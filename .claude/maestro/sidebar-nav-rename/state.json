@@ -1,0 +1,16 @@
+{
+  "slug": "sidebar-nav-rename",
+  "tier": "light",
+  "task": "Rename Sessions to New Agents; stack Ask/Automations nav vertically",
+  "state": "in_progress",
+  "round": 1,
+  "gate1Approved": false,
+  "lastTesterVerdict": null,
+  "lastReviewerVerdict": null,
+  "lastVerify": {
+    "ts": "2026-06-26T12:16:36.730166Z",
+    "exit": 0
+  },
+  "createdAt": "2026-06-26T12:16:27.272935Z",
+  "updatedAt": "2026-06-26T12:16:36.730166Z"
+}

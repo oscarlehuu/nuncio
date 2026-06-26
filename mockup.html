@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>Nuncio — Sessions</title>
+<title>Nuncio — New Agents</title>
 <style>
   /* ============ Design tokens ============ */
   :root {
@@ -110,7 +110,8 @@
   .brand-text { font-weight: 600; font-size: 14.5px; letter-spacing: -0.01em; }
   .nav-row {
     display: flex;
-    gap: 2px;
+    flex-direction: column;
+    gap: 1px;
     margin-top: 14px;
   }
   .nav-item {
@@ -894,10 +895,9 @@
         <div class="brand-text">Nuncio</div>
       </div>
       <div class="nav-row">
-        <button class="nav-item active" data-view="sessions" title="Sessions">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-          <span>Sessions</span>
-          <span class="pill" id="sessionCount">6</span>
+        <button class="nav-item active" data-view="sessions" title="New Agents">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>
+          <span>New Agents</span>
         </button>
         <button class="nav-item disabled" data-view="ask" title="Ask — coming soon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
@@ -1249,7 +1249,6 @@ function setSidebarFilter(f, ev) {
 function renderSidebarSessions() {
   const list = $('#sidebarSessionList');
   const filtered = state.sessions.filter(s => state.sidebarFilter === 'all' || s.status === state.sidebarFilter);
-  $('#sessionCount').textContent = state.sessions.length;
   $('#quickSessionCount').textContent = `${state.sessions.length} session${state.sessions.length === 1 ? '' : 's'}`;
 
   list.innerHTML = '';
