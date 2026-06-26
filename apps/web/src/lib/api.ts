@@ -1,4 +1,13 @@
-export type SessionStatus = 'CREATED' | 'RUNNING' | 'IDLE' | 'ERROR';
+import type { ModelProvider } from './model-providers';
+import { FALLBACK_PROVIDERS } from './model-providers';
+
+export type SessionStatus =
+  | 'CREATED'
+  | 'RUNNING'
+  | 'IDLE'
+  | 'PAUSED'
+  | 'ARCHIVED'
+  | 'ERROR';
 
 export interface Session {
   id: string;
@@ -24,14 +33,52 @@ export async function fetchSessions(): Promise<Session[]> {
   return res.json();
 }
 
-export async function createSession(prompt: string): Promise<Session> {
+export async function createSession(prompt: string, model?: string): Promise<Session> {
+  const body: { prompt: string; model?: string } = { prompt };
+  if (model) body.model = model;
+
   const res = await fetch('/api/sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error('Failed to create session');
   return res.json();
+}
+
+export async function steerSession(id: string, message: string): Promise<Session> {
+  const res = await fetch(`/api/sessions/${id}/steer`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message }),
+  });
+  if (!res.ok) throw new Error('Failed to steer session');
+  return res.json();
+}
+
+export async function pauseSession(id: string): Promise<Session> {
+  const res = await fetch(`/api/sessions/${id}/pause`, { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to pause session');
+  return res.json();
+}
+
+export async function archiveSession(id: string): Promise<Session> {
+  const res = await fetch(`/api/sessions/${id}/archive`, { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to archive session');
+  return res.json();
+}
+
+export async function fetchModels(): Promise<ModelProvider[]> {
+  try {
+    const res = await fetch('/api/models');
+    if (!res.ok) return FALLBACK_PROVIDERS;
+    const data = await res.json();
+    if (Array.isArray(data)) return data as ModelProvider[];
+    if (Array.isArray(data?.providers)) return data.providers as ModelProvider[];
+    return FALLBACK_PROVIDERS;
+  } catch {
+    return FALLBACK_PROVIDERS;
+  }
 }
 
 export async function fetchEvents(sessionId: string, since = 0): Promise<SessionEvent[]> {
@@ -45,6 +92,8 @@ export function statusLabel(status: SessionStatus): string {
     CREATED: 'Created',
     RUNNING: 'Running',
     IDLE: 'Idle',
+    PAUSED: 'Paused',
+    ARCHIVED: 'Archived',
     ERROR: 'Error',
   };
   return map[status] ?? status;

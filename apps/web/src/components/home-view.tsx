@@ -1,18 +1,20 @@
 import { useState } from 'react';
+import { DEFAULT_MODEL_ID, ModelPicker } from './model-picker';
 
 interface HomeViewProps {
   sessionCount: number;
-  onSubmit: (prompt: string) => Promise<void>;
+  onSubmit: (prompt: string, model?: string) => Promise<void>;
   loading?: boolean;
 }
 
 export function HomeView({ sessionCount, onSubmit, loading }: HomeViewProps) {
   const [prompt, setPrompt] = useState('');
+  const [model, setModel] = useState(DEFAULT_MODEL_ID);
 
   const handleSubmit = async () => {
     const text = prompt.trim();
     if (!text || loading) return;
-    await onSubmit(text);
+    await onSubmit(text, model);
     setPrompt('');
   };
 
@@ -26,7 +28,7 @@ export function HomeView({ sessionCount, onSubmit, loading }: HomeViewProps) {
           </p>
         </div>
 
-        <div className="bg-bg-1 border border-border rounded-[14px] shadow-[0_8px_32px_rgba(0,0,0,0.4)]">
+        <div className="bg-bg-1 border border-border rounded-[14px] shadow-[0_8px_32px_rgba(0,0,0,0.4)] focus-within:border-accent focus-within:shadow-[0_0_0_3px_var(--color-accent-soft),0_8px_32px_rgba(0,0,0,0.4)] transition-shadow">
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
@@ -38,15 +40,15 @@ export function HomeView({ sessionCount, onSubmit, loading }: HomeViewProps) {
             }}
             placeholder="Ask Nuncio to build features, fix bugs, or work on your code…"
             rows={4}
-            className="w-full bg-transparent px-4 pt-4 pb-2 resize-none outline-none text-[15px] placeholder:text-text-3"
+            className="w-full bg-transparent px-5 pt-4 pb-2 resize-none outline-none text-[15px] placeholder:text-text-3"
           />
-          <div className="home-composer-bar flex items-center justify-between px-3 pb-3">
-            <span className="text-xs text-text-2 px-2">Pi · Mock mode</span>
+          <div className="home-composer-bar flex items-center justify-between gap-2 px-3 pb-3">
+            <ModelPicker value={model} onChange={setModel} />
             <button
               type="button"
               onClick={() => void handleSubmit()}
               disabled={loading || !prompt.trim()}
-              className="touch-target w-11 h-11 md:w-9 md:h-9 rounded-lg bg-accent text-[#1a1208] flex items-center justify-center disabled:opacity-40 hover:bg-accent-hover transition-colors"
+              className="touch-target w-11 h-11 md:w-9 md:h-9 rounded-lg bg-accent text-[#1a1208] flex items-center justify-center disabled:opacity-40 hover:bg-accent-hover transition-colors shrink-0"
             >
               <SendIcon />
             </button>
