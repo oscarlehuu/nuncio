@@ -68,6 +68,80 @@ describe('Nuncio API', () => {
     expect(res.body.some((e: { type: string }) => e.type === 'user_message')).toBe(true);
     expect(res.body.some((e: { type: string }) => e.type === 'assistant_message')).toBe(true);
   });
+
+  describe('phase 3 session lifecycle', () => {
+    it('POST /api/sessions/:id/steer succeeds when IDLE', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/sessions')
+        .send({ prompt: 'Build the auth module' });
+
+      const id = created.body.id;
+      await waitForIdle(app, id);
+
+      const steer = await request(app.getHttpServer())
+        .post(`/api/sessions/${id}/steer`)
+        .send({ message: 'Focus on unit tests only' });
+
+      expect(steer.status).toBe(201);
+      await waitForIdle(app, id);
+
+      const events = await request(app.getHttpServer()).get(`/api/sessions/${id}/events`);
+      expect(events.body.some((e: { type: string }) => e.type === 'steer_message')).toBe(true);
+    });
+
+    it('POST /api/sessions/:id/steer succeeds when PAUSED', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/sessions')
+        .send({ prompt: 'Refactor the session store' });
+
+      const id = created.body.id;
+      await waitForIdle(app, id);
+
+      const paused = await request(app.getHttpServer()).post(`/api/sessions/${id}/pause`);
+      expect(paused.status).toBe(201);
+      expect(paused.body.status).toBe('PAUSED');
+
+      const steer = await request(app.getHttpServer())
+        .post(`/api/sessions/${id}/steer`)
+        .send({ message: 'Resume with integration tests' });
+
+      expect(steer.status).toBe(201);
+      await waitForIdle(app, id);
+      expect((await request(app.getHttpServer()).get(`/api/sessions/${id}`)).body.status).toBe('IDLE');
+    });
+
+    it('POST /api/sessions/:id/archive transitions to ARCHIVED', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/sessions')
+        .send({ prompt: 'Archive me when done' });
+
+      const id = created.body.id;
+      await waitForIdle(app, id);
+
+      const archived = await request(app.getHttpServer()).post(`/api/sessions/${id}/archive`);
+      expect(archived.status).toBe(201);
+      expect(archived.body.status).toBe('ARCHIVED');
+    });
+
+    it('GET /api/sessions excludes archived sessions', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/sessions')
+        .send({ prompt: 'Hidden after archive' });
+
+      const id = created.body.id;
+      await waitForIdle(app, id);
+      await request(app.getHttpServer()).post(`/api/sessions/${id}/archive`);
+
+      const list = await request(app.getHttpServer()).get('/api/sessions');
+      expect(list.status).toBe(200);
+      expect(list.body.some((s: { id: string }) => s.id === id)).toBe(false);
+
+      const withArchived = await request(app.getHttpServer()).get('/api/sessions?includeArchived=true');
+      expect(withArchived.body.some((s: { id: string; status: string }) => s.id === id && s.status === 'ARCHIVED')).toBe(
+        true,
+      );
+    });
+  });
 });
 
 async function waitForIdle(app: INestApplication, id: string, timeoutMs = 5000) {

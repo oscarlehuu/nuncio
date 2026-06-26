@@ -16,4 +16,54 @@ describe('session-fsm', () => {
   it('allows IDLE -> RUNNING for steer', () => {
     expect(canTransition('IDLE', 'RUNNING')).toBe(true);
   });
+
+  describe('phase 3 — PAUSED', () => {
+    it('allows RUNNING -> PAUSED', () => {
+      expect(canTransition('RUNNING', 'PAUSED')).toBe(true);
+    });
+
+    it('allows IDLE -> PAUSED', () => {
+      expect(canTransition('IDLE', 'PAUSED')).toBe(true);
+    });
+
+    it('allows PAUSED -> RUNNING for steer/resume', () => {
+      expect(canTransition('PAUSED', 'RUNNING')).toBe(true);
+    });
+
+    it('blocks CREATED -> PAUSED', () => {
+      expect(canTransition('CREATED', 'PAUSED')).toBe(false);
+    });
+
+    it('blocks ARCHIVED -> PAUSED', () => {
+      expect(canTransition('ARCHIVED', 'PAUSED')).toBe(false);
+    });
+  });
+
+  describe('phase 3 — ARCHIVED', () => {
+    it('allows IDLE -> ARCHIVED', () => {
+      expect(canTransition('IDLE', 'ARCHIVED')).toBe(true);
+    });
+
+    it('allows PAUSED -> ARCHIVED', () => {
+      expect(canTransition('PAUSED', 'ARCHIVED')).toBe(true);
+    });
+
+    it('allows ERROR -> ARCHIVED', () => {
+      expect(canTransition('ERROR', 'ARCHIVED')).toBe(true);
+    });
+
+    it('blocks RUNNING -> ARCHIVED', () => {
+      expect(canTransition('RUNNING', 'ARCHIVED')).toBe(false);
+    });
+
+    it('blocks CREATED -> ARCHIVED', () => {
+      expect(canTransition('CREATED', 'ARCHIVED')).toBe(false);
+    });
+
+    it('blocks transitions from ARCHIVED (terminal)', () => {
+      expect(canTransition('ARCHIVED', 'IDLE')).toBe(false);
+      expect(canTransition('ARCHIVED', 'RUNNING')).toBe(false);
+      expect(canTransition('ARCHIVED', 'PAUSED')).toBe(false);
+    });
+  });
 });
