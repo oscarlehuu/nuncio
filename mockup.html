@@ -1,0 +1,1800 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Nuncio — Sessions</title>
+<style>
+  /* ============ Design tokens ============ */
+  :root {
+    --bg-0: #0d0f12;
+    --bg-1: #131620;
+    --bg-2: #1a1e2a;
+    --bg-3: #232838;
+    --bg-glass: rgba(26, 30, 42, 0.72);
+    --border: #2a2f3e;
+    --border-soft: #1f2330;
+    --text-0: #e6e9ef;
+    --text-1: #a8b0bf;
+    --text-2: #6b7280;
+    --text-3: #4b5263;
+    --accent: #d4a574;
+    --accent-soft: rgba(212, 165, 116, 0.14);
+    --accent-hover: #e0b384;
+    --success: #7fb98c;
+    --success-soft: rgba(127, 185, 140, 0.14);
+    --warn: #d4a574;
+    --warn-soft: rgba(212, 165, 116, 0.14);
+    --error: #c97474;
+    --error-soft: rgba(201, 116, 116, 0.14);
+    --info: #74a5c9;
+    --info-soft: rgba(116, 165, 201, 0.14);
+    --radius: 10px;
+    --radius-sm: 6px;
+    --radius-lg: 14px;
+    --shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.24);
+    --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, Menlo, monospace;
+    --font-serif: "New York", "Iowan Old Style", "Charter", Georgia, serif;
+    --sidebar-w: 260px;
+    --max-w: 720px;
+  }
+
+  @media (max-width: 768px) {
+    :root {
+      --sidebar-w: 0px;
+    }
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    font-family: var(--font-sans);
+    background: var(--bg-0);
+    color: var(--text-0);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+  input, textarea, select { font-family: inherit; color: inherit; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--bg-3); }
+
+  /* ============ Layout shell ============ */
+  .app {
+    display: grid;
+    grid-template-columns: var(--sidebar-w) 1fr;
+    height: 100vh;
+    height: 100dvh;
+    width: 100vw;
+  }
+  .app > * { min-width: 0; min-height: 0; }
+  @media (max-width: 768px) {
+    .app { grid-template-columns: 1fr; }
+  }
+
+  /* ============ Sidebar ============ */
+  .sidebar {
+    background: var(--bg-1);
+    border-right: 1px solid var(--border-soft);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .sidebar-head {
+    padding: 16px 14px 12px;
+    flex-shrink: 0;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 2px 4px;
+  }
+  .brand-mark {
+    width: 26px; height: 26px;
+    border-radius: 7px;
+    background: linear-gradient(135deg, var(--accent) 0%, #b88858 100%);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-serif);
+    font-weight: 600;
+    color: #1a1208;
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+  .brand-text { font-weight: 600; font-size: 14.5px; letter-spacing: -0.01em; }
+  .nav-row {
+    display: flex;
+    gap: 2px;
+    margin-top: 14px;
+  }
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 9px;
+    border-radius: var(--radius-sm);
+    color: var(--text-1);
+    font-size: 13px;
+    width: 100%;
+    text-align: left;
+    transition: background 0.12s, color 0.12s;
+  }
+  .nav-item:hover { background: var(--bg-2); color: var(--text-0); }
+  .nav-item.active { background: var(--accent-soft); color: var(--accent); }
+  .nav-item svg { width: 15px; height: 15px; flex-shrink: 0; }
+  .nav-item .pill {
+    margin-left: auto;
+    background: var(--bg-3);
+    color: var(--text-2);
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+  }
+  .nav-item.active .pill { background: var(--accent-soft); color: var(--accent); }
+  .nav-item.disabled { opacity: 0.45; cursor: not-allowed; }
+  .nav-item.disabled:hover { background: transparent; color: var(--text-1); }
+
+  /* Session list in sidebar */
+  .sidebar-sessions {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 8px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .sidebar-sessions-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 8px 6px;
+    flex-shrink: 0;
+    position: sticky;
+    top: 0;
+    background: var(--bg-1);
+    z-index: 1;
+  }
+  .sidebar-sessions-head .label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-3);
+    font-weight: 600;
+  }
+  .filter-trigger {
+    font-size: 10px;
+    color: var(--text-2);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .filter-trigger:hover { background: var(--bg-2); color: var(--text-0); }
+  .filter-trigger.active { color: var(--accent); background: var(--accent-soft); }
+
+  .side-session {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 7px 8px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background 0.1s;
+    text-align: left;
+    width: 100%;
+  }
+  .side-session:hover { background: var(--bg-2); }
+  .side-session.active { background: var(--bg-2); }
+  .side-session.active::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 6px; bottom: 6px;
+    width: 2px;
+    background: var(--accent);
+    border-radius: 2px;
+  }
+  .side-session { position: relative; }
+  .status-dot {
+    width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+    margin-top: 5px;
+  }
+  .status-dot.running { background: var(--success); box-shadow: 0 0 6px var(--success); animation: pulse 1.6s infinite; }
+  .status-dot.idle { background: var(--info); }
+  .status-dot.paused { background: var(--text-3); }
+  .status-dot.archived { background: var(--text-3); opacity: 0.4; }
+  .status-dot.error { background: var(--error); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+  .side-session .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .side-session .title {
+    font-size: 12.5px;
+    color: var(--text-0);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.3;
+  }
+  .side-session.active .title { color: var(--accent); }
+  .side-session .meta {
+    font-size: 10.5px;
+    color: var(--text-2);
+    display: flex; gap: 6px; align-items: center;
+    overflow: hidden;
+  }
+  .side-session .meta .model { color: var(--accent); }
+  .side-session .meta .time { flex-shrink: 0; }
+
+  .sidebar-footer {
+    padding: 10px 8px;
+    border-top: 1px solid var(--border-soft);
+    flex-shrink: 0;
+  }
+  .user-pill {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 8px; border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+  .user-pill:hover { background: var(--bg-2); }
+  .avatar {
+    width: 24px; height: 24px; border-radius: 50%;
+    background: linear-gradient(135deg, #5a6378, #3a4256);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 600; color: var(--text-0);
+    flex-shrink: 0;
+  }
+  .user-pill .meta { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+  .user-pill .meta .name { font-size: 12.5px; color: var(--text-0); }
+  .user-pill .meta .sub { font-size: 10.5px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .user-pill svg.chev { width: 13px; height: 13px; color: var(--text-3); flex-shrink: 0; }
+
+  /* Mobile sidebar toggle + scrim (outside grid) */
+  .mobile-toggle {
+    display: none;
+    position: fixed;
+    top: 12px; left: 12px;
+    z-index: 60;
+    width: 40px; height: 40px;
+    background: var(--bg-glass);
+    backdrop-filter: blur(10px);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    align-items: center; justify-content: center;
+  }
+  .scrim {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 40;
+  }
+  .scrim.show { display: block; }
+  @media (max-width: 768px) {
+    .mobile-toggle { display: flex; }
+    .sidebar {
+      position: fixed;
+      top: 0; left: 0; bottom: 0;
+      width: 280px;
+      z-index: 50;
+      transform: translateX(-100%);
+      transition: transform 0.22s ease;
+      padding-top: 0;
+    }
+    .sidebar.open { transform: translateX(0); box-shadow: var(--shadow); }
+  }
+
+  /* ============ Main area ============ */
+  .main {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* ============ Home view (central chat box) ============ */
+  .view-home {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0 24px;
+  }
+  .home-inner {
+    width: 100%;
+    max-width: var(--max-w);
+    margin: 0 auto;
+    padding: 64px 0 32px;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+    flex: 1;
+  }
+  @media (max-width: 768px) {
+    .view-home { padding: 0 16px; }
+    .home-inner { padding: 56px 0 24px; gap: 22px; }
+  }
+  .home-hero {
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .home-hero h1 {
+    font-family: var(--font-serif);
+    font-size: 26px;
+    font-weight: 500;
+    letter-spacing: -0.015em;
+    color: var(--text-0);
+  }
+  .home-hero p {
+    font-size: 13.5px;
+    color: var(--text-2);
+    max-width: 460px;
+    margin: 0 auto;
+  }
+  @media (max-width: 768px) {
+    .home-hero h1 { font-size: 22px; }
+    .home-hero p { font-size: 13px; }
+  }
+
+  /* Central composer (Devin/Cursor pattern) */
+  .home-composer {
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow);
+    transition: border-color 0.15s, box-shadow 0.15s;
+    display: flex;
+    flex-direction: column;
+  }
+  .home-composer:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow);
+  }
+  .home-composer textarea {
+    width: 100%;
+    background: transparent;
+    border: none;
+    resize: none;
+    padding: 18px 20px 8px;
+    color: var(--text-0);
+    font-size: 15px;
+    line-height: 1.55;
+    outline: none;
+    min-height: 96px;
+    max-height: 280px;
+  }
+  .home-composer textarea::placeholder { color: var(--text-3); }
+  .home-composer-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px 12px;
+  }
+  .home-composer-bar .left { display: flex; gap: 6px; align-items: center; flex: 1; flex-wrap: wrap; }
+  .home-composer-bar .right { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+
+  /* Model selector — nested Provider → Group → Model (Cursor Cloud pattern) */
+  .model-dropdown { position: relative; }
+  .model-trigger {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 10px;
+    background: var(--bg-2);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-sm);
+    color: var(--text-1);
+    font-size: 12.5px;
+    transition: all 0.12s;
+  }
+  .model-trigger:hover { background: var(--bg-3); color: var(--text-0); }
+  .model-trigger .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  .model-trigger .provider { color: var(--text-2); font-size: 11px; }
+  .model-trigger .name { color: var(--text-0); font-weight: 500; }
+  .model-trigger svg.chev { width: 12px; height: 12px; color: var(--text-2); transition: transform 0.15s; }
+  .model-dropdown.open .model-trigger svg.chev { transform: rotate(180deg); }
+
+  /* Menu panel — shared by all 3 levels */
+  .model-panel {
+    position: absolute;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 6px;
+    display: none;
+    z-index: 30;
+    min-width: 220px;
+  }
+  .model-panel.open { display: block; }
+
+  /* Level 1: providers */
+  #modelPanel1 {
+    bottom: calc(100% + 6px);
+    left: 0;
+    min-width: 220px;
+  }
+  /* Level 2/3: open to the right of level 1, stacked upward from trigger */
+  #modelPanel2, #modelPanel3 {
+    bottom: calc(100% + 6px);
+    left: 232px;
+    min-width: 260px;
+  }
+  #modelPanel3 { left: 484px; min-width: 280px; }
+  @media (max-width: 768px) {
+    /* Mobile: stack panels as full-width overlays instead of side-by-side */
+    #modelPanel2, #modelPanel3 { left: 0; bottom: calc(100% + 6px); }
+    #modelPanel3 { left: 0; }
+  }
+
+  .model-search {
+    display: flex; align-items: center; gap: 6px;
+    padding: 7px 9px;
+    background: var(--bg-1);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-sm);
+    margin-bottom: 6px;
+  }
+  .model-search svg { width: 13px; height: 13px; color: var(--text-2); flex-shrink: 0; }
+  .model-search input {
+    flex: 1; background: transparent; border: none; outline: none;
+    font-size: 12.5px; color: var(--text-0);
+  }
+  .model-search input::placeholder { color: var(--text-3); }
+
+  .model-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 9px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    width: 100%;
+    text-align: left;
+    transition: background 0.1s;
+    color: var(--text-1);
+    font-size: 13px;
+  }
+  .model-row:hover { background: var(--bg-3); color: var(--text-0); }
+  .model-row.active { background: var(--accent-soft); color: var(--accent); }
+  .model-row .icon {
+    width: 20px; height: 20px;
+    border-radius: 5px;
+    background: var(--bg-1);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 600;
+    color: var(--text-1);
+    flex-shrink: 0;
+  }
+  .model-row.active .icon { background: var(--accent-soft); color: var(--accent); }
+  .model-row .label { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .model-row .label .name { font-size: 13px; color: inherit; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .model-row .label .sub { font-size: 10.5px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .model-row .count {
+    font-size: 10.5px;
+    color: var(--text-3);
+    background: var(--bg-1);
+    padding: 1px 6px;
+    border-radius: 999px;
+    flex-shrink: 0;
+  }
+  .model-row .badge {
+    font-size: 9.5px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: var(--bg-1);
+    color: var(--text-2);
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+  .model-row .badge.oauth { color: var(--info); background: var(--info-soft); }
+  .model-row .badge.unavailable { color: var(--text-3); }
+  .model-row .chev-r {
+    width: 13px; height: 13px;
+    color: var(--text-3);
+    flex-shrink: 0;
+  }
+  .model-row:hover .chev-r { color: var(--text-1); }
+  .model-row .check {
+    width: 14px; height: 14px;
+    color: var(--accent);
+    display: none;
+    flex-shrink: 0;
+  }
+  .model-row.selected .check { display: block; }
+  .model-row.selected .name { color: var(--accent); }
+  .model-row .cost {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-3);
+    flex-shrink: 0;
+  }
+
+  .composer-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 6px 10px;
+    background: var(--bg-2);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-sm);
+    color: var(--text-1);
+    font-size: 12.5px;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .composer-chip:hover { background: var(--bg-3); color: var(--text-0); }
+  .composer-chip svg { width: 13px; height: 13px; }
+  .composer-chip.workspace { color: var(--info); }
+  .composer-chip.workspace.empty { color: var(--text-2); }
+
+  .send-btn {
+    width: 32px; height: 32px;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #1a1208;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.12s, transform 0.08s;
+  }
+  .send-btn:hover { background: var(--accent-hover); }
+  .send-btn:active { transform: scale(0.95); }
+  .send-btn:disabled { background: var(--bg-3); color: var(--text-3); cursor: not-allowed; }
+  .send-btn svg { width: 15px; height: 15px; }
+
+  /* Quick row beneath composer (Devin-style status chips) */
+  .home-quick {
+    display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;
+    font-size: 11.5px; color: var(--text-2);
+  }
+  .home-quick .qchip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 4px 9px;
+    background: var(--bg-1);
+    border: 1px solid var(--border-soft);
+    border-radius: 999px;
+  }
+  .home-quick .qchip svg { width: 12px; height: 12px; }
+  .home-quick .qchip.ok { color: var(--success); }
+  .home-quick .qchip.ok svg { color: var(--success); }
+
+  /* Onboarding (below composer on home) */
+  .onboard {
+    background: var(--bg-1);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+  }
+  .onboard-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .onboard-head h3 { font-size: 13px; font-weight: 600; color: var(--text-0); }
+  .onboard-progress {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11.5px; color: var(--text-2);
+  }
+  .progress-bar {
+    width: 80px; height: 5px;
+    background: var(--bg-3);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .progress-bar .fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+    transition: width 0.3s;
+  }
+  .onboard-list { display: flex; flex-direction: column; gap: 2px; }
+  .onboard-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 6px;
+    font-size: 13px;
+    color: var(--text-1);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: background 0.12s;
+  }
+  .onboard-item:hover { background: var(--bg-2); }
+  .onboard-check {
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    border: 1.5px solid var(--text-3);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    transition: all 0.15s;
+  }
+  .onboard-check svg { width: 11px; height: 11px; color: transparent; }
+  .onboard-item.done .onboard-check {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .onboard-item.done .onboard-check svg { color: #1a1208; }
+  .onboard-item.done .label { color: var(--text-2); text-decoration: line-through; text-decoration-color: var(--text-3); }
+  .onboard-item .label { flex: 1; }
+
+  /* ============ Session detail view ============ */
+  .view-detail {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .detail-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border-soft);
+    flex-shrink: 0;
+    min-height: 52px;
+  }
+  @media (max-width: 768px) {
+    .detail-header { padding: 10px 14px 10px 60px; }
+  }
+  .back-btn {
+    padding: 5px 9px 5px 5px;
+    border-radius: var(--radius-sm);
+    color: var(--text-1);
+    font-size: 12.5px;
+    display: flex; align-items: center; gap: 4px;
+  }
+  .back-btn:hover { background: var(--bg-2); color: var(--text-0); }
+  .back-btn svg { width: 15px; height: 15px; }
+  .detail-title {
+    font-size: 14px; font-weight: 500;
+    flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .detail-status {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11.5px; color: var(--text-1);
+    padding: 3px 8px; border-radius: 999px;
+    background: var(--bg-2);
+    flex-shrink: 0;
+  }
+  .detail-status.running { color: var(--success); }
+  .detail-actions { display: flex; gap: 4px; flex-shrink: 0; }
+
+  /* Messages stream */
+  .stream {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 0 8px;
+  }
+  .stream-inner {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 0 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+  @media (max-width: 768px) { .stream-inner { padding: 0 14px 24px; } }
+
+  .msg { display: flex; gap: 12px; flex-direction: column; }
+  .msg.user { align-items: flex-end; flex-direction: row; }
+  .msg.user .bubble {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border: 1px solid transparent;
+    border-radius: 14px 14px 4px 14px;
+    padding: 10px 14px;
+    max-width: 80%;
+    font-size: 13.5px;
+    line-height: 1.5;
+  }
+  .msg-label {
+    font-size: 11px;
+    color: var(--text-3);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .msg-label .model-name { color: var(--accent); }
+  .msg.assistant .bubble {
+    background: transparent;
+    color: var(--text-0);
+    padding: 0;
+    font-size: 13.5px;
+    line-height: 1.6;
+  }
+  .msg.assistant .bubble p { margin: 0 0 10px; }
+  .msg.assistant .bubble p:last-child { margin-bottom: 0; }
+  .msg.assistant .bubble code {
+    font-family: var(--font-mono);
+    background: var(--bg-2);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 12.5px;
+    color: var(--accent);
+  }
+  .cursor {
+    display: inline-block;
+    width: 7px; height: 15px;
+    background: var(--accent);
+    margin-left: 2px;
+    vertical-align: text-bottom;
+    animation: blink 1s steps(2) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* Tool call card */
+  .tool-card {
+    background: var(--bg-1);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    font-size: 12.5px;
+  }
+  .tool-card-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px;
+    background: var(--bg-2);
+    cursor: pointer;
+    user-select: none;
+  }
+  .tool-card-head:hover { background: var(--bg-3); }
+  .tool-icon {
+    width: 18px; height: 18px;
+    border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px;
+    flex-shrink: 0;
+  }
+  .tool-icon.bash { background: var(--info-soft); color: var(--info); }
+  .tool-icon.read { background: var(--success-soft); color: var(--success); }
+  .tool-icon.write { background: var(--warn-soft); color: var(--warn); }
+  .tool-icon.edit { background: var(--accent-soft); color: var(--accent); }
+  .tool-card-head .name { color: var(--text-1); font-family: var(--font-mono); font-size: 12px; }
+  .tool-card-head .summary { color: var(--text-2); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 8px; }
+  .tool-card-head .chev { color: var(--text-3); width: 14px; height: 14px; }
+  .tool-card-head .chev.open { transform: rotate(90deg); }
+  .tool-card-body {
+    padding: 10px 12px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--text-1);
+    background: var(--bg-0);
+    display: none;
+    overflow-x: auto;
+    max-height: 240px;
+    overflow-y: auto;
+  }
+  .tool-card.open .tool-card-body { display: block; }
+  .tool-card-body .out { color: var(--text-1); }
+  .tool-card-body .err { color: var(--error); }
+  .tool-card-body .cmd { color: var(--accent); }
+
+  /* ============ Steer composer (detail view) ============ */
+  .composer-wrap {
+    padding: 12px 20px 18px;
+    border-top: 1px solid var(--border-soft);
+    background: var(--bg-1);
+    flex-shrink: 0;
+  }
+  @media (max-width: 768px) {
+    .composer-wrap {
+      padding: 10px 14px 16px;
+      padding-bottom: calc(16px + env(safe-area-inset-bottom));
+    }
+  }
+  .composer {
+    width: 100%;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    transition: border-color 0.12s;
+  }
+  .composer:focus-within { border-color: var(--accent); }
+  .composer textarea {
+    width: 100%;
+    background: transparent;
+    border: none;
+    resize: none;
+    padding: 14px 16px 6px;
+    color: var(--text-0);
+    font-size: 14px;
+    line-height: 1.5;
+    outline: none;
+    min-height: 48px;
+    max-height: 200px;
+  }
+  .composer textarea::placeholder { color: var(--text-3); }
+  .composer-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 12px 10px;
+  }
+  .composer-bar .left { display: flex; gap: 6px; align-items: center; flex: 1; flex-wrap: wrap; }
+  .composer-bar .right { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 7px 12px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-0);
+    font-size: 13px;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .btn:hover { background: var(--bg-3); border-color: var(--border); }
+  .btn.primary {
+    background: var(--accent);
+    color: #1a1208;
+    border-color: var(--accent);
+    font-weight: 500;
+  }
+  .btn.primary:hover { background: var(--accent-hover); }
+  .btn svg { width: 14px; height: 14px; }
+  .btn.icon-only { padding: 7px; }
+  .btn.ghost { background: transparent; border-color: transparent; }
+  .btn.ghost:hover { background: var(--bg-2); }
+
+  /* ============ Coming soon ============ */
+  .comingsoon {
+    flex: 1;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-2);
+  }
+  .comingsoon .glyph {
+    width: 56px; height: 56px;
+    border-radius: 14px;
+    background: var(--bg-2);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-3);
+    margin-bottom: 18px;
+  }
+  .comingsoon h2 { font-size: 18px; color: var(--text-0); margin-bottom: 6px; font-weight: 500; }
+  .comingsoon p { font-size: 13.5px; max-width: 360px; line-height: 1.55; }
+  .comingsoon .tag {
+    margin-top: 18px;
+    font-size: 11px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 3px 10px;
+    border-radius: 999px;
+  }
+
+  /* ============ Toast ============ */
+  .toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    color: var(--text-0);
+    padding: 10px 16px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    z-index: 100;
+    opacity: 0;
+    transition: opacity 0.18s, transform 0.18s;
+    box-shadow: var(--shadow-sm);
+    pointer-events: none;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<!-- Mobile toggle + scrim (outside grid) -->
+<button class="mobile-toggle" id="mobileToggle" aria-label="Menu">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="20" height="20"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+</button>
+<div class="scrim" id="scrim"></div>
+
+<div class="app" id="app">
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-head">
+      <div class="brand">
+        <div class="brand-mark">N</div>
+        <div class="brand-text">Nuncio</div>
+      </div>
+      <div class="nav-row">
+        <button class="nav-item active" data-view="sessions" title="Sessions">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span>Sessions</span>
+          <span class="pill" id="sessionCount">6</span>
+        </button>
+        <button class="nav-item disabled" data-view="ask" title="Ask — coming soon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <span>Ask</span>
+        </button>
+        <button class="nav-item disabled" data-view="automations" title="Automations — coming soon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span>Automations</span>
+        </button>
+        <button class="nav-item disabled" data-view="review" title="Review — coming soon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+          <span>Review</span>
+        </button>
+        <button class="nav-item disabled" data-view="wiki" title="Wiki — coming soon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+          <span>Wiki</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="sidebar-sessions">
+      <div class="sidebar-sessions-head">
+        <span class="label">Recent</span>
+        <button class="filter-trigger active" data-filter="all" onclick="setSidebarFilter('all', event)">All</button>
+      </div>
+      <div id="sidebarSessionList">
+        <!-- filled by JS -->
+      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="user-pill">
+        <div class="avatar">OS</div>
+        <div class="meta">
+          <div class="name">Oscar</div>
+          <div class="sub">oscars-macbook-pro</div>
+        </div>
+        <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main" id="main">
+
+    <!-- Home view: central chat box -->
+    <section class="view-home" id="viewHome">
+      <div class="home-inner">
+        <div class="home-hero">
+          <h1>What should I work on?</h1>
+          <p>Delegate a task — write code, fix bugs, open a PR. Your agents keep going while you're away.</p>
+        </div>
+
+        <div class="home-composer">
+          <textarea id="homeInput" placeholder="Ask Nuncio to build features, fix bugs, or work on your code…" rows="4"></textarea>
+          <div class="home-composer-bar">
+            <div class="left">
+              <!-- Model selector — nested Provider → Group → Model -->
+              <div class="model-dropdown" id="modelDropdown">
+                <button class="model-trigger" id="modelTrigger">
+                  <span class="dot"></span>
+                  <span class="provider" id="homeModelProvider">Pi</span>
+                  <span style="color:var(--text-3)">·</span>
+                  <span class="name" id="homeModelName">Fable 5</span>
+                  <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
+                <!-- Level 1: providers -->
+                <div class="model-panel" id="modelPanel1"></div>
+                <!-- Level 2: groups under selected provider -->
+                <div class="model-panel" id="modelPanel2"></div>
+                <!-- Level 3: models under selected group -->
+                <div class="model-panel" id="modelPanel3"></div>
+              </div>
+              <!-- Workspace / repo chip -->
+              <button class="composer-chip workspace empty" id="homeRepoChip" onclick="toast('Pick a repo — coming soon')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                <span>No repo</span>
+              </button>
+              <!-- Attach -->
+              <button class="composer-chip" onclick="toast('Attach files — coming soon')" title="Attach">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+              </button>
+            </div>
+            <div class="right">
+              <button class="send-btn" id="homeSendBtn" onclick="startSessionFromHome()" title="Start session">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick status row (Devin-style) -->
+        <div class="home-quick">
+          <span class="qchip ok">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+            Pi connected
+          </span>
+          <span class="qchip">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            macOS · Node 24
+          </span>
+          <span class="qchip">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <span id="quickSessionCount">6 sessions</span>
+          </span>
+        </div>
+
+        <!-- Onboarding -->
+        <div class="onboard" id="onboard">
+          <div class="onboard-head">
+            <h3>Get started with Nuncio</h3>
+            <div class="onboard-progress">
+              <span id="onboardCount">2 of 5</span>
+              <div class="progress-bar"><div class="fill" id="onboardFill" style="width: 40%"></div></div>
+            </div>
+          </div>
+          <div class="onboard-list" id="onboardList"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Session detail view -->
+    <section class="view-detail" id="viewDetail" style="display:none">
+      <div class="detail-header">
+        <button class="back-btn" onclick="showHome()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+          <span>Home</span>
+        </button>
+        <div class="detail-title" id="detailTitle">—</div>
+        <div class="detail-status" id="detailStatus">
+          <span class="status-dot" id="detailDot"></span>
+          <span id="detailStatusText">—</span>
+        </div>
+        <div class="detail-actions">
+          <button class="btn ghost icon-only" title="Fork chat" onclick="toast('Fork to new model — coming soon')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="6" y1="9" x2="6" y2="15"/><path d="M18 9a3 3 0 1 1 0-6 3 3 0 0 1 0 6zM6 3v0a9 9 0 0 0 9 9h3"/></svg>
+          </button>
+          <button class="btn ghost icon-only" title="Archive" onclick="archiveActive()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="stream" id="stream">
+        <div class="stream-inner" id="streamInner"></div>
+      </div>
+
+      <div class="composer-wrap">
+        <div class="composer">
+          <textarea id="steerInput" placeholder="Steer the agent — add context, change direction, ask a question…" rows="1"></textarea>
+          <div class="composer-bar">
+            <div class="left">
+              <button class="composer-chip" onclick="toast('Switch model — forks to new session')">
+                <span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--accent)"></span>
+                <span id="composerModel">Fable 5</span>
+              </button>
+              <button class="composer-chip workspace" id="detailRepoChip" onclick="toast('Workspace: ~/nuncio/ws/9f3a…')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                <span id="detailRepoName">—</span>
+              </button>
+            </div>
+            <div class="right">
+              <button class="btn ghost icon-only" title="Interrupt" id="interruptBtn" onclick="interruptAgent()" style="display:none">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+              </button>
+              <button class="send-btn" id="sendBtn" onclick="sendSteer()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Coming soon -->
+    <section class="comingsoon" id="viewComingSoon" style="display:none">
+      <div class="glyph">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" width="28" height="28"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      </div>
+      <h2 id="csTitle">Coming soon</h2>
+      <p id="csBody">This feature will be developed using Nuncio itself — once Sessions is stable.</p>
+      <div class="tag">Roadmap · Phase 06–07</div>
+    </section>
+
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ============ State ============ */
+/* Pi provider config — mirrors ~/.pi/agent/auth.json + my-pi-harness/config/models.json.
+   Structure: provider → group → model. Mirrors Cursor Cloud's nested selector. */
+const PROVIDERS = [
+  {
+    id: 'pi',
+    name: 'Pi',
+    sub: 'Local harness · ~/.pi/agent',
+    icon: 'π',
+    groups: [
+      {
+        id: 'cliproxy',
+        name: 'cliproxy',
+        sub: 'localhost:8317 · default',
+        models: [
+          { id: 'claude-fable-5',    name: 'Fable 5',            sub: 'Most capable',           badge: 'xhigh', cost: '$10 / $50' },
+          { id: 'claude-opus-4-8',   name: 'Opus 4.8',           sub: 'CTO + tester pattern',   badge: 'xhigh', cost: '$5 / $25' },
+          { id: 'claude-sonnet-4-6', name: 'Sonnet 4.6',         sub: 'Scout fallback',          badge: 'high',  cost: '$3 / $15' },
+          { id: 'gemini-3.5-flash',  name: 'Gemini 3.5 Flash',   sub: 'Cheap + quick',           badge: 'low',   cost: '$1.5 / $9' },
+        ],
+      },
+      {
+        id: 'anthropic-oauth',
+        name: 'Anthropic (Claude)',
+        sub: 'OAuth · signed in',
+        badge: 'oauth',
+        models: [
+          { id: 'anthropic:claude-opus-4',    name: 'Claude Opus 4',       sub: 'Most capable',     badge: 'xhigh', cost: '$15 / $75' },
+          { id: 'anthropic:claude-sonnet-4',  name: 'Claude Sonnet 4',     sub: 'Balanced',          badge: 'high',  cost: '$3 / $15' },
+          { id: 'anthropic:claude-haiku-4',   name: 'Claude Haiku 4',      sub: 'Fast + cheap',      badge: 'low',   cost: '$0.25 / $1.25' },
+        ],
+      },
+      {
+        id: 'openai-codex-oauth',
+        name: 'ChatGPT Plus/Pro (Codex)',
+        sub: 'OAuth · signed in',
+        badge: 'oauth',
+        models: [
+          { id: 'codex:gpt-5.5-high', name: 'GPT 5.5 High',  sub: 'Reasoning · high',    badge: 'high', cost: '$5 / $20' },
+          { id: 'codex:gpt-5.5-low',  name: 'GPT 5.5 Low',   sub: 'Reasoning · low',     badge: 'low',  cost: '$2 / $8' },
+          { id: 'codex:gpt-5',        name: 'GPT 5',          sub: 'Standard',            badge: 'med',  cost: '$3 / $12' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'anthropic-direct',
+    name: 'Anthropic',
+    sub: 'Direct API · bring your own key',
+    icon: 'A',
+    unavailable: true,
+  },
+  {
+    id: 'openai-direct',
+    name: 'OpenAI',
+    sub: 'Direct API · bring your own key',
+    icon: 'O',
+    unavailable: true,
+  },
+];
+
+/* Flatten for quick lookups */
+const ALL_MODELS = (() => {
+  const out = [];
+  PROVIDERS.forEach(p => (p.groups || []).forEach(g => g.models.forEach(m => out.push({ ...m, providerId: p.id, providerName: p.name, groupId: g.id, groupName: g.name }))));
+  return out;
+})();
+const MODEL_BY_ID = Object.fromEntries(ALL_MODELS.map(m => [m.id, m]));
+
+
+const state = {
+  sessions: [
+    { id: '9f3a', title: 'Add rate-limiting middleware to auth-service', status: 'running', model: 'claude-fable-5', repo: 'nuncio/auth-service', branch: 'nuncio/9f3a-rate-limit', updatedAt: '2m ago', preview: "Reading `src/middleware/auth.ts` and `src/routes/login.ts`. Planning to add a token-bucket limiter keyed by IP + user…" },
+    { id: '7c21', title: 'Fix flaky test: websocket reconnect drops messages', status: 'idle', model: 'claude-opus-4-8', repo: 'nuncio/web-app', branch: 'nuncio/7c21-ws-reconnect', updatedAt: '14m ago', preview: "Found it — `client.ts:64` only reports `closed`, no outbound queue. Drafting fix + repro test." },
+    { id: '5b88', title: 'Research: compare TemporalLite vs in-process for personal agent loop', status: 'idle', model: 'claude-opus-4-8', updatedAt: '1h ago', preview: "Conclusion: in-process + lazy revive is right for single-user. Temporal only worth it at >50 concurrent sessions." },
+    { id: '4d12', title: 'Migrate SQLite schema for milestones sidecar', status: 'paused', model: 'claude-sonnet-4-6', repo: 'nuncio/server', branch: 'nuncio/4d12-milestones-schema', updatedAt: '3h ago', preview: "Wrote migration `0003_add_milestones.sql`. Paused waiting on your review of the index strategy." },
+    { id: '2a09', title: 'Sketch Devin-style sidebar component', status: 'archived', model: 'claude-fable-5', repo: 'nuncio/web-app', branch: 'nuncio/2a09-sidebar', updatedAt: 'yesterday', preview: "Merged in PR #42. Sidebar now has Sessions/Ask/Automations/Review/Wiki." },
+    { id: '1f7e', title: 'Read pimote STREAMING-DESIGN.md and write migration notes', status: 'archived', model: 'claude-opus-4-8', updatedAt: '2d ago', preview: "Three-tier event log is gold. Apply y original for nuncio's WS hub." },
+  ],
+  sidebarFilter: 'all',
+  activeSessionId: null,
+  homeModel: 'claude-fable-5',
+  streamTimer: null,
+  onboardItems: [
+    { id: 'connect_pi',    label: 'Connect Pi (auth.json detected)',         done: true },
+    { id: 'first_session', label: 'Run your first session',                  done: true },
+    { id: 'connect_git',   label: 'Connect a GitHub repo',                   done: false },
+    { id: 'steer_agent',   label: 'Steer an agent mid-run',                  done: false },
+    { id: 'install_pwa',   label: 'Install Nuncio as a PWA on your phone',   done: false },
+  ],
+};
+
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => document.querySelectorAll(s);
+
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._tm);
+  t._tm = setTimeout(() => t.classList.remove('show'), 2200);
+}
+function statusLabel(s) {
+  return { running: 'Running', idle: 'Idle', paused: 'Paused', archived: 'Archived', error: 'Error' }[s] || s;
+}
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+/* ============ Sidebar nav ============ */
+$$('.nav-item').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (btn.classList.contains('disabled')) {
+      const view = btn.dataset.view;
+      const titles = { ask: 'Ask', automations: 'Automations', review: 'Review', wiki: 'Wiki' };
+      const bodies = {
+        ask: 'Quick Q&A mode — no workspace, no git. Just ask and get an answer.',
+        automations: 'Cron schedules and webhooks that trigger sessions automatically.',
+        review: 'Diff viewer and PR review surface — see what your agents changed.',
+        wiki: 'A markdown knowledge base your agents can read and write to.',
+      };
+      showComingSoon(titles[view], bodies[view]);
+      return;
+    }
+    $$('.nav-item').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    showHome();
+    closeSidebar();
+  });
+});
+
+function showComingSoon(title, body) {
+  $('#viewHome').style.display = 'none';
+  $('#viewDetail').style.display = 'none';
+  $('#viewComingSoon').style.display = 'flex';
+  $('#csTitle').textContent = title;
+  $('#csBody').textContent = body;
+}
+
+/* ============ Mobile sidebar ============ */
+$('#mobileToggle').addEventListener('click', () => {
+  $('#sidebar').classList.toggle('open');
+  $('#scrim').classList.toggle('show');
+});
+$('#scrim').addEventListener('click', closeSidebar);
+function closeSidebar() {
+  $('#sidebar').classList.remove('open');
+  $('#scrim').classList.remove('show');
+}
+
+/* ============ Sidebar session list ============ */
+function setSidebarFilter(f, ev) {
+  if (ev) ev.stopPropagation();
+  state.sidebarFilter = f;
+  $$('.filter-trigger').forEach(b => b.classList.toggle('active', b.dataset.filter === f));
+  renderSidebarSessions();
+}
+
+function renderSidebarSessions() {
+  const list = $('#sidebarSessionList');
+  const filtered = state.sessions.filter(s => state.sidebarFilter === 'all' || s.status === state.sidebarFilter);
+  $('#sessionCount').textContent = state.sessions.length;
+  $('#quickSessionCount').textContent = `${state.sessions.length} session${state.sessions.length === 1 ? '' : 's'}`;
+
+  list.innerHTML = '';
+  if (filtered.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'padding: 20px 8px; text-align: center; color: var(--text-3); font-size: 12px;';
+    empty.textContent = 'No sessions';
+    list.appendChild(empty);
+    return;
+  }
+  filtered.forEach(s => {
+    const m = MODEL_BY_ID[s.model];
+    const el = document.createElement('button');
+    el.className = 'side-session' + (s.id === state.activeSessionId ? ' active' : '');
+    el.onclick = () => openSession(s.id);
+    el.innerHTML = `
+      <span class="status-dot ${s.status}"></span>
+      <div class="body">
+        <div class="title">${escapeHtml(s.title)}</div>
+        <div class="meta">
+          <span class="model">${m.name}</span>
+          <span class="time">${s.updatedAt}</span>
+        </div>
+      </div>
+    `;
+    list.appendChild(el);
+  });
+}
+
+/* ============ Onboarding ============ */
+function renderOnboard() {
+  const list = $('#onboardList');
+  list.innerHTML = '';
+  state.onboardItems.forEach(item => {
+    const el = document.createElement('div');
+    el.className = 'onboard-item' + (item.done ? ' done' : '');
+    el.onclick = () => { item.done = !item.done; renderOnboard(); };
+    el.innerHTML = `
+      <div class="onboard-check">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      </div>
+      <span class="label">${escapeHtml(item.label)}</span>
+    `;
+    list.appendChild(el);
+  });
+  const done = state.onboardItems.filter(i => i.done).length;
+  const total = state.onboardItems.length;
+  $('#onboardCount').textContent = `${done} of ${total}`;
+  $('#onboardFill').style.width = `${(done / total) * 100}%`;
+}
+
+/* ============ Model selector — nested Provider → Group → Model ============ */
+const modelState = {
+  openProvider: null,   // currently expanded provider id (level 1)
+  openGroup: null,      // currently expanded group id (level 2)
+  search: '',           // level-2/3 search query
+};
+
+function renderProviderPanel() {
+  const panel = $('#modelPanel1');
+  panel.innerHTML = '';
+  PROVIDERS.forEach(p => {
+    const row = document.createElement('button');
+    const active = modelState.openProvider === p.id;
+    row.className = 'model-row' + (active ? ' active' : '');
+    if (p.unavailable) row.classList.add('disabled');
+    const handleClick = (e) => {
+      if (e) e.stopPropagation();
+      if (p.unavailable) { toast(`${p.name} — bring your own API key`); return; }
+      modelState.openProvider = active ? null : p.id;
+      if (!active) { modelState.openGroup = null; modelState.search = ''; }
+      renderAllPanels();
+    };
+    row.addEventListener('click', handleClick);
+    const groupCount = (p.groups || []).length;
+    row.innerHTML = `
+      <span class="icon">${p.icon || '·'}</span>
+      <span class="label">
+        <span class="name">${escapeHtml(p.name)}</span>
+        <span class="sub">${escapeHtml(p.sub)}</span>
+      </span>
+      ${groupCount ? `<span class="count">${groupCount} group${groupCount === 1 ? '' : 's'}</span>` : '<span class="badge unavailable">BYOK</span>'}
+      <svg class="chev-r" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+    `;
+    panel.appendChild(row);
+  });
+}
+
+function renderGroupPanel() {
+  const panel = $('#modelPanel2');
+  panel.innerHTML = '';
+  if (!modelState.openProvider) return;
+  const p = PROVIDERS.find(x => x.id === modelState.openProvider);
+  if (!p || !p.groups) return;
+
+  // Search box
+  const search = document.createElement('div');
+  search.className = 'model-search';
+  search.innerHTML = `
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input type="text" placeholder="Search models or providers" value="${escapeHtml(modelState.search)}" id="modelSearchInput">
+  `;
+  panel.appendChild(search);
+  setTimeout(() => {
+    const inp = $('#modelSearchInput');
+    if (inp) {
+      inp.addEventListener('input', (e) => { modelState.search = e.target.value; renderGroupPanel(); setTimeout(() => $('#modelSearchInput').focus(), 0); });
+      inp.addEventListener('click', (e) => e.stopPropagation());
+    }
+  }, 0);
+
+  // Filter groups/models by search
+  const q = modelState.search.trim().toLowerCase();
+  const matchModel = (m) => !q || m.name.toLowerCase().includes(q) || m.sub.toLowerCase().includes(q);
+  (p.groups || []).forEach(g => {
+    const filteredModels = g.models.filter(matchModel);
+    if (q && filteredModels.length === 0) return; // hide group if no model matches
+    const active = modelState.openGroup === g.id;
+    const row = document.createElement('button');
+    row.className = 'model-row' + (active ? ' active' : '');
+    const groupRef = g;
+    row.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const wasActive = modelState.openGroup === groupRef.id;
+      modelState.openGroup = wasActive ? null : groupRef.id;
+      renderAllPanels();
+    });
+    const total = g.models.length;
+    row.innerHTML = `
+      <span class="icon">${escapeHtml(g.name.slice(0, 1).toUpperCase())}</span>
+      <span class="label">
+        <span class="name">${escapeHtml(g.name)}</span>
+        <span class="sub">${escapeHtml(g.sub)}</span>
+      </span>
+      ${g.badge ? `<span class="badge ${g.badge}">${g.badge}</span>` : ''}
+      <span class="count">${q ? filteredModels.length : total}</span>
+      <svg class="chev-r" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+    `;
+    panel.appendChild(row);
+  });
+}
+
+function renderModelPanel() {
+  const panel = $('#modelPanel3');
+  panel.innerHTML = '';
+  if (!modelState.openProvider || !modelState.openGroup) return;
+  const p = PROVIDERS.find(x => x.id === modelState.openProvider);
+  const g = (p?.groups || []).find(x => x.id === modelState.openGroup);
+  if (!g) return;
+
+  // Header breadcrumb
+  const header = document.createElement('div');
+  header.style.cssText = 'padding: 4px 9px 8px; font-size: 10.5px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600;';
+  header.textContent = `${p.name} · ${g.name}`;
+  panel.appendChild(header);
+
+  g.models.forEach(m => {
+    const row = document.createElement('button');
+    row.className = 'model-row' + (m.id === state.homeModel ? ' selected' : '');
+    const modelRef = m;
+    row.addEventListener('click', (e) => {
+      e.stopPropagation();
+      selectModel(modelRef.id);
+    });
+    row.innerHTML = `
+      <span class="label">
+        <span class="name">${escapeHtml(m.name)}</span>
+        <span class="sub">${escapeHtml(m.sub)}</span>
+      </span>
+      <span class="badge">${escapeHtml(m.badge)}</span>
+      <span class="cost">${escapeHtml(m.cost)}</span>
+      <svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+    `;
+    panel.appendChild(row);
+  });
+}
+
+function selectModel(modelId) {
+  state.homeModel = modelId;
+  const m = MODEL_BY_ID[modelId];
+  if (m) {
+    $('#homeModelProvider').textContent = m.providerName;
+    $('#homeModelName').textContent = m.name;
+  }
+  closeModelMenu();
+}
+
+function renderAllPanels() {
+  renderProviderPanel();
+  renderGroupPanel();
+  renderModelPanel();
+  // Toggle visibility via .open class
+  $('#modelPanel1').classList.toggle('open', !!modelState.openProvider || $('#modelDropdown').classList.contains('open'));
+  // panel 1 should always show when dropdown open; panel 2/3 conditional
+  const ddOpen = $('#modelDropdown').classList.contains('open');
+  $('#modelPanel1').classList.toggle('open', ddOpen);
+  $('#modelPanel2').classList.toggle('open', ddOpen && !!modelState.openProvider);
+  $('#modelPanel3').classList.toggle('open', ddOpen && !!modelState.openGroup);
+}
+
+function toggleModelMenu(e) {
+  if (e) e.stopPropagation();
+  const dd = $('#modelDropdown');
+  const opening = !dd.classList.contains('open');
+  dd.classList.toggle('open', opening);
+  if (opening) {
+    // If a model is already selected, pre-open its provider + group
+    const m = MODEL_BY_ID[state.homeModel];
+    if (m) { modelState.openProvider = m.providerId; modelState.openGroup = m.groupId; }
+    renderAllPanels();
+  }
+}
+function closeModelMenu() {
+  $('#modelDropdown').classList.remove('open');
+  $('#modelPanel1').classList.remove('open');
+  $('#modelPanel2').classList.remove('open');
+  $('#modelPanel3').classList.remove('open');
+}
+document.addEventListener('click', closeModelMenu);
+// Stop propagation inside dropdown so clicks don't close
+['modelPanel1', 'modelPanel2', 'modelPanel3'].forEach(id => {
+  document.addEventListener('DOMContentLoaded', () => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('click', (e) => e.stopPropagation());
+  });
+});
+// Also attach immediately (script runs after DOM)
+['modelPanel1', 'modelPanel2', 'modelPanel3'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('click', (e) => e.stopPropagation());
+});
+// Trigger: use addEventListener + stopPropagation so document click handler doesn't close it
+(() => {
+  const trigger = document.getElementById('modelTrigger');
+  if (trigger) trigger.addEventListener('click', (e) => { e.stopPropagation(); toggleModelMenu(e); });
+})();
+
+/* ============ Home composer → create session ============ */
+const homeInput = $('#homeInput');
+homeInput.addEventListener('input', () => {
+  homeInput.style.height = 'auto';
+  homeInput.style.height = Math.min(homeInput.scrollHeight, 280) + 'px';
+});
+homeInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    startSessionFromHome();
+  }
+});
+
+function startSessionFromHome() {
+  const text = homeInput.value.trim();
+  if (!text) { homeInput.focus(); return; }
+  const id = Math.random().toString(16).slice(2, 6);
+  const slug = text.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30).replace(/^-|-$/g, '');
+  const repoChip = $('#homeRepoChip');
+  const hasRepo = !repoChip.classList.contains('empty');
+  const repoName = hasRepo ? repoChip.querySelector('span').textContent : undefined;
+
+  const newSession = {
+    id,
+    title: text.length > 70 ? text.slice(0, 67) + '…' : text,
+    status: 'running',
+    model: state.homeModel,
+    repo: repoName,
+    branch: repoName ? `nuncio/${id}-${slug}` : undefined,
+    updatedAt: 'just now',
+    preview: 'Reading the codebase and planning the approach…',
+  };
+  state.sessions.unshift(newSession);
+  if (repoName) {
+    const ob = state.onboardItems.find(i => i.id === 'connect_git');
+    if (ob) ob.done = true;
+  }
+  const firstOb = state.onboardItems.find(i => i.id === 'first_session');
+  if (firstOb) firstOb.done = true;
+
+  homeInput.value = '';
+  homeInput.style.height = 'auto';
+  renderSidebarSessions();
+  renderOnboard();
+  toast('Session started — agent is working');
+  setTimeout(() => openSession(id), 200);
+}
+
+/* ============ View switching ============ */
+function showHome() {
+  stopFakeStream();
+  state.activeSessionId = null;
+  $('#viewDetail').style.display = 'none';
+  $('#viewComingSoon').style.display = 'none';
+  $('#viewHome').style.display = 'flex';
+  $$('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === 'sessions'));
+  renderSidebarSessions();
+  closeSidebar();
+  setTimeout(() => homeInput.focus(), 50);
+}
+
+function openSession(id) {
+  const s = state.sessions.find(x => x.id === id);
+  if (!s) return;
+  state.activeSessionId = id;
+
+  $('#viewHome').style.display = 'none';
+  $('#viewComingSoon').style.display = 'none';
+  $('#viewDetail').style.display = 'flex';
+
+  $('#detailTitle').textContent = s.title;
+  $('#detailStatusText').textContent = statusLabel(s.status);
+  $('#detailDot').className = 'status-dot ' + s.status;
+  $('#detailStatus').className = 'detail-status ' + s.status;
+  $('#composerModel').textContent = MODEL_BY_ID[s.model].name;
+  const repoChip = $('#detailRepoChip');
+  if (s.repo) {
+    repoChip.style.display = '';
+    $('#detailRepoName').textContent = s.repo;
+  } else {
+    repoChip.style.display = 'none';
+  }
+
+  buildTranscript(s);
+  $('#stream').scrollTop = $('#stream').scrollHeight;
+
+  if (s.status === 'running') {
+    startFakeStream(s);
+    $('#interruptBtn').style.display = 'flex';
+  } else {
+    stopFakeStream();
+    $('#interruptBtn').style.display = 'none';
+  }
+  renderSidebarSessions();
+  closeSidebar();
+}
+
+function archiveActive() {
+  const s = state.sessions.find(x => x.id === state.activeSessionId);
+  if (!s) return;
+  s.status = 'archived';
+  s.updatedAt = 'archived just now';
+  toast('Session archived');
+  showHome();
+}
+
+/* ============ Fake transcript + streaming ============ */
+function buildTranscript(s) {
+  const inner = $('#streamInner');
+  inner.innerHTML = '';
+
+  const userMsg = (text) => {
+    const el = document.createElement('div');
+    el.className = 'msg user';
+    el.innerHTML = `<div class="bubble">${escapeHtml(text)}</div>`;
+    return el;
+  };
+  const asstMsg = (html) => {
+    const el = document.createElement('div');
+    el.className = 'msg assistant';
+    el.innerHTML = `<div class="msg-label">Assistant · <span class="model-name">${MODEL_BY_ID[s.model].name}</span></div><div class="bubble">${html}</div>`;
+    return el;
+  };
+  const toolCard = (tool, summary, body, isOpen) => {
+    const el = document.createElement('div');
+    el.className = 'tool-card' + (isOpen ? ' open' : '');
+    const icons = { bash: '$', read: 'R', write: 'W', edit: 'E' };
+    el.innerHTML = `
+      <div class="tool-card-head" onclick="this.parentElement.classList.toggle('open');this.querySelector('.chev').classList.toggle('open')">
+        <div class="tool-icon ${tool}">${icons[tool] || '?'}</div>
+        <span class="name">${tool}</span>
+        <span class="summary">${escapeHtml(summary)}</span>
+        <svg class="chev ${isOpen ? 'open' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+      <div class="tool-card-body">${body}</div>
+    `;
+    return el;
+  };
+
+  inner.appendChild(userMsg(s.title));
+  inner.appendChild(toolCard('read', 'src/middleware/auth.ts',
+    `<span class="out">export async function authMiddleware(req, res, next) {
+  const token = req.headers.authorization?.slice(7);
+  if (!token) return res.status(401).json({ error: 'no token' });
+  const user = await verifyJwt(token);
+  req.user = user;
+  next();
+}</span>`, false));
+  inner.appendChild(asstMsg(`<p>I see the auth middleware is straightforward. To add rate-limiting I'll need a token-bucket store keyed by <code>ip + userId</code>. Let me check the routes first.</p>`));
+  inner.appendChild(toolCard('bash', 'cat src/routes/login.ts | head -40',
+    `<span class="cmd">$ cat src/routes/login.ts | head -40</span>
+<span class="out">router.post('/login', async (req, res) => {
+  const { email, password } = req.body;
+  const user = await db.users.findByEmail(email);
+  if (!user || !verifyPwd(password, user.pwdHash)) {
+    return res.status(401).json({ error: 'invalid' });
+  }
+  const token = signJwt({ id: user.id });
+  res.json({ token });
+});</span>`, false));
+  inner.appendChild(asstMsg(`<p>The <code>/login</code> route is the main brute-force surface. I'll add a <code>rateLimit(opts)</code> middleware with a per-IP bucket of 10 requests / minute, and a stricter per-user bucket of 5 / minute on token-refresh.</p>`));
+  inner.appendChild(toolCard('write', 'src/middleware/rateLimit.ts (new)',
+    `<span class="out">import type { Request, Response, NextFunction } from 'express';
+interface Bucket { tokens: number; lastRefill: number; }
+const buckets = new Map&lt;string, Bucket&gt;();
+export function rateLimit(opts: { key: (req: Request) =&gt; string; capacity: number; refillPerSec: number; }) {
+  return (req: Request, res: Response, next: NextFunction) =&gt; {
+    const k = opts.key(req);
+    const now = Date.now();
+    const b = buckets.get(k) ?? { tokens: opts.capacity, lastRefill: now };
+    const elapsed = (now - b.lastRefill) / 1000;
+    b.tokens = Math.min(opts.capacity, b.tokens + elapsed * opts.refillPerSec);
+    b.lastRefill = now;
+    if (b.tokens &lt; 1) return res.status(429).json({ error: 'rate_limited' });
+    b.tokens -= 1; buckets.set(k, b); next();
+  };
+}</span>`, false));
+
+  if (s.status === 'running') {
+    const live = document.createElement('div');
+    live.className = 'msg assistant';
+    live.id = 'liveMsg';
+    live.innerHTML = `<div class="msg-label">Assistant · <span class="model-name">${MODEL_BY_ID[s.model].name}</span></div><div class="bubble"><p id="liveText"></p><span class="cursor"></span></div>`;
+    inner.appendChild(live);
+  } else if (s.status === 'paused') {
+    inner.appendChild(asstMsg(`<p>Migration written and committed to <code>nuncio/4d12-milestones-schema</code>. <strong>Paused for your review</strong> of the index strategy — should <code>session_id</code> be the primary index, or a composite <code>(session_id, seq)</code>?</p>`));
+  } else if (s.status === 'idle') {
+    inner.appendChild(asstMsg(`<p>Done. Conclusion: for a single-user personal agent app, in-process + lazy revive is the right pattern. Durable external runtimes (Temporal) only earn their complexity above ~50 concurrent sessions.</p>`));
+  }
+}
+
+const STREAM_TEXT = "Now I'll wire the limiter into the login and refresh routes. For `/login` I'll use `key: req => req.ip`, capacity 10, refill 0.2/s — so 10 bursts then 12/min sustained. For `/refresh` I'll use `key: req => \\`user:${req.user.id}\\``, capacity 5, refill 0.1/s. Then I'll add a test file that mocks the clock to verify the bucket math. ";
+
+function startFakeStream(s) {
+  stopFakeStream();
+  let i = 0;
+  const text = STREAM_TEXT;
+  const liveText = $('#liveText');
+  if (!liveText) return;
+  liveText.textContent = '';
+  state.streamTimer = setInterval(() => {
+    if (i >= text.length) {
+      stopFakeStream();
+      const cursor = document.querySelector('#liveMsg .cursor');
+      if (cursor) cursor.remove();
+      s.status = 'idle';
+      s.updatedAt = 'just now';
+      $('#detailStatusText').textContent = statusLabel('idle');
+      $('#detailDot').className = 'status-dot idle';
+      $('#detailStatus').className = 'detail-status idle';
+      $('#interruptBtn').style.display = 'none';
+      renderSidebarSessions();
+      return;
+    }
+    liveText.textContent += text.slice(i, i + 3);
+    i += 3;
+    $('#stream').scrollTop = $('#stream').scrollHeight;
+  }, 40);
+}
+
+function stopFakeStream() {
+  if (state.streamTimer) { clearInterval(state.streamTimer); state.streamTimer = null; }
+}
+
+function interruptAgent() {
+  stopFakeStream();
+  const s = state.sessions.find(x => x.id === state.activeSessionId);
+  if (s) {
+    s.status = 'idle';
+    s.updatedAt = 'interrupted';
+    $('#detailStatusText').textContent = statusLabel('idle');
+    $('#detailDot').className = 'status-dot idle';
+    $('#detailStatus').className = 'detail-status idle';
+    $('#interruptBtn').style.display = 'none';
+    const cursor = document.querySelector('#liveMsg .cursor');
+    if (cursor) cursor.remove();
+    const liveText = $('#liveText');
+    if (liveText) liveText.textContent += ' [interrupted by user]';
+    toast('Agent interrupted');
+    renderSidebarSessions();
+  }
+}
+
+/* ============ Steer composer ============ */
+const steerInput = $('#steerInput');
+steerInput.addEventListener('input', () => {
+  steerInput.style.height = 'auto';
+  steerInput.style.height = Math.min(steerInput.scrollHeight, 160) + 'px';
+});
+steerInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendSteer(); }
+  if (e.key === 'Escape') { interruptAgent(); }
+});
+
+function sendSteer() {
+  const text = steerInput.value.trim();
+  if (!text) return;
+  const inner = $('#streamInner');
+  const live = $('#liveMsg');
+  if (live) live.remove();
+
+  const u = document.createElement('div');
+  u.className = 'msg user';
+  u.innerHTML = `<div class="bubble">${escapeHtml(text)}</div>`;
+  inner.appendChild(u);
+
+  const s = state.sessions.find(x => x.id === state.activeSessionId);
+  const a = document.createElement('div');
+  a.className = 'msg assistant';
+  a.innerHTML = `<div class="msg-label">Assistant · <span class="model-name">${MODEL_BY_ID[s?.model || state.homeModel].name}</span></div><div class="bubble"><p id="liveText"></p><span class="cursor"></span></div>`;
+  inner.appendChild(a);
+  $('#stream').scrollTop = $('#stream').scrollHeight;
+
+  steerInput.value = '';
+  steerInput.style.height = 'auto';
+
+  const reply = `Got it — adjusting course. ${text.length < 60 ? 'On it.' : 'I will work through this step by step and report back.'}`;
+  let i = 0;
+  const liveText = $('#liveText');
+  const tm = setInterval(() => {
+    if (i >= reply.length) {
+      clearInterval(tm);
+      const cursor = document.querySelector('.msg.assistant:last-child .cursor');
+      if (cursor) cursor.remove();
+      return;
+    }
+    liveText.textContent += reply.slice(i, i + 2);
+    i += 2;
+    $('#stream').scrollTop = $('#stream').scrollHeight;
+  }, 32);
+
+  // Mark "steer_agent" onboard done
+  const ob = state.onboardItems.find(i => i.id === 'steer_agent');
+  if (ob && !ob.done) { ob.done = true; renderOnboard(); }
+}
+
+/* ============ Init ============ */
+(() => {
+  // Set initial provider/model labels from default homeModel
+  const m = MODEL_BY_ID[state.homeModel];
+  if (m) {
+    $('#homeModelProvider').textContent = m.providerName;
+    $('#homeModelName').textContent = m.name;
+  }
+})();
+renderOnboard();
+renderSidebarSessions();
+setTimeout(() => homeInput.focus(), 100);
+</script>
+</body>
+</html>
