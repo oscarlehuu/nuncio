@@ -21,6 +21,38 @@ npm run build   # build server + web
 npm test        # server unit/integration tests
 ```
 
+## PWA install (iPhone)
+
+Nuncio ships as an installable PWA (`vite-plugin-pwa`: manifest, service worker, standalone display). **Add to Home Screen on iPhone requires HTTPS** — Safari will not offer a full install from plain `http://` localhost.
+
+1. Deploy with Tailscale HTTPS (see [Production deploy](#production-deploy-tailscale) below).
+2. On your iPhone, open the Tailscale URL in **Safari** (not an in-app browser).
+3. Tap **Share** → **Add to Home Screen**.
+4. Launch Nuncio from the home-screen icon — it runs in standalone mode with the dark theme and app icon.
+
+The service worker precaches the UI shell; `/api/*` uses network-first so session data stays fresh.
+
+## Production deploy (Tailscale)
+
+Build and run the production stack on your machine, then expose it over Tailscale for HTTPS access from your phone or other devices on your tailnet.
+
+```bash
+npm run build
+npm run start:prod -w apps/server   # API on :3000
+npm run preview -w apps/web         # built UI on :5173 (proxies /api → 3000)
+tailscale serve --bg 5173
+```
+
+Open `https://<your-machine>.<tailnet>.ts.net` — Tailscale terminates TLS so iPhone PWA install works.
+
+**API on port 3000:** In dev, Vite proxies `/api` to the NestJS server. The same proxy applies when using `vite preview`, so a single `tailscale serve --bg 5173` is usually enough — the browser only talks to 5173 and the preview server forwards API calls to localhost:3000.
+
+If you serve the API and web separately (e.g. static files from another host without a proxy), you may need a **second** `tailscale serve` for port 3000, or a **unified reverse proxy** (nginx, Caddy, etc.) that routes `/` → web and `/api` → server under one HTTPS origin.
+
+## Roadmap
+
+Phase plans and milestones: [plans/260626-nuncio-roadmap/](plans/260626-nuncio-roadmap/)
+
 ## Architecture
 
 - **Agent harness:** [Pi SDK](https://github.com/earendil-works/pi) (`createAgentSession`) — in-process, resumable; falls back to mock agent when `~/.pi/agent/auth.json` is missing
