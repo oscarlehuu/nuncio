@@ -1,4 +1,10 @@
-export type SessionStatus = 'CREATED' | 'RUNNING' | 'IDLE' | 'ERROR';
+export type SessionStatus =
+  | 'CREATED'
+  | 'RUNNING'
+  | 'IDLE'
+  | 'PAUSED'
+  | 'ARCHIVED'
+  | 'ERROR';
 
 export interface SessionRow {
   id: string;
@@ -41,4 +47,8 @@ export interface SessionDto {
 export interface CreateSessionDto {
   prompt: string;
   model?: string;
+}
+
+export interface SteerSessionDto {
+  message: string;
 }

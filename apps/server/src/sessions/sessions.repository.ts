@@ -26,10 +26,11 @@ function titleFromPrompt(prompt: string): string {
 export class SessionsRepository {
   constructor(private readonly database: DatabaseService) {}
 
-  list(): SessionDto[] {
-    const rows = this.database.db
-      .prepare('SELECT * FROM sessions ORDER BY updated_at DESC')
-      .all() as SessionRow[];
+  list(includeArchived = false): SessionDto[] {
+    const sql = includeArchived
+      ? 'SELECT * FROM sessions ORDER BY updated_at DESC'
+      : "SELECT * FROM sessions WHERE status != 'ARCHIVED' ORDER BY updated_at DESC";
+    const rows = this.database.db.prepare(sql).all() as SessionRow[];
     return rows.map(toDto);
   }
 

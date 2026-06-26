@@ -3,9 +3,11 @@ import type { SessionStatus } from './session.types';
 
 const TRANSITIONS: Record<SessionStatus, SessionStatus[]> = {
   CREATED: ['RUNNING', 'ERROR'],
-  RUNNING: ['IDLE', 'ERROR'],
-  IDLE: ['RUNNING', 'ERROR'],
-  ERROR: ['RUNNING', 'IDLE'],
+  RUNNING: ['IDLE', 'ERROR', 'PAUSED'],
+  IDLE: ['RUNNING', 'ERROR', 'PAUSED', 'ARCHIVED'],
+  PAUSED: ['RUNNING', 'ARCHIVED'],
+  ARCHIVED: [],
+  ERROR: ['RUNNING', 'IDLE', 'ARCHIVED'],
 };
 
 export function assertTransition(from: SessionStatus, to: SessionStatus): void {

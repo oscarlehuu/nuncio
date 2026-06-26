@@ -9,7 +9,7 @@ import {
   Res,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import type { CreateSessionDto } from './session.types';
+import type { CreateSessionDto, SteerSessionDto } from './session.types';
 import { SessionsService } from './sessions.service';
 
 @Controller('sessions')
@@ -17,8 +17,8 @@ export class SessionsController {
   constructor(private readonly sessions: SessionsService) {}
 
   @Get()
-  list() {
-    return this.sessions.list();
+  list(@Query('includeArchived') includeArchived?: string) {
+    return this.sessions.list(includeArchived === '1' || includeArchived === 'true');
   }
 
   @Post()
@@ -34,6 +34,21 @@ export class SessionsController {
     const session = this.sessions.get(id);
     if (!session) throw new NotFoundException('Session not found');
     return session;
+  }
+
+  @Post(':id/steer')
+  steer(@Param('id') id: string, @Body() body: SteerSessionDto) {
+    return this.sessions.steer(id, body?.message ?? '');
+  }
+
+  @Post(':id/pause')
+  pause(@Param('id') id: string) {
+    return this.sessions.pause(id);
+  }
+
+  @Post(':id/archive')
+  archive(@Param('id') id: string) {
+    return this.sessions.archive(id);
   }
 
   @Get(':id/events')
