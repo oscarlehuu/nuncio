@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
+  archiveSession,
   createSession,
   fetchSessions,
+  pauseSession,
+  steerSession,
   type Session,
 } from './lib/api';
 import { useSessionStream } from './lib/use-session-stream';
@@ -13,6 +16,8 @@ export default function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [steering, setSteering] = useState(false);
+  const [lifecycleBusy, setLifecycleBusy] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const events = useSessionStream(activeId);
 
@@ -45,10 +50,10 @@ export default function App() {
     closeSidebar();
   }, [closeSidebar]);
 
-  const handleCreate = async (prompt: string) => {
+  const handleCreate = async (prompt: string, model?: string) => {
     setCreating(true);
     try {
-      const session = await createSession(prompt);
+      const session = await createSession(prompt, model);
       const list = await refresh();
       setActiveId(session.id);
       closeSidebar();
@@ -57,6 +62,41 @@ export default function App() {
       }
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleSteer = async (message: string) => {
+    if (!activeId) return;
+    setSteering(true);
+    try {
+      await steerSession(activeId, message);
+      await refresh();
+    } finally {
+      setSteering(false);
+    }
+  };
+
+  const handlePause = async () => {
+    if (!activeId) return;
+    setLifecycleBusy(true);
+    try {
+      await pauseSession(activeId);
+      await refresh();
+    } finally {
+      setLifecycleBusy(false);
+    }
+  };
+
+  const handleArchive = async () => {
+    if (!activeId) return;
+    setLifecycleBusy(true);
+    try {
+      await archiveSession(activeId);
+      await refresh();
+      setActiveId(null);
+      closeSidebar();
+    } finally {
+      setLifecycleBusy(false);
     }
   };
 
@@ -89,6 +129,11 @@ export default function App() {
             session={activeSession}
             events={events}
             onBack={handleNew}
+            onSteer={handleSteer}
+            onPause={handlePause}
+            onArchive={handleArchive}
+            steering={steering}
+            lifecycleBusy={lifecycleBusy}
           />
         ) : (
           <HomeView

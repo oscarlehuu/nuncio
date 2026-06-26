@@ -16,6 +16,7 @@
   --color-accent-hover: #e0b384;
   --color-success: #7fb98c;
   --color-error: #c97474;
+  --color-info: #74a5c9;
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", system-ui, sans-serif;
   --font-mono: "SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, Menlo, monospace;
   --font-serif: "New York", "Iowan Old Style", "Charter", Georgia, serif;
@@ -109,8 +110,60 @@ body {
     padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
   }
 
+  .composer-wrap {
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+
   .touch-target {
     min-height: 44px;
     min-width: 44px;
   }
+}
+
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--color-text-1);
+  font-size: 13px;
+  transition: background 0.1s;
+  border: none;
+  background: none;
+}
+
+.model-row:hover {
+  background: var(--color-bg-3);
+  color: var(--color-text-0);
+}
+
+.model-row.active {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.model-row.selected .block.font-medium {
+  color: var(--color-accent);
+}
+
+.model-row-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  background: var(--color-bg-1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-1);
+  flex-shrink: 0;
+}
+
+.model-row.active .model-row-icon {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
 }
