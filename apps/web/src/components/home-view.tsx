@@ -17,7 +17,7 @@ export function HomeView({ sessionCount, onSubmit, loading }: HomeViewProps) {
   };
 
   return (
-    <section className="flex-1 flex flex-col items-center justify-center p-6 overflow-y-auto">
+    <section className="flex-1 flex flex-col items-center justify-center p-6 pt-16 md:pt-6 overflow-y-auto">
       <div className="w-full max-w-[720px]">
         <div className="text-center mb-8">
           <h1 className="text-[28px] font-medium tracking-tight mb-2">What should I work on?</h1>
@@ -40,13 +40,13 @@ export function HomeView({ sessionCount, onSubmit, loading }: HomeViewProps) {
             rows={4}
             className="w-full bg-transparent px-4 pt-4 pb-2 resize-none outline-none text-[15px] placeholder:text-text-3"
           />
-          <div className="flex items-center justify-between px-3 pb-3">
+          <div className="home-composer-bar flex items-center justify-between px-3 pb-3">
             <span className="text-xs text-text-2 px-2">Pi · Mock mode</span>
             <button
               type="button"
               onClick={() => void handleSubmit()}
               disabled={loading || !prompt.trim()}
-              className="w-9 h-9 rounded-lg bg-accent text-[#1a1208] flex items-center justify-center disabled:opacity-40 hover:bg-accent-hover transition-colors"
+              className="touch-target w-11 h-11 md:w-9 md:h-9 rounded-lg bg-accent text-[#1a1208] flex items-center justify-center disabled:opacity-40 hover:bg-accent-hover transition-colors"
             >
               <SendIcon />
             </button>
