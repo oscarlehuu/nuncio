@@ -4,7 +4,7 @@ A self-hosted, Devin-like web app for delegating tasks to AI agents — built fo
 
 ## Status
 
-Phase 0–1 vertical slice: monorepo scaffold, session API, SSE streaming, and mockup-inspired UI.
+Phase 0–1 vertical slice · Phase 2 PWA/mobile · Phase 3 steer + model picker.
 
 ## Quick start
 
@@ -72,10 +72,15 @@ Phase plans and milestones: [plans/260626-nuncio-roadmap/](plans/260626-nuncio-r
 | GET | `/api/sessions/:id` | Session detail |
 | GET | `/api/sessions/:id/events?since=` | Event log (cursor) |
 | GET | `/api/sessions/:id/stream?since=` | SSE stream |
+| POST | `/api/sessions/:id/steer` | Steer agent `{ "message": "..." }` |
+| POST | `/api/sessions/:id/pause` | Pause session |
+| POST | `/api/sessions/:id/archive` | Archive session |
+| GET | `/api/models` | Model catalog (Pi registry or static fallback) |
 
 ### Session FSM
 
-`CREATED` → `RUNNING` → `IDLE` | `ERROR` (steer resumes `IDLE` → `RUNNING`)
+`CREATED` → `RUNNING` → `IDLE` | `ERROR` | `PAUSED`  
+`IDLE`/`PAUSED` → `RUNNING` (steer) · `IDLE`/`PAUSED`/`ERROR` → `ARCHIVED`
 
 ## Project layout
 
