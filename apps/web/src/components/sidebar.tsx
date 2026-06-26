@@ -5,13 +5,16 @@ import { StatusDot } from './status-dot';
 interface SidebarProps {
   sessions: Session[];
   activeId: string | null;
+  open?: boolean;
   onSelect: (id: string | null) => void;
   onNew: () => void;
 }
 
-export function Sidebar({ sessions, activeId, onSelect, onNew }: SidebarProps) {
+export function Sidebar({ sessions, activeId, open = false, onSelect, onNew }: SidebarProps) {
   return (
-    <aside className="hidden md:flex flex-col bg-bg-1 border-r border-border-soft w-[260px] min-h-0">
+    <aside
+      className={`sidebar-drawer flex flex-col bg-bg-1 border-r border-border-soft w-[260px] min-h-0 md:static md:translate-x-0 md:shadow-none ${open ? 'open' : ''}`}
+    >
       <div className="p-4 pb-3 shrink-0">
         <div className="flex items-center gap-2.5 px-1">
           <div className="w-[26px] h-[26px] rounded-[7px] bg-gradient-to-br from-accent to-[#b88858] flex items-center justify-center font-serif font-semibold text-[#1a1208] text-sm">
@@ -23,7 +26,7 @@ export function Sidebar({ sessions, activeId, onSelect, onNew }: SidebarProps) {
           <button
             type="button"
             onClick={onNew}
-            className="flex items-center gap-2 px-2 py-1.5 rounded-md text-accent bg-accent-soft text-[13px] w-full text-left"
+            className="touch-target flex items-center gap-2 px-2 py-2 md:py-1.5 rounded-md text-accent bg-accent-soft text-[13px] w-full text-left"
           >
             <PlusIcon />
             <span>New Agents</span>
@@ -41,7 +44,7 @@ export function Sidebar({ sessions, activeId, onSelect, onNew }: SidebarProps) {
               key={s.id}
               type="button"
               onClick={() => onSelect(s.id)}
-              className={`relative flex items-start gap-2 p-2 rounded-md text-left w-full transition-colors ${
+              className={`touch-target relative flex items-start gap-2 p-2.5 md:p-2 rounded-md text-left w-full transition-colors ${
                 activeId === s.id ? 'bg-bg-2' : 'hover:bg-bg-2'
               }`}
             >
