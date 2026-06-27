@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import {
-  FALLBACK_PROVIDERS,
   flattenProviders,
   modelById,
   normalizeModelCatalog,
@@ -31,9 +30,7 @@ interface ModelPickerProps {
 }
 
 export function ModelPicker({ value, onChange, providers }: ModelPickerProps) {
-  const catalog = normalizeModelCatalog(
-    providers && providers.length > 0 ? providers : FALLBACK_PROVIDERS,
-  );
+  const catalog = normalizeModelCatalog(providers ?? []);
   const [open, setOpen] = useState(false);
 
   const lookup = modelById(catalog);

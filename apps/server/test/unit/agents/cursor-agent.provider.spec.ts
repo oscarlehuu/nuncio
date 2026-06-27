@@ -18,7 +18,7 @@ type StubOpts = {
   waitStatus?: 'finished' | 'error' | 'cancelled';
   waitResult?: string;
   streamEvents?: Array<{ type: string; [key: string]: unknown }>;
-  deltaUpdates?: Array<{ type: string; text?: string; toolCall?: { type?: string }; [key: string]: unknown }>;
+  deltaUpdates?: Array<{ type: string; text?: string; toolCall?: { type?: string; status?: string; isError?: boolean }; [key: string]: unknown }>;
 };
 
 function makeStubSdk(opts: StubOpts = {}) {
@@ -413,6 +413,23 @@ describe('CursorAgentProvider', () => {
     const toolEnd = all.find((e) => e.type === 'tool_end');
     expect((toolStart?.payload as { tool: string }).tool).toBe('bash');
     expect((toolEnd?.payload as { tool: string }).tool).toBe('bash');
+  });
+
+  it('maps tool-call-completed error status to tool_end isError=true', async () => {
+    const { sdk } = makeStubSdk({
+      deltaUpdates: [
+        { type: 'tool-call-completed', toolCall: { type: 'bash', status: 'error' } },
+      ],
+      waitResult: 'done',
+    });
+    provider.sdkOverride = sdk as never;
+    process.env.CURSOR_API_KEY = 'cursor_test_key';
+
+    const created = sessions.create({ prompt: 'run it', provider: 'cursor' });
+    await provider.run(created.id, created.prompt, { emit: () => {} });
+
+    const toolEnd = events.list(created.id).find((e) => e.type === 'tool_end');
+    expect((toolEnd?.payload as { isError: boolean }).isError).toBe(true);
   });
 
   it('ignores non-text/non-tool interaction updates', async () => {

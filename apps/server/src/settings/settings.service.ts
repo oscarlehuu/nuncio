@@ -59,7 +59,11 @@ export class SettingsService {
     const def = this.requireDefinition(key);
     const dbRow = this.repo.get(key);
     if (dbRow) {
-      return { value: this.decode(key, dbRow.value), source: 'db' };
+      const decoded = this.tryDecode(key, dbRow.value);
+      if (decoded !== undefined) {
+        return { value: decoded, source: 'db' };
+      }
+      // Corrupt ciphertext or wrong SETTINGS_KEY — fall through to env/default.
     }
     const envValue = this.readEnv(def);
     if (envValue !== undefined) return { value: envValue, source: 'env' };
@@ -131,6 +135,15 @@ export class SettingsService {
     // Guard against double-decryption: only decrypt if it looks like our ciphertext.
     if (!isEncrypted(stored)) return stored;
     return decryptValue(stored, this.key);
+  }
+
+  /** Returns undefined when a secret row cannot be decrypted (corrupt / wrong key). */
+  private tryDecode(key: string, stored: string): string | undefined {
+    try {
+      return this.decode(key, stored);
+    } catch {
+      return undefined;
+    }
   }
 
   private readEnv(def: SettingDefinition): string | undefined {

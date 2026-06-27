@@ -1,13 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Send } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { BranchPicker } from './branch-picker';
-import { DEFAULT_MODEL_ID, DEFAULT_PROVIDER_ID, ModelPicker } from './model-picker';
+import { ModelPicker } from './model-picker';
 import { ProjectPicker } from './project-picker';
 import { ProviderIcon } from './provider-icon';
-import { FALLBACK_PROVIDERS, type ModelProvider } from '../lib/model-providers';
+import {
+  modelById,
+  normalizeModelCatalog,
+  pickDefaultModelSelection,
+  type ModelProvider,
+} from '../lib/model-providers';
 
 interface HomeViewProps {
   sessionCount: number;
@@ -24,19 +29,28 @@ interface HomeViewProps {
 
 export function HomeView({ sessionCount, providers, onSubmit, loading }: HomeViewProps) {
   const [prompt, setPrompt] = useState('');
-  const [model, setModel] = useState(DEFAULT_MODEL_ID);
-  const [provider, setProvider] = useState<string | undefined>(DEFAULT_PROVIDER_ID);
+  const [model, setModel] = useState('');
+  const [provider, setProvider] = useState<string | undefined>();
   const [projectPath, setProjectPath] = useState<string | undefined>();
   const [baseBranch, setBaseBranch] = useState<string | undefined>();
 
-  const availableProviders = (providers && providers.length > 0
-    ? providers
-    : FALLBACK_PROVIDERS
-  ).filter((p) => !p.unavailable);
+  const catalogLoaded = Boolean(providers && providers.length > 0);
+  const availableProviders = (providers ?? []).filter((p) => !p.unavailable);
+
+  useEffect(() => {
+    if (!catalogLoaded || !providers) return;
+    const catalog = normalizeModelCatalog(providers);
+    if (model && provider && modelById(catalog)[model]) return;
+    const picked = pickDefaultModelSelection(providers);
+    if (picked) {
+      setModel(picked.modelId);
+      setProvider(picked.providerId);
+    }
+  }, [catalogLoaded, providers, model, provider]);
 
   const handleSubmit = async () => {
     const text = prompt.trim();
-    if (!text || loading) return;
+    if (!text || loading || !catalogLoaded || !model || !provider) return;
     await onSubmit(text, model, provider, projectPath, baseBranch);
     setPrompt('');
   };
@@ -88,7 +102,7 @@ export function HomeView({ sessionCount, providers, onSubmit, loading }: HomeVie
               size="icon-lg"
               aria-label="Send"
               onClick={() => void handleSubmit()}
-              disabled={loading || !prompt.trim()}
+              disabled={loading || !prompt.trim() || !catalogLoaded || !model}
               className="size-11 md:size-9 shrink-0"
             >
               <Send />

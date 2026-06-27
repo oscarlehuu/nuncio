@@ -44,6 +44,15 @@ export default function App() {
     return list;
   }, []);
 
+  const refreshModels = useCallback(async () => {
+    try {
+      const list = await fetchModels();
+      setProviders(list);
+    } catch {
+      toast.error('Failed to load models');
+    }
+  }, []);
+
   useEffect(() => {
     void refresh();
     const timer = setInterval(() => void refresh(), 5000);
@@ -51,8 +60,8 @@ export default function App() {
   }, [refresh]);
 
   useEffect(() => {
-    void fetchModels().then(setProviders);
-  }, []);
+    void refreshModels();
+  }, [refreshModels]);
 
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
 
@@ -147,23 +156,25 @@ export default function App() {
       try {
         const updated = await updateSetting(key, value);
         setSettings((prev) => prev.map((s) => (s.key === key ? updated : s)));
+        await refreshModels();
         toast.success(`Saved ${key}`);
       } catch {
         toast.error(`Failed to save ${key}`);
       }
     },
-    [],
+    [refreshModels],
   );
 
   const handleClearSetting = useCallback(async (key: string) => {
     try {
       const updated = await clearSetting(key);
       setSettings((prev) => prev.map((s) => (s.key === key ? updated : s)));
+      await refreshModels();
       toast.success(`Cleared ${key}`);
     } catch {
       toast.error(`Failed to clear ${key}`);
     }
-  }, []);
+  }, [refreshModels]);
 
   return (
     <div className="h-full flex bg-background">

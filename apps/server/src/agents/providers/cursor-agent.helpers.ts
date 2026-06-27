@@ -7,6 +7,15 @@ export function isCursorDefaultModelId(id: string): boolean {
   return bare === 'default';
 }
 
+export function isCursorToolCallError(
+  toolCall: { status?: string; isError?: boolean } | undefined,
+): boolean {
+  if (!toolCall) return false;
+  if (toolCall.isError === true) return true;
+  const status = toolCall.status?.toLowerCase();
+  return status === 'error' || status === 'failed';
+}
+
 export const STATIC_FALLBACK_CURSOR_MODELS: ModelProviderDto[] = [
   {
     id: 'cursor',
@@ -45,7 +54,7 @@ export type CursorSdk = {
 export type CursorInteractionUpdate = {
   type: string;
   text?: string;
-  toolCall?: { type?: string };
+  toolCall?: { type?: string; status?: string; isError?: boolean };
 };
 
 export type CursorAgentInstance = {

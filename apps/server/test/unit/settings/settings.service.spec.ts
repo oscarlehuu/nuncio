@@ -83,6 +83,16 @@ describe('SettingsService', () => {
     it('throws when resolving an unknown key', () => {
       expect(() => service.resolve('UNKNOWN_KEY')).toThrow(/unknown setting/i);
     });
+
+    it('falls back to env when a DB secret row cannot be decrypted', () => {
+      process.env.CURSOR_API_KEY = 'env-key';
+      repo.set('CURSOR_API_KEY', 'v1:deadbeef:bad:ciphertext');
+      expect(service.resolve('CURSOR_API_KEY')).toBe('env-key');
+      expect(service.resolveSource('CURSOR_API_KEY')).toEqual({
+        value: 'env-key',
+        source: 'env',
+      });
+    });
   });
 
   describe('resolveSource', () => {

@@ -6,6 +6,7 @@ import {
   flattenProviders,
   modelById,
   normalizeModelCatalog,
+  pickDefaultModelSelection,
   prettyModelName,
   sanitizeCursorModels,
   sortModelProviders,
@@ -200,6 +201,44 @@ describe('normalizeModelCatalog', () => {
       'cursor:composer-2.5',
       'pi:m',
     ]);
+  });
+});
+
+describe('pickDefaultModelSelection', () => {
+  const piOnly: ModelProvider[] = [
+    {
+      id: 'pi',
+      name: 'Pi',
+      groups: [{ id: 'g', name: 'G', models: [{ id: 'anthropic:claude-haiku-4', name: 'Haiku' }] }],
+    },
+    { id: 'mock', name: 'Mock', groups: [{ id: 'm', name: 'M', models: [{ id: 'mock:default', name: 'Mock' }] }] },
+  ];
+
+  const withCursor: ModelProvider[] = [
+    ...piOnly,
+    {
+      id: 'cursor',
+      name: 'Cursor',
+      groups: [{ id: 'c', name: 'C', models: [{ id: 'cursor:composer-2.5', name: 'Composer 2.5' }] }],
+    },
+  ];
+
+  it('prefers cursor when available', () => {
+    expect(pickDefaultModelSelection(withCursor)).toEqual({
+      modelId: 'cursor:composer-2.5',
+      providerId: 'cursor',
+    });
+  });
+
+  it('falls back to pi when cursor is absent', () => {
+    expect(pickDefaultModelSelection(piOnly)).toEqual({
+      modelId: 'anthropic:claude-haiku-4',
+      providerId: 'pi',
+    });
+  });
+
+  it('returns null when no models are available', () => {
+    expect(pickDefaultModelSelection([])).toBeNull();
   });
 });
 

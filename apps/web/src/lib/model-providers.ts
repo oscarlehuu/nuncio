@@ -231,3 +231,13 @@ export function sortModelProviders(providers: ModelProvider[]): ModelProvider[] 
 export function normalizeModelCatalog(providers: ModelProvider[]): ModelProvider[] {
   return sortModelProviders(sanitizeCursorModels(providers));
 }
+
+/** First available model in catalog order (cursor → pi → mock when present). */
+export function pickDefaultModelSelection(
+  providers: ModelProvider[],
+): { modelId: string; providerId: string } | null {
+  const catalog = normalizeModelCatalog(providers.filter((p) => !p.unavailable));
+  const first = flattenProviders(catalog)[0];
+  if (!first) return null;
+  return { modelId: first.id, providerId: first.providerId };
+}

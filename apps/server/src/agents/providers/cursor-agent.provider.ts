@@ -10,6 +10,7 @@ import { BaseAgentProvider } from '../agents.base-provider';
 import {
   CURSOR_PREFERRED_MODEL,
   isCursorDefaultModelId,
+  isCursorToolCallError,
   parseCursorModel,
   STATIC_FALLBACK_CURSOR_MODELS,
   type CursorInteractionUpdate,
@@ -179,7 +180,10 @@ export class CursorAgentProvider extends BaseAgentProvider {
         this.pushEvent(
           sessionId,
           'tool_end',
-          { tool: update.toolCall?.type ?? 'unknown', isError: false },
+          {
+            tool: update.toolCall?.type ?? 'unknown',
+            isError: isCursorToolCallError(update.toolCall),
+          },
           context.emit,
         );
         return;
