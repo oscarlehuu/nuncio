@@ -93,6 +93,8 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
       await runGitAsync(repoDir, ['init', '-b', 'main']);
       writeFileSync(join(repoDir, 'README.md'), '# cwd proof\n');
       await runGitAsync(repoDir, ['add', 'README.md']);
+      await runGitAsync(repoDir, ['config', 'user.email', 'test@nuncio.local']);
+      await runGitAsync(repoDir, ['config', 'user.name', 'Nuncio Test']);
       await runGitAsync(repoDir, ['commit', '-m', 'init']);
 
       const sessionId = 'picide01';

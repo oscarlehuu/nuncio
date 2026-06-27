@@ -18,6 +18,8 @@ async function initRepo(dir: string, branch = 'main'): Promise<void> {
   await runGitAsync(dir, ['init', '-b', branch]);
   writeFileSync(join(dir, 'README.md'), '# test\n');
   await runGitAsync(dir, ['add', 'README.md']);
+  await runGitAsync(dir, ['config', 'user.email', 'test@nuncio.local']);
+  await runGitAsync(dir, ['config', 'user.name', 'Nuncio Test']);
   await runGitAsync(dir, ['commit', '-m', 'init']);
 }
 

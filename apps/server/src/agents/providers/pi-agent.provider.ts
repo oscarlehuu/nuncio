@@ -108,37 +108,19 @@ export class PiAgentProvider extends BaseAgentProvider {
     const authStorage = pi.AuthStorage.create(join(agentDir, 'auth.json'));
     const modelRegistry = pi.ModelRegistry.create(authStorage, join(agentDir, 'models.json'));
     const model = resolveModelId(context.model, (provider, id) => modelRegistry.find(provider, id));
-    const cwdOptions = context.cwd
-      ? { cwd: context.cwd, sessionManager: pi.SessionManager.inMemory(context.cwd) }
-      : { sessionManager: pi.SessionManager.inMemory() };
-    // When a worktree cwd is set, rebind EVERY built-in tool to that cwd via
-    // customTools. This wins over same-named tools registered by local extensions
-    // (e.g. claude-studio binds bash/read/edit/write to process.cwd() at load time,
-    // which would make the agent operate in the server's cwd instead of the worktree).
-    // SDK customTools take precedence over extension `pi.registerTool` overrides.
-    // We cover ALL built-in tools (not just the active allowlist) so the `tools`
-    // allowlist below can evolve without risking drift — an inactive customTool is
-    // filtered out by the allowlist, but a cwd-correct instance is always ready if a
-    // tool is later enabled. This makes Nuncio immune to any extension that overrides
-    // built-in tools with a wrong cwd, present or future.
-    const customTools = context.cwd
-      ? [
-          pi.createReadTool(context.cwd),
-          pi.createBashTool(context.cwd),
-          pi.createEditTool(context.cwd),
-          pi.createWriteTool(context.cwd),
-          pi.createGrepTool(context.cwd),
-          pi.createFindTool(context.cwd),
-          pi.createLsTool(context.cwd),
-        ]
-      : undefined;
+    const cwdOptions = buildPiCwdOptions(context.cwd, pi.SessionManager.inMemory);
+    const customTools = buildPiCustomTools(context.cwd, pi);
     const { session } = await pi.createAgentSession({
       agentDir,
       ...cwdOptions,
       authStorage,
       modelRegistry,
       tools: ['read', 'bash', 'grep', 'find', 'ls'],
-      ...(customTools ? { customTools } : {}),
+      // customTools are built from the SDK's own tool factories (createBashTool etc.),
+      // which return AgentTool values structurally compatible with ToolDefinition.
+      // The helper is typed unknown[] so it stays SDK-type-independent + CI-safe to
+      // unit-test; cast at this interop boundary where the SDK accepts them.
+      ...(customTools ? { customTools: customTools as never } : {}),
       ...(model ? { model } : {}),
     });
 
@@ -232,4 +214,57 @@ export function resolveModelId<T>(
   const id = trimmed.slice(idx + 1);
   if (!provider || !id) return undefined;
   return find(provider, id);
+}
+
+/**
+ * Build the cwd-related `createAgentSession` options. When a worktree cwd is set,
+ * pass `cwd` + an in-memory session manager bound to it; otherwise use the default
+ * in-memory manager with no cwd (Pi falls back to `process.cwd()`).
+ *
+ * Extracted as a pure helper so the cwd wiring can be unit-tested with a stub
+ * session-manager factory, independent of the real Pi SDK + auth (CI-safe).
+ */
+export function buildPiCwdOptions<S>(
+  cwd: string | undefined,
+  inMemory: (cwd?: string) => S,
+): { cwd?: string; sessionManager: S } {
+  return cwd
+    ? { cwd, sessionManager: inMemory(cwd) }
+    : { sessionManager: inMemory() };
+}
+
+/**
+ * Build the `customTools` array for `createAgentSession`. When a worktree cwd is
+ * set, rebind EVERY built-in tool to that cwd. This wins over same-named tools
+ * registered by local extensions (e.g. claude-studio binds bash/read/edit/write to
+ * `process.cwd()` at load time, which would make the agent operate in the server's
+ * cwd instead of the worktree). SDK customTools take precedence over extension
+ * `pi.registerTool` overrides. All built-ins are rebound (not just the active
+ * `tools` allowlist) so the allowlist can evolve without drift — an inactive
+ * customTool is filtered out by the allowlist, but a cwd-correct instance is always
+ * ready. Returns `undefined` when no worktree is set so extension overrides apply
+ * as-is.
+ */
+export function buildPiCustomTools(
+  cwd: string | undefined,
+  factories: {
+    createReadTool: (cwd: string) => unknown;
+    createBashTool: (cwd: string) => unknown;
+    createEditTool: (cwd: string) => unknown;
+    createWriteTool: (cwd: string) => unknown;
+    createGrepTool: (cwd: string) => unknown;
+    createFindTool: (cwd: string) => unknown;
+    createLsTool: (cwd: string) => unknown;
+  },
+): unknown[] | undefined {
+  if (!cwd) return undefined;
+  return [
+    factories.createReadTool(cwd),
+    factories.createBashTool(cwd),
+    factories.createEditTool(cwd),
+    factories.createWriteTool(cwd),
+    factories.createGrepTool(cwd),
+    factories.createFindTool(cwd),
+    factories.createLsTool(cwd),
+  ];
 }
