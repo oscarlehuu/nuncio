@@ -4,12 +4,12 @@
   "private": true,
   "scripts": {
     "build": "nest build",
-    "dev": "nest start --watch",
-    "start": "nest start",
-    "start:prod": "node dist/main",
-    "test": "jest",
-    "test:e2e": "jest --config ./test/jest-e2e.json",
-    "test:integration": "NODE_OPTIONS=--experimental-vm-modules jest --config ./test/integration/jest.config.json",
+    "dev": "bun --watch src/main.ts",
+    "start": "bun src/main.ts",
+    "start:prod": "bun run dist/main.js",
+    "test": "bun test test/unit/",
+    "test:e2e": "bun test ./test/e2e/app.e2e-spec.ts",
+    "test:integration": "bun test test/integration/",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
@@ -17,7 +17,6 @@
     "@nestjs/common": "^11.0.1",
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
-    "better-sqlite3": "^12.4.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "uuid": "^11.1.0"
@@ -26,24 +25,13 @@
     "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.1",
-    "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^5.0.0",
     "@types/jest": "^30.0.0",
     "@types/node": "^24.0.0",
     "@types/supertest": "^7.0.0",
     "@types/uuid": "^10.0.0",
-    "jest": "^30.0.0",
     "supertest": "^7.0.0",
-    "ts-jest": "^29.2.5",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.3"
-  },
-  "jest": {
-    "moduleFileExtensions": ["js", "json", "ts"],
-    "rootDir": ".",
-    "roots": ["<rootDir>/src", "<rootDir>/test/unit"],
-    "testRegex": "test/unit/.*\\.spec\\.ts$",
-    "transform": { "^.+\\.(t|j)s$": "ts-jest" },
-    "testEnvironment": "node"
   }
 }

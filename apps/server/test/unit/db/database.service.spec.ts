@@ -1,8 +1,10 @@
-import Database from 'better-sqlite3';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseService } from '../../../src/db/database.service';
+
+// bun:sqlite (Bun builtin) — used to seed a pre-migration schema on disk.
+const { Database } = require('bun:sqlite');
 
 describe('DatabaseService schema + migration', () => {
   let db: DatabaseService;

@@ -1,7 +1,12 @@
 import { Global, Injectable, OnModuleDestroy } from '@nestjs/common';
-import Database from 'better-sqlite3';
 import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
+
+// Bun runtime: use the built-in bun:sqlite instead of better-sqlite3
+// (Bun blocks better-sqlite3 at dlopen — https://github.com/oven-sh/bun/issues/4290).
+// `require` keeps this file tsc-friendly without pulling in bun-types; the
+// repositories treat `db` as `any` and use the same prepare/all/get/run API.
+const { Database } = require('bun:sqlite');
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -33,13 +38,13 @@ CREATE INDEX IF NOT EXISTS idx_events_session_seq ON events(session_id, seq);
 @Global()
 @Injectable()
 export class DatabaseService implements OnModuleDestroy {
-  readonly db: Database.Database;
+  readonly db: any;
 
   constructor() {
     const dataDir = process.env.NUNCIO_DATA_DIR ?? join(process.cwd(), 'data');
     mkdirSync(dataDir, { recursive: true });
     this.db = new Database(join(dataDir, 'nuncio.db'));
-    this.db.pragma('journal_mode = WAL');
+    this.db.exec('PRAGMA journal_mode = WAL');
     this.db.exec(SCHEMA);
     this.migrate();
   }

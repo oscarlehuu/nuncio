@@ -39,9 +39,9 @@ export class EventsRepository {
     this.database.db
       .prepare(
         `INSERT INTO events (session_id, seq, type, payload, created_at)
-         VALUES (@session_id, @seq, @type, @payload, @created_at)`,
+         VALUES (?, ?, ?, ?, ?)`,
       )
-      .run(row);
+      .run(row.session_id, row.seq, row.type, row.payload, row.created_at);
     return { seq: row.seq, type, payload, createdAt: now };
   }
 }
