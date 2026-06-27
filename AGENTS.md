@@ -3,6 +3,7 @@
 Context file for AI coding agents working on Nuncio. Read this before touching the codebase.
 
 > **Work TDD-first.** Always start from a failing test. Implement only what makes it pass. A change is not done while the suite is red. See [Working practice: TDD-first](#working-practice-tdd-first).
+> **Need a decision from the user? Answer TL;DR.** One-line recommendation first, then the trade-off in a sentence (what you gain vs. lose), then the options. No long preamble — the user decides fast.
 
 ## What is Nuncio
 
@@ -22,6 +23,7 @@ Nuncio is a **self-hosted, Devin-style web app for delegating tasks to AI agents
 2. **Green — implement the minimum** to make the test pass. No more, no less.
 3. **Refactor** under the safety of the passing test.
 4. **Gate:** the change is not done until the suite is green. Don't move on, don't commit, don't open a PR on a red suite. **Never silence, skip, or weaken a failing test just to pass the build.**
+5. **Docs sync:** update `README.md` to match the shipped code — commands, API, architecture, status. If architecture or conventions shifted, update `AGENTS.md` too. A merged change with stale docs isn't done.
 
 Grounding in what exists today:
 
@@ -310,6 +312,7 @@ Nuncio runs on **Bun** (≥ 1.3) — server, build, and tests. Bun replaces npm,
 - Pi's `tools: ['read','bash','grep','find','ls']` are hardcoded in `createPiSession()` — not yet configurable per session or via env.
 - Pi uses `SessionManager.inMemory(cwd)` when a workspace is set (else plain `inMemory()`) — active Pi sessions are lost on server restart; a `steer` on a revived session creates a fresh Pi session in the same worktree cwd (conversation history is in the event log, not restored into Pi). File-backed `SessionManager.create(cwd)` revive is not yet implemented.
 - **Git worktrees:** each session with `projectPath` gets an isolated worktree at `NUNCIO_WORKSPACES_DIR/<sessionId>` on branch `nuncio/<id>-<slug>` branched from the picked base. Archive keeps the worktree + branch (no auto-cleanup yet). Worktree creation fails the HTTP create if git errors — no orphan session row.
+- **Pi tool cwd vs. local extensions:** when `context.cwd` is set, `PiAgentProvider` passes `customTools` covering ALL built-in tools (`read`/`bash`/`edit`/`write`/`grep`/`find`/`ls`, each `pi.createXTool(cwd)`) to `createAgentSession`. This is required because local Pi extensions (e.g. `claude-studio` in `~/.pi/agent/extensions/`) can `pi.registerTool({ name: 'bash', ... })` and override the built-ins — and `claude-studio` binds them to `process.cwd()` (the server's cwd) at extension load time, which would make the agent operate in the server dir instead of the worktree. SDK `customTools` take precedence over extension `pi.registerTool` overrides (verified in `pi-agent.cwd.spec.ts` + real-Pi `pi-agent.integration.spec.ts`). All built-ins are rebound (not just the active `tools` allowlist) so the allowlist can evolve without drift — an inactive customTool is filtered by the allowlist, but a cwd-correct instance is always ready. When no worktree, `customTools` is omitted so extension overrides apply as-is.
 - **Project discovery:** set `NUNCIO_PROJECT_ROOTS=~/code,~/Desktop/Oscar` (comma-separated). Frontend also supports typing a custom absolute path. Browsers cannot browse the Mac filesystem (Tailscale iPhone PWA) — server-driven list only.
 - iPhone PWA install needs HTTPS (Tailscale); plain `http://localhost` won't offer a full install.
 - `vite preview` proxies `/api` → 3000, so a single `tailscale serve --bg 5173` is usually enough. Serving web + API from separate origins needs a reverse proxy.

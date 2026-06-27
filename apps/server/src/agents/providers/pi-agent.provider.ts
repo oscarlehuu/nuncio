@@ -111,12 +111,34 @@ export class PiAgentProvider extends BaseAgentProvider {
     const cwdOptions = context.cwd
       ? { cwd: context.cwd, sessionManager: pi.SessionManager.inMemory(context.cwd) }
       : { sessionManager: pi.SessionManager.inMemory() };
+    // When a worktree cwd is set, rebind EVERY built-in tool to that cwd via
+    // customTools. This wins over same-named tools registered by local extensions
+    // (e.g. claude-studio binds bash/read/edit/write to process.cwd() at load time,
+    // which would make the agent operate in the server's cwd instead of the worktree).
+    // SDK customTools take precedence over extension `pi.registerTool` overrides.
+    // We cover ALL built-in tools (not just the active allowlist) so the `tools`
+    // allowlist below can evolve without risking drift — an inactive customTool is
+    // filtered out by the allowlist, but a cwd-correct instance is always ready if a
+    // tool is later enabled. This makes Nuncio immune to any extension that overrides
+    // built-in tools with a wrong cwd, present or future.
+    const customTools = context.cwd
+      ? [
+          pi.createReadTool(context.cwd),
+          pi.createBashTool(context.cwd),
+          pi.createEditTool(context.cwd),
+          pi.createWriteTool(context.cwd),
+          pi.createGrepTool(context.cwd),
+          pi.createFindTool(context.cwd),
+          pi.createLsTool(context.cwd),
+        ]
+      : undefined;
     const { session } = await pi.createAgentSession({
       agentDir,
       ...cwdOptions,
       authStorage,
       modelRegistry,
       tools: ['read', 'bash', 'grep', 'find', 'ls'],
+      ...(customTools ? { customTools } : {}),
       ...(model ? { model } : {}),
     });
 
