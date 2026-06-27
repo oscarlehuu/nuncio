@@ -302,6 +302,8 @@ Nuncio runs on **Bun** (≥ 1.3) — server, build, and tests. Bun replaces npm,
 - **Provider-agnostic harness.** Pi SDK is the inaugural provider, not the architecture. New agent SDKs (Cursor, OpenAI/Claude agents, …) implement the same `AgentProvider` contract and register — no session-layer or UI-layer changes to adopt them.
 - **3-layer state decoupling** — conversation durable, agent loop disposable, machine state a strict FSM.
 - **YAGNI / KISS / DRY.** Don't build ahead of the roadmap. The agent-provider abstraction is the one forward-looking investment, because the whole point is multi-SDK support.
+- **Docs stay in sync with code.** After every implementation, update `README.md` (commands/API/architecture/status) and `AGENTS.md` if conventions shifted — stale docs count as unfinished work.
+- **TL;DR when asking the user.** When you need a decision, lead with a one-line recommendation, then the trade-off (gain vs. loss) in one sentence, then the options. The user decides fast — don't bury the ask.
 
 ## Gotchas
 
