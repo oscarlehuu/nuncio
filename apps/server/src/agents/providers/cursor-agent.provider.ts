@@ -32,10 +32,7 @@ export class CursorAgentProvider extends BaseAgentProvider {
   }
 
   async isAvailable(): Promise<boolean> {
-    if (process.env.NUNCIO_FORCE_MOCK === '1') {
-      this.cachedAvailable = false;
-      return false;
-    }
+    if (process.env.NUNCIO_FORCE_MOCK === '1') return false;
     if (this.cachedAvailable !== undefined) return this.cachedAvailable;
     const key = process.env.CURSOR_API_KEY?.trim();
     this.cachedAvailable = !!key;

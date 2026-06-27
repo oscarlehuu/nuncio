@@ -163,6 +163,14 @@ describe('CursorAgentProvider', () => {
     expect(await provider.isAvailable()).toBe(true);
   });
 
+  it('isAvailable does not poison the cache when NUNCIO_FORCE_MOCK is unset later', async () => {
+    process.env.CURSOR_API_KEY = 'cursor_test_key';
+    process.env.NUNCIO_FORCE_MOCK = '1';
+    expect(await provider.isAvailable()).toBe(false);
+    delete process.env.NUNCIO_FORCE_MOCK;
+    expect(await provider.isAvailable()).toBe(true);
+  });
+
   it('isAvailable never calls Agent.create', async () => {
     const { sdk, createCalls } = makeStubSdk();
     provider.sdkOverride = sdk as never;
