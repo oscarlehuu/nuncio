@@ -6,6 +6,7 @@ export interface AgentRunContext {
   emit?: EventEmitter;
   model?: string | null;
   workspace?: string | null;
+  cwd?: string;
 }
 
 export interface AgentProvider {

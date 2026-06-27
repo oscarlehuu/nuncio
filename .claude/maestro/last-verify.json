@@ -1,0 +1,6 @@
+{
+  "ts": "2026-06-26T23:22:23.568257Z",
+  "epoch": 1782516143,
+  "exit": 0,
+  "cmd": "npm test -w apps/server"
+}

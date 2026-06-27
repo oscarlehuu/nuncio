@@ -7,7 +7,7 @@ import { DatabaseService } from '../../../src/db/database.service';
 const { Database } = require('bun:sqlite');
 
 describe('DatabaseService schema + migration', () => {
-  let db: DatabaseService;
+  let db: DatabaseService | undefined;
   let dataDir: string;
 
   afterEach(() => {
@@ -77,5 +77,24 @@ describe('DatabaseService schema + migration', () => {
       provider: string;
     };
     expect(row.provider).toBe('pi');
+  });
+
+  it('enables WAL journal mode', () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-wal-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
+
+    db = new DatabaseService();
+    const mode = db.db.prepare('PRAGMA journal_mode').get() as { journal_mode: string };
+    expect(mode.journal_mode).toBe('wal');
+  });
+
+  it('onModuleDestroy closes the database handle', () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-close-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
+
+    db = new DatabaseService();
+    db.onModuleDestroy();
+    expect(() => db!.db.prepare('SELECT 1').get()).toThrow();
+    db = undefined; // afterEach would otherwise double-close
   });
 });

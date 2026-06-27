@@ -48,6 +48,13 @@ describe('AgentRegistry', () => {
     expect(() => registry.get('missing')).toThrow(BadRequestException);
   });
 
+  it('get returns a registered provider by id', async () => {
+    const registry = await createRegistry(true);
+
+    expect(registry.get('mock').id).toBe('mock');
+    expect(registry.get('pi').id).toBe('pi');
+  });
+
   it('exposes every registered provider via all()', async () => {
     const registry = await createRegistry(true);
 

@@ -1,9 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PiAgentProvider } from '../../src/agents/providers/pi-agent.provider';
 import { DatabaseModule } from '../../src/db/database.module';
+import { GitService } from '../../src/git/git.service';
 import { EventsRepository } from '../../src/sessions/persistence/events.repository';
 import { SessionsPersistenceModule } from '../../src/sessions/sessions.persistence.module';
 import { SessionsRepository } from '../../src/sessions/persistence/sessions.repository';
@@ -74,4 +75,73 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
     },
     60_000,
   );
+
+  // Real LLM call — proves the Pi SDK actually honors `cwd` + `SessionManager.inMemory(cwd)`
+  // and runs its tools inside the worktree. Drops a uniquely-named marker file in the
+  // worktree, asks the agent to `ls` the current directory, and asserts the marker
+  // filename appears in the streamed events. This is the only test that exercises the
+  // real Phase 4 cwd path end-to-end (GitService worktree → Pi cwd → tool execution).
+  it(
+    'runs a real Pi session inside a git worktree and operates in its cwd',
+    async () => {
+      const workspacesDir = mkdtempSync(join(tmpdir(), 'nuncio-pi-cwd-ws-'));
+      process.env.NUNCIO_WORKSPACES_DIR = workspacesDir;
+      const git = new GitService();
+
+      const repoDir = mkdtempSync(join(tmpdir(), 'nuncio-pi-cwd-repo-'));
+      mkdirSync(repoDir, { recursive: true });
+      await runGitAsync(repoDir, ['init', '-b', 'main']);
+      writeFileSync(join(repoDir, 'README.md'), '# cwd proof\n');
+      await runGitAsync(repoDir, ['add', 'README.md']);
+      await runGitAsync(repoDir, ['commit', '-m', 'init']);
+
+      const sessionId = 'picide01';
+      const marker = `NUNCIO_CWD_MARKER_${sessionId}.txt`;
+      let worktreePath = '';
+      try {
+        const worktree = await git.createWorktree(repoDir, 'main', sessionId, 'cwd-proof');
+        worktreePath = worktree.worktreePath;
+        writeFileSync(join(worktreePath, marker), 'proof\n');
+
+        const created = sessions.create({
+          id: sessionId,
+          prompt: `Run \`ls\` in the current directory and reply with the exact file list, nothing else.`,
+          provider: 'pi',
+        });
+
+        const emitted: { type: string; payload: unknown }[] = [];
+        await provider.run(created.id, created.prompt, {
+          emit: (event) => emitted.push(event),
+          cwd: worktreePath,
+        });
+
+        const all = events.list(created.id);
+        const blob = JSON.stringify(
+          all.map((e) => ({ type: e.type, payload: e.payload })),
+        ) + JSON.stringify(emitted.map((e) => ({ type: e.type, payload: e.payload })));
+
+        expect(blob).toContain(marker);
+        expect(sessions.findById(created.id)?.status).toBe('IDLE');
+      } finally {
+        try {
+          await git.removeWorktree(repoDir, worktreePath);
+        } catch {
+          // best-effort
+        }
+        rmSync(workspacesDir, { recursive: true, force: true });
+        rmSync(repoDir, { recursive: true, force: true });
+        delete process.env.NUNCIO_WORKSPACES_DIR;
+      }
+    },
+    120_000,
+  );
 });
+
+async function runGitAsync(cwd: string, args: string[]): Promise<void> {
+  const proc = Bun.spawn(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });
+  const code = await proc.exited;
+  if (code !== 0) {
+    const stderr = await new Response(proc.stderr).text();
+    throw new Error(`git ${args.join(' ')} failed: ${stderr}`);
+  }
+}

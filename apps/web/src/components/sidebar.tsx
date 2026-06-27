@@ -4,6 +4,7 @@ import { ModeToggle } from '@/components/mode-toggle';
 import { cn } from '@/lib/utils';
 import type { Session } from '../lib/api';
 import { relativeTime, statusLabel } from '../lib/api';
+import { projectDisplayName } from '../lib/projects';
 import { StatusDot } from './status-dot';
 
 interface SidebarProps {
@@ -64,7 +65,7 @@ export function Sidebar({ sessions, activeId, onSelect, onNew }: SidebarProps) {
               <div className="min-w-0 flex-1">
                 <div className="text-[13px] text-sidebar-foreground truncate">{s.title}</div>
                 <div className="text-[11px] text-muted-foreground truncate mt-0.5">
-                  {s.preview ?? statusLabel(s.status)} · {relativeTime(s.updatedAt)}
+                  {projectDisplayName(s.projectPath) ?? s.preview ?? statusLabel(s.status)} · {relativeTime(s.updatedAt)}
                 </div>
               </div>
             </button>

@@ -1,6 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter } from 'events';
+import { v4 as uuidv4 } from 'uuid';
 import { AgentRegistry } from '../agents/agents.registry';
+import { GitService } from '../git/git.service';
 import { canTransition } from './domain/sessions.fsm';
 import type { CreateSessionDto, SessionDto, SessionEvent, SessionStatus } from './domain/sessions.types';
 import { EventsRepository } from './persistence/events.repository';
@@ -16,6 +18,7 @@ export class SessionsService {
     private readonly sessions: SessionsRepository,
     private readonly events: EventsRepository,
     private readonly agents: AgentRegistry,
+    private readonly git: GitService,
   ) {}
 
   list(includeArchived = false): SessionDto[] {
@@ -34,7 +37,30 @@ export class SessionsService {
     const providerId = input.provider?.trim() || (await this.agents.defaultId());
     await this.agents.getAvailable(providerId);
 
-    const session = this.sessions.create({ ...input, provider: providerId });
+    const id = uuidv4().slice(0, 8);
+    let projectPath: string | undefined;
+    let baseBranch: string | undefined;
+    let worktreePath: string | undefined;
+    let branch: string | undefined;
+
+    if (input.projectPath?.trim()) {
+      projectPath = input.projectPath.trim();
+      baseBranch = input.baseBranch?.trim() || 'main';
+      const slug = input.prompt.trim().split('\n')[0] ?? 'task';
+      const worktree = await this.git.createWorktree(projectPath, baseBranch, id, slug);
+      worktreePath = worktree.worktreePath;
+      branch = worktree.branch;
+    }
+
+    const session = this.sessions.create({
+      ...input,
+      id,
+      provider: providerId,
+      projectPath,
+      baseBranch,
+      worktreePath,
+      branch,
+    });
     void this.startRun(session);
     return session;
   }
@@ -55,7 +81,8 @@ export class SessionsService {
     await provider.steer(id, trimmed, {
       emit: (event) => this.onAgentEvent(id, event),
       model: current.model,
-      workspace: current.workspace,
+      workspace: current.worktreePath ?? current.workspace ?? undefined,
+      cwd: current.worktreePath ?? undefined,
     });
     return this.requireSession(id);
   }
@@ -130,7 +157,8 @@ export class SessionsService {
       await provider.run(session.id, session.prompt, {
         emit: (event) => this.onAgentEvent(session.id, event),
         model: session.model,
-        workspace: session.workspace,
+        workspace: session.worktreePath ?? session.workspace ?? undefined,
+        cwd: session.worktreePath ?? undefined,
       });
     })();
   }

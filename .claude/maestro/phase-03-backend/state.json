@@ -1,0 +1,16 @@
+{
+  "slug": "phase-03-backend",
+  "tier": "light",
+  "task": "Phase 3 backend: steer, pause, archive, models API",
+  "state": "done",
+  "round": 1,
+  "gate1Approved": false,
+  "lastTesterVerdict": null,
+  "lastReviewerVerdict": null,
+  "lastVerify": {
+    "ts": "2026-06-26T23:20:15.477300Z",
+    "exit": 0
+  },
+  "createdAt": "2026-06-26T23:16:23.119528Z",
+  "updatedAt": "2026-06-26T23:20:15.477300Z"
+}

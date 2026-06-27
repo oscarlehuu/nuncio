@@ -105,6 +105,9 @@ apps/
         models.types.ts        ModelProviderDto/ModelGroupDto/ModelItemDto
         models.static.ts       STATIC_MODEL_PROVIDERS (Pi fallback when no auth)
         models.service.ts      aggregates from AgentRegistry
+      git/                 git worktree + project discovery (Phase 4 workspace)
+        git.service.ts         listProjects, listBranches, createWorktree
+        git.controller.ts        GET /api/projects, GET /api/projects/branches
       db/                DatabaseService (Global, bun:sqlite, schema bootstrap + guarded ALTER migration)
     test/
       unit/<domain>/     bun test unit specs grouped by domain (agents/, sessions/, models/, db/) + app.spec.ts
@@ -112,10 +115,10 @@ apps/
       integration/pi-agent.integration.spec.ts  real-Pi integration (gated on ~/.pi/agent/auth.json; opt-in)
   web/                   Vite + React + Tailwind v4 + shadcn/ui (PWA)
     src/
-      lib/               api.ts, use-session-stream.ts (SSE hook), model-providers.ts, utils.ts (cn())
+      lib/               api.ts, use-session-stream.ts (SSE hook), model-providers.ts, projects.ts, utils.ts (cn())
       components/
         ui/              shadcn primitives (Radix-based) — generated, rarely hand-edited
-        home-view, session-detail, sidebar, model-picker, status-dot  (feature components)
+        home-view, session-detail, sidebar, model-picker, project-picker, branch-picker, status-dot  (feature components)
       App.tsx            top-level state + view routing
 mockup.html              UI blueprint / reference (single-file mockup)
 data/                    SQLite (gitignored)
@@ -165,22 +168,26 @@ The harness is provider-agnostic: an `AgentProvider` runs/steers/disposes a sess
 
 `DatabaseService` (Global injectable) opens `bun:sqlite` (`require('bun:sqlite')` — see [Bun runtime](#bun-runtime)), sets `journal_mode=WAL` via `db.exec('PRAGMA journal_mode = WAL')`, and runs `CREATE TABLE IF NOT EXISTS` for `sessions` + `events`. **There is no migration framework.** Schema changes for existing DBs must be added as a manual `ALTER TABLE` guarded by `PRAGMA table_info(...)` checks — the `provider` column migration in `DatabaseService.migrate()` is the template.
 
-## API (Phase 0–3)
+## API (Phase 0–4)
 
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/health` | health check |
+| GET | `/api/projects` | list git repos from `NUNCIO_PROJECT_ROOTS` (one level deep) |
+| GET | `/api/projects/branches?path=` | list branches for a repo path (also accepts custom absolute paths) |
 | GET | `/api/sessions` | list (excludes `ARCHIVED` unless `?includeArchived=1\|true`) |
-| POST | `/api/sessions` | `{ prompt, model?, provider?, workspace? }` — starts the run in the background; `provider` defaults to `registry.defaultId()` (pi if authed, else mock) |
-| GET | `/api/sessions/:id` | detail |
+| POST | `/api/sessions` | `{ prompt, model?, provider?, workspace?, projectPath?, baseBranch? }` — when `projectPath` is set, creates a git worktree on branch `nuncio/<id>-<slug>` branched from `baseBranch` (default `main`); `workspace` is the Cursor provider cwd fallback; starts run in background; `provider` defaults to `registry.defaultId()` (pi if authed, else mock) |
+| GET | `/api/sessions/:id` | detail (includes `workspace`, `projectPath`, `baseBranch`, `worktreePath`, `branch` when set) |
 | GET | `/api/sessions/:id/events?since=` | event log (cursor) |
 | GET | `/api/sessions/:id/stream?since=` | SSE stream |
 | POST | `/api/sessions/:id/steer` | `{ message }` — mid-run steering (routes through `provider.steer()`; Pi uses `streamingBehavior: 'steer'`) |
 | POST | `/api/sessions/:id/pause` | |
-| POST | `/api/sessions/:id/archive` | terminal; disposes the session's agent handle |
+| POST | `/api/sessions/:id/archive` | terminal; disposes the session's agent handle (worktree + branch kept on disk) |
 | GET | `/api/models` | aggregates `listModels()` across `AgentRegistry.available()` (Pi `ModelRegistry` when authed, Cursor `Cursor.models.list()` when `CURSOR_API_KEY` set, else static fallback; mock returns a mock entry) |
 
 Model selection is **per-session** (Provider → Group → Model, 3-level picker on the frontend) and **wired through to Pi**: the session's `model` (stored as `provider:modelId`, e.g. `anthropic:claude-opus-4-5`) flows via `AgentRunContext.model` → `PiAgentProvider.resolveModelId()` → `ModelRegistry.find(provider, id)` → `createAgentSession({ model })`. Static ids without a `:` (only present when Pi registry is empty / no auth) fall back to Pi's default. `provider` is also per-session, resolved from `sessions.provider` on `steer`/`archive`.
+
+**Workspace (Phase 4):** optional `projectPath` + `baseBranch` on create. Server runs `git worktree add -b nuncio/<id>-<slug> ~/.nuncio/workspaces/<id> <baseBranch>` before the agent run. `AgentRunContext.cwd` = `worktreePath` → Pi `createAgentSession({ cwd, sessionManager: SessionManager.inMemory(cwd) })`. Frontend uses server-driven project discovery (`ProjectPicker` + `BranchPicker` comboboxes) — no browser filesystem API (Safari/iOS PWA safe).
 
 ## Code conventions
 
@@ -199,6 +206,8 @@ Model selection is **per-session** (Provider → Group → Model, 3-level picker
 | Var | Default | Purpose |
 |---|---|---|
 | `NUNCIO_DATA_DIR` | `./data` | SQLite directory |
+| `NUNCIO_PROJECT_ROOTS` | (empty) | Comma-separated dirs to scan one level deep for git repos (frontend project picker) |
+| `NUNCIO_WORKSPACES_DIR` | `~/.nuncio/workspaces` | Per-session git worktree parent dir (`<dir>/<sessionId>`) |
 | `NUNCIO_FORCE_MOCK` | — | `1` forces mock agent even with Pi auth |
 | `CURSOR_API_KEY` | — | Cursor SDK auth; required for `cursor` provider availability (mint at cursor.com/dashboard/cloud-agents) |
 | `NUNCIO_CURSOR_CWD` | `process.cwd()` | Default cwd for Cursor local agents when session has no `workspace` |
@@ -214,7 +223,7 @@ Pi auth is reused as-is from `~/.pi/agent/auth.json` (single source of truth sha
 | 0–1 | monorepo scaffold, sessions API, UI | done |
 | 2 | PWA + mobile UX + Tailscale prod | done |
 | 3 | steer, pause, archive, model picker | done |
-| 4 | git integration (workspace/branch/PR) | planned |
+| 4 | git integration (workspace/branch/PR) | workspace subset done (`worktree` + pickers + Pi `cwd`); PR/cleanup deferred |
 | 5 | web push + webhooks | planned |
 
 > Runtime migration to Bun landed (see [Bun runtime](#bun-runtime)). Agent-provider abstraction + shadcn/ui also landed.
@@ -299,7 +308,9 @@ Nuncio runs on **Bun** (≥ 1.3) — server, build, and tests. Bun replaces npm,
 - **bun:sqlite named params need a prefix** (`{@id}`/`{$id}`), unlike better-sqlite3's `{id}`. Nuncio uses positional `?` everywhere — don't reintroduce named `@param` with unprefixed object keys (silently binds NULL).
 - No DB migration framework — any schema change needs a guarded `ALTER TABLE` for existing dev DBs (the `provider` column migration in `DatabaseService.migrate()` is the template: `PRAGMA table_info(...)` check → `ALTER TABLE`).
 - Pi's `tools: ['read','bash','grep','find','ls']` are hardcoded in `createPiSession()` — not yet configurable per session or via env.
-- Pi uses `SessionManager.inMemory()` — active Pi sessions are lost on server restart; a `steer` on a revived session creates a fresh Pi session (conversation history is replayed from the event log, not restored into Pi). The lazy-revive design (`SessionManager.create(cwd)` / `open(path)`) from the brainstorm is not yet implemented.
+- Pi uses `SessionManager.inMemory(cwd)` when a workspace is set (else plain `inMemory()`) — active Pi sessions are lost on server restart; a `steer` on a revived session creates a fresh Pi session in the same worktree cwd (conversation history is in the event log, not restored into Pi). File-backed `SessionManager.create(cwd)` revive is not yet implemented.
+- **Git worktrees:** each session with `projectPath` gets an isolated worktree at `NUNCIO_WORKSPACES_DIR/<sessionId>` on branch `nuncio/<id>-<slug>` branched from the picked base. Archive keeps the worktree + branch (no auto-cleanup yet). Worktree creation fails the HTTP create if git errors — no orphan session row.
+- **Project discovery:** set `NUNCIO_PROJECT_ROOTS=~/code,~/Desktop/Oscar` (comma-separated). Frontend also supports typing a custom absolute path. Browsers cannot browse the Mac filesystem (Tailscale iPhone PWA) — server-driven list only.
 - iPhone PWA install needs HTTPS (Tailscale); plain `http://localhost` won't offer a full install.
 - `vite preview` proxies `/api` → 3000, so a single `tailscale serve --bg 5173` is usually enough. Serving web + API from separate origins needs a reverse proxy.
 - Don't bake Pi-specific assumptions (auth path, `ModelRegistry`, `streamingBehavior`) into `SessionsService` or the UI — route them through the provider. Adding a second provider is the test of whether the abstraction holds.

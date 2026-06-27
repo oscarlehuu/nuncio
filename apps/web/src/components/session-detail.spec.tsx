@@ -13,6 +13,10 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     model: 'claude-fable-5',
     prompt: 'do it',
     preview: null,
+    projectPath: null,
+    baseBranch: null,
+    worktreePath: null,
+    branch: null,
     createdAt: Date.now() - 3_600_000,
     updatedAt: Date.now() - 120_000,
     ...overrides,
@@ -67,5 +71,14 @@ describe('SessionDetail', () => {
   it('hides the pause button when the session is ARCHIVED', async () => {
     await renderDetail({ status: 'ARCHIVED' });
     expect(screen.queryByRole('button', { name: /pause session/i })).toBeNull();
+  });
+
+  it('shows repo and branch badges when workspace metadata is present', async () => {
+    await renderDetail({
+      projectPath: '/Users/dev/code/nuncio',
+      branch: 'nuncio/s1-fix-auth',
+    });
+    expect(screen.getAllByText('nuncio').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('nuncio/s1-fix-auth').length).toBeGreaterThan(0);
   });
 });

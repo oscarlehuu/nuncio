@@ -64,9 +64,8 @@ export abstract class BaseAgentProvider implements AgentProvider {
 
   private handleError(sessionId: string, error: unknown, emit?: EventEmitter): void {
     const message = error instanceof Error ? error.message : String(error);
-    this.events.append(sessionId, 'error', { message });
     this.sessions.updateStatus(sessionId, 'ERROR');
-    emit?.({ type: 'status', payload: { status: 'ERROR' } });
-    emit?.({ type: 'error', payload: { message } });
+    this.pushEvent(sessionId, 'status', { status: 'ERROR' }, emit);
+    this.pushEvent(sessionId, 'error', { message }, emit);
   }
 }

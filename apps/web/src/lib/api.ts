@@ -17,6 +17,10 @@ export interface Session {
   model: string | null;
   prompt: string;
   preview: string | null;
+  projectPath: string | null;
+  baseBranch: string | null;
+  worktreePath: string | null;
+  branch: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -34,10 +38,24 @@ export async function fetchSessions(): Promise<Session[]> {
   return res.json();
 }
 
-export async function createSession(prompt: string, model?: string, provider?: string): Promise<Session> {
-  const body: { prompt: string; model?: string; provider?: string } = { prompt };
+export async function createSession(
+  prompt: string,
+  model?: string,
+  provider?: string,
+  projectPath?: string,
+  baseBranch?: string,
+): Promise<Session> {
+  const body: {
+    prompt: string;
+    model?: string;
+    provider?: string;
+    projectPath?: string;
+    baseBranch?: string;
+  } = { prompt };
   if (model) body.model = model;
   if (provider) body.provider = provider;
+  if (projectPath) body.projectPath = projectPath;
+  if (baseBranch) body.baseBranch = baseBranch;
 
   const res = await fetch('/api/sessions', {
     method: 'POST',

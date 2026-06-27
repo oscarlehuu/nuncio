@@ -54,10 +54,16 @@ export default function App() {
     setSidebarOpen(false);
   }, []);
 
-  const handleCreate = async (prompt: string, model?: string, provider?: string) => {
+  const handleCreate = async (
+    prompt: string,
+    model?: string,
+    provider?: string,
+    projectPath?: string,
+    baseBranch?: string,
+  ) => {
     setCreating(true);
     try {
-      const session = await createSession(prompt, model, provider);
+      const session = await createSession(prompt, model, provider, projectPath, baseBranch);
       const list = await refresh();
       setActiveId(session.id);
       setSidebarOpen(false);

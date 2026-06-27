@@ -108,9 +108,12 @@ export class PiAgentProvider extends BaseAgentProvider {
     const authStorage = pi.AuthStorage.create(join(agentDir, 'auth.json'));
     const modelRegistry = pi.ModelRegistry.create(authStorage, join(agentDir, 'models.json'));
     const model = resolveModelId(context.model, (provider, id) => modelRegistry.find(provider, id));
+    const cwdOptions = context.cwd
+      ? { cwd: context.cwd, sessionManager: pi.SessionManager.inMemory(context.cwd) }
+      : { sessionManager: pi.SessionManager.inMemory() };
     const { session } = await pi.createAgentSession({
       agentDir,
-      sessionManager: pi.SessionManager.inMemory(),
+      ...cwdOptions,
       authStorage,
       modelRegistry,
       tools: ['read', 'bash', 'grep', 'find', 'ls'],
