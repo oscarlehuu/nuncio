@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Menu } from 'lucide-react';
 import {
   archiveSession,
   createSession,
@@ -11,6 +12,14 @@ import { useSessionStream } from './lib/use-session-stream';
 import { HomeView } from './components/home-view';
 import { SessionDetail } from './components/session-detail';
 import { Sidebar } from './components/sidebar';
+import { Button } from '@/components/ui/button';
+import {
+  Sheet,
+  SheetContent,
+  SheetTitle,
+  SheetTrigger,
+} from '@/components/ui/sheet';
+import { Toaster } from '@/components/ui/sonner';
 
 export default function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -35,28 +44,23 @@ export default function App() {
 
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
 
-  const closeSidebar = useCallback(() => setSidebarOpen(false), []);
-
-  const handleSelect = useCallback(
-    (id: string | null) => {
-      setActiveId(id);
-      closeSidebar();
-    },
-    [closeSidebar],
-  );
+  const handleSelect = useCallback((id: string | null) => {
+    setActiveId(id);
+    setSidebarOpen(false);
+  }, []);
 
   const handleNew = useCallback(() => {
     setActiveId(null);
-    closeSidebar();
-  }, [closeSidebar]);
+    setSidebarOpen(false);
+  }, []);
 
-  const handleCreate = async (prompt: string, model?: string) => {
+  const handleCreate = async (prompt: string, model?: string, provider?: string) => {
     setCreating(true);
     try {
-      const session = await createSession(prompt, model);
+      const session = await createSession(prompt, model, provider);
       const list = await refresh();
       setActiveId(session.id);
-      closeSidebar();
+      setSidebarOpen(false);
       if (!list.find((s) => s.id === session.id)) {
         setSessions((prev) => [session, ...prev]);
       }
@@ -94,36 +98,50 @@ export default function App() {
       await archiveSession(activeId);
       await refresh();
       setActiveId(null);
-      closeSidebar();
+      setSidebarOpen(false);
     } finally {
       setLifecycleBusy(false);
     }
   };
 
   return (
-    <div className="h-full grid md:grid-cols-[260px_1fr] bg-bg-0">
-      <button
-        type="button"
-        className="mobile-toggle"
-        aria-label="Menu"
-        aria-expanded={sidebarOpen}
-        onClick={() => setSidebarOpen((open) => !open)}
-      >
-        <MenuIcon />
-      </button>
-      <div
-        className={`scrim${sidebarOpen ? ' show' : ''}`}
-        onClick={closeSidebar}
-        role="presentation"
-      />
-      <Sidebar
-        sessions={sessions}
-        activeId={activeId}
-        open={sidebarOpen}
-        onSelect={handleSelect}
-        onNew={handleNew}
-      />
-      <main className="flex flex-col min-h-0 min-w-0">
+    <div className="h-full flex bg-background">
+      <aside className="hidden md:flex w-[260px] shrink-0 border-r border-sidebar-border flex-col">
+        <Sidebar
+          sessions={sessions}
+          activeId={activeId}
+          onSelect={handleSelect}
+          onNew={handleNew}
+        />
+      </aside>
+
+      <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
+        <SheetTrigger asChild>
+          <Button
+            variant="outline"
+            size="icon"
+            className="md:hidden fixed z-50 backdrop-blur"
+            style={{
+              top: 'calc(12px + env(safe-area-inset-top, 0px))',
+              left: 'calc(12px + env(safe-area-inset-left, 0px))',
+            }}
+            aria-label="Open navigation"
+          >
+            <Menu />
+          </Button>
+        </SheetTrigger>
+        <SheetContent side="left" className="w-[280px] p-0 gap-0">
+          <SheetTitle className="sr-only">Navigation</SheetTitle>
+          <Sidebar
+            sessions={sessions}
+            activeId={activeId}
+            onSelect={handleSelect}
+            onNew={handleNew}
+          />
+        </SheetContent>
+      </Sheet>
+
+      <main className="flex-1 flex flex-col min-h-0 min-w-0">
         {activeSession ? (
           <SessionDetail
             session={activeSession}
@@ -143,16 +161,8 @@ export default function App() {
           />
         )}
       </main>
-    </div>
-  );
-}
 
-function MenuIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="w-5 h-5">
-      <line x1="3" y1="6" x2="21" y2="6" />
-      <line x1="3" y1="12" x2="21" y2="12" />
-      <line x1="3" y1="18" x2="21" y2="18" />
-    </svg>
+      <Toaster richColors closeButton />
+    </div>
   );
 }

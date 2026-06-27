@@ -1,21 +1,31 @@
 import { useState } from 'react';
+import { Send } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Textarea } from '@/components/ui/textarea';
 import { DEFAULT_MODEL_ID, ModelPicker } from './model-picker';
 
 interface HomeViewProps {
   sessionCount: number;
-  onSubmit: (prompt: string, model?: string) => Promise<void>;
+  onSubmit: (prompt: string, model?: string, provider?: string) => Promise<void>;
   loading?: boolean;
 }
 
 export function HomeView({ sessionCount, onSubmit, loading }: HomeViewProps) {
   const [prompt, setPrompt] = useState('');
   const [model, setModel] = useState(DEFAULT_MODEL_ID);
+  const [provider, setProvider] = useState<string | undefined>();
 
   const handleSubmit = async () => {
     const text = prompt.trim();
     if (!text || loading) return;
-    await onSubmit(text, model);
+    await onSubmit(text, model, provider);
     setPrompt('');
+  };
+
+  const handleModelChange = (modelId: string, providerId: string) => {
+    setModel(modelId);
+    setProvider(providerId);
   };
 
   return (
@@ -23,13 +33,13 @@ export function HomeView({ sessionCount, onSubmit, loading }: HomeViewProps) {
       <div className="w-full max-w-[720px]">
         <div className="text-center mb-8">
           <h1 className="text-[28px] font-medium tracking-tight mb-2">What should I work on?</h1>
-          <p className="text-text-1 text-[15px] max-w-[480px] mx-auto">
+          <p className="text-muted-foreground text-[15px] max-w-[480px] mx-auto">
             Delegate a task — write code, fix bugs, open a PR. Your agents keep going while you&apos;re away.
           </p>
         </div>
 
-        <div className="bg-bg-1 border border-border rounded-[14px] shadow-[0_8px_32px_rgba(0,0,0,0.4)] focus-within:border-accent focus-within:shadow-[0_0_0_3px_var(--color-accent-soft),0_8px_32px_rgba(0,0,0,0.4)] transition-shadow">
-          <textarea
+        <div className="rounded-xl border border-border bg-card shadow-lg transition-shadow focus-within:ring-2 focus-within:ring-ring/50">
+          <Textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => {
@@ -39,40 +49,29 @@ export function HomeView({ sessionCount, onSubmit, loading }: HomeViewProps) {
               }
             }}
             placeholder="Ask Nuncio to build features, fix bugs, or work on your code…"
-            rows={4}
-            className="w-full bg-transparent px-5 pt-4 pb-2 resize-none outline-none text-[15px] placeholder:text-text-3"
+            className="min-h-[96px] resize-none border-0 shadow-none bg-transparent text-[15px] px-5 pt-4 pb-2 focus-visible:ring-0 focus-visible:border-0"
           />
           <div className="home-composer-bar flex items-center justify-between gap-2 px-3 pb-3">
-            <ModelPicker value={model} onChange={setModel} />
-            <button
-              type="button"
+            <ModelPicker value={model} onChange={handleModelChange} />
+            <Button
+              size="icon-lg"
+              aria-label="Send"
               onClick={() => void handleSubmit()}
               disabled={loading || !prompt.trim()}
-              className="touch-target w-11 h-11 md:w-9 md:h-9 rounded-lg bg-accent text-[#1a1208] flex items-center justify-center disabled:opacity-40 hover:bg-accent-hover transition-colors shrink-0"
+              className="size-11 md:size-9 shrink-0"
             >
-              <SendIcon />
-            </button>
+              <Send />
+            </Button>
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2 justify-center mt-5 text-xs text-text-2">
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-bg-2 border border-border-soft">
-            Pi connected
-          </span>
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-bg-2 border border-border-soft">
+        <div className="flex flex-wrap gap-2 justify-center mt-5">
+          <Badge variant="secondary">Pi connected</Badge>
+          <Badge variant="secondary">
             {sessionCount} session{sessionCount === 1 ? '' : 's'}
-          </span>
+          </Badge>
         </div>
       </div>
     </section>
-  );
-}
-
-function SendIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
-      <line x1="22" y1="2" x2="11" y2="13" />
-      <polygon points="22 2 15 22 11 13 2 9 22 2" />
-    </svg>
   );
 }

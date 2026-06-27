@@ -13,6 +13,7 @@ export interface Session {
   id: string;
   title: string;
   status: SessionStatus;
+  provider: string;
   model: string | null;
   prompt: string;
   preview: string | null;
@@ -33,9 +34,10 @@ export async function fetchSessions(): Promise<Session[]> {
   return res.json();
 }
 
-export async function createSession(prompt: string, model?: string): Promise<Session> {
-  const body: { prompt: string; model?: string } = { prompt };
+export async function createSession(prompt: string, model?: string, provider?: string): Promise<Session> {
+  const body: { prompt: string; model?: string; provider?: string } = { prompt };
   if (model) body.model = model;
+  if (provider) body.provider = provider;
 
   const res = await fetch('/api/sessions', {
     method: 'POST',

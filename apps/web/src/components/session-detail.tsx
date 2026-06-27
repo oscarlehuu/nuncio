@@ -1,8 +1,18 @@
 import { useMemo, useState } from 'react';
+import { Archive, ArrowLeft, Pause, Send } from 'lucide-react';
 import type { Session, SessionEvent } from '../lib/api';
 import { statusLabel } from '../lib/api';
 import { FALLBACK_PROVIDERS, modelById } from '../lib/model-providers';
 import { StatusDot } from './status-dot';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 
 interface TranscriptProps {
   events: SessionEvent[];
@@ -21,24 +31,29 @@ export function Transcript({ events, streaming }: TranscriptProps) {
   return (
     <div className="flex flex-col gap-5 py-4">
       {messages.map((msg, i) => (
-        <div key={i} className={`flex flex-col gap-1 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+        <div
+          key={i}
+          className={`flex flex-col gap-1 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
+        >
           {msg.role === 'assistant' && (
-            <span className="text-[11px] text-text-2 px-1">Assistant</span>
+            <span className="text-[11px] text-muted-foreground px-1">Assistant</span>
           )}
           <div
             className={`max-w-[90%] px-3.5 py-2.5 rounded-[10px] text-[14px] leading-relaxed ${
               msg.role === 'user'
-                ? 'bg-accent-soft text-accent border border-transparent rounded-[14px_14px_4px_14px]'
-                : 'bg-transparent text-text-0'
+                ? 'bg-primary/10 text-primary border border-transparent rounded-[14px_14px_4px_14px]'
+                : 'bg-transparent text-foreground'
             }`}
           >
             {msg.text}
-            {msg.streaming && <span className="inline-block w-2 h-4 ml-0.5 bg-accent animate-pulse align-middle" />}
+            {msg.streaming && (
+              <span className="inline-block w-2 h-4 ml-0.5 bg-primary animate-pulse align-middle" />
+            )}
           </div>
         </div>
       ))}
       {streaming && messages.length === 0 && (
-        <p className="text-text-2 text-sm px-2">Agent is thinking…</p>
+        <p className="text-muted-foreground text-sm px-2">Agent is thinking…</p>
       )}
     </div>
   );
@@ -125,39 +140,52 @@ export function SessionDetail({
 
   return (
     <section className="flex-1 flex flex-col min-h-0">
-      <header className="shrink-0 flex items-center gap-3 px-4 md:px-5 py-3 border-b border-border-soft bg-bg-1/80 backdrop-blur min-h-[52px]">
-        <button type="button" onClick={onBack} className="md:hidden text-text-1 text-sm flex items-center gap-1">
-          ← Home
-        </button>
+      <header className="shrink-0 flex items-center gap-3 px-4 md:px-5 py-3 border-b border-border bg-card/80 backdrop-blur min-h-[52px]">
+        <Button variant="ghost" size="sm" onClick={onBack} className="md:hidden gap-1">
+          <ArrowLeft data-icon="inline-start" />
+          Home
+        </Button>
         <div className="flex-1 min-w-0 font-medium truncate text-sm">{session.title}</div>
-        <div className="flex items-center gap-1.5 text-[11.5px] text-text-1 shrink-0 px-2 py-0.5 rounded-full bg-bg-2">
+        <Badge variant="secondary" className="gap-1.5 shrink-0">
           <StatusDot status={session.status} />
           {statusLabel(session.status)}
-        </div>
-        <div className="flex items-center gap-1 shrink-0">
-          {canPause && (
-            <button
-              type="button"
-              onClick={() => void onPause()}
-              disabled={lifecycleBusy}
-              title="Pause session"
-              className="p-2 rounded-md text-text-1 hover:bg-bg-2 disabled:opacity-40"
-            >
-              <PauseIcon />
-            </button>
-          )}
-          {canArchive && (
-            <button
-              type="button"
-              onClick={() => void onArchive()}
-              disabled={lifecycleBusy}
-              title="Archive session"
-              className="p-2 rounded-md text-text-1 hover:bg-bg-2 disabled:opacity-40"
-            >
-              <ArchiveIcon />
-            </button>
-          )}
-        </div>
+        </Badge>
+        <TooltipProvider>
+          <div className="flex items-center gap-1 shrink-0">
+            {canPause && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => void onPause()}
+                    disabled={lifecycleBusy}
+                    aria-label="Pause session"
+                  >
+                    <Pause />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Pause session</TooltipContent>
+              </Tooltip>
+            )}
+            {canArchive && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => void onArchive()}
+                    disabled={lifecycleBusy}
+                    aria-label="Archive session"
+                  >
+                    <Archive />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Archive session</TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+        </TooltipProvider>
       </header>
 
       <div className="flex-1 overflow-y-auto px-4 md:px-8 min-h-0">
@@ -166,9 +194,9 @@ export function SessionDetail({
         </div>
       </div>
 
-      <div className="shrink-0 px-4 md:px-5 pt-3 pb-4 md:pb-[18px] border-t border-border-soft bg-bg-1 composer-wrap">
-        <div className="max-w-[760px] mx-auto bg-bg-2 border border-border rounded-[10px] focus-within:border-accent transition-colors">
-          <textarea
+      <div className="shrink-0 px-4 md:px-5 pt-3 pb-4 md:pb-[18px] border-t border-border bg-card composer-wrap">
+        <div className="max-w-[760px] mx-auto rounded-[10px] border border-border bg-secondary transition-shadow focus-within:ring-2 focus-within:ring-ring/50">
+          <Textarea
             value={steerText}
             onChange={(e) => setSteerText(e.target.value)}
             onKeyDown={(e) => {
@@ -185,53 +213,25 @@ export function SessionDetail({
                   ? 'Agent is running — wait for idle or pause first…'
                   : 'Steer the agent — add context, change direction, ask a question…'
             }
-            rows={1}
-            className="w-full bg-transparent px-4 pt-3.5 pb-1.5 resize-none outline-none text-sm placeholder:text-text-3 disabled:opacity-50 min-h-[48px]"
+            className="min-h-[48px] resize-none border-0 shadow-none bg-transparent focus-visible:ring-0 focus-visible:border-0"
           />
           <div className="flex items-center justify-between gap-2 px-3 pb-2.5">
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-bg-1 border border-border-soft rounded-md text-xs text-text-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-accent" />
+            <Badge variant="secondary" className="gap-1.5">
+              <span className="size-1.5 rounded-full bg-primary" />
               {modelName}
-            </span>
-            <button
-              type="button"
+            </Badge>
+            <Button
+              size="icon-lg"
+              aria-label="Send"
               onClick={() => void handleSteer()}
               disabled={steerDisabled || !steerText.trim()}
-              className="touch-target w-9 h-9 rounded-lg bg-accent text-[#1a1208] flex items-center justify-center disabled:opacity-40 hover:bg-accent-hover transition-colors shrink-0"
+              className="shrink-0"
             >
-              <SendIcon />
-            </button>
+              <Send />
+            </Button>
           </div>
         </div>
       </div>
     </section>
-  );
-}
-
-function SendIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5">
-      <line x1="22" y1="2" x2="11" y2="13" />
-      <polygon points="22 2 15 22 11 13 2 9 22 2" />
-    </svg>
-  );
-}
-
-function PauseIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5">
-      <rect x="6" y="4" width="4" height="16" />
-      <rect x="14" y="4" width="4" height="16" />
-    </svg>
-  );
-}
-
-function ArchiveIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="w-3.5 h-3.5">
-      <polyline points="21 8 21 21 3 21 3 8" />
-      <rect x="1" y="3" width="22" height="5" />
-      <line x1="10" y1="12" x2="14" y2="12" />
-    </svg>
   );
 }
