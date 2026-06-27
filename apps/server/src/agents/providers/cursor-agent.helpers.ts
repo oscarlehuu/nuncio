@@ -1,5 +1,12 @@
 import type { ModelProviderDto } from '../../models/models.types';
 
+export const CURSOR_PREFERRED_MODEL = 'composer-2.5';
+
+export function isCursorDefaultModelId(id: string): boolean {
+  const bare = id.startsWith('cursor:') ? id.slice('cursor:'.length) : id;
+  return bare === 'default';
+}
+
 export const STATIC_FALLBACK_CURSOR_MODELS: ModelProviderDto[] = [
   {
     id: 'cursor',
@@ -11,7 +18,13 @@ export const STATIC_FALLBACK_CURSOR_MODELS: ModelProviderDto[] = [
         id: 'cursor',
         name: 'Cursor',
         sub: 'Local runtime',
-        models: [{ id: 'cursor:composer-2', name: 'Composer 2', sub: 'Default' }],
+        models: [
+          {
+            id: `cursor:${CURSOR_PREFERRED_MODEL}`,
+            name: 'Composer 2.5',
+            sub: 'Cursor model',
+          },
+        ],
       },
     ],
   },
@@ -29,8 +42,17 @@ export type CursorSdk = {
   JsonlLocalAgentStore: new (dir: string) => unknown;
 };
 
+export type CursorInteractionUpdate = {
+  type: string;
+  text?: string;
+  toolCall?: { type?: string };
+};
+
 export type CursorAgentInstance = {
-  send: (text: string) => Promise<CursorRunInstance>;
+  send: (
+    text: string,
+    options?: { onDelta?: (args: { update: CursorInteractionUpdate }) => void },
+  ) => Promise<CursorRunInstance>;
   close?: () => void;
 };
 

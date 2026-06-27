@@ -4,11 +4,14 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { BranchPicker } from './branch-picker';
-import { DEFAULT_MODEL_ID, ModelPicker } from './model-picker';
+import { DEFAULT_MODEL_ID, DEFAULT_PROVIDER_ID, ModelPicker } from './model-picker';
 import { ProjectPicker } from './project-picker';
+import { ProviderIcon } from './provider-icon';
+import { FALLBACK_PROVIDERS, type ModelProvider } from '../lib/model-providers';
 
 interface HomeViewProps {
   sessionCount: number;
+  providers?: ModelProvider[];
   onSubmit: (
     prompt: string,
     model?: string,
@@ -19,12 +22,17 @@ interface HomeViewProps {
   loading?: boolean;
 }
 
-export function HomeView({ sessionCount, onSubmit, loading }: HomeViewProps) {
+export function HomeView({ sessionCount, providers, onSubmit, loading }: HomeViewProps) {
   const [prompt, setPrompt] = useState('');
   const [model, setModel] = useState(DEFAULT_MODEL_ID);
-  const [provider, setProvider] = useState<string | undefined>();
+  const [provider, setProvider] = useState<string | undefined>(DEFAULT_PROVIDER_ID);
   const [projectPath, setProjectPath] = useState<string | undefined>();
   const [baseBranch, setBaseBranch] = useState<string | undefined>();
+
+  const availableProviders = (providers && providers.length > 0
+    ? providers
+    : FALLBACK_PROVIDERS
+  ).filter((p) => !p.unavailable);
 
   const handleSubmit = async () => {
     const text = prompt.trim();
@@ -53,7 +61,7 @@ export function HomeView({ sessionCount, onSubmit, loading }: HomeViewProps) {
           </p>
         </div>
 
-        <div className="rounded-xl border border-border bg-card shadow-lg transition-shadow focus-within:ring-2 focus-within:ring-ring/50">
+        <div className="home-composer flex flex-col rounded-xl border border-border bg-card shadow-lg transition-shadow focus-within:ring-2 focus-within:ring-ring/50">
           <Textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
@@ -64,17 +72,17 @@ export function HomeView({ sessionCount, onSubmit, loading }: HomeViewProps) {
               }
             }}
             placeholder="Ask Nuncio to build features, fix bugs, or work on your code…"
-            className="min-h-[96px] resize-none border-0 shadow-none bg-transparent text-[15px] px-5 pt-4 pb-2 focus-visible:ring-0 focus-visible:border-0"
+            className="min-h-[96px] shrink-0 resize-none border-0 shadow-none bg-transparent text-[15px] px-5 pt-4 pb-2 focus-visible:ring-0 focus-visible:border-0"
           />
-          <div className="home-composer-bar flex items-center justify-between gap-2 px-3 pb-3">
-            <div className="flex items-center gap-2 min-w-0 flex-wrap">
+          <div className="home-composer-bar flex items-center justify-between gap-2 border-t border-border px-3 pt-2 pb-3">
+            <div className="home-composer-pickers flex min-w-0 flex-1 items-center gap-2 overflow-x-auto [&_button]:shrink-0">
               <ProjectPicker value={projectPath} onChange={handleProjectChange} />
               <BranchPicker
                 projectPath={projectPath}
                 value={baseBranch}
                 onChange={setBaseBranch}
               />
-              <ModelPicker value={model} onChange={handleModelChange} />
+              <ModelPicker value={model} onChange={handleModelChange} providers={providers} />
             </div>
             <Button
               size="icon-lg"
@@ -89,7 +97,12 @@ export function HomeView({ sessionCount, onSubmit, loading }: HomeViewProps) {
         </div>
 
         <div className="flex flex-wrap gap-2 justify-center mt-5">
-          <Badge variant="secondary">Pi connected</Badge>
+          {availableProviders.map((p) => (
+            <Badge key={p.id} variant="secondary" className="gap-1.5">
+              <ProviderIcon providerId={p.id} className="size-3" />
+              {p.name} connected
+            </Badge>
+          ))}
           <Badge variant="secondary">
             {sessionCount} session{sessionCount === 1 ? '' : 's'}
           </Badge>

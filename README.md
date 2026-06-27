@@ -14,6 +14,8 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 - **Mobile-first PWA** — installable on iPhone via Tailscale HTTPS; standalone dark UI, safe-area aware
 - **Self-hosted** — your machine, your SQLite, your credentials; nothing leaves your tailnet
 - **Provider-neutral agent layer** — `AgentProvider` interface + `AgentRegistry`; Pi, Cursor, and Mock today, extensible
+- **Settings store** — runtime-configurable env vars (API keys, paths, flags) stored in SQLite and editable via the frontend; secrets encrypted at rest (AES-256-GCM), env vars still honoured as fallback
+- **Folder picker** — browse the host machine's directories to pick a project (server-side, works on iPhone PWA), or paste a custom path
 
 ## Status
 
@@ -39,7 +41,7 @@ Nuncio drives the [Pi SDK](https://github.com/earendil-works/pi) in-process. Log
 
 ### Cursor credentials
 
-Set `CURSOR_API_KEY` (from [Cursor dashboard](https://cursor.com/dashboard/cloud-agents)) to enable the **Cursor** provider (`provider: "cursor"`). Uses `@cursor/sdk` local runtime under Bun with `useHttp1ForAgent` + `JsonlLocalAgentStore` escape hatches. Default cwd: `NUNCIO_CURSOR_CWD` or `process.cwd()`. Per-session `workspace` field (Phase 4 UI) overrides cwd when set.
+Set `CURSOR_API_KEY` (from [Cursor dashboard](https://cursor.com/dashboard/cloud-agents)) to enable the **Cursor** provider (`provider: "cursor"`). Uses `@cursor/sdk` local runtime under Bun with `useHttp1ForAgent` + `JsonlLocalAgentStore` escape hatches. Default cwd: `NUNCIO_CURSOR_CWD` or `process.cwd()`. Per-session `workspace` field (Phase 4 UI) overrides cwd when set. The key can also be set via the **Settings** UI (gear icon in the sidebar) — it's stored encrypted at rest and overrides the env var without a restart.
 
 ## Testing
 
@@ -85,7 +87,7 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 - **Agent providers:** Pi SDK + Mock behind a common `AgentProvider` interface; `AgentRegistry` selects per session. Pi auth via the SDK's `AuthStorage` (API key **or** OAuth/subscription) at `~/.pi/agent` (override: `PI_CODING_AGENT_DIR`). Falls back to Mock when Pi has no configured credentials. See [docs/system-architecture.md](docs/system-architecture.md).
 - **Backend:** NestJS (`apps/server`) on port 3000
 - **Frontend:** Vite + React + Tailwind + shadcn/ui (`apps/web`) on port 5173
-- **Persistence:** SQLite (`better-sqlite3`) in `data/nuncio.db` — sessions (with `provider` + `model`) + append-only event log
+- **Persistence:** SQLite (`bun:sqlite`) in `data/nuncio.db` — sessions (with `provider` + `model`), append-only event log, and a `settings` table for runtime-configurable env overrides (secrets encrypted at rest)
 - **Auth:** Tailscale (network) + static app token (planned)
 - **Distribution:** Open source — friends/colleagues self-host on their own Linux/macOS machines
 
@@ -103,6 +105,10 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 | POST | `/api/sessions/:id/pause` | Pause session |
 | POST | `/api/sessions/:id/archive` | Archive session |
 | GET | `/api/models` | Model catalog (aggregated from available providers) |
+| GET | `/api/settings` | List all settings (secrets masked, never raw) |
+| PUT | `/api/settings/:key` | Update a setting `{ "value": "..." }` (encrypts secrets, busts provider caches) |
+| DELETE | `/api/settings/:key` | Clear a setting (falls back to env/default) |
+| GET | `/api/fs/dirs?path=` | Server-side directory browser (defaults to `$HOME`); used by the folder picker |
 
 ### Session FSM
 

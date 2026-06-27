@@ -1,10 +1,12 @@
-import { Plus } from 'lucide-react';
+import { Plus, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/mode-toggle';
 import { cn } from '@/lib/utils';
 import type { Session } from '../lib/api';
 import { relativeTime, statusLabel } from '../lib/api';
 import { projectDisplayName } from '../lib/projects';
+import { providerMeta } from '../lib/model-providers';
+import { ProviderIcon } from './provider-icon';
 import { StatusDot } from './status-dot';
 
 interface SidebarProps {
@@ -12,9 +14,16 @@ interface SidebarProps {
   activeId: string | null;
   onSelect: (id: string | null) => void;
   onNew: () => void;
+  onSettings?: () => void;
 }
 
-export function Sidebar({ sessions, activeId, onSelect, onNew }: SidebarProps) {
+export function Sidebar({
+  sessions,
+  activeId,
+  onSelect,
+  onNew,
+  onSettings,
+}: SidebarProps) {
   return (
     <div className="flex flex-col h-full bg-sidebar text-sidebar-foreground">
       <div className="p-4 pb-3 shrink-0">
@@ -23,9 +32,6 @@ export function Sidebar({ sessions, activeId, onSelect, onNew }: SidebarProps) {
             N
           </div>
           <span className="font-semibold text-[14.5px] tracking-tight">Nuncio</span>
-          <div className="ml-auto">
-            <ModeToggle />
-          </div>
         </div>
         <nav className="mt-3.5 flex flex-col gap-px">
           <Button
@@ -61,11 +67,19 @@ export function Sidebar({ sessions, activeId, onSelect, onNew }: SidebarProps) {
               {activeId === s.id && (
                 <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 bg-sidebar-ring rounded-sm" />
               )}
-              <StatusDot status={s.status} />
+              <StatusDot status={s.status} className="mt-1" />
               <div className="min-w-0 flex-1">
                 <div className="text-[13px] text-sidebar-foreground truncate">{s.title}</div>
-                <div className="text-[11px] text-muted-foreground truncate mt-0.5">
-                  {projectDisplayName(s.projectPath) ?? s.preview ?? statusLabel(s.status)} · {relativeTime(s.updatedAt)}
+                <div className="text-[11px] text-muted-foreground truncate mt-0.5 flex items-center gap-1">
+                  <span
+                    aria-label={`${providerMeta(s.provider).name} provider`}
+                    className="shrink-0 leading-none"
+                  >
+                    <ProviderIcon providerId={s.provider} className="size-3" />
+                  </span>
+                  <span className="truncate">
+                    {projectDisplayName(s.projectPath) ?? s.preview ?? statusLabel(s.status)} · {relativeTime(s.updatedAt)}
+                  </span>
                 </div>
               </div>
             </button>
@@ -75,6 +89,19 @@ export function Sidebar({ sessions, activeId, onSelect, onNew }: SidebarProps) {
           )}
         </div>
       </div>
+
+      <footer
+        data-sidebar-footer
+        className="shrink-0 border-t border-sidebar-border p-3 flex items-center justify-end gap-1"
+        style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}
+      >
+        {onSettings && (
+          <Button variant="ghost" size="icon" onClick={onSettings} aria-label="Settings" className="size-8">
+            <Settings className="size-4" />
+          </Button>
+        )}
+        <ModeToggle />
+      </footer>
     </div>
   );
 }

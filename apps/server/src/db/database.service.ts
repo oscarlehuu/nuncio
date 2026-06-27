@@ -33,16 +33,25 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_session_seq ON events(session_id, seq);
+
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 `;
 
 @Global()
 @Injectable()
 export class DatabaseService implements OnModuleDestroy {
   readonly db: Database;
+  /** Resolved data directory (exposed so other services can colocate files, e.g. the settings key). */
+  readonly dataDir: string;
 
   constructor() {
     const dataDir = process.env.NUNCIO_DATA_DIR ?? join(process.cwd(), 'data');
     mkdirSync(dataDir, { recursive: true });
+    this.dataDir = dataDir;
     this.db = new Database(join(dataDir, 'nuncio.db'));
     this.db.exec('PRAGMA journal_mode = WAL');
     this.db.exec(SCHEMA);

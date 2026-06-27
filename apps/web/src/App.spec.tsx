@@ -55,6 +55,20 @@ describe('App navigation', () => {
     await userEvent.click(menu);
     expect(await screen.findByText('Navigation')).toBeInTheDocument();
   });
+
+  it('mobile drawer has no sheet close button and shows theme in footer', async () => {
+    render(
+      <ThemeProvider defaultTheme="light">
+        <App />
+      </ThemeProvider>,
+    );
+    await userEvent.click(screen.getByRole('button', { name: /open navigation/i }));
+    await screen.findByText('Navigation');
+    expect(screen.queryByRole('button', { name: /^close$/i })).not.toBeInTheDocument();
+    const theme = screen.getByRole('button', { name: /toggle theme/i });
+    const footer = theme.closest('[data-sidebar-footer]');
+    expect(footer).toBeInTheDocument();
+  });
 });
 
 describe('App create flow', () => {
@@ -92,8 +106,8 @@ describe('App create flow', () => {
     await waitFor(() => expect(createSession).toHaveBeenCalled());
     expect(createSession).toHaveBeenCalledWith(
       'build the thing',
-      'claude-fable-5',
-      undefined,
+      'cursor:composer-2.5',
+      'cursor',
       undefined,
       undefined,
     );

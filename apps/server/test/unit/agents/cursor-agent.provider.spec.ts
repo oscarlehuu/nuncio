@@ -9,6 +9,7 @@ import { DatabaseModule } from '../../../src/db/database.module';
 import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
+import { SettingsModule } from '../../../src/settings/settings.module';
 
 type StubOpts = {
   models?: string[];
@@ -17,18 +18,25 @@ type StubOpts = {
   waitStatus?: 'finished' | 'error' | 'cancelled';
   waitResult?: string;
   streamEvents?: Array<{ type: string; [key: string]: unknown }>;
+  deltaUpdates?: Array<{ type: string; text?: string; toolCall?: { type?: string }; [key: string]: unknown }>;
 };
 
 function makeStubSdk(opts: StubOpts = {}) {
   const createCalls: unknown[] = [];
   const sendCalls: string[] = [];
+  const sendOptionsCalls: unknown[] = [];
   const closeCalls: number[] = [];
   const modelsListCalls: number[] = [];
 
   const agent = {
     agentId: 'stub-agent-1',
-    send: async (text: string) => {
+    send: async (text: string, options?: { onDelta?: (args: { update: { type: string; [key: string]: unknown } }) => void }) => {
       sendCalls.push(text);
+      sendOptionsCalls.push(options);
+      // Fire onDelta updates (simulating the SDK streaming tokens/tool state).
+      for (const update of opts.deltaUpdates ?? []) {
+        options?.onDelta?.({ update });
+      }
       return {
         id: 'stub-run-1',
         stream: async function* () {
@@ -78,7 +86,7 @@ function makeStubSdk(opts: StubOpts = {}) {
     },
   };
 
-  return { sdk, createCalls, sendCalls, closeCalls, modelsListCalls };
+  return { sdk, createCalls, sendCalls, sendOptionsCalls, closeCalls, modelsListCalls };
 }
 
 describe('parseCursorModel', () => {
@@ -113,7 +121,7 @@ describe('CursorAgentProvider', () => {
     delete process.env.NUNCIO_FORCE_MOCK;
 
     module = await Test.createTestingModule({
-      imports: [DatabaseModule, SessionsPersistenceModule],
+      imports: [DatabaseModule, SessionsPersistenceModule, SettingsModule],
       providers: [CursorAgentProvider],
     }).compile();
 
@@ -193,6 +201,18 @@ describe('CursorAgentProvider', () => {
     ]);
   });
 
+  it('listModels omits the cursor "default" model entry', async () => {
+    const { sdk } = makeStubSdk({ models: ['default', 'composer-2.5', 'gpt-5'] });
+    provider.sdkOverride = sdk as never;
+    process.env.CURSOR_API_KEY = 'cursor_test_key';
+
+    const models = await provider.listModels();
+    expect(models[0].groups?.[0].models.map((m) => m.id)).toEqual([
+      'cursor:composer-2.5',
+      'cursor:gpt-5',
+    ]);
+  });
+
   it('listModels caches Cursor.models.list result', async () => {
     const { sdk, modelsListCalls } = makeStubSdk();
     provider.sdkOverride = sdk as never;
@@ -209,7 +229,7 @@ describe('CursorAgentProvider', () => {
     process.env.CURSOR_API_KEY = 'cursor_test_key';
 
     const models = await provider.listModels();
-    expect(models[0].groups?.[0].models[0].id).toBe('cursor:composer-2');
+    expect(models[0].groups?.[0].models[0].id).toBe('cursor:composer-2.5');
   });
 
   it('dispose is a no-op for unknown session', () => {
@@ -241,13 +261,10 @@ describe('CursorAgentProvider', () => {
 
   it('run maps assistant and tool_call events and reaches IDLE (case A)', async () => {
     const { sdk } = makeStubSdk({
-      streamEvents: [
-        {
-          type: 'assistant',
-          message: { role: 'assistant', content: [{ type: 'text', text: 'Hello' }] },
-        },
-        { type: 'tool_call', call_id: 'c1', name: 'grep', status: 'running' },
-        { type: 'tool_call', call_id: 'c1', name: 'grep', status: 'completed' },
+      deltaUpdates: [
+        { type: 'text-delta', text: 'Hello' },
+        { type: 'tool-call-started', toolCall: { type: 'grep' } },
+        { type: 'tool-call-completed', toolCall: { type: 'grep' } },
       ],
       waitResult: 'Hello world',
     });
@@ -340,12 +357,7 @@ describe('CursorAgentProvider', () => {
 
   it('assistant_message falls back to accumulatedText when result.result is missing (case F)', async () => {
     const { sdk } = makeStubSdk({
-      streamEvents: [
-        {
-          type: 'assistant',
-          message: { role: 'assistant', content: [{ type: 'text', text: 'Fallback' }] },
-        },
-      ],
+      deltaUpdates: [{ type: 'text-delta', text: 'Fallback' }],
       waitResult: undefined,
     });
     provider.sdkOverride = sdk as never;
@@ -356,5 +368,70 @@ describe('CursorAgentProvider', () => {
 
     const assistantMessage = events.list(created.id).find((e) => e.type === 'assistant_message');
     expect((assistantMessage?.payload as { text: string }).text).toBe('Fallback');
+  });
+
+  it('emits one assistant_delta per text-delta token via onDelta (token streaming)', async () => {
+    const { sdk, sendOptionsCalls } = makeStubSdk({
+      deltaUpdates: [
+        { type: 'text-delta', text: 'P' },
+        { type: 'text-delta', text: 'ONG' },
+      ],
+      waitResult: 'PONG',
+    });
+    provider.sdkOverride = sdk as never;
+    process.env.CURSOR_API_KEY = 'cursor_test_key';
+
+    const created = sessions.create({ prompt: 'ping', provider: 'cursor' });
+    const emitted: { type: string; payload: unknown }[] = [];
+    const emit: EventEmitter = (event) => emitted.push(event);
+
+    await provider.run(created.id, created.prompt, { emit });
+
+    const deltas = events.list(created.id).filter((e) => e.type === 'assistant_delta');
+    expect(deltas.map((e) => (e.payload as { delta: string }).delta)).toEqual(['P', 'ONG']);
+    expect(sessions.findById(created.id)?.preview).toBe('PONG');
+    // The provider must pass an onDelta handler to agent.send.
+    expect((sendOptionsCalls[0] as { onDelta?: unknown }).onDelta).toBeInstanceOf(Function);
+  });
+
+  it('maps tool-call-started/completed to tool_start/tool_end via onDelta', async () => {
+    const { sdk } = makeStubSdk({
+      deltaUpdates: [
+        { type: 'tool-call-started', toolCall: { type: 'bash' } },
+        { type: 'tool-call-completed', toolCall: { type: 'bash' } },
+      ],
+      waitResult: 'done',
+    });
+    provider.sdkOverride = sdk as never;
+    process.env.CURSOR_API_KEY = 'cursor_test_key';
+
+    const created = sessions.create({ prompt: 'run it', provider: 'cursor' });
+    await provider.run(created.id, created.prompt, { emit: () => {} });
+
+    const all = events.list(created.id);
+    const toolStart = all.find((e) => e.type === 'tool_start');
+    const toolEnd = all.find((e) => e.type === 'tool_end');
+    expect((toolStart?.payload as { tool: string }).tool).toBe('bash');
+    expect((toolEnd?.payload as { tool: string }).tool).toBe('bash');
+  });
+
+  it('ignores non-text/non-tool interaction updates', async () => {
+    const { sdk } = makeStubSdk({
+      deltaUpdates: [
+        { type: 'thinking-delta', text: 'pondering' },
+        { type: 'token-delta', tokens: 5 },
+        { type: 'step-started' },
+      ],
+      waitResult: 'ok',
+    });
+    provider.sdkOverride = sdk as never;
+    process.env.CURSOR_API_KEY = 'cursor_test_key';
+
+    const created = sessions.create({ prompt: 'think', provider: 'cursor' });
+    await provider.run(created.id, created.prompt, { emit: () => {} });
+
+    const all = events.list(created.id);
+    expect(all.filter((e) => e.type === 'assistant_delta')).toHaveLength(0);
+    expect(all.filter((e) => e.type === 'tool_start')).toHaveLength(0);
   });
 });

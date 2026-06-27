@@ -17,4 +17,6 @@ export interface AgentProvider {
   run(sessionId: string, prompt: string, context: AgentRunContext): Promise<void>;
   steer(sessionId: string, message: string, context: AgentRunContext): Promise<void>;
   dispose(sessionId: string): void;
+  /** Clear any cached availability/model state so the next call re-resolves from current settings. */
+  bustCache(): void;
 }

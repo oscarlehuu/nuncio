@@ -1,17 +1,22 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Menu } from 'lucide-react';
+import { toast } from 'sonner';
 import {
   archiveSession,
   createSession,
+  fetchModels,
   fetchSessions,
   pauseSession,
   steerSession,
   type Session,
 } from './lib/api';
+import { clearSetting, fetchSettings, updateSetting, type Setting } from './lib/settings-api';
 import { useSessionStream } from './lib/use-session-stream';
 import { HomeView } from './components/home-view';
 import { SessionDetail } from './components/session-detail';
+import { SettingsView } from './components/settings-view';
 import { Sidebar } from './components/sidebar';
+import type { ModelProvider } from './lib/model-providers';
 import { Button } from '@/components/ui/button';
 import {
   Sheet,
@@ -23,11 +28,14 @@ import { Toaster } from '@/components/ui/sonner';
 
 export default function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [providers, setProviders] = useState<ModelProvider[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [steering, setSteering] = useState(false);
   const [lifecycleBusy, setLifecycleBusy] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [settings, setSettings] = useState<Setting[]>([]);
   const events = useSessionStream(activeId);
 
   const refresh = useCallback(async () => {
@@ -41,6 +49,10 @@ export default function App() {
     const timer = setInterval(() => void refresh(), 5000);
     return () => clearInterval(timer);
   }, [refresh]);
+
+  useEffect(() => {
+    void fetchModels().then(setProviders);
+  }, []);
 
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
 
@@ -110,6 +122,49 @@ export default function App() {
     }
   };
 
+  const refreshSettings = useCallback(async () => {
+    try {
+      const list = await fetchSettings();
+      setSettings(list);
+    } catch {
+      toast.error('Failed to load settings');
+    }
+  }, []);
+
+  const handleOpenSettings = useCallback(() => {
+    setShowSettings(true);
+    setActiveId(null);
+    setSidebarOpen(false);
+    void refreshSettings();
+  }, [refreshSettings]);
+
+  const handleBackFromSettings = useCallback(() => {
+    setShowSettings(false);
+  }, []);
+
+  const handleUpdateSetting = useCallback(
+    async (key: string, value: string) => {
+      try {
+        const updated = await updateSetting(key, value);
+        setSettings((prev) => prev.map((s) => (s.key === key ? updated : s)));
+        toast.success(`Saved ${key}`);
+      } catch {
+        toast.error(`Failed to save ${key}`);
+      }
+    },
+    [],
+  );
+
+  const handleClearSetting = useCallback(async (key: string) => {
+    try {
+      const updated = await clearSetting(key);
+      setSettings((prev) => prev.map((s) => (s.key === key ? updated : s)));
+      toast.success(`Cleared ${key}`);
+    } catch {
+      toast.error(`Failed to clear ${key}`);
+    }
+  }, []);
+
   return (
     <div className="h-full flex bg-background">
       <aside className="hidden md:flex w-[260px] shrink-0 border-r border-sidebar-border flex-col">
@@ -118,6 +173,7 @@ export default function App() {
           activeId={activeId}
           onSelect={handleSelect}
           onNew={handleNew}
+          onSettings={handleOpenSettings}
         />
       </aside>
 
@@ -136,23 +192,31 @@ export default function App() {
             <Menu />
           </Button>
         </SheetTrigger>
-        <SheetContent side="left" className="w-[280px] p-0 gap-0">
+        <SheetContent side="left" showCloseButton={false} className="w-[280px] p-0 gap-0">
           <SheetTitle className="sr-only">Navigation</SheetTitle>
           <Sidebar
             sessions={sessions}
             activeId={activeId}
             onSelect={handleSelect}
             onNew={handleNew}
+            onSettings={handleOpenSettings}
           />
         </SheetContent>
       </Sheet>
 
       <main className="flex-1 flex flex-col min-h-0 min-w-0">
-        {activeSession ? (
+        {showSettings ? (
+          <SettingsView
+            settings={settings}
+            onUpdate={handleUpdateSetting}
+            onClear={handleClearSetting}
+            onBack={handleBackFromSettings}
+          />
+        ) : activeSession ? (
           <SessionDetail
             session={activeSession}
             events={events}
-            onBack={handleNew}
+            providers={providers}
             onSteer={handleSteer}
             onPause={handlePause}
             onArchive={handleArchive}
@@ -162,6 +226,7 @@ export default function App() {
         ) : (
           <HomeView
             sessionCount={sessions.length}
+            providers={providers}
             onSubmit={handleCreate}
             loading={creating}
           />

@@ -57,6 +57,31 @@ describe('HomeView', () => {
     expect(screen.getByText(/3 sessions/i)).toBeInTheDocument();
   });
 
+  it('shows a connected badge per available provider', () => {
+    const providers = [
+      { id: 'pi', name: 'Pi', groups: [] },
+      { id: 'cursor', name: 'Cursor', groups: [] },
+      { id: 'anthropic-direct', name: 'Anthropic', unavailable: true, groups: [] },
+    ];
+    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={providers} />);
+    expect(screen.getByText(/pi connected/i)).toBeInTheDocument();
+    expect(screen.getByText(/cursor connected/i)).toBeInTheDocument();
+    expect(screen.queryByText(/anthropic connected/i)).toBeNull();
+  });
+
+  it('stacks textarea above a single-row scrolling picker toolbar', () => {
+    const { container } = render(<HomeView sessionCount={0} onSubmit={vi.fn()} />);
+    const card = container.querySelector('.home-composer');
+    const bar = container.querySelector('.home-composer-bar');
+    const pickers = container.querySelector('.home-composer-pickers');
+
+    expect(card).toHaveClass('flex', 'flex-col');
+    expect(bar).toHaveClass('border-t');
+    expect(pickers).toBeTruthy();
+    expect(pickers).toHaveClass('overflow-x-auto');
+    expect(pickers).not.toHaveClass('flex-wrap');
+  });
+
   it('forwards project and branch selections on submit', async () => {
     const onSubmit = vi.fn();
     render(<HomeView sessionCount={0} onSubmit={onSubmit} />);
@@ -64,6 +89,6 @@ describe('HomeView', () => {
     await userEvent.click(screen.getByRole('button', { name: /pick branch/i }));
     await userEvent.type(screen.getByPlaceholderText(/ask nuncio/i), 'Add workspace');
     await userEvent.click(screen.getByRole('button', { name: /send/i }));
-    expect(onSubmit).toHaveBeenCalledWith('Add workspace', expect.any(String), undefined, '/code/nuncio', 'main');
+    expect(onSubmit).toHaveBeenCalledWith('Add workspace', expect.any(String), 'cursor', '/code/nuncio', 'main');
   });
 });

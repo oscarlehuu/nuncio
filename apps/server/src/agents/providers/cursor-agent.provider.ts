@@ -4,11 +4,15 @@ import { join } from 'node:path';
 import type { ModelProviderDto } from '../../models/models.types';
 import { EventsRepository } from '../../sessions/persistence/events.repository';
 import { SessionsRepository } from '../../sessions/persistence/sessions.repository';
+import { SettingsService } from '../../settings/settings.service';
 import type { AgentRunContext } from '../agents.types';
 import { BaseAgentProvider } from '../agents.base-provider';
 import {
+  CURSOR_PREFERRED_MODEL,
+  isCursorDefaultModelId,
   parseCursorModel,
   STATIC_FALLBACK_CURSOR_MODELS,
+  type CursorInteractionUpdate,
   type CursorSdk,
   type CursorSessionHandle,
 } from './cursor-agent.helpers';
@@ -27,23 +31,29 @@ export class CursorAgentProvider extends BaseAgentProvider {
   /** Test hook: inject a stub SDK instead of loading @cursor/sdk. */
   sdkOverride?: CursorSdk;
 
-  constructor(sessions: SessionsRepository, events: EventsRepository) {
+  constructor(sessions: SessionsRepository, events: EventsRepository, private readonly settings: SettingsService) {
     super(sessions, events);
   }
 
   async isAvailable(): Promise<boolean> {
-    if (process.env.NUNCIO_FORCE_MOCK === '1') return false;
+    if (this.settings.resolve('NUNCIO_FORCE_MOCK') === '1') return false;
     if (this.cachedAvailable !== undefined) return this.cachedAvailable;
-    const key = process.env.CURSOR_API_KEY?.trim();
+    const key = this.settings.resolve('CURSOR_API_KEY')?.trim();
     this.cachedAvailable = !!key;
     return this.cachedAvailable;
+  }
+
+  /** Drop cached availability + models so the next call re-resolves from current settings. */
+  bustCache(): void {
+    this.cachedAvailable = undefined;
+    this.cachedModels = undefined;
   }
 
   async listModels(): Promise<ModelProviderDto[]> {
     if (this.cachedModels) return this.cachedModels;
     try {
       const sdk = await this.loadSdk();
-      const apiKey = process.env.CURSOR_API_KEY!;
+      const apiKey = this.settings.resolve('CURSOR_API_KEY')!;
       const models = await sdk.Cursor.models.list({ apiKey });
       const dto: ModelProviderDto[] = [
         {
@@ -56,11 +66,13 @@ export class CursorAgentProvider extends BaseAgentProvider {
               id: 'cursor',
               name: 'Cursor',
               sub: 'Local runtime',
-              models: models.map((m) => ({
-                id: `cursor:${m.id}`,
-                name: m.id,
-                sub: 'Cursor model',
-              })),
+              models: models
+                .filter((m) => !isCursorDefaultModelId(m.id))
+                .map((m) => ({
+                  id: `cursor:${m.id}`,
+                  name: m.id,
+                  sub: 'Cursor model',
+                })),
             },
           ],
         },
@@ -84,7 +96,7 @@ export class CursorAgentProvider extends BaseAgentProvider {
   }
 
   protected resolveCwd(_sessionId: string, context: AgentRunContext): string {
-    return context.workspace ?? process.env.NUNCIO_CURSOR_CWD ?? process.cwd();
+    return context.workspace ?? this.settings.resolve('NUNCIO_CURSOR_CWD') ?? process.cwd();
   }
 
   protected async executePrompt(
@@ -96,8 +108,8 @@ export class CursorAgentProvider extends BaseAgentProvider {
     let handle = this.activeSessions.get(sessionId);
     if (!handle) {
       const sdk = await this.loadSdk();
-      const apiKey = process.env.CURSOR_API_KEY!;
-      const modelId = parseCursorModel(context.model) ?? 'composer-2';
+      const apiKey = this.settings.resolve('CURSOR_API_KEY')!;
+      const modelId = parseCursorModel(context.model) ?? CURSOR_PREFERRED_MODEL;
       const agent = await sdk.Agent.create({
         apiKey,
         model: { id: modelId },
@@ -114,50 +126,12 @@ export class CursorAgentProvider extends BaseAgentProvider {
     const active = handle;
     active.accumulatedText = '';
 
-    const run = await active.agent.send(text);
-    for await (const event of run.stream()) {
-      switch (event.type) {
-        case 'assistant': {
-          const message = (event as { message?: { content?: Array<{ type: string; text?: string }> } })
-            .message;
-          for (const block of message?.content ?? []) {
-            if (block.type === 'text' && block.text) {
-              active.accumulatedText += block.text;
-              this.pushEvent(sessionId, 'assistant_delta', { delta: block.text }, context.emit);
-              this.sessions.touchPreview(sessionId, active.accumulatedText);
-            }
-          }
-          break;
-        }
-        case 'tool_call': {
-          const toolEvent = event as { status?: string; name?: string };
-          if (toolEvent.status === 'running') {
-            this.pushEvent(sessionId, 'tool_start', { tool: toolEvent.name }, context.emit);
-          } else {
-            this.pushEvent(
-              sessionId,
-              'tool_end',
-              { tool: toolEvent.name, isError: toolEvent.status === 'error' },
-              context.emit,
-            );
-          }
-          break;
-        }
-        case 'thinking':
-        case 'status':
-        case 'system':
-        case 'request':
-        case 'user':
-        case 'task':
-        case 'usage':
-          break;
-        default: {
-          const _exhaustive: never = event.type as never;
-          void _exhaustive;
-        }
-      }
-    }
-
+    // onDelta gives token-by-token text + tool-call state (finer-grained than
+    // run.stream()'s block-level `assistant` events). run.wait() drains the run
+    // and returns the terminal result.
+    const run = await active.agent.send(text, {
+      onDelta: ({ update }) => this.handleDelta(sessionId, active, update, context),
+    });
     const result = await run.wait();
     switch (result.status) {
       case 'finished':
@@ -176,6 +150,42 @@ export class CursorAgentProvider extends BaseAgentProvider {
         const _exhaustive: never = result.status;
         throw new Error(`unexpected Cursor run status: ${_exhaustive}`);
       }
+    }
+  }
+
+  private handleDelta(
+    sessionId: string,
+    active: CursorSessionHandle,
+    update: CursorInteractionUpdate,
+    context: AgentRunContext,
+  ): void {
+    switch (update.type) {
+      case 'text-delta':
+        if (update.text) {
+          active.accumulatedText += update.text;
+          this.pushEvent(sessionId, 'assistant_delta', { delta: update.text }, context.emit);
+          this.sessions.touchPreview(sessionId, active.accumulatedText);
+        }
+        return;
+      case 'tool-call-started':
+        this.pushEvent(
+          sessionId,
+          'tool_start',
+          { tool: update.toolCall?.type ?? 'unknown' },
+          context.emit,
+        );
+        return;
+      case 'tool-call-completed':
+        this.pushEvent(
+          sessionId,
+          'tool_end',
+          { tool: update.toolCall?.type ?? 'unknown', isError: false },
+          context.emit,
+        );
+        return;
+      default:
+        // thinking-delta, token-delta, step-*, summary-*, etc. — not surfaced.
+        return;
     }
   }
 
