@@ -59,9 +59,9 @@ export class SessionsRepository {
     this.database.db
       .prepare(
         `INSERT INTO sessions (id, title, status, provider, model, prompt, preview, created_at, updated_at)
-         VALUES (@id, @title, @status, @provider, @model, @prompt, @preview, @created_at, @updated_at)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(row);
+      .run(row.id, row.title, row.status, row.provider, row.model, row.prompt, row.preview, row.created_at, row.updated_at);
     return toDto(row);
   }
 
