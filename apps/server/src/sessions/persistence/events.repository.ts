@@ -17,21 +17,22 @@ export class EventsRepository {
 
   list(sessionId: string, since = 0): SessionEvent[] {
     const rows = this.database.db
-      .prepare(
+      .prepare<EventRow, [string, number]>(
         'SELECT * FROM events WHERE session_id = ? AND seq > ? ORDER BY seq ASC',
       )
-      .all(sessionId, since) as EventRow[];
+      .all(sessionId, since);
     return rows.map(parseEvent);
   }
 
   append(sessionId: string, type: string, payload: unknown): SessionEvent {
     const now = Date.now();
     const next = this.database.db
-      .prepare('SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM events WHERE session_id = ?')
-      .get(sessionId) as { seq: number };
+      .prepare<{ seq: number }, [string]>('SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM events WHERE session_id = ?')
+      .get(sessionId);
+    const seq = next?.seq ?? 1;
     const row = {
       session_id: sessionId,
-      seq: next.seq,
+      seq,
       type,
       payload: JSON.stringify(payload),
       created_at: now,
@@ -42,6 +43,6 @@ export class EventsRepository {
          VALUES (?, ?, ?, ?, ?)`,
       )
       .run(row.session_id, row.seq, row.type, row.payload, row.created_at);
-    return { seq: row.seq, type, payload, createdAt: now };
+    return { seq, type, payload, createdAt: now };
   }
 }

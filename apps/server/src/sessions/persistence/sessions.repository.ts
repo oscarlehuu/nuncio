@@ -31,14 +31,14 @@ export class SessionsRepository {
     const sql = includeArchived
       ? 'SELECT * FROM sessions ORDER BY updated_at DESC'
       : "SELECT * FROM sessions WHERE status != 'ARCHIVED' ORDER BY updated_at DESC";
-    const rows = this.database.db.prepare(sql).all() as SessionRow[];
+    const rows = this.database.db.prepare<SessionRow, []>(sql).all();
     return rows.map(toDto);
   }
 
   findById(id: string): SessionDto | null {
     const row = this.database.db
-      .prepare('SELECT * FROM sessions WHERE id = ?')
-      .get(id) as SessionRow | undefined;
+      .prepare<SessionRow, [string]>('SELECT * FROM sessions WHERE id = ?')
+      .get(id);
     return row ? toDto(row) : null;
   }
 
@@ -67,8 +67,8 @@ export class SessionsRepository {
 
   updateStatus(id: string, status: SessionStatus): SessionDto {
     const current = this.database.db
-      .prepare('SELECT status FROM sessions WHERE id = ?')
-      .get(id) as { status: SessionStatus } | undefined;
+      .prepare<{ status: SessionStatus }, [string]>('SELECT status FROM sessions WHERE id = ?')
+      .get(id);
     if (!current) throw new Error(`Session ${id} not found`);
     assertTransition(current.status, status);
     const now = Date.now();
