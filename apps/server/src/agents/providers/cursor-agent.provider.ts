@@ -152,6 +152,7 @@ export class CursorAgentProvider extends BaseAgentProvider {
         case 'request':
         case 'user':
         case 'task':
+        case 'usage':
           break;
         default: {
           const _exhaustive: never = event.type as never;

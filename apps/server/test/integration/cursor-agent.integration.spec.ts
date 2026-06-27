@@ -16,6 +16,7 @@ const HANDLED_SDK_EVENT_TYPES = new Set([
   'user',
   'task',
   'request',
+  'usage',
 ]);
 
 suite('CursorAgentProvider with real Cursor API key (integration)', () => {
@@ -38,7 +39,7 @@ suite('CursorAgentProvider with real Cursor API key (integration)', () => {
     async () => {
       const agent = await Agent.create({
         apiKey: process.env.CURSOR_API_KEY!,
-        model: { id: 'composer-2' },
+        model: { id: 'composer-2.5' },
         local: {
           cwd: wsDir,
           useHttp1ForAgent: true,
