@@ -9,6 +9,7 @@
     "start:prod": "node dist/main",
     "test": "jest",
     "test:e2e": "jest --config ./test/jest-e2e.json",
+    "test:integration": "NODE_OPTIONS=--experimental-vm-modules jest --config ./test/integration/jest.config.json",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
@@ -39,8 +40,9 @@
   },
   "jest": {
     "moduleFileExtensions": ["js", "json", "ts"],
-    "rootDir": "src",
-    "testRegex": ".*\\.spec\\.ts$",
+    "rootDir": ".",
+    "roots": ["<rootDir>/src", "<rootDir>/test/unit"],
+    "testRegex": "test/unit/.*\\.spec\\.ts$",
     "transform": { "^.+\\.(t|j)s$": "ts-jest" },
     "testEnvironment": "node"
   }

@@ -1,10 +1,10 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter } from 'events';
-import type { CreateSessionDto, SessionDto, SessionEvent, SessionStatus } from './session.types';
-import { canTransition } from './session-fsm';
-import { EventsRepository } from './events.repository';
-import { PiAgentService } from './pi-agent.service';
-import { SessionsRepository } from './sessions.repository';
+import { AgentRegistry } from '../agents/agents.registry';
+import { canTransition } from './domain/sessions.fsm';
+import type { CreateSessionDto, SessionDto, SessionEvent, SessionStatus } from './domain/sessions.types';
+import { EventsRepository } from './persistence/events.repository';
+import { SessionsRepository } from './persistence/sessions.repository';
 
 type StreamListener = (event: SessionEvent) => void;
 
@@ -15,7 +15,7 @@ export class SessionsService {
   constructor(
     private readonly sessions: SessionsRepository,
     private readonly events: EventsRepository,
-    private readonly piAgent: PiAgentService,
+    private readonly agents: AgentRegistry,
   ) {}
 
   list(includeArchived = false): SessionDto[] {
@@ -30,9 +30,12 @@ export class SessionsService {
     return this.events.list(id, since);
   }
 
-  create(input: CreateSessionDto): SessionDto {
-    const session = this.sessions.create(input);
-    void this.startRun(session.id, input.prompt);
+  async create(input: CreateSessionDto): Promise<SessionDto> {
+    const providerId = input.provider?.trim() || (await this.agents.defaultId());
+    await this.agents.getAvailable(providerId);
+
+    const session = this.sessions.create({ ...input, provider: providerId });
+    void this.startRun(session);
     return session;
   }
 
@@ -48,7 +51,11 @@ export class SessionsService {
       throw new BadRequestException(`Cannot steer session in status ${current.status}`);
     }
 
-    await this.piAgent.steer(id, trimmed, (event) => this.onAgentEvent(id, event));
+    const provider = await this.agents.getAvailable(current.provider);
+    await provider.steer(id, trimmed, {
+      emit: (event) => this.onAgentEvent(id, event),
+      model: current.model,
+    });
     return this.requireSession(id);
   }
 
@@ -66,7 +73,7 @@ export class SessionsService {
     if (!canTransition(session.status, 'ARCHIVED')) {
       throw new BadRequestException(`Cannot archive session in status ${session.status}`);
     }
-    this.piAgent.dispose(id);
+    this.agents.get(session.provider).dispose(id);
     this.transition(id, 'ARCHIVED');
     return this.requireSession(id);
   }
@@ -116,7 +123,13 @@ export class SessionsService {
     this.getOrCreateBus(id).emit('event', event);
   }
 
-  private startRun(sessionId: string, prompt: string): void {
-    void this.piAgent.run(sessionId, prompt, (event) => this.onAgentEvent(sessionId, event));
+  private startRun(session: SessionDto): void {
+    void (async () => {
+      const provider = await this.agents.getAvailable(session.provider);
+      await provider.run(session.id, session.prompt, {
+        emit: (event) => this.onAgentEvent(session.id, event),
+        model: session.model,
+      });
+    })();
   }
 }

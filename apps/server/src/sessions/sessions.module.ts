@@ -1,19 +1,12 @@
 import { Module } from '@nestjs/common';
-import { EventsRepository } from './events.repository';
-import { MockAgentService } from './mock-agent.service';
-import { PiAgentService } from './pi-agent.service';
-import { SessionsController } from './sessions.controller';
-import { SessionsRepository } from './sessions.repository';
+import { AgentsModule } from '../agents/agents.module';
+import { SessionsController } from './api/sessions.controller';
+import { SessionsPersistenceModule } from './sessions.persistence.module';
 import { SessionsService } from './sessions.service';
 
 @Module({
+  imports: [AgentsModule, SessionsPersistenceModule],
   controllers: [SessionsController],
-  providers: [
-    SessionsRepository,
-    EventsRepository,
-    MockAgentService,
-    PiAgentService,
-    SessionsService,
-  ],
+  providers: [SessionsService],
 })
 export class SessionsModule {}

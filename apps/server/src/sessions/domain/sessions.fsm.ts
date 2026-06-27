@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import type { SessionStatus } from './session.types';
+import type { SessionStatus } from './sessions.types';
 
 const TRANSITIONS: Record<SessionStatus, SessionStatus[]> = {
   CREATED: ['RUNNING', 'ERROR'],

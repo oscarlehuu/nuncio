@@ -1,4 +1,5 @@
-import { canTransition } from './session-fsm';
+import { BadRequestException } from '@nestjs/common';
+import { assertTransition, canTransition } from '../../../src/sessions/domain/sessions.fsm';
 
 describe('session-fsm', () => {
   it('allows CREATED -> RUNNING', () => {
@@ -64,6 +65,18 @@ describe('session-fsm', () => {
       expect(canTransition('ARCHIVED', 'IDLE')).toBe(false);
       expect(canTransition('ARCHIVED', 'RUNNING')).toBe(false);
       expect(canTransition('ARCHIVED', 'PAUSED')).toBe(false);
+    });
+  });
+
+  describe('assertTransition', () => {
+    it('throws BadRequestException on an invalid transition', () => {
+      expect(() => assertTransition('CREATED', 'IDLE')).toThrow(BadRequestException);
+      expect(() => assertTransition('ARCHIVED', 'RUNNING')).toThrow(BadRequestException);
+    });
+
+    it('passes silently on a valid transition', () => {
+      expect(() => assertTransition('IDLE', 'RUNNING')).not.toThrow();
+      expect(() => assertTransition('RUNNING', 'PAUSED')).not.toThrow();
     });
   });
 });

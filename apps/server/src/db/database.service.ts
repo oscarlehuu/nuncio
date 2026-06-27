@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'CREATED',
+  provider TEXT NOT NULL DEFAULT 'pi',
   model TEXT,
   prompt TEXT NOT NULL,
   preview TEXT,
@@ -40,9 +41,20 @@ export class DatabaseService implements OnModuleDestroy {
     this.db = new Database(join(dataDir, 'nuncio.db'));
     this.db.pragma('journal_mode = WAL');
     this.db.exec(SCHEMA);
+    this.migrate();
   }
 
   onModuleDestroy() {
     this.db.close();
+  }
+
+  private migrate(): void {
+    const sessionColumns = this.db
+      .prepare('PRAGMA table_info(sessions)')
+      .all() as Array<{ name: string }>;
+
+    if (!sessionColumns.some((column) => column.name === 'provider')) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN provider TEXT NOT NULL DEFAULT 'pi'");
+    }
   }
 }

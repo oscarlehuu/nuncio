@@ -3,12 +3,11 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { DatabaseModule } from '../db/database.module';
-import { EventsRepository } from './events.repository';
-import { MockAgentService } from './mock-agent.service';
-import { PiAgentService } from './pi-agent.service';
-import { SessionsRepository } from './sessions.repository';
-import { SessionsService } from './sessions.service';
+import { AgentsModule } from '../../../src/agents/agents.module';
+import { DatabaseModule } from '../../../src/db/database.module';
+import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
+import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
+import { SessionsService } from '../../../src/sessions/sessions.service';
 
 describe('SessionsService lifecycle (phase 3)', () => {
   let service: SessionsService;
@@ -21,14 +20,8 @@ describe('SessionsService lifecycle (phase 3)', () => {
     process.env.NUNCIO_FORCE_MOCK = '1';
 
     const module: TestingModule = await Test.createTestingModule({
-      imports: [DatabaseModule],
-      providers: [
-        SessionsRepository,
-        EventsRepository,
-        MockAgentService,
-        PiAgentService,
-        SessionsService,
-      ],
+      imports: [DatabaseModule, SessionsPersistenceModule, AgentsModule],
+      providers: [SessionsService],
     }).compile();
 
     service = module.get(SessionsService);
@@ -42,7 +35,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
   });
 
   function seedSession(status: 'IDLE' | 'PAUSED' | 'RUNNING' | 'ARCHIVED' | 'ERROR') {
-    const created = sessions.create({ prompt: 'Lifecycle test session' });
+    const created = sessions.create({ prompt: 'Lifecycle test session', provider: 'mock' });
     sessions.updateStatus(created.id, 'RUNNING');
     if (status === 'RUNNING') return created.id;
     if (status === 'ERROR') {
@@ -114,4 +107,40 @@ describe('SessionsService lifecycle (phase 3)', () => {
     const listed = service.list(true);
     expect(listed.some((s) => s.id === archivedId && s.status === 'ARCHIVED')).toBe(true);
   });
+
+  describe('per-session provider selection', () => {
+    it('defaults to mock when provider omitted and only mock is available', async () => {
+      const session = await service.create({ prompt: 'default provider task' });
+      expect(session.provider).toBe('mock');
+      await waitForIdle(service, session.id);
+    });
+
+    it('stores an explicit mock provider', async () => {
+      const session = await service.create({ prompt: 'explicit mock task', provider: 'mock' });
+      expect(session.provider).toBe('mock');
+      await waitForIdle(service, session.id);
+    });
+
+    it('rejects an unknown provider', async () => {
+      await expect(
+        service.create({ prompt: 'bad provider', provider: 'missing' }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects an unavailable provider', async () => {
+      await expect(
+        service.create({ prompt: 'pi without auth', provider: 'pi' }),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
 });
+
+async function waitForIdle(service: SessionsService, id: string, timeoutMs = 5000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const session = service.get(id);
+    if (session?.status === 'IDLE' || session?.status === 'ERROR') return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`Session ${id} did not reach IDLE in time`);
+}

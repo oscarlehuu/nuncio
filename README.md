@@ -4,7 +4,7 @@ A self-hosted, Devin-like web app for delegating tasks to AI agents — built fo
 
 ## Status
 
-Phase 0–1 vertical slice · Phase 2 PWA/mobile · Phase 3 steer + model picker.
+Phase 0–3 · agent-provider abstraction + Pi auth hardening.
 
 ## Quick start
 
@@ -18,7 +18,9 @@ npm run dev
 
 ```bash
 npm run build   # build server + web
-npm test        # server unit/integration tests
+npm test        # server unit tests
+npm run test:e2e -w apps/server        # HTTP e2e tests (mock provider)
+npm run test:integration -w apps/server # real Pi auth (skips when ~/.pi/agent absent)
 ```
 
 ## PWA install (iPhone)
@@ -55,27 +57,27 @@ Phase plans and milestones: [plans/260626-nuncio-roadmap/](plans/260626-nuncio-r
 
 ## Architecture
 
-- **Agent harness:** [Pi SDK](https://github.com/earendil-works/pi) (`createAgentSession`) — in-process, resumable; falls back to mock agent when `~/.pi/agent/auth.json` is missing
+- **Agent providers:** Pi SDK + Mock behind a common `AgentProvider` interface; `AgentRegistry` selects per session. Pi auth via the SDK's `AuthStorage` (API key **or** OAuth/subscription) at `~/.pi/agent` (override: `PI_CODING_AGENT_DIR`). Falls back to Mock when Pi has no configured credentials. See [docs/system-architecture.md](docs/system-architecture.md).
 - **Backend:** NestJS (`apps/server`) on port 3000
 - **Frontend:** Vite + React + Tailwind (`apps/web`) on port 5173
-- **Persistence:** SQLite (`better-sqlite3`) in `data/nuncio.db` for sessions + event log
+- **Persistence:** SQLite (`better-sqlite3`) in `data/nuncio.db` — sessions (with `provider` + `model`) + event log
 - **Auth:** Tailscale (network) + static app token (planned)
 - **Distribution:** Open source — friends/colleagues self-host on their own Linux/macOS machines
 
-## API (Phase 1)
+## API
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/health` | Health check |
-| GET | `/api/sessions` | List sessions |
-| POST | `/api/sessions` | Create session `{ "prompt": "..." }` |
-| GET | `/api/sessions/:id` | Session detail |
+| GET | `/api/sessions` | List sessions (`?includeArchived=1`) |
+| POST | `/api/sessions` | Create session `{ "prompt": "...", "provider?": "pi\|mock", "model?": "..." }` |
+| GET | `/api/sessions/:id` | Session detail (incl. `provider`, `model`) |
 | GET | `/api/sessions/:id/events?since=` | Event log (cursor) |
 | GET | `/api/sessions/:id/stream?since=` | SSE stream |
 | POST | `/api/sessions/:id/steer` | Steer agent `{ "message": "..." }` |
 | POST | `/api/sessions/:id/pause` | Pause session |
 | POST | `/api/sessions/:id/archive` | Archive session |
-| GET | `/api/models` | Model catalog (Pi registry or static fallback) |
+| GET | `/api/models` | Model catalog (aggregated from available providers) |
 
 ### Session FSM
 
@@ -86,17 +88,28 @@ Phase plans and milestones: [plans/260626-nuncio-roadmap/](plans/260626-nuncio-r
 
 ```
 apps/
-  server/   NestJS API + Pi harness
+  server/
+    src/
+      agents/        AgentProvider interface + BaseAgentProvider + AgentRegistry + providers/ (pi, mock)
+      sessions/      api/ · domain/ (types, fsm) · persistence/ (repositories) + service + module
+      models/        model catalog aggregation from providers
+      health/ · db/
+    test/
+      unit/          *.spec.ts (jest, CJS)
+      e2e/           HTTP e2e (mock provider)
+      integration/   real Pi auth (skips when ~/.pi/agent absent; --experimental-vm-modules)
   web/      Vite React UI
 mockup.html UI blueprint (reference)
 data/       SQLite (gitignored)
+docs/       system-architecture.md
 ```
 
 ## Design principles
 
 - **3-layer state decoupling:** Conversation (durable) / Agent loop (replaceable) / Machine state (FSM)
-- **Long-running, resumable sessions** — lazy-revive FSM
-- **Per-session model selection** — Provider → Group → Model (planned)
+- **Provider-neutral agent layer:** every agent SDK implements `AgentProvider`; `AgentRegistry` resolves per session so Pi/Cursor/any future SDK plug in uniformly
+- **Per-session provider + model selection** — `provider` + `model` stored on the session, wired through to the SDK
+- **Long-running, resumable sessions** — FSM + event log persist in SQLite; Pi conversation history is in-memory pending session revival (planned)
 
 ## License
 

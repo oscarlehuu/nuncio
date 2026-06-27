@@ -10,6 +10,7 @@ export interface SessionRow {
   id: string;
   title: string;
   status: SessionStatus;
+  provider: string;
   model: string | null;
   prompt: string;
   preview: string | null;
@@ -37,6 +38,7 @@ export interface SessionDto {
   id: string;
   title: string;
   status: SessionStatus;
+  provider: string;
   model: string | null;
   prompt: string;
   preview: string | null;
@@ -46,6 +48,7 @@ export interface SessionDto {
 
 export interface CreateSessionDto {
   prompt: string;
+  provider?: string;
   model?: string;
 }
 

@@ -1,14 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import { v4 as uuidv4 } from 'uuid';
-import { DatabaseService } from '../db/database.service';
-import { assertTransition } from './session-fsm';
-import type { CreateSessionDto, SessionDto, SessionRow, SessionStatus } from './session.types';
+import { DatabaseService } from '../../db/database.service';
+import { assertTransition } from '../domain/sessions.fsm';
+import type { CreateSessionDto, SessionDto, SessionRow, SessionStatus } from '../domain/sessions.types';
 
 function toDto(row: SessionRow): SessionDto {
   return {
     id: row.id,
     title: row.title,
     status: row.status,
+    provider: row.provider,
     model: row.model,
     prompt: row.prompt,
     preview: row.preview,
@@ -48,6 +49,7 @@ export class SessionsRepository {
       id,
       title: titleFromPrompt(input.prompt),
       status: 'CREATED',
+      provider: input.provider ?? 'pi',
       model: input.model ?? null,
       prompt: input.prompt,
       preview: null,
@@ -56,8 +58,8 @@ export class SessionsRepository {
     };
     this.database.db
       .prepare(
-        `INSERT INTO sessions (id, title, status, model, prompt, preview, created_at, updated_at)
-         VALUES (@id, @title, @status, @model, @prompt, @preview, @created_at, @updated_at)`,
+        `INSERT INTO sessions (id, title, status, provider, model, prompt, preview, created_at, updated_at)
+         VALUES (@id, @title, @status, @provider, @model, @prompt, @preview, @created_at, @updated_at)`,
       )
       .run(row);
     return toDto(row);

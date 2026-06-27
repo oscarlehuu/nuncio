@@ -4,7 +4,7 @@ import request from 'supertest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { AppModule } from './app.module';
+import { AppModule } from '../../src/app.module';
 
 describe('Nuncio API', () => {
   let app: INestApplication;

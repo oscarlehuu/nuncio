@@ -10,6 +10,7 @@ Thumbs.db
 node_modules/
 dist/
 data/
+.pi/
 .env
 .env.local
 

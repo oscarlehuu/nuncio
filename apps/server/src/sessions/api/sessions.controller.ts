@@ -9,8 +9,8 @@ import {
   Res,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import type { CreateSessionDto, SteerSessionDto } from './session.types';
-import { SessionsService } from './sessions.service';
+import type { CreateSessionDto, SteerSessionDto } from '../domain/sessions.types';
+import { SessionsService } from '../sessions.service';
 
 @Controller('sessions')
 export class SessionsController {
@@ -26,7 +26,11 @@ export class SessionsController {
     if (!body?.prompt?.trim()) {
       return { error: 'prompt is required' };
     }
-    return this.sessions.create({ prompt: body.prompt.trim(), model: body.model });
+    return this.sessions.create({
+      prompt: body.prompt.trim(),
+      provider: body.provider,
+      model: body.model,
+    });
   }
 
   @Get(':id')

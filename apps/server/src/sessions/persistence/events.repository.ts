@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { DatabaseService } from '../db/database.service';
-import type { EventRow, SessionEvent } from './session.types';
+import { DatabaseService } from '../../db/database.service';
+import type { EventRow, SessionEvent } from '../domain/sessions.types';
 
 function parseEvent(row: EventRow): SessionEvent {
   return {
