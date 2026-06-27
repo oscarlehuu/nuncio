@@ -1,26 +1,52 @@
 import { BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AgentsModule } from '../../../src/agents/agents.module';
 import { DatabaseModule } from '../../../src/db/database.module';
+import { GitModule } from '../../../src/git/git.module';
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
 import { SessionsService } from '../../../src/sessions/sessions.service';
+
+async function runGitAsync(cwd: string, args: string[]): Promise<void> {
+  const proc = Bun.spawn(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });
+  const code = await proc.exited;
+  if (code !== 0) {
+    const stderr = await new Response(proc.stderr).text();
+    throw new Error(`git ${args.join(' ')} failed: ${stderr}`);
+  }
+}
+
+async function initRepo(dir: string): Promise<void> {
+  mkdirSync(dir, { recursive: true });
+  await runGitAsync(dir, ['init', '-b', 'main']);
+  writeFileSync(join(dir, 'README.md'), '# test\n');
+  await runGitAsync(dir, ['add', 'README.md']);
+  await runGitAsync(dir, ['config', 'user.email', 'test@nuncio.local']);
+  await runGitAsync(dir, ['config', 'user.name', 'Nuncio Test']);
+  await runGitAsync(dir, ['commit', '-m', 'init']);
+}
 
 describe('SessionsService lifecycle (phase 3)', () => {
   let service: SessionsService;
   let sessions: SessionsRepository;
   let dataDir: string;
+  let repoPath: string;
+  let workspacesDir: string;
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-svc-test-'));
+    repoPath = mkdtempSync(join(tmpdir(), 'nuncio-svc-repo-'));
+    workspacesDir = mkdtempSync(join(tmpdir(), 'nuncio-svc-ws-'));
     process.env.NUNCIO_DATA_DIR = dataDir;
     process.env.NUNCIO_FORCE_MOCK = '1';
+    process.env.NUNCIO_WORKSPACES_DIR = workspacesDir;
+    await initRepo(repoPath);
 
     const module: TestingModule = await Test.createTestingModule({
-      imports: [DatabaseModule, SessionsPersistenceModule, AgentsModule],
+      imports: [DatabaseModule, GitModule, SessionsPersistenceModule, AgentsModule],
       providers: [SessionsService],
     }).compile();
 
@@ -30,8 +56,11 @@ describe('SessionsService lifecycle (phase 3)', () => {
 
   afterAll(async () => {
     rmSync(dataDir, { recursive: true, force: true });
+    rmSync(repoPath, { recursive: true, force: true });
+    rmSync(workspacesDir, { recursive: true, force: true });
     delete process.env.NUNCIO_DATA_DIR;
     delete process.env.NUNCIO_FORCE_MOCK;
+    delete process.env.NUNCIO_WORKSPACES_DIR;
   });
 
   function seedSession(status: 'IDLE' | 'PAUSED' | 'RUNNING' | 'ARCHIVED' | 'ERROR') {
@@ -131,6 +160,37 @@ describe('SessionsService lifecycle (phase 3)', () => {
       await expect(
         service.create({ prompt: 'pi without auth', provider: 'pi' }),
       ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('workspace worktree integration', () => {
+    it('creates a session with worktree when projectPath is provided', async () => {
+      const session = await service.create({
+        prompt: 'Fix auth middleware',
+        provider: 'mock',
+        projectPath: repoPath,
+        baseBranch: 'main',
+      });
+
+      expect(session.projectPath).toBe(repoPath);
+      expect(session.baseBranch).toBe('main');
+      expect(session.worktreePath).toBe(join(workspacesDir, session.id));
+      expect(session.branch).toBe(`nuncio/${session.id}-fix-auth-middleware`);
+
+      await waitForIdle(service, session.id);
+    });
+
+    it('does not persist a session when worktree creation fails', async () => {
+      const before = service.list(true).length;
+      await expect(
+        service.create({
+          prompt: 'Broken workspace',
+          provider: 'mock',
+          projectPath: '/definitely/not/a/git/repo',
+          baseBranch: 'main',
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(service.list(true).length).toBe(before);
     });
   });
 });

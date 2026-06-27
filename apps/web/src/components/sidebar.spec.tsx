@@ -19,6 +19,10 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     model: 'pi/fable-5',
     prompt: 'do the thing',
     preview: 'working on it',
+    projectPath: null,
+    baseBranch: null,
+    worktreePath: null,
+    branch: null,
     createdAt: Date.now() - 3_600_000,
     updatedAt: Date.now() - 120_000,
     ...overrides,
@@ -56,5 +60,20 @@ describe('Sidebar', () => {
   it('shows an empty state when there are no sessions', () => {
     renderWithTheme(<Sidebar sessions={[]} activeId={null} onSelect={() => {}} onNew={() => {}} />);
     expect(screen.getByText(/no sessions yet/i)).toBeInTheDocument();
+  });
+
+  it('shows the project name on the subtitle when projectPath is set', () => {
+    const sessions = [
+      makeSession({
+        id: 's1',
+        title: 'Fix auth',
+        projectPath: '/Users/dev/code/nuncio',
+        preview: 'Reading middleware',
+      }),
+    ];
+    renderWithTheme(
+      <Sidebar sessions={sessions} activeId={null} onSelect={() => {}} onNew={() => {}} />,
+    );
+    expect(screen.getByText(/nuncio ·/i)).toBeInTheDocument();
   });
 });

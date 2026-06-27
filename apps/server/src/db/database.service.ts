@@ -13,6 +13,10 @@ CREATE TABLE IF NOT EXISTS sessions (
   workspace TEXT,
   prompt TEXT NOT NULL,
   preview TEXT,
+  project_path TEXT,
+  base_branch TEXT,
+  worktree_path TEXT,
+  branch TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -60,6 +64,19 @@ export class DatabaseService implements OnModuleDestroy {
 
     if (!sessionColumns.some((column) => column.name === 'workspace')) {
       this.db.exec('ALTER TABLE sessions ADD COLUMN workspace TEXT');
+    }
+
+    const workspaceColumns = [
+      'project_path',
+      'base_branch',
+      'worktree_path',
+      'branch',
+    ] as const;
+
+    for (const column of workspaceColumns) {
+      if (!sessionColumns.some((entry) => entry.name === column)) {
+        this.db.exec(`ALTER TABLE sessions ADD COLUMN ${column} TEXT`);
+      }
     }
   }
 }

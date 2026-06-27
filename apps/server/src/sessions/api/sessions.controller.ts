@@ -31,6 +31,8 @@ export class SessionsController {
       provider: body.provider,
       model: body.model,
       workspace: body.workspace,
+      projectPath: body.projectPath,
+      baseBranch: body.baseBranch,
     });
   }
 

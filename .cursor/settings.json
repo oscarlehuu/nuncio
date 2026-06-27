@@ -1,0 +1,10 @@
+{
+  "plugins": {
+    "shadcn": {
+      "enabled": true
+    },
+    "cursor-sdk": {
+      "enabled": true
+    }
+  }
+}

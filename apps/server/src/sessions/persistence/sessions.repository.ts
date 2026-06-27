@@ -14,6 +14,10 @@ function toDto(row: SessionRow): SessionDto {
     workspace: row.workspace ?? null,
     prompt: row.prompt,
     preview: row.preview,
+    projectPath: row.project_path,
+    baseBranch: row.base_branch,
+    worktreePath: row.worktree_path,
+    branch: row.branch,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -45,7 +49,7 @@ export class SessionsRepository {
 
   create(input: CreateSessionDto): SessionDto {
     const now = Date.now();
-    const id = uuidv4().slice(0, 8);
+    const id = input.id ?? uuidv4().slice(0, 8);
     const row: SessionRow = {
       id,
       title: titleFromPrompt(input.prompt),
@@ -55,13 +59,17 @@ export class SessionsRepository {
       workspace: input.workspace?.trim() || null,
       prompt: input.prompt,
       preview: null,
+      project_path: input.projectPath ?? null,
+      base_branch: input.baseBranch ?? null,
+      worktree_path: input.worktreePath ?? null,
+      branch: input.branch ?? null,
       created_at: now,
       updated_at: now,
     };
     this.database.db
       .prepare(
-        `INSERT INTO sessions (id, title, status, provider, model, workspace, prompt, preview, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO sessions (id, title, status, provider, model, workspace, prompt, preview, project_path, base_branch, worktree_path, branch, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -72,6 +80,10 @@ export class SessionsRepository {
         row.workspace,
         row.prompt,
         row.preview,
+        row.project_path,
+        row.base_branch,
+        row.worktree_path,
+        row.branch,
         row.created_at,
         row.updated_at,
       );

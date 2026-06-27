@@ -7,6 +7,22 @@ vi.mock('../lib/api', () => ({
   fetchModels: vi.fn().mockResolvedValue([]),
 }));
 
+vi.mock('./project-picker', () => ({
+  ProjectPicker: ({ onChange }: { onChange: (path: string) => void }) => (
+    <button type="button" onClick={() => onChange('/code/nuncio')}>
+      Pick project
+    </button>
+  ),
+}));
+
+vi.mock('./branch-picker', () => ({
+  BranchPicker: ({ onChange }: { onChange: (branch: string) => void }) => (
+    <button type="button" onClick={() => onChange('main')}>
+      Pick branch
+    </button>
+  ),
+}));
+
 describe('HomeView', () => {
   it('submits the prompt via the send button', async () => {
     const onSubmit = vi.fn();
@@ -39,5 +55,15 @@ describe('HomeView', () => {
   it('shows the session count badge', () => {
     render(<HomeView sessionCount={3} onSubmit={vi.fn()} />);
     expect(screen.getByText(/3 sessions/i)).toBeInTheDocument();
+  });
+
+  it('forwards project and branch selections on submit', async () => {
+    const onSubmit = vi.fn();
+    render(<HomeView sessionCount={0} onSubmit={onSubmit} />);
+    await userEvent.click(screen.getByRole('button', { name: /pick project/i }));
+    await userEvent.click(screen.getByRole('button', { name: /pick branch/i }));
+    await userEvent.type(screen.getByPlaceholderText(/ask nuncio/i), 'Add workspace');
+    await userEvent.click(screen.getByRole('button', { name: /send/i }));
+    expect(onSubmit).toHaveBeenCalledWith('Add workspace', expect.any(String), undefined, '/code/nuncio', 'main');
   });
 });

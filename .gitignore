@@ -19,3 +19,7 @@ data/
 .idea/
 *.swp
 *.swo
+
+# Agent / IDE run state (machine- and session-specific, not source)
+.claude/
+.cursor/hooks/state/

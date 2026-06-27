@@ -1,19 +1,48 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AppModule } from '../../src/app.module';
 
+async function runGitAsync(cwd: string, args: string[]): Promise<void> {
+  const proc = Bun.spawn(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });
+  const code = await proc.exited;
+  if (code !== 0) {
+    const stderr = await new Response(proc.stderr).text();
+    throw new Error(`git ${args.join(' ')} failed: ${stderr}`);
+  }
+}
+
+async function initRepo(dir: string): Promise<void> {
+  mkdirSync(dir, { recursive: true });
+  await runGitAsync(dir, ['init', '-b', 'main']);
+  writeFileSync(join(dir, 'README.md'), '# test\n');
+  await runGitAsync(dir, ['add', 'README.md']);
+  await runGitAsync(dir, ['config', 'user.email', 'test@nuncio.local']);
+  await runGitAsync(dir, ['config', 'user.name', 'Nuncio Test']);
+  await runGitAsync(dir, ['commit', '-m', 'init']);
+}
+
 describe('Nuncio API', () => {
   let app: INestApplication;
   let dataDir: string;
+  let rootsDir: string;
+  let repoPath: string;
+  let workspacesDir: string;
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-test-'));
+    rootsDir = mkdtempSync(join(tmpdir(), 'nuncio-test-roots-'));
+    repoPath = join(rootsDir, 'sample-repo');
+    workspacesDir = mkdtempSync(join(tmpdir(), 'nuncio-test-ws-'));
+    await initRepo(repoPath);
+
     process.env.NUNCIO_DATA_DIR = dataDir;
     process.env.NUNCIO_FORCE_MOCK = '1';
+    process.env.NUNCIO_PROJECT_ROOTS = rootsDir;
+    process.env.NUNCIO_WORKSPACES_DIR = workspacesDir;
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
@@ -27,8 +56,12 @@ describe('Nuncio API', () => {
   afterAll(async () => {
     await app.close();
     rmSync(dataDir, { recursive: true, force: true });
+    rmSync(rootsDir, { recursive: true, force: true });
+    rmSync(workspacesDir, { recursive: true, force: true });
     delete process.env.NUNCIO_DATA_DIR;
     delete process.env.NUNCIO_FORCE_MOCK;
+    delete process.env.NUNCIO_PROJECT_ROOTS;
+    delete process.env.NUNCIO_WORKSPACES_DIR;
   });
 
   it('GET /api/health returns ok', async () => {
@@ -140,6 +173,35 @@ describe('Nuncio API', () => {
       expect(withArchived.body.some((s: { id: string; status: string }) => s.id === id && s.status === 'ARCHIVED')).toBe(
         true,
       );
+    });
+  });
+
+  describe('phase 4 workspace integration', () => {
+    it('GET /api/projects lists git repos from configured roots', async () => {
+      const res = await request(app.getHttpServer()).get('/api/projects');
+      expect(res.status).toBe(200);
+      expect(res.body.some((project: { path: string }) => project.path === repoPath)).toBe(true);
+    });
+
+    it('GET /api/projects/branches returns branches for a repo path', async () => {
+      const res = await request(app.getHttpServer()).get(`/api/projects/branches?path=${encodeURIComponent(repoPath)}`);
+      expect(res.status).toBe(200);
+      expect(res.body.some((branch: { name: string }) => branch.name === 'main')).toBe(true);
+    });
+
+    it('POST /api/sessions with projectPath creates worktree metadata', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/sessions')
+        .send({
+          prompt: 'Add workspace support',
+          projectPath: repoPath,
+          baseBranch: 'main',
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body.worktreePath).toBe(join(workspacesDir, res.body.id));
+      expect(res.body.branch).toBe(`nuncio/${res.body.id}-add-workspace-support`);
+      await waitForIdle(app, res.body.id);
     });
   });
 });

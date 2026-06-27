@@ -3,11 +3,19 @@ import { Send } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
+import { BranchPicker } from './branch-picker';
 import { DEFAULT_MODEL_ID, ModelPicker } from './model-picker';
+import { ProjectPicker } from './project-picker';
 
 interface HomeViewProps {
   sessionCount: number;
-  onSubmit: (prompt: string, model?: string, provider?: string) => Promise<void>;
+  onSubmit: (
+    prompt: string,
+    model?: string,
+    provider?: string,
+    projectPath?: string,
+    baseBranch?: string,
+  ) => Promise<void>;
   loading?: boolean;
 }
 
@@ -15,17 +23,24 @@ export function HomeView({ sessionCount, onSubmit, loading }: HomeViewProps) {
   const [prompt, setPrompt] = useState('');
   const [model, setModel] = useState(DEFAULT_MODEL_ID);
   const [provider, setProvider] = useState<string | undefined>();
+  const [projectPath, setProjectPath] = useState<string | undefined>();
+  const [baseBranch, setBaseBranch] = useState<string | undefined>();
 
   const handleSubmit = async () => {
     const text = prompt.trim();
     if (!text || loading) return;
-    await onSubmit(text, model, provider);
+    await onSubmit(text, model, provider, projectPath, baseBranch);
     setPrompt('');
   };
 
   const handleModelChange = (modelId: string, providerId: string) => {
     setModel(modelId);
     setProvider(providerId);
+  };
+
+  const handleProjectChange = (path: string) => {
+    setProjectPath(path);
+    setBaseBranch(undefined);
   };
 
   return (
@@ -52,7 +67,15 @@ export function HomeView({ sessionCount, onSubmit, loading }: HomeViewProps) {
             className="min-h-[96px] resize-none border-0 shadow-none bg-transparent text-[15px] px-5 pt-4 pb-2 focus-visible:ring-0 focus-visible:border-0"
           />
           <div className="home-composer-bar flex items-center justify-between gap-2 px-3 pb-3">
-            <ModelPicker value={model} onChange={handleModelChange} />
+            <div className="flex items-center gap-2 min-w-0 flex-wrap">
+              <ProjectPicker value={projectPath} onChange={handleProjectChange} />
+              <BranchPicker
+                projectPath={projectPath}
+                value={baseBranch}
+                onChange={setBaseBranch}
+              />
+              <ModelPicker value={model} onChange={handleModelChange} />
+            </div>
             <Button
               size="icon-lg"
               aria-label="Send"

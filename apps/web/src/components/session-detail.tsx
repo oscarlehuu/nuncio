@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
-import { Archive, ArrowLeft, Pause, Send } from 'lucide-react';
+import { Archive, ArrowLeft, FolderGit2, GitBranch, Pause, Send } from 'lucide-react';
 import type { Session, SessionEvent } from '../lib/api';
 import { statusLabel } from '../lib/api';
+import { projectDisplayName } from '../lib/projects';
 import { FALLBACK_PROVIDERS, modelById } from '../lib/model-providers';
 import { StatusDot } from './status-dot';
 import { Button } from '@/components/ui/button';
@@ -130,6 +131,8 @@ export function SessionDetail({
   const modelName = session.model
     ? modelById(FALLBACK_PROVIDERS)[session.model]?.name ?? session.model
     : 'Default';
+  const repoName = projectDisplayName(session.projectPath);
+  const branchName = session.branch;
 
   const handleSteer = async () => {
     const text = steerText.trim();
@@ -146,6 +149,18 @@ export function SessionDetail({
           Home
         </Button>
         <div className="flex-1 min-w-0 font-medium truncate text-sm">{session.title}</div>
+        {repoName && (
+          <Badge variant="outline" className="gap-1.5 shrink-0 hidden sm:inline-flex">
+            <FolderGit2 className="size-3" />
+            {repoName}
+          </Badge>
+        )}
+        {branchName && (
+          <Badge variant="outline" className="gap-1.5 shrink-0 hidden md:inline-flex">
+            <GitBranch className="size-3" />
+            {branchName}
+          </Badge>
+        )}
         <Badge variant="secondary" className="gap-1.5 shrink-0">
           <StatusDot status={session.status} />
           {statusLabel(session.status)}
@@ -216,10 +231,18 @@ export function SessionDetail({
             className="min-h-[48px] resize-none border-0 shadow-none bg-transparent focus-visible:ring-0 focus-visible:border-0"
           />
           <div className="flex items-center justify-between gap-2 px-3 pb-2.5">
-            <Badge variant="secondary" className="gap-1.5">
-              <span className="size-1.5 rounded-full bg-primary" />
-              {modelName}
-            </Badge>
+            <div className="flex items-center gap-2 min-w-0 flex-wrap">
+              <Badge variant="secondary" className="gap-1.5">
+                <span className="size-1.5 rounded-full bg-primary" />
+                {modelName}
+              </Badge>
+              {repoName && (
+                <Badge variant="secondary" className="gap-1.5 max-w-[180px]">
+                  <FolderGit2 className="size-3 shrink-0" />
+                  <span className="truncate">{repoName}</span>
+                </Badge>
+              )}
+            </div>
             <Button
               size="icon-lg"
               aria-label="Send"
