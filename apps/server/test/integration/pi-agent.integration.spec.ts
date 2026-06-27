@@ -4,10 +4,12 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PiAgentProvider } from '../../src/agents/providers/pi-agent.provider';
 import { DatabaseModule } from '../../src/db/database.module';
+import { GitModule } from '../../src/git/git.module';
 import { GitService } from '../../src/git/git.service';
 import { EventsRepository } from '../../src/sessions/persistence/events.repository';
 import { SessionsPersistenceModule } from '../../src/sessions/sessions.persistence.module';
 import { SessionsRepository } from '../../src/sessions/persistence/sessions.repository';
+import { SettingsModule } from '../../src/settings/settings.module';
 
 // Gate the suite on the same agent dir the Pi SDK resolves (PI_CODING_AGENT_DIR
 // or ~/.pi/agent). Skips entirely in CI / machines without real Pi auth, so the
@@ -31,7 +33,7 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
     delete process.env.NUNCIO_FORCE_MOCK;
 
     module = await Test.createTestingModule({
-      imports: [DatabaseModule, SessionsPersistenceModule],
+      imports: [DatabaseModule, SessionsPersistenceModule, SettingsModule, GitModule],
       providers: [PiAgentProvider],
     }).compile();
 
@@ -86,7 +88,7 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
     async () => {
       const workspacesDir = mkdtempSync(join(tmpdir(), 'nuncio-pi-cwd-ws-'));
       process.env.NUNCIO_WORKSPACES_DIR = workspacesDir;
-      const git = new GitService();
+      const git = module.get(GitService);
 
       const repoDir = mkdtempSync(join(tmpdir(), 'nuncio-pi-cwd-repo-'));
       mkdirSync(repoDir, { recursive: true });

@@ -3,6 +3,7 @@ import type { AgentProvider } from './agents.types';
 import { CursorAgentProvider } from './providers/cursor-agent.provider';
 import { MockAgentProvider } from './providers/mock-agent.provider';
 import { PiAgentProvider } from './providers/pi-agent.provider';
+import { SettingsService } from '../settings/settings.service';
 
 @Injectable()
 export class AgentRegistry {
@@ -12,8 +13,13 @@ export class AgentRegistry {
     private readonly pi: PiAgentProvider,
     private readonly cursor: CursorAgentProvider,
     private readonly mock: MockAgentProvider,
+    settings: SettingsService,
   ) {
     this.providers = [this.pi, this.cursor, this.mock];
+    // When any setting changes (e.g. a credential is rotated via the UI), drop
+    // every provider's cached availability/models so the next call re-resolves
+    // from the new value — no server restart required.
+    settings.onChange(() => this.bustCaches());
   }
 
   all(): AgentProvider[] {
@@ -42,6 +48,13 @@ export class AgentRegistry {
   }
 
   async defaultId(): Promise<string> {
-    return (await this.pi.isAvailable()) ? this.pi.id : this.mock.id;
+    if (await this.cursor.isAvailable()) return this.cursor.id;
+    if (await this.pi.isAvailable()) return this.pi.id;
+    return this.mock.id;
+  }
+
+  /** Clear cached availability/models on every provider. Called on settings change. */
+  bustCaches(): void {
+    for (const provider of this.providers) provider.bustCache();
   }
 }

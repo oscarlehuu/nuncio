@@ -80,6 +80,20 @@ export const FALLBACK_PROVIDERS: ModelProvider[] = [
     icon: 'O',
     unavailable: true,
   },
+  {
+    id: 'cursor',
+    name: 'Cursor',
+    sub: 'Local SDK · @cursor/sdk',
+    icon: '◆',
+    groups: [
+      {
+        id: 'cursor',
+        name: 'Cursor',
+        sub: 'Local runtime',
+        models: [{ id: 'cursor:composer-2.5', name: 'Composer 2.5', sub: 'Cursor model' }],
+      },
+    ],
+  },
 ];
 
 export interface FlatModel extends ModelInfo {
@@ -105,4 +119,125 @@ export function modelById(providers: ModelProvider[]): Record<string, FlatModel>
   return Object.fromEntries(flattenProviders(providers).map((m) => [m.id, m]));
 }
 
-export const DEFAULT_MODEL_ID = 'claude-fable-5';
+export function providerMeta(
+  providerId: string,
+  providers: ModelProvider[] = FALLBACK_PROVIDERS,
+): { name: string; icon: string } {
+  const found = providers.find((p) => p.id === providerId);
+  if (found) {
+    return { name: found.name, icon: found.icon ?? (providerId[0]?.toUpperCase() ?? '?') };
+  }
+  return { name: providerId, icon: providerId[0]?.toUpperCase() ?? '?' };
+}
+
+const MODEL_ACRONYMS: Record<string, string> = {
+  gpt: 'GPT',
+  glm: 'GLM',
+};
+
+/**
+ * Prettify a raw model slug into a human-readable name.
+ * - "composer-2.5" → "Composer 2.5"
+ * - "gpt-5.5" → "GPT 5.5"
+ * - "claude-opus-4-8" → "Claude Opus 4 8"
+ * Names that already contain a space are assumed nice (e.g. "Claude Haiku 3.5") and returned as-is.
+ */
+export function prettyModelName(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return trimmed;
+  if (trimmed.includes(' ')) return trimmed;
+  return trimmed
+    .split('-')
+    .map((word) => {
+      const lower = word.toLowerCase();
+      if (MODEL_ACRONYMS[lower]) return MODEL_ACRONYMS[lower];
+      if (/^[0-9.]+$/.test(word)) return word;
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    })
+    .join(' ');
+}
+
+export function sanitizeCursorModels(providers: ModelProvider[]): ModelProvider[] {
+  return providers.map((p) => {
+    if (p.id !== 'cursor' || !p.groups) return p;
+    return {
+      ...p,
+      groups: p.groups.map((g) => ({
+        ...g,
+        models: g.models.filter((m) => !isCursorDefaultModelId(m.id)),
+      })),
+    };
+  });
+}
+
+function isCursorDefaultModelId(id: string): boolean {
+  const bare = id.startsWith('cursor:') ? id.slice('cursor:'.length) : id;
+  return bare === 'default';
+}
+
+export const DEFAULT_PROVIDER_ID = 'cursor';
+export const DEFAULT_MODEL_ID = 'cursor:composer-2.5';
+
+/** Provider menu order — cursor first (matches defaultId + Synara-style preference). */
+export const DEFAULT_PROVIDER_ORDER = ['cursor', 'pi', 'mock'] as const;
+
+export function compareProvidersByOrder(
+  leftId: string,
+  rightId: string,
+  order: readonly string[] = DEFAULT_PROVIDER_ORDER,
+): number {
+  const leftIndex = order.indexOf(leftId);
+  const rightIndex = order.indexOf(rightId);
+  const normalizedLeftIndex =
+    leftIndex >= 0 ? leftIndex : DEFAULT_PROVIDER_ORDER.indexOf(leftId as (typeof DEFAULT_PROVIDER_ORDER)[number]) + order.length;
+  const normalizedRightIndex =
+    rightIndex >= 0
+      ? rightIndex
+      : DEFAULT_PROVIDER_ORDER.indexOf(rightId as (typeof DEFAULT_PROVIDER_ORDER)[number]) + order.length;
+  if (normalizedLeftIndex !== normalizedRightIndex) {
+    return normalizedLeftIndex - normalizedRightIndex;
+  }
+  return leftId.localeCompare(rightId);
+}
+
+function sortModelsInProvider(provider: ModelProvider): ModelProvider {
+  if (!provider.groups?.length) return provider;
+  return {
+    ...provider,
+    groups: [...provider.groups]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((group) => ({
+        ...group,
+        models: [...group.models].sort((a, b) =>
+          prettyModelName(a.name).localeCompare(prettyModelName(b.name), undefined, {
+            sensitivity: 'base',
+          }),
+        ),
+      })),
+  };
+}
+
+export function sortModelProviders(providers: ModelProvider[]): ModelProvider[] {
+  return [...providers]
+    .map(sortModelsInProvider)
+    .sort((a, b) => {
+      const aUnavailable = a.unavailable === true;
+      const bUnavailable = b.unavailable === true;
+      if (aUnavailable !== bUnavailable) return aUnavailable ? 1 : -1;
+      return compareProvidersByOrder(a.id, b.id);
+    });
+}
+
+export function normalizeModelCatalog(providers: ModelProvider[]): ModelProvider[] {
+  return sortModelProviders(sanitizeCursorModels(providers));
+}
+
+/** First available model in catalog order (cursor → pi → mock when present). */
+export function pickDefaultModelSelection(
+  providers: ModelProvider[],
+): { modelId: string; providerId: string } | null {
+  const catalog = normalizeModelCatalog(providers.filter((p) => !p.unavailable));
+  const first = flattenProviders(catalog)[0];
+  if (!first) return null;
+  return { modelId: first.id, providerId: first.providerId };
+}

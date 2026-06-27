@@ -1,7 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
+import { Test, TestingModule } from '@nestjs/testing';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import { DatabaseModule } from '../../../src/db/database.module';
+import { GitModule } from '../../../src/git/git.module';
 import { GitService } from '../../../src/git/git.service';
 
 async function runGitAsync(cwd: string, args: string[]): Promise<void> {
@@ -24,9 +27,11 @@ async function initRepo(dir: string, branch = 'main'): Promise<void> {
 }
 
 describe('GitService', () => {
+  let module: TestingModule;
   let service: GitService;
   let rootsDir: string;
   let workspacesDir: string;
+  let dataDir: string;
   let repoA: string;
   let repoB: string;
   let nestedRepo: string;
@@ -34,6 +39,8 @@ describe('GitService', () => {
   beforeAll(async () => {
     rootsDir = mkdtempSync(join(tmpdir(), 'nuncio-roots-'));
     workspacesDir = mkdtempSync(join(tmpdir(), 'nuncio-ws-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-git-data-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
     process.env.NUNCIO_PROJECT_ROOTS = rootsDir;
     process.env.NUNCIO_WORKSPACES_DIR = workspacesDir;
 
@@ -46,12 +53,18 @@ describe('GitService', () => {
     mkdirSync(join(rootsDir, 'nested'), { recursive: true });
     await initRepo(nestedRepo);
 
-    service = new GitService();
+    module = await Test.createTestingModule({
+      imports: [DatabaseModule, GitModule],
+    }).compile();
+    service = module.get(GitService);
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    await module.close();
     rmSync(rootsDir, { recursive: true, force: true });
     rmSync(workspacesDir, { recursive: true, force: true });
+    rmSync(dataDir, { recursive: true, force: true });
+    delete process.env.NUNCIO_DATA_DIR;
     delete process.env.NUNCIO_PROJECT_ROOTS;
     delete process.env.NUNCIO_WORKSPACES_DIR;
   });

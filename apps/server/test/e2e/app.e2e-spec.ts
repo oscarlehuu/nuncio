@@ -176,6 +176,99 @@ describe('Nuncio API (e2e)', () => {
       expect(res.status).toBe(400);
     });
   });
+
+  describe('fs directory browser (e2e)', () => {
+    it('GET /api/fs/dirs defaults to home and returns a listing', async () => {
+      const res = await request(app.getHttpServer()).get('/api/fs/dirs');
+      expect(res.status).toBe(200);
+      expect(res.body.current).toBeDefined();
+      expect(typeof res.body.current).toBe('string');
+      expect(Array.isArray(res.body.entries)).toBe(true);
+      // entries carry the documented shape
+      if (res.body.entries.length > 0) {
+        const first = res.body.entries[0];
+        expect(first.name).toBeDefined();
+        expect(first.path).toBeDefined();
+        expect(typeof first.isGit).toBe('boolean');
+      }
+    });
+
+    it('GET /api/fs/dirs?path= lists the given directory and reports parent', async () => {
+      const res = await request(app.getHttpServer()).get(
+        `/api/fs/dirs?path=${encodeURIComponent(repoPath)}`,
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.current).toBe(repoPath);
+      expect(res.body.parent).toBeDefined();
+      // e2e-repo is a git repo — it should self-report isGit on its own .git,
+      // but listing its contents: a fresh repo has no non-hidden subdirs.
+      expect(Array.isArray(res.body.entries)).toBe(true);
+    });
+
+    it('GET /api/fs/dirs returns 400 for a non-existent path', async () => {
+      const res = await request(app.getHttpServer()).get(
+        `/api/fs/dirs?path=${encodeURIComponent('/definitely/not/here')}`,
+      );
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('settings (e2e)', () => {
+    it('GET /api/settings returns the catalog with masked secrets', async () => {
+      const res = await request(app.getHttpServer()).get('/api/settings');
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      const cursor = res.body.find((s: { key: string }) => s.key === 'CURSOR_API_KEY');
+      expect(cursor).toBeDefined();
+      expect(cursor.type).toBe('secret');
+      expect(cursor.hasValue).toBe(false);
+      expect(cursor.value).toBeNull();
+      // NUNCIO_FORCE_MOCK is set to '1' via env in beforeAll → hasValue true, raw (non-secret)
+      const forceMock = res.body.find((s: { key: string }) => s.key === 'NUNCIO_FORCE_MOCK');
+      expect(forceMock.hasValue).toBe(true);
+      expect(forceMock.source).toBe('env');
+      expect(forceMock.value).toBe('1');
+    });
+
+    it('PUT /api/settings/CURSOR_API_KEY stores + returns a masked DTO (never raw)', async () => {
+      const res = await request(app.getHttpServer())
+        .put('/api/settings/CURSOR_API_KEY')
+        .send({ value: 'sk-e2e-secret-abcdef1234' });
+      expect(res.status).toBe(200);
+      expect(res.body.hasValue).toBe(true);
+      expect(res.body.source).toBe('db');
+      expect(res.body.value).toBe('••••1234'); // masked, last 4
+      // The raw secret must never appear anywhere in the response body.
+      expect(JSON.stringify(res.body)).not.toContain('sk-e2e-secret');
+    });
+
+    it('GET /api/settings/CURSOR_API_KEY after PUT shows masked value, not raw', async () => {
+      const res = await request(app.getHttpServer()).get('/api/settings/CURSOR_API_KEY');
+      expect(res.status).toBe(200);
+      expect(res.body.hasValue).toBe(true);
+      expect(res.body.value).toBe('••••1234');
+      expect(JSON.stringify(res.body)).not.toContain('sk-e2e-secret');
+    });
+
+    it('PUT /api/settings rejects a missing value field with 400', async () => {
+      const res = await request(app.getHttpServer())
+        .put('/api/settings/CURSOR_API_KEY')
+        .send({});
+      expect(res.status).toBe(400);
+    });
+
+    it('GET /api/settings/:key returns 404 for an unknown key', async () => {
+      const res = await request(app.getHttpServer()).get('/api/settings/NOPE');
+      expect(res.status).toBe(404);
+    });
+
+    it('DELETE /api/settings/CURSOR_API_KEY clears the DB row (falls back to env/default)', async () => {
+      const res = await request(app.getHttpServer()).delete('/api/settings/CURSOR_API_KEY');
+      expect(res.status).toBe(200);
+      expect(res.body.hasValue).toBe(false);
+      expect(res.body.value).toBeNull();
+    });
+  });
 });
 
 async function waitForIdle(app: INestApplication, id: string, timeoutMs = 5000) {

@@ -28,7 +28,11 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
 }));
 
 function makeProvider(): PiAgentProvider {
-  return new PiAgentProvider({} as never, {} as never);
+  // Minimal SettingsService stub: resolve() returns undefined for every key,
+  // so the provider falls back to the mocked SDK's getAgentDir() ('/tmp/fake-pi')
+  // and is never short-circuited by NUNCIO_FORCE_MOCK.
+  const settingsStub = { resolve: () => undefined } as never;
+  return new PiAgentProvider({} as never, {} as never, settingsStub);
 }
 
 describe('PiAgentProvider.listModels', () => {

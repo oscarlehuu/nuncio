@@ -1,51 +1,48 @@
 import { useEffect, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
-import { fetchModels } from '../lib/api';
 import {
-  FALLBACK_PROVIDERS,
   flattenProviders,
   modelById,
+  normalizeModelCatalog,
+  prettyModelName,
   type ModelProvider,
 } from '../lib/model-providers';
+import { ProviderIcon } from './provider-icon';
 import { Button } from '@/components/ui/button';
 import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from '@/components/ui/command';
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover';
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
-export { DEFAULT_MODEL_ID } from '../lib/model-providers';
+export { DEFAULT_MODEL_ID, DEFAULT_PROVIDER_ID } from '../lib/model-providers';
 
 interface ModelPickerProps {
   value: string;
   onChange: (modelId: string, providerId: string) => void;
+  providers?: ModelProvider[];
 }
 
-export function ModelPicker({ value, onChange }: ModelPickerProps) {
-  const [providers, setProviders] = useState<ModelProvider[]>(FALLBACK_PROVIDERS);
+export function ModelPicker({ value, onChange, providers }: ModelPickerProps) {
+  const catalog = normalizeModelCatalog(providers ?? []);
   const [open, setOpen] = useState(false);
 
-  const lookup = modelById(providers);
+  const lookup = modelById(catalog);
   const selected = lookup[value];
 
   useEffect(() => {
-    void fetchModels().then(setProviders);
-  }, []);
-
-  useEffect(() => {
-    const lookupForProviders = modelById(providers);
+    const lookupForProviders = modelById(catalog);
     if (lookupForProviders[value]) return;
-    const first = flattenProviders(providers)[0];
+    const first = flattenProviders(catalog)[0];
     if (first) onChange(first.id, first.providerId);
-  }, [onChange, providers, value]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onChange, catalog, value]);
 
   const selectModel = (id: string) => {
     const model = lookup[id];
@@ -53,57 +50,52 @@ export function ModelPicker({ value, onChange }: ModelPickerProps) {
     setOpen(false);
   };
 
+  const triggerLabel = selected
+    ? `${selected.providerName} · ${prettyModelName(selected.name)}`
+    : 'Select model';
+
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
         <Button variant="outline" className="h-8 gap-1.5 px-2.5">
-          <span className="size-1.5 rounded-full bg-primary shrink-0" />
-          <span className="text-muted-foreground text-[11px]">
-            {selected?.providerName ?? 'Pi'}
-          </span>
-          <span className="text-muted-foreground">·</span>
-          <span className="font-medium text-[13px]">{selected?.name ?? 'Fable 5'}</span>
+          <ProviderIcon
+            providerId={selected?.providerId ?? 'pi'}
+            className="size-3.5 shrink-0 text-muted-foreground"
+          />
+          <span className="font-medium text-[13px] truncate max-w-[180px]">{triggerLabel}</span>
           <ChevronDown data-icon="inline-end" />
         </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-[320px] p-0" align="start">
-        <Command>
-          <CommandInput placeholder="Search models…" />
-          <CommandList>
-            <CommandEmpty>No model found.</CommandEmpty>
-            {providers.map((p) => {
-              const flat = flattenProviders([p]);
-              if (flat.length === 0) return null;
-              return (
-                <CommandGroup key={p.id} heading={p.name}>
-                  {flat.map((m) => (
-                    <CommandItem
-                      key={m.id}
-                      value={`${m.name} ${m.sub ?? ''} ${m.groupName} ${m.cost ?? ''}`}
-                      onSelect={() => selectModel(m.id)}
-                      data-checked={m.id === value ? 'true' : undefined}
-                    >
-                      <div className="flex-1 min-w-0">
-                        <div className="text-[13px] font-medium truncate">{m.name}</div>
-                        {m.sub && (
-                          <div className="text-[11px] text-muted-foreground truncate">
-                            {m.sub}
-                          </div>
-                        )}
-                      </div>
-                      {m.cost && (
-                        <span className="text-[10px] text-muted-foreground font-mono shrink-0">
-                          {m.cost}
-                        </span>
-                      )}
-                    </CommandItem>
-                  ))}
-                </CommandGroup>
-              );
-            })}
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-[220px]">
+        {catalog.map((p, idx) => {
+          const flat = flattenProviders([p]);
+          if (flat.length === 0) return null;
+          return (
+            <div key={p.id}>
+              {idx > 0 && <DropdownMenuSeparator />}
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>
+                  <ProviderIcon providerId={p.id} className="size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="truncate">{p.name}</span>
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="max-h-[320px] overflow-y-auto w-[240px]">
+                  <DropdownMenuRadioGroup value={value}>
+                    {flat.map((m) => (
+                      <DropdownMenuRadioItem
+                        key={m.id}
+                        value={m.id}
+                        onSelect={() => selectModel(m.id)}
+                      >
+                        <span className="truncate">{prettyModelName(m.name)}</span>
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            </div>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

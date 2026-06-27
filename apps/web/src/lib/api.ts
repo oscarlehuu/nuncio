@@ -1,5 +1,5 @@
 import type { ModelProvider } from './model-providers';
-import { FALLBACK_PROVIDERS } from './model-providers';
+import { FALLBACK_PROVIDERS, normalizeModelCatalog } from './model-providers';
 
 export type SessionStatus =
   | 'CREATED'
@@ -91,13 +91,13 @@ export async function archiveSession(id: string): Promise<Session> {
 export async function fetchModels(): Promise<ModelProvider[]> {
   try {
     const res = await fetch('/api/models');
-    if (!res.ok) return FALLBACK_PROVIDERS;
+    if (!res.ok) return normalizeModelCatalog(FALLBACK_PROVIDERS);
     const data = await res.json();
-    if (Array.isArray(data)) return data as ModelProvider[];
-    if (Array.isArray(data?.providers)) return data.providers as ModelProvider[];
-    return FALLBACK_PROVIDERS;
+    if (Array.isArray(data)) return normalizeModelCatalog(data as ModelProvider[]);
+    if (Array.isArray(data?.providers)) return normalizeModelCatalog(data.providers as ModelProvider[]);
+    return normalizeModelCatalog(FALLBACK_PROVIDERS);
   } catch {
-    return FALLBACK_PROVIDERS;
+    return normalizeModelCatalog(FALLBACK_PROVIDERS);
   }
 }
 

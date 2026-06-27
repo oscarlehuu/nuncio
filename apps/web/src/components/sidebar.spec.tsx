@@ -76,4 +76,55 @@ describe('Sidebar', () => {
     );
     expect(screen.getByText(/nuncio ·/i)).toBeInTheDocument();
   });
+
+  it('shows a provider indicator per session', () => {
+    const sessions = [
+      makeSession({ id: 's1', title: 'Pi task', provider: 'pi' }),
+      makeSession({ id: 's2', title: 'Cursor task', provider: 'cursor' }),
+    ];
+    renderWithTheme(
+      <Sidebar sessions={sessions} activeId={null} onSelect={() => {}} onNew={() => {}} />,
+    );
+    expect(screen.getByLabelText(/pi provider/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/cursor provider/i)).toBeInTheDocument();
+  });
+
+  it('falls back to the provider id initial when the provider is unknown', () => {
+    const sessions = [makeSession({ id: 's1', title: 'Weird task', provider: 'zebra' })];
+    renderWithTheme(
+      <Sidebar sessions={sessions} activeId={null} onSelect={() => {}} onNew={() => {}} />,
+    );
+    expect(screen.getByLabelText(/zebra provider/i)).toBeInTheDocument();
+  });
+
+  it('calls onSettings when the settings button is clicked', async () => {
+    const onSettings = vi.fn();
+    renderWithTheme(
+      <Sidebar sessions={[]} activeId={null} onSelect={() => {}} onNew={() => {}} onSettings={onSettings} />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: /settings/i }));
+    expect(onSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not render the settings button when onSettings is omitted', () => {
+    renderWithTheme(<Sidebar sessions={[]} activeId={null} onSelect={() => {}} onNew={() => {}} />);
+    expect(screen.queryByRole('button', { name: /settings/i })).not.toBeInTheDocument();
+  });
+
+  it('renders settings and theme toggle in the footer', () => {
+    const { container } = renderWithTheme(
+      <Sidebar sessions={[]} activeId={null} onSelect={() => {}} onNew={() => {}} onSettings={() => {}} />,
+    );
+    const footer = container.querySelector('[data-sidebar-footer]');
+    expect(footer).toBeInTheDocument();
+    expect(footer).toContainElement(screen.getByRole('button', { name: /settings/i }));
+    expect(footer).toContainElement(screen.getByRole('button', { name: /toggle theme/i }));
+  });
+
+  it('does not render header actions for settings or theme', () => {
+    const { container } = renderWithTheme(
+      <Sidebar sessions={[]} activeId={null} onSelect={() => {}} onNew={() => {}} onSettings={() => {}} />,
+    );
+    expect(container.querySelector('[data-sidebar-header-actions]')).not.toBeInTheDocument();
+  });
 });

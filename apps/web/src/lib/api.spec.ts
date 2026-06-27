@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { FALLBACK_PROVIDERS } from './model-providers';
+import { FALLBACK_PROVIDERS, normalizeModelCatalog } from './model-providers';
 import {
   archiveSession,
   createSession,
@@ -95,14 +95,14 @@ describe('api fetch functions', () => {
     expect(await fetchModels()).toEqual([{ id: 'pi' }]);
   });
 
-  it('fetchModels falls back to FALLBACK_PROVIDERS when fetch rejects', async () => {
+  it('fetchModels falls back to normalized FALLBACK_PROVIDERS when fetch rejects', async () => {
     fetchMock.mockRejectedValue(new Error('network'));
-    expect(await fetchModels()).toBe(FALLBACK_PROVIDERS);
+    expect(await fetchModels()).toEqual(normalizeModelCatalog(FALLBACK_PROVIDERS));
   });
 
   it('fetchModels falls back when the response is not ok', async () => {
     fetchMock.mockResolvedValue(jsonRes(null, false, 503));
-    expect(await fetchModels()).toBe(FALLBACK_PROVIDERS);
+    expect(await fetchModels()).toEqual(normalizeModelCatalog(FALLBACK_PROVIDERS));
   });
 
   it('steer / pause / archive hit the right POST endpoints', async () => {

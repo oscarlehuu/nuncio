@@ -4,6 +4,7 @@ import type { ModelGroupDto, ModelItemDto, ModelProviderDto } from '../../models
 import { STATIC_MODEL_PROVIDERS } from '../../models/models.static';
 import { EventsRepository } from '../../sessions/persistence/events.repository';
 import { SessionsRepository } from '../../sessions/persistence/sessions.repository';
+import { SettingsService } from '../../settings/settings.service';
 import type { AgentRunContext } from '../agents.types';
 import { BaseAgentProvider } from '../agents.base-provider';
 
@@ -34,16 +35,16 @@ export class PiAgentProvider extends BaseAgentProvider {
   private piSdkPromise?: Promise<PiSdk>;
   private cachedAvailable?: boolean;
 
-  constructor(sessions: SessionsRepository, events: EventsRepository) {
+  constructor(sessions: SessionsRepository, events: EventsRepository, private readonly settings: SettingsService) {
     super(sessions, events);
   }
 
   async isAvailable(): Promise<boolean> {
-    if (process.env.NUNCIO_FORCE_MOCK === '1') return false;
+    if (this.settings.resolve('NUNCIO_FORCE_MOCK') === '1') return false;
     if (this.cachedAvailable !== undefined) return this.cachedAvailable;
     try {
       const pi = await this.loadSdk();
-      const agentDir = pi.getAgentDir();
+      const agentDir = this.resolveAgentDir(pi);
       const authStorage = pi.AuthStorage.create(join(agentDir, 'auth.json'));
       const registry = pi.ModelRegistry.create(authStorage, join(agentDir, 'models.json'));
       this.cachedAvailable = registry.getAvailable().length > 0;
@@ -53,10 +54,15 @@ export class PiAgentProvider extends BaseAgentProvider {
     return this.cachedAvailable;
   }
 
+  /** Drop cached availability so the next call re-resolves from current settings. */
+  bustCache(): void {
+    this.cachedAvailable = undefined;
+  }
+
   async listModels(): Promise<ModelProviderDto[]> {
     try {
       const pi = await this.loadSdk();
-      const agentDir = pi.getAgentDir();
+      const agentDir = this.resolveAgentDir(pi);
       const authStorage = pi.AuthStorage.create(join(agentDir, 'auth.json'));
       const modelRegistry = pi.ModelRegistry.create(authStorage, join(agentDir, 'models.json'));
       return this.fromRegistry(modelRegistry);
@@ -99,12 +105,20 @@ export class PiAgentProvider extends BaseAgentProvider {
     return this.piSdkPromise;
   }
 
+  /**
+   * Resolve the Pi agent directory: a configured setting (DB or env) wins,
+   * otherwise defer to the SDK's own resolution (`~/.pi/agent` by default).
+   */
+  private resolveAgentDir(pi: PiSdk): string {
+    return this.settings.resolve('PI_AGENT_DIR') ?? pi.getAgentDir();
+  }
+
   private async createPiSession(
     sessionId: string,
     context: AgentRunContext,
   ): Promise<PiSessionHandle> {
     const pi = await this.loadSdk();
-    const agentDir = pi.getAgentDir();
+    const agentDir = this.resolveAgentDir(pi);
     const authStorage = pi.AuthStorage.create(join(agentDir, 'auth.json'));
     const modelRegistry = pi.ModelRegistry.create(authStorage, join(agentDir, 'models.json'));
     const model = resolveModelId(context.model, (provider, id) => modelRegistry.find(provider, id));

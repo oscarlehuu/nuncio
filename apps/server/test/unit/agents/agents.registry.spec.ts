@@ -42,6 +42,14 @@ describe('AgentRegistry', () => {
     expect((await registry.available()).map((provider) => provider.id)).toEqual(['mock']);
   });
 
+  it('prefers cursor as default when CURSOR_API_KEY is set', async () => {
+    delete process.env.CURSOR_API_KEY;
+    process.env.CURSOR_API_KEY = 'cursor_test_key';
+    const registry = await createRegistry(false);
+
+    expect(await registry.defaultId()).toBe('cursor');
+  });
+
   it('rejects unknown providers', async () => {
     const registry = await createRegistry(true);
 

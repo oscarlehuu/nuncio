@@ -2,6 +2,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
+import { SettingsService } from '../settings/settings.service';
 import type { BranchDto, ProjectDto, WorktreeResult } from './git.types';
 
 function expandHome(path: string): string {
@@ -37,8 +38,10 @@ function isGitRepo(dir: string): boolean {
 
 @Injectable()
 export class GitService {
+  constructor(private readonly settings: SettingsService) {}
+
   private get projectRoots(): string[] {
-    const raw = process.env.NUNCIO_PROJECT_ROOTS?.trim();
+    const raw = this.settings.resolve('NUNCIO_PROJECT_ROOTS')?.trim();
     if (!raw) return [];
     return raw
       .split(',')
@@ -47,7 +50,7 @@ export class GitService {
   }
 
   private get workspacesDir(): string {
-    const raw = process.env.NUNCIO_WORKSPACES_DIR?.trim();
+    const raw = this.settings.resolve('NUNCIO_WORKSPACES_DIR')?.trim();
     return resolve(expandHome(raw || join(homedir(), '.nuncio', 'workspaces')));
   }
 

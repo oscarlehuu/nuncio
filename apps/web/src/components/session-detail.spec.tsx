@@ -1,8 +1,9 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SessionDetail } from './session-detail';
 import type { Session, SessionEvent } from '../lib/api';
+import type { ModelProvider } from '../lib/model-providers';
 
 function makeSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -25,21 +26,25 @@ function makeSession(overrides: Partial<Session> = {}): Session {
 
 const NO_EVENTS: SessionEvent[] = [];
 
-async function renderDetail(overrides: Partial<Session> = {}) {
+async function renderDetail(
+  overrides: Partial<Session> = {},
+  events: SessionEvent[] = NO_EVENTS,
+  providers?: ModelProvider[],
+) {
   const onSteer = vi.fn();
   const onPause = vi.fn();
   const onArchive = vi.fn();
-  render(
+  const view = render(
     <SessionDetail
       session={makeSession(overrides)}
-      events={NO_EVENTS}
-      onBack={() => {}}
+      events={events}
+      providers={providers}
       onSteer={onSteer}
       onPause={onPause}
       onArchive={onArchive}
     />,
   );
-  return { onSteer, onPause, onArchive };
+  return { onSteer, onPause, onArchive, ...view };
 }
 
 describe('SessionDetail', () => {
@@ -51,8 +56,8 @@ describe('SessionDetail', () => {
     expect(onSteer).toHaveBeenCalledWith('Use the cache layer');
   });
 
-  it('calls onPause when the pause button is clicked', async () => {
-    const { onPause } = await renderDetail();
+  it('calls onPause when the pause button is clicked while IDLE', async () => {
+    const { onPause } = await renderDetail({ status: 'IDLE' });
     await userEvent.click(screen.getByRole('button', { name: /pause session/i }));
     expect(onPause).toHaveBeenCalledTimes(1);
   });
@@ -63,14 +68,98 @@ describe('SessionDetail', () => {
     expect(onArchive).toHaveBeenCalledTimes(1);
   });
 
-  it('disables steering when the session is RUNNING', async () => {
+  it('shows Stop instead of Send when RUNNING and Stop calls onPause', async () => {
+    const { onPause } = await renderDetail({ status: 'RUNNING' });
+    expect(screen.queryByRole('button', { name: /send/i })).toBeNull();
+    const stop = screen.getByRole('button', { name: /stop session/i });
+    expect(stop).toBeEnabled();
+    await userEvent.click(stop);
+    expect(onPause).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides header pause when RUNNING but keeps archive', async () => {
     await renderDetail({ status: 'RUNNING' });
-    expect(screen.getByRole('button', { name: /send/i })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /pause session/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /archive session/i })).toBeInTheDocument();
   });
 
   it('hides the pause button when the session is ARCHIVED', async () => {
     await renderDetail({ status: 'ARCHIVED' });
     expect(screen.queryByRole('button', { name: /pause session/i })).toBeNull();
+  });
+
+  it('shows Nuncio is working indicator when RUNNING with no content', async () => {
+    await renderDetail({ status: 'RUNNING' });
+    expect(screen.getByTestId('working-indicator')).toHaveTextContent(/Nuncio is working/i);
+  });
+
+  it('shows Nuncio is writing when RUNNING with streaming deltas', async () => {
+    const events: SessionEvent[] = [
+      { seq: 1, type: 'assistant_delta', payload: { delta: 'Hello' }, createdAt: Date.now() },
+    ];
+    await renderDetail({ status: 'RUNNING' }, events);
+    expect(screen.getByTestId('working-indicator')).toHaveTextContent(/Nuncio is writing/i);
+  });
+
+  it('renders the working indicator BELOW the user message, not above it', async () => {
+    const events: SessionEvent[] = [
+      { seq: 1, type: 'user_message', payload: { text: 'do the thing' }, createdAt: Date.now() },
+    ];
+    await renderDetail({ status: 'RUNNING' }, events);
+    const indicator = screen.getByTestId('working-indicator');
+    const userMsg = screen.getByText('do the thing');
+    // Indicator must follow the user message in DOM order (below, not above).
+    const position = userMsg.compareDocumentPosition(indicator);
+    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // And it must NOT precede the user message.
+    expect(position & Node.DOCUMENT_POSITION_PRECEDING).toBeFalsy();
+  });
+
+  it('renders the working indicator after the last user message when deltas exist', async () => {
+    const events: SessionEvent[] = [
+      { seq: 1, type: 'user_message', payload: { text: 'first prompt' }, createdAt: Date.now() },
+      { seq: 2, type: 'assistant_delta', payload: { delta: 'streaming reply' }, createdAt: Date.now() },
+    ];
+    await renderDetail({ status: 'RUNNING' }, events);
+    const indicator = screen.getByTestId('working-indicator');
+    const userMsg = screen.getByText('first prompt');
+    const position = userMsg.compareDocumentPosition(indicator);
+    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('does not render a Home button or Home text in the session header', async () => {
+    await renderDetail();
+    expect(screen.queryByRole('button', { name: /home/i })).toBeNull();
+    expect(screen.queryByText(/^home$/i)).toBeNull();
+  });
+
+  it('does not auto-scroll transcript on delta updates', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const events: SessionEvent[] = [
+      { seq: 1, type: 'user_message', payload: { text: 'Hi' }, createdAt: Date.now() },
+    ];
+    const { rerender } = await renderDetail({ status: 'RUNNING' }, events);
+
+    const scrollEl = document.querySelector('.overflow-y-auto') as HTMLDivElement;
+    expect(scrollEl).toBeTruthy();
+    scrollEl.scrollTop = 0;
+
+    const moreEvents: SessionEvent[] = [
+      ...events,
+      { seq: 2, type: 'assistant_delta', payload: { delta: 'A'.repeat(200) }, createdAt: Date.now() },
+    ];
+    rerender(
+      <SessionDetail
+        session={makeSession({ status: 'RUNNING' })}
+        events={moreEvents}
+        onSteer={vi.fn()}
+        onPause={vi.fn()}
+        onArchive={vi.fn()}
+      />,
+    );
+
+    expect(scrollEl.scrollTop).toBe(0);
+    vi.useRealTimers();
   });
 
   it('shows repo and branch badges when workspace metadata is present', async () => {
@@ -80,5 +169,89 @@ describe('SessionDetail', () => {
     });
     expect(screen.getAllByText('nuncio').length).toBeGreaterThan(0);
     expect(screen.getAllByText('nuncio/s1-fix-auth').length).toBeGreaterThan(0);
+  });
+
+  it('shows the friendly model name from the provided providers catalog', async () => {
+    const providers: ModelProvider[] = [
+      {
+        id: 'cursor',
+        name: 'Cursor',
+        groups: [
+          {
+            id: 'cursor',
+            name: 'Cursor',
+            models: [{ id: 'cursor:composer-2.5', name: 'Composer 2.5' }],
+          },
+        ],
+      },
+    ];
+    await renderDetail({ provider: 'cursor', model: 'cursor:composer-2.5' }, NO_EVENTS, providers);
+    expect(screen.getByText('Composer 2.5')).toBeInTheDocument();
+    expect(screen.queryByText('cursor:composer-2.5')).toBeNull();
+  });
+
+  it('prettifies a raw cursor model slug into a readable name', async () => {
+    const providers: ModelProvider[] = [
+      {
+        id: 'cursor',
+        name: 'Cursor',
+        groups: [
+          {
+            id: 'cursor',
+            name: 'Cursor',
+            models: [{ id: 'cursor:composer-2.5', name: 'composer-2.5' }],
+          },
+        ],
+      },
+    ];
+    await renderDetail({ provider: 'cursor', model: 'cursor:composer-2.5' }, NO_EVENTS, providers);
+    expect(screen.getByText('Composer 2.5')).toBeInTheDocument();
+    expect(screen.queryByText('composer-2.5')).toBeNull();
+  });
+
+  it('falls back to the raw model id when the model is not in the catalog', async () => {
+    await renderDetail({ model: 'unknown:model-x' }, NO_EVENTS, []);
+    expect(screen.getByText('unknown:model-x')).toBeInTheDocument();
+  });
+});
+
+describe('SessionDetail throttled streaming', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('reveals assistant deltas gradually while RUNNING', async () => {
+    const longDelta = 'x'.repeat(120);
+    const events: SessionEvent[] = [
+      { seq: 1, type: 'assistant_delta', payload: { delta: longDelta }, createdAt: Date.now() },
+    ];
+    await renderDetail({ status: 'RUNNING' }, events);
+
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+
+    const assistantBubble = screen.getByText(/^x{1,119}$/);
+    expect(assistantBubble.textContent?.length).toBeLessThan(longDelta.length);
+
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(assistantBubble.textContent?.length).toBeGreaterThan(40);
+    expect(assistantBubble.textContent?.length).toBeLessThan(longDelta.length);
+  });
+
+  it('flushes throttled text when assistant_message arrives', async () => {
+    const full = 'Complete response text here';
+    const events: SessionEvent[] = [
+      { seq: 1, type: 'assistant_delta', payload: { delta: full }, createdAt: Date.now() },
+      { seq: 2, type: 'assistant_message', payload: { text: full }, createdAt: Date.now() },
+    ];
+    await renderDetail({ status: 'IDLE' }, events);
+    expect(screen.getByText(full)).toBeInTheDocument();
   });
 });

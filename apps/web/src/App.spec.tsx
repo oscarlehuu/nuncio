@@ -9,21 +9,44 @@ vi.mock('./lib/api', () => ({
   steerSession: vi.fn(),
   pauseSession: vi.fn(),
   archiveSession: vi.fn(),
-  fetchModels: vi.fn().mockResolvedValue([]),
+  fetchModels: vi.fn(),
   fetchEvents: vi.fn().mockResolvedValue([]),
   statusLabel: (s: string) => s,
   relativeTime: () => 'now',
+}));
+
+vi.mock('./lib/settings-api', () => ({
+  fetchSettings: vi.fn().mockResolvedValue([]),
+  updateSetting: vi.fn(),
+  clearSetting: vi.fn(),
 }));
 
 import App from './App';
 import {
   archiveSession,
   createSession,
+  fetchModels,
   fetchSessions,
   pauseSession,
   steerSession,
   type Session,
 } from './lib/api';
+import { fetchSettings, updateSetting } from './lib/settings-api';
+import type { ModelProvider } from './lib/model-providers';
+
+const LIVE_CATALOG: ModelProvider[] = [
+  {
+    id: 'cursor',
+    name: 'Cursor',
+    groups: [
+      {
+        id: 'cursor',
+        name: 'Cursor',
+        models: [{ id: 'cursor:composer-2.5', name: 'Composer 2.5' }],
+      },
+    ],
+  },
+];
 
 function fakeSession(over: Partial<Session> = {}): Session {
   return {
@@ -55,10 +78,25 @@ describe('App navigation', () => {
     await userEvent.click(menu);
     expect(await screen.findByText('Navigation')).toBeInTheDocument();
   });
+
+  it('mobile drawer has no sheet close button and shows theme in footer', async () => {
+    render(
+      <ThemeProvider defaultTheme="light">
+        <App />
+      </ThemeProvider>,
+    );
+    await userEvent.click(screen.getByRole('button', { name: /open navigation/i }));
+    await screen.findByText('Navigation');
+    expect(screen.queryByRole('button', { name: /^close$/i })).not.toBeInTheDocument();
+    const theme = screen.getByRole('button', { name: /toggle theme/i });
+    const footer = theme.closest('[data-sidebar-footer]');
+    expect(footer).toBeInTheDocument();
+  });
 });
 
 describe('App create flow', () => {
   beforeEach(() => {
+    vi.mocked(fetchModels).mockResolvedValue(LIVE_CATALOG);
     // App uses useSessionStream, which constructs an EventSource once a session
     // becomes active. jsdom has no EventSource, so stub a no-op one.
     vi.stubGlobal(
@@ -87,13 +125,16 @@ describe('App create flow', () => {
 
     const textarea = screen.getByPlaceholderText(/Ask Nuncio/i);
     await userEvent.type(textarea, 'build the thing');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /^send$/i })).not.toBeDisabled(),
+    );
     await userEvent.click(screen.getByRole('button', { name: /^send$/i }));
 
     await waitFor(() => expect(createSession).toHaveBeenCalled());
     expect(createSession).toHaveBeenCalledWith(
       'build the thing',
-      'claude-fable-5',
-      undefined,
+      'cursor:composer-2.5',
+      'cursor',
       undefined,
       undefined,
     );
@@ -153,5 +194,56 @@ describe('App lifecycle', () => {
     await userEvent.type(textarea, 'use the cache layer');
     await userEvent.click(screen.getByRole('button', { name: /^send$/i }));
     await waitFor(() => expect(steerSession).toHaveBeenCalledWith('new1', 'use the cache layer'));
+  });
+});
+
+describe('App settings', () => {
+  beforeEach(() => {
+    vi.mocked(fetchModels).mockResolvedValue(LIVE_CATALOG);
+    vi.mocked(fetchSettings).mockResolvedValue([
+      {
+        key: 'CURSOR_API_KEY',
+        category: 'provider',
+        providerId: 'cursor',
+        type: 'secret',
+        label: 'Cursor API Key',
+        description: 'test',
+        hasValue: false,
+        source: null,
+        value: null,
+        readOnly: false,
+      },
+    ]);
+    vi.mocked(updateSetting).mockResolvedValue({
+      key: 'CURSOR_API_KEY',
+      category: 'provider',
+      providerId: 'cursor',
+      type: 'secret',
+      label: 'Cursor API Key',
+      description: 'test',
+      hasValue: true,
+      source: 'db',
+      value: '••••abcd',
+      readOnly: false,
+    });
+  });
+
+  it('refetches models after saving a setting', async () => {
+    render(
+      <ThemeProvider defaultTheme="light">
+        <App />
+      </ThemeProvider>,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /settings/i }));
+    await waitFor(() => expect(screen.getByText('Cursor API Key')).toBeInTheDocument());
+
+    const callsBeforeSave = vi.mocked(fetchModels).mock.calls.length;
+    const input = screen.getByPlaceholderText('Enter new value');
+    await userEvent.type(input, 'sk-test-key');
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(updateSetting).toHaveBeenCalled());
+    expect(vi.mocked(fetchModels).mock.calls.length).toBeGreaterThan(callsBeforeSave);
   });
 });

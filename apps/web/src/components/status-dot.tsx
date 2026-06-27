@@ -11,10 +11,20 @@ const STATUS_CLASS: Record<SessionStatus, string> = {
   ERROR: 'bg-destructive',
 };
 
-export function StatusDot({ status }: { status: SessionStatus }) {
+export function StatusDot({
+  status,
+  className,
+}: {
+  status: SessionStatus;
+  className?: string;
+}) {
   return (
     <span
-      className={cn('inline-block size-[7px] rounded-full shrink-0 mt-1', STATUS_CLASS[status])}
+      className={cn(
+        'inline-block size-[7px] rounded-full shrink-0',
+        STATUS_CLASS[status],
+        className,
+      )}
       title={statusLabel(status)}
     />
   );

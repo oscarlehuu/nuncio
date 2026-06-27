@@ -25,6 +25,9 @@ export abstract class BaseAgentProvider implements AgentProvider {
 
   dispose(_sessionId: string): void {}
 
+  /** Default no-op; providers that cache availability/models override this. */
+  bustCache(): void {}
+
   protected abstract executePrompt(
     sessionId: string,
     text: string,

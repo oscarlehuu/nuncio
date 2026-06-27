@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { PiAgentProvider, resolveModelId } from '../../../src/agents/providers/pi-agent.provider';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
+import { SettingsModule } from '../../../src/settings/settings.module';
 
 describe('PiAgentProvider', () => {
   let module: TestingModule;
@@ -17,7 +18,7 @@ describe('PiAgentProvider', () => {
     process.env.NUNCIO_FORCE_MOCK = '1';
 
     module = await Test.createTestingModule({
-      imports: [DatabaseModule, SessionsPersistenceModule],
+      imports: [DatabaseModule, SessionsPersistenceModule, SettingsModule],
       providers: [PiAgentProvider],
     }).compile();
 

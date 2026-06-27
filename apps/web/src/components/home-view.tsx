@@ -1,14 +1,22 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Send } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { BranchPicker } from './branch-picker';
-import { DEFAULT_MODEL_ID, ModelPicker } from './model-picker';
+import { ModelPicker } from './model-picker';
 import { ProjectPicker } from './project-picker';
+import { ProviderIcon } from './provider-icon';
+import {
+  modelById,
+  normalizeModelCatalog,
+  pickDefaultModelSelection,
+  type ModelProvider,
+} from '../lib/model-providers';
 
 interface HomeViewProps {
   sessionCount: number;
+  providers?: ModelProvider[];
   onSubmit: (
     prompt: string,
     model?: string,
@@ -19,16 +27,30 @@ interface HomeViewProps {
   loading?: boolean;
 }
 
-export function HomeView({ sessionCount, onSubmit, loading }: HomeViewProps) {
+export function HomeView({ sessionCount, providers, onSubmit, loading }: HomeViewProps) {
   const [prompt, setPrompt] = useState('');
-  const [model, setModel] = useState(DEFAULT_MODEL_ID);
+  const [model, setModel] = useState('');
   const [provider, setProvider] = useState<string | undefined>();
   const [projectPath, setProjectPath] = useState<string | undefined>();
   const [baseBranch, setBaseBranch] = useState<string | undefined>();
 
+  const catalogLoaded = Boolean(providers && providers.length > 0);
+  const availableProviders = (providers ?? []).filter((p) => !p.unavailable);
+
+  useEffect(() => {
+    if (!catalogLoaded || !providers) return;
+    const catalog = normalizeModelCatalog(providers);
+    if (model && provider && modelById(catalog)[model]) return;
+    const picked = pickDefaultModelSelection(providers);
+    if (picked) {
+      setModel(picked.modelId);
+      setProvider(picked.providerId);
+    }
+  }, [catalogLoaded, providers, model, provider]);
+
   const handleSubmit = async () => {
     const text = prompt.trim();
-    if (!text || loading) return;
+    if (!text || loading || !catalogLoaded || !model || !provider) return;
     await onSubmit(text, model, provider, projectPath, baseBranch);
     setPrompt('');
   };
@@ -53,7 +75,7 @@ export function HomeView({ sessionCount, onSubmit, loading }: HomeViewProps) {
           </p>
         </div>
 
-        <div className="rounded-xl border border-border bg-card shadow-lg transition-shadow focus-within:ring-2 focus-within:ring-ring/50">
+        <div className="home-composer flex flex-col rounded-xl border border-border bg-card shadow-lg transition-shadow focus-within:ring-2 focus-within:ring-ring/50">
           <Textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
@@ -64,23 +86,23 @@ export function HomeView({ sessionCount, onSubmit, loading }: HomeViewProps) {
               }
             }}
             placeholder="Ask Nuncio to build features, fix bugs, or work on your code…"
-            className="min-h-[96px] resize-none border-0 shadow-none bg-transparent text-[15px] px-5 pt-4 pb-2 focus-visible:ring-0 focus-visible:border-0"
+            className="min-h-[96px] shrink-0 resize-none border-0 shadow-none bg-transparent text-[15px] px-5 pt-4 pb-2 focus-visible:ring-0 focus-visible:border-0"
           />
-          <div className="home-composer-bar flex items-center justify-between gap-2 px-3 pb-3">
-            <div className="flex items-center gap-2 min-w-0 flex-wrap">
+          <div className="home-composer-bar flex items-center justify-between gap-2 border-t border-border px-3 pt-2 pb-3">
+            <div className="home-composer-pickers flex min-w-0 flex-1 items-center gap-2 overflow-x-auto [&_button]:shrink-0">
               <ProjectPicker value={projectPath} onChange={handleProjectChange} />
               <BranchPicker
                 projectPath={projectPath}
                 value={baseBranch}
                 onChange={setBaseBranch}
               />
-              <ModelPicker value={model} onChange={handleModelChange} />
+              <ModelPicker value={model} onChange={handleModelChange} providers={providers} />
             </div>
             <Button
               size="icon-lg"
               aria-label="Send"
               onClick={() => void handleSubmit()}
-              disabled={loading || !prompt.trim()}
+              disabled={loading || !prompt.trim() || !catalogLoaded || !model}
               className="size-11 md:size-9 shrink-0"
             >
               <Send />
@@ -89,7 +111,12 @@ export function HomeView({ sessionCount, onSubmit, loading }: HomeViewProps) {
         </div>
 
         <div className="flex flex-wrap gap-2 justify-center mt-5">
-          <Badge variant="secondary">Pi connected</Badge>
+          {availableProviders.map((p) => (
+            <Badge key={p.id} variant="secondary" className="gap-1.5">
+              <ProviderIcon providerId={p.id} className="size-3" />
+              {p.name} connected
+            </Badge>
+          ))}
           <Badge variant="secondary">
             {sessionCount} session{sessionCount === 1 ? '' : 's'}
           </Badge>
