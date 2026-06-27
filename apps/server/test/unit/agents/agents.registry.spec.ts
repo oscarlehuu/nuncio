@@ -51,12 +51,27 @@ describe('AgentRegistry', () => {
   it('exposes every registered provider via all()', async () => {
     const registry = await createRegistry(true);
 
-    expect(registry.all().map((provider) => provider.id).sort()).toEqual(['mock', 'pi']);
+    expect(registry.all().map((provider) => provider.id).sort()).toEqual(['cursor', 'mock', 'pi']);
   });
 
   it('rejects an unavailable provider via getAvailable', async () => {
     const registry = await createRegistry(true);
 
     await expect(registry.getAvailable('pi')).rejects.toThrow(BadRequestException);
+  });
+
+  it('rejects cursor when CURSOR_API_KEY is missing', async () => {
+    delete process.env.CURSOR_API_KEY;
+    const registry = await createRegistry(false);
+
+    await expect(registry.getAvailable('cursor')).rejects.toThrow(BadRequestException);
+  });
+
+  it('resolves cursor when CURSOR_API_KEY is set', async () => {
+    process.env.CURSOR_API_KEY = 'cursor_test_key';
+    const registry = await createRegistry(false);
+
+    const provider = await registry.getAvailable('cursor');
+    expect(provider.id).toBe('cursor');
   });
 });

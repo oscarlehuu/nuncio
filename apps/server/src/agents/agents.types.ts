@@ -5,6 +5,7 @@ export type EventEmitter = (event: { type: string; payload: unknown }) => void;
 export interface AgentRunContext {
   emit?: EventEmitter;
   model?: string | null;
+  workspace?: string | null;
 }
 
 export interface AgentProvider {

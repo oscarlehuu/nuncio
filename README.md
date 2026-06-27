@@ -7,13 +7,13 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 ## Features
 
 - **Delegate tasks** — create a session with a prompt; the agent runs in-process and streams output as events
-- **Per-session provider + model** — choose the agent provider (`pi` / `mock`) and the exact model (e.g. `openai-codex:gpt-5.5`, `anthropic:claude-sonnet-4`) per session; both are stored on the session and wired through to the SDK
+- **Per-session provider + model** — choose the agent provider (`pi` / `cursor` / `mock`) and the exact model (e.g. `cursor:composer-2`, `anthropic:claude-sonnet-4`) per session; both are stored on the session and wired through to the SDK
 - **Steer mid-task** — send follow-up messages that continue the same agent conversation (the Pi session handle is retained)
 - **Pause / archive** — suspend a running session or retire it; a session FSM enforces valid transitions
 - **Real-time + replay** — SSE stream for live updates, event log with cursor for replay
 - **Mobile-first PWA** — installable on iPhone via Tailscale HTTPS; standalone dark UI, safe-area aware
 - **Self-hosted** — your machine, your SQLite, your credentials; nothing leaves your tailnet
-- **Provider-neutral agent layer** — `AgentProvider` interface + `AgentRegistry`; Pi and Mock today, extensible
+- **Provider-neutral agent layer** — `AgentProvider` interface + `AgentRegistry`; Pi, Cursor, and Mock today, extensible
 
 ## Status
 
@@ -36,6 +36,10 @@ npm run build   # build server + web
 ### Pi credentials
 
 Nuncio drives the [Pi SDK](https://github.com/earendil-works/pi) in-process. Log in with the `pi` CLI first so `~/.pi/agent/auth.json` exists — it holds your API key **or** OAuth/subscription tokens (OpenAI, Anthropic). Override the agent directory with `PI_CODING_AGENT_DIR`. When no Pi credentials are configured, Nuncio falls back to a built-in **Mock** provider so the UI still works end-to-end.
+
+### Cursor credentials
+
+Set `CURSOR_API_KEY` (from [Cursor dashboard](https://cursor.com/dashboard/cloud-agents)) to enable the **Cursor** provider (`provider: "cursor"`). Uses `@cursor/sdk` local runtime under Bun with `useHttp1ForAgent` + `JsonlLocalAgentStore` escape hatches. Default cwd: `NUNCIO_CURSOR_CWD` or `process.cwd()`. Per-session `workspace` field (Phase 4 UI) overrides cwd when set.
 
 ## Testing
 

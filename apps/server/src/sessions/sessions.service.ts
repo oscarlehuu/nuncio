@@ -55,6 +55,7 @@ export class SessionsService {
     await provider.steer(id, trimmed, {
       emit: (event) => this.onAgentEvent(id, event),
       model: current.model,
+      workspace: current.workspace,
     });
     return this.requireSession(id);
   }
@@ -129,6 +130,7 @@ export class SessionsService {
       await provider.run(session.id, session.prompt, {
         emit: (event) => this.onAgentEvent(session.id, event),
         model: session.model,
+        workspace: session.workspace,
       });
     })();
   }

@@ -12,6 +12,7 @@ export interface SessionRow {
   status: SessionStatus;
   provider: string;
   model: string | null;
+  workspace: string | null;
   prompt: string;
   preview: string | null;
   created_at: number;
@@ -40,6 +41,7 @@ export interface SessionDto {
   status: SessionStatus;
   provider: string;
   model: string | null;
+  workspace: string | null;
   prompt: string;
   preview: string | null;
   createdAt: number;
@@ -50,6 +52,7 @@ export interface CreateSessionDto {
   prompt: string;
   provider?: string;
   model?: string;
+  workspace?: string;
 }
 
 export interface SteerSessionDto {

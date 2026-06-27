@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import type { AgentProvider } from './agents.types';
+import { CursorAgentProvider } from './providers/cursor-agent.provider';
 import { MockAgentProvider } from './providers/mock-agent.provider';
 import { PiAgentProvider } from './providers/pi-agent.provider';
 
@@ -9,9 +10,10 @@ export class AgentRegistry {
 
   constructor(
     private readonly pi: PiAgentProvider,
+    private readonly cursor: CursorAgentProvider,
     private readonly mock: MockAgentProvider,
   ) {
-    this.providers = [this.pi, this.mock];
+    this.providers = [this.pi, this.cursor, this.mock];
   }
 
   all(): AgentProvider[] {
