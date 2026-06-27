@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   status TEXT NOT NULL DEFAULT 'CREATED',
   provider TEXT NOT NULL DEFAULT 'pi',
   model TEXT,
+  workspace TEXT,
   prompt TEXT NOT NULL,
   preview TEXT,
   created_at INTEGER NOT NULL,
@@ -55,6 +56,10 @@ export class DatabaseService implements OnModuleDestroy {
 
     if (!sessionColumns.some((column) => column.name === 'provider')) {
       this.db.exec("ALTER TABLE sessions ADD COLUMN provider TEXT NOT NULL DEFAULT 'pi'");
+    }
+
+    if (!sessionColumns.some((column) => column.name === 'workspace')) {
+      this.db.exec('ALTER TABLE sessions ADD COLUMN workspace TEXT');
     }
   }
 }

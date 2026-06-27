@@ -151,7 +151,7 @@ ERROR   → RUNNING | IDLE | ARCHIVED
 
 The harness is provider-agnostic: an `AgentProvider` runs/steers/disposes a session and knows its own model catalog. **Pi is the inaugural provider** — it is what's wired today — but any agent SDK is meant to implement the same contract and register alongside it.
 
-**Today (Pi + mock, abstracted):** the `apps/server/src/agents/` module defines the `AgentProvider` interface (`agents.types.ts`), a `BaseAgentProvider` abstract class (`agents.base-provider.ts`) using the template-method pattern, and an `AgentRegistry` (`agents.registry.ts`). `BaseAgentProvider.run()`/`steer()` own the shared orchestration (set RUNNING → push user/steer message → `executePrompt()` → set IDLE, with unified error handling); concrete providers implement only `executePrompt()`. `PiAgentProvider` runs the Pi SDK in-process and keeps a `Map<sessionId, PiSessionHandle>` alive after the first run so `steer()` reuses the same Pi session. `MockAgentProvider` is the always-available fallback. The `EventEmitter` type lives in `agents.types.ts`.
+**Today (Pi + Cursor + mock, abstracted):** the `apps/server/src/agents/` module defines the `AgentProvider` interface (`agents.types.ts`), a `BaseAgentProvider` abstract class (`agents.base-provider.ts`) using the template-method pattern, and an `AgentRegistry` (`agents.registry.ts`). `BaseAgentProvider.run()`/`steer()` own the shared orchestration (set RUNNING → push user/steer message → `executePrompt()` → set IDLE, with unified error handling); concrete providers implement only `executePrompt()`. `PiAgentProvider` runs the Pi SDK in-process and keeps a `Map<sessionId, PiSessionHandle>` alive after the first run so `steer()` reuses the same Pi session. `CursorAgentProvider` runs `@cursor/sdk` local runtime in-process (`await Agent.create` + `send` + `stream` + `wait`), maps SDK events to Nuncio events (`assistant`→`assistant_delta`, `tool_call`→`tool_start`/`tool_end`), and reuses the same agent handle per session for steer. `MockAgentProvider` is the always-available fallback. The `EventEmitter` type lives in `agents.types.ts`.
 
 `SessionsService` injects `AgentRegistry` and resolves the provider **per-session** from `sessions.provider` on `create`/`steer`/`archive`. `CreateSessionDto.provider?` defaults to `registry.defaultId()` (pi if authed, else mock); unavailable providers are rejected at create time. `ModelsService` is thin — it aggregates `listModels()` across `registry.available()`. See [Agent provider abstraction](#agent-provider-abstraction) for what shipped vs. what remains.
 
@@ -171,14 +171,14 @@ The harness is provider-agnostic: an `AgentProvider` runs/steers/disposes a sess
 |---|---|---|
 | GET | `/api/health` | health check |
 | GET | `/api/sessions` | list (excludes `ARCHIVED` unless `?includeArchived=1\|true`) |
-| POST | `/api/sessions` | `{ prompt, model?, provider? }` — starts the run in the background; `provider` defaults to `registry.defaultId()` (pi if authed, else mock) |
+| POST | `/api/sessions` | `{ prompt, model?, provider?, workspace? }` — starts the run in the background; `provider` defaults to `registry.defaultId()` (pi if authed, else mock) |
 | GET | `/api/sessions/:id` | detail |
 | GET | `/api/sessions/:id/events?since=` | event log (cursor) |
 | GET | `/api/sessions/:id/stream?since=` | SSE stream |
 | POST | `/api/sessions/:id/steer` | `{ message }` — mid-run steering (routes through `provider.steer()`; Pi uses `streamingBehavior: 'steer'`) |
 | POST | `/api/sessions/:id/pause` | |
 | POST | `/api/sessions/:id/archive` | terminal; disposes the session's agent handle |
-| GET | `/api/models` | aggregates `listModels()` across `AgentRegistry.available()` (Pi `ModelRegistry` when authed, else `STATIC_MODEL_PROVIDERS`; mock returns a mock entry) |
+| GET | `/api/models` | aggregates `listModels()` across `AgentRegistry.available()` (Pi `ModelRegistry` when authed, Cursor `Cursor.models.list()` when `CURSOR_API_KEY` set, else static fallback; mock returns a mock entry) |
 
 Model selection is **per-session** (Provider → Group → Model, 3-level picker on the frontend) and **wired through to Pi**: the session's `model` (stored as `provider:modelId`, e.g. `anthropic:claude-opus-4-5`) flows via `AgentRunContext.model` → `PiAgentProvider.resolveModelId()` → `ModelRegistry.find(provider, id)` → `createAgentSession({ model })`. Static ids without a `:` (only present when Pi registry is empty / no auth) fall back to Pi's default. `provider` is also per-session, resolved from `sessions.provider` on `steer`/`archive`.
 
@@ -200,6 +200,8 @@ Model selection is **per-session** (Provider → Group → Model, 3-level picker
 |---|---|---|
 | `NUNCIO_DATA_DIR` | `./data` | SQLite directory |
 | `NUNCIO_FORCE_MOCK` | — | `1` forces mock agent even with Pi auth |
+| `CURSOR_API_KEY` | — | Cursor SDK auth; required for `cursor` provider availability (mint at cursor.com/dashboard/cloud-agents) |
+| `NUNCIO_CURSOR_CWD` | `process.cwd()` | Default cwd for Cursor local agents when session has no `workspace` |
 | `PI_AGENT_DIR` / `PI_CODING_AGENT_DIR` | `~/.pi/agent` | Pi auth/config root (`auth.json`, models) |
 | `PORT` | `3000` | server listen port |
 
@@ -238,9 +240,9 @@ When a phase is large it is split into lanes working on isolated branches, then 
 
 **Status: shipped.** The `agents/` module, `AgentProvider` interface, `BaseAgentProvider` template-method base, and `AgentRegistry` have landed; `PiAgentService`/`MockAgentService` migrated to `PiAgentProvider`/`MockAgentProvider`; `SessionsService` injects `AgentRegistry` and resolves the provider per-session; `ModelsService` aggregates `listModels()` across available providers. A `provider` column was added to `sessions` with a guarded `ALTER TABLE` migration in `DatabaseService.migrate()` (existing dev DBs are handled). The old `EventEmitter`-in-`mock-agent.service.ts` coupling is gone — the type lives in `agents.types.ts`. `SessionsPersistenceModule` was extracted to export the repositories to both `SessionsModule` and `AgentsModule` without a circular dependency.
 
-**Deferred:** `CursorAgentProvider` was deliberately set aside ("chúng ta đang chưa làm tới đó, hãy tập trung vào pi sdk") — only Pi + Mock are wired today. The registry already handles 2+ providers, so adding Cursor later is a known extension point (implement `AgentProvider`, register in `agents.module.ts` + `AgentRegistry`); the pattern is proven by Pi + Mock.
+**Cursor provider (shipped):** `CursorAgentProvider` implements `AgentProvider` via `@cursor/sdk` local runtime. Uses `await Agent.create({ local: { cwd, useHttp1ForAgent: true, store: new JsonlLocalAgentStore(dir) } })` — both escape hatches required for Bun compat (HTTP/1.1 avoids `NGHTTP2_FRAME_SIZE_ERROR`; JSONL store avoids `node:sqlite`). `isAvailable()` checks `CURSOR_API_KEY` env only (no network); invalid keys surface at first `Agent.create` (hits `GET /v1/models` immediately) → session ERROR. `dispose()` calls sync `agent.close()`. Final assistant text from `result.result` (authoritative per SDK docs). `listModels()` caches `Cursor.models.list()` once per process. Opt-in only — `defaultId()` remains pi-then-mock.
 
-**Remaining gaps:** Pi uses `SessionManager.inMemory()`, so active Pi sessions are lost on server restart and a `steer` on a revived session creates a fresh Pi session (conversation history is replayed from the event log, not restored into Pi) — the lazy-revive design (`SessionManager.create(cwd)` / `open(path)`) from the brainstorm is not yet implemented. Pi's `tools: ['read','bash','grep','find','ls']` are hardcoded (not configurable per session or via env). The `resolveModelId` logic is unit-tested with a stub `find`, but there is no integration test that exercises real `~/.pi/agent/auth.json` end-to-end (would be skipped when auth is absent).
+**Remaining gaps:** Pi uses `SessionManager.inMemory()`, so active Pi sessions are lost on server restart and a `steer` on a revived session creates a fresh Pi session (conversation history is replayed from the event log, not restored into Pi) — the lazy-revive design (`SessionManager.create(cwd)` / `open(path)`) from the brainstorm is not yet implemented. Pi's `tools: ['read','bash','grep','find','ls']` are hardcoded (not configurable per session or via env). Cursor provider uses env-configured cwd (`NUNCIO_CURSOR_CWD`) until Phase 4 per-session worktree; concurrent Cursor sessions share cwd (file-conflict risk). Cursor agent handles lost on server restart (same as Pi in-memory), though `JsonlLocalAgentStore` persists state for future `Agent.resume()`. Cloud runtime (GitHub repo + PR) not yet supported. The `resolveModelId` logic is unit-tested with a stub `find`, but there is no integration test that exercises real `~/.pi/agent/auth.json` end-to-end (would be skipped when auth is absent). Cursor integration test (`test/integration/cursor-agent.integration.spec.ts`) is gated on `CURSOR_API_KEY`.
 
 ## shadcn/ui adoption
 
@@ -302,6 +304,7 @@ Nuncio runs on **Bun** (≥ 1.3) — server, build, and tests. Bun replaces npm,
 - `vite preview` proxies `/api` → 3000, so a single `tailscale serve --bg 5173` is usually enough. Serving web + API from separate origins needs a reverse proxy.
 - Don't bake Pi-specific assumptions (auth path, `ModelRegistry`, `streamingBehavior`) into `SessionsService` or the UI — route them through the provider. Adding a second provider is the test of whether the abstraction holds.
 - shadcn primitives live in `components/ui/` and are CLI-generated — don't hand-edit them unless fixing a primitive bug; compose them in feature components. Use `cn()` for conditional classes, not string concatenation.
+- **Cursor SDK under Bun** requires two escape hatches on every `Agent.create`: `local.useHttp1ForAgent: true` (Bun HTTP/2 client lacks bidirectional streaming → `NGHTTP2_FRAME_SIZE_ERROR` without it) and `local.store: new JsonlLocalAgentStore(<string dir>)` (default `SqliteLocalAgentStore` uses `node:sqlite`, not implemented in Bun 1.3.x). Constructor takes a **string** dir, not `{ dir }`. Smoke probe 2026-06-27 confirmed both work. Gated `test:integration` (`cursor-agent.integration.spec.ts`) is the canary. `Agent.create` is async (returns Promise) and hits backend immediately to validate the key — `isAvailable()` must NOT call it. SDK prints code-frame lines to stderr on errors — not suppressible via `Cursor.configure`.
 
 ## Reference projects (consult when stuck)
 

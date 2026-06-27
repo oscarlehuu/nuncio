@@ -11,6 +11,7 @@ function toDto(row: SessionRow): SessionDto {
     status: row.status,
     provider: row.provider,
     model: row.model,
+    workspace: row.workspace ?? null,
     prompt: row.prompt,
     preview: row.preview,
     createdAt: row.created_at,
@@ -51,6 +52,7 @@ export class SessionsRepository {
       status: 'CREATED',
       provider: input.provider ?? 'pi',
       model: input.model ?? null,
+      workspace: input.workspace?.trim() || null,
       prompt: input.prompt,
       preview: null,
       created_at: now,
@@ -58,10 +60,21 @@ export class SessionsRepository {
     };
     this.database.db
       .prepare(
-        `INSERT INTO sessions (id, title, status, provider, model, prompt, preview, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO sessions (id, title, status, provider, model, workspace, prompt, preview, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(row.id, row.title, row.status, row.provider, row.model, row.prompt, row.preview, row.created_at, row.updated_at);
+      .run(
+        row.id,
+        row.title,
+        row.status,
+        row.provider,
+        row.model,
+        row.workspace,
+        row.prompt,
+        row.preview,
+        row.created_at,
+        row.updated_at,
+      );
     return toDto(row);
   }
 

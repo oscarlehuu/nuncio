@@ -30,6 +30,7 @@ export class SessionsController {
       prompt: body.prompt.trim(),
       provider: body.provider,
       model: body.model,
+      workspace: body.workspace,
     });
   }
 
