@@ -45,7 +45,7 @@ export class SessionsService {
 
     if (input.projectPath?.trim()) {
       projectPath = input.projectPath.trim();
-      baseBranch = input.baseBranch?.trim() || 'main';
+      baseBranch = input.baseBranch?.trim() || undefined;
       const slug = input.prompt.trim().split('\n')[0] ?? 'task';
       const worktree = await this.git.createWorktree(projectPath, baseBranch, id, slug);
       worktreePath = worktree.worktreePath;

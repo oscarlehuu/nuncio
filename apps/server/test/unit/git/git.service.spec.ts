@@ -125,4 +125,28 @@ describe('GitService', () => {
     const root = await service.resolveRepoRoot(subdir);
     expect(root).toBe(realpathSync.native(repoA));
   });
+
+  it('createWorktree resolves the repo default branch when baseBranch is omitted', async () => {
+    const developRepo = mkdtempSync(join(tmpdir(), 'nuncio-develop-repo-'));
+    const developWs = mkdtempSync(join(tmpdir(), 'nuncio-develop-ws-'));
+    const previousWorkspaces = process.env.NUNCIO_WORKSPACES_DIR;
+    process.env.NUNCIO_WORKSPACES_DIR = developWs;
+    try {
+      await initRepo(developRepo, 'develop');
+
+      const result = await service.createWorktree(developRepo, undefined, 'dev00001', 'task');
+
+      const proc = Bun.spawn(
+        ['git', '-C', result.worktreePath, 'log', '--format=%H', '-n', '1', 'develop'],
+        { stdout: 'pipe', stderr: 'pipe' },
+      );
+      const code = await proc.exited;
+      expect(code).toBe(0);
+      await service.removeWorktree(developRepo, result.worktreePath);
+    } finally {
+      process.env.NUNCIO_WORKSPACES_DIR = previousWorkspaces;
+      rmSync(developRepo, { recursive: true, force: true });
+      rmSync(developWs, { recursive: true, force: true });
+    }
+  });
 });

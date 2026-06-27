@@ -139,7 +139,7 @@ export class GitService {
 
   async createWorktree(
     projectPath: string,
-    baseBranch: string,
+    baseBranch: string | undefined,
     sessionId: string,
     slug: string,
   ): Promise<WorktreeResult> {
@@ -148,9 +148,13 @@ export class GitService {
     const branch = `nuncio/${sessionId}-${safeSlug}`.slice(0, 120);
     const worktreePath = join(this.workspacesDir, sessionId);
 
+    // Resolve the repo's actual default branch when the caller omits baseBranch,
+    // instead of assuming "main" — repos may use develop/master/etc.
+    const resolvedBase = baseBranch?.trim() || (await this.resolveDefaultBranch(repoRoot));
+
     try {
       await git(
-        ['worktree', 'add', '-b', branch, worktreePath, baseBranch],
+        ['worktree', 'add', '-b', branch, worktreePath, resolvedBase],
         repoRoot,
       );
     } catch (error) {
@@ -159,6 +163,18 @@ export class GitService {
     }
 
     return { worktreePath, branch };
+  }
+
+  private async resolveDefaultBranch(repoRoot: string): Promise<string> {
+    try {
+      const branches = await this.listBranches(repoRoot);
+      const def = branches.find((b) => b.isDefault);
+      if (def) return def.name;
+      if (branches.length > 0) return branches[0].name;
+    } catch {
+      // fall through to 'main' as a last resort
+    }
+    return 'main';
   }
 
   async removeWorktree(repoRoot: string, worktreePath: string): Promise<void> {
