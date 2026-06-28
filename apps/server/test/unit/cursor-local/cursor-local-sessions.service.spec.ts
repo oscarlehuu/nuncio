@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Test, TestingModule } from '@nestjs/testing';
@@ -21,9 +21,11 @@ describe('CursorLocalSessionsService', () => {
 
     const olderId = '11111111-1111-1111-1111-111111111111';
     const newerId = '22222222-2222-2222-2222-222222222222';
-    for (const [id, title] of [
-      [olderId, 'Older task'],
-      [newerId, 'Newer task'],
+    const olderBase = new Date('2026-01-01T00:00:00Z');
+    const newerBase = new Date('2026-01-02T00:00:00Z');
+    for (const [id, title, mtime] of [
+      [olderId, 'Older task', olderBase],
+      [newerId, 'Newer task', newerBase],
     ] as const) {
       const dir = join(chatRoot, id);
       mkdirSync(dir, { recursive: true });
@@ -41,6 +43,7 @@ describe('CursorLocalSessionsService', () => {
           }),
         ].join('\n') + '\n',
       );
+      utimesSync(jsonl, mtime, mtime);
     }
 
     module = await Test.createTestingModule({

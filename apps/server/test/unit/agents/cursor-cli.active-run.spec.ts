@@ -1,6 +1,6 @@
 import { ConflictException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CursorCliProvider } from '../../../src/agents/providers/cursor-cli.provider';
@@ -13,10 +13,15 @@ describe('CursorCliProvider active-run guard', () => {
   let module: TestingModule;
   let provider: CursorCliProvider;
   let dataDir: string;
+  let fakeAgentBin: string;
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-cli-guard-'));
     process.env.NUNCIO_DATA_DIR = dataDir;
+    fakeAgentBin = join(tmpdir(), `nuncio-fake-agent-${Date.now()}`);
+    writeFileSync(fakeAgentBin, '#!/bin/sh\nexit 0\n');
+    chmodSync(fakeAgentBin, 0o755);
+    process.env.NUNCIO_CURSOR_AGENT_BIN = fakeAgentBin;
     module = await Test.createTestingModule({
       imports: [DatabaseModule, SettingsModule, SessionsPersistenceModule],
       providers: [CursorCliProvider],
@@ -28,7 +33,9 @@ describe('CursorCliProvider active-run guard', () => {
   afterAll(async () => {
     await module.close();
     rmSync(dataDir, { recursive: true, force: true });
+    rmSync(fakeAgentBin, { force: true });
     delete process.env.NUNCIO_DATA_DIR;
+    delete process.env.NUNCIO_CURSOR_AGENT_BIN;
   });
 
   it('blocks steer when transcript was updated recently', async () => {
