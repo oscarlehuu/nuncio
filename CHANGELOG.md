@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0
+
+### Minor Changes
+
+- [#5](https://github.com/oscarlehuu/nuncio/pull/5) [`3c8760b`](https://github.com/oscarlehuu/nuncio/commit/3c8760b88ed17c8a7c152c647430b47f7ff566f4) Thanks [@oscarlehuu](https://github.com/oscarlehuu)! - Added **Continue on mobile** — pick an in-progress Cursor chat from your Mac and import it into Nuncio so you can steer it from your phone. Imported chats resume via the Cursor CLI (`agent --resume`); sessions you create in Nuncio still use the in-process SDK.
+
 ## 0.1.0
 
 ### Minor Changes
