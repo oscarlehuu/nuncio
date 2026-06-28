@@ -7,6 +7,6 @@
   "access": "restricted",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
-  "ignore": ["@nuncio/server", "@nuncio/web"],
+  "ignore": ["@nuncio/server", "@nuncio/web", "@nuncio/landing"],
   "privatePackages": { "version": true, "tag": false }
 }
