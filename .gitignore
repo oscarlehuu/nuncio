@@ -1,8 +1,9 @@
-# Screenshots (kept locally, not in repo) — except in assets/
+# Screenshots (kept locally, not in repo) — except in assets/ and web public icons
 *.jpg
 *.png
 !assets/*.jpg
 !assets/*.png
+!apps/web/public/**/*.png
 
 # OS
 .DS_Store
