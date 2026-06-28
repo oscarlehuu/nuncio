@@ -1,7 +1,12 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HomeView } from './home-view';
+import { saveModelPreference } from '../lib/model-preference';
+import {
+  recordBranchSelection,
+  recordProjectSelection,
+} from '../lib/project-preference';
 import type { ModelProvider } from '../lib/model-providers';
 
 const PI_ONLY_PROVIDERS: ModelProvider[] = [
@@ -26,36 +31,47 @@ vi.mock('../lib/api', () => ({
 }));
 
 vi.mock('./project-picker', () => ({
-  ProjectPicker: ({ onChange }: { onChange: (path: string) => void }) => (
+  ProjectPicker: ({ value, onChange }: { value?: string; onChange: (path: string) => void }) => (
     <button type="button" onClick={() => onChange('/code/nuncio')}>
-      Pick project
+      {value ? value.split('/').pop() : 'No repo'}
     </button>
   ),
 }));
 
 vi.mock('./branch-picker', () => ({
-  BranchPicker: ({ onChange }: { onChange: (branch: string) => void }) => (
+  BranchPicker: ({
+    value,
+    onChange,
+  }: {
+    value?: string;
+    onChange: (branch: string) => void;
+  }) => (
     <button type="button" onClick={() => onChange('main')}>
-      Pick branch
+      {value ?? 'Branch'}
     </button>
   ),
 }));
 
 describe('HomeView', () => {
-  it('submits the prompt via the send button', async () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it('submits the prompt on Enter', async () => {
     const onSubmit = vi.fn();
     render(<HomeView sessionCount={0} onSubmit={onSubmit} providers={CURSOR_AND_PI} />);
     const textarea = screen.getByPlaceholderText(/ask nuncio/i);
-    await userEvent.type(textarea, 'Build a login page');
-    await userEvent.click(screen.getByRole('button', { name: /send/i }));
+    await userEvent.type(textarea, 'Build a login page{Enter}');
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls[0][0]).toBe('Build a login page');
   });
 
-  it('send button is disabled when the prompt is empty', () => {
+  it('does not submit on Enter when the prompt is empty', async () => {
     const onSubmit = vi.fn();
-    render(<HomeView sessionCount={0} onSubmit={onSubmit} />);
-    expect(screen.getByRole('button', { name: /send/i })).toBeDisabled();
+    render(<HomeView sessionCount={0} onSubmit={onSubmit} providers={CURSOR_AND_PI} />);
+    await userEvent.keyboard('{Enter}');
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /send/i })).toBeNull();
   });
 
   it('submits on Enter (without shift) and not on Shift+Enter', async () => {
@@ -75,21 +91,24 @@ describe('HomeView', () => {
     expect(screen.getByText(/3 sessions/i)).toBeInTheDocument();
   });
 
-  it('shows a connected badge per available provider', () => {
+  it('shows a live-status badge per available provider', () => {
     const providers = [
       { id: 'pi', name: 'Pi', groups: [] },
       { id: 'cursor', name: 'Cursor', groups: [] },
       { id: 'anthropic-direct', name: 'Anthropic', unavailable: true, groups: [] },
     ];
     render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={providers} />);
-    expect(screen.getByText(/pi connected/i)).toBeInTheDocument();
-    expect(screen.getByText(/cursor connected/i)).toBeInTheDocument();
-    expect(screen.queryByText(/anthropic connected/i)).toBeNull();
+    expect(screen.getByLabelText(/pi connected/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/cursor connected/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/anthropic connected/i)).toBeNull();
+    expect(screen.getByText('Pi')).toBeInTheDocument();
+    expect(screen.getByText('Cursor')).toBeInTheDocument();
+    expect(screen.queryByText(/connected$/i)).toBeNull();
   });
 
-  it('does not show connected badges before the live catalog loads', () => {
+  it('does not show provider badges before the live catalog loads', () => {
     render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={[]} />);
-    expect(screen.queryByText(/connected/i)).toBeNull();
+    expect(screen.queryByLabelText(/connected/i)).toBeNull();
   });
 
   it('stacks textarea above a single-row scrolling picker toolbar', () => {
@@ -108,30 +127,61 @@ describe('HomeView', () => {
   it('forwards project and branch selections on submit', async () => {
     const onSubmit = vi.fn();
     render(<HomeView sessionCount={0} onSubmit={onSubmit} providers={CURSOR_AND_PI} />);
-    await userEvent.click(screen.getByRole('button', { name: /pick project/i }));
-    await userEvent.click(screen.getByRole('button', { name: /pick branch/i }));
-    await userEvent.type(screen.getByPlaceholderText(/ask nuncio/i), 'Add workspace');
-    await userEvent.click(screen.getByRole('button', { name: /send/i }));
+    await userEvent.click(screen.getByRole('button', { name: /no repo/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^branch$/i }));
+    await userEvent.type(screen.getByPlaceholderText(/ask nuncio/i), 'Add workspace{Enter}');
     expect(onSubmit).toHaveBeenCalledWith(
       'Add workspace',
       'cursor:composer-2.5',
       'cursor',
       '/code/nuncio',
       'main',
+      undefined,
     );
+  });
+
+  it('restores the last project and branch from localStorage', () => {
+    recordProjectSelection('/code/nuncio', 'nuncio');
+    recordBranchSelection('/code/nuncio', 'develop');
+    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
+    expect(screen.getByRole('button', { name: /^nuncio$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^develop$/i })).toBeInTheDocument();
+  });
+
+  it('restores the last model selection from localStorage', async () => {
+    saveModelPreference({
+      modelId: 'anthropic:claude-haiku-4',
+      providerId: 'pi',
+    });
+    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
+    expect(await screen.findByRole('button', { name: /haiku/i })).toBeInTheDocument();
   });
 
   it('defaults to pi when cursor is not in the live catalog', async () => {
     const onSubmit = vi.fn();
     render(<HomeView sessionCount={0} onSubmit={onSubmit} providers={PI_ONLY_PROVIDERS} />);
-    await userEvent.type(screen.getByPlaceholderText(/ask nuncio/i), 'Hello');
-    await userEvent.click(screen.getByRole('button', { name: /send/i }));
+    await userEvent.type(screen.getByPlaceholderText(/ask nuncio/i), 'Hello{Enter}');
     expect(onSubmit).toHaveBeenCalledWith(
       'Hello',
       'anthropic:claude-haiku-4',
       'pi',
       undefined,
       undefined,
+      undefined,
     );
+  });
+
+  it('shows Continue on mobile icon in the composer bar when handler is provided', async () => {
+    const onContinue = vi.fn();
+    render(
+      <HomeView
+        sessionCount={0}
+        onSubmit={vi.fn()}
+        onContinueOnMobile={onContinue}
+        providers={CURSOR_AND_PI}
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: /continue on mobile/i }));
+    expect(onContinue).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,7 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ModelProviderDto } from '../../models/models.types';
+import {
+  buildCursorModelParams,
+  cursorModelItemLabel,
+  cursorParametersToDescriptors,
+  type CursorModelListItem,
+  type CursorModelParameter,
+} from './cursor-model-options.helpers';
 import { EventsRepository } from '../../sessions/persistence/events.repository';
 import { SessionsRepository } from '../../sessions/persistence/sessions.repository';
 import { SettingsService } from '../../settings/settings.service';
@@ -17,6 +23,7 @@ import {
   type CursorSdk,
   type CursorSessionHandle,
 } from './cursor-agent.helpers';
+import type { ModelProviderDto } from '../../models/models.types';
 
 @Injectable()
 export class CursorAgentProvider extends BaseAgentProvider {
@@ -27,6 +34,7 @@ export class CursorAgentProvider extends BaseAgentProvider {
   private sdkPromise?: Promise<CursorSdk>;
   private cachedAvailable?: boolean;
   private cachedModels?: ModelProviderDto[];
+  private readonly cursorModelParameters = new Map<string, CursorModelParameter[]>();
   private store?: unknown;
 
   /** Test hook: inject a stub SDK instead of loading @cursor/sdk. */
@@ -37,7 +45,6 @@ export class CursorAgentProvider extends BaseAgentProvider {
   }
 
   async isAvailable(): Promise<boolean> {
-    if (this.settings.resolve('NUNCIO_FORCE_MOCK') === '1') return false;
     if (this.cachedAvailable !== undefined) return this.cachedAvailable;
     const key = this.settings.resolve('CURSOR_API_KEY')?.trim();
     this.cachedAvailable = !!key;
@@ -48,6 +55,7 @@ export class CursorAgentProvider extends BaseAgentProvider {
   bustCache(): void {
     this.cachedAvailable = undefined;
     this.cachedModels = undefined;
+    this.cursorModelParameters.clear();
   }
 
   async listModels(): Promise<ModelProviderDto[]> {
@@ -55,7 +63,8 @@ export class CursorAgentProvider extends BaseAgentProvider {
     try {
       const sdk = await this.loadSdk();
       const apiKey = this.settings.resolve('CURSOR_API_KEY')!;
-      const models = await sdk.Cursor.models.list({ apiKey });
+      const models = (await sdk.Cursor.models.list({ apiKey })) as CursorModelListItem[];
+      this.cursorModelParameters.clear();
       const dto: ModelProviderDto[] = [
         {
           id: this.id,
@@ -69,11 +78,25 @@ export class CursorAgentProvider extends BaseAgentProvider {
               sub: 'Local runtime',
               models: models
                 .filter((m) => !isCursorDefaultModelId(m.id))
-                .map((m) => ({
-                  id: `cursor:${m.id}`,
-                  name: m.id,
-                  sub: 'Cursor model',
-                })),
+                .map((m) => {
+                  if (m.parameters?.length) this.cursorModelParameters.set(m.id, m.parameters);
+                  const options = cursorParametersToDescriptors(m.parameters);
+                  const variants =
+                    options.length === 0
+                      ? m.variants?.map((v) => ({
+                          label: v.displayName,
+                          params: v.params,
+                          ...(v.isDefault ? { isDefault: true as const } : {}),
+                        }))
+                      : undefined;
+                  return {
+                    id: `cursor:${m.id}`,
+                    name: cursorModelItemLabel(m),
+                    sub: 'Cursor model',
+                    ...(options.length > 0 ? { options } : {}),
+                    ...(variants && variants.length > 0 ? { variants } : {}),
+                  };
+                }),
             },
           ],
         },
@@ -111,9 +134,13 @@ export class CursorAgentProvider extends BaseAgentProvider {
       const sdk = await this.loadSdk();
       const apiKey = this.settings.resolve('CURSOR_API_KEY')!;
       const modelId = parseCursorModel(context.model) ?? CURSOR_PREFERRED_MODEL;
+      const params = buildCursorModelParams(
+        context.modelOptions,
+        this.cursorModelParameters.get(modelId),
+      );
       const agent = await sdk.Agent.create({
         apiKey,
-        model: { id: modelId },
+        model: params ? { id: modelId, params } : { id: modelId },
         local: {
           cwd: this.resolveCwd(sessionId, context),
           useHttp1ForAgent: true,

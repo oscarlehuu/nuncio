@@ -3,12 +3,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseModule } from '../../../src/db/database.module';
+import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
 
 describe('SessionsRepository', () => {
   let module: TestingModule;
   let repo: SessionsRepository;
+  let events: EventsRepository;
   let dataDir: string;
 
   beforeAll(async () => {
@@ -20,6 +22,7 @@ describe('SessionsRepository', () => {
     }).compile();
 
     repo = module.get(SessionsRepository);
+    events = module.get(EventsRepository);
   });
 
   afterAll(async () => {
@@ -31,15 +34,17 @@ describe('SessionsRepository', () => {
   it('create stores provider, model, and workspace fields', () => {
     const s = repo.create({
       prompt: 'do thing',
-      provider: 'mock',
+      provider: 'cursor',
       model: 'm1',
+      modelOptions: { fast: true, thinkingLevel: 'high' },
       projectPath: '/p',
       baseBranch: 'main',
       worktreePath: '/w',
       branch: 'nuncio/x',
     });
-    expect(s.provider).toBe('mock');
+    expect(s.provider).toBe('cursor');
     expect(s.model).toBe('m1');
+    expect(s.modelOptions).toEqual({ fast: true, thinkingLevel: 'high' });
     expect(s.projectPath).toBe('/p');
     expect(s.baseBranch).toBe('main');
     expect(s.worktreePath).toBe('/w');
@@ -85,5 +90,42 @@ describe('SessionsRepository', () => {
     const updated = repo.updateStatus(s.id, 'RUNNING');
     expect(updated.status).toBe('RUNNING');
     expect(repo.findById(s.id)?.status).toBe('RUNNING');
+  });
+
+  describe('delete', () => {
+    it('removes the session row', () => {
+      const s = repo.create({ prompt: 'delete me' });
+      repo.delete(s.id);
+      expect(repo.findById(s.id)).toBeNull();
+    });
+
+    it('cascades the delete to the session events', () => {
+      const s = repo.create({ prompt: 'delete with events' });
+      events.append(s.id, 'user_message', { text: 'hi' });
+      events.append(s.id, 'assistant_message', { text: 'hello' });
+      expect(events.list(s.id)).toHaveLength(2);
+
+      repo.delete(s.id);
+
+      expect(events.list(s.id)).toHaveLength(0);
+      expect(repo.findById(s.id)).toBeNull();
+    });
+
+    it('does not affect other sessions or their events', () => {
+      const keep = repo.create({ prompt: 'keep me' });
+      const drop = repo.create({ prompt: 'drop me' });
+      events.append(keep.id, 'user_message', { text: 'keep-1' });
+      events.append(drop.id, 'user_message', { text: 'drop-1' });
+
+      repo.delete(drop.id);
+
+      expect(repo.findById(keep.id)).not.toBeNull();
+      expect(events.list(keep.id)).toHaveLength(1);
+      expect(repo.findById(drop.id)).toBeNull();
+    });
+
+    it('is a no-op for a missing id', () => {
+      expect(() => repo.delete('does-not-exist')).not.toThrow();
+    });
   });
 });

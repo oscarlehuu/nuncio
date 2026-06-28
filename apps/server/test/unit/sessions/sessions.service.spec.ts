@@ -1,14 +1,21 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AgentsModule } from '../../../src/agents/agents.module';
+import { AgentRegistry } from '../../../src/agents/agents.registry';
+import { CursorLocalModule } from '../../../src/cursor-local/cursor-local.module';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { GitModule } from '../../../src/git/git.module';
+import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
 import { SessionsService } from '../../../src/sessions/sessions.service';
+import {
+  configureSimulatedCursorEnv,
+  withSimulatedCursorProvider,
+} from '../../helpers/simulated-cursor-app';
 
 async function runGitAsync(cwd: string, args: string[]): Promise<void> {
   const proc = Bun.spawn(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });
@@ -32,6 +39,8 @@ async function initRepo(dir: string): Promise<void> {
 describe('SessionsService lifecycle (phase 3)', () => {
   let service: SessionsService;
   let sessions: SessionsRepository;
+  let events: EventsRepository;
+  let registry: AgentRegistry;
   let dataDir: string;
   let repoPath: string;
   let workspacesDir: string;
@@ -41,17 +50,21 @@ describe('SessionsService lifecycle (phase 3)', () => {
     repoPath = mkdtempSync(join(tmpdir(), 'nuncio-svc-repo-'));
     workspacesDir = mkdtempSync(join(tmpdir(), 'nuncio-svc-ws-'));
     process.env.NUNCIO_DATA_DIR = dataDir;
-    process.env.NUNCIO_FORCE_MOCK = '1';
+    configureSimulatedCursorEnv();
     process.env.NUNCIO_WORKSPACES_DIR = workspacesDir;
     await initRepo(repoPath);
 
-    const module: TestingModule = await Test.createTestingModule({
-      imports: [DatabaseModule, GitModule, SessionsPersistenceModule, AgentsModule],
-      providers: [SessionsService],
-    }).compile();
+    const module: TestingModule = await withSimulatedCursorProvider(
+      Test.createTestingModule({
+        imports: [DatabaseModule, GitModule, SessionsPersistenceModule, AgentsModule, CursorLocalModule],
+        providers: [SessionsService],
+      }),
+    ).compile();
 
     service = module.get(SessionsService);
     sessions = module.get(SessionsRepository);
+    events = module.get(EventsRepository);
+    registry = module.get(AgentRegistry);
   });
 
   afterAll(async () => {
@@ -59,12 +72,12 @@ describe('SessionsService lifecycle (phase 3)', () => {
     rmSync(repoPath, { recursive: true, force: true });
     rmSync(workspacesDir, { recursive: true, force: true });
     delete process.env.NUNCIO_DATA_DIR;
-    delete process.env.NUNCIO_FORCE_MOCK;
+    delete process.env.CURSOR_API_KEY;
     delete process.env.NUNCIO_WORKSPACES_DIR;
   });
 
   function seedSession(status: 'IDLE' | 'PAUSED' | 'RUNNING' | 'ARCHIVED' | 'ERROR') {
-    const created = sessions.create({ prompt: 'Lifecycle test session', provider: 'mock' });
+    const created = sessions.create({ prompt: 'Lifecycle test session', provider: 'cursor' });
     sessions.updateStatus(created.id, 'RUNNING');
     if (status === 'RUNNING') return created.id;
     if (status === 'ERROR') {
@@ -79,6 +92,13 @@ describe('SessionsService lifecycle (phase 3)', () => {
     }
     sessions.updateStatus(created.id, 'ARCHIVED');
     return created.id;
+  }
+
+  function seedArchivedWithEvents(): string {
+    const id = seedSession('ARCHIVED');
+    events.append(id, 'user_message', { text: 'original prompt' });
+    events.append(id, 'assistant_message', { text: 'a response' });
+    return id;
   }
 
   it('steer requires IDLE or PAUSED session', async () => {
@@ -137,16 +157,80 @@ describe('SessionsService lifecycle (phase 3)', () => {
     expect(listed.some((s) => s.id === archivedId && s.status === 'ARCHIVED')).toBe(true);
   });
 
+  describe('restore', () => {
+    it('transitions an ARCHIVED session back to IDLE', () => {
+      const id = seedSession('ARCHIVED');
+      const restored = service.restore(id);
+      expect(restored.status).toBe('IDLE');
+      expect(service.get(id)?.status).toBe('IDLE');
+    });
+
+    it('emits a status event when restoring', () => {
+      const id = seedSession('ARCHIVED');
+      const before = service.getEvents(id).length;
+      service.restore(id);
+      const after = service.getEvents(id);
+      expect(after.length).toBeGreaterThan(before);
+      const last = after[after.length - 1];
+      expect(last.type).toBe('status');
+      expect(last.payload).toEqual({ status: 'IDLE' });
+    });
+
+    it('rejects restore on a non-archived session', () => {
+      const idleId = seedSession('IDLE');
+      const pausedId = seedSession('PAUSED');
+      expect(() => service.restore(idleId)).toThrow(BadRequestException);
+      expect(() => service.restore(pausedId)).toThrow(BadRequestException);
+    });
+
+    it('rejects restore on a missing session', () => {
+      expect(() => service.restore('nope')).toThrow(NotFoundException);
+    });
+  });
+
+  describe('delete', () => {
+    it('permanently removes an archived session and its events', async () => {
+      const id = await seedArchivedWithEvents();
+      expect(service.get(id)).not.toBeNull();
+      expect(events.list(id).length).toBeGreaterThan(0);
+
+      service.delete(id);
+
+      expect(service.get(id)).toBeNull();
+      expect(events.list(id)).toHaveLength(0);
+    });
+
+    it('rejects delete on a non-archived session (must archive first)', () => {
+      const idleId = seedSession('IDLE');
+      const runningId = seedSession('RUNNING');
+      expect(() => service.delete(idleId)).toThrow(BadRequestException);
+      expect(() => service.delete(runningId)).toThrow(BadRequestException);
+    });
+
+    it('rejects delete on a missing session', () => {
+      expect(() => service.delete('nope')).toThrow(NotFoundException);
+    });
+
+    it('disposes the agent handle before deleting', async () => {
+      const id = await seedArchivedWithEvents();
+      const provider = registry.get('cursor');
+      const disposeSpy = jest.spyOn(provider, 'dispose');
+      service.delete(id);
+      expect(disposeSpy).toHaveBeenCalledWith(id);
+      disposeSpy.mockRestore();
+    });
+  });
+
   describe('per-session provider selection', () => {
-    it('defaults to mock when provider omitted and only mock is available', async () => {
+    it('defaults to cursor when provider omitted and cursor is available', async () => {
       const session = await service.create({ prompt: 'default provider task' });
-      expect(session.provider).toBe('mock');
+      expect(session.provider).toBe('cursor');
       await waitForIdle(service, session.id);
     });
 
-    it('stores an explicit mock provider', async () => {
-      const session = await service.create({ prompt: 'explicit mock task', provider: 'mock' });
-      expect(session.provider).toBe('mock');
+    it('stores an explicit cursor provider', async () => {
+      const session = await service.create({ prompt: 'explicit cursor task', provider: 'cursor' });
+      expect(session.provider).toBe('cursor');
       await waitForIdle(service, session.id);
     });
 
@@ -167,7 +251,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
     it('creates a session with worktree when projectPath is provided', async () => {
       const session = await service.create({
         prompt: 'Fix auth middleware',
-        provider: 'mock',
+        provider: 'cursor',
         projectPath: repoPath,
         baseBranch: 'main',
       });
@@ -185,7 +269,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
       await expect(
         service.create({
           prompt: 'Broken workspace',
-          provider: 'mock',
+          provider: 'cursor',
           projectPath: '/definitely/not/a/git/repo',
           baseBranch: 'main',
         }),

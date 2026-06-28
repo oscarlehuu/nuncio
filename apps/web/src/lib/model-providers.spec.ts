@@ -115,13 +115,13 @@ describe('sortModelProviders', () => {
     expect(sortModelProviders(providers).map((p) => p.id)).toEqual(['cursor', 'pi']);
   });
 
-  it('places mock after cursor and pi', () => {
+  it('sorts unknown providers after known ones alphabetically', () => {
     const providers: ModelProvider[] = [
-      { id: 'mock', name: 'Mock', groups: [{ id: 'g', name: 'G', models: [{ id: 'm0', name: 'M0' }] }] },
+      { id: 'zulu', name: 'Zulu', groups: [{ id: 'g', name: 'G', models: [{ id: 'm0', name: 'M0' }] }] },
       { id: 'pi', name: 'Pi', groups: [{ id: 'g', name: 'G', models: [{ id: 'm1', name: 'M1' }] }] },
       { id: 'cursor', name: 'Cursor', groups: [{ id: 'g', name: 'G', models: [{ id: 'm2', name: 'M2' }] }] },
     ];
-    expect(sortModelProviders(providers).map((p) => p.id)).toEqual(['cursor', 'pi', 'mock']);
+    expect(sortModelProviders(providers).map((p) => p.id)).toEqual(['cursor', 'pi', 'zulu']);
   });
 
   it('sorts unavailable providers after available ones', () => {
@@ -211,7 +211,6 @@ describe('pickDefaultModelSelection', () => {
       name: 'Pi',
       groups: [{ id: 'g', name: 'G', models: [{ id: 'anthropic:claude-haiku-4', name: 'Haiku' }] }],
     },
-    { id: 'mock', name: 'Mock', groups: [{ id: 'm', name: 'M', models: [{ id: 'mock:default', name: 'Mock' }] }] },
   ];
 
   const withCursor: ModelProvider[] = [

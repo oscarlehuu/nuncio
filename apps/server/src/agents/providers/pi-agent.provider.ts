@@ -7,6 +7,7 @@ import { SessionsRepository } from '../../sessions/persistence/sessions.reposito
 import { SettingsService } from '../../settings/settings.service';
 import type { AgentRunContext } from '../agents.types';
 import { BaseAgentProvider } from '../agents.base-provider';
+import { piThinkingDescriptors, resolvePiThinkingLevel } from './pi-thinking.helpers';
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent');
 
@@ -23,7 +24,18 @@ type PiModelRegistry = {
     id: string;
     name: string;
     cost?: { input: number; output: number };
+    reasoning?: boolean;
+    thinkingLevelMap?: Record<string, string | null>;
   }>;
+  find: (
+    provider: string,
+    id: string,
+  ) =>
+    | {
+        reasoning?: boolean;
+        thinkingLevelMap?: Record<string, string | null>;
+      }
+    | undefined;
   getProviderDisplayName: (provider: string) => string;
 };
 
@@ -40,7 +52,6 @@ export class PiAgentProvider extends BaseAgentProvider {
   }
 
   async isAvailable(): Promise<boolean> {
-    if (this.settings.resolve('NUNCIO_FORCE_MOCK') === '1') return false;
     if (this.cachedAvailable !== undefined) return this.cachedAvailable;
     try {
       const pi = await this.loadSdk();
@@ -122,6 +133,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     const authStorage = pi.AuthStorage.create(join(agentDir, 'auth.json'));
     const modelRegistry = pi.ModelRegistry.create(authStorage, join(agentDir, 'models.json'));
     const model = resolveModelId(context.model, (provider, id) => modelRegistry.find(provider, id));
+    const thinkingLevel = resolvePiThinkingLevel(context.modelOptions, model);
     const cwdOptions = buildPiCwdOptions(context.cwd, pi.SessionManager.inMemory);
     const customTools = buildPiCustomTools(context.cwd, pi);
     const { session } = await pi.createAgentSession({
@@ -130,12 +142,9 @@ export class PiAgentProvider extends BaseAgentProvider {
       authStorage,
       modelRegistry,
       tools: ['read', 'bash', 'grep', 'find', 'ls'],
-      // customTools are built from the SDK's own tool factories (createBashTool etc.),
-      // which return AgentTool values structurally compatible with ToolDefinition.
-      // The helper is typed unknown[] so it stays SDK-type-independent + CI-safe to
-      // unit-test; cast at this interop boundary where the SDK accepts them.
       ...(customTools ? { customTools: customTools as never } : {}),
       ...(model ? { model } : {}),
+      ...(thinkingLevel ? { thinkingLevel } : {}),
     });
 
     let assistantText = '';
@@ -177,10 +186,13 @@ export class PiAgentProvider extends BaseAgentProvider {
 
     const groupsByProvider = new Map<string, ModelItemDto[]>();
     for (const model of models) {
+      const registryModel = modelRegistry.find(model.provider, model.id);
+      const options = piThinkingDescriptors(registryModel ?? model);
       const item: ModelItemDto = {
         id: `${model.provider}:${model.id}`,
         name: model.name,
         sub: model.id,
+        ...(options.length > 0 ? { options } : {}),
       };
       if (model.cost) item.cost = `$${model.cost.input} / $${model.cost.output}`;
       groupsByProvider.set(model.provider, [...(groupsByProvider.get(model.provider) ?? []), item]);

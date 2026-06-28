@@ -146,8 +146,8 @@ describe('SettingsService', () => {
     it('emits an onChange listener with the changed key', () => {
       const seen: string[] = [];
       service.onChange((key) => seen.push(key));
-      service.set('NUNCIO_FORCE_MOCK', '1');
-      expect(seen).toContain('NUNCIO_FORCE_MOCK');
+      service.set('NUNCIO_PROJECT_ROOTS', '/tmp/projects');
+      expect(seen).toContain('NUNCIO_PROJECT_ROOTS');
     });
 
     it('throws when setting an unknown key', () => {
@@ -174,10 +174,10 @@ describe('SettingsService', () => {
 
     it('emits an onChange listener with the changed key', () => {
       const seen: string[] = [];
-      service.set('NUNCIO_FORCE_MOCK', '1');
+      service.set('NUNCIO_PROJECT_ROOTS', '/tmp/projects');
       service.onChange((key) => seen.push(key));
-      service.clear('NUNCIO_FORCE_MOCK');
-      expect(seen).toContain('NUNCIO_FORCE_MOCK');
+      service.clear('NUNCIO_PROJECT_ROOTS');
+      expect(seen).toContain('NUNCIO_PROJECT_ROOTS');
     });
 
     it('throws when clearing an unknown key', () => {

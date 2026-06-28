@@ -24,6 +24,12 @@ Nuncio is a **self-hosted, Devin-style web app for delegating tasks to AI agents
 3. **Refactor** under the safety of the passing test.
 4. **Gate:** the change is not done until the suite is green. Don't move on, don't commit, don't open a PR on a red suite. **Never silence, skip, or weaken a failing test just to pass the build.**
 5. **Docs sync:** update `README.md` to match the shipped code — commands, API, architecture, status. If architecture or conventions shifted, update `AGENTS.md` too. A merged change with stale docs isn't done.
+6. **Changeset (release note) — mandatory for user-facing changes.** If the PR changes anything a user would notice (new feature, behavior shift, bug fix, UI change), add a changeset fragment before opening the PR:
+   ```bash
+   bun run changeset        # → select "nuncio", pick minor/patch/major, write a release-note-style summary
+   git add .changeset/*.md  # commit the fragment alongside your code
+   ```
+   Write the summary from a user's perspective — it becomes the `CHANGELOG.md` entry and the GitHub Release note **verbatim**. Good: "Added a folder picker so you can choose a project from your phone." Bad: "fix: picker bug". **A user-facing PR without a changeset isn't done — same gate as a red suite.** Skip only for pure refactor/test/docs/chore with no observable behavior change. See [Releases & changelog](#releases--changelog) for the full automated flow.
 
 Grounding in what exists today:
 
@@ -62,7 +68,7 @@ After each implementation — and **before commit or PR** — run a **code revie
 
 | Layer | Choice |
 |---|---|
-| Agent harness | **Provider-agnostic by design** — any agent SDK behind a common `AgentProvider` contract. **Pi SDK** (`@earendil-works/pi-coding-agent`) is the inaugural provider, run in-process via `createAgentSession`; **mock provider** is the always-available fallback when no provider is authed or `NUNCIO_FORCE_MOCK=1`. Cursor and other SDKs plug into the same contract. |
+| Agent harness | **Provider-agnostic by design** — any agent SDK behind a common `AgentProvider` contract. **Pi SDK** (`@earendil-works/pi-coding-agent`) is the inaugural provider, run in-process via `createAgentSession`; **Cursor** (`@cursor/sdk`) runs local agents when `CURSOR_API_KEY` is set. Additional SDKs plug into the same contract. |
 | Backend | NestJS 11 (`apps/server`) on port **3000**, runs on Bun |
 | Frontend | Vite 8 + React 19 + Tailwind 4 + **shadcn/ui (nova preset, light + dark)** (`apps/web`) on port **5173** (proxies `/api` → 3000); installable **PWA** via `vite-plugin-pwa`. shadcn primitives (Radix-based) in `components/ui/`, composed into feature components; nova oklch semantic tokens adopted directly. See [shadcn/ui adoption](#shadcnui-adoption). |
 | Persistence | SQLite (`bun:sqlite`) at `data/nuncio.db`, WAL mode |
@@ -78,6 +84,9 @@ bun run dev          # server (3000) + web (5173) concurrently
 bun run build        # build server + web
 bun run test         # server unit (bun test test/unit/)
 bun run lint         # server tsc --noEmit + web oxlint
+bun run changeset    # create a changeset fragment (run from a feature branch; commit the .changeset/*.md)
+bun run version      # consume pending changesets → bump root version + update CHANGELOG.md + sync server/web (opens via CI)
+bun run release      # create v<version> git tag + GitHub Release from the matching CHANGELOG.md section (runs in CI)
 ```
 
 Per-workspace (via `bun run --filter`):
@@ -105,6 +114,23 @@ tailscale serve --bg 5173                    # https://<machine>.<tailnet>.ts.ne
 
 iPhone PWA install requires HTTPS — use the Tailscale URL in Safari → Share → Add to Home Screen.
 
+## Releases & changelog
+
+Versioning + changelog are managed by [Changesets](https://github.com/changesets/changesets). The flow is **curated, not commit-driven** — each PR ships a hand-written summary fragment that becomes the changelog entry verbatim, so the result reads like release notes (Superset/Cursor style), not a commit log.
+
+**Single source of truth:** only the root `nuncio` package is versioned (`.changeset/config.json` `ignore`s `@nuncio/server` + `@nuncio/web`; the root is a workspace member via the `"."` entry so Changesets can version it). `@nuncio/server` and `@nuncio/web` are private and synced to the root version by `scripts/sync-versions.mjs` on every `bun run version`. One `CHANGELOG.md` at the repo root.
+
+**The per-PR rule** (repeated here as the authoritative spec; see [Working practice: TDD-first](#working-practice-tdd-first) step 6 for the gate framing): every PR with user-facing changes ships a `.changeset/*.md` fragment written as a release note. PRs that are pure refactor/test/docs/chore skip it. See `.changeset/README.md` for the contribution guide.
+
+**Cutting a release (automated via `.github/workflows/release.yml`):**
+
+1. PRs with changesets merge to `main` → the `changesets/action` opens a **"chore: release version"** PR that runs `bun run version` (bumps root + syncs server/web + prepends a `## <version>` section to `CHANGELOG.md`).
+2. Merge that Version PR → the action runs `bun run release`, which creates the `v<version>` git tag and a GitHub Release with the matching changelog section as the body. `scripts/release.mjs` is idempotent (no-ops if the tag exists).
+
+**Manual release (local):** `bun run version` then `bun run release` (requires `gh auth login`).
+
+**In-app "What's new" page:** the web app renders `CHANGELOG.md` at `/changelog`-equivalent (sidebar footer → ✨ button). The markdown is loaded at build time via the `virtual:changelog` Vite plugin (`apps/web/vite.config.ts`), parsed by `apps/web/src/lib/parse-changelog.ts` into structured releases/sections, and rendered by `apps/web/src/components/changelog-view.tsx`. Inline `**bold**`, `` `code` ``, and `[label](href)` (PR/author links) are tokenized by `apps/web/src/lib/render-inline-markdown.ts`. After a release, bumping the root `package.json` version + restarting `bun run dev` is enough to refresh the in-app page.
+
 ## Project layout
 
 ```
@@ -119,7 +145,7 @@ apps/
         agents.module.ts       wires providers + registry, exports registry
         providers/
           pi-agent.provider.ts   Pi provider (inaugural) — real agent via Pi SDK
-          mock-agent.provider.ts mock provider — always-available fallback
+          cursor-agent.provider.ts Cursor provider via @cursor/sdk local runtime
       sessions/          session domain: FSM, repos, service, controller
         api/sessions.controller.ts       REST endpoints
         domain/sessions.fsm.ts           pure transition table + assertTransition/canTransition
@@ -152,18 +178,25 @@ apps/
       db/                DatabaseService (Global, bun:sqlite, schema bootstrap + guarded ALTER migration; exposes dataDir)
     test/
       unit/<domain>/     bun test unit specs grouped by domain (agents/, sessions/, models/, db/) + app.spec.ts
-      e2e/app.e2e-spec.ts        e2e over HTTP (mock provider; run via bun run test:e2e)
+      e2e/app.e2e-spec.ts        e2e over HTTP (simulated cursor provider; run via bun run test:e2e)
       integration/pi-agent.integration.spec.ts  real-Pi integration (gated on ~/.pi/agent/auth.json; opt-in)
   web/                   Vite + React + Tailwind v4 + shadcn/ui (PWA)
     src/
-      lib/               api.ts, use-session-stream.ts (SSE hook), model-providers.ts, projects.ts, utils.ts (cn())
+      lib/               api.ts, use-session-stream.ts (SSE hook), model-providers.ts, projects.ts, utils.ts (cn()),
+                         parse-changelog.ts + render-inline-markdown.ts (changelog page support)
       components/
         ui/              shadcn primitives (Radix-based) — generated, rarely hand-edited
         home-view, session-detail, sidebar, model-picker, project-picker, branch-picker, status-dot  (feature components)
-      App.tsx            top-level state + view routing
+        settings-view, changelog-view                                        (full-page views reached from sidebar footer)
+      App.tsx            top-level state + view routing (home / session / settings / changelog)
+      vite.config.ts     includes the `virtual:changelog` plugin (loads root CHANGELOG.md at build time)
 mockup.html              UI blueprint / reference (single-file mockup)
 data/                    SQLite (gitignored)
 plans/                   phased roadmap + per-phase reports
+CHANGELOG.md             release notes — appended by Changesets on each `bun run version` (source for the in-app What's-new page + GitHub Releases)
+.changeset/              Changesets config + pending release-note fragments (one .md per PR)
+scripts/                 sync-versions.mjs (sync server/web → root version), release.mjs (git tag + GitHub Release)
+.github/workflows/release.yml   Version PR + release-on-merge automation (changesets/action)
 ```
 
 ## Architecture
@@ -185,19 +218,19 @@ CREATED → RUNNING | ERROR
 RUNNING → IDLE | ERROR | PAUSED
 IDLE    → RUNNING | ERROR | PAUSED | ARCHIVED
 PAUSED  → RUNNING | ARCHIVED
-ARCHIVED → (terminal)
+ARCHIVED → IDLE
 ERROR   → RUNNING | IDLE | ARCHIVED
 ```
 
-`ARCHIVED` is terminal. `archive()` also disposes the session's agent handle via `agents.get(session.provider).dispose(id)` (routes through the provider).
+`ARCHIVED` is recoverable: `restore()` transitions it back to `IDLE` (the agent loop was disposed at archive time, so the next steer spins up a fresh provider session; the event log keeps the prior conversation). Permanent removal goes through `delete()`, which is restricted to `ARCHIVED` sessions — archive first, then delete. `archive()` and `delete()` both dispose the session's agent handle via `agents.get(session.provider).dispose(id)` (routes through the provider); `delete()` also drops the in-memory SSE bus and cascades the event log via a single transaction.
 
 ### Agent providers
 
 The harness is provider-agnostic: an `AgentProvider` runs/steers/disposes a session and knows its own model catalog. **Pi is the inaugural provider** — it is what's wired today — but any agent SDK is meant to implement the same contract and register alongside it.
 
-**Today (Pi + Cursor + mock, abstracted):** the `apps/server/src/agents/` module defines the `AgentProvider` interface (`agents.types.ts`), a `BaseAgentProvider` abstract class (`agents.base-provider.ts`) using the template-method pattern, and an `AgentRegistry` (`agents.registry.ts`). `BaseAgentProvider.run()`/`steer()` own the shared orchestration (set RUNNING → push user/steer message → `executePrompt()` → set IDLE, with unified error handling); concrete providers implement only `executePrompt()`. `PiAgentProvider` runs the Pi SDK in-process and keeps a `Map<sessionId, PiSessionHandle>` alive after the first run so `steer()` reuses the same Pi session; it token-streams via `session.subscribe()` `text_delta` → `assistant_delta`. `CursorAgentProvider` runs `@cursor/sdk` local runtime in-process (`await Agent.create` + `send({ onDelta })` + `wait`), token-streams via `onDelta` `text-delta` → `assistant_delta` (and `tool-call-started`/`completed` → `tool_start`/`tool_end`), and reuses the same agent handle per session for steer. `MockAgentProvider` is the always-available fallback. The `EventEmitter` type lives in `agents.types.ts`. See [Token streaming](#token-streaming-per-provider-delta-sources) for the per-provider delta sources behind the shared event contract.
+**Today (Pi + Cursor, abstracted):** the `apps/server/src/agents/` module defines the `AgentProvider` interface (`agents.types.ts`), a `BaseAgentProvider` abstract class (`agents.base-provider.ts`) using the template-method pattern, and an `AgentRegistry` (`agents.registry.ts`). `BaseAgentProvider.run()`/`steer()` own the shared orchestration (set RUNNING → push user/steer message → `executePrompt()` → set IDLE, with unified error handling); concrete providers implement only `executePrompt()`. `PiAgentProvider` runs the Pi SDK in-process and keeps a `Map<sessionId, PiSessionHandle>` alive after the first run so `steer()` reuses the same Pi session; it token-streams via `session.subscribe()` `text_delta` → `assistant_delta`. `CursorAgentProvider` runs `@cursor/sdk` local runtime in-process (`await Agent.create` + `send({ onDelta })` + `wait`), token-streams via `onDelta` `text-delta` → `assistant_delta` (and `tool-call-started`/`completed` → `tool_start`/`tool_end`), and reuses the same agent handle per session for steer. The `EventEmitter` type lives in `agents.types.ts`. See [Token streaming](#token-streaming-per-provider-delta-sources) for the per-provider delta sources behind the shared event contract.
 
-`SessionsService` injects `AgentRegistry` and resolves the provider **per-session** from `sessions.provider` on `create`/`steer`/`archive`. `CreateSessionDto.provider?` defaults to `registry.defaultId()` (cursor if `CURSOR_API_KEY` set, else pi if authed, else mock); unavailable providers are rejected at create time. `ModelsService` is thin — it aggregates `listModels()` across `registry.available()`. See [Agent provider abstraction](#agent-provider-abstraction) for what shipped vs. what remains.
+`SessionsService` injects `AgentRegistry` and resolves the provider **per-session** from `sessions.provider` on `create`/`steer`/`archive`. `CreateSessionDto.provider?` defaults to `registry.defaultId()` (cursor if `CURSOR_API_KEY` set, else pi if authed; throws `503` when neither is configured); unavailable providers are rejected at create time. `ModelsService` is thin — it aggregates `listModels()` across `registry.available()`. See [Agent provider abstraction](#agent-provider-abstraction) for what shipped vs. what remains.
 
 ### Streaming
 
@@ -213,7 +246,6 @@ The event contract is **shared** across providers (emitted via `BaseAgentProvide
 |---|---|---|
 | **Pi** | `session.subscribe()` → `message_update` → `assistantMessageEvent.type === 'text_delta'` (token-level) | `assistant_delta` |
 | **Cursor** | `agent.send(text, { onDelta })` → `InteractionUpdate.type === 'text-delta'` (token-level); `tool-call-started` / `tool-call-completed` | `assistant_delta` / `tool_start` / `tool_end` |
-| Mock | simulated delta stream | `assistant_delta` |
 
 > **Adding a new engine?** Check whether its SDK exposes a token-level streaming callback (Pi: `subscribe` + `text_delta`; Cursor: `onDelta` + `text-delta`). Map it to the shared `assistant_delta { delta }` event so the frontend `Transcript` streams without changes. If the SDK only offers block-level messages, fall back to emitting the whole block as one `assistant_delta` (block-level) — the transcript still renders, just less smoothly. Do NOT introduce a per-provider event type; the contract stays shared.
 
@@ -229,14 +261,18 @@ The event contract is **shared** across providers (emitted via `BaseAgentProvide
 | GET | `/api/projects` | list git repos from `NUNCIO_PROJECT_ROOTS` (one level deep) |
 | GET | `/api/projects/branches?path=` | list branches for a repo path (also accepts custom absolute paths) |
 | GET | `/api/sessions` | list (excludes `ARCHIVED` unless `?includeArchived=1\|true`) |
-| POST | `/api/sessions` | `{ prompt, model?, provider?, workspace?, projectPath?, baseBranch? }` — when `projectPath` is set, creates a git worktree on branch `nuncio/<id>-<slug>` branched from `baseBranch` (default `main`); `workspace` is the Cursor provider cwd fallback; starts run in background; `provider` defaults to `registry.defaultId()` (cursor if `CURSOR_API_KEY` set, else pi if authed, else mock) |
-| GET | `/api/sessions/:id` | detail (includes `workspace`, `projectPath`, `baseBranch`, `worktreePath`, `branch` when set) |
+| POST | `/api/sessions` | `{ prompt, model?, provider?, workspace?, projectPath?, baseBranch? }` — when `projectPath` is set, creates a git worktree on branch `nuncio/<id>-<slug>` branched from `baseBranch` (default `main`); `workspace` is the Cursor provider cwd fallback; starts run in background; `provider` defaults to `registry.defaultId()` (cursor if `CURSOR_API_KEY` set, else pi if authed; `503` when neither configured) |
+| POST | `/api/sessions/handoff` | `{ cursorChatId, workspace, title? }` — selective import of a Cursor IDE/CLI chat from `~/.cursor/projects/<slug>/agent-transcripts/`; creates `provider: cursor`, `cursor_backend: cli`, hydrates transcript into the event log, status `IDLE` (no auto-run). Idempotent per `cursor_chat_id`. |
+| GET | `/api/cursor/local-sessions?workspace=&limit=` | read-only picker feed — scans agent transcripts for the workspace slug; marks chats already imported |
+| GET | `/api/sessions/:id` | detail (includes `workspace`, `projectPath`, `baseBranch`, `worktreePath`, `branch`, `cursorBackend`, `cursorChatId` when set) |
 | GET | `/api/sessions/:id/events?since=` | event log (cursor) |
 | GET | `/api/sessions/:id/stream?since=` | SSE stream |
 | POST | `/api/sessions/:id/steer` | `{ message }` — mid-run steering (routes through `provider.steer()`; Pi uses `streamingBehavior: 'steer'`) |
 | POST | `/api/sessions/:id/pause` | |
-| POST | `/api/sessions/:id/archive` | terminal; disposes the session's agent handle (worktree + branch kept on disk) |
-| GET | `/api/models` | aggregates `listModels()` across `AgentRegistry.available()` (Pi `ModelRegistry` when authed, Cursor `Cursor.models.list()` when `CURSOR_API_KEY` set, else static fallback; mock returns a mock entry) |
+| POST | `/api/sessions/:id/archive` | disposes the session's agent handle (worktree + branch kept on disk); recoverable via `restore` |
+| POST | `/api/sessions/:id/restore` | un-archive → IDLE (no-op on the agent loop; the next steer rebuilds it from the event log) |
+| DELETE | `/api/sessions/:id` | permanent; rejects unless the session is `ARCHIVED` (archive first). Disposes the agent handle, drops the in-memory SSE bus, and cascades the event log in one transaction |
+| GET | `/api/models` | aggregates `listModels()` across `AgentRegistry.available()` (Pi `ModelRegistry` when authed, Cursor `Cursor.models.list()` when `CURSOR_API_KEY` set, else static Pi fallback) |
 | GET | `/api/settings` | list all settings (catalog metadata + `hasValue` + `source` + masked/raw `value`; secrets masked, never raw) |
 | GET | `/api/settings/:key` | single setting DTO (404 for unknown key) |
 | PUT | `/api/settings/:key` | `{ value }` — persists (encrypts secrets), busts provider caches, returns the masked DTO |
@@ -270,9 +306,9 @@ Env vars are the **fallback** for the settings store. Every var below (except th
 | `NUNCIO_SETTINGS_KEY` | (generated) | 32-byte AES-256-GCM key for secret settings (hex or base64). If absent, a key is generated at `data/settings.key` (mode 0600). | ❌ boot-only (chicken-egg) |
 | `NUNCIO_PROJECT_ROOTS` | (empty) | Comma-separated dirs to scan one level deep for git repos (frontend project picker) | ✅ |
 | `NUNCIO_WORKSPACES_DIR` | `~/.nuncio/workspaces` | Per-session git worktree parent dir (`<dir>/<sessionId>`) | ✅ |
-| `NUNCIO_FORCE_MOCK` | — | `1` forces mock agent even with Pi auth | ✅ |
 | `CURSOR_API_KEY` | — | Cursor SDK auth; required for `cursor` provider availability (mint at cursor.com/dashboard/cloud-agents). Stored encrypted at rest. | ✅ (secret) |
 | `NUNCIO_CURSOR_CWD` | `process.cwd()` | Default cwd for Cursor local agents when session has no `workspace` | ✅ |
+| `NUNCIO_CURSOR_AGENT_BIN` | `~/.local/bin/agent` | Path to Cursor CLI for imported handoff sessions (`cursor_backend=cli`) | ✅ |
 | `PI_AGENT_DIR` / `PI_CODING_AGENT_DIR` | `~/.pi/agent` | Pi auth/config root (`auth.json`, models). The directory path is configurable; the `auth.json` *contents* are read-only (managed by the `pi` CLI). | ✅ |
 
 Pi auth is reused as-is from `~/.pi/agent/auth.json` (single source of truth shared with the `pi` CLI).
@@ -317,11 +353,32 @@ When a phase is large it is split into lanes working on isolated branches, then 
 
 ## Agent provider abstraction
 
-**Status: shipped.** The `agents/` module, `AgentProvider` interface, `BaseAgentProvider` template-method base, and `AgentRegistry` have landed; `PiAgentService`/`MockAgentService` migrated to `PiAgentProvider`/`MockAgentProvider`; `SessionsService` injects `AgentRegistry` and resolves the provider per-session; `ModelsService` aggregates `listModels()` across available providers. A `provider` column was added to `sessions` with a guarded `ALTER TABLE` migration in `DatabaseService.migrate()` (existing dev DBs are handled). The old `EventEmitter`-in-`mock-agent.service.ts` coupling is gone — the type lives in `agents.types.ts`. `SessionsPersistenceModule` was extracted to export the repositories to both `SessionsModule` and `AgentsModule` without a circular dependency.
+**Status: shipped.** The `agents/` module, `AgentProvider` interface, `BaseAgentProvider` template-method base, and `AgentRegistry` have landed; `PiAgentService` migrated to `PiAgentProvider`; `SessionsService` injects `AgentRegistry` and resolves the provider per-session; `ModelsService` aggregates `listModels()` across available providers.
 
 **Cursor provider (shipped):** `CursorAgentProvider` implements `AgentProvider` via `@cursor/sdk` local runtime. Uses `await Agent.create({ local: { cwd, useHttp1ForAgent: true, store: new JsonlLocalAgentStore(dir) } })` — both escape hatches required for Bun compat (HTTP/1.1 avoids `NGHTTP2_FRAME_SIZE_ERROR`; JSONL store avoids `node:sqlite`). `isAvailable()` checks `CURSOR_API_KEY` env only (no network); invalid keys surface at first `Agent.create` (hits `GET /v1/models` immediately) → session ERROR. `dispose()` calls sync `agent.close()`. Final assistant text from `result.result` (authoritative per SDK docs). `listModels()` caches `Cursor.models.list()` once per process, omitting the SDK's `default` model entry. `defaultId()` prefers cursor when `CURSOR_API_KEY` is set.
 
 **Remaining gaps:** Pi uses `SessionManager.inMemory()`, so active Pi sessions are lost on server restart and a `steer` on a revived session creates a fresh Pi session (conversation history is replayed from the event log, not restored into Pi) — the lazy-revive design (`SessionManager.create(cwd)` / `open(path)`) from the brainstorm is not yet implemented. Pi's `tools: ['read','bash','grep','find','ls']` are hardcoded (not configurable per session or via env). Cursor provider uses env-configured cwd (`NUNCIO_CURSOR_CWD`) until Phase 4 per-session worktree; concurrent Cursor sessions share cwd (file-conflict risk). Cursor agent handles lost on server restart (same as Pi in-memory), though `JsonlLocalAgentStore` persists state for future `Agent.resume()`. Cloud runtime (GitHub repo + PR) not yet supported. The `resolveModelId` logic is unit-tested with a stub `find`, but there is no integration test that exercises real `~/.pi/agent/auth.json` end-to-end (would be skipped when auth is absent). Cursor integration test (`test/integration/cursor-agent.integration.spec.ts`) is gated on `CURSOR_API_KEY`.
+
+### Handoff (Continue on mobile)
+
+**Status: shipped.** Selective import of a Cursor IDE/CLI chat into Nuncio for phone steering.
+
+| Source | `cursor_backend` | Steer backend | Store |
+|--------|------------------|---------------|-------|
+| `POST /api/sessions` (Nuncio create) | `sdk` (default) | `CursorAgentProvider` (`@cursor/sdk`) | `data/cursor-store/*.ndjson` |
+| `POST /api/sessions/handoff` (import) | `cli` | `CursorCliProvider` (`agent -p --resume`) | Cursor's `~/.cursor/chats/<hash>/<chatId>/` |
+
+**Modules:** `cursor-local/` scans `~/.cursor/projects/<slug>/agent-transcripts/` for the picker (`GET /api/cursor/local-sessions`) and hydrates JSONL into the event log on import. `CursorCliProvider` spawns the CLI, parses `stream-json` → shared `assistant_delta` / `assistant_message` events.
+
+**Idempotent import:** `POST /api/sessions/handoff` keyed on `cursor_chat_id` — re-import returns the existing session row (no duplicate transcript append).
+
+**Active-run guard:** Before CLI steer, block if transcript mtime **or** `store.db` mtime under `~/.cursor/chats/*/<chatId>/` is fresher than 60s (Cursor may still be running in IDE). Pass `forceResume: true` on `POST /api/sessions/:id/steer` to skip. `chatStoreMtime()` scans all workspace-hash dirs (hash algorithm not stable across Cursor versions — scan is intentional).
+
+**Transcript refresh:** `SessionsService.refreshTranscriptIfNeeded()` runs before steer — if the on-disk transcript is newer than the last hydration, append new turns (dedupe by event type + payload). Emits `transcript_refreshed` when new rows land.
+
+**Subprocess lifecycle:** `CursorCliProvider.dispose()` kills the active `Bun.spawn` handle; `pause()` / `archive()` route through `agents.resolveForSession(session).dispose(id)`. `main.ts` shutdown calls `registry.cli().disposeAll()`.
+
+**Frontend:** `HandoffPicker` (bottom sheet) — project picker, search, refresh, day-grouped list with "On Nuncio" badge. Entry points: home composer + session-detail header (SDK Cursor sessions only). Errors map to actionable toasts via `HandoffApiError` (409/503/404).
 
 ## shadcn/ui adoption
 
@@ -338,7 +395,7 @@ When a phase is large it is split into lanes working on isolated branches, then 
 - `App.tsx` — flex shell; static `<aside>` (desktop) + `Sheet` (mobile drawer) for the sidebar; `Menu` trigger (lucide) with iOS safe-area offset; `Toaster`. Owns the `providers` state (fetches `/api/models` once) and passes it down to `HomeView` + `SessionDetail` so model-name lookups use the live catalog, not the static fallback.
 - `sidebar.tsx` — `Button` (New Agent), sticky footer with Settings + `ModeToggle`, `bg-sidebar`/`sidebar-accent`/`sidebar-ring` tokens, `StatusDot`, and a per-session `ProviderIcon`. Mobile `Sheet` uses `showCloseButton={false}` (dismiss via hamburger or overlay).
 - `home-view.tsx` — `Textarea` (borderless inside a `bg-card` composer), `Button` (send, `Send` icon, `aria-label="Send"`), `Badge` (one "connected" badge per available provider, filtered by `unavailable` + session count).
-- `model-picker.tsx` — Synara-style **cascading `DropdownMenu`** (engine → model): top level lists providers (`π Pi` / `◆ Cursor` / `M Mock`) as `DropdownMenuSubTrigger`; each opens a `DropdownMenuSubContent` with a `DropdownMenuRadioGroup` of that provider's models. Selecting a model fires `onChange(modelId, providerId)` and closes the menu. Replaces the old flat `Command`-in-`Popover` combobox. Receives `providers` as a controlled prop from `App` (no internal fetch). Model labels run through `prettyModelName()` (e.g. `composer-2.5` → "Composer 2.5"). Re-exports `DEFAULT_MODEL_ID`.
+- `model-picker.tsx` — Synara-style **cascading `DropdownMenu`** (engine → model): top level lists providers (`π Pi` / `◆ Cursor`) as `DropdownMenuSubTrigger`; each opens a `DropdownMenuSubContent` with a `DropdownMenuRadioGroup` of that provider's models.
 - `session-detail.tsx` — `Button` (back/pause/archive, lucide icons, `Tooltip` + `TooltipProvider`), `Badge` (status + model pill), `Textarea` (steer composer). Model pill resolves the friendly name via `modelById(providers)` → `prettyModelName()` with `FALLBACK_PROVIDERS` fallback; unknown models fall back to the raw id.
 - `status-dot.tsx` — semantic tokens (`bg-muted-foreground`, `bg-success`, `bg-info`, `bg-destructive`) + `cn()`.
 - `provider-icon.tsx` — branded SVG glyphs for known providers (`CursorIcon` real Cursor logo, `PiIcon` real Pi logo, both `fill="currentColor"` so they adapt to light/dark); `ProviderIcon({ providerId, className })` maps `cursor`/`pi` → SVG, falls back to the `providerMeta` char for unknown. Used in model-picker (trigger + engine submenu), sidebar (per-session indicator), home-view ("connected" badges).
@@ -355,7 +412,7 @@ Nuncio runs on **Bun** (≥ 1.3) — server, build, and tests. Bun replaces npm,
 
 **better-sqlite3 → bun:sqlite:** Bun blocks `better-sqlite3` at `dlopen` ([oven-sh/bun#4290](https://github.com/oven-sh/bun/issues/4290)), so the server uses the built-in `bun:sqlite`. `DatabaseService` does `require('bun:sqlite')` (tsc-friendly without bun-types; `db` typed `any`), opens `data/nuncio.db`, sets WAL via `db.exec('PRAGMA journal_mode = WAL')`. The repositories use the same `prepare/all/get/run` API. **One API difference:** `bun:sqlite` named params require a prefix in the object key (`{@id}`/`{$id}`), unlike better-sqlite3's unprefixed `{id}` — Nuncio uses **positional `?`** to avoid this; do not reintroduce named `@param` with unprefixed keys (it silently binds NULL under bun:sqlite).
 
-**jest → bun test:** `jest`/`ts-jest` removed; tests run via `bun test`. `@types/jest` is kept for test-global typing (`bun test` is jest-API-compatible at runtime: `describe/it/expect/beforeAll/...`). Layout: `bun test test/unit/` (unit), `bun run test:e2e` (e2e over HTTP, mock provider), `bun run test:integration` (real-Pi, gated on `~/.pi/agent/auth.json`, opt-in — makes a real LLM call, 60s timeout).
+**jest → bun test:** `jest`/`ts-jest` removed; tests run via `bun test`. `@types/jest` is kept for test-global typing (`bun test` is jest-API-compatible at runtime: `describe/it/expect/beforeAll/...`). Layout: `bun test test/unit/` (unit), `bun run test:e2e` (e2e over HTTP, simulated cursor provider), `bun run test:integration` (real-Pi, gated on `~/.pi/agent/auth.json`, opt-in — makes a real LLM call, 60s timeout).
 
 **Scripts:** workspaces use `bun run --filter @nuncio/<pkg> <script>` (not npm `-w`). Server `dev`/`start` run TS directly on Bun (`bun --watch src/main.ts` / `bun src/main.ts`); `start:prod` is `bun run dist/main.js`. **Do not use `node dist/main`** — `bun:sqlite` only exists in the Bun runtime. `nest build` (tsc) stays for the `build` step (runtime-agnostic).
 

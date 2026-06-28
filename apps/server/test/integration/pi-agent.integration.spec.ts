@@ -24,13 +24,10 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
   let sessions: SessionsRepository;
   let events: EventsRepository;
   let dataDir: string;
-  let previousForceMock: string | undefined;
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-pi-integration-'));
     process.env.NUNCIO_DATA_DIR = dataDir;
-    previousForceMock = process.env.NUNCIO_FORCE_MOCK;
-    delete process.env.NUNCIO_FORCE_MOCK;
 
     module = await Test.createTestingModule({
       imports: [DatabaseModule, SessionsPersistenceModule, SettingsModule, GitModule],
@@ -46,8 +43,6 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
     await module.close();
     rmSync(dataDir, { recursive: true, force: true });
     delete process.env.NUNCIO_DATA_DIR;
-    if (previousForceMock === undefined) delete process.env.NUNCIO_FORCE_MOCK;
-    else process.env.NUNCIO_FORCE_MOCK = previousForceMock;
   });
 
   it('reports availability when Pi auth is configured', async () => {

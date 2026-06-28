@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { recordProjectSelection } from '../lib/project-preference';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ProjectPicker } from './project-picker';
@@ -35,11 +36,26 @@ vi.mock('./folder-browser', () => ({
 
 describe('ProjectPicker', () => {
   beforeEach(() => {
+    localStorage.clear();
     mockFetchProjects.mockReset();
     mockFolderBrowserSelect.mockReset();
     mockFetchProjects.mockResolvedValue([
       { id: '/code/nuncio', name: 'nuncio', path: '/code/nuncio', isGit: true },
     ]);
+  });
+
+  it('shows recent projects above the catalog list', async () => {
+    recordProjectSelection('/Users/dev/old-repo', 'old-repo');
+    mockFetchProjects.mockResolvedValue([
+      { id: '/code/nuncio', name: 'nuncio', path: '/code/nuncio', isGit: true },
+    ]);
+    const onChange = vi.fn();
+    render(<ProjectPicker onChange={onChange} />);
+
+    await userEvent.click(await screen.findByRole('button', { name: /no repo/i }));
+    expect(screen.getByText('Recents')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /old-repo/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /nuncio/i })).toBeInTheDocument();
   });
 
   it('lists projects and selects one', async () => {

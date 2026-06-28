@@ -3,8 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Agent, JsonlLocalAgentStore } from '@cursor/sdk';
 
-const hasCursorKey =
-  !!process.env.CURSOR_API_KEY?.trim() && process.env.NUNCIO_FORCE_MOCK !== '1';
+const hasCursorKey = !!process.env.CURSOR_API_KEY?.trim();
 const suite = hasCursorKey ? describe : describe.skip;
 
 const HANDLED_SDK_EVENT_TYPES = new Set([

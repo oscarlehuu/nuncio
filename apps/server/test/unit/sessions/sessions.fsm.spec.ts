@@ -61,10 +61,14 @@ describe('session-fsm', () => {
       expect(canTransition('CREATED', 'ARCHIVED')).toBe(false);
     });
 
-    it('blocks transitions from ARCHIVED (terminal)', () => {
-      expect(canTransition('ARCHIVED', 'IDLE')).toBe(false);
+    it('blocks transitions from ARCHIVED except restore to IDLE', () => {
       expect(canTransition('ARCHIVED', 'RUNNING')).toBe(false);
       expect(canTransition('ARCHIVED', 'PAUSED')).toBe(false);
+      expect(canTransition('ARCHIVED', 'ERROR')).toBe(false);
+    });
+
+    it('allows ARCHIVED -> IDLE for restore', () => {
+      expect(canTransition('ARCHIVED', 'IDLE')).toBe(true);
     });
   });
 

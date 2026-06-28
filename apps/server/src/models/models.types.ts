@@ -1,9 +1,19 @@
+import type { ModelOptionDescriptorDto } from './model-options.types';
+
+export interface ModelVariantDto {
+  label: string;
+  params: Array<{ id: string; value: string }>;
+  isDefault?: boolean;
+}
+
 export interface ModelItemDto {
   id: string;
   name: string;
   sub?: string;
   badge?: string;
   cost?: string;
+  options?: ModelOptionDescriptorDto[];
+  variants?: ModelVariantDto[];
 }
 
 export interface ModelGroupDto {

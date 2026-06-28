@@ -66,7 +66,7 @@ describe('BaseAgentProvider error path', () => {
   });
 
   it('routes an executePrompt failure to ERROR status + error event', async () => {
-    const created = sessions.create({ prompt: 'fail me', provider: 'mock' });
+    const created = sessions.create({ prompt: 'fail me', provider: 'throwing' });
     const emitted: { type: string; payload: unknown }[] = [];
     const emit: EventEmitter = (event) => emitted.push(event);
 
@@ -83,7 +83,7 @@ describe('BaseAgentProvider error path', () => {
   });
 
   it('still emits RUNNING + user_message before the failure', async () => {
-    const created = sessions.create({ prompt: 'fail again', provider: 'mock' });
+    const created = sessions.create({ prompt: 'fail again', provider: 'throwing' });
     const emitted: { type: string; payload: unknown }[] = [];
     await provider.run(created.id, created.prompt, { emit: (e) => emitted.push(e) });
 
@@ -91,5 +91,71 @@ describe('BaseAgentProvider error path', () => {
       emitted.some((e) => e.type === 'status' && (e.payload as { status: string }).status === 'RUNNING'),
     ).toBe(true);
     expect(emitted.some((e) => e.type === 'user_message')).toBe(true);
+  });
+
+  describe('race with delete', () => {
+    it('does not throw when the session is deleted while executePrompt is in flight', async () => {
+      // Provider that deletes the session mid-run, simulating an admin deleting
+      // a stuck session while the agent loop is still executing.
+      @Injectable()
+      class MidRunDeleteProvider extends BaseAgentProvider {
+        readonly id = 'midrun-delete';
+        readonly name = 'MidRunDelete';
+
+        constructor(s: SessionsRepository, e: EventsRepository) {
+          super(s, e);
+        }
+        async isAvailable() {
+          return true;
+        }
+        async listModels(): Promise<[]> {
+          return [];
+        }
+        protected async executePrompt(sessionId: string): Promise<void> {
+          // Delete the session from the persistence layer underneath the loop.
+          sessions.delete(sessionId);
+          // Then resolve normally — the base provider will try to updateStatus
+          // to IDLE on a session row that no longer exists.
+        }
+      }
+
+      const raceProvider = new MidRunDeleteProvider(sessions, events);
+      const created = sessions.create({ prompt: 'race me', provider: 'midrun-delete' });
+
+      // The run must not throw "Session not found" out of run()/handleError —
+      // that would escape as an unhandled rejection and crash the process.
+      await expect(raceProvider.run(created.id, created.prompt, {})).resolves.toBeUndefined();
+      expect(sessions.findById(created.id)).toBeNull();
+    });
+
+    it('does not throw when handleError runs against a deleted session', async () => {
+      // Provider that deletes the session then throws, exercising the
+      // handleError path against a missing row.
+      @Injectable()
+      class DeleteThenThrowProvider extends BaseAgentProvider {
+        readonly id = 'delete-throw';
+        readonly name = 'DeleteThenThrow';
+
+        constructor(s: SessionsRepository, e: EventsRepository) {
+          super(s, e);
+        }
+        async isAvailable() {
+          return true;
+        }
+        async listModels(): Promise<[]> {
+          return [];
+        }
+        protected async executePrompt(sessionId: string): Promise<void> {
+          sessions.delete(sessionId);
+          throw new Error('boom after delete');
+        }
+      }
+
+      const raceProvider = new DeleteThenThrowProvider(sessions, events);
+      const created = sessions.create({ prompt: 'fail after delete', provider: 'delete-throw' });
+
+      await expect(raceProvider.run(created.id, created.prompt, {})).resolves.toBeUndefined();
+      expect(sessions.findById(created.id)).toBeNull();
+    });
   });
 });

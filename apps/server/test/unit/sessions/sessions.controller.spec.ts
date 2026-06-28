@@ -7,8 +7,9 @@ function makeSession(over: Partial<SessionDto> = {}): SessionDto {
     id: 's1',
     title: 't',
     status: 'IDLE',
-    provider: 'mock',
+    provider: 'cursor',
     model: null,
+    modelOptions: null,
     workspace: null,
     prompt: 'p',
     preview: null,
@@ -16,6 +17,8 @@ function makeSession(over: Partial<SessionDto> = {}): SessionDto {
     baseBranch: null,
     worktreePath: null,
     branch: null,
+    cursorBackend: null,
+    cursorChatId: null,
     createdAt: 0,
     updatedAt: 0,
     ...over,
@@ -110,5 +113,23 @@ describe('SessionsController', () => {
     const controller = new SessionsController(service);
 
     expect(() => controller.events('nope', undefined)).toThrow(NotFoundException);
+  });
+
+  it('restore delegates to sessions.restore', () => {
+    const restore = jest.fn(() => makeSession({ id: 's1', status: 'IDLE' }));
+    const service = { restore } as never;
+    const controller = new SessionsController(service);
+
+    expect(controller.restore('s1')).toMatchObject({ id: 's1', status: 'IDLE' });
+    expect(restore).toHaveBeenCalledWith('s1');
+  });
+
+  it('delete delegates to sessions.delete', () => {
+    const del = jest.fn();
+    const service = { delete: del } as never;
+    const controller = new SessionsController(service);
+
+    controller.delete('s1');
+    expect(del).toHaveBeenCalledWith('s1');
   });
 });

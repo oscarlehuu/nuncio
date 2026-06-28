@@ -1,9 +1,19 @@
+import type { ModelOptionDescriptor } from './model-options';
+
+export interface ModelVariant {
+  label: string;
+  params: Array<{ id: string; value: string }>;
+  isDefault?: boolean;
+}
+
 export interface ModelInfo {
   id: string;
   name: string;
   sub?: string;
   badge?: string;
   cost?: string;
+  options?: ModelOptionDescriptor[];
+  variants?: ModelVariant[];
 }
 
 export interface ModelGroup {
@@ -179,7 +189,7 @@ export const DEFAULT_PROVIDER_ID = 'cursor';
 export const DEFAULT_MODEL_ID = 'cursor:composer-2.5';
 
 /** Provider menu order — cursor first (matches defaultId + Synara-style preference). */
-export const DEFAULT_PROVIDER_ORDER = ['cursor', 'pi', 'mock'] as const;
+export const DEFAULT_PROVIDER_ORDER = ['cursor', 'pi'] as const;
 
 export function compareProvidersByOrder(
   leftId: string,
@@ -232,7 +242,7 @@ export function normalizeModelCatalog(providers: ModelProvider[]): ModelProvider
   return sortModelProviders(sanitizeCursorModels(providers));
 }
 
-/** First available model in catalog order (cursor → pi → mock when present). */
+/** First available model in catalog order (cursor → pi when present). */
 export function pickDefaultModelSelection(
   providers: ModelProvider[],
 ): { modelId: string; providerId: string } | null {

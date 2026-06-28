@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, FolderGit2, FolderOpen } from 'lucide-react';
-import { fetchProjects, type Project } from '../lib/projects';
+import { fetchProjects, projectDisplayName, type Project } from '../lib/projects';
+import { loadProjectPreference, type RecentProject } from '../lib/project-preference';
 import { Button } from '@/components/ui/button';
 import {
   Command,
@@ -30,13 +31,27 @@ export function ProjectPicker({ value, onChange }: ProjectPickerProps) {
   const [customMode, setCustomMode] = useState(false);
   const [customPath, setCustomPath] = useState('');
   const [browserOpen, setBrowserOpen] = useState(false);
+  const [recents, setRecents] = useState<RecentProject[]>([]);
 
   useEffect(() => {
     void fetchProjects().then(setProjects);
   }, []);
 
-  const selected = projects.find((project) => project.path === value);
-  const label = selected?.name ?? (value ? value.split('/').filter(Boolean).pop() ?? value : 'No repo');
+  useEffect(() => {
+    if (open) setRecents(loadProjectPreference().recentProjects);
+  }, [open]);
+
+  const recentPaths = useMemo(() => new Set(recents.map((entry) => entry.path)), [recents]);
+  const catalogProjects = projects.filter((project) => !recentPaths.has(project.path));
+
+  const selected = projects.find((project) => project.path === value)
+    ?? recents.find((entry) => entry.path === value);
+  const label =
+    selected && 'name' in selected && selected.name
+      ? selected.name
+      : value
+        ? projectDisplayName(value) ?? value
+        : 'No repo';
 
   const selectProject = (path: string) => {
     onChange(path);
@@ -61,7 +76,7 @@ export function ProjectPicker({ value, onChange }: ProjectPickerProps) {
     <>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
-          <Button variant="outline" className="h-8 gap-1.5 px-2.5 max-w-[180px]">
+          <Button variant="outline" className="composer-picker-trigger h-8 gap-1.5 px-2.5 max-w-[180px]">
             <FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" />
             <span className={`truncate text-[13px] ${value ? 'font-medium' : 'text-muted-foreground'}`}>
               {label}
@@ -92,9 +107,28 @@ export function ProjectPicker({ value, onChange }: ProjectPickerProps) {
               <CommandInput placeholder="Search projects…" />
               <CommandList>
                 <CommandEmpty>No project found.</CommandEmpty>
-                {projects.length > 0 && (
+                {recents.length > 0 && (
+                  <CommandGroup heading="Recents">
+                    {recents.map((entry) => (
+                      <CommandItem
+                        key={entry.path}
+                        value={`${entry.name ?? projectDisplayName(entry.path)} ${entry.path}`}
+                        onSelect={() => selectProject(entry.path)}
+                        data-checked={entry.path === value ? 'true' : undefined}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[13px] font-medium truncate">
+                            {entry.name ?? projectDisplayName(entry.path) ?? entry.path}
+                          </div>
+                          <div className="text-[11px] text-muted-foreground truncate">{entry.path}</div>
+                        </div>
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                )}
+                {catalogProjects.length > 0 && (
                   <CommandGroup heading="Projects">
-                    {projects.map((project) => (
+                    {catalogProjects.map((project) => (
                       <CommandItem
                         key={project.id}
                         value={`${project.name} ${project.path}`}

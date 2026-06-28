@@ -3,16 +3,24 @@
   "private": true,
   "version": "0.1.0",
   "workspaces": [
+    ".",
     "apps/server",
-    "apps/web"
+    "apps/web",
+    "apps/landing"
   ],
   "scripts": {
     "dev": "concurrently -n server,web -c blue,green \"bun run --filter @nuncio/server dev\" \"bun run --filter @nuncio/web dev\"",
     "build": "bun run --filter @nuncio/server build && bun run --filter @nuncio/web build",
+    "build:landing": "bun run --filter @nuncio/landing build",
     "test": "bun run --filter @nuncio/server test",
-    "lint": "bun run --filter @nuncio/server lint && bun run --filter @nuncio/web lint"
+    "lint": "bun run --filter @nuncio/server lint && bun run --filter @nuncio/web lint",
+    "changeset": "changeset",
+    "version": "changeset version && bun run scripts/sync-versions.mjs",
+    "release": "bun run scripts/release.mjs"
   },
   "devDependencies": {
+    "@changesets/changelog-github": "^0.7.0",
+    "@changesets/cli": "^2.31.0",
     "concurrently": "^9.2.1"
   }
 }

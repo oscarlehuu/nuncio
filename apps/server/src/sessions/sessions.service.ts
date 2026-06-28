@@ -1,10 +1,22 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
 import { AgentRegistry } from '../agents/agents.registry';
+import { CursorLocalSessionsService } from '../cursor-local/cursor-local-sessions.service';
+import { turnsToSessionEvents } from '../cursor-local/cursor-transcript-hydrate';
 import { GitService } from '../git/git.service';
 import { canTransition } from './domain/sessions.fsm';
-import type { CreateSessionDto, SessionDto, SessionEvent, SessionStatus } from './domain/sessions.types';
+import type {
+  CreateSessionDto,
+  HandoffSessionDto,
+  SessionDto,
+  SessionEvent,
+  SessionStatus,
+} from './domain/sessions.types';
 import { EventsRepository } from './persistence/events.repository';
 import { SessionsRepository } from './persistence/sessions.repository';
 
@@ -19,6 +31,7 @@ export class SessionsService {
     private readonly events: EventsRepository,
     private readonly agents: AgentRegistry,
     private readonly git: GitService,
+    private readonly cursorLocal: CursorLocalSessionsService,
   ) {}
 
   list(includeArchived = false): SessionDto[] {
@@ -26,10 +39,15 @@ export class SessionsService {
   }
 
   get(id: string): SessionDto | null {
+    const session = this.sessions.findById(id);
+    if (!session) return null;
+    this.hydrateIfNeeded(session);
     return this.sessions.findById(id);
   }
 
   getEvents(id: string, since = 0): SessionEvent[] {
+    const session = this.requireSession(id);
+    this.hydrateIfNeeded(session);
     return this.events.list(id, since);
   }
 
@@ -60,12 +78,40 @@ export class SessionsService {
       baseBranch,
       worktreePath,
       branch,
+      cursorBackend: 'sdk',
     });
     void this.startRun(session);
     return session;
   }
 
-  async steer(id: string, message: string): Promise<SessionDto> {
+  async handoff(input: HandoffSessionDto): Promise<SessionDto> {
+    const chatId = input.cursorChatId?.trim();
+    const workspace = input.workspace?.trim();
+    if (!chatId) throw new BadRequestException('cursorChatId is required');
+    if (!workspace) throw new BadRequestException('workspace is required');
+
+    const existing = this.sessions.findByCursorChatId(chatId, 'cli');
+    if (existing) return existing;
+
+    const local = this.cursorLocal.find(chatId, workspace);
+    if (!local) {
+      throw new NotFoundException(`Cursor chat ${chatId} not found for workspace`);
+    }
+
+    const title = input.title?.trim() || local.title;
+    const model = this.cursorLocal.readTranscriptModel(chatId, workspace);
+    const session = this.sessions.createHandoff({
+      title,
+      workspace,
+      cursorChatId: chatId,
+      prompt: title,
+      model,
+    });
+    this.hydrateIfNeeded(session);
+    return this.sessions.findById(session.id)!;
+  }
+
+  async steer(id: string, message: string, forceResume?: boolean): Promise<SessionDto> {
     this.requireSession(id);
     const trimmed = message?.trim();
     if (!trimmed) {
@@ -77,12 +123,29 @@ export class SessionsService {
       throw new BadRequestException(`Cannot steer session in status ${current.status}`);
     }
 
-    const provider = await this.agents.getAvailable(current.provider);
+    this.refreshTranscriptIfNeeded(current);
+
+    const provider = await this.agents.resolveAvailableForSession(current);
+    const workspace = current.worktreePath ?? current.workspace ?? undefined;
+    const transcriptMtimeMs =
+      current.cursorBackend === 'cli' && current.cursorChatId && workspace
+        ? this.cursorLocal.transcriptMtime(current.cursorChatId, workspace)
+        : null;
+    const chatStoreMtimeMs =
+      current.cursorBackend === 'cli' && current.cursorChatId
+        ? this.cursorLocal.chatStoreMtime(current.cursorChatId)
+        : null;
+
     await provider.steer(id, trimmed, {
       emit: (event) => this.onAgentEvent(id, event),
       model: current.model,
-      workspace: current.worktreePath ?? current.workspace ?? undefined,
+      modelOptions: current.modelOptions,
+      workspace,
       cwd: current.worktreePath ?? undefined,
+      cursorChatId: current.cursorChatId,
+      transcriptMtimeMs,
+      chatStoreMtimeMs,
+      forceResume: forceResume === true,
     });
     return this.requireSession(id);
   }
@@ -91,6 +154,9 @@ export class SessionsService {
     const session = this.requireSession(id);
     if (!canTransition(session.status, 'PAUSED')) {
       throw new BadRequestException(`Cannot pause session in status ${session.status}`);
+    }
+    if (session.status === 'RUNNING') {
+      this.agents.resolveForSession(session).dispose(id);
     }
     this.transition(id, 'PAUSED');
     return this.requireSession(id);
@@ -101,9 +167,28 @@ export class SessionsService {
     if (!canTransition(session.status, 'ARCHIVED')) {
       throw new BadRequestException(`Cannot archive session in status ${session.status}`);
     }
-    this.agents.get(session.provider).dispose(id);
+    this.agents.resolveForSession(session).dispose(id);
     this.transition(id, 'ARCHIVED');
     return this.requireSession(id);
+  }
+
+  restore(id: string): SessionDto {
+    const session = this.requireSession(id);
+    if (session.status !== 'ARCHIVED') {
+      throw new BadRequestException(`Cannot restore session in status ${session.status}`);
+    }
+    this.transition(id, 'IDLE');
+    return this.requireSession(id);
+  }
+
+  delete(id: string): void {
+    const session = this.requireSession(id);
+    if (session.status !== 'ARCHIVED') {
+      throw new BadRequestException(`Cannot delete session in status ${session.status}; archive first`);
+    }
+    this.agents.resolveForSession(session).dispose(id);
+    this.streams.delete(id);
+    this.sessions.delete(id);
   }
 
   subscribe(id: string, listener: StreamListener): () => void {
@@ -111,6 +196,39 @@ export class SessionsService {
     const handler = (event: SessionEvent) => listener(event);
     bus.on('event', handler);
     return () => bus.off('event', handler);
+  }
+
+  private hydrateIfNeeded(session: SessionDto): void {
+    if (session.cursorBackend !== 'cli' || !session.cursorChatId || !session.workspace) return;
+    if (this.events.count(session.id) > 0) return;
+
+    const turns = this.cursorLocal.readTranscript(session.cursorChatId, session.workspace);
+    const batch = turnsToSessionEvents(turns);
+    if (batch.length === 0) return;
+    this.events.appendBatch(session.id, batch);
+  }
+
+  private refreshTranscriptIfNeeded(session: SessionDto): void {
+    if (session.cursorBackend !== 'cli' || !session.cursorChatId || !session.workspace) return;
+
+    const turns = this.cursorLocal.readTranscript(session.cursorChatId, session.workspace);
+    const hydrated = turnsToSessionEvents(turns);
+    if (hydrated.length === 0) return;
+
+    const existing = this.events.list(session.id, 0);
+    const seen = new Set(
+      existing
+        .filter((e) => e.type === 'user_message' || e.type === 'assistant_message')
+        .map((e) => `${e.type}:${JSON.stringify(e.payload)}`),
+    );
+
+    const toAppend = hydrated.filter(
+      (e) => !seen.has(`${e.type}:${JSON.stringify(e.payload)}`),
+    );
+    if (toAppend.length === 0) return;
+
+    this.events.appendBatch(session.id, toAppend);
+    this.appendAndEmit(session.id, 'transcript_refreshed', { added: toAppend.length });
   }
 
   private requireSession(id: string): SessionDto {
@@ -152,13 +270,16 @@ export class SessionsService {
   }
 
   private startRun(session: SessionDto): void {
+    if (session.cursorBackend === 'cli') return;
     void (async () => {
-      const provider = await this.agents.getAvailable(session.provider);
+      const provider = await this.agents.resolveAvailableForSession(session);
       await provider.run(session.id, session.prompt, {
         emit: (event) => this.onAgentEvent(session.id, event),
         model: session.model,
+        modelOptions: session.modelOptions,
         workspace: session.worktreePath ?? session.workspace ?? undefined,
         cwd: session.worktreePath ?? undefined,
+        cursorChatId: session.cursorChatId,
       });
     })();
   }

@@ -5,6 +5,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AppModule } from '../../src/app.module';
+import { CursorLocalSessionsService } from '../../src/cursor-local/cursor-local-sessions.service';
+import { toProjectSlug } from '../../src/cursor-local/cursor-project-slug';
+import {
+  configureSimulatedCursorEnv,
+  withSimulatedCursorProvider,
+} from '../helpers/simulated-cursor-app';
 
 async function runGitAsync(cwd: string, args: string[]): Promise<void> {
   const proc = Bun.spawn(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });
@@ -40,13 +46,15 @@ describe('Nuncio API (e2e)', () => {
     await initRepo(repoPath);
 
     process.env.NUNCIO_DATA_DIR = dataDir;
-    process.env.NUNCIO_FORCE_MOCK = '1';
+    configureSimulatedCursorEnv();
     process.env.NUNCIO_PROJECT_ROOTS = rootsDir;
     process.env.NUNCIO_WORKSPACES_DIR = workspacesDir;
 
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
+    const moduleFixture: TestingModule = await withSimulatedCursorProvider(
+      Test.createTestingModule({
+        imports: [AppModule],
+      }),
+    ).compile();
 
     app = moduleFixture.createNestApplication();
     app.setGlobalPrefix('api');
@@ -59,7 +67,7 @@ describe('Nuncio API (e2e)', () => {
     rmSync(rootsDir, { recursive: true, force: true });
     rmSync(workspacesDir, { recursive: true, force: true });
     delete process.env.NUNCIO_DATA_DIR;
-    delete process.env.NUNCIO_FORCE_MOCK;
+    delete process.env.CURSOR_API_KEY;
     delete process.env.NUNCIO_PROJECT_ROOTS;
     delete process.env.NUNCIO_WORKSPACES_DIR;
   });
@@ -75,16 +83,16 @@ describe('Nuncio API (e2e)', () => {
     const res = await request(app.getHttpServer()).get('/api/models');
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
-    expect(res.body.some((p: { id: string }) => p.id === 'mock')).toBe(true);
+    expect(res.body.some((p: { id: string }) => p.id === 'cursor')).toBe(true);
   });
 
   it('runs a full session lifecycle over HTTP', async () => {
     const created = await request(app.getHttpServer())
       .post('/api/sessions')
-      .send({ prompt: 'Build the e2e flow', provider: 'mock' });
+      .send({ prompt: 'Build the e2e flow', provider: 'cursor' });
     expect(created.status).toBe(201);
     expect(created.body.id).toBeDefined();
-    expect(created.body.provider).toBe('mock');
+    expect(created.body.provider).toBe('cursor');
 
     const id = created.body.id;
     await waitForIdle(app, id);
@@ -108,6 +116,56 @@ describe('Nuncio API (e2e)', () => {
     const archived = await request(app.getHttpServer()).post(`/api/sessions/${id}/archive`);
     expect(archived.status).toBe(201);
     expect(archived.body.status).toBe('ARCHIVED');
+
+    // restore the archived session back to IDLE
+    const restored = await request(app.getHttpServer()).post(`/api/sessions/${id}/restore`);
+    expect(restored.status).toBe(201);
+    expect(restored.body.status).toBe('IDLE');
+    expect(
+      (await request(app.getHttpServer()).get(`/api/sessions/${id}`)).body.status,
+    ).toBe('IDLE');
+
+    // re-archive, then permanently delete
+    await request(app.getHttpServer()).post(`/api/sessions/${id}/archive`);
+    const deleted = await request(app.getHttpServer()).delete(`/api/sessions/${id}`);
+    expect(deleted.status).toBe(200);
+    expect(deleted.body).toEqual({ ok: true });
+    expect(
+      (await request(app.getHttpServer()).get(`/api/sessions/${id}`)).status,
+    ).toBe(404);
+    // events endpoint also 404s once the session row is gone
+    expect(
+      (await request(app.getHttpServer()).get(`/api/sessions/${id}/events`)).status,
+    ).toBe(404);
+  });
+
+  it('rejects DELETE on a non-archived session (must archive first)', async () => {
+    const created = await request(app.getHttpServer())
+      .post('/api/sessions')
+      .send({ prompt: 'do not delete me yet', provider: 'cursor' });
+    const id = created.body.id;
+    await waitForIdle(app, id);
+
+    const res = await request(app.getHttpServer()).delete(`/api/sessions/${id}`);
+    expect(res.status).toBe(400);
+
+    // cleanup so other tests don't see it
+    await request(app.getHttpServer()).post(`/api/sessions/${id}/archive`);
+    await request(app.getHttpServer()).delete(`/api/sessions/${id}`);
+  });
+
+  it('rejects restore on a non-archived session', async () => {
+    const created = await request(app.getHttpServer())
+      .post('/api/sessions')
+      .send({ prompt: 'do not restore me yet', provider: 'cursor' });
+    const id = created.body.id;
+    await waitForIdle(app, id);
+
+    const res = await request(app.getHttpServer()).post(`/api/sessions/${id}/restore`);
+    expect(res.status).toBe(400);
+
+    await request(app.getHttpServer()).post(`/api/sessions/${id}/archive`);
+    await request(app.getHttpServer()).delete(`/api/sessions/${id}`);
   });
 
   it('rejects creating a session with an unknown provider', async () => {
@@ -137,7 +195,7 @@ describe('Nuncio API (e2e)', () => {
         .post('/api/sessions')
         .send({
           prompt: 'Add workspace e2e flow',
-          provider: 'mock',
+          provider: 'cursor',
           projectPath: repoPath,
           baseBranch: 'main',
         });
@@ -169,7 +227,7 @@ describe('Nuncio API (e2e)', () => {
         .post('/api/sessions')
         .send({
           prompt: 'broken workspace',
-          provider: 'mock',
+          provider: 'cursor',
           projectPath: '/definitely/not/a/git/repo',
           baseBranch: 'main',
         });
@@ -213,6 +271,72 @@ describe('Nuncio API (e2e)', () => {
     });
   });
 
+  describe('handoff (e2e)', () => {
+    let fakeHome: string;
+    let handoffWorkspace: string;
+    const chatId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+
+    beforeAll(() => {
+      fakeHome = mkdtempSync(join(tmpdir(), 'nuncio-e2e-handoff-home-'));
+      handoffWorkspace = join(fakeHome, 'repo');
+      mkdirSync(handoffWorkspace, { recursive: true });
+      const slug = toProjectSlug(handoffWorkspace);
+      const dir = join(fakeHome, '.cursor/projects', slug, 'agent-transcripts', chatId);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, `${chatId}.jsonl`),
+        JSON.stringify({
+          role: 'user',
+          message: { content: [{ type: 'text', text: 'E2E handoff chat' }] },
+        }) + '\n',
+      );
+
+      const local = app.get(CursorLocalSessionsService);
+      local.homeDir = () => fakeHome;
+    });
+
+    afterAll(() => {
+      rmSync(fakeHome, { recursive: true, force: true });
+    });
+
+    it('GET /api/cursor/local-sessions lists fixture chat', async () => {
+      const res = await request(app.getHttpServer()).get(
+        `/api/cursor/local-sessions?workspace=${encodeURIComponent(handoffWorkspace)}`,
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.items.some((item: { chatId: string }) => item.chatId === chatId)).toBe(true);
+    });
+
+    it('POST /api/sessions/handoff imports chat as IDLE cli session (idempotent)', async () => {
+      const first = await request(app.getHttpServer())
+        .post('/api/sessions/handoff')
+        .send({ cursorChatId: chatId, workspace: handoffWorkspace });
+      expect(first.status).toBe(201);
+      expect(first.body.cursorBackend).toBe('cli');
+      expect(first.body.cursorChatId).toBe(chatId);
+      expect(first.body.status).toBe('IDLE');
+
+      const events = await request(app.getHttpServer()).get(`/api/sessions/${first.body.id}/events`);
+      expect(events.body.some((e: { type: string }) => e.type === 'user_message')).toBe(true);
+
+      const second = await request(app.getHttpServer())
+        .post('/api/sessions/handoff')
+        .send({ cursorChatId: chatId, workspace: handoffWorkspace });
+      expect(second.status).toBe(201);
+      expect(second.body.id).toBe(first.body.id);
+    });
+
+    it('POST /api/sessions/handoff returns 404 for missing chat', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/sessions/handoff')
+        .send({
+          cursorChatId: '00000000-0000-0000-0000-000000000000',
+          workspace: handoffWorkspace,
+        });
+      expect(res.status).toBe(404);
+    });
+  });
+
   describe('settings (e2e)', () => {
     it('GET /api/settings returns the catalog with masked secrets', async () => {
       const res = await request(app.getHttpServer()).get('/api/settings');
@@ -221,13 +345,13 @@ describe('Nuncio API (e2e)', () => {
       const cursor = res.body.find((s: { key: string }) => s.key === 'CURSOR_API_KEY');
       expect(cursor).toBeDefined();
       expect(cursor.type).toBe('secret');
-      expect(cursor.hasValue).toBe(false);
-      expect(cursor.value).toBeNull();
-      // NUNCIO_FORCE_MOCK is set to '1' via env in beforeAll → hasValue true, raw (non-secret)
-      const forceMock = res.body.find((s: { key: string }) => s.key === 'NUNCIO_FORCE_MOCK');
-      expect(forceMock.hasValue).toBe(true);
-      expect(forceMock.source).toBe('env');
-      expect(forceMock.value).toBe('1');
+      expect(cursor.hasValue).toBe(true);
+      expect(cursor.source).toBe('env');
+      expect(cursor.value).toBe('••••-key');
+      const projectRoots = res.body.find((s: { key: string }) => s.key === 'NUNCIO_PROJECT_ROOTS');
+      expect(projectRoots).toBeDefined();
+      expect(projectRoots.hasValue).toBe(true);
+      expect(projectRoots.source).toBe('env');
     });
 
     it('PUT /api/settings/CURSOR_API_KEY stores + returns a masked DTO (never raw)', async () => {
@@ -265,8 +389,9 @@ describe('Nuncio API (e2e)', () => {
     it('DELETE /api/settings/CURSOR_API_KEY clears the DB row (falls back to env/default)', async () => {
       const res = await request(app.getHttpServer()).delete('/api/settings/CURSOR_API_KEY');
       expect(res.status).toBe(200);
-      expect(res.body.hasValue).toBe(false);
-      expect(res.body.value).toBeNull();
+      expect(res.body.hasValue).toBe(true);
+      expect(res.body.source).toBe('env');
+      expect(res.body.value).toBe('••••-key');
     });
   });
 });

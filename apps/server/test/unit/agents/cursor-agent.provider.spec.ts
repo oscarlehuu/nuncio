@@ -13,6 +13,20 @@ import { SettingsModule } from '../../../src/settings/settings.module';
 
 type StubOpts = {
   models?: string[];
+  modelItems?: Array<{
+    id: string;
+    displayName?: string;
+    parameters?: Array<{
+      id: string;
+      displayName?: string;
+      values: Array<{ value: string; displayName?: string }>;
+    }>;
+    variants?: Array<{
+      displayName: string;
+      params: Array<{ id: string; value: string }>;
+      isDefault?: boolean;
+    }>;
+  }>;
   modelsListThrows?: boolean;
   createThrows?: Error;
   waitStatus?: 'finished' | 'error' | 'cancelled';
@@ -76,7 +90,10 @@ function makeStubSdk(opts: StubOpts = {}) {
         list: async () => {
           modelsListCalls.push(1);
           if (opts.modelsListThrows) throw new Error('net');
-          return (opts.models ?? ['composer-2']).map((id) => ({ id }));
+          const items =
+            opts.modelItems ??
+            (opts.models ?? ['composer-2']).map((id) => ({ id }));
+          return items;
         },
       },
     },
@@ -111,14 +128,11 @@ describe('CursorAgentProvider', () => {
   let events: EventsRepository;
   let dataDir: string;
   let previousKey: string | undefined;
-  let previousForceMock: string | undefined;
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-cursor-provider-'));
     process.env.NUNCIO_DATA_DIR = dataDir;
     previousKey = process.env.CURSOR_API_KEY;
-    previousForceMock = process.env.NUNCIO_FORCE_MOCK;
-    delete process.env.NUNCIO_FORCE_MOCK;
 
     module = await Test.createTestingModule({
       imports: [DatabaseModule, SessionsPersistenceModule, SettingsModule],
@@ -136,8 +150,6 @@ describe('CursorAgentProvider', () => {
     delete process.env.NUNCIO_DATA_DIR;
     if (previousKey === undefined) delete process.env.CURSOR_API_KEY;
     else process.env.CURSOR_API_KEY = previousKey;
-    if (previousForceMock === undefined) delete process.env.NUNCIO_FORCE_MOCK;
-    else process.env.NUNCIO_FORCE_MOCK = previousForceMock;
   });
 
   beforeEach(() => {
@@ -152,13 +164,6 @@ describe('CursorAgentProvider', () => {
     expect(await provider.isAvailable()).toBe(false);
   });
 
-  it('isAvailable returns false when NUNCIO_FORCE_MOCK=1 even with key', async () => {
-    process.env.CURSOR_API_KEY = 'cursor_test_key';
-    process.env.NUNCIO_FORCE_MOCK = '1';
-    expect(await provider.isAvailable()).toBe(false);
-    delete process.env.NUNCIO_FORCE_MOCK;
-  });
-
   it('isAvailable returns true when CURSOR_API_KEY is set', async () => {
     process.env.CURSOR_API_KEY = 'cursor_test_key';
     expect(await provider.isAvailable()).toBe(true);
@@ -168,14 +173,6 @@ describe('CursorAgentProvider', () => {
     process.env.CURSOR_API_KEY = 'cursor_test_key';
     expect(await provider.isAvailable()).toBe(true);
     delete process.env.CURSOR_API_KEY;
-    expect(await provider.isAvailable()).toBe(true);
-  });
-
-  it('isAvailable does not poison the cache when NUNCIO_FORCE_MOCK is unset later', async () => {
-    process.env.CURSOR_API_KEY = 'cursor_test_key';
-    process.env.NUNCIO_FORCE_MOCK = '1';
-    expect(await provider.isAvailable()).toBe(false);
-    delete process.env.NUNCIO_FORCE_MOCK;
     expect(await provider.isAvailable()).toBe(true);
   });
 
@@ -230,6 +227,131 @@ describe('CursorAgentProvider', () => {
 
     const models = await provider.listModels();
     expect(models[0].groups?.[0].models[0].id).toBe('cursor:composer-2.5');
+  });
+
+  it('listModels exposes parameter options from SDK metadata', async () => {
+    const { sdk } = makeStubSdk({
+      modelItems: [
+        {
+          id: 'composer-2.5',
+          displayName: 'Composer 2.5',
+          parameters: [
+            {
+              id: 'fast',
+              displayName: 'Fast Mode',
+              values: [
+                { value: 'false', displayName: 'Normal' },
+                { value: 'true', displayName: 'Fast' },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    provider.sdkOverride = sdk as never;
+    process.env.CURSOR_API_KEY = 'cursor_test_key';
+
+    const models = await provider.listModels();
+    expect(models[0].groups?.[0].models[0].options).toEqual([
+      {
+        id: 'fast',
+        label: 'Fast Mode',
+        type: 'boolean',
+        defaultValue: false,
+      },
+    ]);
+  });
+
+  it('listModels omits variants when parameters are present (options submenu owns combos)', async () => {
+    const { sdk } = makeStubSdk({
+      modelItems: [
+        {
+          id: 'codex-5.1-max',
+          displayName: 'Codex 5.1 Max',
+          parameters: [
+            {
+              id: 'fast',
+              values: [{ value: 'false' }, { value: 'true' }],
+            },
+            {
+              id: 'reasoning',
+              values: [
+                { value: 'low', displayName: 'Low' },
+                { value: 'high', displayName: 'High' },
+              ],
+            },
+          ],
+          variants: [
+            { displayName: 'Codex 5.1 Max', params: [{ id: 'fast', value: 'false' }, { id: 'reasoning', value: 'low' }] },
+            { displayName: 'Codex 5.1 Max', params: [{ id: 'fast', value: 'true' }, { id: 'reasoning', value: 'high' }] },
+          ],
+        },
+      ],
+    });
+    provider.sdkOverride = sdk as never;
+    process.env.CURSOR_API_KEY = 'cursor_test_key';
+
+    const models = await provider.listModels();
+    const item = models[0].groups?.[0].models[0];
+    expect(item?.options?.length).toBeGreaterThan(0);
+    expect(item?.variants).toBeUndefined();
+  });
+
+  it('listModels forwards cursor variants when no parameters exist', async () => {
+    const { sdk } = makeStubSdk({
+      modelItems: [
+        {
+          id: 'claude-opus-4-6',
+          displayName: 'Claude Opus 4.6',
+          variants: [
+            {
+              displayName: 'opus (xhigh)',
+              params: [{ id: 'reasoning', value: 'xhigh' }],
+              isDefault: true,
+            },
+          ],
+        },
+      ],
+    });
+    provider.sdkOverride = sdk as never;
+    process.env.CURSOR_API_KEY = 'cursor_test_key';
+
+    const models = await provider.listModels();
+    expect(models[0].groups?.[0].models[0].variants).toEqual([
+      {
+        label: 'opus (xhigh)',
+        params: [{ id: 'reasoning', value: 'xhigh' }],
+        isDefault: true,
+      },
+    ]);
+  });
+
+  it('run passes model params from modelOptions to Agent.create', async () => {
+    const { sdk, createCalls } = makeStubSdk({
+      modelItems: [
+        {
+          id: 'composer-2.5',
+          parameters: [{ id: 'fast', values: [{ value: 'false' }, { value: 'true' }] }],
+        },
+      ],
+      waitResult: 'ok',
+    });
+    provider.sdkOverride = sdk as never;
+    process.env.CURSOR_API_KEY = 'cursor_test_key';
+
+    await provider.listModels();
+    const created = sessions.create({ prompt: 'task', provider: 'cursor' });
+    await provider.run(created.id, created.prompt, {
+      emit: () => {},
+      model: 'cursor:composer-2.5',
+      modelOptions: { fast: true },
+    });
+
+    const args = createCalls[0] as { model: { id: string; params?: Array<{ id: string; value: string }> } };
+    expect(args.model).toEqual({
+      id: 'composer-2.5',
+      params: [{ id: 'fast', value: 'true' }],
+    });
   });
 
   it('dispose is a no-op for unknown session', () => {

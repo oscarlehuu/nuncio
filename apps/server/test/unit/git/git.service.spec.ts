@@ -2,7 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { GitModule } from '../../../src/git/git.module';
 import { GitService } from '../../../src/git/git.service';
@@ -88,6 +88,31 @@ describe('GitService', () => {
     mkdirSync(subdir, { recursive: true });
     const branches = await service.listBranches(subdir);
     expect(branches.some((b) => b.name === 'main')).toBe(true);
+  });
+
+  it('listBranches returns the unborn branch when the repo has no commits yet', async () => {
+    const emptyRepo = mkdtempSync(join(tmpdir(), 'nuncio-empty-repo-'));
+    try {
+      await runGitAsync(emptyRepo, ['init', '-b', 'master']);
+      const branches = await service.listBranches(emptyRepo);
+      expect(branches).toEqual([
+        { name: 'master', isDefault: true, isCurrent: true },
+      ]);
+    } finally {
+      rmSync(emptyRepo, { recursive: true, force: true });
+    }
+  });
+
+  it('listBranches expands tilde paths under the home directory', async () => {
+    const homeRepo = join(homedir(), `.nuncio-git-tilde-${Date.now()}`);
+    try {
+      await initRepo(homeRepo);
+      const tildePath = `~${homeRepo.slice(homedir().length)}`;
+      const branches = await service.listBranches(tildePath);
+      expect(branches.some((b) => b.name === 'main')).toBe(true);
+    } finally {
+      rmSync(homeRepo, { recursive: true, force: true });
+    }
   });
 
   it('listBranches rejects non-git paths', async () => {

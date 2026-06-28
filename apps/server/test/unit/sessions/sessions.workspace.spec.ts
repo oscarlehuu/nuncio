@@ -29,13 +29,13 @@ describe('SessionsRepository workspace field', () => {
   });
 
   it('persists workspace when provided on create', () => {
-    const created = sessions.create({ prompt: 'p', provider: 'mock', workspace: '/tmp/x' });
+    const created = sessions.create({ prompt: 'p', provider: 'cursor', workspace: '/tmp/x' });
     expect(created.workspace).toBe('/tmp/x');
     expect(sessions.findById(created.id)?.workspace).toBe('/tmp/x');
   });
 
   it('defaults workspace to null when omitted', () => {
-    const created = sessions.create({ prompt: 'p', provider: 'mock' });
+    const created = sessions.create({ prompt: 'p', provider: 'cursor' });
     expect(created.workspace).toBeNull();
   });
 });

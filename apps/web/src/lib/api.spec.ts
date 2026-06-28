@@ -3,10 +3,13 @@ import { FALLBACK_PROVIDERS, normalizeModelCatalog } from './model-providers';
 import {
   archiveSession,
   createSession,
+  deleteSession,
+  fetchArchivedSessions,
   fetchModels,
   fetchSessions,
   pauseSession,
   relativeTime,
+  restoreSession,
   statusLabel,
   steerSession,
 } from './api';
@@ -75,6 +78,20 @@ describe('api fetch functions', () => {
     expect(JSON.parse(call.body as string)).toEqual({ prompt: 'just prompt' });
   });
 
+  it('createSession posts modelOptions when provided', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ id: 's3' }));
+    await createSession('go', 'cursor:composer-2.5', 'cursor', undefined, undefined, {
+      fast: true,
+    });
+    const call = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(call.body as string)).toEqual({
+      prompt: 'go',
+      model: 'cursor:composer-2.5',
+      provider: 'cursor',
+      modelOptions: { fast: true },
+    });
+  });
+
   it('fetchSessions parses the JSON list', async () => {
     fetchMock.mockResolvedValue(jsonRes([{ id: 'a' }]));
     expect(await fetchSessions()).toEqual([{ id: 'a' }]);
@@ -125,5 +142,52 @@ describe('api fetch functions', () => {
       '/api/sessions/s1/archive',
       expect.objectContaining({ method: 'POST' }),
     );
+  });
+
+  it('fetchArchivedSessions requests the includeArchived flag', async () => {
+    fetchMock.mockResolvedValue(jsonRes([{ id: 'a1', status: 'ARCHIVED' }]));
+    const list = await fetchArchivedSessions();
+    expect(fetchMock).toHaveBeenCalledWith('/api/sessions?includeArchived=1');
+    expect(list).toEqual([{ id: 'a1', status: 'ARCHIVED' }]);
+  });
+
+  it('fetchArchivedSessions filters out non-archived sessions', async () => {
+    fetchMock.mockResolvedValue(
+      jsonRes([
+        { id: 'a1', status: 'ARCHIVED' },
+        { id: 'b2', status: 'IDLE' },
+        { id: 'a3', status: 'ARCHIVED' },
+      ]),
+    );
+    const list = await fetchArchivedSessions();
+    expect(list.map((s) => s.id)).toEqual(['a1', 'a3']);
+  });
+
+  it('fetchArchivedSessions throws when the response is not ok', async () => {
+    fetchMock.mockResolvedValue(jsonRes(null, false, 500));
+    await expect(fetchArchivedSessions()).rejects.toThrow('Failed to load archived sessions');
+  });
+
+  it('restoreSession posts to the restore endpoint', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ id: 's1', status: 'IDLE' }));
+    await restoreSession('s1');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/sessions/s1/restore',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('deleteSession sends a DELETE request', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ ok: true }));
+    await deleteSession('s1');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/sessions/s1',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+  });
+
+  it('deleteSession throws when the response is not ok', async () => {
+    fetchMock.mockResolvedValue(jsonRes(null, false, 400));
+    await expect(deleteSession('s1')).rejects.toThrow('Failed to delete session');
   });
 });

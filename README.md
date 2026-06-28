@@ -1,5 +1,11 @@
 # Nuncio
 
+[![CI](https://github.com/oscarlehuu/nuncio/actions/workflows/ci.yml/badge.svg)](https://github.com/oscarlehuu/nuncio/actions/workflows/ci.yml)
+[![Release](https://github.com/oscarlehuu/nuncio/actions/workflows/release.yml/badge.svg)](https://github.com/oscarlehuu/nuncio/actions/workflows/release.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![runtime: Bun](https://img.shields.io/badge/runtime-Bun%20%E2%89%A5%201.3-f9f1e1?logo=bun)](https://bun.sh)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
 A self-hosted, mobile-first web app for delegating tasks to AI coding agents. Run it on your own machine, point it at your own Pi / Anthropic / OpenAI credentials, and assign work from your phone — agents keep going while you're away, and you can steer them mid-task.
 
 Think Devin, but self-hosted and provider-neutral: the agent layer is a single interface, so Pi runs today and any future agent SDK (Cursor, …) can plug in uniformly.
@@ -7,32 +13,55 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 ## Features
 
 - **Delegate tasks** — create a session with a prompt; the agent runs in-process and streams output as events
-- **Per-session provider + model** — choose the agent provider (`pi` / `cursor` / `mock`) and the exact model (e.g. `cursor:composer-2`, `anthropic:claude-sonnet-4`) per session; both are stored on the session and wired through to the SDK
+- **Per-session provider + model** — choose the agent provider (`pi` / `cursor`) and the exact model (e.g. `cursor:composer-2`, `anthropic:claude-sonnet-4`) per session; both are stored on the session and wired through to the SDK
 - **Steer mid-task** — send follow-up messages that continue the same agent conversation (the Pi session handle is retained)
-- **Pause / archive** — suspend a running session or retire it; a session FSM enforces valid transitions
+- **Pause / archive / restore / delete** — suspend a running session, retire it to the Archived tab, restore it back to IDLE, or permanently delete it; a session FSM enforces valid transitions and a confirm dialog guards deletes
 - **Real-time + replay** — SSE stream for live updates, event log with cursor for replay
 - **Mobile-first PWA** — installable on iPhone via Tailscale HTTPS; standalone dark UI, safe-area aware
 - **Self-hosted** — your machine, your SQLite, your credentials; nothing leaves your tailnet
 - **Provider-neutral agent layer** — `AgentProvider` interface + `AgentRegistry`; Pi, Cursor, and Mock today, extensible
 - **Settings store** — runtime-configurable env vars (API keys, paths, flags) stored in SQLite and editable via the frontend; secrets encrypted at rest (AES-256-GCM), env vars still honoured as fallback
 - **Folder picker** — browse the host machine's directories to pick a project (server-side, works on iPhone PWA), or paste a custom path
+- **Continue on mobile** — import an in-progress Cursor IDE/CLI chat from your Mac and steer it from the phone PWA (CLI `--resume` for imported sessions)
+
+## Screenshots
+
+> Screenshots live in [`assets/`](assets/) (added as needed). Until then, the in-app UI matches [`mockup.html`](mockup.html) (the UI blueprint used during development).
 
 ## Status
 
 Phase 0–3 complete (vertical slice · PWA/mobile · steer + model picker) with agent-provider abstraction and Pi auth hardening. Phase 4 (git workspace / branch / PR) and Phase 5 (web push / webhooks) planned — see [Roadmap](#roadmap).
 
-## Quick start
+## Changelog
+
+Releases are versioned and documented with [Changesets](https://github.com/changesets/changesets) — each pull request ships a hand-written summary fragment, so the changelog reads like curated release notes rather than a commit log.
+
+- **In app:** open the sidebar → ✨ **What's new** (bottom-left) to browse every release, grouped by version and category, with links back to the pull requests that shipped each change.
+- **On GitHub:** each release is published as a [GitHub Release](https://github.com/oscarlehuu/nuncio/releases) with the matching changelog section as the body, tagged `v<version>`.
+- **In the repo:** [`CHANGELOG.md`](CHANGELOG.md) is the single source of truth.
+
+To add a changelog entry for your PR:
 
 ```bash
-npm install
-npm run dev
+bun run changeset        # select "nuncio", pick minor/patch, write a release-note-style summary
+```
+
+Merging PRs triggers a `chore: release version` PR that bumps the version and updates `CHANGELOG.md`; merging that PR cuts the release (git tag + GitHub Release). See [`.changeset/README.md`](.changeset/README.md) and [AGENTS.md → Releases & changelog](AGENTS.md) for the full workflow.
+
+## Quick start
+
+Requires [Bun](https://bun.sh) ≥ 1.3 (the server uses `bun:sqlite`, a Bun builtin — Node won't work).
+
+```bash
+bun install
+bun run dev
 ```
 
 - **API:** http://localhost:3000/api/health
 - **Web:** http://localhost:5173 (proxies `/api` → 3000)
 
 ```bash
-npm run build   # build server + web
+bun run build   # build server + web
 ```
 
 ### Pi credentials
@@ -46,22 +75,22 @@ Set `CURSOR_API_KEY` (from [Cursor dashboard](https://cursor.com/dashboard/cloud
 ## Testing
 
 ```bash
-npm test                                  # server unit tests (mock provider)
-npm run test:e2e -w apps/server           # HTTP e2e (mock provider)
-npm run test:integration -w apps/server   # real Pi auth — skips when ~/.pi/agent absent
-npm test -w apps/web                      # web component tests (vitest)
+bun run test                                       # server unit tests (simulated cursor provider)
+bun run --filter @nuncio/server test:e2e           # HTTP e2e (simulated cursor provider)
+bun run --filter @nuncio/server test:integration   # real Pi auth — skips when ~/.pi/agent absent
+bun run --filter @nuncio/web test                  # web component tests (vitest)
 ```
 
-The integration suite runs jest with `--experimental-vm-modules` because the Pi SDK is ESM and jest's CJS runner needs that flag for dynamic `import()`. It skips automatically on machines without Pi auth, so it is CI-safe.
+All server tests run on `bun test` (no jest). The integration suite is gated on `~/.pi/agent/auth.json` and self-skips when absent, so it is CI-safe.
 
 ## Production deploy (Tailscale)
 
 Build and run the production stack on your machine, then expose it over Tailscale for HTTPS access from your phone or other devices on your tailnet.
 
 ```bash
-npm run build
-npm run start:prod -w apps/server   # API on :3000
-npm run preview -w apps/web         # built UI on :5173 (proxies /api → 3000)
+bun run build
+bun run --filter @nuncio/server start:prod   # API on :3000
+bun run --filter @nuncio/web preview         # built UI on :5173 (proxies /api → 3000)
 tailscale serve --bg 5173
 ```
 
@@ -97,13 +126,17 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 |--------|------|-------------|
 | GET | `/api/health` | Health check |
 | GET | `/api/sessions` | List sessions (`?includeArchived=1`) |
-| POST | `/api/sessions` | Create session `{ "prompt": "...", "provider?": "pi\|mock", "model?": "..." }` |
-| GET | `/api/sessions/:id` | Session detail (incl. `provider`, `model`) |
+| POST | `/api/sessions` | Create session `{ "prompt": "...", "provider?": "pi\|cursor", "model?": "..." }` |
+| POST | `/api/sessions/handoff` | Import a Cursor IDE/CLI chat `{ "cursorChatId": "...", "workspace": "/abs/path", "title?": "..." }` → `IDLE` session with transcript hydrated |
+| GET | `/api/cursor/local-sessions?workspace=` | List in-progress Cursor chats on this Mac for the handoff picker |
+| GET | `/api/sessions/:id` | Session detail (incl. `provider`, `model`, `cursorBackend`, `cursorChatId`) |
 | GET | `/api/sessions/:id/events?since=` | Event log (cursor) |
 | GET | `/api/sessions/:id/stream?since=` | SSE stream |
-| POST | `/api/sessions/:id/steer` | Steer agent `{ "message": "..." }` |
+| POST | `/api/sessions/:id/steer` | Steer agent `{ "message": "...", "forceResume?": true }` — `forceResume` skips the active-run guard for CLI handoff sessions |
 | POST | `/api/sessions/:id/pause` | Pause session |
-| POST | `/api/sessions/:id/archive` | Archive session |
+| POST | `/api/sessions/:id/archive` | Archive session (recoverable via `restore`) |
+| POST | `/api/sessions/:id/restore` | Restore an archived session → IDLE |
+| DELETE | `/api/sessions/:id` | Permanently delete an archived session + its event log |
 | GET | `/api/models` | Model catalog (aggregated from available providers) |
 | GET | `/api/settings` | List all settings (secrets masked, never raw) |
 | PUT | `/api/settings/:key` | Update a setting `{ "value": "..." }` (encrypts secrets, busts provider caches) |
@@ -113,7 +146,38 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 ### Session FSM
 
 `CREATED` → `RUNNING` → `IDLE` | `ERROR` | `PAUSED`
-`IDLE`/`PAUSED` → `RUNNING` (steer) · `IDLE`/`PAUSED`/`ERROR` → `ARCHIVED`
+`IDLE`/`PAUSED` → `RUNNING` (steer) · `IDLE`/`PAUSED`/`ERROR` → `ARCHIVED` · `ARCHIVED` → `IDLE` (restore)
+
+Archived sessions are browsable in the sidebar's **Archived** tab (search by title/prompt, restore to IDLE, or delete permanently with a confirm dialog).
+
+### Continue on mobile (Cursor handoff)
+
+Pick **one** in-progress Cursor chat on your Mac and continue it from the Nuncio phone PWA without losing transcript context.
+
+**Setup**
+
+- Install the Cursor CLI (`agent` binary). Default path: `~/.local/bin/agent`.
+- Override via env `NUNCIO_CURSOR_AGENT_BIN` or **Settings → NUNCIO_CURSOR_AGENT_BIN** (gear icon in sidebar).
+- Set `NUNCIO_PROJECT_ROOTS` (or use **Browse folders…** in the picker) so Nuncio can find chats for your repo.
+
+**Flow**
+
+1. Start or continue a chat in **Cursor IDE** on your Mac (same project folder you pick in Nuncio).
+2. On your phone (Tailscale HTTPS PWA), tap **Continue on mobile** (home composer or session header for SDK Cursor sessions).
+3. Pick the project folder → select the chat → **Import** (or **Open** if already imported).
+4. Steer from the phone; Nuncio runs `agent -p --resume <chatId>` and streams tokens into the session transcript.
+
+**Troubleshooting**
+
+| Symptom | Fix |
+|---------|-----|
+| Chat not listed | Open the chat in Cursor first; confirm the project folder matches the repo path Cursor uses. Tap **Refresh** in the picker. |
+| "Cursor is still running this chat…" (409) | Pause or finish the run in Cursor IDE on your Mac, then retry. |
+| "Cursor CLI not found" (503) | Install the CLI or set `NUNCIO_CURSOR_AGENT_BIN` in Settings. |
+| "Chat no longer exists" (404) | The transcript folder was removed; start a new chat in Cursor. |
+| Steer hangs / no output | Run the server with `bun run --filter @nuncio/server start` (not `dev`) when testing Cursor — `--watch` reloads on DB writes and kills in-flight CLI runs. |
+
+Imported sessions use `cursor_backend=cli` and resume via the CLI subprocess. Sessions you **create** in Nuncio still use `@cursor/sdk` in-process (`cursor_backend=sdk`).
 
 ## Project layout
 
@@ -121,18 +185,19 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 apps/
   server/
     src/
-      agents/        AgentProvider interface + BaseAgentProvider + AgentRegistry + providers/ (pi, mock)
+      agents/        AgentProvider interface + BaseAgentProvider + AgentRegistry + providers/ (pi, cursor)
       sessions/      api/ · domain/ (types, fsm) · persistence/ (repositories) + service + module
       models/        model catalog aggregation from providers
       health/ · db/
     test/
-      unit/          *.spec.ts (jest, CJS)
-      e2e/           HTTP e2e (mock provider)
-      integration/   real Pi auth (skips when ~/.pi/agent absent; --experimental-vm-modules)
-  web/      Vite React UI (shadcn/ui)
+      unit/          *.spec.ts (bun test)
+      e2e/           HTTP e2e (simulated cursor provider)
+      integration/   real Pi auth (skips when ~/.pi/agent absent; opt-in)
+  web/      Vite + React + Tailwind v4 + shadcn/ui (installable PWA)
 mockup.html UI blueprint (reference)
 data/       SQLite (gitignored)
 docs/       system-architecture.md
+assets/     Screenshots for the README (un-ignored only here — see .gitignore)
 ```
 
 ## Design principles
@@ -155,6 +220,15 @@ Phase plans and milestones: [plans/260626-nuncio-roadmap/](plans/260626-nuncio-r
 | 4 | Git workspace, branch, PR | Planned |
 | 5 | Web Push + webhooks | Planned |
 
+## Contributing
+
+Contributions are welcome! Before opening a PR:
+
+- Read [CONTRIBUTING.md](CONTRIBUTING.md) — it covers the TDD-first workflow, the Changeset-based release process, and the PR checklist.
+- For context on architecture and conventions, see [AGENTS.md](AGENTS.md) and [docs/system-architecture.md](docs/system-architecture.md).
+- Found a security issue? See [SECURITY.md](SECURITY.md) — **do not** open a public issue for vulnerabilities.
+- Everyone is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## License
 
-MIT
+[MIT](LICENSE) — © oscarlehuu. See the [LICENSE](LICENSE) file for the full text.

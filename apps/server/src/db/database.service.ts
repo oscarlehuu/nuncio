@@ -87,5 +87,22 @@ export class DatabaseService implements OnModuleDestroy {
         this.db.exec(`ALTER TABLE sessions ADD COLUMN ${column} TEXT`);
       }
     }
+
+    if (!sessionColumns.some((column) => column.name === 'model_options')) {
+      this.db.exec('ALTER TABLE sessions ADD COLUMN model_options TEXT');
+    }
+
+    if (!sessionColumns.some((column) => column.name === 'cursor_backend')) {
+      this.db.exec('ALTER TABLE sessions ADD COLUMN cursor_backend TEXT');
+    }
+
+    if (!sessionColumns.some((column) => column.name === 'cursor_chat_id')) {
+      this.db.exec('ALTER TABLE sessions ADD COLUMN cursor_chat_id TEXT');
+    }
+
+    this.db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS sessions_cli_chat_unique
+      ON sessions(cursor_chat_id) WHERE cursor_backend = 'cli'
+    `);
   }
 }
