@@ -1,13 +1,17 @@
 #!/usr/bin/env node
 /**
- * Sync @nuncio/server and @nuncio/web package.json versions to the root version.
+ * Sync @nuncio/server, @nuncio/web, and @nuncio/landing package.json versions
+ * to the root version.
  *
  * Only the root `nuncio` package is versioned by Changesets (see .changeset/config.json
- * `ignore`). The two workspace packages are private and never published, but keeping
+ * `ignore`). The workspace packages are private and never published, but keeping
  * their versions in lockstep with the root makes "the Nuncio version" unambiguous
  * wherever a package.json is read.
  *
- * Runs automatically as part of `bun run version`. Exits 0 if already in sync.
+ * IMPORTANT: do NOT run this as part of `bun run version`. changesets/action treats
+ * any package.json version bump as a release and reads `<pkg>/CHANGELOG.md` for the
+ * PR body — only the root has a changelog. Run manually after a local version bump,
+ * or wire into release automation after the version PR merges.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

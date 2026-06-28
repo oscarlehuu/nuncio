@@ -15,7 +15,8 @@
     "test": "bun run --filter @nuncio/server test",
     "lint": "bun run --filter @nuncio/server lint && bun run --filter @nuncio/web lint",
     "changeset": "changeset",
-    "version": "changeset version && bun run scripts/sync-versions.mjs",
+    "version": "changeset version",
+    "sync-versions": "bun run scripts/sync-versions.mjs",
     "release": "bun run scripts/release.mjs"
   },
   "devDependencies": {

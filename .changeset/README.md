@@ -31,9 +31,12 @@ Commit the generated `.changeset/<random-name>.md` file alongside your code chan
 A GitHub Actions workflow (`release.yml`) opens a **"chore: release version"** PR that:
 
 - runs `bun run version` (consumes all pending changesets, bumps the root version,
-  prepends a new section to `CHANGELOG.md`, and syncs `@nuncio/server` +
-  `@nuncio/web` to the new version)
+  prepends a new section to `CHANGELOG.md`)
 - commits the result to the version PR
+
+After merging locally, run `bun run sync-versions` if you want workspace
+`package.json` files to match the root version (optional — not part of CI
+because changesets/action reads per-package changelogs for any version bump).
 
 Merge that PR to cut a release. On merge, the workflow:
 
