@@ -36,8 +36,13 @@ if (tagExists) {
 
 // 2. Extract the changelog section for this version.
 const changelog = readFileSync(resolve(root, 'CHANGELOG.md'), 'utf8');
-// Match the version header (with optional trailing date) up to the next `## ` or EOF.
-const sectionRe = new RegExp(`^## ${version}(?:\\s+.*)?\\n([\\s\\S]*?)(?=\\n## |$)`, 'm');
+const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// `m` so `^` matches section headers mid-file; `\z` not `$` — with `m`, `$` is end-of-line
+// and the non-greedy capture would match empty before the first blank line.
+const sectionRe = new RegExp(
+  `^## ${escapedVersion}(?:\\s+.*)?\\n([\\s\\S]*?)(?=\\n## |\\z)`,
+  'm',
+);
 const match = changelog.match(sectionRe);
 if (!match) {
   console.error(`no CHANGELOG.md section found for ${version} — run \`bun run version\` first.`);
