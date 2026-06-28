@@ -191,3 +191,13 @@ body {
     min-width: 44px;
   }
 }
+
+/* Composer toolbar pickers: solid background, no outline grey wash. */
+.composer-picker-trigger {
+  @apply border-border bg-background text-foreground shadow-none;
+  @apply hover:bg-background hover:text-foreground;
+  @apply aria-expanded:bg-background aria-expanded:text-foreground;
+  @apply dark:border-border dark:bg-background dark:hover:bg-background dark:aria-expanded:bg-background;
+  /* outline variant adds dark:bg-input/30 — force flat match with composer */
+  @apply dark:!bg-background dark:hover:!bg-background dark:aria-expanded:!bg-background;
+}

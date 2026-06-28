@@ -1,3 +1,5 @@
+import type { ModelOptionsMap } from '../../models/model-options.types';
+
 export type SessionStatus =
   | 'CREATED'
   | 'RUNNING'
@@ -12,6 +14,7 @@ export interface SessionRow {
   status: SessionStatus;
   provider: string;
   model: string | null;
+  model_options: string | null;
   workspace: string | null;
   prompt: string;
   preview: string | null;
@@ -19,6 +22,8 @@ export interface SessionRow {
   base_branch: string | null;
   worktree_path: string | null;
   branch: string | null;
+  cursor_backend: string | null;
+  cursor_chat_id: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -45,6 +50,7 @@ export interface SessionDto {
   status: SessionStatus;
   provider: string;
   model: string | null;
+  modelOptions: ModelOptionsMap | null;
   workspace: string | null;
   prompt: string;
   preview: string | null;
@@ -52,22 +58,34 @@ export interface SessionDto {
   baseBranch: string | null;
   worktreePath: string | null;
   branch: string | null;
+  cursorBackend: 'sdk' | 'cli' | null;
+  cursorChatId: string | null;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface HandoffSessionDto {
+  cursorChatId: string;
+  workspace: string;
+  title?: string;
 }
 
 export interface CreateSessionDto {
   prompt: string;
   provider?: string;
   model?: string;
+  modelOptions?: ModelOptionsMap;
   workspace?: string;
   id?: string;
   projectPath?: string;
   baseBranch?: string;
   worktreePath?: string;
   branch?: string;
+  cursorBackend?: 'sdk' | 'cli' | null;
+  cursorChatId?: string | null;
 }
 
 export interface SteerSessionDto {
   message: string;
+  forceResume?: boolean;
 }

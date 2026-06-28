@@ -1,3 +1,4 @@
+import type { ModelOptionsMap } from '../models/model-options.types';
 import type { ModelProviderDto } from '../models/models.types';
 
 export type EventEmitter = (event: { type: string; payload: unknown }) => void;
@@ -5,8 +6,17 @@ export type EventEmitter = (event: { type: string; payload: unknown }) => void;
 export interface AgentRunContext {
   emit?: EventEmitter;
   model?: string | null;
+  modelOptions?: ModelOptionsMap | null;
   workspace?: string | null;
   cwd?: string;
+  /** CLI handoff: Cursor chat UUID for `agent --resume`. */
+  cursorChatId?: string | null;
+  /** Transcript mtime (ms) for active-run guard. */
+  transcriptMtimeMs?: number | null;
+  /** CLI checkpoint store mtime (ms) for active-run guard. */
+  chatStoreMtimeMs?: number | null;
+  /** Skip active-run guard when user explicitly forces resume. */
+  forceResume?: boolean;
 }
 
 export interface AgentProvider {

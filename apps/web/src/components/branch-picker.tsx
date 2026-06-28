@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, GitBranch } from 'lucide-react';
 import { fetchBranches, type Branch } from '../lib/projects';
 import { Button } from '@/components/ui/button';
@@ -26,27 +26,35 @@ export function BranchPicker({ projectPath, value, onChange }: BranchPickerProps
   const [branches, setBranches] = useState<Branch[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const disabled = !projectPath;
+  const valueRef = useRef(value);
+  valueRef.current = value;
 
   useEffect(() => {
     if (!projectPath) {
       setBranches([]);
+      setLoadError(false);
       return;
     }
 
     let cancelled = false;
     setLoading(true);
+    setLoadError(false);
     void fetchBranches(projectPath)
       .then((items) => {
         if (cancelled) return;
         setBranches(items);
-        if (!value) {
+        if (!valueRef.current) {
           const preferred = items.find((branch) => branch.isDefault) ?? items[0];
           if (preferred) onChange(preferred.name);
         }
       })
       .catch(() => {
-        if (!cancelled) setBranches([]);
+        if (!cancelled) {
+          setBranches([]);
+          setLoadError(true);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -55,7 +63,7 @@ export function BranchPicker({ projectPath, value, onChange }: BranchPickerProps
     return () => {
       cancelled = true;
     };
-  }, [projectPath, onChange, value]);
+  }, [projectPath, onChange]);
 
   const selected = branches.find((branch) => branch.name === value);
 
@@ -64,12 +72,12 @@ export function BranchPicker({ projectPath, value, onChange }: BranchPickerProps
       <PopoverTrigger asChild>
         <Button
           variant="outline"
-          className="h-8 gap-1.5 px-2.5 max-w-[160px]"
+          className="composer-picker-trigger h-8 gap-1.5 px-2.5 max-w-[160px]"
           disabled={disabled}
         >
           <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
           <span className={`truncate text-[13px] ${value ? 'font-medium' : 'text-muted-foreground'}`}>
-            {disabled ? 'Branch' : selected?.name ?? value ?? 'Branch'}
+            {disabled ? 'Branch' : loadError ? 'Branch unavailable' : selected?.name ?? value ?? 'Branch'}
           </span>
           <ChevronDown data-icon="inline-end" />
         </Button>

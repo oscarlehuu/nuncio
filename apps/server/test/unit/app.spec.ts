@@ -5,6 +5,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AppModule } from '../../src/app.module';
+import {
+  configureSimulatedCursorEnv,
+  withSimulatedCursorProvider,
+} from '../helpers/simulated-cursor-app';
 
 async function runGitAsync(cwd: string, args: string[]): Promise<void> {
   const proc = Bun.spawn(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });
@@ -40,13 +44,15 @@ describe('Nuncio API', () => {
     await initRepo(repoPath);
 
     process.env.NUNCIO_DATA_DIR = dataDir;
-    process.env.NUNCIO_FORCE_MOCK = '1';
+    configureSimulatedCursorEnv();
     process.env.NUNCIO_PROJECT_ROOTS = rootsDir;
     process.env.NUNCIO_WORKSPACES_DIR = workspacesDir;
 
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
+    const moduleFixture: TestingModule = await withSimulatedCursorProvider(
+      Test.createTestingModule({
+        imports: [AppModule],
+      }),
+    ).compile();
 
     app = moduleFixture.createNestApplication();
     app.setGlobalPrefix('api');
@@ -59,7 +65,7 @@ describe('Nuncio API', () => {
     rmSync(rootsDir, { recursive: true, force: true });
     rmSync(workspacesDir, { recursive: true, force: true });
     delete process.env.NUNCIO_DATA_DIR;
-    delete process.env.NUNCIO_FORCE_MOCK;
+    delete process.env.CURSOR_API_KEY;
     delete process.env.NUNCIO_PROJECT_ROOTS;
     delete process.env.NUNCIO_WORKSPACES_DIR;
   });

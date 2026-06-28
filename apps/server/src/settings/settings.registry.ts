@@ -47,15 +47,17 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
       'Used when a session has no workspace. Falls back to the server process cwd if unset.',
     envVar: 'NUNCIO_CURSOR_CWD',
   },
-  // ── General ──────────────────────────────────────────────────────────────
   {
-    key: 'NUNCIO_FORCE_MOCK',
-    category: 'general',
-    type: 'boolean',
-    label: 'Force mock agent',
-    description: 'Set to "1" to force the mock provider even when real providers are authed.',
-    envVar: 'NUNCIO_FORCE_MOCK',
+    key: 'NUNCIO_CURSOR_AGENT_BIN',
+    category: 'provider',
+    providerId: 'cursor',
+    type: 'path',
+    label: 'Cursor CLI binary',
+    description:
+      'Path to the `agent` CLI binary for handoff sessions. Defaults to ~/.local/bin/agent, then PATH.',
+    envVar: 'NUNCIO_CURSOR_AGENT_BIN',
   },
+  // ── General ──────────────────────────────────────────────────────────────
   {
     key: 'NUNCIO_PROJECT_ROOTS',
     category: 'general',

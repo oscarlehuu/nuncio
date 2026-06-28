@@ -1,11 +1,30 @@
+import { beforeAll, afterAll, beforeEach, describe, it, expect, mock } from 'bun:test';
 import { Test, TestingModule } from '@nestjs/testing';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { PiAgentProvider, resolveModelId } from '../../../src/agents/providers/pi-agent.provider';
+import { PiAgentProvider } from '../../../src/agents/providers/pi-agent.provider';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
 import { SettingsModule } from '../../../src/settings/settings.module';
+
+let availableModelCount = 0;
+
+mock.module('@earendil-works/pi-coding-agent', () => ({
+  AuthStorage: { create: () => ({}) },
+  ModelRegistry: {
+    create: () => ({
+      getAvailable: () => Array.from({ length: availableModelCount }, (_, i) => ({
+        provider: 'anthropic',
+        id: `model-${i}`,
+        name: `Model ${i}`,
+      })),
+      getProviderDisplayName: (provider: string) => provider,
+      find: () => undefined,
+    }),
+  },
+  getAgentDir: () => '/tmp/fake-pi',
+}));
 
 describe('PiAgentProvider', () => {
   let module: TestingModule;
@@ -15,7 +34,6 @@ describe('PiAgentProvider', () => {
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-pi-provider-'));
     process.env.NUNCIO_DATA_DIR = dataDir;
-    process.env.NUNCIO_FORCE_MOCK = '1';
 
     module = await Test.createTestingModule({
       imports: [DatabaseModule, SessionsPersistenceModule, SettingsModule],
@@ -29,57 +47,24 @@ describe('PiAgentProvider', () => {
     await module.close();
     rmSync(dataDir, { recursive: true, force: true });
     delete process.env.NUNCIO_DATA_DIR;
-    delete process.env.NUNCIO_FORCE_MOCK;
   });
 
-  it('is unavailable when NUNCIO_FORCE_MOCK is set', async () => {
+  beforeEach(() => {
+    availableModelCount = 0;
+    provider.bustCache();
+  });
+
+  it('is unavailable when the Pi registry has no models', async () => {
     expect(await provider.isAvailable()).toBe(false);
+  });
+
+  it('is available when the Pi registry reports models', async () => {
+    availableModelCount = 1;
+    provider.bustCache();
+    expect(await provider.isAvailable()).toBe(true);
   });
 
   it('dispose is a no-op for an unknown session', () => {
     expect(() => provider.dispose('no-such-session')).not.toThrow();
-  });
-});
-
-describe('resolveModelId', () => {
-  it('splits provider:modelId (colon) and delegates to find', () => {
-    const find = jest.fn((provider: string, id: string) => ({ provider, id }));
-    expect(resolveModelId('anthropic:claude-opus-4', find)).toEqual({
-      provider: 'anthropic',
-      id: 'claude-opus-4',
-    });
-    expect(find).toHaveBeenCalledWith('anthropic', 'claude-opus-4');
-  });
-
-  it('splits provider/modelId (slash, Pi SDK convention) and delegates to find', () => {
-    const find = jest.fn((provider: string, id: string) => ({ provider, id }));
-    expect(resolveModelId('openai/gpt-5.5', find)).toEqual({
-      provider: 'openai',
-      id: 'gpt-5.5',
-    });
-    expect(find).toHaveBeenCalledWith('openai', 'gpt-5.5');
-  });
-
-  it('returns undefined for ids without a provider separator', () => {
-    const find = jest.fn();
-    expect(resolveModelId('claude-fable-5', find)).toBeUndefined();
-    expect(resolveModelId(':leadingslice', find)).toBeUndefined();
-    expect(resolveModelId('/leadingslice', find)).toBeUndefined();
-    expect(find).not.toHaveBeenCalled();
-  });
-
-  it('returns undefined for empty or null input', () => {
-    const find = jest.fn();
-    expect(resolveModelId('', find)).toBeUndefined();
-    expect(resolveModelId(null, find)).toBeUndefined();
-    expect(resolveModelId(undefined, find)).toBeUndefined();
-    expect(resolveModelId('   ', find)).toBeUndefined();
-    expect(find).not.toHaveBeenCalled();
-  });
-
-  it('propagates an unresolved lookup as undefined', () => {
-    const find = jest.fn(() => undefined);
-    expect(resolveModelId('anthropic:unknown-model', find)).toBeUndefined();
-    expect(find).toHaveBeenCalledWith('anthropic', 'unknown-model');
   });
 });

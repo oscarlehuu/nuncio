@@ -6,7 +6,7 @@ const TRANSITIONS: Record<SessionStatus, SessionStatus[]> = {
   RUNNING: ['IDLE', 'ERROR', 'PAUSED'],
   IDLE: ['RUNNING', 'ERROR', 'PAUSED', 'ARCHIVED'],
   PAUSED: ['RUNNING', 'ARCHIVED'],
-  ARCHIVED: [],
+  ARCHIVED: ['IDLE'],
   ERROR: ['RUNNING', 'IDLE', 'ARCHIVED'],
 };
 

@@ -1,5 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { AgentRegistry } from './agents/agents.registry';
 
 // The Cursor SDK under Bun emits stray NGHTTP2_FRAME_SIZE_ERROR / ERR_HTTP2_STREAM_ERROR
 // events from its HTTP/2 streams (model discovery, Agent.create validation) that escape the
@@ -38,6 +39,18 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.setGlobalPrefix('api');
   app.enableCors({ origin: true });
+
+  const shutdown = () => {
+    try {
+      const registry = app.get(AgentRegistry);
+      registry.cli().disposeAll();
+    } catch {
+      // App may not have finished booting.
+    }
+  };
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+
   await app.listen(process.env.PORT ?? 3000);
 }
 bootstrap();

@@ -3,10 +3,15 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AgentsModule } from '../../../src/agents/agents.module';
+import { CursorLocalModule } from '../../../src/cursor-local/cursor-local.module';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { GitModule } from '../../../src/git/git.module';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
 import { SessionsService } from '../../../src/sessions/sessions.service';
+import {
+  configureSimulatedCursorEnv,
+  withSimulatedCursorProvider,
+} from '../../helpers/simulated-cursor-app';
 
 describe('SessionsService subscribe / event bus', () => {
   let module: TestingModule;
@@ -16,12 +21,14 @@ describe('SessionsService subscribe / event bus', () => {
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-subscribe-'));
     process.env.NUNCIO_DATA_DIR = dataDir;
-    process.env.NUNCIO_FORCE_MOCK = '1';
+    configureSimulatedCursorEnv();
 
-    module = await Test.createTestingModule({
-      imports: [DatabaseModule, SessionsPersistenceModule, AgentsModule, GitModule],
-      providers: [SessionsService],
-    }).compile();
+    module = await withSimulatedCursorProvider(
+      Test.createTestingModule({
+        imports: [DatabaseModule, SessionsPersistenceModule, AgentsModule, GitModule, CursorLocalModule],
+        providers: [SessionsService],
+      }),
+    ).compile();
 
     service = module.get(SessionsService);
   });
@@ -30,11 +37,11 @@ describe('SessionsService subscribe / event bus', () => {
     await module.close();
     rmSync(dataDir, { recursive: true, force: true });
     delete process.env.NUNCIO_DATA_DIR;
-    delete process.env.NUNCIO_FORCE_MOCK;
+    delete process.env.CURSOR_API_KEY;
   });
 
   it('delivers emitted events to a subscriber', async () => {
-    const session = await service.create({ prompt: 'sub me', provider: 'mock' });
+    const session = await service.create({ prompt: 'sub me', provider: 'cursor' });
     await waitForIdle(service, session.id);
 
     const received: string[] = [];
@@ -46,7 +53,7 @@ describe('SessionsService subscribe / event bus', () => {
   });
 
   it('stops delivering after unsubscribe', async () => {
-    const session = await service.create({ prompt: 'unsub me', provider: 'mock' });
+    const session = await service.create({ prompt: 'unsub me', provider: 'cursor' });
     await waitForIdle(service, session.id);
 
     const received: string[] = [];

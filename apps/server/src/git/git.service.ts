@@ -92,8 +92,9 @@ export class GitService {
   }
 
   async resolveRepoRoot(path: string): Promise<string> {
+    const normalized = expandHome(path.trim());
     try {
-      const topLevel = await git(['rev-parse', '--show-toplevel'], path);
+      const topLevel = await git(['rev-parse', '--show-toplevel'], normalized);
       return realpathSync.native(resolve(topLevel));
     } catch {
       throw new BadRequestException(`Not a git repository: ${path}`);
@@ -102,11 +103,17 @@ export class GitService {
 
   async listBranches(projectPath: string): Promise<BranchDto[]> {
     const repoRoot = await this.resolveRepoRoot(projectPath);
-    let current = 'main';
+
+    let current: string | null = null;
     try {
-      current = await git(['rev-parse', '--abbrev-ref', 'HEAD'], repoRoot);
+      const head = await git(['rev-parse', '--abbrev-ref', 'HEAD'], repoRoot);
+      if (head && head !== 'HEAD') current = head;
     } catch {
-      // detached HEAD or empty repo — keep default
+      try {
+        current = await git(['symbolic-ref', '--short', 'HEAD'], repoRoot);
+      } catch {
+        current = null;
+      }
     }
 
     const output = await git(['branch', '--format=%(refname:short)\t%(refname:short)'], repoRoot).catch(
@@ -121,14 +128,23 @@ export class GitService {
       if (name && name !== 'HEAD') names.add(name);
     }
 
-    let defaultBranch = 'main';
+    if (names.size === 0 && current) {
+      names.add(current);
+    }
+
+    if (names.size === 0) {
+      return [];
+    }
+
+    let defaultBranch = current ?? 'main';
     try {
       const symref = await git(['symbolic-ref', 'refs/remotes/origin/HEAD'], repoRoot);
       defaultBranch = symref.replace('refs/remotes/origin/', '');
     } catch {
       if (names.has('main')) defaultBranch = 'main';
       else if (names.has('master')) defaultBranch = 'master';
-      else if (current !== 'HEAD') defaultBranch = current;
+      else if (current) defaultBranch = current;
+      else defaultBranch = [...names][0] ?? 'main';
     }
 
     return [...names]
@@ -136,7 +152,7 @@ export class GitService {
       .map((name) => ({
         name,
         isDefault: name === defaultBranch,
-        isCurrent: name === current,
+        isCurrent: current !== null && name === current,
       }));
   }
 

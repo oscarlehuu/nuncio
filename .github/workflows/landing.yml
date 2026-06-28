@@ -1,0 +1,59 @@
+name: Landing
+
+# Build the static landing page (apps/landing) and deploy it to GitHub Pages.
+# Runs on every push to main so the Changelog section picks up the latest
+# CHANGELOG.md automatically — no manual update needed.
+#
+# Requires repo Settings → Pages → Source = "GitHub Actions".
+
+on:
+  push:
+    branches: [main]
+  # Allow manual trigger for testing the deploy without a push.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: landing-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build landing
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build landing
+        run: bun run build:landing
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/landing/dist
+
+  deploy:
+    name: Deploy to Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

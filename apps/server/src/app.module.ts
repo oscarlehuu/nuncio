@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { CursorLocalModule } from './cursor-local/cursor-local.module';
 import { DatabaseModule } from './db/database.module';
 import { FsModule } from './fs/fs.module';
 import { GitModule } from './git/git.module';
@@ -11,6 +12,7 @@ import { SettingsModule } from './settings/settings.module';
   imports: [
     DatabaseModule,
     SettingsModule,
+    CursorLocalModule,
     FsModule,
     GitModule,
     HealthModule,

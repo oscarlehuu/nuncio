@@ -1,12 +1,33 @@
-import { useEffect, useState } from 'react';
-import { Send } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { useEffect, useMemo, useState } from 'react';
+import { ArrowRightLeft } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { BranchPicker } from './branch-picker';
 import { ModelPicker } from './model-picker';
 import { ProjectPicker } from './project-picker';
 import { ProviderIcon } from './provider-icon';
+import { ConnectionDot } from './status-dot';
+import { defaultOptionsForModel } from '../lib/model-picker-catalog';
+import type { ModelOptionsMap } from '../lib/model-options';
+import {
+  loadModelPreference,
+  resolveModelSelection,
+  saveModelPreference,
+} from '../lib/model-preference';
+import { projectDisplayName } from '../lib/projects';
+import {
+  loadProjectPreference,
+  recordBranchSelection,
+  recordProjectSelection,
+  resolveWorkspacePreference,
+} from '../lib/project-preference';
 import {
   modelById,
   normalizeModelCatalog,
@@ -23,46 +44,81 @@ interface HomeViewProps {
     provider?: string,
     projectPath?: string,
     baseBranch?: string,
+    modelOptions?: ModelOptionsMap,
   ) => Promise<void>;
+  onContinueOnMobile?: () => void;
   loading?: boolean;
 }
 
-export function HomeView({ sessionCount, providers, onSubmit, loading }: HomeViewProps) {
+export function HomeView({ sessionCount, providers, onSubmit, onContinueOnMobile, loading }: HomeViewProps) {
+  const initialWorkspace = resolveWorkspacePreference();
   const [prompt, setPrompt] = useState('');
   const [model, setModel] = useState('');
   const [provider, setProvider] = useState<string | undefined>();
-  const [projectPath, setProjectPath] = useState<string | undefined>();
-  const [baseBranch, setBaseBranch] = useState<string | undefined>();
+  const [modelOptions, setModelOptions] = useState<ModelOptionsMap>({});
+  const [projectPath, setProjectPath] = useState<string | undefined>(initialWorkspace.projectPath);
+  const [baseBranch, setBaseBranch] = useState<string | undefined>(initialWorkspace.baseBranch);
 
   const catalogLoaded = Boolean(providers && providers.length > 0);
   const availableProviders = (providers ?? []).filter((p) => !p.unavailable);
+  const catalog = useMemo(() => normalizeModelCatalog(providers ?? []), [providers]);
 
   useEffect(() => {
     if (!catalogLoaded || !providers) return;
-    const catalog = normalizeModelCatalog(providers);
-    if (model && provider && modelById(catalog)[model]) return;
+    const lookup = modelById(catalog);
+    if (model && provider && lookup[model]) return;
+    const resolved = resolveModelSelection(providers, loadModelPreference());
+    if (resolved) {
+      setModel(resolved.modelId);
+      setProvider(resolved.providerId);
+      setModelOptions(resolved.modelOptions);
+      return;
+    }
     const picked = pickDefaultModelSelection(providers);
     if (picked) {
       setModel(picked.modelId);
       setProvider(picked.providerId);
+      setModelOptions(defaultOptionsForModel(lookup[picked.modelId]));
     }
-  }, [catalogLoaded, providers, model, provider]);
+  }, [catalogLoaded, providers, model, provider, catalog]);
 
   const handleSubmit = async () => {
     const text = prompt.trim();
     if (!text || loading || !catalogLoaded || !model || !provider) return;
-    await onSubmit(text, model, provider, projectPath, baseBranch);
+    const selected = modelById(catalog)[model];
+    const hasConfigurable =
+      (selected?.options?.length ?? 0) > 0 || (selected?.variants?.length ?? 0) > 0;
+    const optionsPayload = hasConfigurable ? modelOptions : undefined;
+    await onSubmit(text, model, provider, projectPath, baseBranch, optionsPayload);
     setPrompt('');
   };
 
-  const handleModelChange = (modelId: string, providerId: string) => {
+  const handleModelChange = (
+    modelId: string,
+    providerId: string,
+    options?: ModelOptionsMap,
+  ) => {
     setModel(modelId);
     setProvider(providerId);
+    const nextOptions = options ?? {};
+    setModelOptions(nextOptions);
+    saveModelPreference({
+      modelId,
+      providerId,
+      modelOptions: Object.keys(nextOptions).length > 0 ? nextOptions : undefined,
+    });
   };
 
   const handleProjectChange = (path: string) => {
     setProjectPath(path);
-    setBaseBranch(undefined);
+    const savedBranch = loadProjectPreference().lastBranchByProject?.[path];
+    setBaseBranch(savedBranch);
+    recordProjectSelection(path, projectDisplayName(path) ?? undefined);
+  };
+
+  const handleBranchChange = (branch: string) => {
+    setBaseBranch(branch);
+    if (projectPath) recordBranchSelection(projectPath, branch);
   };
 
   return (
@@ -75,7 +131,7 @@ export function HomeView({ sessionCount, providers, onSubmit, loading }: HomeVie
           </p>
         </div>
 
-        <div className="home-composer flex flex-col rounded-xl border border-border bg-card shadow-lg transition-shadow focus-within:ring-2 focus-within:ring-ring/50">
+        <div className="home-composer flex flex-col rounded-xl border border-border bg-background shadow-lg transition-shadow focus-within:ring-2 focus-within:ring-ring/50">
           <Textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
@@ -88,36 +144,57 @@ export function HomeView({ sessionCount, providers, onSubmit, loading }: HomeVie
             placeholder="Ask Nuncio to build features, fix bugs, or work on your code…"
             className="min-h-[96px] shrink-0 resize-none border-0 shadow-none bg-transparent text-[15px] px-5 pt-4 pb-2 focus-visible:ring-0 focus-visible:border-0"
           />
-          <div className="home-composer-bar flex items-center justify-between gap-2 border-t border-border px-3 pt-2 pb-3">
+          <div className="home-composer-bar flex items-center gap-2 border-t border-border px-3 pt-2 pb-3">
             <div className="home-composer-pickers flex min-w-0 flex-1 items-center gap-2 overflow-x-auto [&_button]:shrink-0">
               <ProjectPicker value={projectPath} onChange={handleProjectChange} />
               <BranchPicker
                 projectPath={projectPath}
                 value={baseBranch}
-                onChange={setBaseBranch}
+                onChange={handleBranchChange}
               />
-              <ModelPicker value={model} onChange={handleModelChange} providers={providers} />
+              <ModelPicker
+                value={model}
+                modelOptions={modelOptions}
+                onChange={handleModelChange}
+                providers={providers}
+              />
             </div>
-            <Button
-              size="icon-lg"
-              aria-label="Send"
-              onClick={() => void handleSubmit()}
-              disabled={loading || !prompt.trim() || !catalogLoaded || !model}
-              className="size-11 md:size-9 shrink-0"
-            >
-              <Send />
-            </Button>
+            {onContinueOnMobile ? (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="composer-picker-trigger size-8 shrink-0"
+                      onClick={onContinueOnMobile}
+                      aria-label="Continue on mobile"
+                    >
+                      <ArrowRightLeft />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">Continue on mobile</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            ) : null}
           </div>
         </div>
 
         <div className="flex flex-wrap gap-2 justify-center mt-5">
           {availableProviders.map((p) => (
-            <Badge key={p.id} variant="secondary" className="gap-1.5">
-              <ProviderIcon providerId={p.id} className="size-3" />
-              {p.name} connected
+            <Badge
+              key={p.id}
+              variant="secondary"
+              className="gap-1.5 border-border/60 bg-muted/40 font-normal text-foreground"
+              aria-label={`${p.name} connected`}
+            >
+              <ProviderIcon providerId={p.id} className="size-3 shrink-0 text-muted-foreground" />
+              <span>{p.name}</span>
+              <ConnectionDot />
             </Badge>
           ))}
-          <Badge variant="secondary">
+          <Badge variant="secondary" className="border-border/60 bg-muted/40 font-normal text-muted-foreground">
             {sessionCount} session{sessionCount === 1 ? '' : 's'}
           </Badge>
         </div>

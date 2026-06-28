@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# Avoid concurrent release runs racing on rapid pushes to main.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: version-or-publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      # Single workflow, two modes (handled by changesets/action):
+      #   1. If pending changesets exist → run `bun run version` and open/update a
+      #      "chore: release version" PR that bumps versions + updates CHANGELOG.md.
+      #   2. When that PR is merged (no pending changesets, versions already bumped)
+      #      → run `bun run release`, which creates the `v<version>` git tag and a
+      #      GitHub Release with the matching CHANGELOG.md section as the body.
+      - name: Create Release Pull Request or cut release
+        uses: changesets/action@v1
+        with:
+          version: bun run version
+          publish: bun run release
+          commit: "chore: release version"
+          title: "chore: release version"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # `gh` (used by scripts/release.mjs) prefers GH_TOKEN.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

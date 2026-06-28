@@ -1,4 +1,5 @@
 import type { ModelProvider } from './model-providers';
+import type { ModelOptionsMap } from './model-options';
 import { FALLBACK_PROVIDERS, normalizeModelCatalog } from './model-providers';
 
 export type SessionStatus =
@@ -15,12 +16,16 @@ export interface Session {
   status: SessionStatus;
   provider: string;
   model: string | null;
+  modelOptions: ModelOptionsMap | null;
   prompt: string;
   preview: string | null;
+  workspace: string | null;
   projectPath: string | null;
   baseBranch: string | null;
   worktreePath: string | null;
   branch: string | null;
+  cursorBackend: 'sdk' | 'cli' | null;
+  cursorChatId: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -38,12 +43,20 @@ export async function fetchSessions(): Promise<Session[]> {
   return res.json();
 }
 
+export async function fetchArchivedSessions(): Promise<Session[]> {
+  const res = await fetch('/api/sessions?includeArchived=1');
+  if (!res.ok) throw new Error('Failed to load archived sessions');
+  const all = (await res.json()) as Session[];
+  return all.filter((s) => s.status === 'ARCHIVED');
+}
+
 export async function createSession(
   prompt: string,
   model?: string,
   provider?: string,
   projectPath?: string,
   baseBranch?: string,
+  modelOptions?: ModelOptionsMap,
 ): Promise<Session> {
   const body: {
     prompt: string;
@@ -51,11 +64,13 @@ export async function createSession(
     provider?: string;
     projectPath?: string;
     baseBranch?: string;
+    modelOptions?: ModelOptionsMap;
   } = { prompt };
   if (model) body.model = model;
   if (provider) body.provider = provider;
   if (projectPath) body.projectPath = projectPath;
   if (baseBranch) body.baseBranch = baseBranch;
+  if (modelOptions && Object.keys(modelOptions).length > 0) body.modelOptions = modelOptions;
 
   const res = await fetch('/api/sessions', {
     method: 'POST',
@@ -86,6 +101,17 @@ export async function archiveSession(id: string): Promise<Session> {
   const res = await fetch(`/api/sessions/${id}/archive`, { method: 'POST' });
   if (!res.ok) throw new Error('Failed to archive session');
   return res.json();
+}
+
+export async function restoreSession(id: string): Promise<Session> {
+  const res = await fetch(`/api/sessions/${id}/restore`, { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to restore session');
+  return res.json();
+}
+
+export async function deleteSession(id: string): Promise<void> {
+  const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('Failed to delete session');
 }
 
 export async function fetchModels(): Promise<ModelProvider[]> {

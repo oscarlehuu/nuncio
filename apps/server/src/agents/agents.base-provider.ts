@@ -1,3 +1,4 @@
+import { HttpException } from '@nestjs/common';
 import type { ModelProviderDto } from '../models/models.types';
 import { EventsRepository } from '../sessions/persistence/events.repository';
 import { SessionsRepository } from '../sessions/persistence/sessions.repository';
@@ -58,6 +59,11 @@ export abstract class BaseAgentProvider implements AgentProvider {
 
       await this.executePrompt(sessionId, text, isSteer, context);
 
+      // The session may have been deleted (e.g. user deleted an archived
+      // session) while the agent loop was in flight. Silently no-op instead of
+      // throwing "Session not found" out of run() — that would escape as an
+      // unhandled rejection and crash the process.
+      if (!this.sessions.findById(sessionId)) return;
       this.sessions.updateStatus(sessionId, 'IDLE');
       this.pushEvent(sessionId, 'status', { status: 'IDLE' }, context.emit);
     } catch (error) {
@@ -66,7 +72,23 @@ export abstract class BaseAgentProvider implements AgentProvider {
   }
 
   private handleError(sessionId: string, error: unknown, emit?: EventEmitter): void {
+    if (error instanceof HttpException) {
+      const session = this.sessions.findById(sessionId);
+      if (session?.status === 'RUNNING') {
+        try {
+          this.sessions.updateStatus(sessionId, 'IDLE');
+          this.pushEvent(sessionId, 'status', { status: 'IDLE' }, emit);
+        } catch {
+          /* session deleted mid-run */
+        }
+      }
+      throw error;
+    }
     const message = error instanceof Error ? error.message : String(error);
+    // Same race guard as runOrSteer: if the session row is gone (deleted mid-run),
+    // there is nothing to update and no event bus to push to. Logging the error
+    // here would just spam — the original failure already happened upstream.
+    if (!this.sessions.findById(sessionId)) return;
     this.sessions.updateStatus(sessionId, 'ERROR');
     this.pushEvent(sessionId, 'status', { status: 'ERROR' }, emit);
     this.pushEvent(sessionId, 'error', { message }, emit);

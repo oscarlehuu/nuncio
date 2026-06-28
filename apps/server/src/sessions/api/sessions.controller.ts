@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   NotFoundException,
   Param,
@@ -9,7 +10,7 @@ import {
   Res,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import type { CreateSessionDto, SteerSessionDto } from '../domain/sessions.types';
+import type { CreateSessionDto, HandoffSessionDto, SteerSessionDto } from '../domain/sessions.types';
 import { SessionsService } from '../sessions.service';
 
 @Controller('sessions')
@@ -36,6 +37,11 @@ export class SessionsController {
     });
   }
 
+  @Post('handoff')
+  handoff(@Body() body: HandoffSessionDto) {
+    return this.sessions.handoff(body);
+  }
+
   @Get(':id')
   get(@Param('id') id: string) {
     const session = this.sessions.get(id);
@@ -45,7 +51,7 @@ export class SessionsController {
 
   @Post(':id/steer')
   steer(@Param('id') id: string, @Body() body: SteerSessionDto) {
-    return this.sessions.steer(id, body?.message ?? '');
+    return this.sessions.steer(id, body?.message ?? '', body?.forceResume);
   }
 
   @Post(':id/pause')
@@ -56,6 +62,17 @@ export class SessionsController {
   @Post(':id/archive')
   archive(@Param('id') id: string) {
     return this.sessions.archive(id);
+  }
+
+  @Post(':id/restore')
+  restore(@Param('id') id: string) {
+    return this.sessions.restore(id);
+  }
+
+  @Delete(':id')
+  delete(@Param('id') id: string) {
+    this.sessions.delete(id);
+    return { ok: true };
   }
 
   @Get(':id/events')

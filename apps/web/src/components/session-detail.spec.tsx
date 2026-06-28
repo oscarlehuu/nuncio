@@ -12,12 +12,16 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     status: 'IDLE',
     provider: 'pi',
     model: 'claude-fable-5',
+    modelOptions: null,
     prompt: 'do it',
     preview: null,
+    workspace: null,
     projectPath: null,
     baseBranch: null,
     worktreePath: null,
     branch: null,
+    cursorBackend: null,
+    cursorChatId: null,
     createdAt: Date.now() - 3_600_000,
     updatedAt: Date.now() - 120_000,
     ...overrides,
@@ -213,6 +217,84 @@ describe('SessionDetail', () => {
     await renderDetail({ model: 'unknown:model-x' }, NO_EVENTS, []);
     expect(screen.getByText('unknown:model-x')).toBeInTheDocument();
   });
+
+  describe('archived actions', () => {
+    async function renderArchived(handlers: {
+      onRestore?: (id: string) => void | Promise<void>;
+      onDelete?: (id: string) => void | Promise<void>;
+    } = {}) {
+      const onSteer = vi.fn();
+      const onPause = vi.fn();
+      const onArchive = vi.fn();
+      const onRestore = handlers.onRestore ?? vi.fn();
+      const onDelete = handlers.onDelete ?? vi.fn();
+      const view = render(
+        <SessionDetail
+          session={makeSession({ id: 's1', status: 'ARCHIVED' })}
+          events={NO_EVENTS}
+          onSteer={onSteer}
+          onPause={onPause}
+          onArchive={onArchive}
+          onRestore={onRestore}
+          onDelete={onDelete}
+        />,
+      );
+      return { onSteer, onPause, onArchive, onRestore, onDelete, ...view };
+    }
+
+    it('shows a Restore button when the session is ARCHIVED', async () => {
+      await renderArchived();
+      expect(screen.getByRole('button', { name: /restore session/i })).toBeInTheDocument();
+    });
+
+    it('hides the archive button when the session is ARCHIVED', async () => {
+      await renderArchived();
+      expect(screen.queryByRole('button', { name: /archive session/i })).toBeNull();
+    });
+
+    it('calls onRestore with the session id when Restore is clicked', async () => {
+      const { onRestore } = await renderArchived();
+      await userEvent.click(screen.getByRole('button', { name: /restore session/i }));
+      expect(onRestore).toHaveBeenCalledWith('s1');
+    });
+
+    it('shows a Delete button when the session is ARCHIVED', async () => {
+      await renderArchived();
+      expect(screen.getByRole('button', { name: /delete session/i })).toBeInTheDocument();
+    });
+
+    it('opens a confirmation dialog and only deletes after confirming', async () => {
+      const { onDelete } = await renderArchived();
+      await userEvent.click(screen.getByRole('button', { name: /delete session/i }));
+      expect(onDelete).not.toHaveBeenCalled();
+      expect(await screen.findByRole('heading', { name: /delete session/i })).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: /delete forever/i }));
+      expect(onDelete).toHaveBeenCalledWith('s1');
+    });
+
+    it('cancel in the confirm dialog does not delete', async () => {
+      const { onDelete } = await renderArchived();
+      await userEvent.click(screen.getByRole('button', { name: /delete session/i }));
+      await userEvent.click(screen.getByRole('button', { name: /cancel/i }));
+      expect(onDelete).not.toHaveBeenCalled();
+    });
+
+    it('does not render Restore / Delete when the session is not archived', async () => {
+      const view = render(
+        <SessionDetail
+          session={makeSession({ status: 'IDLE' })}
+          events={NO_EVENTS}
+          onSteer={vi.fn()}
+          onPause={vi.fn()}
+          onArchive={vi.fn()}
+          onRestore={vi.fn()}
+          onDelete={vi.fn()}
+        />,
+      );
+      expect(view.queryByRole('button', { name: /restore session/i })).toBeNull();
+      expect(view.queryByRole('button', { name: /delete session/i })).toBeNull();
+    });
+  });
 });
 
 describe('SessionDetail throttled streaming', () => {
@@ -253,5 +335,38 @@ describe('SessionDetail throttled streaming', () => {
     ];
     await renderDetail({ status: 'IDLE' }, events);
     expect(screen.getByText(full)).toBeInTheDocument();
+  });
+
+  it('shows Continue on mobile for SDK Cursor sessions when handler provided', async () => {
+    const onContinue = vi.fn();
+    render(
+      <SessionDetail
+        session={makeSession({ provider: 'cursor', cursorBackend: 'sdk' })}
+        events={NO_EVENTS}
+        onSteer={vi.fn()}
+        onPause={vi.fn()}
+        onArchive={vi.fn()}
+        onContinueOnMobile={onContinue}
+      />,
+    );
+    const btn = screen.getByRole('button', { name: /continue on mobile/i });
+    expect(btn).toBeInTheDocument();
+    await userEvent.click(btn);
+    expect(onContinue).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides Continue on mobile for CLI handoff sessions', async () => {
+    render(
+      <SessionDetail
+        session={makeSession({ provider: 'cursor', cursorBackend: 'cli' })}
+        events={NO_EVENTS}
+        onSteer={vi.fn()}
+        onPause={vi.fn()}
+        onArchive={vi.fn()}
+        onContinueOnMobile={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /continue on mobile/i })).toBeNull();
+    expect(screen.getByText('Imported from Cursor')).toBeInTheDocument();
   });
 });

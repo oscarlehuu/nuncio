@@ -5,6 +5,10 @@ import { tmpdir } from 'node:os';
 import { AgentsModule } from '../../../src/agents/agents.module';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { ModelsService } from '../../../src/models/models.service';
+import {
+  configureSimulatedCursorEnv,
+  withSimulatedCursorProvider,
+} from '../../helpers/simulated-cursor-app';
 
 describe('ModelsService', () => {
   let module: TestingModule;
@@ -14,12 +18,14 @@ describe('ModelsService', () => {
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-models-svc-'));
     process.env.NUNCIO_DATA_DIR = dataDir;
-    process.env.NUNCIO_FORCE_MOCK = '1';
+    configureSimulatedCursorEnv();
 
-    module = await Test.createTestingModule({
-      imports: [DatabaseModule, AgentsModule],
-      providers: [ModelsService],
-    }).compile();
+    module = await withSimulatedCursorProvider(
+      Test.createTestingModule({
+        imports: [DatabaseModule, AgentsModule],
+        providers: [ModelsService],
+      }),
+    ).compile();
 
     models = module.get(ModelsService);
   });
@@ -28,12 +34,12 @@ describe('ModelsService', () => {
     await module.close();
     rmSync(dataDir, { recursive: true, force: true });
     delete process.env.NUNCIO_DATA_DIR;
-    delete process.env.NUNCIO_FORCE_MOCK;
+    delete process.env.CURSOR_API_KEY;
   });
 
   it('aggregates models from available providers only', async () => {
     const result = await models.list();
     expect(result).toHaveLength(1);
-    expect(result[0].id).toBe('mock');
+    expect(result[0].id).toBe('cursor');
   });
 });

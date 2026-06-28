@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Archive, FolderGit2, GitBranch, Pause, Send, Square } from 'lucide-react';
+import { Archive, ArrowRightLeft, FolderGit2, GitBranch, Pause, RotateCcw, Send, Square, Trash2 } from 'lucide-react';
 import type { Session, SessionEvent } from '../lib/api';
 import { statusLabel } from '../lib/api';
 import { projectDisplayName } from '../lib/projects';
@@ -9,6 +9,14 @@ import { Transcript } from './session-transcript';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   Tooltip,
   TooltipContent,
@@ -25,6 +33,12 @@ interface SessionDetailProps {
   onSteer: (message: string) => Promise<void>;
   onPause: () => Promise<void>;
   onArchive: () => Promise<void>;
+  /** Restore an archived session back to IDLE. Only invoked when status === 'ARCHIVED'. */
+  onRestore?: (id: string) => void | Promise<void>;
+  /** Permanently delete an archived session. Only invoked when status === 'ARCHIVED'. */
+  onDelete?: (id: string) => void | Promise<void>;
+  /** Open Continue on mobile picker (SDK Cursor sessions only). */
+  onContinueOnMobile?: () => void;
   steering?: boolean;
   lifecycleBusy?: boolean;
 }
@@ -36,21 +50,34 @@ export function SessionDetail({
   onSteer,
   onPause,
   onArchive,
+  onRestore,
+  onDelete,
+  onContinueOnMobile,
   steering,
   lifecycleBusy,
 }: SessionDetailProps) {
   const [steerText, setSteerText] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const streaming = session.status === 'RUNNING';
   const isRunning = session.status === 'RUNNING';
+  const isArchived = session.status === 'ARCHIVED';
   const steerDisabled =
     session.status === 'RUNNING' || session.status === 'ARCHIVED' || steering || lifecycleBusy;
-  const showHeaderPause = !isRunning && session.status !== 'PAUSED' && session.status !== 'ARCHIVED';
-  const canArchive = session.status !== 'ARCHIVED';
+  const showHeaderPause = !isRunning && session.status !== 'PAUSED' && !isArchived;
+  const canArchive = !isArchived;
+  const canRestore = isArchived && !!onRestore;
+  const canDelete = isArchived && !!onDelete;
 
   const catalog = providers && providers.length > 0 ? providers : FALLBACK_PROVIDERS;
   const entry = session.model ? modelById(catalog)[session.model] : undefined;
-  const modelName = entry ? prettyModelName(entry.name) : (session.model ?? 'Default');
+  const modelName = entry
+    ? prettyModelName(entry.name)
+    : session.model ?? (session.cursorBackend === 'cli' ? 'Cursor model' : 'Default');
+  const showContinueOnMobile =
+    session.provider === 'cursor' &&
+    session.cursorBackend !== 'cli' &&
+    !!onContinueOnMobile;
   const repoName = projectDisplayName(session.projectPath);
   const branchName = session.branch;
 
@@ -85,12 +112,33 @@ export function SessionDetail({
             {branchName}
           </Badge>
         )}
+        {session.cursorBackend === 'cli' ? (
+          <Badge variant="outline" className="gap-1.5 shrink-0 hidden lg:inline-flex">
+            Imported from Cursor
+          </Badge>
+        ) : null}
         <Badge variant="secondary" className="gap-1.5 shrink-0">
           <StatusDot status={session.status} />
           {statusLabel(session.status)}
         </Badge>
         <TooltipProvider>
           <div className="flex items-center gap-1 shrink-0">
+            {showContinueOnMobile && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={onContinueOnMobile}
+                    disabled={lifecycleBusy}
+                    aria-label="Continue on mobile"
+                  >
+                    <ArrowRightLeft />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Continue on mobile</TooltipContent>
+              </Tooltip>
+            )}
             {showHeaderPause && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -121,6 +169,39 @@ export function SessionDetail({
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>Archive session</TooltipContent>
+              </Tooltip>
+            )}
+            {canRestore && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => void onRestore?.(session.id)}
+                    disabled={lifecycleBusy}
+                    aria-label="Restore session"
+                  >
+                    <RotateCcw />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Restore session</TooltipContent>
+              </Tooltip>
+            )}
+            {canDelete && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setConfirmDelete(true)}
+                    disabled={lifecycleBusy}
+                    aria-label="Delete session"
+                    className="text-destructive hover:text-destructive"
+                  >
+                    <Trash2 />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Delete session permanently</TooltipContent>
               </Tooltip>
             )}
           </div>
@@ -192,6 +273,32 @@ export function SessionDetail({
           </div>
         </div>
       </div>
+
+      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete session</DialogTitle>
+            <DialogDescription>
+              Permanently delete “{session.title}”? This removes the session and its full
+              transcript. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmDelete(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setConfirmDelete(false);
+                void onDelete?.(session.id);
+              }}
+            >
+              Delete forever
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

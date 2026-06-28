@@ -11,6 +11,18 @@ const STATUS_CLASS: Record<SessionStatus, string> = {
   ERROR: 'bg-destructive',
 };
 
+export function ConnectionDot({ className }: { className?: string }) {
+  return (
+    <span
+      className={cn(
+        'inline-block size-1.5 rounded-full shrink-0 bg-success shadow-[0_0_5px_var(--color-success)]',
+        className,
+      )}
+      aria-hidden
+    />
+  );
+}
+
 export function StatusDot({
   status,
   className,

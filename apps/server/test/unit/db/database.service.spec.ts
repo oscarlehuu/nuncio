@@ -23,6 +23,7 @@ describe('DatabaseService schema + migration', () => {
     db = new DatabaseService();
     const cols = db.db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>;
     expect(cols.map((column) => column.name)).toContain('provider');
+    expect(cols.map((column) => column.name)).toContain('model_options');
   });
 
   it('defaults provider to pi when omitted on insert', () => {
