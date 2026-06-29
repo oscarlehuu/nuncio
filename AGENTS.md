@@ -50,26 +50,29 @@ Agents working on Nuncio often **share the same branch** — they are not each g
 ```
 cursor/<feature>  →  cursor-sdk  →  main
 pi/<feature>      →  pi-sdk      →  main
-main              →  cursor-sdk | pi-sdk   (sync-back only)
+codex/<feature>   →  codex-sdk   →  main
+main              →  cursor-sdk | pi-sdk | codex-sdk   (sync-back only)
 ```
 
 | Your work touches | Branch prefix | PR target |
 |---|---|---|
 | Cursor provider / `@cursor/sdk` / Handoff / CLI | `cursor/<slug>` | **`cursor-sdk`** |
 | Pi provider / `@earendil-works/pi-coding-agent` | `pi/<slug>` | **`pi-sdk`** |
+| Codex provider / Codex SDK / Codex CLI | `codex/<slug>` | **`codex-sdk`** |
 | Release cut (Changesets bot) | `changeset-release/main` | **`main`** (automated) |
 
 **Rules (CI `branch-flow` job — must pass):**
 
 - `cursor-sdk` ← only `cursor/*` or `main` (sync-back)
 - `pi-sdk` ← only `pi/*` or `main` (sync-back)
-- `main` ← only `cursor-sdk`, `pi-sdk`, or `changeset-release/*`
+- `codex-sdk` ← only `codex/*` or `main` (sync-back)
+- `main` ← only `cursor-sdk`, `pi-sdk`, `codex-sdk`, or `changeset-release/*`
 
-Shared harness code (`sessions`, `agents.registry`, web UI) may be touched from either lane — pick the lane for the **primary SDK** under test. After one SDK branch merges to `main`, sync the other integration branch: `git checkout pi-sdk && git merge main && git push` (or the reverse).
+Shared harness code (`sessions`, `agents.registry`, web UI) may be touched from any SDK lane — pick the lane for the **primary SDK** under test. After one SDK branch merges to `main`, sync the other integration branches: `git checkout pi-sdk && git merge main && git push` (or the equivalent for `cursor-sdk` / `codex-sdk`).
 
 Verify locally before opening a PR: `BASE_REF=cursor-sdk HEAD_REF=cursor/my-feat bun run check-branch-flow`
 
-**GitHub branch protection (manual, one-time):** on `main`, `cursor-sdk`, and `pi-sdk` — require PR + status checks **`branch-flow`** and **`ci`**, block direct pushes.
+**GitHub branch protection (manual, one-time):** on `main`, `cursor-sdk`, `pi-sdk`, and `codex-sdk` — require PR + status checks **`branch-flow`** and **`ci`**, block direct pushes.
 
 ### Branch & worktree naming (contributors)
 
@@ -81,9 +84,10 @@ Every feature branch **must** use an SDK lane prefix — CI `branch-flow` reject
 |---|---|---|---|
 | Cursor | `cursor/<slug>` | **`cursor-sdk`** | `cursor/handoff-picker` |
 | Pi | `pi/<slug>` | **`pi-sdk`** | `pi/session-cwd-fix` |
+| Codex | `codex/<slug>` | **`codex-sdk`** | `codex/provider-integration` |
 | Release bot | `changeset-release/*` | **`main`** | (automated — do not hand-create) |
 
-**`<slug>` rules:** kebab-case, short, describes the work — `cursor/model-picker-fast-toggle`, not `cursor/fix` or `cursor/john-wip`.
+**`<slug>` rules:** kebab-case, short, describes the work — `codex/provider-integration`, not `codex/fix` or `codex/john-wip`.
 
 **Multi-agent phases:** per-lane branches like `cursor/phase-04-a-backend`, then combine into `cursor/phase-04-combined` before one PR to the integration branch (see [Parallel-agent lane convention](#parallel-agent-lane-convention)).
 
@@ -91,14 +95,14 @@ Every feature branch **must** use an SDK lane prefix — CI `branch-flow` reject
 
 ```bash
 git fetch origin
-git checkout cursor-sdk && git pull --ff-only origin cursor-sdk   # or pi-sdk
-git checkout -b cursor/my-feature
+git checkout codex-sdk && git pull --ff-only origin codex-sdk   # or cursor-sdk / pi-sdk
+git checkout -b codex/my-feature
 ```
 
 Verify before opening a PR:
 
 ```bash
-BASE_REF=cursor-sdk HEAD_REF=cursor/my-feature bun run check-branch-flow
+BASE_REF=codex-sdk HEAD_REF=codex/my-feature bun run check-branch-flow
 ```
 
 #### Optional: git worktree (isolated checkout)
@@ -107,15 +111,15 @@ Agents often **share one checkout** on the same branch. Use a **git worktree** w
 
 | What | Convention |
 |---|---|
-| **Branch name** | Same as above: `cursor/<slug>` or `pi/<slug>` |
-| **Base ref** | `origin/cursor-sdk` or `origin/pi-sdk` (never `main` for feature work) |
+| **Branch name** | Same as above: `cursor/<slug>`, `pi/<slug>`, or `codex/<slug>` |
+| **Base ref** | `origin/cursor-sdk`, `origin/pi-sdk`, or `origin/codex-sdk` (never `main` for feature work) |
 | **Worktree path** | Sibling dir: `../nuncio-<slug>` — or Cursor-managed: `~/.cursor/worktrees/nuncio/<slug>/` |
 
 ```bash
 git fetch origin
-git worktree add -b cursor/my-feature ../nuncio-my-feature origin/cursor-sdk
+git worktree add -b codex/my-feature ../nuncio-my-feature origin/codex-sdk
 cd ../nuncio-my-feature && bun install
-# … work, commit, push cursor/my-feature, open PR → cursor-sdk
+# … work, commit, push codex/my-feature, open PR → codex-sdk
 ```
 
 **Cleanup after merge:**
@@ -123,7 +127,7 @@ cd ../nuncio-my-feature && bun install
 ```bash
 git worktree remove ../nuncio-my-feature
 git worktree prune
-git push origin --delete cursor/my-feature   # if the remote branch still exists
+git push origin --delete codex/my-feature   # if the remote branch still exists
 ```
 
 Cursor dev worktrees under `~/.cursor/worktrees/` accumulate over time — `git worktree remove` + `git worktree prune` when done. Worktrees checkout **local** branch refs; run `git fetch` on the main clone before creating one if you need remote-latest.
@@ -467,7 +471,7 @@ Plans: `plans/260626-nuncio-roadmap/`. Per-phase reports: `plans/reports/`.
 
 ### Parallel-agent lane convention
 
-When a phase is large it is split into lanes working on isolated branches, then merged into the SDK integration branch (`cursor-sdk` or `pi-sdk`), then to `main`:
+When a phase is large it is split into lanes working on isolated branches, then merged into the SDK integration branch (`cursor-sdk`, `pi-sdk`, or `codex-sdk`), then to `main`:
 
 | Lane | Ownership |
 |---|---|
@@ -475,7 +479,7 @@ When a phase is large it is split into lanes working on isolated branches, then 
 | B — Frontend | `apps/web/src/**` |
 | C — Tests + Docs | `*.spec.ts`, `apps/server/test/**`, `README.md`, `plans/reports/` |
 
-- Branches: `cursor/phase-NN-<lane>-5323`, combined into `cursor/phase-NN-combined-5323` → PR to **`cursor-sdk`** (Pi lane: `pi/…` → **`pi-sdk`**).
+- Branches: `cursor/phase-NN-<lane>-5323`, combined into `cursor/phase-NN-combined-5323` → PR to **`cursor-sdk`** (Pi lane: `pi/…` → **`pi-sdk`**, Codex lane: `codex/…` → **`codex-sdk`**).
 - **File ownership is strict** — no overlapping edits across lanes. Tests own test files only and read (never edit) implementation files.
 - Merge order is defined per phase in `phase-NN-orchestration.md`; verify with `bun run build && bun test` after each merge.
 - Each lane writes a short report to `plans/reports/phase-NN-<lane>-report.md` (status, what shipped, verify commands, unresolved).
