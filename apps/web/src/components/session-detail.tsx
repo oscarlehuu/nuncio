@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { Archive, ArrowRightLeft, FolderGit2, GitBranch, Pause, RotateCcw, Send, Square, Trash2 } from 'lucide-react';
-import type { Session, SessionEvent } from '../lib/api';
+import type { ProviderRequestDecision, Session, SessionEvent } from '../lib/api';
 import { statusLabel } from '../lib/api';
+import { isCodexApprovalEngine } from '../lib/codex-approval-engine';
 import { projectDisplayName } from '../lib/projects';
 import { FALLBACK_PROVIDERS, modelById, prettyModelName, type ModelProvider } from '../lib/model-providers';
 import { StatusDot } from './status-dot';
 import { Transcript } from './session-transcript';
+import { ApprovalModePicker, type ApprovalMode } from './approval-mode-picker';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
@@ -39,6 +41,12 @@ interface SessionDetailProps {
   onDelete?: (id: string) => void | Promise<void>;
   /** Open Continue on mobile picker (SDK Cursor sessions only). */
   onContinueOnMobile?: () => void;
+  approvalMode?: ApprovalMode;
+  onApprovalModeChange?: (mode: ApprovalMode) => void | Promise<void>;
+  onRespondProviderRequest?: (
+    requestId: string,
+    decision: ProviderRequestDecision,
+  ) => void | Promise<void>;
   steering?: boolean;
   lifecycleBusy?: boolean;
 }
@@ -53,11 +61,15 @@ export function SessionDetail({
   onRestore,
   onDelete,
   onContinueOnMobile,
+  approvalMode = 'full-access',
+  onApprovalModeChange,
+  onRespondProviderRequest,
   steering,
   lifecycleBusy,
 }: SessionDetailProps) {
   const [steerText, setSteerText] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [respondingRequestId, setRespondingRequestId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const streaming = session.status === 'RUNNING';
   const isRunning = session.status === 'RUNNING';
@@ -80,6 +92,8 @@ export function SessionDetail({
     !!onContinueOnMobile;
   const repoName = projectDisplayName(session.projectPath);
   const branchName = session.branch;
+  const showApprovalMode =
+    !!onApprovalModeChange && isCodexApprovalEngine(session.provider, session.model);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -90,10 +104,28 @@ export function SessionDetail({
   const handleSteer = async () => {
     const text = steerText.trim();
     if (!text || steerDisabled) return;
-    await onSteer(text);
     setSteerText('');
+    try {
+      await onSteer(text);
+    } catch (error) {
+      setSteerText((current) => (current.trim() ? current : text));
+      throw error;
+    }
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
+  };
+
+  const handleRespondProviderRequest = async (
+    requestId: string,
+    decision: ProviderRequestDecision,
+  ) => {
+    if (!onRespondProviderRequest || respondingRequestId) return;
+    setRespondingRequestId(requestId);
+    try {
+      await onRespondProviderRequest(requestId, decision);
+    } finally {
+      setRespondingRequestId(null);
+    }
   };
 
   return (
@@ -210,7 +242,14 @@ export function SessionDetail({
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 md:px-8 min-h-0">
         <div className="max-w-[760px] mx-auto">
-          <Transcript events={events} streaming={streaming} />
+          <Transcript
+            events={events}
+            streaming={streaming}
+            respondingRequestId={respondingRequestId}
+            onRespondProviderRequest={
+              onRespondProviderRequest ? handleRespondProviderRequest : undefined
+            }
+          />
         </div>
       </div>
 
@@ -247,6 +286,14 @@ export function SessionDetail({
                   <span className="truncate">{repoName}</span>
                 </Badge>
               )}
+              {showApprovalMode ? (
+                <ApprovalModePicker
+                  value={approvalMode}
+                  onChange={onApprovalModeChange}
+                  disabled={lifecycleBusy}
+                  surface="embedded"
+                />
+              ) : null}
             </div>
             {isRunning ? (
               <Button

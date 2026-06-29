@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import type { AgentProvider } from './agents.types';
+import { CodexAgentProvider } from './providers/codex-agent.provider';
 import { CursorAgentProvider } from './providers/cursor-agent.provider';
 import { CursorCliProvider } from './providers/cursor-cli.provider';
 import { PiAgentProvider } from './providers/pi-agent.provider';
@@ -14,11 +15,12 @@ export class AgentRegistry {
   constructor(
     private readonly pi: PiAgentProvider,
     private readonly cursor: CursorAgentProvider,
+    private readonly codex: CodexAgentProvider,
     cli: CursorCliProvider,
     settings: SettingsService,
   ) {
     this.cliProvider = cli;
-    this.providers = [this.pi, this.cursor];
+    this.providers = [this.pi, this.cursor, this.codex];
     settings.onChange(() => this.bustCaches());
   }
 
@@ -68,6 +70,7 @@ export class AgentRegistry {
 
   async defaultId(): Promise<string> {
     if (await this.cursor.isAvailable()) return this.cursor.id;
+    if (await this.codex.isAvailable()) return this.codex.id;
     if (await this.pi.isAvailable()) return this.pi.id;
     throw new ServiceUnavailableException('No agent provider is configured');
   }

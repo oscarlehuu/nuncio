@@ -36,6 +36,27 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     envVar: 'PI_CODING_AGENT_DIR',
     altEnvVar: 'PI_AGENT_DIR',
   },
+  {
+    key: 'NUNCIO_CODEX_BIN',
+    category: 'provider',
+    providerId: 'codex',
+    type: 'path',
+    label: 'Codex CLI binary',
+    description:
+      'Path to the `codex` CLI binary used to launch `codex app-server`. Defaults to PATH.',
+    envVar: 'NUNCIO_CODEX_BIN',
+    default: 'codex',
+  },
+  {
+    key: 'NUNCIO_CODEX_HOME',
+    category: 'provider',
+    providerId: 'codex',
+    type: 'path',
+    label: 'Codex home',
+    description:
+      'Optional CODEX_HOME override for Codex app-server. Leave unset to use the same Codex login as the CLI/app.',
+    envVar: 'NUNCIO_CODEX_HOME',
+  },
   // ── Provider behavioral ──────────────────────────────────────────────────
   {
     key: 'NUNCIO_CURSOR_CWD',
@@ -56,6 +77,27 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     description:
       'Path to the `agent` CLI binary for handoff sessions. Defaults to ~/.local/bin/agent, then PATH.',
     envVar: 'NUNCIO_CURSOR_AGENT_BIN',
+  },
+  {
+    key: 'NUNCIO_CODEX_CWD',
+    category: 'provider',
+    providerId: 'codex',
+    type: 'path',
+    label: 'Codex default working directory',
+    description:
+      'Used when a Codex session has no selected workspace or worktree. Falls back to the server process cwd if unset.',
+    envVar: 'NUNCIO_CODEX_CWD',
+  },
+  {
+    key: 'NUNCIO_CODEX_RUNTIME_MODE',
+    category: 'provider',
+    providerId: 'codex',
+    type: 'string',
+    label: 'Codex runtime mode',
+    description:
+      '`full-access` runs with approval_policy=never and danger-full-access. `approval-required` starts read-only/untrusted and surfaces approval requests in the transcript.',
+    envVar: 'NUNCIO_CODEX_RUNTIME_MODE',
+    default: 'full-access',
   },
   // ── General ──────────────────────────────────────────────────────────────
   {

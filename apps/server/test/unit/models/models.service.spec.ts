@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AgentsModule } from '../../../src/agents/agents.module';
+import { CodexAgentProvider } from '../../../src/agents/providers/codex-agent.provider';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { ModelsService } from '../../../src/models/models.service';
 import {
@@ -25,7 +26,16 @@ describe('ModelsService', () => {
         imports: [DatabaseModule, AgentsModule],
         providers: [ModelsService],
       }),
-    ).compile();
+    )
+      .overrideProvider(CodexAgentProvider)
+      .useValue({
+        id: 'codex',
+        name: 'Codex',
+        isAvailable: async () => false,
+        listModels: async () => [],
+        dispose: () => undefined,
+      })
+      .compile();
 
     models = module.get(ModelsService);
   });
