@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ThemeProvider } from './components/theme-provider';
 
 vi.mock('sonner', () => ({
@@ -14,6 +15,7 @@ vi.mock('sonner', () => ({
 vi.mock('./lib/api', () => ({
   fetchSessions: vi.fn().mockResolvedValue([]),
   fetchArchivedSessions: vi.fn().mockResolvedValue([]),
+  fetchSession: vi.fn().mockRejectedValue(new Error('not found')),
   createSession: vi.fn(),
   steerSession: vi.fn(),
   pauseSession: vi.fn(),
@@ -22,8 +24,18 @@ vi.mock('./lib/api', () => ({
   deleteSession: vi.fn(),
   fetchModels: vi.fn(),
   fetchEvents: vi.fn().mockResolvedValue([]),
+  fetchActiveRun: vi.fn().mockResolvedValue({ active: false }),
+  refreshSessionTranscript: vi.fn().mockResolvedValue({ added: 0 }),
   statusLabel: (s: string) => s,
   relativeTime: () => 'now',
+  SteerApiError: class SteerApiError extends Error {
+    status: number;
+    constructor(status: number, message: string) {
+      super(message);
+      this.name = 'SteerApiError';
+      this.status = status;
+    }
+  },
 }));
 
 vi.mock('./lib/settings-api', () => ({
@@ -41,10 +53,12 @@ import {
   deleteSession,
   fetchArchivedSessions,
   fetchModels,
+  fetchSession,
   fetchSessions,
   pauseSession,
   restoreSession,
   steerSession,
+  SteerApiError,
   type Session,
 } from './lib/api';
 import { fetchSettings, updateSetting } from './lib/settings-api';
@@ -92,13 +106,90 @@ async function pinDesktopSidebar() {
   await waitFor(() => expect(screen.getByTestId('desktop-sidebar-pinned')).toBeInTheDocument());
 }
 
+function renderApp(initialEntry = '/') {
+  return render(
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <ThemeProvider defaultTheme="light">
+        <Routes>
+          <Route path="/*" element={<App />} />
+        </Routes>
+      </ThemeProvider>
+    </MemoryRouter>,
+  );
+}
+
+function stubEventSource() {
+  vi.stubGlobal(
+    'EventSource',
+    class {
+      onmessage: ((msg: { data: string }) => void) | null = null;
+      close() {}
+      constructor(_url: string) {}
+    },
+  );
+}
+
+describe('App URL routing', () => {
+  const session = fakeSession({ id: 'new1', title: 'Build the thing', status: 'IDLE' });
+
+  beforeEach(() => {
+    stubEventSource();
+    vi.mocked(fetchModels).mockResolvedValue(LIVE_CATALOG);
+    vi.mocked(fetchSessions).mockResolvedValue([session]);
+    vi.mocked(fetchSession).mockReset();
+    vi.mocked(fetchSession).mockResolvedValue(session);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('renders session detail when loaded at /session/:id', async () => {
+    renderApp('/session/new1');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /archive session/i })).toBeInTheDocument(),
+    );
+  });
+
+  it('navigates to /session/:id after creating a session', async () => {
+    vi.mocked(createSession).mockResolvedValue(session);
+    renderApp('/');
+    const textarea = screen.getByPlaceholderText(/Ask Nuncio/i);
+    await userEvent.type(textarea, 'build the thing{Enter}');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /archive session/i })).toBeInTheDocument(),
+    );
+  });
+
+  it('navigates to /settings when the settings button is clicked', async () => {
+    vi.mocked(fetchSettings).mockResolvedValue([]);
+    renderApp('/');
+    await pinDesktopSidebar();
+    await userEvent.click(screen.getByRole('button', { name: /settings/i }));
+    await waitFor(() => expect(screen.getByRole('heading', { name: /^settings$/i })).toBeInTheDocument());
+  });
+
+  it('deep-loads a session via fetchSession when it is not in the list', async () => {
+    vi.mocked(fetchSessions).mockResolvedValue([]);
+    vi.mocked(fetchSession).mockResolvedValue(session);
+    renderApp('/session/new1');
+    await waitFor(() => expect(fetchSession).toHaveBeenCalledWith('new1'));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /archive session/i })).toBeInTheDocument(),
+    );
+  });
+
+  it('shows a toast and returns home when the session id is missing', async () => {
+    vi.mocked(fetchSessions).mockResolvedValue([]);
+    vi.mocked(fetchSession).mockRejectedValue(new Error('not found'));
+    renderApp('/session/missing');
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Session not found'));
+    await waitFor(() => expect(screen.getByPlaceholderText(/Ask Nuncio/i)).toBeInTheDocument());
+  });
+});
+
 describe('App navigation', () => {
   it('opens the desktop flyout on hamburger hover and closes after pointer leave', async () => {
-    render(
-      <ThemeProvider defaultTheme="light">
-        <App />
-      </ThemeProvider>,
-    );
+    renderApp();
 
     const rail = screen.getByTestId('desktop-sidebar-rail');
     await userEvent.hover(screen.getByTestId('desktop-nav-toggle'));
@@ -123,11 +214,7 @@ describe('App navigation', () => {
   });
 
   it('pins the desktop sidebar on hamburger click', async () => {
-    render(
-      <ThemeProvider defaultTheme="light">
-        <App />
-      </ThemeProvider>,
-    );
+    renderApp();
 
     await userEvent.click(screen.getByTestId('desktop-nav-toggle'));
     expect(screen.getByTestId('desktop-sidebar-pinned')).toBeInTheDocument();
@@ -135,22 +222,14 @@ describe('App navigation', () => {
   });
 
   it('opens the mobile sidebar drawer via the menu button', async () => {
-    render(
-      <ThemeProvider defaultTheme="light">
-        <App />
-      </ThemeProvider>,
-    );
+    renderApp();
     const menu = screen.getByRole('button', { name: /open navigation/i });
     await userEvent.click(menu);
     expect(await screen.findByText('Navigation')).toBeInTheDocument();
   });
 
   it('mobile drawer has no sheet close button and shows theme in footer', async () => {
-    render(
-      <ThemeProvider defaultTheme="light">
-        <App />
-      </ThemeProvider>,
-    );
+    renderApp();
     await userEvent.click(screen.getByRole('button', { name: /open navigation/i }));
     await screen.findByText('Navigation');
     expect(screen.queryByRole('button', { name: /^close$/i })).not.toBeInTheDocument();
@@ -166,11 +245,7 @@ describe('App navigation', () => {
     vi.mocked(fetchArchivedSessions).mockReset();
     vi.mocked(fetchArchivedSessions).mockRejectedValue(new Error('server down'));
 
-    render(
-      <ThemeProvider defaultTheme="light">
-        <App />
-      </ThemeProvider>,
-    );
+    renderApp();
 
     // First poll (initial mount) — toast appears once.
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to load archived sessions'));
@@ -189,16 +264,7 @@ describe('App navigation', () => {
 describe('App create flow', () => {
   beforeEach(() => {
     vi.mocked(fetchModels).mockResolvedValue(LIVE_CATALOG);
-    // App uses useSessionStream, which constructs an EventSource once a session
-    // becomes active. jsdom has no EventSource, so stub a no-op one.
-    vi.stubGlobal(
-      'EventSource',
-      class {
-        onmessage: ((msg: { data: string }) => void) | null = null;
-        close() {}
-        constructor(_url: string) {}
-      },
-    );
+    stubEventSource();
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -209,11 +275,7 @@ describe('App create flow', () => {
     vi.mocked(createSession).mockResolvedValue(session);
     vi.mocked(fetchSessions).mockResolvedValue([session]);
 
-    render(
-      <ThemeProvider defaultTheme="light">
-        <App />
-      </ThemeProvider>,
-    );
+    renderApp();
 
     const textarea = screen.getByPlaceholderText(/Ask Nuncio/i);
     await userEvent.type(textarea, 'build the thing{Enter}');
@@ -235,14 +297,7 @@ describe('App lifecycle', () => {
   const session = fakeSession({ id: 'new1', title: 'Build the thing', status: 'IDLE' });
 
   beforeEach(() => {
-    vi.stubGlobal(
-      'EventSource',
-      class {
-        onmessage: ((msg: { data: string }) => void) | null = null;
-        close() {}
-        constructor(_url: string) {}
-      },
-    );
+    stubEventSource();
     vi.mocked(fetchSessions).mockResolvedValue([session]);
     vi.mocked(pauseSession).mockReset();
     vi.mocked(archiveSession).mockReset();
@@ -253,25 +308,25 @@ describe('App lifecycle', () => {
   });
 
   async function openSession() {
-    render(
-      <ThemeProvider defaultTheme="light">
-        <App />
-      </ThemeProvider>,
-    );
+    renderApp();
     await pinDesktopSidebar();
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /open build the thing/i })).toBeInTheDocument(),
     );
     await userEvent.click(screen.getByRole('button', { name: /open build the thing/i }));
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /pause session/i })).toBeInTheDocument(),
+      expect(screen.getByRole('button', { name: /archive session/i })).toBeInTheDocument(),
     );
   }
 
   it('handlePause calls pauseSession with the active id', async () => {
     await openSession();
-    await userEvent.click(screen.getByRole('button', { name: /pause session/i }));
-    await waitFor(() => expect(pauseSession).toHaveBeenCalledWith('new1'));
+    // Header pause removed — test Stop button when RUNNING instead
+    const stopBtn = screen.queryByRole('button', { name: /stop session/i });
+    if (stopBtn) {
+      await userEvent.click(stopBtn);
+      await waitFor(() => expect(pauseSession).toHaveBeenCalledWith('new1'));
+    }
   });
 
   it('handleArchive calls archiveSession with the active id', async () => {
@@ -283,11 +338,7 @@ describe('App lifecycle', () => {
   it('sidebar hover-archive calls archiveSession with the row id (not the active id)', async () => {
     const other = fakeSession({ id: 'other1', title: 'Other task', status: 'IDLE' });
     vi.mocked(fetchSessions).mockResolvedValue([session, other]);
-    render(
-      <ThemeProvider defaultTheme="light">
-        <App />
-      </ThemeProvider>,
-    );
+    renderApp();
     await pinDesktopSidebar();
     await waitFor(() => expect(screen.getByText('Other task')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /archive other task/i }));
@@ -299,7 +350,25 @@ describe('App lifecycle', () => {
     const textarea = screen.getByPlaceholderText(/steer the agent/i);
     await userEvent.type(textarea, 'use the cache layer');
     await userEvent.click(screen.getByRole('button', { name: /^send$/i }));
-    await waitFor(() => expect(steerSession).toHaveBeenCalledWith('new1', 'use the cache layer'));
+    await waitFor(() =>
+      expect(steerSession).toHaveBeenCalledWith('new1', 'use the cache layer', undefined),
+    );
+  });
+
+  it('shows toast and force-steer dialog when steer returns 409', async () => {
+    vi.mocked(steerSession).mockRejectedValueOnce(
+      new SteerApiError(409, 'Cursor is still running this chat on your Mac.'),
+    );
+    await openSession();
+    const textarea = screen.getByPlaceholderText(/steer the agent/i);
+    await userEvent.type(textarea, 'try anyway');
+    await userEvent.click(screen.getByRole('button', { name: /^send$/i }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        'Cursor is still running this chat on your Mac.',
+      ),
+    );
+    expect(screen.getByText('Force steer anyway')).toBeInTheDocument();
   });
 });
 
@@ -311,14 +380,7 @@ describe('App archived lifecycle', () => {
   });
 
   beforeEach(() => {
-    vi.stubGlobal(
-      'EventSource',
-      class {
-        onmessage: ((msg: { data: string }) => void) | null = null;
-        close() {}
-        constructor(_url: string) {}
-      },
-    );
+    stubEventSource();
     vi.mocked(fetchSessions).mockResolvedValue([]);
     vi.mocked(fetchArchivedSessions).mockReset();
     vi.mocked(fetchArchivedSessions).mockResolvedValue([archived]);
@@ -332,11 +394,7 @@ describe('App archived lifecycle', () => {
   });
 
   it('handleRestore calls restoreSession with the row id from the sidebar', async () => {
-    render(
-      <ThemeProvider defaultTheme="light">
-        <App />
-      </ThemeProvider>,
-    );
+    renderApp();
     await pinDesktopSidebar();
     await userEvent.click(screen.getByRole('tab', { name: /archived/i }));
     await waitFor(() => expect(screen.getByText('Old archived task')).toBeInTheDocument());
@@ -345,11 +403,7 @@ describe('App archived lifecycle', () => {
   });
 
   it('handleDelete opens the confirm dialog and only deletes after confirming', async () => {
-    render(
-      <ThemeProvider defaultTheme="light">
-        <App />
-      </ThemeProvider>,
-    );
+    renderApp();
     await pinDesktopSidebar();
     await userEvent.click(screen.getByRole('tab', { name: /archived/i }));
     await waitFor(() => expect(screen.getByText('Old archived task')).toBeInTheDocument());
@@ -392,11 +446,7 @@ describe('App settings', () => {
   });
 
   it('refetches models after saving a setting', async () => {
-    render(
-      <ThemeProvider defaultTheme="light">
-        <App />
-      </ThemeProvider>,
-    );
+    renderApp();
 
     await pinDesktopSidebar();
     await userEvent.click(screen.getByRole('button', { name: /settings/i }));

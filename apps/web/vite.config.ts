@@ -31,6 +31,7 @@ function changelogPlugin() {
 }
 
 export default defineConfig({
+  appType: 'spa',
   plugins: [
     react(),
     tailwindcss(),
@@ -67,6 +68,8 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        navigateFallback: '/index.html',
+        navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
           {
             urlPattern: /^\/api\/.*/i,

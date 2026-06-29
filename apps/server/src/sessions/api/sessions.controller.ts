@@ -5,6 +5,7 @@ import {
   Get,
   NotFoundException,
   Param,
+  Patch,
   Post,
   Query,
   Res,
@@ -42,6 +43,20 @@ export class SessionsController {
     return this.sessions.handoff(body);
   }
 
+  @Get(':id/active-run')
+  activeRun(@Param('id') id: string) {
+    const session = this.sessions.get(id);
+    if (!session) throw new NotFoundException('Session not found');
+    return { active: this.sessions.isCursorCliActive(id) };
+  }
+
+  @Post(':id/refresh-transcript')
+  refreshTranscript(@Param('id') id: string) {
+    const session = this.sessions.get(id);
+    if (!session) throw new NotFoundException('Session not found');
+    return this.sessions.refreshTranscript(id);
+  }
+
   @Get(':id')
   get(@Param('id') id: string) {
     const session = this.sessions.get(id);
@@ -67,6 +82,14 @@ export class SessionsController {
   @Post(':id/restore')
   restore(@Param('id') id: string) {
     return this.sessions.restore(id);
+  }
+
+  @Patch(':id')
+  rename(@Param('id') id: string, @Body() body: { title?: string }) {
+    if (!body?.title?.trim()) {
+      return { error: 'title is required' };
+    }
+    return this.sessions.rename(id, body.title.trim());
   }
 
   @Delete(':id')
