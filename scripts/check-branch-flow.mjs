@@ -4,7 +4,8 @@
  *
  *   cursor/*  → cursor-sdk → main
  *   pi/*      → pi-sdk     → main
- *   main      → cursor-sdk | pi-sdk  (sync-back)
+ *   codex/*   → codex-sdk  → main
+ *   main      → cursor-sdk | pi-sdk | codex-sdk  (sync-back)
  *
  * Usage:
  *   BASE_REF=main HEAD_REF=cursor/feat bun run check-branch-flow
@@ -32,7 +33,8 @@ console.error('');
 console.error('Expected merge graph:');
 console.error('  cursor/<feature>  →  cursor-sdk  →  main');
 console.error('  pi/<feature>      →  pi-sdk      →  main');
-console.error('  main              →  cursor-sdk | pi-sdk  (sync-back only)');
+console.error('  codex/<feature>   →  codex-sdk   →  main');
+console.error('  main              →  cursor-sdk | pi-sdk | codex-sdk  (sync-back only)');
 console.error('');
 console.error('See AGENTS.md → SDK lane branches.');
 process.exit(1);
