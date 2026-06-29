@@ -68,7 +68,9 @@ main              →  cursor-sdk | pi-sdk | codex-sdk   (sync-back only)
 - `codex-sdk` ← only `codex/*` or `main` (sync-back)
 - `main` ← only `cursor-sdk`, `pi-sdk`, `codex-sdk`, or `changeset-release/*`
 
-Shared harness code (`sessions`, `agents.registry`, web UI) may be touched from any SDK lane — pick the lane for the **primary SDK** under test. After one SDK branch merges to `main`, sync the other integration branches: `git checkout pi-sdk && git merge main && git push` (or the equivalent for `cursor-sdk` / `codex-sdk`).
+Shared harness code (`sessions`, `agents.registry`, web UI) may be touched from any SDK lane — pick the lane for the **primary SDK** under test. Before making an SDK-specific change, ask whether the behavior belongs in the shared provider contract, base provider, registry, session orchestration, event schema, settings catalog, or model-picker UI. If it can serve multiple SDKs without speculative complexity, implement the shared shape first and keep only the SDK adapter details inside `providers/<sdk>-agent.provider.ts`. After one SDK branch merges to `main`, sync the other integration branches: `git checkout pi-sdk && git merge main && git push` (or the equivalent for `cursor-sdk` / `codex-sdk`).
+
+**Shared-first rule:** SDK lanes isolate risky provider work, but they must not become silos. Every SDK PR should state whether its change is provider-neutral or SDK-specific; provider-neutral improvements should be organized so Cursor, Pi, Codex, and future SDKs can reuse them through the common interfaces.
 
 Verify locally before opening a PR: `BASE_REF=cursor-sdk HEAD_REF=cursor/my-feat bun run check-branch-flow`
 
@@ -90,6 +92,8 @@ Every feature branch **must** use an SDK lane prefix — CI `branch-flow` reject
 **`<slug>` rules:** kebab-case, short, describes the work — `codex/provider-integration`, not `codex/fix` or `codex/john-wip`.
 
 **Multi-agent phases:** per-lane branches like `cursor/phase-04-a-backend`, then combine into `cursor/phase-04-combined` before one PR to the integration branch (see [Parallel-agent lane convention](#parallel-agent-lane-convention)).
+
+**Shared/provider-neutral work:** if the primary change is truly shared across providers, prefer a short-lived branch under the SDK lane that is actively proving the abstraction (for example `codex/provider-contract-cleanup` while building Codex), merge it through that lane, then sync `main` back to the other SDK branches. Do not create another permanent integration branch for shared work unless the user explicitly asks; `main` is the shared source of truth.
 
 **Create a branch** (always from the updated integration branch, not `main`):
 
@@ -558,7 +562,8 @@ Nuncio runs on **Bun** (≥ 1.3) — server, build, and tests. Bun replaces npm,
 - **TDD-first.** Write the failing test first; implement only what makes it pass; never call work done on a red suite, and never weaken a test to pass the build. See [Working practice: TDD-first](#working-practice-tdd-first).
 - **Async-first, not realtime chat.** Sessions are delegated background tasks; optimize for "delegate and review later," not "chat back and forth."
 - **In-process agent, not subprocess.** One Bun process hosts many agent sessions (today Pi `AgentSession`s sharing `ModelRegistry`/`AuthStorage`; tomorrow each provider manages its own). Simpler and faster than spawning a CLI per session. Acceptable trade-off: one crash kills active sessions (personal scale, 3–5 concurrent, SQLite recovers).
-- **Provider-agnostic harness.** Pi SDK is the inaugural provider, not the architecture. New agent SDKs (Cursor, OpenAI/Claude agents, …) implement the same `AgentProvider` contract and register — no session-layer or UI-layer changes to adopt them.
+- **Provider-agnostic harness.** Pi SDK is the inaugural provider, not the architecture. New agent SDKs (Cursor, Codex, OpenAI/Claude agents, …) implement the same `AgentProvider` contract and register — no session-layer or UI-layer changes to adopt them.
+- **Shared-first provider design.** When working in any SDK lane, keep asking whether the code is actually common infrastructure. Prefer shared contracts, event shapes, status handling, settings definitions, model catalog plumbing, and UI affordances over one-off SDK branches in the session or frontend layers. SDK-specific code should mostly be auth, SDK client setup, model translation, tool/runtime quirks, and delta mapping.
 - **3-layer state decoupling** — conversation durable, agent loop disposable, machine state a strict FSM.
 - **YAGNI / KISS / DRY.** Don't build ahead of the roadmap. The agent-provider abstraction is the one forward-looking investment, because the whole point is multi-SDK support.
 - **Docs stay in sync with code.** After every implementation, update `README.md` (commands/API/architecture/status) and `AGENTS.md` if conventions shifted — stale docs count as unfinished work.
