@@ -86,9 +86,33 @@ PRs that are pure refactors, tests, or docs do **not** need a changeset.
 
 Merging a PR with changesets triggers a `chore: release version` PR that bumps the version and updates `CHANGELOG.md`; merging that PR cuts the release (git tag `v<version>` + GitHub Release). See [`.changeset/README.md`](.changeset/README.md) and [AGENTS.md → Releases & changelog](AGENTS.md) for the full automation flow.
 
+## Branch & worktree naming
+
+Full spec: [AGENTS.md → Branch & worktree naming](AGENTS.md#branch--worktree-naming-contributors).
+
+**Branches (required):**
+
+- Feature work uses **`cursor/<slug>`** or **`pi/<slug>`** (kebab-case slug) — branch from **`cursor-sdk`** or **`pi-sdk`**, not `main`.
+- Open the PR against the matching integration branch. Only `cursor-sdk`, `pi-sdk`, and `changeset-release/*` may merge to `main`.
+- Do **not** use bare `fix/*`, `docs/*`, or `feat/*` prefixes — `branch-flow` CI will fail.
+
+**Worktrees (optional):**
+
+- Default: one shared checkout on your feature branch.
+- For an isolated second checkout, add a worktree with the **same branch name** (`cursor/<slug>`), based on `origin/cursor-sdk` (or `pi-sdk`):
+
+  ```bash
+  git fetch origin
+  git worktree add -b cursor/my-feature ../nuncio-my-feature origin/cursor-sdk
+  ```
+
+- Remove when done: `git worktree remove …` + `git worktree prune`.
+
+**Session worktrees (runtime — not for repo dev):** when users pick a project in the app, Nuncio creates `nuncio/<sessionId>-<slug>` under `~/.nuncio/workspaces/` on the **target repo**. That is separate from contributor git worktrees on the Nuncio repo.
+
 ## Pull request process
 
-1. **Branch** from the SDK integration branch (`cursor-sdk` or `pi-sdk`), not `main`. Use prefix `cursor/<slug>` or `pi/<slug>` (see [AGENTS.md → SDK lane branches](AGENTS.md#sdk-lane-branches-enforced-by-ci)).
+1. **Branch** from the SDK integration branch (`cursor-sdk` or `pi-sdk`), not `main`. Use prefix `cursor/<slug>` or `pi/<slug>` — see [Branch & worktree naming](#branch--worktree-naming) and [AGENTS.md → SDK lane branches](AGENTS.md#sdk-lane-branches-enforced-by-ci).
 2. **TDD-first** — see above. The suite must be green before you open a PR.
 3. **Add a changeset** if the change is user-facing.
 4. **Sync docs** — update `README.md` (commands, API, architecture, status) and `AGENTS.md` (if architecture or conventions shifted). A merged change with stale docs isn't done.
