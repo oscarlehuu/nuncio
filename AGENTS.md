@@ -535,3 +535,19 @@ Minimal web GUI for coding agents (Codex, Claude, Cursor, OpenCode). Synara fork
 - Stuck on **Bun runtime (native modules, Pi under Bun)** → Synara (ships on Bun).
 - Stuck on **web-GUI-for-agents architecture** → T3Code `docs/architecture/overview.md`.
 - Add more references here as they're discovered.
+
+## Learned User Preferences
+
+- User communicates in Vietnamese; match the user's language in chat replies only — code, docs, commits, PRs, and changesets stay English.
+- User orchestrates through agents — agents own coding, PRs, changesets, and merges when asked; do not expect the user to run interactive CLI (`bun run changeset`).
+- Mirror Cursor IDE UX for model controls: reasoning effort as a slider, fast as a per-model lightning toggle (not a separate model row), badges inline with the model name.
+- Consult Synara first for multi-provider UI patterns before inventing alternatives.
+- Prefer conservative version bumps: default `patch` unless the change is a clear new end-to-end user workflow.
+
+## Learned Workspace Facts
+
+- Git worktrees (Cursor dev worktrees and Nuncio session worktrees) checkout local branch refs — they do not auto-fetch from remote; run `git fetch` on the main clone before spawning agents if remote-latest matters.
+- Cursor agent dev worktrees accumulate under `~/.cursor/worktrees/<project>/` — clean with `git worktree remove` + `git worktree prune`.
+- Nuncio per-session worktrees live under `~/.nuncio/workspaces/<sessionId>/` on target project repos — separate from Nuncio repo dev worktrees.
+- Cloud agents (Devin, etc.) clone from GitHub on their VM; the local Mac needs `git fetch`/`pull` after they push.
+- PWA icons and static assets in `apps/web/public/` must remain git-tracked — watch `.gitignore` for accidental excludes.
