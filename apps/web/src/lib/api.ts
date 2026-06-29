@@ -37,6 +37,8 @@ export interface SessionEvent {
   createdAt: number;
 }
 
+export type ProviderRequestDecision = 'approve' | 'deny';
+
 export class SteerApiError extends Error {
   readonly status: number;
 
@@ -100,19 +102,29 @@ export async function createSession(
   projectPath?: string,
   baseBranch?: string,
   modelOptions?: ModelOptionsMap,
+  useWorktree = false,
 ): Promise<Session> {
   const body: {
     prompt: string;
     model?: string;
     provider?: string;
+    workspace?: string;
     projectPath?: string;
     baseBranch?: string;
     modelOptions?: ModelOptionsMap;
+    useWorktree?: boolean;
   } = { prompt };
   if (model) body.model = model;
   if (provider) body.provider = provider;
-  if (projectPath) body.projectPath = projectPath;
-  if (baseBranch) body.baseBranch = baseBranch;
+  if (projectPath) {
+    body.projectPath = projectPath;
+    if (baseBranch) body.baseBranch = baseBranch;
+    if (useWorktree) {
+      body.useWorktree = true;
+    } else {
+      body.workspace = projectPath;
+    }
+  }
   if (modelOptions && Object.keys(modelOptions).length > 0) body.modelOptions = modelOptions;
 
   const res = await fetch('/api/sessions', {
@@ -175,6 +187,23 @@ export async function restoreSession(id: string): Promise<Session> {
 export async function deleteSession(id: string): Promise<void> {
   const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
   if (!res.ok) throw new Error('Failed to delete session');
+}
+
+export async function respondProviderRequest(
+  sessionId: string,
+  requestId: string,
+  decision: ProviderRequestDecision,
+): Promise<{ requestId: string; decision: ProviderRequestDecision }> {
+  const res = await fetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/provider-requests/${encodeURIComponent(requestId)}/respond`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision }),
+    },
+  );
+  if (!res.ok) throw new Error('Failed to respond to provider request');
+  return res.json();
 }
 
 export async function renameSession(id: string, title: string): Promise<Session> {

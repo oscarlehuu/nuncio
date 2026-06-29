@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Archive, ArrowRightLeft, Check, FolderGit2, GitBranch, Pencil, RotateCcw, Send, Square, Trash2, X } from 'lucide-react';
-import type { Session, SessionEvent } from '../lib/api';
+import { Archive, ArrowRightLeft, Check, FolderGit2, GitBranch, Pause, Pencil, RotateCcw, Send, Square, Trash2, X } from 'lucide-react';
+import type { ProviderRequestDecision, Session, SessionEvent } from '../lib/api';
 import { projectDisplayName } from '../lib/projects';
 import { FALLBACK_PROVIDERS, modelById, prettyModelName, type ModelProvider } from '../lib/model-providers';
+import { isCodexApprovalEngine } from '../lib/codex-approval-engine';
 import { useContextUsage } from '../lib/use-context-usage';
 import { ContextUsageButton } from './context-usage-button';
 import { Transcript } from './session-transcript';
+import { ApprovalModePicker, type ApprovalMode } from './approval-mode-picker';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -43,6 +45,12 @@ interface SessionDetailProps {
   onContinueOnMobile?: () => void;
   /** Cursor IDE may still be running this CLI handoff chat on the host. */
   machineActive?: boolean;
+  approvalMode?: ApprovalMode;
+  onApprovalModeChange?: (mode: ApprovalMode) => void | Promise<void>;
+  onRespondProviderRequest?: (
+    requestId: string,
+    decision: ProviderRequestDecision,
+  ) => void | Promise<void>;
   steering?: boolean;
   lifecycleBusy?: boolean;
 }
@@ -59,6 +67,9 @@ export function SessionDetail({
   onRename,
   onContinueOnMobile,
   machineActive = false,
+  approvalMode = 'full-access',
+  onApprovalModeChange,
+  onRespondProviderRequest,
   steering,
   lifecycleBusy,
 }: SessionDetailProps) {
@@ -66,6 +77,7 @@ export function SessionDetail({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
+  const [respondingRequestId, setRespondingRequestId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pendingScrollToBottomRef = useRef(true);
   const streaming = session.status === 'RUNNING';
@@ -76,6 +88,7 @@ export function SessionDetail({
     session.status === 'ARCHIVED' ||
     steering ||
     lifecycleBusy;
+  const showHeaderPause = !isRunning && session.status !== 'PAUSED' && !isArchived;
   const canArchive = !isArchived;
   const canRestore = isArchived && !!onRestore;
   const canDelete = isArchived && !!onDelete;
@@ -97,6 +110,8 @@ export function SessionDetail({
   const repoName = projectDisplayName(session.projectPath) ?? projectDisplayName(session.workspace);
   const branchName = session.branch;
   const contextUsage = useContextUsage(events);
+  const showApprovalMode =
+    !!onApprovalModeChange && isCodexApprovalEngine(session.provider, session.model);
 
   useEffect(() => {
     pendingScrollToBottomRef.current = true;
@@ -117,8 +132,13 @@ export function SessionDetail({
   const handleSteer = async () => {
     const text = steerText.trim();
     if (!text || steerDisabled) return;
-    await onSteer(text);
     setSteerText('');
+    try {
+      await onSteer(text);
+    } catch (error) {
+      setSteerText((current) => (current.trim() ? current : text));
+      throw error;
+    }
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   };
@@ -135,11 +155,23 @@ export function SessionDetail({
     setTitleDraft('');
   };
 
+  const handleRespondProviderRequest = async (
+    requestId: string,
+    decision: ProviderRequestDecision,
+  ) => {
+    if (!onRespondProviderRequest || respondingRequestId) return;
+    setRespondingRequestId(requestId);
+    try {
+      await onRespondProviderRequest(requestId, decision);
+    } finally {
+      setRespondingRequestId(null);
+    }
+  };
+
   return (
     <section className="flex-1 flex flex-col min-h-0">
       <TooltipProvider>
       <header className="shrink-0 flex items-center gap-3 px-4 md:px-5 py-3 border-b border-border bg-card/80 backdrop-blur min-h-[52px]">
-        {/* Centered title with tooltip + rename */}
         <div className="flex-1 min-w-0 flex justify-center items-center">
           {editingTitle ? (
             <div className="flex items-center gap-1.5 max-w-[60%]">
@@ -204,7 +236,6 @@ export function SessionDetail({
           )}
         </div>
 
-        {/* Right-side actions */}
         <div className="flex items-center gap-1 shrink-0">
             {showContinueOnMobile && (
               <Tooltip>
@@ -220,6 +251,22 @@ export function SessionDetail({
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>Continue on mobile</TooltipContent>
+              </Tooltip>
+            )}
+            {showHeaderPause && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => void onPause()}
+                    disabled={lifecycleBusy}
+                    aria-label="Pause session"
+                  >
+                    <Pause />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Pause session</TooltipContent>
               </Tooltip>
             )}
             {canArchive && (
@@ -277,7 +324,14 @@ export function SessionDetail({
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 md:px-8 min-h-0">
         <div className="max-w-[760px] mx-auto">
-          <Transcript events={events} streaming={streaming} />
+          <Transcript
+            events={events}
+            streaming={streaming}
+            respondingRequestId={respondingRequestId}
+            onRespondProviderRequest={
+              onRespondProviderRequest ? handleRespondProviderRequest : undefined
+            }
+          />
         </div>
       </div>
 
@@ -305,12 +359,20 @@ export function SessionDetail({
             className="min-h-[44px] resize-none border-0 shadow-none bg-transparent focus-visible:ring-0 focus-visible:border-0 text-[14px]"
           />
           <div className="flex items-center justify-between gap-2 px-3 pb-2">
-            <div className="flex items-center gap-3 min-w-0">
+            <div className="flex items-center gap-3 min-w-0 flex-wrap">
               <span className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
                 <span className="size-1.5 rounded-full bg-primary" />
                 {modelName}
               </span>
               <ContextUsageButton usage={contextUsage} />
+              {showApprovalMode ? (
+                <ApprovalModePicker
+                  value={approvalMode}
+                  onChange={onApprovalModeChange}
+                  disabled={lifecycleBusy}
+                  surface="embedded"
+                />
+              ) : null}
             </div>
             {isRunning ? (
               <Button

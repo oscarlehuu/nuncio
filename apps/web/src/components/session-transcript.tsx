@@ -1,5 +1,5 @@
 import { Fragment, memo, useMemo } from 'react';
-import type { SessionEvent } from '../lib/api';
+import type { ProviderRequestDecision, SessionEvent } from '../lib/api';
 import {
   buildTranscriptBlocks,
   workingIndicatorLabel,
@@ -8,6 +8,7 @@ import {
 import { ThinkingBlock } from './transcript-blocks/thinking-block';
 import { ToolGroup, type ToolGroupTool } from './transcript-blocks/tool-group';
 import { CursorContextBlock } from './transcript-blocks/cursor-context-block';
+import { ProviderRequestCard } from './provider-request-card';
 import {
   AssistantBubble,
   ErrorBlock,
@@ -17,6 +18,11 @@ import {
 interface TranscriptProps {
   events: SessionEvent[];
   streaming?: boolean;
+  respondingRequestId?: string | null;
+  onRespondProviderRequest?: (
+    requestId: string,
+    decision: ProviderRequestDecision,
+  ) => void | Promise<void>;
 }
 
 type RenderItem =
@@ -89,7 +95,17 @@ function ErrorRow({ message }: { message: string }) {
   );
 }
 
-function RenderItemView({ item, streaming }: { item: RenderItem; streaming?: boolean }) {
+function RenderItemView({
+  item,
+  streaming,
+  respondingRequestId,
+  onRespondProviderRequest,
+}: {
+  item: RenderItem;
+  streaming?: boolean;
+  respondingRequestId?: string | null;
+  onRespondProviderRequest?: TranscriptProps['onRespondProviderRequest'];
+}) {
   if (item.type === 'tool-group') {
     return <ToolGroup tools={item.tools} />;
   }
@@ -100,7 +116,6 @@ function RenderItemView({ item, streaming }: { item: RenderItem; streaming?: boo
     case 'assistant':
       return <AssistantBlock text={block.text} streaming={streaming && block.streaming} />;
     case 'tool':
-      // Single tool (grouping produced only one) — still wrap in ToolGroup for consistency.
       return (
         <ToolGroup
           tools={[
@@ -125,6 +140,14 @@ function RenderItemView({ item, streaming }: { item: RenderItem; streaming?: boo
           sections={block.sections}
         />
       );
+    case 'provider_request':
+      return (
+        <ProviderRequestCard
+          request={block}
+          responding={respondingRequestId === block.requestId}
+          onRespond={onRespondProviderRequest}
+        />
+      );
     case 'error':
       return <ErrorRow message={block.message} />;
     default: {
@@ -135,7 +158,12 @@ function RenderItemView({ item, streaming }: { item: RenderItem; streaming?: boo
   }
 }
 
-export const Transcript = memo(function Transcript({ events, streaming }: TranscriptProps) {
+export const Transcript = memo(function Transcript({
+  events,
+  streaming,
+  respondingRequestId,
+  onRespondProviderRequest,
+}: TranscriptProps) {
   const blocks = useMemo(() => buildTranscriptBlocks(events), [events]);
   const items = useMemo(() => groupConsecutiveTools(blocks), [blocks]);
   const indicatorLabel = workingIndicatorLabel(blocks, streaming ?? false);
@@ -155,7 +183,12 @@ export const Transcript = memo(function Transcript({ events, streaming }: Transc
       {items.map((item, i) => (
         <Fragment key={`item-${i}`}>
           {i === indicatorIndex && <WorkingIndicator label={indicatorLabel} />}
-          <RenderItemView item={item} streaming={streaming} />
+          <RenderItemView
+            item={item}
+            streaming={streaming}
+            respondingRequestId={respondingRequestId}
+            onRespondProviderRequest={onRespondProviderRequest}
+          />
         </Fragment>
       ))}
       {streaming && indicatorIndex >= items.length && (

@@ -15,28 +15,44 @@ import { canTransition } from './domain/sessions.fsm';
 import type {
   CreateSessionDto,
   HandoffSessionDto,
+  ProviderRequestDecision,
+  ProviderRequestInput,
+  ProviderRequestResult,
   SessionDto,
   SessionEvent,
   SessionStatus,
 } from './domain/sessions.types';
 import { isCursorCliRecentlyActive } from '../agents/providers/cursor-cli.active-run';
 import { EventsRepository } from './persistence/events.repository';
+import { ProviderRequestsRepository } from './persistence/provider-requests.repository';
 import { SessionsRepository } from './persistence/sessions.repository';
 
 type StreamListener = (event: SessionEvent) => void;
 
+interface PendingProviderRequest {
+  sessionId: string;
+  provider: string;
+  method: string;
+  params?: unknown;
+  resolve: (result: ProviderRequestResult) => void;
+}
+
 @Injectable()
 export class SessionsService {
   private readonly streams = new Map<string, EventEmitter>();
+  private readonly providerRequests = new Map<string, PendingProviderRequest>();
   private readonly transcriptMtimeCache = new Map<string, number>();
 
   constructor(
     private readonly sessions: SessionsRepository,
     private readonly events: EventsRepository,
+    private readonly providerRequestRecords: ProviderRequestsRepository,
     private readonly agents: AgentRegistry,
     private readonly git: GitService,
     private readonly cursorLocal: CursorLocalSessionsService,
-  ) {}
+  ) {
+    this.resolveStaleProviderRequests();
+  }
 
   list(includeArchived = false): SessionDto[] {
     return this.sessions.list(includeArchived);
@@ -82,6 +98,7 @@ export class SessionsService {
     await this.agents.getAvailable(providerId);
 
     const id = uuidv4().slice(0, 8);
+    let workspace = input.workspace?.trim() || undefined;
     let projectPath: string | undefined;
     let baseBranch: string | undefined;
     let worktreePath: string | undefined;
@@ -89,17 +106,24 @@ export class SessionsService {
 
     if (input.projectPath?.trim()) {
       projectPath = input.projectPath.trim();
+      await this.git.listBranches(projectPath);
       baseBranch = input.baseBranch?.trim() || undefined;
-      const slug = input.prompt.trim().split('\n')[0] ?? 'task';
-      const worktree = await this.git.createWorktree(projectPath, baseBranch, id, slug);
-      worktreePath = worktree.worktreePath;
-      branch = worktree.branch;
+      if (input.useWorktree === true) {
+        workspace = undefined;
+        const slug = input.prompt.trim().split('\n')[0] ?? 'task';
+        const worktree = await this.git.createWorktree(projectPath, baseBranch, id, slug);
+        worktreePath = worktree.worktreePath;
+        branch = worktree.branch;
+      } else {
+        workspace = workspace ?? projectPath;
+      }
     }
 
     const session = this.sessions.create({
       ...input,
       id,
       provider: providerId,
+      workspace,
       projectPath,
       baseBranch,
       worktreePath,
@@ -171,6 +195,7 @@ export class SessionsService {
 
     await provider.steer(id, trimmed, {
       emit: (event) => this.onAgentEvent(id, event),
+      requestProviderApproval: (request) => this.requestProviderApproval(id, request),
       model: current.model,
       modelOptions: current.modelOptions,
       workspace,
@@ -192,6 +217,7 @@ export class SessionsService {
     if (session.status === 'RUNNING') {
       this.agents.resolveForSession(session).dispose(id);
     }
+    this.cancelProviderRequests(id);
     this.transition(id, 'PAUSED');
     return this.requireSession(id);
   }
@@ -202,6 +228,7 @@ export class SessionsService {
       throw new BadRequestException(`Cannot archive session in status ${session.status}`);
     }
     this.agents.resolveForSession(session).dispose(id);
+    this.cancelProviderRequests(id);
     this.transition(id, 'ARCHIVED');
     return this.requireSession(id);
   }
@@ -232,6 +259,7 @@ export class SessionsService {
       throw new BadRequestException(`Cannot delete session in status ${session.status}; archive first`);
     }
     this.agents.resolveForSession(session).dispose(id);
+    this.cancelProviderRequests(id);
     this.streams.delete(id);
     this.sessions.delete(id);
   }
@@ -241,6 +269,62 @@ export class SessionsService {
     const handler = (event: SessionEvent) => listener(event);
     bus.on('event', handler);
     return () => bus.off('event', handler);
+  }
+
+  requestProviderApproval(
+    sessionId: string,
+    request: ProviderRequestInput,
+  ): Promise<ProviderRequestResult> {
+    this.requireSession(sessionId);
+    const requestId = uuidv4().slice(0, 8);
+    const record = this.providerRequestRecords.create({
+      requestId,
+      sessionId,
+      provider: request.provider,
+      method: request.method,
+      ...(request.params !== undefined ? { params: request.params } : {}),
+    });
+
+    this.appendAndEmit(sessionId, 'provider_request', this.providerRequestPayload(record));
+
+    return new Promise((resolve) => {
+      this.providerRequests.set(requestId, {
+        sessionId,
+        provider: request.provider,
+        method: request.method,
+        ...(request.params !== undefined ? { params: request.params } : {}),
+        resolve,
+      });
+    });
+  }
+
+  respondProviderRequest(
+    sessionId: string,
+    requestId: string,
+    decision: unknown,
+  ): ProviderRequestResult {
+    if (decision !== 'approve' && decision !== 'deny') {
+      throw new BadRequestException('decision must be approve or deny');
+    }
+    const safeDecision: ProviderRequestDecision = decision;
+
+    if (!this.providerRequestRecords.findPending(sessionId, requestId)) {
+      throw new NotFoundException('Provider request not found');
+    }
+
+    const pending = this.providerRequests.get(requestId);
+    const resolved = this.providerRequestRecords.resolve(requestId, safeDecision);
+    if (!resolved) {
+      throw new NotFoundException('Provider request not found');
+    }
+
+    const result = { requestId, decision: safeDecision };
+    this.appendAndEmit(sessionId, 'provider_request_resolved', this.providerRequestPayload(resolved));
+    if (pending?.sessionId === sessionId) {
+      this.providerRequests.delete(requestId);
+      pending.resolve(result);
+    }
+    return result;
   }
 
   private hydrateIfNeeded(session: SessionDto): void {
@@ -340,6 +424,8 @@ export class SessionsService {
       const provider = await this.agents.resolveAvailableForSession(session);
       await provider.run(session.id, session.prompt, {
         emit: (event) => this.onAgentEvent(session.id, event),
+        requestProviderApproval: (request) =>
+          this.requestProviderApproval(session.id, request),
         model: session.model,
         modelOptions: session.modelOptions,
         workspace: session.worktreePath ?? session.workspace ?? undefined,
@@ -347,5 +433,55 @@ export class SessionsService {
         cursorChatId: session.cursorChatId,
       });
     })();
+  }
+
+  private cancelProviderRequests(id: string): void {
+    const resolved = this.providerRequestRecords.resolvePendingForSession(
+      id,
+      'deny',
+      'session_disposed',
+    );
+    for (const record of resolved) {
+      const pending = this.providerRequests.get(record.requestId);
+      if (pending?.sessionId === id) {
+        this.providerRequests.delete(record.requestId);
+        pending.resolve({ requestId: record.requestId, decision: 'deny' });
+      }
+      this.appendAndEmit(id, 'provider_request_resolved', this.providerRequestPayload(record));
+    }
+  }
+
+  private resolveStaleProviderRequests(): void {
+    const resolved = this.providerRequestRecords.resolveAllPending(
+      'deny',
+      'server_restarted',
+    );
+    for (const record of resolved) {
+      this.appendAndEmit(
+        record.sessionId,
+        'provider_request_resolved',
+        this.providerRequestPayload(record),
+      );
+    }
+  }
+
+  private providerRequestPayload(record: {
+    requestId: string;
+    provider: string;
+    method: string;
+    params?: unknown;
+    status: string;
+    decision?: ProviderRequestDecision | null;
+    reason?: string | null;
+  }): Record<string, unknown> {
+    return {
+      requestId: record.requestId,
+      provider: record.provider,
+      method: record.method,
+      status: record.status,
+      ...(record.params !== undefined ? { params: record.params } : {}),
+      ...(record.decision ? { decision: record.decision } : {}),
+      ...(record.reason ? { reason: record.reason } : {}),
+    };
   }
 }

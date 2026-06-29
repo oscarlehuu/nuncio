@@ -1,7 +1,12 @@
 import type { ModelOptionDescriptor } from './model-options';
 
 /** Select options rendered as a Faster ↔ Smarter slider (Cursor-style). */
-export const EFFORT_SLIDER_OPTION_IDS = ['reasoning', 'thinkingLevel', 'effort'] as const;
+export const EFFORT_SLIDER_OPTION_IDS = [
+  'reasoning',
+  'reasoningEffort',
+  'thinkingLevel',
+  'effort',
+] as const;
 
 export type EffortSliderOptionId = (typeof EFFORT_SLIDER_OPTION_IDS)[number];
 

@@ -10,6 +10,7 @@ import {
   fetchSessions,
   pauseSession,
   relativeTime,
+  respondProviderRequest,
   restoreSession,
   statusLabel,
   steerSession,
@@ -90,6 +91,42 @@ describe('api fetch functions', () => {
       model: 'cursor:composer-2.5',
       provider: 'cursor',
       modelOptions: { fast: true },
+    });
+  });
+
+  it('createSession posts a selected project and branch as a direct workspace by default', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ id: 's4' }));
+    await createSession('go', 'cursor:composer-2.5', 'cursor', '/code/nuncio', 'main');
+    const call = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(call.body as string)).toEqual({
+      prompt: 'go',
+      model: 'cursor:composer-2.5',
+      provider: 'cursor',
+      projectPath: '/code/nuncio',
+      baseBranch: 'main',
+      workspace: '/code/nuncio',
+    });
+  });
+
+  it('createSession posts worktree metadata only when requested', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ id: 's5' }));
+    await createSession(
+      'go',
+      'cursor:composer-2.5',
+      'cursor',
+      '/code/nuncio',
+      'main',
+      undefined,
+      true,
+    );
+    const call = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(call.body as string)).toEqual({
+      prompt: 'go',
+      model: 'cursor:composer-2.5',
+      provider: 'cursor',
+      projectPath: '/code/nuncio',
+      baseBranch: 'main',
+      useWorktree: true,
     });
   });
 
@@ -201,5 +238,17 @@ describe('api fetch functions', () => {
   it('deleteSession throws when the response is not ok', async () => {
     fetchMock.mockResolvedValue(jsonRes(null, false, 400));
     await expect(deleteSession('s1')).rejects.toThrow('Failed to delete session');
+  });
+
+  it('respondProviderRequest posts the approval decision', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ requestId: 'req-1', decision: 'approve' }));
+    await respondProviderRequest('s1', 'req-1', 'approve');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/sessions/s1/provider-requests/req-1/respond',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ decision: 'approve' }),
+      }),
+    );
   });
 });

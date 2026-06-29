@@ -12,15 +12,18 @@ import {
   fetchSessions,
   pauseSession,
   renameSession,
+  respondProviderRequest,
   restoreSession,
   steerSession,
   SteerApiError,
+  type ProviderRequestDecision,
   type Session,
 } from './lib/api';
 import { clearSetting, fetchSettings, updateSetting, type Setting } from './lib/settings-api';
 import { useSessionStream } from './lib/use-session-stream';
 import { useActiveRun } from './lib/use-active-run';
 import { HomeView } from './components/home-view';
+import type { ApprovalMode } from './components/approval-mode-picker';
 import { HandoffPicker } from './components/handoff-picker';
 import { ChangelogView } from './components/changelog-view';
 import { DesktopSidebarHoverRail, DesktopSidebarPinned } from './components/desktop-sidebar-shell';
@@ -51,6 +54,22 @@ function sessionIdFromPath(pathname: string): string | null {
   return matchPath('/session/:sessionId', pathname)?.params.sessionId ?? null;
 }
 
+const SESSION_STATUSES: readonly Session['status'][] = [
+  'CREATED',
+  'RUNNING',
+  'IDLE',
+  'PAUSED',
+  'ARCHIVED',
+  'ERROR',
+];
+
+function asSessionStatus(value: unknown): Session['status'] | null {
+  if (typeof value !== 'string') return null;
+  return (SESSION_STATUSES as readonly string[]).includes(value)
+    ? (value as Session['status'])
+    : null;
+}
+
 export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -71,6 +90,11 @@ export default function App() {
   const [listsReady, setListsReady] = useState(false);
   const sessionsErrorShown = useRef(false);
   const archivedErrorShown = useRef(false);
+  const approvalMode: ApprovalMode =
+    settings.find((setting) => setting.key === 'NUNCIO_CODEX_RUNTIME_MODE')?.value ===
+    'approval-required'
+      ? 'approval-required'
+      : 'full-access';
 
   const refresh = useCallback(async () => {
     try {
@@ -153,6 +177,7 @@ export default function App() {
     projectPath?: string,
     baseBranch?: string,
     modelOptions?: ModelOptionsMap,
+    useWorktree = false,
   ) => {
     setCreating(true);
     try {
@@ -163,6 +188,7 @@ export default function App() {
         projectPath,
         baseBranch,
         modelOptions,
+        useWorktree,
       );
       const list = await refresh();
       navigate(`/session/${session.id}`);
@@ -195,6 +221,22 @@ export default function App() {
       setSteering(false);
     }
   };
+
+  const handleSessionStatus = useCallback((id: string, status: Session['status'], createdAt: number) => {
+    setSessions((prev) => {
+      let changed = false;
+      const next = prev.map((session) => {
+        if (session.id !== id) return session;
+        const updatedAt = Math.max(session.updatedAt, createdAt);
+        if (session.status === status && session.updatedAt === updatedAt) return session;
+        changed = true;
+        return { ...session, status, updatedAt };
+      });
+      return changed ? next : prev;
+    });
+
+    if (id === activeId && status !== 'RUNNING') setSteering(false);
+  }, [activeId]);
 
   const handlePause = async () => {
     if (!activeId) return;
@@ -276,6 +318,10 @@ export default function App() {
     }
   }, []);
 
+  useEffect(() => {
+    void refreshSettings();
+  }, [refreshSettings]);
+
   const handleOpenSettings = useCallback(() => {
     navigate('/settings');
     dismissTransientSidebar();
@@ -311,6 +357,32 @@ export default function App() {
       toast.error(`Failed to clear ${key}`);
     }
   }, [refreshModels]);
+
+  const handleApprovalModeChange = useCallback(async (mode: ApprovalMode) => {
+    try {
+      const updated = await updateSetting('NUNCIO_CODEX_RUNTIME_MODE', mode);
+      setSettings((prev) =>
+        prev.some((s) => s.key === updated.key)
+          ? prev.map((s) => (s.key === updated.key ? updated : s))
+          : [...prev, updated],
+      );
+      toast.success(`Saved ${updated.label}`);
+    } catch {
+      toast.error('Failed to save approval mode');
+    }
+  }, []);
+
+  const handleRespondProviderRequest = useCallback(
+    async (requestId: string, decision: ProviderRequestDecision) => {
+      if (!activeId) return;
+      try {
+        await respondProviderRequest(activeId, requestId, decision);
+      } catch {
+        toast.error('Failed to respond to provider request');
+      }
+    },
+    [activeId],
+  );
 
   const openHandoff = useCallback((workspace?: string) => {
     setHandoffInitialWorkspace(workspace);
@@ -385,6 +457,8 @@ export default function App() {
                 providers={providers}
                 onSubmit={handleCreate}
                 onContinueOnMobile={() => openHandoff()}
+                approvalMode={approvalMode}
+                onApprovalModeChange={handleApprovalModeChange}
                 loading={creating}
               />
             }
@@ -397,6 +471,9 @@ export default function App() {
                 archivedSessions={archivedSessions}
                 listsReady={listsReady}
                 providers={providers}
+                approvalMode={approvalMode}
+                onApprovalModeChange={handleApprovalModeChange}
+                onRespondProviderRequest={handleRespondProviderRequest}
                 onSteer={handleSteer}
                 onPause={handlePause}
                 onArchive={handleArchive}
@@ -412,6 +489,7 @@ export default function App() {
                     return [session, ...prev];
                   });
                 }}
+                onSessionStatus={handleSessionStatus}
                 onMissingSession={() => {
                   toast.error('Session not found');
                   navigate('/', { replace: true });
@@ -494,6 +572,12 @@ interface SessionRouteProps {
   archivedSessions: Session[];
   listsReady: boolean;
   providers: ModelProvider[];
+  approvalMode: ApprovalMode;
+  onApprovalModeChange: (mode: ApprovalMode) => void | Promise<void>;
+  onRespondProviderRequest: (
+    requestId: string,
+    decision: ProviderRequestDecision,
+  ) => void | Promise<void>;
   onSteer: (message: string, options?: { forceResume?: boolean }) => Promise<void>;
   onPause: () => Promise<void>;
   onArchive: () => Promise<void>;
@@ -504,6 +588,7 @@ interface SessionRouteProps {
   steering: boolean;
   lifecycleBusy: boolean;
   onSessionLoaded: (session: Session) => void;
+  onSessionStatus: (id: string, status: Session['status'], createdAt: number) => void;
   onMissingSession: () => void;
 }
 
@@ -512,6 +597,9 @@ function SessionRoute({
   archivedSessions,
   listsReady,
   providers,
+  approvalMode,
+  onApprovalModeChange,
+  onRespondProviderRequest,
   onSteer,
   onPause,
   onArchive,
@@ -522,6 +610,7 @@ function SessionRoute({
   steering,
   lifecycleBusy,
   onSessionLoaded,
+  onSessionStatus,
   onMissingSession,
 }: SessionRouteProps) {
   const { sessionId } = useParams();
@@ -562,6 +651,21 @@ function SessionRoute({
     };
   }, [sessionId, listedSession, listsReady, onMissingSession, onSessionLoaded]);
 
+  useEffect(() => {
+    if (!session) return;
+    let status: Session['status'] | null = null;
+    let createdAt = Date.now();
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      const event = events[i];
+      if (event?.type !== 'status') continue;
+      status = asSessionStatus(event.payload.status);
+      createdAt = event.createdAt;
+      break;
+    }
+    if (!status) return;
+    onSessionStatus(session.id, status, createdAt);
+  }, [events, onSessionStatus, session]);
+
   if (!session) return null;
 
   return (
@@ -578,6 +682,9 @@ function SessionRoute({
       onContinueOnMobile={() =>
         onContinueOnMobile(session.projectPath ?? session.workspace ?? undefined)
       }
+      approvalMode={approvalMode}
+      onApprovalModeChange={onApprovalModeChange}
+      onRespondProviderRequest={onRespondProviderRequest}
       steering={steering}
       lifecycleBusy={lifecycleBusy}
       machineActive={machineActive}

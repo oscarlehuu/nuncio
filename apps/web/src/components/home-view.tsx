@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowRightLeft } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -13,7 +13,10 @@ import { BranchPicker } from './branch-picker';
 import { ModelPicker } from './model-picker';
 import { ProjectPicker } from './project-picker';
 import { ProviderIcon } from './provider-icon';
+import { ApprovalModePicker, type ApprovalMode } from './approval-mode-picker';
+import { WorkspaceModePicker, type WorkspaceMode } from './workspace-mode-picker';
 import { ConnectionDot } from './status-dot';
+import { isCodexApprovalEngine } from '../lib/codex-approval-engine';
 import { defaultOptionsForModel } from '../lib/model-picker-catalog';
 import type { ModelOptionsMap } from '../lib/model-options';
 import {
@@ -24,6 +27,7 @@ import {
 import { projectDisplayName } from '../lib/projects';
 import {
   loadProjectPreference,
+  isNuncioSessionBranch,
   recordBranchSelection,
   recordProjectSelection,
   resolveWorkspacePreference,
@@ -45,12 +49,23 @@ interface HomeViewProps {
     projectPath?: string,
     baseBranch?: string,
     modelOptions?: ModelOptionsMap,
+    useWorktree?: boolean,
   ) => Promise<void>;
   onContinueOnMobile?: () => void;
+  approvalMode?: ApprovalMode;
+  onApprovalModeChange?: (mode: ApprovalMode) => void | Promise<void>;
   loading?: boolean;
 }
 
-export function HomeView({ sessionCount, providers, onSubmit, onContinueOnMobile, loading }: HomeViewProps) {
+export function HomeView({
+  sessionCount,
+  providers,
+  onSubmit,
+  onContinueOnMobile,
+  approvalMode = 'full-access',
+  onApprovalModeChange,
+  loading,
+}: HomeViewProps) {
   const initialWorkspace = resolveWorkspacePreference();
   const [prompt, setPrompt] = useState('');
   const [model, setModel] = useState('');
@@ -58,10 +73,14 @@ export function HomeView({ sessionCount, providers, onSubmit, onContinueOnMobile
   const [modelOptions, setModelOptions] = useState<ModelOptionsMap>({});
   const [projectPath, setProjectPath] = useState<string | undefined>(initialWorkspace.projectPath);
   const [baseBranch, setBaseBranch] = useState<string | undefined>(initialWorkspace.baseBranch);
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('local');
 
   const catalogLoaded = Boolean(providers && providers.length > 0);
   const availableProviders = (providers ?? []).filter((p) => !p.unavailable);
   const catalog = useMemo(() => normalizeModelCatalog(providers ?? []), [providers]);
+  const useWorktree = workspaceMode === 'worktree';
+  const showApprovalMode =
+    !!onApprovalModeChange && isCodexApprovalEngine(provider, model);
 
   useEffect(() => {
     if (!catalogLoaded || !providers) return;
@@ -89,8 +108,17 @@ export function HomeView({ sessionCount, providers, onSubmit, onContinueOnMobile
     const hasConfigurable =
       (selected?.options?.length ?? 0) > 0 || (selected?.variants?.length ?? 0) > 0;
     const optionsPayload = hasConfigurable ? modelOptions : undefined;
-    await onSubmit(text, model, provider, projectPath, baseBranch, optionsPayload);
+    await onSubmit(
+      text,
+      model,
+      provider,
+      projectPath,
+      baseBranch,
+      optionsPayload,
+      useWorktree,
+    );
     setPrompt('');
+    setWorkspaceMode('local');
   };
 
   const handleModelChange = (
@@ -109,17 +137,17 @@ export function HomeView({ sessionCount, providers, onSubmit, onContinueOnMobile
     });
   };
 
-  const handleProjectChange = (path: string) => {
+  const handleProjectChange = useCallback((path: string) => {
     setProjectPath(path);
     const savedBranch = loadProjectPreference().lastBranchByProject?.[path];
-    setBaseBranch(savedBranch);
+    setBaseBranch(isNuncioSessionBranch(savedBranch) ? undefined : savedBranch);
     recordProjectSelection(path, projectDisplayName(path) ?? undefined);
-  };
+  }, []);
 
-  const handleBranchChange = (branch: string) => {
+  const handleBranchChange = useCallback((branch: string) => {
     setBaseBranch(branch);
     if (projectPath) recordBranchSelection(projectPath, branch);
-  };
+  }, [projectPath]);
 
   return (
     <section className="flex-1 flex flex-col items-center justify-center p-6 pt-16 md:pt-6 overflow-y-auto">
@@ -132,21 +160,39 @@ export function HomeView({ sessionCount, providers, onSubmit, onContinueOnMobile
         </div>
 
         <div className="home-composer flex flex-col rounded-xl border border-border bg-background shadow-lg transition-shadow focus-within:ring-2 focus-within:ring-ring/50">
-          <Textarea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                void handleSubmit();
-              }
-            }}
-            placeholder="Ask Nuncio to build features, fix bugs, or work on your code…"
-            className="min-h-[96px] shrink-0 resize-none border-0 shadow-none bg-transparent text-[15px] px-5 pt-4 pb-2 focus-visible:ring-0 focus-visible:border-0"
-          />
-          <div className="home-composer-bar flex items-center gap-2 border-t border-border px-3 pt-2 pb-3">
+          <div className="home-composer-prompt-frame flex flex-col">
+            <Textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  void handleSubmit();
+                }
+              }}
+              placeholder="Ask Nuncio to build features, fix bugs, or work on your code…"
+              className="min-h-[96px] shrink-0 resize-none border-0 shadow-none bg-transparent text-[15px] px-5 pt-4 pb-2 focus-visible:ring-0 focus-visible:border-0"
+            />
+            <div className="home-composer-prompt-controls flex items-center justify-between gap-2 px-3 pb-3">
+              <div className="flex min-w-0 items-center gap-2">
+                {showApprovalMode ? (
+                  <ApprovalModePicker
+                    value={approvalMode}
+                    onChange={onApprovalModeChange}
+                    surface="embedded"
+                  />
+                ) : null}
+              </div>
+            </div>
+          </div>
+          <div className="home-composer-bar home-composer-context-row flex items-center gap-2 border-t border-border px-3 pt-2 pb-3">
             <div className="home-composer-pickers flex min-w-0 flex-1 items-center gap-2 overflow-x-auto [&_button]:shrink-0">
               <ProjectPicker value={projectPath} onChange={handleProjectChange} />
+              <WorkspaceModePicker
+                value={workspaceMode}
+                onChange={setWorkspaceMode}
+                disabled={!projectPath}
+              />
               <BranchPicker
                 projectPath={projectPath}
                 value={baseBranch}
