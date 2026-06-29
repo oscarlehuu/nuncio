@@ -6,25 +6,46 @@ a changeset fragment so the next release picks it up.
 
 ## Add a changeset to your PR
 
+**Agents (preferred — non-interactive):**
+
+```bash
+bun run add-changeset patch "Fixed steer composer clearing your draft on reconnect."
+# or
+bun run add-changeset minor "Added session export from the sidebar."
+git add .changeset/*.md
+```
+
+**Humans (interactive):**
+
 ```bash
 bun run changeset
 ```
 
-This prompts you to:
+Both create a `.changeset/<slug>.md` file. Pick bump type per **AGENTS.md → Versioning rubric**:
 
-1. **Select the package** — always select **`nuncio`** (the root). This is the only
-   package that is versioned; `@nuncio/server` and `@nuncio/web` are synced to the
-   root version automatically.
-2. **Pick a bump type:**
-   - `minor` — new feature or notable enhancement
-   - `patch` — bug fix or small improvement
-   - `major` — breaking change (rare for a self-hosted app)
-3. **Write a summary** — one or two sentences describing the change from a user's
-   perspective. This text becomes the changelog entry verbatim, so write it like a
-   release note, not a commit message. Good: "Added a folder picker so you can choose
-   a project from your phone." Bad: "fix: picker bug".
+- **`patch`** (default) — bug fix, polish, perf, copy
+- **`minor`** — new end-to-end feature or workflow
+- **`major`** — breaking change (rare pre-1.0)
 
-Commit the generated `.changeset/<random-name>.md` file alongside your code changes.
+Always select / target the root **`nuncio`** package only.
+
+Write the summary from a user's perspective — it becomes the changelog entry verbatim.
+Good: "Added a folder picker so you can choose a project from your phone."
+Bad: "fix: picker bug".
+
+Commit the generated `.changeset/*.md` file alongside your code changes.
+
+## CI gate
+
+PRs that change user-facing source (`apps/web/src`, `apps/server/src`, `apps/landing/src`, `mockup.html`) **must** include a new `.changeset/*.md` fragment. CI runs `bun run check-changeset`.
+
+Pure refactor touching source but no user-visible behavior? Add `<!-- no-changeset -->` to the PR description.
+
+Verify locally before pushing:
+
+```bash
+bun run check-changeset
+```
 
 ## What happens on merge
 

@@ -26,10 +26,11 @@ Nuncio is a **self-hosted, Devin-style web app for delegating tasks to AI agents
 5. **Docs sync:** update `README.md` to match the shipped code — commands, API, architecture, status. If architecture or conventions shifted, update `AGENTS.md` too. A merged change with stale docs isn't done.
 6. **Changeset (release note) — mandatory for user-facing changes.** If the PR changes anything a user would notice (new feature, behavior shift, bug fix, UI change), add a changeset fragment before opening the PR:
    ```bash
-   bun run changeset        # → select "nuncio", pick minor/patch/major, write a release-note-style summary
-   git add .changeset/*.md  # commit the fragment alongside your code
+   bun run add-changeset patch "Fixed steer composer clearing your draft on reconnect."
+   # or: bun run add-changeset minor "Added …"  — see Versioning rubric below
+   git add .changeset/*.md
    ```
-   Write the summary from a user's perspective — it becomes the `CHANGELOG.md` entry and the GitHub Release note **verbatim**. Good: "Added a folder picker so you can choose a project from your phone." Bad: "fix: picker bug". **A user-facing PR without a changeset isn't done — same gate as a red suite.** Skip only for pure refactor/test/docs/chore with no observable behavior change. See [Releases & changelog](#releases--changelog) for the full automated flow.
+   Prefer **`bun run add-changeset`** (non-interactive — agents should use this). Humans may use `bun run changeset` instead. Write the summary from a user's perspective — it becomes the `CHANGELOG.md` entry and the GitHub Release note **verbatim**. Good: "Added a folder picker so you can choose a project from your phone." Bad: "fix: picker bug". **A user-facing PR without a changeset isn't done — same gate as a red suite.** CI runs `bun run check-changeset` on PRs and fails if user-facing source changed without a fragment. Skip only for pure refactor/test/docs/chore with no observable behavior change (add `<!-- no-changeset -->` to the PR body if the diff touches `apps/*/src` but behavior is unchanged). See [Versioning rubric](#versioning-rubric) and [Releases & changelog](#releases--changelog).
 
 Grounding in what exists today:
 
@@ -41,6 +42,34 @@ Bugs: write a test that reproduces the bug (red), then fix (green). No bug fix w
 ## Agent workflow (multi-agent sessions)
 
 Agents working on Nuncio often **share the same branch** — they are not each given an isolated worktree/branch by default. Coordinate with what is already running on the machine.
+
+### SDK lane branches (enforced by CI)
+
+`main` is the **release branch**. SDK work lands through long-lived integration branches — **never** open a feature PR directly against `main`.
+
+```
+cursor/<feature>  →  cursor-sdk  →  main
+pi/<feature>      →  pi-sdk      →  main
+main              →  cursor-sdk | pi-sdk   (sync-back only)
+```
+
+| Your work touches | Branch prefix | PR target |
+|---|---|---|
+| Cursor provider / `@cursor/sdk` / Handoff / CLI | `cursor/<slug>` | **`cursor-sdk`** |
+| Pi provider / `@earendil-works/pi-coding-agent` | `pi/<slug>` | **`pi-sdk`** |
+| Release cut (Changesets bot) | `changeset-release/main` | **`main`** (automated) |
+
+**Rules (CI `branch-flow` job — must pass):**
+
+- `cursor-sdk` ← only `cursor/*` or `main` (sync-back)
+- `pi-sdk` ← only `pi/*` or `main` (sync-back)
+- `main` ← only `cursor-sdk`, `pi-sdk`, or `changeset-release/*`
+
+Shared harness code (`sessions`, `agents.registry`, web UI) may be touched from either lane — pick the lane for the **primary SDK** under test. After one SDK branch merges to `main`, sync the other integration branch: `git checkout pi-sdk && git merge main && git push` (or the reverse).
+
+Verify locally before opening a PR: `BASE_REF=cursor-sdk HEAD_REF=cursor/my-feat bun run check-branch-flow`
+
+**GitHub branch protection (manual, one-time):** on `main`, `cursor-sdk`, and `pi-sdk` — require PR + status checks **`branch-flow`** and **`ci`**, block direct pushes.
 
 ### Dev servers — reuse canonical ports
 
@@ -84,7 +113,9 @@ bun run dev          # server (3000) + web (5173) concurrently
 bun run build        # build server + web
 bun run test         # server unit (bun test test/unit/)
 bun run lint         # server tsc --noEmit + web oxlint
-bun run changeset    # create a changeset fragment (run from a feature branch; commit the .changeset/*.md)
+bun run add-changeset patch "…"   # create a changeset fragment (preferred for agents)
+bun run check-changeset           # verify PR will pass CI changeset gate
+bun run changeset                 # interactive alternative for humans
 bun run version      # consume pending changesets → bump root version + update CHANGELOG.md + sync server/web (opens via CI)
 bun run release      # create v<version> git tag + GitHub Release from the matching CHANGELOG.md section (runs in CI)
 ```
@@ -121,6 +152,38 @@ Versioning + changelog are managed by [Changesets](https://github.com/changesets
 **Single source of truth:** only the root `nuncio` package is versioned (`.changeset/config.json` `ignore`s `@nuncio/server` + `@nuncio/web`; the root is a workspace member via the `"."` entry so Changesets can version it). `@nuncio/server` and `@nuncio/web` are private and synced to the root version by `scripts/sync-versions.mjs` on every `bun run version`. One `CHANGELOG.md` at the repo root.
 
 **The per-PR rule** (repeated here as the authoritative spec; see [Working practice: TDD-first](#working-practice-tdd-first) step 6 for the gate framing): every PR with user-facing changes ships a `.changeset/*.md` fragment written as a release note. PRs that are pure refactor/test/docs/chore skip it. See `.changeset/README.md` for the contribution guide.
+
+### Versioning rubric (agents: read before every PR)
+
+**Default bump is `patch`.** Only choose `minor` when the user gains a **new capability or workflow** they did not have before. When unsure → `patch`.
+
+| Need a changeset? | PR type |
+|---|---|
+| **Yes** | User-visible change — UI, API behavior, bug fix, new endpoint, new picker/flow, error/UX fix users notice |
+| **No** | Pure refactor, tests-only, docs-only, CI/tooling, chore (no observable behavior change). If the diff still touches `apps/*/src`, add `<!-- no-changeset -->` to the PR body so CI skips the gate. |
+
+| Bump | When (pre-1.0) | Examples from Nuncio |
+|---|---|---|
+| **`patch`** (default) | Bug fix, polish, perf, copy, streaming/reconnect fixes, regression fix | Fix steer draft cleared on SSE reconnect; fix Pi cwd in worktree; toast/error message improvements |
+| **`minor`** | New end-to-end feature or workflow; new API surface clients use; new provider users can select; large UX addition | Continue on mobile (Handoff); settings store; git worktree + project picker; Cursor provider |
+| **`major`** | Breaking API/behavior (rare before 1.0) | Remove/rename API field; change session JSON shape without compat |
+
+**Agent checklist before opening a PR:**
+
+1. User-facing change? → `bun run add-changeset <patch|minor|major> "<release note>"` and commit the file under `.changeset/`.
+2. Bump matches rubric — `fix`/small polish → **`patch`**; new user workflow → **`minor`**.
+3. Summary is a **release note** (user perspective), not a commit message.
+4. Run `bun run check-changeset` locally — must pass.
+5. Code review should flag: `fix` PR with `minor` bump, or user-facing diff without a changeset.
+
+**Commands:**
+
+```bash
+bun run add-changeset patch "Fixed …"    # preferred for agents (non-interactive)
+bun run add-changeset minor "Added …"
+bun run check-changeset                  # CI gate — diff vs origin/main
+bun run changeset                        # interactive alternative for humans
+```
 
 **Cutting a release (automated via `.github/workflows/release.yml`):**
 
@@ -195,7 +258,7 @@ data/                    SQLite (gitignored)
 plans/                   phased roadmap + per-phase reports
 CHANGELOG.md             release notes — appended by Changesets on each `bun run version` (source for the in-app What's-new page + GitHub Releases)
 .changeset/              Changesets config + pending release-note fragments (one .md per PR)
-scripts/                 sync-versions.mjs (sync server/web → root version), release.mjs (git tag + GitHub Release)
+scripts/                 add-changeset.mjs, check-changeset.mjs, check-branch-flow.mjs, branch-flow-utils.mjs, sync-versions.mjs, release.mjs
 .github/workflows/release.yml   Version PR + release-on-merge automation (changesets/action)
 ```
 
@@ -338,7 +401,7 @@ Plans: `plans/260626-nuncio-roadmap/`. Per-phase reports: `plans/reports/`.
 
 ### Parallel-agent lane convention
 
-When a phase is large it is split into lanes working on isolated branches, then merged:
+When a phase is large it is split into lanes working on isolated branches, then merged into the SDK integration branch (`cursor-sdk` or `pi-sdk`), then to `main`:
 
 | Lane | Ownership |
 |---|---|
@@ -346,7 +409,7 @@ When a phase is large it is split into lanes working on isolated branches, then 
 | B — Frontend | `apps/web/src/**` |
 | C — Tests + Docs | `*.spec.ts`, `apps/server/test/**`, `README.md`, `plans/reports/` |
 
-- Branches: `cursor/phase-NN-<lane>-5323`, combined into `cursor/phase-NN-combined-5323`.
+- Branches: `cursor/phase-NN-<lane>-5323`, combined into `cursor/phase-NN-combined-5323` → PR to **`cursor-sdk`** (Pi lane: `pi/…` → **`pi-sdk`**).
 - **File ownership is strict** — no overlapping edits across lanes. Tests own test files only and read (never edit) implementation files.
 - Merge order is defined per phase in `phase-NN-orchestration.md`; verify with `bun run build && bun test` after each merge.
 - Each lane writes a short report to `plans/reports/phase-NN-<lane>-report.md` (status, what shipped, verify commands, unresolved).
