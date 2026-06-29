@@ -1,3 +1,4 @@
+import type { ComponentProps } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -34,6 +35,7 @@ async function renderDetail(
   overrides: Partial<Session> = {},
   events: SessionEvent[] = NO_EVENTS,
   providers?: ModelProvider[],
+  extraProps: Partial<ComponentProps<typeof SessionDetail>> = {},
 ) {
   const onSteer = vi.fn();
   const onPause = vi.fn();
@@ -46,6 +48,7 @@ async function renderDetail(
       onSteer={onSteer}
       onPause={onPause}
       onArchive={onArchive}
+      {...extraProps}
     />,
   );
   return { onSteer, onPause, onArchive, ...view };
@@ -58,6 +61,33 @@ describe('SessionDetail', () => {
     await userEvent.type(textarea, 'Use the cache layer');
     await userEvent.click(screen.getByRole('button', { name: /send/i }));
     expect(onSteer).toHaveBeenCalledWith('Use the cache layer');
+  });
+
+  it('clears the composer immediately after sending while steer is still settling', async () => {
+    let resolveSteer!: () => void;
+    const onSteer = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSteer = resolve;
+        }),
+    );
+    render(
+      <SessionDetail
+        session={makeSession()}
+        events={NO_EVENTS}
+        onSteer={onSteer}
+        onPause={vi.fn()}
+        onArchive={vi.fn()}
+      />,
+    );
+
+    const textarea = screen.getByPlaceholderText(/steer the agent/i);
+    await userEvent.type(textarea, 'Use the cache layer');
+    await userEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    expect(onSteer).toHaveBeenCalledWith('Use the cache layer');
+    expect(textarea).toHaveValue('');
+    resolveSteer();
   });
 
   it('calls onPause when the pause button is clicked while IDLE', async () => {
@@ -129,6 +159,63 @@ describe('SessionDetail', () => {
     const userMsg = screen.getByText('first prompt');
     const position = userMsg.compareDocumentPosition(indicator);
     expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('renders provider approval requests and sends an approve decision', async () => {
+    const onRespondProviderRequest = vi.fn();
+    const events: SessionEvent[] = [
+      {
+        seq: 1,
+        type: 'provider_request',
+        payload: {
+          requestId: 'req-1',
+          provider: 'codex',
+          method: 'exec/approval',
+          status: 'pending',
+          params: { command: 'git status' },
+        },
+        createdAt: Date.now(),
+      },
+    ];
+
+    await renderDetail(
+      { status: 'RUNNING', provider: 'codex' },
+      events,
+      undefined,
+      { onRespondProviderRequest },
+    );
+
+    expect(screen.getByText('git status')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /approve request/i }));
+    expect(onRespondProviderRequest).toHaveBeenCalledWith('req-1', 'approve');
+  });
+
+  it('marks provider approval requests as resolved', async () => {
+    const events: SessionEvent[] = [
+      {
+        seq: 1,
+        type: 'provider_request',
+        payload: {
+          requestId: 'req-1',
+          provider: 'codex',
+          method: 'exec/approval',
+          status: 'pending',
+          params: { command: 'git status' },
+        },
+        createdAt: Date.now(),
+      },
+      {
+        seq: 2,
+        type: 'provider_request_resolved',
+        payload: { requestId: 'req-1', decision: 'deny', status: 'resolved' },
+        createdAt: Date.now(),
+      },
+    ];
+
+    await renderDetail({ status: 'RUNNING', provider: 'codex' }, events);
+
+    expect(screen.getByText(/denied/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /approve request/i })).toBeNull();
   });
 
   it('does not render a Home button or Home text in the session header', async () => {
@@ -216,6 +303,52 @@ describe('SessionDetail', () => {
   it('falls back to the raw model id when the model is not in the catalog', async () => {
     await renderDetail({ model: 'unknown:model-x' }, NO_EVENTS, []);
     expect(screen.getByText('unknown:model-x')).toBeInTheDocument();
+  });
+
+  it('shows approval mode in the steer composer for Codex sessions only', async () => {
+    const codexView = await renderDetail(
+      { provider: 'codex', model: 'codex:gpt-5.5' },
+      NO_EVENTS,
+      [
+        {
+          id: 'codex',
+          name: 'Codex',
+          groups: [
+            {
+              id: 'codex',
+              name: 'Codex',
+              models: [{ id: 'codex:gpt-5.5', name: 'GPT 5.5' }],
+            },
+          ],
+        },
+      ],
+      { approvalMode: 'full-access', onApprovalModeChange: vi.fn() },
+    );
+    const approval = screen.getByRole('button', { name: /approval mode: full access/i });
+    expect(approval).toBeInTheDocument();
+    expect(approval).toHaveAttribute('data-variant', 'ghost');
+    expect(approval).not.toHaveClass('composer-picker-trigger');
+    codexView.unmount();
+
+    await renderDetail(
+      { provider: 'cursor', model: 'cursor:composer-2.5' },
+      NO_EVENTS,
+      [
+        {
+          id: 'cursor',
+          name: 'Cursor',
+          groups: [
+            {
+              id: 'cursor',
+              name: 'Cursor',
+              models: [{ id: 'cursor:composer-2.5', name: 'Composer 2.5' }],
+            },
+          ],
+        },
+      ],
+      { approvalMode: 'full-access', onApprovalModeChange: vi.fn() },
+    );
+    expect(screen.queryByRole('button', { name: /approval mode/i })).toBeNull();
   });
 
   describe('archived actions', () => {

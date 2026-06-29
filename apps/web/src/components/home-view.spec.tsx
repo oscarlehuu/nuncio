@@ -26,6 +26,20 @@ const CURSOR_AND_PI: ModelProvider[] = [
   },
 ];
 
+const CODEX_ONLY_PROVIDERS: ModelProvider[] = [
+  {
+    id: 'codex',
+    name: 'Codex',
+    groups: [
+      {
+        id: 'codex',
+        name: 'Codex',
+        models: [{ id: 'codex:gpt-5.5', name: 'GPT 5.5' }],
+      },
+    ],
+  },
+];
+
 vi.mock('../lib/api', () => ({
   fetchModels: vi.fn().mockResolvedValue([]),
 }));
@@ -38,19 +52,30 @@ vi.mock('./project-picker', () => ({
   ),
 }));
 
-vi.mock('./branch-picker', () => ({
-  BranchPicker: ({
-    value,
-    onChange,
-  }: {
-    value?: string;
-    onChange: (branch: string) => void;
-  }) => (
-    <button type="button" onClick={() => onChange('main')}>
-      {value ?? 'Branch'}
-    </button>
-  ),
-}));
+vi.mock('./branch-picker', async () => {
+  const React = await import('react');
+  return {
+    BranchPicker: ({
+      projectPath,
+      value,
+      onChange,
+    }: {
+      projectPath?: string;
+      value?: string;
+      onChange: (branch: string) => void;
+    }) => {
+      React.useEffect(() => {
+        if (projectPath && !value) onChange('main');
+      }, [projectPath, value, onChange]);
+
+      return (
+        <button type="button" disabled={!projectPath} onClick={() => onChange('main')}>
+          {value ?? 'Branch'}
+        </button>
+      );
+    },
+  };
+});
 
 describe('HomeView', () => {
   beforeEach(() => {
@@ -124,11 +149,45 @@ describe('HomeView', () => {
     expect(pickers).not.toHaveClass('flex-wrap');
   });
 
-  it('forwards project and branch selections on submit', async () => {
+  it('shows Codex approval mode inside the prompt frame, not the context picker row', async () => {
+    const { container } = render(
+      <HomeView
+        sessionCount={0}
+        onSubmit={vi.fn()}
+        providers={CODEX_ONLY_PROVIDERS}
+        approvalMode="full-access"
+        onApprovalModeChange={vi.fn()}
+      />,
+    );
+
+    const approval = await screen.findByRole('button', { name: /approval mode: full access/i });
+    const model = await screen.findByRole('button', { name: /gpt 5.5/i });
+    expect(container.querySelector('.home-composer-prompt-frame')).toContainElement(approval);
+    expect(container.querySelector('.home-composer-context-row')).not.toContainElement(approval);
+    expect(container.querySelector('.home-composer-context-row')).toContainElement(model);
+    expect(container.querySelector('.home-composer-prompt-frame')).not.toContainElement(model);
+  });
+
+  it('hides approval mode for non-Codex engines even when an approval handler exists', async () => {
+    render(
+      <HomeView
+        sessionCount={0}
+        onSubmit={vi.fn()}
+        providers={CURSOR_AND_PI}
+        approvalMode="full-access"
+        onApprovalModeChange={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole('button', { name: /composer 2.5/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /approval mode/i })).toBeNull();
+  });
+
+  it('forwards the selected project and branch as local workspace by default', async () => {
     const onSubmit = vi.fn();
     render(<HomeView sessionCount={0} onSubmit={onSubmit} providers={CURSOR_AND_PI} />);
     await userEvent.click(screen.getByRole('button', { name: /no repo/i }));
-    await userEvent.click(screen.getByRole('button', { name: /^branch$/i }));
+    expect(await screen.findByRole('button', { name: /^main$/i })).toBeInTheDocument();
     await userEvent.type(screen.getByPlaceholderText(/ask nuncio/i), 'Add workspace{Enter}');
     expect(onSubmit).toHaveBeenCalledWith(
       'Add workspace',
@@ -137,6 +196,26 @@ describe('HomeView', () => {
       '/code/nuncio',
       'main',
       undefined,
+      false,
+    );
+  });
+
+  it('uses new worktree mode before forwarding the selected branch', async () => {
+    const onSubmit = vi.fn();
+    render(<HomeView sessionCount={0} onSubmit={onSubmit} providers={CURSOR_AND_PI} />);
+    await userEvent.click(screen.getByRole('button', { name: /no repo/i }));
+    await userEvent.click(screen.getByRole('button', { name: /work locally/i }));
+    await userEvent.click(await screen.findByRole('menuitemradio', { name: /new worktree/i }));
+    expect(await screen.findByRole('button', { name: /^main$/i })).toBeInTheDocument();
+    await userEvent.type(screen.getByPlaceholderText(/ask nuncio/i), 'Add worktree{Enter}');
+    expect(onSubmit).toHaveBeenCalledWith(
+      'Add worktree',
+      'cursor:composer-2.5',
+      'cursor',
+      '/code/nuncio',
+      'main',
+      undefined,
+      true,
     );
   });
 
@@ -146,6 +225,7 @@ describe('HomeView', () => {
     render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
     expect(screen.getByRole('button', { name: /^nuncio$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^develop$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /work locally/i })).toBeInTheDocument();
   });
 
   it('restores the last model selection from localStorage', async () => {
@@ -168,6 +248,7 @@ describe('HomeView', () => {
       undefined,
       undefined,
       undefined,
+      false,
     );
   });
 

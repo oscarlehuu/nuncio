@@ -1,5 +1,9 @@
 import type { ModelOptionsMap } from '../models/model-options.types';
 import type { ModelProviderDto } from '../models/models.types';
+import type {
+  ProviderRequestInput,
+  ProviderRequestResult,
+} from '../sessions/domain/sessions.types';
 
 export type EventEmitter = (event: { type: string; payload: unknown }) => void;
 
@@ -17,6 +21,8 @@ export interface AgentRunContext {
   chatStoreMtimeMs?: number | null;
   /** Skip active-run guard when user explicitly forces resume. */
   forceResume?: boolean;
+  /** Provider-agnostic approval hook for SDK/tool requests that need a user decision. */
+  requestProviderApproval?: (request: ProviderRequestInput) => Promise<ProviderRequestResult>;
 }
 
 export interface AgentProvider {

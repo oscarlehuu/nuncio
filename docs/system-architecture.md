@@ -2,7 +2,7 @@
 
 ## Overview
 
-Nuncio is a self-hosted web app for delegating tasks to AI agents. The backend (`apps/server`, NestJS) exposes sessions over HTTP; each session is run by an **agent provider** selected per session. The agent layer is provider-neutral: Pi today, any future agent SDK (Cursor, …) plugs in by implementing one interface.
+Nuncio is a self-hosted web app for delegating tasks to AI agents. The backend (`apps/server`, NestJS) exposes sessions over HTTP; each session is run by an **agent provider** selected per session. The agent layer is provider-neutral: Pi, Codex, Cursor, and future agent SDKs plug in by implementing one interface.
 
 ## Agent provider abstraction
 
@@ -14,6 +14,9 @@ apps/server/src/agents/
   agents.module.ts           Nest wiring
   providers/
     pi-agent.provider.ts     Pi SDK (createAgentSession, AuthStorage, ModelRegistry)
+    codex-app-server.client.ts  JSON-RPC client for `codex app-server`
+    codex-agent.provider.ts  Codex CLI app-server provider
+    cursor-agent.provider.ts Cursor SDK local runtime provider
     mock-agent.provider.ts   Local fallback, always available
 ```
 
@@ -24,9 +27,15 @@ flowchart LR
     ModelsCtrl["ModelsController"] --> ModelsSvc["ModelsService"]
     ModelsSvc --> Registry
     Registry --> Pi["PiAgentProvider"]
+    Registry --> Codex["CodexAgentProvider"]
+    Registry --> Cursor["CursorAgentProvider"]
     Registry --> Mock["MockAgentProvider"]
     Pi --> PiSDK["@earendil-works/pi-coding-agent"]
+    Codex --> CodexCLI["codex app-server"]
+    Cursor --> CursorSDK["@cursor/sdk"]
     Pi -.implements.-> Iface["AgentProvider (interface)"]
+    Codex -.implements.-> Iface
+    Cursor -.implements.-> Iface
     Mock -.implements.-> Iface
 ```
 
@@ -46,14 +55,14 @@ interface AgentProvider {
 
 `BaseAgentProvider` implements the shared `run`/`steer` orchestration (status RUNNING → user/steer_message → `executePrompt()` → status IDLE, plus error → ERROR) via a template method. Concrete providers implement only `executePrompt()`, `isAvailable()`, `listModels()`, and (optionally) `dispose()`.
 
-`AgentRegistry` holds all providers, exposes `all()`, `available()` (async, filters by `isAvailable`), `get(id)` (sync), `getAvailable(id)` (async, throws `BadRequestException` if unavailable), and `defaultId()` (Pi if available, else Mock).
+`AgentRegistry` holds all providers, exposes `all()`, `available()` (async, filters by `isAvailable`), `get(id)` (sync), `getAvailable(id)` (async, throws `BadRequestException` if unavailable), and `defaultId()` (Cursor if configured, then Codex, then Pi, else Mock).
 
 ### Per-session selection flow
 
 1. `POST /api/sessions { prompt, provider?, model? }` → `SessionsService.create()`
 2. `providerId = input.provider || await registry.defaultId()`; `await registry.getAvailable(providerId)` validates
 3. `sessions` row created with `provider` + `model`; `startRun()` calls `registry.getAvailable(provider).run(id, prompt, { emit, model })`
-4. `steer`/`archive` resolve the provider from the stored session row (steer reuses the retained Pi session handle for in-conversation follow-ups)
+4. `steer`/`archive` resolve the provider from the stored session row. Providers retain or restore their own runtime handle where possible.
 
 ## Pi authentication
 
@@ -79,7 +88,21 @@ this.cachedAvailable = registry.getAvailable().length > 0;   // models with conf
 
 ## Model wiring
 
-`session.model` is stored as `provider:modelId` (e.g. `openai-codex:gpt-5.5`, `anthropic:claude-sonnet-4`). `PiAgentProvider.createPiSession` resolves it back to a Pi `Model` via `resolveModelId` (handles both `provider/modelId` slash and `provider:modelId` colon conventions) + `registry.find(provider, id)`, then passes it to `createAgentSession({ model })`. If the id can't be resolved, Pi falls back to its default model. `GET /api/models` aggregates `listModels()` across all available providers.
+`session.model` is stored as `provider:modelId` (e.g. `codex:gpt-5.5`, `cursor:composer-2`, `anthropic:claude-sonnet-4`). `PiAgentProvider.createPiSession` resolves Pi model ids back to a Pi `Model` via `resolveModelId` (handles both `provider/modelId` slash and `provider:modelId` colon conventions) + `registry.find(provider, id)`, then passes it to `createAgentSession({ model })`. `CodexAgentProvider` strips the `codex:` prefix before sending `turn/start` to the Codex app-server. If a provider cannot resolve the requested model, it falls back to its default. `GET /api/models` aggregates `listModels()` across all available providers.
+
+## Codex app-server provider
+
+The Codex provider runs the local Codex CLI app server over stdio. `CodexAppServerClient` owns the JSON-RPC line protocol: request/response correlation, notifications, server-initiated requests, and pending-request cleanup on process exit.
+
+- Availability checks `codex --version` and `codex login status`; it does not make an LLM call.
+- Model discovery uses `model/list` after `initialize`, with GPT-5.5/GPT-5.4 fallback rows if discovery is unavailable.
+- New sessions call `thread/start`; follow-ups reuse `sessions.provider_thread_id` through `thread/resume`.
+- Turns use `turn/start`; dispose/archive sends `turn/interrupt` when a turn is active.
+- `item/agentMessage/delta` maps to the shared `assistant_delta`; `turn/completed` emits the final `assistant_message`.
+- Runtime state lives on the session row: `provider_thread_id`, `provider_active_turn_id`, and `provider_state_json`.
+- Default runtime mode is local `full-access` (`approvalPolicy: "never"`, danger-full-access sandbox). `NUNCIO_CODEX_RUNTIME_MODE=approval-required` switches to read-only/untrusted mode and routes app-server approval requests through the provider-agnostic Nuncio approval flow.
+- Provider approval requests are stored in SQLite (`provider_requests`) and emitted as `provider_request` events with a `requestId`; `POST /api/sessions/:id/provider-requests/:requestId/respond` appends `provider_request_resolved` and resolves the provider's pending Promise.
+- If the server restarts while a request is pending, the new service instance marks stale pending rows denied with reason `server_restarted`; the transcript gets a resolved event instead of leaving an unanswerable approval card pending forever.
 
 ## Sessions domain layout
 
@@ -87,25 +110,29 @@ this.cachedAvailable = registry.getAvailable().length > 0;   // models with conf
 apps/server/src/sessions/
   api/         sessions.controller.ts        HTTP adapter
   domain/      sessions.types.ts, sessions.fsm.ts   types + pure FSM
-  persistence/ sessions.repository.ts, events.repository.ts
+  persistence/ sessions.repository.ts, events.repository.ts, provider-requests.repository.ts
   sessions.module.ts, sessions.persistence.module.ts, sessions.service.ts
 ```
 
-Session FSM: `CREATED → RUNNING → IDLE | ERROR | PAUSED`; `IDLE/PAUSED → RUNNING` (steer); `IDLE/PAUSED/ERROR → ARCHIVED` (terminal). FSM + event log persist in SQLite; the `provider` column was added with an idempotent `ALTER TABLE` migration for existing databases.
+Session FSM: `CREATED → RUNNING → IDLE | ERROR | PAUSED`; `IDLE/PAUSED → RUNNING` (steer); `IDLE/PAUSED/ERROR → ARCHIVED` (terminal). FSM, event log, and provider approval request state persist in SQLite; the `provider` and provider-runtime columns are added with idempotent `ALTER TABLE` migrations for existing databases.
+
+## Workspace selection
+
+Session creation can run in a selected repo directly or create an isolated worktree. The frontend exposes this as repo picker → workspace mode picker (`Work locally` or `New worktree`) → branch picker. `Work locally` sends `projectPath`, `workspace = projectPath`, and the selected `baseBranch` as metadata without checking out the repo. `New worktree` sends `useWorktree: true`; the server creates `nuncio/<sessionId>-<slug>` under `NUNCIO_WORKSPACES_DIR` from the selected `baseBranch`, then runs the provider in that worktree.
 
 ## Tests
 
 | Suite | Command | Scope |
 |-------|---------|-------|
-| Unit | `npm test -w apps/server` (`test/unit/**/*.spec.ts`) | FSM, registry, providers, sessions service, models, DB migration — 55 tests, mock provider |
-| E2E | `npm run test:e2e -w apps/server` (`test/e2e/`) | HTTP lifecycle via supertest with mock provider — 4 tests |
-| Integration | `npm run test:integration -w apps/server` (`test/integration/`) | Real Pi auth: `isAvailable`, `listModels`, a real prompt. **Skips** when `~/.pi/agent/auth.json` is absent (CI-safe). |
+| Unit | `bun run --filter @nuncio/server test` (`test/unit/`) | FSM, registry, providers, sessions service, models, DB migration |
+| E2E | `bun run --filter @nuncio/server test:e2e` (`test/e2e/`) | HTTP lifecycle via supertest with simulated providers |
+| Integration | `bun run --filter @nuncio/server test:integration` (`test/integration/`) | Real provider auth checks and prompts; gated so CI stays safe |
 
-Integration tests run jest with `NODE_OPTIONS=--experimental-vm-modules` because jest's CJS runtime cannot dynamically `import()` an ESM package (the Pi SDK) without that flag. The unit/e2e suites never load the Pi SDK (mock provider + `NUNCIO_FORCE_MOCK` short-circuit), so they stay on plain CJS jest.
+Server tests run on `bun test`. Unit tests use fakes for provider subprocess/SDK boundaries, so they do not require Codex, Cursor, or Pi credentials.
 
 ## Known gaps (follow-up)
 
 - **Pi session revival:** `SessionManager.inMemory()` means Pi conversation history is lost on server restart. File-backed `SessionManager.create(cwd)` + lazy revive is planned to make the "resumable sessions" principle true for Pi.
-- **Availability cache refresh:** `isAvailable` caches once per process; credentials configured after startup require a restart.
+- **Approval continuity:** approval request state is durable, but a request waiting inside the Codex app-server cannot continue across a server/app-server restart; stale pending requests are auto-denied on boot with `server_restarted`.
 - **Tool configuration:** Pi tools are hardcoded (`read, bash, grep, find, ls`); env/per-session config is planned.
-- **Additional providers:** a real Cursor provider can be added by implementing `AgentProvider` and registering it in `AgentRegistry`.
+- **Additional providers:** future SDKs can be added by implementing `AgentProvider` and registering them in `AgentRegistry`.

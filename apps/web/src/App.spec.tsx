@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from './components/theme-provider';
 
@@ -17,6 +17,7 @@ vi.mock('./lib/api', () => ({
   createSession: vi.fn(),
   steerSession: vi.fn(),
   pauseSession: vi.fn(),
+  respondProviderRequest: vi.fn(),
   archiveSession: vi.fn(),
   restoreSession: vi.fn(),
   deleteSession: vi.fn(),
@@ -226,6 +227,7 @@ describe('App create flow', () => {
       undefined,
       undefined,
       undefined,
+      false,
     );
       expect(fetchSessions).toHaveBeenCalled();
   });
@@ -233,14 +235,24 @@ describe('App create flow', () => {
 
 describe('App lifecycle', () => {
   const session = fakeSession({ id: 'new1', title: 'Build the thing', status: 'IDLE' });
+  let eventSources: Array<{
+    url: string;
+    onmessage: ((msg: { data: string }) => void) | null;
+    close: () => void;
+  }>;
 
   beforeEach(() => {
+    eventSources = [];
     vi.stubGlobal(
       'EventSource',
       class {
+        url: string;
         onmessage: ((msg: { data: string }) => void) | null = null;
-        close() {}
-        constructor(_url: string) {}
+        close = vi.fn();
+        constructor(url: string) {
+          this.url = url;
+          eventSources.push(this);
+        }
       },
     );
     vi.mocked(fetchSessions).mockResolvedValue([session]);
@@ -300,6 +312,55 @@ describe('App lifecycle', () => {
     await userEvent.type(textarea, 'use the cache layer');
     await userEvent.click(screen.getByRole('button', { name: /^send$/i }));
     await waitFor(() => expect(steerSession).toHaveBeenCalledWith('new1', 'use the cache layer'));
+  });
+
+  it('unlocks the composer when the stream reports IDLE before steer refresh settles', async () => {
+    let resolveSteer!: (session: Session) => void;
+    vi.mocked(steerSession).mockImplementation(
+      () =>
+        new Promise<Session>((resolve) => {
+          resolveSteer = resolve;
+        }),
+    );
+
+    await openSession();
+    await waitFor(() => expect(eventSources.length).toBeGreaterThan(0));
+
+    const textarea = screen.getByPlaceholderText(/steer the agent/i);
+    await userEvent.type(textarea, 'use the cache layer');
+    await userEvent.click(screen.getByRole('button', { name: /^send$/i }));
+    expect(textarea).toBeDisabled();
+
+    const stream = eventSources[eventSources.length - 1]!;
+    act(() => {
+      stream.onmessage?.({
+        data: JSON.stringify({
+          seq: 1,
+          type: 'status',
+          payload: { status: 'RUNNING' },
+          createdAt: Date.now(),
+        }),
+      });
+      stream.onmessage?.({
+        data: JSON.stringify({
+          seq: 2,
+          type: 'assistant_message',
+          payload: { text: 'Done' },
+          createdAt: Date.now(),
+        }),
+      });
+      stream.onmessage?.({
+        data: JSON.stringify({
+          seq: 3,
+          type: 'status',
+          payload: { status: 'IDLE' },
+          createdAt: Date.now(),
+        }),
+      });
+    });
+
+    await waitFor(() => expect(screen.getByPlaceholderText(/steer the agent/i)).toBeEnabled());
+    resolveSteer(fakeSession({ id: 'new1', status: 'IDLE' }));
   });
 });
 

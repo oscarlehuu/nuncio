@@ -4,6 +4,13 @@ import { EventsRepository } from '../sessions/persistence/events.repository';
 import { SessionsRepository } from '../sessions/persistence/sessions.repository';
 import type { AgentProvider, AgentRunContext, EventEmitter } from './agents.types';
 
+export class AgentRunCancelledError extends Error {
+  constructor(message = 'Agent run cancelled.') {
+    super(message);
+    this.name = 'AgentRunCancelledError';
+  }
+}
+
 export abstract class BaseAgentProvider implements AgentProvider {
   abstract readonly id: string;
   abstract readonly name: string;
@@ -67,6 +74,7 @@ export abstract class BaseAgentProvider implements AgentProvider {
       this.sessions.updateStatus(sessionId, 'IDLE');
       this.pushEvent(sessionId, 'status', { status: 'IDLE' }, context.emit);
     } catch (error) {
+      if (error instanceof AgentRunCancelledError) return;
       this.handleError(sessionId, error, context.emit);
     }
   }

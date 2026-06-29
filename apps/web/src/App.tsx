@@ -9,13 +9,16 @@ import {
   fetchModels,
   fetchSessions,
   pauseSession,
+  respondProviderRequest,
   restoreSession,
   steerSession,
+  type ProviderRequestDecision,
   type Session,
 } from './lib/api';
 import { clearSetting, fetchSettings, updateSetting, type Setting } from './lib/settings-api';
 import { useSessionStream } from './lib/use-session-stream';
 import { HomeView } from './components/home-view';
+import type { ApprovalMode } from './components/approval-mode-picker';
 import { HandoffPicker } from './components/handoff-picker';
 import { ChangelogView } from './components/changelog-view';
 import { DesktopSidebarHoverRail, DesktopSidebarPinned } from './components/desktop-sidebar-shell';
@@ -34,6 +37,22 @@ import {
 } from '@/components/ui/sheet';
 import { Toaster } from '@/components/ui/sonner';
 
+const SESSION_STATUSES: readonly Session['status'][] = [
+  'CREATED',
+  'RUNNING',
+  'IDLE',
+  'PAUSED',
+  'ARCHIVED',
+  'ERROR',
+];
+
+function asSessionStatus(value: unknown): Session['status'] | null {
+  if (typeof value !== 'string') return null;
+  return (SESSION_STATUSES as readonly string[]).includes(value)
+    ? (value as Session['status'])
+    : null;
+}
+
 export default function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [archivedSessions, setArchivedSessions] = useState<Session[]>([]);
@@ -49,7 +68,13 @@ export default function App() {
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [handoffInitialWorkspace, setHandoffInitialWorkspace] = useState<string | undefined>();
   const [settings, setSettings] = useState<Setting[]>([]);
+  const approvalMode: ApprovalMode =
+    settings.find((setting) => setting.key === 'NUNCIO_CODEX_RUNTIME_MODE')?.value ===
+    'approval-required'
+      ? 'approval-required'
+      : 'full-access';
   const events = useSessionStream(activeId);
+  const steerRequestSeq = useRef(0);
   // Suppress repeated toast spam when the server is unreachable: only toast
   // the *first* failure of each kind, then stay quiet until the next success
   // resets the flag. The 5s polling interval would otherwise fire a toast on
@@ -110,6 +135,34 @@ export default function App() {
 
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
 
+  useEffect(() => {
+    if (!activeId) return;
+    let status: Session['status'] | null = null;
+    let createdAt = Date.now();
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      const event = events[i];
+      if (event?.type !== 'status') continue;
+      status = asSessionStatus(event.payload.status);
+      createdAt = event.createdAt;
+      break;
+    }
+    if (!status) return;
+
+    setSessions((prev) => {
+      let changed = false;
+      const next = prev.map((session) => {
+        if (session.id !== activeId) return session;
+        const updatedAt = Math.max(session.updatedAt, createdAt);
+        if (session.status === status && session.updatedAt === updatedAt) return session;
+        changed = true;
+        return { ...session, status, updatedAt };
+      });
+      return changed ? next : prev;
+    });
+
+    if (status !== 'RUNNING') setSteering(false);
+  }, [activeId, events]);
+
   const dismissTransientSidebar = useCallback(() => {
     setSidebarOpen(false);
     desktopSidebar.closeHover();
@@ -135,6 +188,7 @@ export default function App() {
     projectPath?: string,
     baseBranch?: string,
     modelOptions?: ModelOptionsMap,
+    useWorktree = false,
   ) => {
     setCreating(true);
     try {
@@ -145,6 +199,7 @@ export default function App() {
         projectPath,
         baseBranch,
         modelOptions,
+        useWorktree,
       );
       const list = await refresh();
       setActiveId(session.id);
@@ -159,12 +214,14 @@ export default function App() {
 
   const handleSteer = async (message: string) => {
     if (!activeId) return;
+    const requestSeq = steerRequestSeq.current + 1;
+    steerRequestSeq.current = requestSeq;
     setSteering(true);
     try {
       await steerSession(activeId, message);
       await refresh();
     } finally {
-      setSteering(false);
+      if (steerRequestSeq.current === requestSeq) setSteering(false);
     }
   };
 
@@ -236,6 +293,10 @@ export default function App() {
     }
   }, []);
 
+  useEffect(() => {
+    void refreshSettings();
+  }, [refreshSettings]);
+
   const handleOpenSettings = useCallback(() => {
     setShowSettings(true);
     setShowChangelog(false);
@@ -283,6 +344,32 @@ export default function App() {
       toast.error(`Failed to clear ${key}`);
     }
   }, [refreshModels]);
+
+  const handleApprovalModeChange = useCallback(async (mode: ApprovalMode) => {
+    try {
+      const updated = await updateSetting('NUNCIO_CODEX_RUNTIME_MODE', mode);
+      setSettings((prev) =>
+        prev.some((s) => s.key === updated.key)
+          ? prev.map((s) => (s.key === updated.key ? updated : s))
+          : [...prev, updated],
+      );
+      toast.success(`Saved ${updated.label}`);
+    } catch {
+      toast.error('Failed to save approval mode');
+    }
+  }, []);
+
+  const handleRespondProviderRequest = useCallback(
+    async (requestId: string, decision: ProviderRequestDecision) => {
+      if (!activeId) return;
+      try {
+        await respondProviderRequest(activeId, requestId, decision);
+      } catch {
+        toast.error('Failed to respond to provider request');
+      }
+    },
+    [activeId],
+  );
 
   const openHandoff = useCallback((workspace?: string) => {
     setHandoffInitialWorkspace(workspace);
@@ -370,6 +457,9 @@ export default function App() {
             onContinueOnMobile={() =>
               openHandoff(activeSession.projectPath ?? activeSession.workspace ?? undefined)
             }
+            approvalMode={approvalMode}
+            onApprovalModeChange={handleApprovalModeChange}
+            onRespondProviderRequest={handleRespondProviderRequest}
             steering={steering}
             lifecycleBusy={lifecycleBusy}
           />
@@ -379,6 +469,8 @@ export default function App() {
             providers={providers}
             onSubmit={handleCreate}
             onContinueOnMobile={() => openHandoff()}
+            approvalMode={approvalMode}
+            onApprovalModeChange={handleApprovalModeChange}
             loading={creating}
           />
         )}
