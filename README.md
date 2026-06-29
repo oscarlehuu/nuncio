@@ -48,6 +48,22 @@ bun run changeset        # select "nuncio", pick minor/patch, write a release-no
 
 Merging PRs triggers a `chore: release version` PR that bumps the version and updates `CHANGELOG.md`; merging that PR cuts the release (git tag + GitHub Release). See [`.changeset/README.md`](.changeset/README.md) and [AGENTS.md → Releases & changelog](AGENTS.md) for the full workflow.
 
+## SDK lane branches
+
+Provider SDK work lands through integration branches before `main`:
+
+```bash
+cursor/<feature>  →  cursor-sdk  →  main
+pi/<feature>      →  pi-sdk      →  main
+codex/<feature>   →  codex-sdk   →  main
+```
+
+Use `codex/<slug>` branches for Codex provider work and open PRs against `codex-sdk`. Verify locally with:
+
+```bash
+BASE_REF=codex-sdk HEAD_REF=codex/my-feature bun run check-branch-flow
+```
+
 ## Quick start
 
 Requires [Bun](https://bun.sh) ≥ 1.3 (the server uses `bun:sqlite`, a Bun builtin — Node won't work).
