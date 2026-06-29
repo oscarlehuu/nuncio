@@ -115,6 +115,8 @@ export class SessionsRepository {
     cursorChatId: string;
     prompt: string;
     model?: string | null;
+    projectPath?: string | null;
+    branch?: string | null;
   }): SessionDto {
     const now = Date.now();
     const id = input.id ?? uuidv4().slice(0, 8);
@@ -128,10 +130,10 @@ export class SessionsRepository {
       workspace: input.workspace.trim(),
       prompt: input.prompt,
       preview: null,
-      project_path: null,
+      project_path: input.projectPath ?? null,
       base_branch: null,
       worktree_path: null,
-      branch: null,
+      branch: input.branch ?? null,
       provider_thread_id: null,
       provider_active_turn_id: null,
       provider_state_json: null,
@@ -155,6 +157,14 @@ export class SessionsRepository {
       .prepare('UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?')
       .run(status, now, id);
     return this.findById(id)!;
+  }
+
+  updateTitle(id: string, title: string): SessionDto | null {
+    const now = Date.now();
+    this.database.db
+      .prepare('UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?')
+      .run(title, now, id);
+    return this.findById(id);
   }
 
   touchPreview(id: string, preview: string): void {

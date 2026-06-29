@@ -19,6 +19,8 @@ export interface AgentRunContext {
   transcriptMtimeMs?: number | null;
   /** CLI checkpoint store mtime (ms) for active-run guard. */
   chatStoreMtimeMs?: number | null;
+  /** Whether the last JSONL entry is `turn_ended` — agent is idle. */
+  transcriptTurnEnded?: boolean;
   /** Skip active-run guard when user explicitly forces resume. */
   forceResume?: boolean;
   /** Provider-agnostic approval hook for SDK/tool requests that need a user decision. */

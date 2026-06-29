@@ -6,6 +6,7 @@ import {
   deleteSession,
   fetchArchivedSessions,
   fetchModels,
+  fetchSession,
   fetchSessions,
   pauseSession,
   relativeTime,
@@ -137,6 +138,17 @@ describe('api fetch functions', () => {
   it('fetchSessions throws when the response is not ok', async () => {
     fetchMock.mockResolvedValue(jsonRes(null, false, 500));
     await expect(fetchSessions()).rejects.toThrow('Failed to load sessions');
+  });
+
+  it('fetchSession parses a single session', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ id: 's1', title: 'Test' }));
+    expect(await fetchSession('s1')).toEqual({ id: 's1', title: 'Test' });
+    expect(fetchMock).toHaveBeenCalledWith('/api/sessions/s1');
+  });
+
+  it('fetchSession throws when the response is not ok', async () => {
+    fetchMock.mockResolvedValue(jsonRes(null, false, 404));
+    await expect(fetchSession('missing')).rejects.toThrow('Failed to load session');
   });
 
   it('fetchModels returns the array from a 200 response', async () => {

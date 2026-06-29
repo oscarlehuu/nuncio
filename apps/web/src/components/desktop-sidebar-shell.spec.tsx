@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { ThemeProvider } from './theme-provider';
 import { DesktopSidebarHoverRail } from './desktop-sidebar-shell';
@@ -80,5 +80,50 @@ describe('DesktopSidebarHoverRail animation', () => {
       </ThemeProvider>,
     );
     expect(rail.className).toMatch(/\bw-\[260px\](?=\s|$)/);
+  });
+
+  it('does NOT trigger openHover when hovering the rail (only the hamburger button should)', () => {
+    const onOpenHover = vi.fn();
+    renderWithTheme(
+      <DesktopSidebarHoverRail
+        {...railProps}
+        {...sidebarProps}
+        hovered={false}
+        onOpenHover={onOpenHover}
+      />,
+    );
+    const rail = screen.getByTestId('desktop-sidebar-rail');
+    fireEvent.mouseEnter(rail);
+    expect(onOpenHover).not.toHaveBeenCalled();
+  });
+
+  it('triggers openHover when hovering the hamburger button', () => {
+    const onOpenHover = vi.fn();
+    renderWithTheme(
+      <DesktopSidebarHoverRail
+        {...railProps}
+        {...sidebarProps}
+        hovered={false}
+        onOpenHover={onOpenHover}
+      />,
+    );
+    const button = screen.getByTestId('desktop-nav-toggle');
+    fireEvent.mouseEnter(button);
+    expect(onOpenHover).toHaveBeenCalledTimes(1);
+  });
+
+  it('triggers scheduleCloseHover when the cursor leaves the rail', () => {
+    const onScheduleCloseHover = vi.fn();
+    renderWithTheme(
+      <DesktopSidebarHoverRail
+        {...railProps}
+        {...sidebarProps}
+        hovered={true}
+        onScheduleCloseHover={onScheduleCloseHover}
+      />,
+    );
+    const rail = screen.getByTestId('desktop-sidebar-rail');
+    fireEvent.mouseLeave(rail);
+    expect(onScheduleCloseHover).toHaveBeenCalledTimes(1);
   });
 });
