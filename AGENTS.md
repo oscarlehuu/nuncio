@@ -71,6 +71,72 @@ Verify locally before opening a PR: `BASE_REF=cursor-sdk HEAD_REF=cursor/my-feat
 
 **GitHub branch protection (manual, one-time):** on `main`, `cursor-sdk`, and `pi-sdk` — require PR + status checks **`branch-flow`** and **`ci`**, block direct pushes.
 
+### Branch & worktree naming (contributors)
+
+#### Git branches
+
+Every feature branch **must** use an SDK lane prefix — CI `branch-flow` rejects anything else (including `docs/*` or `fix/*` straight to `main`).
+
+| Lane | Branch pattern | PR target | Example |
+|---|---|---|---|
+| Cursor | `cursor/<slug>` | **`cursor-sdk`** | `cursor/handoff-picker` |
+| Pi | `pi/<slug>` | **`pi-sdk`** | `pi/session-cwd-fix` |
+| Release bot | `changeset-release/*` | **`main`** | (automated — do not hand-create) |
+
+**`<slug>` rules:** kebab-case, short, describes the work — `cursor/model-picker-fast-toggle`, not `cursor/fix` or `cursor/john-wip`.
+
+**Multi-agent phases:** per-lane branches like `cursor/phase-04-a-backend`, then combine into `cursor/phase-04-combined` before one PR to the integration branch (see [Parallel-agent lane convention](#parallel-agent-lane-convention)).
+
+**Create a branch** (always from the updated integration branch, not `main`):
+
+```bash
+git fetch origin
+git checkout cursor-sdk && git pull --ff-only origin cursor-sdk   # or pi-sdk
+git checkout -b cursor/my-feature
+```
+
+Verify before opening a PR:
+
+```bash
+BASE_REF=cursor-sdk HEAD_REF=cursor/my-feature bun run check-branch-flow
+```
+
+#### Optional: git worktree (isolated checkout)
+
+Agents often **share one checkout** on the same branch. Use a **git worktree** when you need a second branch checked out without stashing — e.g. parallel agent sessions or long-running local servers on another branch.
+
+| What | Convention |
+|---|---|
+| **Branch name** | Same as above: `cursor/<slug>` or `pi/<slug>` |
+| **Base ref** | `origin/cursor-sdk` or `origin/pi-sdk` (never `main` for feature work) |
+| **Worktree path** | Sibling dir: `../nuncio-<slug>` — or Cursor-managed: `~/.cursor/worktrees/nuncio/<slug>/` |
+
+```bash
+git fetch origin
+git worktree add -b cursor/my-feature ../nuncio-my-feature origin/cursor-sdk
+cd ../nuncio-my-feature && bun install
+# … work, commit, push cursor/my-feature, open PR → cursor-sdk
+```
+
+**Cleanup after merge:**
+
+```bash
+git worktree remove ../nuncio-my-feature
+git worktree prune
+git push origin --delete cursor/my-feature   # if the remote branch still exists
+```
+
+Cursor dev worktrees under `~/.cursor/worktrees/` accumulate over time — `git worktree remove` + `git worktree prune` when done. Worktrees checkout **local** branch refs; run `git fetch` on the main clone before creating one if you need remote-latest.
+
+#### Not the same as Nuncio session worktrees
+
+When a **user creates a Nuncio session** with a project path, the **server** creates an isolated worktree on the **target project repo** (not the Nuncio repo):
+
+- **Branch:** `nuncio/<sessionId>-<slug>` (branched from the session's `baseBranch`, default `main`)
+- **Path:** `~/.nuncio/workspaces/<sessionId>/` (override dir: `NUNCIO_WORKSPACES_DIR`)
+
+Contributors do not create these manually — they are runtime workspace isolation for agent sessions. See **Workspace (Phase 4)** under [API (Phase 0–4)](#api-phase-0-4).
+
 ### Dev servers — reuse canonical ports
 
 | Service | Port | Start command |

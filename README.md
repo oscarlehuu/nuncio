@@ -224,7 +224,7 @@ Phase plans and milestones: [plans/260626-nuncio-roadmap/](plans/260626-nuncio-r
 
 Contributions are welcome! Before opening a PR:
 
-- Read [CONTRIBUTING.md](CONTRIBUTING.md) — it covers the TDD-first workflow, the Changeset-based release process, and the PR checklist.
+- Read [CONTRIBUTING.md](CONTRIBUTING.md) — it covers the TDD-first workflow, the Changeset-based release process, branch/worktree naming, and the PR checklist.
 - For context on architecture and conventions, see [AGENTS.md](AGENTS.md) and [docs/system-architecture.md](docs/system-architecture.md).
 - Found a security issue? See [SECURITY.md](SECURITY.md) — **do not** open a public issue for vulnerabilities.
 - Everyone is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
