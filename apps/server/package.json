@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "build": "nest build",
-    "dev": "bun --watch src/main.ts",
-    "start": "bun src/main.ts",
+    "dev": "bun --env-file=../../.env --watch src/main.ts",
+    "start": "bun --env-file=../../.env src/main.ts",
     "start:prod": "bun run dist/main.js",
     "test": "bun test test/unit/",
     "test:e2e": "bun test ./test/e2e/app.e2e-spec.ts",

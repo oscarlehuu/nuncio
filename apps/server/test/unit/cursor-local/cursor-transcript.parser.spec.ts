@@ -27,6 +27,24 @@ describe('cursor-transcript.parser', () => {
     expect(turn?.role).toBe('assistant');
     expect(turn?.text).toBe('Checking files');
     expect(turn?.toolNames).toEqual(['Read']);
+    expect(turn?.tools).toEqual([{ name: 'Read' }]);
+  });
+
+  it('preserves tool_use input', () => {
+    const line = JSON.stringify({
+      role: 'assistant',
+      message: {
+        content: [
+          {
+            type: 'tool_use',
+            name: 'Read',
+            input: { path: '/foo.ts', limit: 10 },
+          },
+        ],
+      },
+    });
+    const turn = parseTranscriptLine(line);
+    expect(turn?.tools).toEqual([{ name: 'Read', input: { path: '/foo.ts', limit: 10 } }]);
   });
 
   it('returns null for malformed JSON', () => {
@@ -38,6 +56,7 @@ describe('cursor-transcript.parser', () => {
       role: 'user',
       text: 'a'.repeat(100),
       toolNames: [],
+      tools: [],
     });
     expect(title.length).toBe(80);
     expect(title.endsWith('...')).toBe(true);

@@ -54,11 +54,32 @@ Requires [Bun](https://bun.sh) ≥ 1.3 (the server uses `bun:sqlite`, a Bun buil
 
 ```bash
 bun install
+cp .env.example .env   # optional but recommended — shared SQLite across worktrees
 bun run dev
 ```
 
 - **API:** http://localhost:3000/api/health
 - **Web:** http://localhost:5173 (proxies `/api` → 3000)
+
+### Local data (sessions & settings)
+
+SQLite lives under `NUNCIO_DATA_DIR` (default: `./data` relative to the **server process cwd**, which is usually `apps/server/data/` when you run `bun run dev` from the repo root). Each git checkout or worktree without a shared path gets its **own empty database** — that is why a feature worktree can show an empty sidebar while your main clone has sessions.
+
+**Recommended:** point every checkout at one directory:
+
+```bash
+cp .env.example .env
+# edit if needed — default is $HOME/.nuncio/data
+```
+
+Migrate existing data once (example if your sessions were under `apps/server/data/`):
+
+```bash
+mkdir -p ~/.nuncio/data
+cp -a apps/server/data/. ~/.nuncio/data/
+```
+
+Restart `bun run dev` on port **3000** only — see [CONTRIBUTING.md → Dev server ports](CONTRIBUTING.md#dev-server-ports--dont-squat-new-ports).
 
 ```bash
 bun run build   # build server + web
@@ -131,6 +152,8 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 | GET | `/api/cursor/local-sessions?workspace=` | List in-progress Cursor chats on this Mac for the handoff picker |
 | GET | `/api/sessions/:id` | Session detail (incl. `provider`, `model`, `cursorBackend`, `cursorChatId`) |
 | GET | `/api/sessions/:id/events?since=` | Event log (cursor) |
+| GET | `/api/sessions/:id/active-run` | `{ "active": boolean }` — whether Cursor IDE/CLI is likely still running this handoff chat on the host (transcript/store mtime < 60s) |
+| POST | `/api/sessions/:id/refresh-transcript` | Append new turns from the on-disk Cursor transcript; emits `transcript_refreshed` via SSE when rows land |
 | GET | `/api/sessions/:id/stream?since=` | SSE stream |
 | POST | `/api/sessions/:id/steer` | Steer agent `{ "message": "...", "forceResume?": true }` — `forceResume` skips the active-run guard for CLI handoff sessions |
 | POST | `/api/sessions/:id/pause` | Pause session |

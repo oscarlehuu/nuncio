@@ -1,13 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
-import { Archive, ArrowRightLeft, FolderGit2, GitBranch, Pause, RotateCcw, Send, Square, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Archive, ArrowRightLeft, Check, FolderGit2, GitBranch, Pencil, RotateCcw, Send, Square, Trash2, X } from 'lucide-react';
 import type { Session, SessionEvent } from '../lib/api';
-import { statusLabel } from '../lib/api';
 import { projectDisplayName } from '../lib/projects';
 import { FALLBACK_PROVIDERS, modelById, prettyModelName, type ModelProvider } from '../lib/model-providers';
-import { StatusDot } from './status-dot';
+import { useContextUsage } from '../lib/use-context-usage';
+import { ContextUsageButton } from './context-usage-button';
 import { Transcript } from './session-transcript';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import {
   Dialog,
@@ -37,8 +37,12 @@ interface SessionDetailProps {
   onRestore?: (id: string) => void | Promise<void>;
   /** Permanently delete an archived session. Only invoked when status === 'ARCHIVED'. */
   onDelete?: (id: string) => void | Promise<void>;
+  /** Rename the session. */
+  onRename?: (id: string, title: string) => void | Promise<void>;
   /** Open Continue on mobile picker (SDK Cursor sessions only). */
   onContinueOnMobile?: () => void;
+  /** Cursor IDE may still be running this CLI handoff chat on the host. */
+  machineActive?: boolean;
   steering?: boolean;
   lifecycleBusy?: boolean;
 }
@@ -52,40 +56,63 @@ export function SessionDetail({
   onArchive,
   onRestore,
   onDelete,
+  onRename,
   onContinueOnMobile,
+  machineActive = false,
   steering,
   lifecycleBusy,
 }: SessionDetailProps) {
   const [steerText, setSteerText] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
+  const pendingScrollToBottomRef = useRef(true);
   const streaming = session.status === 'RUNNING';
   const isRunning = session.status === 'RUNNING';
   const isArchived = session.status === 'ARCHIVED';
   const steerDisabled =
-    session.status === 'RUNNING' || session.status === 'ARCHIVED' || steering || lifecycleBusy;
-  const showHeaderPause = !isRunning && session.status !== 'PAUSED' && !isArchived;
+    session.status === 'RUNNING' ||
+    session.status === 'ARCHIVED' ||
+    steering ||
+    lifecycleBusy;
   const canArchive = !isArchived;
   const canRestore = isArchived && !!onRestore;
   const canDelete = isArchived && !!onDelete;
 
   const catalog = providers && providers.length > 0 ? providers : FALLBACK_PROVIDERS;
-  const entry = session.model ? modelById(catalog)[session.model] : undefined;
+  const entry = useMemo(
+    () => (session.model ? modelById(catalog)[session.model] : undefined),
+    [catalog, session.model],
+  );
   const modelName = entry
     ? prettyModelName(entry.name)
-    : session.model ?? (session.cursorBackend === 'cli' ? 'Cursor model' : 'Default');
+    : session.model && session.model !== 'Composer'
+      ? session.model
+      : session.provider === 'cursor' ? 'Cursor' : session.provider === 'pi' ? 'Pi' : 'Default';
   const showContinueOnMobile =
     session.provider === 'cursor' &&
     session.cursorBackend !== 'cli' &&
     !!onContinueOnMobile;
-  const repoName = projectDisplayName(session.projectPath);
+  const repoName = projectDisplayName(session.projectPath) ?? projectDisplayName(session.workspace);
   const branchName = session.branch;
+  const contextUsage = useContextUsage(events);
+
+  useEffect(() => {
+    pendingScrollToBottomRef.current = true;
+  }, [session.id]);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [session.id]);
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (pendingScrollToBottomRef.current || nearBottom) {
+      el.scrollTop = el.scrollHeight;
+      if (el.scrollHeight > el.clientHeight) {
+        pendingScrollToBottomRef.current = false;
+      }
+    }
+  }, [events.length, session.id]);
 
   const handleSteer = async () => {
     const text = steerText.trim();
@@ -96,33 +123,89 @@ export function SessionDetail({
     if (el) el.scrollTop = el.scrollHeight;
   };
 
+  const handleRenameSave = async () => {
+    const trimmed = titleDraft.trim();
+    if (!trimmed || !onRename) {
+      setEditingTitle(false);
+      setTitleDraft('');
+      return;
+    }
+    await onRename(session.id, trimmed);
+    setEditingTitle(false);
+    setTitleDraft('');
+  };
+
   return (
     <section className="flex-1 flex flex-col min-h-0">
+      <TooltipProvider>
       <header className="shrink-0 flex items-center gap-3 px-4 md:px-5 py-3 border-b border-border bg-card/80 backdrop-blur min-h-[52px]">
-        <div className="flex-1 min-w-0 font-medium truncate text-sm">{session.title}</div>
-        {repoName && (
-          <Badge variant="outline" className="gap-1.5 shrink-0 hidden sm:inline-flex">
-            <FolderGit2 className="size-3" />
-            {repoName}
-          </Badge>
-        )}
-        {branchName && (
-          <Badge variant="outline" className="gap-1.5 shrink-0 hidden md:inline-flex">
-            <GitBranch className="size-3" />
-            {branchName}
-          </Badge>
-        )}
-        {session.cursorBackend === 'cli' ? (
-          <Badge variant="outline" className="gap-1.5 shrink-0 hidden lg:inline-flex">
-            Imported from Cursor
-          </Badge>
-        ) : null}
-        <Badge variant="secondary" className="gap-1.5 shrink-0">
-          <StatusDot status={session.status} />
-          {statusLabel(session.status)}
-        </Badge>
-        <TooltipProvider>
-          <div className="flex items-center gap-1 shrink-0">
+        {/* Centered title with tooltip + rename */}
+        <div className="flex-1 min-w-0 flex justify-center items-center">
+          {editingTitle ? (
+            <div className="flex items-center gap-1.5 max-w-[60%]">
+              <Input
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleRenameSave();
+                  } else if (e.key === 'Escape') {
+                    setEditingTitle(false);
+                    setTitleDraft('');
+                  }
+                }}
+                autoFocus
+                className="h-7 text-sm"
+                data-testid="rename-input"
+              />
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                onClick={handleRenameSave}
+                aria-label="Save name"
+                disabled={!titleDraft.trim()}
+              >
+                <Check className="size-3.5" />
+              </Button>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                onClick={() => { setEditingTitle(false); setTitleDraft(''); }}
+                aria-label="Cancel rename"
+              >
+                <X className="size-3.5" />
+              </Button>
+            </div>
+          ) : (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  className="group flex items-center gap-1.5 max-w-[50%] cursor-text"
+                  onClick={() => {
+                    if (!onRename) return;
+                    setTitleDraft(session.title);
+                    setEditingTitle(true);
+                  }}
+                  data-testid="session-title"
+                >
+                  <span className="font-medium truncate text-sm text-center">{session.title}</span>
+                  {onRename && (
+                    <Pencil className="size-3 text-muted-foreground/0 group-hover:text-muted-foreground transition-colors shrink-0" />
+                  )}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-[400px]">
+                <p className="text-xs">{session.title}</p>
+                {onRename && <p className="text-[10px] text-muted-foreground mt-0.5">Click to rename</p>}
+              </TooltipContent>
+            </Tooltip>
+          )}
+        </div>
+
+        {/* Right-side actions */}
+        <div className="flex items-center gap-1 shrink-0">
             {showContinueOnMobile && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -137,22 +220,6 @@ export function SessionDetail({
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>Continue on mobile</TooltipContent>
-              </Tooltip>
-            )}
-            {showHeaderPause && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => void onPause()}
-                    disabled={lifecycleBusy}
-                    aria-label="Pause session"
-                  >
-                    <Pause />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Pause session</TooltipContent>
               </Tooltip>
             )}
             {canArchive && (
@@ -205,8 +272,8 @@ export function SessionDetail({
               </Tooltip>
             )}
           </div>
-        </TooltipProvider>
       </header>
+      </TooltipProvider>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 md:px-8 min-h-0">
         <div className="max-w-[760px] mx-auto">
@@ -214,8 +281,8 @@ export function SessionDetail({
         </div>
       </div>
 
-      <div className="shrink-0 px-4 md:px-5 pt-3 pb-4 md:pb-[18px] border-t border-border bg-card composer-wrap">
-        <div className="max-w-[760px] mx-auto rounded-[10px] border border-border bg-secondary transition-shadow focus-within:ring-2 focus-within:ring-ring/50">
+      <div className="shrink-0 px-4 md:px-5 pt-2.5 pb-3 md:pb-4">
+        <div className="max-w-[760px] mx-auto rounded-xl border border-border/50 bg-muted/20 transition-colors focus-within:border-border/80">
           <Textarea
             value={steerText}
             onChange={(e) => setSteerText(e.target.value)}
@@ -229,46 +296,69 @@ export function SessionDetail({
             placeholder={
               session.status === 'ARCHIVED'
                 ? 'Session archived — steering disabled'
-                : session.status === 'RUNNING'
-                  ? 'Agent is running — wait for idle or stop first…'
-                  : 'Steer the agent — add context, change direction, ask a question…'
+                : machineActive
+                  ? 'Cursor is running this chat on your Mac — wait for it to finish…'
+                  : session.status === 'RUNNING'
+                    ? 'Agent is running — wait for idle or stop first…'
+                    : 'Steer the agent — add context, change direction, ask a question…'
             }
-            className="min-h-[48px] resize-none border-0 shadow-none bg-transparent focus-visible:ring-0 focus-visible:border-0"
+            className="min-h-[44px] resize-none border-0 shadow-none bg-transparent focus-visible:ring-0 focus-visible:border-0 text-[14px]"
           />
-          <div className="flex items-center justify-between gap-2 px-3 pb-2.5">
-            <div className="flex items-center gap-2 min-w-0 flex-wrap">
-              <Badge variant="secondary" className="gap-1.5">
+          <div className="flex items-center justify-between gap-2 px-3 pb-2">
+            <div className="flex items-center gap-3 min-w-0">
+              <span className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
                 <span className="size-1.5 rounded-full bg-primary" />
                 {modelName}
-              </Badge>
-              {repoName && (
-                <Badge variant="secondary" className="gap-1.5 max-w-[180px]">
-                  <FolderGit2 className="size-3 shrink-0" />
-                  <span className="truncate">{repoName}</span>
-                </Badge>
-              )}
+              </span>
+              <ContextUsageButton usage={contextUsage} />
             </div>
             {isRunning ? (
               <Button
-                size="icon-lg"
+                size="icon"
                 variant="destructive"
                 aria-label="Stop session"
                 onClick={() => void onPause()}
                 disabled={lifecycleBusy}
-                className="shrink-0"
+                className="shrink-0 rounded-full"
               >
-                <Square />
+                <Square className="size-3.5" />
               </Button>
             ) : (
               <Button
-                size="icon-lg"
+                size="icon"
                 aria-label="Send"
                 onClick={() => void handleSteer()}
                 disabled={steerDisabled || !steerText.trim()}
-                className="shrink-0"
+                className="shrink-0 rounded-full"
               >
-                <Send />
+                <Send className="size-4" />
               </Button>
+            )}
+          </div>
+          <div
+            data-testid="session-footer"
+            className="flex items-center gap-3 px-3 py-1.5 border-t border-border/30 text-[11px] text-muted-foreground"
+          >
+            {repoName && (
+              <span className="flex items-center gap-1 shrink-0">
+                <FolderGit2 className="size-3" />
+                {repoName}
+              </span>
+            )}
+            {branchName && (
+              <span className="flex items-center gap-1 shrink-0">
+                <GitBranch className="size-3" />
+                {branchName}
+              </span>
+            )}
+            <span className="flex items-center gap-1 shrink-0">
+              <span className={`size-1.5 rounded-full ${machineActive ? 'bg-info animate-pulse' : 'bg-success'}`} />
+              Local
+            </span>
+            {machineActive && (
+              <span className="flex items-center gap-1 shrink-0 text-info">
+                Running on machine
+              </span>
             )}
           </div>
         </div>

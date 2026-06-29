@@ -98,4 +98,59 @@ describe('SessionsService.refreshTranscriptIfNeeded', () => {
       userMessages.some((e) => (e.payload as { text: string }).text === 'Follow up on Mac'),
     ).toBe(true);
   });
+
+  it('emits appended transcript events on the SSE bus, not only transcript_refreshed', async () => {
+    const busChatId = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
+    const slug = toProjectSlug(workspace);
+    const busDir = join(fakeHome, '.cursor/projects', slug, 'agent-transcripts', busChatId);
+    mkdirSync(busDir, { recursive: true });
+    writeFileSync(
+      join(busDir, `${busChatId}.jsonl`),
+      JSON.stringify({
+        role: 'user',
+        message: { content: [{ type: 'text', text: 'First message' }] },
+      }) + '\n',
+    );
+
+    const session = await service.handoff({ cursorChatId: busChatId, workspace });
+    expect(events.list(session.id).filter((e) => e.type === 'user_message')).toHaveLength(1);
+
+    const jsonl = join(busDir, `${busChatId}.jsonl`);
+    writeFileSync(
+      jsonl,
+      [
+        JSON.stringify({
+          role: 'user',
+          message: { content: [{ type: 'text', text: 'First message' }] },
+        }),
+        JSON.stringify({
+          role: 'assistant',
+          message: { content: [{ type: 'text', text: 'Reply from IDE' }] },
+        }),
+        JSON.stringify({
+          role: 'user',
+          message: { content: [{ type: 'text', text: 'New turn from Mac' }] },
+        }),
+      ].join('\n') + '\n',
+    );
+
+    const received: Array<{ type: string; payload: unknown }> = [];
+    const unsub = service.subscribe(session.id, (event) => {
+      received.push({ type: event.type, payload: event.payload });
+    });
+
+    const result = service.refreshTranscript(session.id);
+    unsub();
+
+    expect(result.added).toBeGreaterThanOrEqual(2);
+    expect(received.some((e) => e.type === 'assistant_message')).toBe(true);
+    expect(
+      received.some(
+        (e) =>
+          e.type === 'user_message' &&
+          (e.payload as { text: string }).text === 'New turn from Mac',
+      ),
+    ).toBe(true);
+    expect(received.some((e) => e.type === 'transcript_refreshed')).toBe(true);
+  });
 });
