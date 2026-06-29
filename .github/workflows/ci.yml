@@ -21,6 +21,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -41,3 +43,17 @@ jobs:
 
       - name: Web unit tests
         run: bun run --filter @nuncio/web test
+
+      - name: Script unit tests
+        run: bun run test:scripts
+
+      - name: Require changeset for user-facing PR changes
+        if: >-
+          github.event_name == 'pull_request' &&
+          !contains(github.event.pull_request.title, 'chore: release version')
+        env:
+          BASE_REF: origin/${{ github.base_ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          GITHUB_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bun run check-changeset

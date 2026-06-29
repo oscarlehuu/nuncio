@@ -29,7 +29,7 @@ apps/server/   NestJS API + provider-agnostic agent harness (Bun runtime)
 apps/web/      Vite + React + Tailwind v4 + shadcn/ui (installable PWA)
 docs/          system-architecture.md
 plans/         phased roadmap + per-phase reports (decision history)
-scripts/       sync-versions.mjs, release.mjs (release automation)
+scripts/       add-changeset.mjs, check-changeset.mjs, check-branch-flow.mjs, sync-versions.mjs, release.mjs
 .changeset/    Changesets config + pending release-note fragments
 ```
 
@@ -70,9 +70,12 @@ Versioning and the changelog are managed by [Changesets](https://github.com/chan
 **For every PR that changes user-facing behavior, add a changeset:**
 
 ```bash
-bun run changeset        # → select "nuncio", pick minor/patch/major, write a release-note-style summary
-git add .changeset/*.md  # commit the fragment alongside your code
+bun run add-changeset patch "Fixed steer composer clearing your draft on reconnect."
+# or: bun run add-changeset minor "Added …"  — see AGENTS.md → Versioning rubric
+git add .changeset/*.md
 ```
+
+Interactive alternative: `bun run changeset`. Verify with `bun run check-changeset` before opening the PR.
 
 Write the summary from a user's perspective (it becomes the changelog entry as-is).
 
@@ -85,7 +88,7 @@ Merging a PR with changesets triggers a `chore: release version` PR that bumps t
 
 ## Pull request process
 
-1. **Branch** from `main`. Use a descriptive name (e.g. `feat/folder-picker`, `fix/sse-replay-cursor`).
+1. **Branch** from the SDK integration branch (`cursor-sdk` or `pi-sdk`), not `main`. Use prefix `cursor/<slug>` or `pi/<slug>` (see [AGENTS.md → SDK lane branches](AGENTS.md#sdk-lane-branches-enforced-by-ci)).
 2. **TDD-first** — see above. The suite must be green before you open a PR.
 3. **Add a changeset** if the change is user-facing.
 4. **Sync docs** — update `README.md` (commands, API, architecture, status) and `AGENTS.md` (if architecture or conventions shifted). A merged change with stale docs isn't done.
@@ -95,8 +98,10 @@ Merging a PR with changesets triggers a `chore: release version` PR that bumps t
    bun run test
    bun run --filter @nuncio/web test
    bun run build
+   bun run check-branch-flow   # BASE_REF=… HEAD_REF=… — see AGENTS.md
+   bun run check-changeset
    ```
-6. **Open the PR** against `main` and fill in the template.
+6. **Open the PR** against **`cursor-sdk`** or **`pi-sdk`** (feature work). Only integration branches (`cursor-sdk`, `pi-sdk`) merge to `main`.
 7. **Code review** — every PR is reviewed before merge. Fix blockers; document warnings inline. Tests green alone is not done — review is part of the shipping gate.
 
 ## Code style
