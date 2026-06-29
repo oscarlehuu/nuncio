@@ -37,9 +37,52 @@ export interface SessionEvent {
   createdAt: number;
 }
 
+export class SteerApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'SteerApiError';
+    this.status = status;
+  }
+}
+
+export function steerErrorMessage(status: number, fallback: string): string {
+  switch (status) {
+    case 409:
+      return 'Cursor is still running this chat on your Mac. Pause it there, then retry — or force steer anyway.';
+    case 503:
+      return 'Cursor CLI not found. Install it or set NUNCIO_CURSOR_AGENT_BIN in Settings.';
+    default:
+      return fallback;
+  }
+}
+
+export interface ActiveRunStatus {
+  active: boolean;
+}
+
+export async function fetchActiveRun(sessionId: string): Promise<ActiveRunStatus> {
+  const res = await fetch(`/api/sessions/${sessionId}/active-run`);
+  if (!res.ok) throw new Error('Failed to check active run status');
+  return res.json();
+}
+
+export async function refreshSessionTranscript(sessionId: string): Promise<{ added: number }> {
+  const res = await fetch(`/api/sessions/${sessionId}/refresh-transcript`, { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to refresh transcript');
+  return res.json();
+}
+
 export async function fetchSessions(): Promise<Session[]> {
   const res = await fetch('/api/sessions');
   if (!res.ok) throw new Error('Failed to load sessions');
+  return res.json();
+}
+
+export async function fetchSession(id: string): Promise<Session> {
+  const res = await fetch(`/api/sessions/${id}`);
+  if (!res.ok) throw new Error('Failed to load session');
   return res.json();
 }
 
@@ -81,13 +124,33 @@ export async function createSession(
   return res.json();
 }
 
-export async function steerSession(id: string, message: string): Promise<Session> {
+export async function steerSession(
+  id: string,
+  message: string,
+  forceResume?: boolean,
+): Promise<Session> {
+  const body: { message: string; forceResume?: boolean } = { message };
+  if (forceResume) body.forceResume = true;
+
   const res = await fetch(`/api/sessions/${id}/steer`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error('Failed to steer session');
+  if (!res.ok) {
+    const text = await res.text();
+    let detail = text;
+    try {
+      const parsed = JSON.parse(text) as { message?: string };
+      if (parsed.message) detail = parsed.message;
+    } catch {
+      // keep raw text
+    }
+    throw new SteerApiError(
+      res.status,
+      steerErrorMessage(res.status, detail || 'Failed to steer session'),
+    );
+  }
   return res.json();
 }
 
@@ -112,6 +175,16 @@ export async function restoreSession(id: string): Promise<Session> {
 export async function deleteSession(id: string): Promise<void> {
   const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
   if (!res.ok) throw new Error('Failed to delete session');
+}
+
+export async function renameSession(id: string, title: string): Promise<Session> {
+  const res = await fetch(`/api/sessions/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) throw new Error('Failed to rename session');
+  return res.json();
 }
 
 export async function fetchModels(): Promise<ModelProvider[]> {

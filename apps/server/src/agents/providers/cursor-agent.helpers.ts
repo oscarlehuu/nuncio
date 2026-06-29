@@ -54,7 +54,15 @@ export type CursorSdk = {
 export type CursorInteractionUpdate = {
   type: string;
   text?: string;
-  toolCall?: { type?: string; status?: string; isError?: boolean };
+  thinkingDurationMs?: number;
+  toolCall?: {
+    id?: string;
+    type?: string;
+    status?: string;
+    isError?: boolean;
+    args?: unknown;
+    result?: unknown;
+  };
 };
 
 export type CursorAgentInstance = {
@@ -79,6 +87,9 @@ export type CursorRunInstance = {
 export type CursorSessionHandle = {
   agent: CursorAgentInstance;
   accumulatedText: string;
+  accumulatedThinking: string;
+  thinkingOpen: boolean;
+  thinkingId?: string;
 };
 
 export function parseCursorModel(model: string | null | undefined): string | undefined {

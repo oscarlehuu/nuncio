@@ -24,6 +24,7 @@ import {
   type CursorSessionHandle,
 } from './cursor-agent.helpers';
 import type { ModelProviderDto } from '../../models/models.types';
+import { truncatePayload } from '../../sessions/domain/events.types';
 
 @Injectable()
 export class CursorAgentProvider extends BaseAgentProvider {
@@ -147,12 +148,15 @@ export class CursorAgentProvider extends BaseAgentProvider {
           store: this.resolveStore(sdk),
         },
       });
-      handle = { agent, accumulatedText: '' };
+      handle = { agent, accumulatedText: '', accumulatedThinking: '', thinkingOpen: false };
       this.activeSessions.set(sessionId, handle);
     }
 
     const active = handle;
     active.accumulatedText = '';
+    active.accumulatedThinking = '';
+    active.thinkingOpen = false;
+    active.thinkingId = undefined;
 
     // onDelta gives token-by-token text + tool-call state (finer-grained than
     // run.stream()'s block-level `assistant` events). run.wait() drains the run
@@ -195,29 +199,83 @@ export class CursorAgentProvider extends BaseAgentProvider {
           this.sessions.touchPreview(sessionId, active.accumulatedText);
         }
         return;
-      case 'tool-call-started':
+      case 'thinking-delta':
+        if (update.text) {
+          this.ensureThinkingStarted(sessionId, active, context);
+          active.accumulatedThinking += update.text;
+          this.pushEvent(
+            sessionId,
+            'thinking_delta',
+            { thinkingId: active.thinkingId, delta: update.text },
+            context.emit,
+          );
+        }
+        return;
+      case 'thinking-completed':
+        if (active.thinkingOpen || active.accumulatedThinking) {
+          this.pushEvent(
+            sessionId,
+            'thinking_message',
+            { thinkingId: active.thinkingId, text: active.accumulatedThinking },
+            context.emit,
+          );
+          active.accumulatedThinking = '';
+          active.thinkingOpen = false;
+          active.thinkingId = undefined;
+        }
+        return;
+      case 'tool-call-started': {
+        const callId = update.toolCall?.id ?? crypto.randomUUID();
+        const tool = update.toolCall?.type ?? 'unknown';
+        const input = update.toolCall?.args;
+        const truncatedInput = input !== undefined ? truncatePayload(input).value : undefined;
         this.pushEvent(
           sessionId,
           'tool_start',
-          { tool: update.toolCall?.type ?? 'unknown' },
+          { callId, tool, ...(truncatedInput !== undefined ? { input: truncatedInput } : {}) },
           context.emit,
         );
         return;
-      case 'tool-call-completed':
+      }
+      case 'tool-call-completed': {
+        const callId = update.toolCall?.id;
+        const tool = update.toolCall?.type ?? 'unknown';
+        const result = update.toolCall?.result;
+        const truncatedOutput = result !== undefined ? truncatePayload(result).value : undefined;
         this.pushEvent(
           sessionId,
           'tool_end',
           {
-            tool: update.toolCall?.type ?? 'unknown',
+            ...(callId ? { callId } : {}),
+            tool,
             isError: isCursorToolCallError(update.toolCall),
+            ...(truncatedOutput !== undefined ? { output: truncatedOutput } : {}),
           },
           context.emit,
         );
         return;
+      }
       default:
-        // thinking-delta, token-delta, step-*, summary-*, etc. — not surfaced.
+        // token-delta, step-*, summary-*, etc. — not surfaced.
         return;
     }
+  }
+
+  private ensureThinkingStarted(
+    sessionId: string,
+    active: CursorSessionHandle,
+    context: AgentRunContext,
+  ): void {
+    if (active.thinkingOpen) return;
+    active.thinkingOpen = true;
+    active.thinkingId = crypto.randomUUID();
+    active.accumulatedThinking = '';
+    this.pushEvent(
+      sessionId,
+      'thinking_start',
+      { thinkingId: active.thinkingId },
+      context.emit,
+    );
   }
 
   private loadSdk(): Promise<CursorSdk> {

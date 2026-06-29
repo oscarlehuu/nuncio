@@ -162,6 +162,33 @@ describe('Nuncio API', () => {
       expect(archived.body.status).toBe('ARCHIVED');
     });
 
+    it('PATCH /api/sessions/:id renames the session', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/sessions')
+        .send({ prompt: 'Original title' });
+      const id = created.body.id;
+      await waitForIdle(app, id);
+
+      const renamed = await request(app.getHttpServer())
+        .patch(`/api/sessions/${id}`)
+        .send({ title: 'My custom name' });
+      expect(renamed.status).toBe(200);
+      expect(renamed.body.title).toBe('My custom name');
+      expect(renamed.body.id).toBe(id);
+    });
+
+    it('PATCH /api/sessions/:id rejects empty title', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/sessions')
+        .send({ prompt: 'Some prompt' });
+      const id = created.body.id;
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/sessions/${id}`)
+        .send({ title: '   ' });
+      expect(res.body.error).toBeDefined();
+    });
+
     it('GET /api/sessions excludes archived sessions', async () => {
       const created = await request(app.getHttpServer())
         .post('/api/sessions')
