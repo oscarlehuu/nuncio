@@ -72,7 +72,6 @@ export function DesktopSidebarHoverRail({
           ? 'w-[260px] border-r border-sidebar-border bg-sidebar shadow-xl'
           : 'w-14',
       )}
-      onMouseEnter={onOpenHover}
       onMouseLeave={onScheduleCloseHover}
     >
       <div className="shrink-0 p-3" style={{ paddingTop: safeTop }}>

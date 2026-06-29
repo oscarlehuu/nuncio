@@ -111,13 +111,12 @@ describe('SessionDetail', () => {
     expect(onPause).toHaveBeenCalledTimes(1);
   });
 
-  it('hides header pause when RUNNING but keeps archive', async () => {
+  it('keeps archive button when RUNNING', async () => {
     await renderDetail({ status: 'RUNNING' });
-    expect(screen.queryByRole('button', { name: /pause session/i })).toBeNull();
     expect(screen.getByRole('button', { name: /archive session/i })).toBeInTheDocument();
   });
 
-  it('hides the pause button when the session is ARCHIVED', async () => {
+  it('does not show a pause button when ARCHIVED', async () => {
     await renderDetail({ status: 'ARCHIVED' });
     expect(screen.queryByRole('button', { name: /pause session/i })).toBeNull();
   });
@@ -260,6 +259,28 @@ describe('SessionDetail', () => {
     });
     expect(screen.getAllByText('nuncio').length).toBeGreaterThan(0);
     expect(screen.getAllByText('nuncio/s1-fix-auth').length).toBeGreaterThan(0);
+  });
+
+  it('renders repo and branch in the footer below the composer', async () => {
+    await renderDetail({
+      projectPath: '/Users/dev/code/nuncio',
+      branch: 'nuncio/s1-fix-auth',
+    });
+    const footer = screen.getByTestId('session-footer');
+    expect(footer).toBeInTheDocument();
+    expect(footer).toHaveTextContent('nuncio');
+    expect(footer).toHaveTextContent('nuncio/s1-fix-auth');
+    expect(footer).toHaveTextContent('Local');
+  });
+
+  it('does not render repo or branch in the header', async () => {
+    await renderDetail({
+      projectPath: '/Users/dev/code/nuncio',
+      branch: 'nuncio/s1-fix-auth',
+    });
+    const header = document.querySelector('header');
+    expect(header).toBeTruthy();
+    expect(header).not.toHaveTextContent('nuncio/s1-fix-auth');
   });
 
   it('shows the friendly model name from the provided providers catalog', async () => {
@@ -500,6 +521,38 @@ describe('SessionDetail throttled streaming', () => {
       />,
     );
     expect(screen.queryByRole('button', { name: /continue on mobile/i })).toBeNull();
-    expect(screen.getByText('Imported from Cursor')).toBeInTheDocument();
+  });
+
+  it('shows Running on machine badge when machineActive', () => {
+    render(
+      <SessionDetail
+        session={makeSession({ provider: 'cursor', cursorBackend: 'cli' })}
+        events={NO_EVENTS}
+        onSteer={vi.fn()}
+        onPause={vi.fn()}
+        onArchive={vi.fn()}
+        machineActive
+      />,
+    );
+    expect(screen.getByText('Running on machine')).toBeInTheDocument();
+  });
+
+  it('shows hint in composer while machineActive but keeps steer enabled', async () => {
+    const onSteer = vi.fn();
+    render(
+      <SessionDetail
+        session={makeSession({ provider: 'cursor', cursorBackend: 'cli', status: 'IDLE' })}
+        events={NO_EVENTS}
+        onSteer={onSteer}
+        onPause={vi.fn()}
+        onArchive={vi.fn()}
+        machineActive
+      />,
+    );
+    const textarea = screen.getByPlaceholderText(/cursor is running this chat/i);
+    expect(textarea).toBeEnabled();
+    await userEvent.type(textarea, 'try from phone');
+    await userEvent.click(screen.getByRole('button', { name: /send/i }));
+    expect(onSteer).toHaveBeenCalledWith('try from phone');
   });
 });

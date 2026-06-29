@@ -1,17 +1,19 @@
-import { Fragment, useMemo } from 'react';
+import { Fragment, memo, useMemo } from 'react';
 import type { ProviderRequestDecision, SessionEvent } from '../lib/api';
-import { useThrottledStreamText } from '../lib/use-throttled-stream-text';
-import { cn } from '../lib/utils';
-import { ProviderRequestCard, type ProviderRequestView } from './provider-request-card';
-
-export interface Message {
-  kind: 'message';
-  role: 'user' | 'assistant';
-  text: string;
-  streaming?: boolean;
-}
-
-type TranscriptItem = Message | ProviderRequestView;
+import {
+  buildTranscriptBlocks,
+  workingIndicatorLabel,
+  type TranscriptBlock,
+} from '../lib/transcript-build-blocks';
+import { ThinkingBlock } from './transcript-blocks/thinking-block';
+import { ToolGroup, type ToolGroupTool } from './transcript-blocks/tool-group';
+import { CursorContextBlock } from './transcript-blocks/cursor-context-block';
+import { ProviderRequestCard } from './provider-request-card';
+import {
+  AssistantBubble,
+  ErrorBlock,
+  UserBubble,
+} from './transcript-blocks/transcript-bubbles';
 
 interface TranscriptProps {
   events: SessionEvent[];
@@ -23,189 +25,186 @@ interface TranscriptProps {
   ) => void | Promise<void>;
 }
 
-export function buildMessages(events: SessionEvent[]): TranscriptItem[] {
-  const out: TranscriptItem[] = [];
-  const requests = new Map<string, ProviderRequestView>();
-  let assistantBuf = '';
+type RenderItem =
+  | { type: 'block'; block: TranscriptBlock }
+  | { type: 'tool-group'; tools: ToolGroupTool[] };
 
-  for (const event of events) {
-    if (event.type === 'user_message') {
-      flushAssistant(out, assistantBuf);
-      assistantBuf = '';
-      out.push({ kind: 'message', role: 'user', text: String(event.payload.text ?? '') });
-    }
-    if (event.type === 'assistant_delta') {
-      assistantBuf += String(event.payload.delta ?? '');
-    }
-    if (event.type === 'assistant_message') {
-      assistantBuf = String(event.payload.text ?? assistantBuf);
-      flushAssistant(out, assistantBuf);
-      assistantBuf = '';
-    }
-    if (event.type === 'tool_start') {
-      out.push({
-        kind: 'message',
-        role: 'assistant',
-        text: `▸ tool: ${String(event.payload.tool ?? 'unknown')}`,
-      });
-    }
-    if (event.type === 'error') {
-      out.push({ kind: 'message', role: 'assistant', text: `Error: ${String(event.payload.message ?? 'unknown')}` });
-    }
-    if (event.type === 'provider_request') {
-      flushAssistant(out, assistantBuf);
-      assistantBuf = '';
-      const request = providerRequestFromPayload(event.payload);
-      if (request) {
-        requests.set(request.requestId, request);
-        out.push(request);
-      }
-    }
-    if (event.type === 'provider_request_resolved') {
-      const requestId = payloadString(event.payload, 'requestId');
-      const existing = requestId ? requests.get(requestId) : undefined;
-      const decision = providerRequestDecision(event.payload);
-      if (existing) {
-        existing.status = 'resolved';
-        existing.decision = decision;
-      } else if (requestId) {
-        out.push({
-          kind: 'provider_request',
-          requestId,
-          provider: payloadString(event.payload, 'provider') ?? 'provider',
-          method: payloadString(event.payload, 'method') ?? 'request',
-          status: 'resolved',
-          decision,
+function groupConsecutiveTools(blocks: TranscriptBlock[]): RenderItem[] {
+  const out: RenderItem[] = [];
+  let i = 0;
+  while (i < blocks.length) {
+    const block = blocks[i];
+    if (block.kind === 'tool') {
+      const tools: ToolGroupTool[] = [];
+      while (i < blocks.length && blocks[i].kind === 'tool') {
+        const t = blocks[i] as Extract<TranscriptBlock, { kind: 'tool' }>;
+        tools.push({
+          callId: t.callId,
+          tool: t.tool,
+          status: t.status,
+          summary: t.summary,
+          ...(t.input !== undefined ? { input: t.input } : {}),
+          ...(t.output !== undefined ? { output: t.output } : {}),
         });
+        i++;
       }
+      out.push({ type: 'tool-group', tools });
+    } else {
+      out.push({ type: 'block', block });
+      i++;
     }
   }
-
-  if (assistantBuf) {
-    out.push({ kind: 'message', role: 'assistant', text: assistantBuf, streaming: true });
-  }
-
   return out;
-}
-
-function flushAssistant(out: TranscriptItem[], text: string) {
-  if (text.trim()) out.push({ kind: 'message', role: 'assistant', text });
-}
-
-function StreamingAssistantText({ text, streaming }: { text: string; streaming: boolean }) {
-  const displayed = useThrottledStreamText(text, streaming);
-  return (
-    <>
-      {displayed}
-      {streaming && (
-        <span className="inline-block w-2 h-4 ml-0.5 bg-primary animate-pulse align-middle" />
-      )}
-    </>
-  );
 }
 
 export function WorkingIndicator({ label }: { label: string }) {
   return (
     <div
-      className="flex items-center gap-2 px-2 py-2 text-sm text-muted-foreground"
+      className="flex items-center gap-2 px-2 py-1.5 text-[13px] text-muted-foreground"
       data-testid="working-indicator"
     >
-      <span className="size-2 rounded-full bg-primary animate-pulse shrink-0" />
+      <span className="size-1.5 rounded-full bg-primary animate-pulse shrink-0" />
       <span>{label}</span>
     </div>
   );
 }
 
-export function Transcript({
+function UserBlock({ text }: { text: string }) {
+  return (
+    <div className="flex flex-col items-end">
+      <div className="max-w-[90%] px-3 py-2 rounded-[12px_12px_4px_12px] text-[14px] leading-relaxed bg-muted/25 text-foreground/90">
+        <UserBubble text={text} />
+      </div>
+    </div>
+  );
+}
+
+function AssistantBlock({ text, streaming }: { text: string; streaming?: boolean }) {
+  return (
+    <div className="text-[14px] leading-relaxed text-foreground">
+      <AssistantBubble text={text} streaming={streaming} />
+    </div>
+  );
+}
+
+function ErrorRow({ message }: { message: string }) {
+  return (
+    <div className="text-[14px] text-destructive">
+      <ErrorBlock message={message} />
+    </div>
+  );
+}
+
+function RenderItemView({
+  item,
+  streaming,
+  respondingRequestId,
+  onRespondProviderRequest,
+}: {
+  item: RenderItem;
+  streaming?: boolean;
+  respondingRequestId?: string | null;
+  onRespondProviderRequest?: TranscriptProps['onRespondProviderRequest'];
+}) {
+  if (item.type === 'tool-group') {
+    return <ToolGroup tools={item.tools} />;
+  }
+  const block = item.block;
+  switch (block.kind) {
+    case 'user':
+      return <UserBlock text={block.text} />;
+    case 'assistant':
+      return <AssistantBlock text={block.text} streaming={streaming && block.streaming} />;
+    case 'tool':
+      return (
+        <ToolGroup
+          tools={[
+            {
+              callId: block.callId,
+              tool: block.tool,
+              status: block.status,
+              summary: block.summary,
+              ...(block.input !== undefined ? { input: block.input } : {}),
+              ...(block.output !== undefined ? { output: block.output } : {}),
+            },
+          ]}
+        />
+      );
+    case 'thinking':
+      return <ThinkingBlock text={block.text} streaming={streaming && block.streaming} />;
+    case 'cursor-context':
+      return (
+        <CursorContextBlock
+          summary={block.summary}
+          instruction={block.instruction}
+          sections={block.sections}
+        />
+      );
+    case 'provider_request':
+      return (
+        <ProviderRequestCard
+          request={block}
+          responding={respondingRequestId === block.requestId}
+          onRespond={onRespondProviderRequest}
+        />
+      );
+    case 'error':
+      return <ErrorRow message={block.message} />;
+    default: {
+      const _exhaustive: never = block;
+      void _exhaustive;
+      return null;
+    }
+  }
+}
+
+export const Transcript = memo(function Transcript({
   events,
   streaming,
   respondingRequestId,
   onRespondProviderRequest,
 }: TranscriptProps) {
-  const messages = useMemo(() => buildMessages(events), [events]);
-  const isWriting = streaming && messages.some((m) => m.kind === 'message' && m.streaming);
+  const blocks = useMemo(() => buildTranscriptBlocks(events), [events]);
+  const items = useMemo(() => groupConsecutiveTools(blocks), [blocks]);
+  const indicatorLabel = workingIndicatorLabel(blocks, streaming ?? false);
 
-  const indicatorLabel = isWriting ? 'Nuncio is writing…' : 'Nuncio is working…';
-
-  // Place the working indicator right after the last user message (so it sits
-  // BELOW the user's prompt, before any assistant deltas). When there is no
-  // user message, fall back to the end of the transcript.
   const indicatorIndex = useMemo(() => {
     if (!streaming) return -1;
     let lastUser = -1;
-    for (let i = 0; i < messages.length; i++) {
-      const item = messages[i];
-      if (item.kind === 'message' && item.role === 'user') lastUser = i;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type === 'block' && item.block.kind === 'user') lastUser = i;
     }
-    return lastUser === -1 ? messages.length : lastUser + 1;
-  }, [messages, streaming]);
+    return lastUser === -1 ? items.length : lastUser + 1;
+  }, [items, streaming]);
 
   return (
-    <div className="flex flex-col gap-5 py-4">
-      {messages.map((msg, i) => (
-        <Fragment key={i}>
+    <div className="flex flex-col gap-1.5 py-2">
+      {items.map((item, i) => (
+        <Fragment key={`item-${i}`}>
           {i === indicatorIndex && <WorkingIndicator label={indicatorLabel} />}
-          {msg.kind === 'provider_request' ? (
-            <ProviderRequestCard
-              request={msg}
-              responding={respondingRequestId === msg.requestId}
-              onRespond={onRespondProviderRequest}
-            />
-          ) : (
-            <div
-              className={cn(
-                'flex flex-col gap-1',
-                msg.role === 'user' ? 'items-end' : 'items-start',
-              )}
-            >
-              {msg.role === 'assistant' && (
-                <span className="text-[11px] text-muted-foreground px-1">Assistant</span>
-              )}
-              <div
-                className={cn(
-                  'max-w-[90%] px-3.5 py-2.5 rounded-[10px] text-[14px] leading-relaxed',
-                  msg.role === 'user'
-                    ? 'bg-primary/10 text-primary border border-transparent rounded-[14px_14px_4px_14px]'
-                    : 'bg-transparent text-foreground',
-                )}
-              >
-                {msg.role === 'assistant' && msg.streaming ? (
-                  <StreamingAssistantText text={msg.text} streaming={streaming ?? false} />
-                ) : (
-                  msg.text
-                )}
-              </div>
-            </div>
-          )}
+          <RenderItemView
+            item={item}
+            streaming={streaming}
+            respondingRequestId={respondingRequestId}
+            onRespondProviderRequest={onRespondProviderRequest}
+          />
         </Fragment>
       ))}
-      {streaming && indicatorIndex >= messages.length && (
+      {streaming && indicatorIndex >= items.length && (
         <WorkingIndicator label={indicatorLabel} />
       )}
     </div>
   );
-}
+});
 
-function providerRequestFromPayload(payload: Record<string, unknown>): ProviderRequestView | null {
-  const requestId = payloadString(payload, 'requestId');
-  if (!requestId) return null;
-  return {
-    kind: 'provider_request',
-    requestId,
-    provider: payloadString(payload, 'provider') ?? 'provider',
-    method: payloadString(payload, 'method') ?? 'request',
-    params: payload.params,
-    status: payloadString(payload, 'status') === 'resolved' ? 'resolved' : 'pending',
-    decision: providerRequestDecision(payload),
-  };
-}
-
-function providerRequestDecision(payload: Record<string, unknown>): ProviderRequestDecision | undefined {
-  const decision = payloadString(payload, 'decision');
-  return decision === 'approve' || decision === 'deny' ? decision : undefined;
-}
-
-function payloadString(payload: Record<string, unknown>, key: string): string | undefined {
-  const value = payload[key];
-  return typeof value === 'string' ? value : undefined;
+/** @deprecated Use buildTranscriptBlocks — kept for test back-compat. */
+export function buildMessages(events: SessionEvent[]) {
+  return buildTranscriptBlocks(events)
+    .filter((b) => b.kind === 'user' || b.kind === 'assistant')
+    .map((b) => ({
+      role: b.kind as 'user' | 'assistant',
+      text: b.text,
+      ...(b.kind === 'assistant' && b.streaming ? { streaming: true } : {}),
+    }));
 }

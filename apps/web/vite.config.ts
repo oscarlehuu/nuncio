@@ -40,6 +40,7 @@ const webPort = readPort(process.env.NUNCIO_WEB_PORT, 5173);
 const apiTarget = process.env.NUNCIO_API_ORIGIN ?? 'http://localhost:3000';
 
 export default defineConfig({
+  appType: 'spa',
   plugins: [
     react(),
     tailwindcss(),
@@ -76,6 +77,8 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        navigateFallback: '/index.html',
+        navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
           {
             urlPattern: /^\/api\/.*/i,

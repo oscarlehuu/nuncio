@@ -13,7 +13,11 @@ import {
   toProjectSlug,
   transcriptDirForChat,
 } from './cursor-project-slug';
-import { chatStoreMtime as resolveChatStoreMtime } from './cursor-chat-store';
+import {
+  chatStoreMtime as resolveChatStoreMtime,
+  readCursorChatNames as resolveCursorChatNames,
+  readCursorChatMetadata as resolveCursorChatMetadata,
+} from './cursor-chat-store';
 import type { LocalCursorSessionDto } from './cursor-local-sessions.types';
 
 const DEFAULT_LIMIT = 20;
@@ -32,6 +36,7 @@ export class CursorLocalSessionsService {
 
     const cap = Math.min(Math.max(limit, 1), MAX_LIMIT);
     const entries: LocalCursorSessionDto[] = [];
+    const cursorNames = resolveCursorChatNames(this.homeDir());
 
     for (const chatId of readdirSync(root, { withFileTypes: true })) {
       if (!chatId.isDirectory()) continue;
@@ -47,7 +52,7 @@ export class CursorLocalSessionsService {
         chatId: chatId.name,
         workspace: abs,
         projectSlug: slug,
-        title: meta.title,
+        title: cursorNames.get(chatId.name) ?? meta.title,
         preview: meta.preview,
         updatedAt: statSync(jsonlPath).mtimeMs,
         messageCount: meta.messageCount,
@@ -76,7 +81,7 @@ export class CursorLocalSessionsService {
       const turn = parseTranscriptLine(line);
       if (turn) turns.push(turn);
     }
-    return turns.slice(0, 500);
+    return turns;
   }
 
   /** For active-run heuristic: transcript file mtime in ms. */
@@ -87,30 +92,45 @@ export class CursorLocalSessionsService {
     return statSync(jsonlPath).mtimeMs;
   }
 
+  /** True when the last JSONL entry is `turn_ended` — agent is idle, not running. */
+  isTranscriptTurnEnded(chatId: string, workspace: string): boolean {
+    const slug = toProjectSlug(workspace);
+    const jsonlPath = join(transcriptDirForChat(this.homeDir(), slug, chatId), `${chatId}.jsonl`);
+    if (!existsSync(jsonlPath)) return false;
+    const lines = readFileSync(jsonlPath, 'utf8').split('\n').filter(Boolean);
+    if (lines.length === 0) return false;
+    try {
+      const last = JSON.parse(lines[lines.length - 1]!);
+      return last.type === 'turn_ended' || last.role === 'turn_ended';
+    } catch {
+      return false;
+    }
+  }
+
   /** For active-run heuristic: CLI checkpoint store.db mtime in ms. */
   chatStoreMtime(chatId: string): number | null {
     return resolveChatStoreMtime(this.homeDir(), chatId);
   }
 
-  /** Best-effort model id from the latest assistant line in the transcript. */
+  /** Best-effort model from the transcript JSONL. Returns null for CLI sessions (model is not stored). */
   readTranscriptModel(chatId: string, workspace: string): string | null {
     const slug = toProjectSlug(workspace);
     const jsonlPath = join(transcriptDirForChat(this.homeDir(), slug, chatId), `${chatId}.jsonl`);
-    if (!existsSync(jsonlPath)) return null;
-
-    const lines = readFileSync(jsonlPath, 'utf8').split('\n').filter(Boolean);
-    for (let i = lines.length - 1; i >= 0; i -= 1) {
-      try {
-        const parsed = JSON.parse(lines[i]!) as {
-          role?: string;
-          model?: string;
-          message?: { model?: string };
-        };
-        if (parsed.role !== 'assistant') continue;
-        const model = parsed.model ?? parsed.message?.model;
-        if (model?.trim()) return model.trim();
-      } catch {
-        continue;
+    if (existsSync(jsonlPath)) {
+      const lines = readFileSync(jsonlPath, 'utf8').split('\n').filter(Boolean);
+      for (let i = lines.length - 1; i >= 0; i -= 1) {
+        try {
+          const parsed = JSON.parse(lines[i]!) as {
+            role?: string;
+            model?: string;
+            message?: { model?: string };
+          };
+          if (parsed.role !== 'assistant') continue;
+          const model = parsed.model ?? parsed.message?.model;
+          if (model?.trim()) return model.trim();
+        } catch {
+          continue;
+        }
       }
     }
     return null;

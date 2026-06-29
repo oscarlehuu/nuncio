@@ -17,6 +17,7 @@ Thanks for considering a contribution! Nuncio is a self-hosted, mobile-first web
 git clone https://github.com/oscarlehuu/nuncio.git
 cd nuncio
 bun install
+cp .env.example .env   # shared NUNCIO_DATA_DIR across worktrees (recommended)
 bun run dev          # API on :3000, web on :5173 (proxies /api → 3000)
 ```
 
@@ -107,6 +108,8 @@ Full spec: [AGENTS.md → Branch & worktree naming](AGENTS.md#branch--worktree-n
   ```
 
 - Remove when done: `git worktree remove …` + `git worktree prune`.
+
+**Shared data across worktrees:** each checkout has its own source tree, but you usually want **one SQLite database** for local dev. Without `NUNCIO_DATA_DIR`, the default path is cwd-relative (`apps/server/data/` when using `bun run dev`), so a new worktree starts with an empty session list. Copy `.env.example` → `.env` at the repo root in **every** checkout (same `NUNCIO_DATA_DIR=$HOME/.nuncio/data`). The server loads root `.env` automatically. Run **one** dev server on ports 3000 + 5173 — not a second instance per worktree.
 
 **Session worktrees (runtime — not for repo dev):** when users pick a project in the app, Nuncio creates `nuncio/<sessionId>-<slug>` under `~/.nuncio/workspaces/` on the **target repo**. That is separate from contributor git worktrees on the Nuncio repo.
 

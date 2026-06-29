@@ -4,10 +4,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { EventEmitter } from 'events';
+import { homedir } from 'node:os';
 import { v4 as uuidv4 } from 'uuid';
 import { AgentRegistry } from '../agents/agents.registry';
 import { CursorLocalSessionsService } from '../cursor-local/cursor-local-sessions.service';
 import { turnsToSessionEvents } from '../cursor-local/cursor-transcript-hydrate';
+import { readCursorChatMetadata } from '../cursor-local/cursor-chat-store';
 import { GitService } from '../git/git.service';
 import { canTransition } from './domain/sessions.fsm';
 import type {
@@ -20,6 +22,7 @@ import type {
   SessionEvent,
   SessionStatus,
 } from './domain/sessions.types';
+import { isCursorCliRecentlyActive } from '../agents/providers/cursor-cli.active-run';
 import { EventsRepository } from './persistence/events.repository';
 import { ProviderRequestsRepository } from './persistence/provider-requests.repository';
 import { SessionsRepository } from './persistence/sessions.repository';
@@ -38,6 +41,7 @@ interface PendingProviderRequest {
 export class SessionsService {
   private readonly streams = new Map<string, EventEmitter>();
   private readonly providerRequests = new Map<string, PendingProviderRequest>();
+  private readonly transcriptMtimeCache = new Map<string, number>();
 
   constructor(
     private readonly sessions: SessionsRepository,
@@ -65,6 +69,28 @@ export class SessionsService {
     const session = this.requireSession(id);
     this.hydrateIfNeeded(session);
     return this.events.list(id, since);
+  }
+
+  /** Whether Cursor IDE/CLI is likely still running this handoff chat on the host. */
+  isCursorCliActive(id: string): boolean {
+    const session = this.requireSession(id);
+    if (session.cursorBackend !== 'cli' || !session.cursorChatId || !session.workspace) {
+      return false;
+    }
+    const workspace = session.worktreePath ?? session.workspace;
+    const transcriptMtimeMs = this.cursorLocal.transcriptMtime(session.cursorChatId, workspace);
+    const chatStoreMtimeMs = this.cursorLocal.chatStoreMtime(session.cursorChatId);
+    const turnEnded = this.cursorLocal.isTranscriptTurnEnded(session.cursorChatId, workspace);
+    return isCursorCliRecentlyActive(transcriptMtimeMs, chatStoreMtimeMs, turnEnded);
+  }
+
+  /** Append new transcript turns from disk; emits transcript_refreshed when rows land. */
+  refreshTranscript(id: string): { added: number } {
+    const session = this.requireSession(id);
+    const before = this.events.list(id, 0).length;
+    this.refreshTranscriptIfNeeded(session);
+    const after = this.events.list(id, 0).length;
+    return { added: Math.max(0, after - before) };
   }
 
   async create(input: CreateSessionDto): Promise<SessionDto> {
@@ -124,12 +150,15 @@ export class SessionsService {
 
     const title = input.title?.trim() || local.title;
     const model = this.cursorLocal.readTranscriptModel(chatId, workspace);
+    const cursorMeta = readCursorChatMetadata(homedir(), chatId);
     const session = this.sessions.createHandoff({
-      title,
+      title: cursorMeta.name ?? title,
       workspace,
       cursorChatId: chatId,
       prompt: title,
       model,
+      projectPath: cursorMeta.repoPath ?? workspace,
+      branch: cursorMeta.branch ?? null,
     });
     this.hydrateIfNeeded(session);
     return this.sessions.findById(session.id)!;
@@ -159,6 +188,10 @@ export class SessionsService {
       current.cursorBackend === 'cli' && current.cursorChatId
         ? this.cursorLocal.chatStoreMtime(current.cursorChatId)
         : null;
+    const transcriptTurnEnded =
+      current.cursorBackend === 'cli' && current.cursorChatId && workspace
+        ? this.cursorLocal.isTranscriptTurnEnded(current.cursorChatId, workspace)
+        : false;
 
     await provider.steer(id, trimmed, {
       emit: (event) => this.onAgentEvent(id, event),
@@ -170,6 +203,7 @@ export class SessionsService {
       cursorChatId: current.cursorChatId,
       transcriptMtimeMs,
       chatStoreMtimeMs,
+      transcriptTurnEnded,
       forceResume: forceResume === true,
     });
     return this.requireSession(id);
@@ -206,6 +240,17 @@ export class SessionsService {
     }
     this.transition(id, 'IDLE');
     return this.requireSession(id);
+  }
+
+  rename(id: string, title: string): SessionDto {
+    const trimmed = title.trim();
+    if (!trimmed) {
+      throw new BadRequestException('Title cannot be empty');
+    }
+    this.requireSession(id);
+    const updated = this.sessions.updateTitle(id, trimmed);
+    if (!updated) throw new NotFoundException(`Session ${id} not found`);
+    return updated;
   }
 
   delete(id: string): void {
@@ -290,28 +335,48 @@ export class SessionsService {
     const batch = turnsToSessionEvents(turns);
     if (batch.length === 0) return;
     this.events.appendBatch(session.id, batch);
+    const workspace = session.worktreePath ?? session.workspace;
+    const mtime = this.cursorLocal.transcriptMtime(session.cursorChatId, workspace);
+    if (mtime !== null) this.transcriptMtimeCache.set(session.id, mtime);
   }
 
   private refreshTranscriptIfNeeded(session: SessionDto): void {
     if (session.cursorBackend !== 'cli' || !session.cursorChatId || !session.workspace) return;
 
-    const turns = this.cursorLocal.readTranscript(session.cursorChatId, session.workspace);
+    const workspace = session.worktreePath ?? session.workspace;
+    const currentMtime = this.cursorLocal.transcriptMtime(session.cursorChatId, workspace);
+    if (currentMtime === null) return;
+    const cachedMtime = this.transcriptMtimeCache.get(session.id);
+    if (cachedMtime !== undefined && currentMtime === cachedMtime) return;
+
+    const turns = this.cursorLocal.readTranscript(session.cursorChatId, workspace);
     const hydrated = turnsToSessionEvents(turns);
+    this.transcriptMtimeCache.set(session.id, currentMtime);
     if (hydrated.length === 0) return;
 
     const existing = this.events.list(session.id, 0);
-    const seen = new Set(
-      existing
-        .filter((e) => e.type === 'user_message' || e.type === 'assistant_message')
-        .map((e) => `${e.type}:${JSON.stringify(e.payload)}`),
-    );
+    const existingCounts = new Map<string, number>();
+    for (const e of existing) {
+      const key = `${e.type}:${JSON.stringify(e.payload)}`;
+      existingCounts.set(key, (existingCounts.get(key) ?? 0) + 1);
+    }
 
-    const toAppend = hydrated.filter(
-      (e) => !seen.has(`${e.type}:${JSON.stringify(e.payload)}`),
-    );
+    const toAppend: Array<{ type: string; payload: unknown }> = [];
+    const hydratedCounts = new Map<string, number>();
+    for (const e of hydrated) {
+      const key = `${e.type}:${JSON.stringify(e.payload)}`;
+      const hydratedCount = (hydratedCounts.get(key) ?? 0) + 1;
+      hydratedCounts.set(key, hydratedCount);
+      if (hydratedCount > (existingCounts.get(key) ?? 0)) {
+        toAppend.push(e);
+      }
+    }
     if (toAppend.length === 0) return;
 
-    this.events.appendBatch(session.id, toAppend);
+    const appended = this.events.appendBatch(session.id, toAppend);
+    for (const event of appended) {
+      this.emit(session.id, event);
+    }
     this.appendAndEmit(session.id, 'transcript_refreshed', { added: toAppend.length });
   }
 

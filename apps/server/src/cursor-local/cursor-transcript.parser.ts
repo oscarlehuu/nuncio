@@ -1,13 +1,26 @@
+export interface ParsedTranscriptTool {
+  name: string;
+  input?: unknown;
+}
+
 export interface ParsedTranscriptTurn {
   role: 'user' | 'assistant';
   text: string;
   toolNames: string[];
+  tools: ParsedTranscriptTool[];
+}
+
+interface JsonlContentBlock {
+  type?: string;
+  text?: string;
+  name?: string;
+  input?: unknown;
 }
 
 interface JsonlMessage {
   role?: string;
   message?: {
-    content?: Array<{ type?: string; text?: string; name?: string }>;
+    content?: JsonlContentBlock[];
   };
 }
 
@@ -32,22 +45,28 @@ export function parseTranscriptLine(line: string): ParsedTranscriptTurn | null {
 
   const content = parsed.message?.content ?? [];
   const textParts: string[] = [];
-  const toolNames: string[] = [];
+  const tools: ParsedTranscriptTool[] = [];
   for (const block of content) {
     if (block.type === 'text' && block.text) textParts.push(block.text);
-    if (block.type === 'tool_use' && block.name) toolNames.push(block.name);
+    if (block.type === 'tool_use' && block.name) {
+      tools.push({
+        name: block.name,
+        ...(block.input !== undefined ? { input: block.input } : {}),
+      });
+    }
   }
+  const toolNames = tools.map((t) => t.name);
   const rawText = textParts.join('\n').trim();
-  if (!rawText && toolNames.length === 0) return null;
+  if (!rawText && tools.length === 0) return null;
 
-  const text =
-    parsed.role === 'user' ? stripPromptWrappers(rawText) : rawText;
-  if (!text && toolNames.length === 0) return null;
+  const text = parsed.role === 'user' ? stripPromptWrappers(rawText) : rawText;
+  if (!text && tools.length === 0) return null;
 
   return {
     role: parsed.role,
     text,
     toolNames,
+    tools,
   };
 }
 
