@@ -97,6 +97,7 @@ function fakeSession(over: Partial<Session> = {}): Session {
     branch: null,
     cursorBackend: null,
     cursorChatId: null,
+    supportsInteraction: false,
     createdAt: 0,
     updatedAt: 0,
     ...over,

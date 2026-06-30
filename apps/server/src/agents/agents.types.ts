@@ -4,8 +4,14 @@ import type {
   ProviderRequestInput,
   ProviderRequestResult,
 } from '../sessions/domain/sessions.types';
+import type { UserInputAnswer } from '../sessions/domain/user-input.types';
 
 export type EventEmitter = (event: { type: string; payload: unknown }) => void;
+
+export interface InteractionResponse {
+  answers: UserInputAnswer[];
+  resolvedBy: 'user' | 'skip';
+}
 
 export interface AgentRunContext {
   emit?: EventEmitter;
@@ -35,6 +41,15 @@ export interface AgentProvider {
   run(sessionId: string, prompt: string, context: AgentRunContext): Promise<void>;
   steer(sessionId: string, message: string, context: AgentRunContext): Promise<void>;
   dispose(sessionId: string): void;
+  /** Whether this provider can respond to live interactive tool prompts (e.g. AskQuestion). */
+  supportsInteraction?(): boolean;
+  /** Submit answers for a pending interactive tool prompt. Live path only — historical imports skip this. */
+  submitInteraction?(
+    sessionId: string,
+    requestId: string,
+    response: InteractionResponse,
+    context: AgentRunContext,
+  ): Promise<void>;
   /** Clear any cached availability/model state so the next call re-resolves from current settings. */
   bustCache(): void;
 }

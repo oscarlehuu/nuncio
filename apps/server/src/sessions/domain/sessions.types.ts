@@ -106,6 +106,7 @@ export interface SessionDto {
   providerState: Record<string, unknown> | null;
   cursorBackend: 'sdk' | 'cli' | null;
   cursorChatId: string | null;
+  supportsInteraction: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -138,6 +139,15 @@ export interface CreateSessionDto {
 export interface SteerSessionDto {
   message: string;
   forceResume?: boolean;
+}
+
+export interface RespondInteractionDto {
+  answers: Array<{
+    questionId: string;
+    selectedOptionIds: string[];
+    freeText?: string;
+  }>;
+  resolvedBy: 'user' | 'skip';
 }
 
 export interface RespondProviderRequestDto {
