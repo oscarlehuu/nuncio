@@ -8,6 +8,7 @@ import {
 import { ThinkingBlock } from './transcript-blocks/thinking-block';
 import { ToolGroup, type ToolGroupTool } from './transcript-blocks/tool-group';
 import { CursorContextBlock } from './transcript-blocks/cursor-context-block';
+import { UserInputBlock } from './transcript-blocks/user-input-block';
 import { ProviderRequestCard } from './provider-request-card';
 import {
   AssistantBubble,
@@ -18,6 +19,7 @@ import {
 interface TranscriptProps {
   events: SessionEvent[];
   streaming?: boolean;
+  pendingRequestIds?: ReadonlySet<string>;
   respondingRequestId?: string | null;
   onRespondProviderRequest?: (
     requestId: string,
@@ -98,11 +100,13 @@ function ErrorRow({ message }: { message: string }) {
 function RenderItemView({
   item,
   streaming,
+  pendingRequestIds,
   respondingRequestId,
   onRespondProviderRequest,
 }: {
   item: RenderItem;
   streaming?: boolean;
+  pendingRequestIds?: ReadonlySet<string>;
   respondingRequestId?: string | null;
   onRespondProviderRequest?: TranscriptProps['onRespondProviderRequest'];
 }) {
@@ -140,6 +144,16 @@ function RenderItemView({
           sections={block.sections}
         />
       );
+    case 'user_input':
+      return (
+        <UserInputBlock
+          requestId={block.requestId}
+          questions={block.questions}
+          defaultOpen={pendingRequestIds?.has(block.requestId)}
+          {...(block.title ? { title: block.title } : {})}
+          {...(block.resolvedBy ? { resolvedBy: block.resolvedBy } : {})}
+        />
+      );
     case 'provider_request':
       return (
         <ProviderRequestCard
@@ -161,6 +175,7 @@ function RenderItemView({
 export const Transcript = memo(function Transcript({
   events,
   streaming,
+  pendingRequestIds,
   respondingRequestId,
   onRespondProviderRequest,
 }: TranscriptProps) {
@@ -186,6 +201,7 @@ export const Transcript = memo(function Transcript({
           <RenderItemView
             item={item}
             streaming={streaming}
+            pendingRequestIds={pendingRequestIds}
             respondingRequestId={respondingRequestId}
             onRespondProviderRequest={onRespondProviderRequest}
           />

@@ -14,6 +14,7 @@ import type { Response } from 'express';
 import type {
   CreateSessionDto,
   HandoffSessionDto,
+  RespondInteractionDto,
   RespondProviderRequestDto,
   SetSessionModelDto,
   SteerSessionDto,
@@ -86,6 +87,15 @@ export class SessionsController {
   @Patch(':id/model')
   setModel(@Param('id') id: string, @Body() body: SetSessionModelDto) {
     return this.sessions.setSessionModel(id, body?.model ?? '', body?.options);
+  }
+
+  @Post(':id/interactions/:requestId/respond')
+  respondInteraction(
+    @Param('id') id: string,
+    @Param('requestId') requestId: string,
+    @Body() body: RespondInteractionDto,
+  ) {
+    return this.sessions.respondInteraction(id, requestId, body);
   }
 
   @Post(':id/provider-requests/:requestId/respond')

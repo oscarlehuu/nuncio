@@ -14,6 +14,13 @@ import {
   resolveCursorAgentBin,
 } from './cursor-cli.helpers';
 import { isCursorCliRecentlyActive } from './cursor-cli.active-run';
+import { formatInteractionAnswers } from '../../sessions/domain/format-interaction-answers';
+import {
+  buildUserInputRequestedPayload,
+  type UserInputRequestedEventPayload,
+} from '../../sessions/domain/interactive-tool-events';
+import { isInteractiveTool } from '../tool-interaction.registry';
+import type { InteractionResponse } from '../agents.types';
 
 @Injectable()
 export class CursorCliProvider extends BaseAgentProvider {
@@ -58,6 +65,32 @@ export class CursorCliProvider extends BaseAgentProvider {
   }
 
   bustCache(): void {}
+
+  supportsInteraction(): boolean {
+    return true;
+  }
+
+  async submitInteraction(
+    sessionId: string,
+    requestId: string,
+    response: InteractionResponse,
+    context: AgentRunContext,
+  ): Promise<void> {
+    const requested = this.findOpenUserInputRequest(sessionId, requestId);
+    if (!requested) {
+      throw new Error(`No pending user input request ${requestId}`);
+    }
+
+    this.pushEvent(
+      sessionId,
+      'user_input_resolved',
+      { requestId, resolvedBy: response.resolvedBy },
+      context.emit,
+    );
+
+    const formatted = formatInteractionAnswers(requested.questions, response);
+    await this.steer(sessionId, formatted, context);
+  }
 
   async run(sessionId: string, prompt: string, context: AgentRunContext): Promise<void> {
     this.assertNotRecentlyActive(context);
@@ -184,7 +217,16 @@ export class CursorCliProvider extends BaseAgentProvider {
         this.pushEvent(sessionId, 'assistant_message', { text: event.text }, context.emit);
         this.sessions.touchPreview(sessionId, event.text);
         break;
-      case 'tool_start':
+      case 'tool_start': {
+        const userInputPayload = buildUserInputRequestedPayload(
+          event.tool,
+          event.input,
+          event.callId,
+        );
+        if (userInputPayload) {
+          this.pushEvent(sessionId, 'user_input_requested', userInputPayload, context.emit);
+          break;
+        }
         this.pushEvent(
           sessionId,
           'tool_start',
@@ -196,7 +238,11 @@ export class CursorCliProvider extends BaseAgentProvider {
           context.emit,
         );
         break;
+      }
       case 'tool_end':
+        if (isInteractiveTool(event.tool) && event.callId) {
+          break;
+        }
         this.pushEvent(
           sessionId,
           'tool_end',
@@ -218,5 +264,27 @@ export class CursorCliProvider extends BaseAgentProvider {
         void _exhaustive;
       }
     }
+  }
+
+  private findOpenUserInputRequest(
+    sessionId: string,
+    requestId: string,
+  ): UserInputRequestedEventPayload | undefined {
+    let requested: UserInputRequestedEventPayload | undefined;
+    let resolved = false;
+
+    for (const event of this.events.list(sessionId, 0)) {
+      if (event.type === 'user_input_requested') {
+        const payload = event.payload as UserInputRequestedEventPayload;
+        if (payload.requestId === requestId) requested = payload;
+      }
+      if (event.type === 'user_input_resolved') {
+        const payload = event.payload as { requestId?: string };
+        if (payload.requestId === requestId) resolved = true;
+      }
+    }
+
+    if (!requested || resolved) return undefined;
+    return requested;
   }
 }

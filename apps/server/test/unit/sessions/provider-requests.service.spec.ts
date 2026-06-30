@@ -26,7 +26,7 @@ describe('SessionsService provider requests', () => {
       imports: [DatabaseModule, SessionsPersistenceModule],
       providers: [
         SessionsService,
-        { provide: AgentRegistry, useValue: {} },
+        { provide: AgentRegistry, useValue: { supportsInteractionForSession: () => false } },
         { provide: GitService, useValue: {} },
         { provide: CursorLocalSessionsService, useValue: {} },
       ],
@@ -98,7 +98,7 @@ describe('SessionsService provider requests', () => {
       imports: [DatabaseModule, SessionsPersistenceModule],
       providers: [
         SessionsService,
-        { provide: AgentRegistry, useValue: {} },
+        { provide: AgentRegistry, useValue: { supportsInteractionForSession: () => false } },
         { provide: GitService, useValue: {} },
         { provide: CursorLocalSessionsService, useValue: {} },
       ],

@@ -55,6 +55,43 @@ describe('buildTranscriptBlocks', () => {
     }
   });
 
+  it('builds user_input block from requested + resolved events', () => {
+    const questions = [{ id: 'q1', prompt: 'Pick', options: [{ id: 'a', label: 'A' }] }];
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'user_input_requested', { requestId: 'r1', title: 'Title', questions }),
+      ev(2, 'user_input_resolved', { requestId: 'r1', resolvedBy: 'user' }),
+    ]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({
+      kind: 'user_input',
+      requestId: 'r1',
+      title: 'Title',
+      questions,
+      resolvedBy: 'user',
+    });
+  });
+
+  it('builds user_input block from legacy tool_start askquestion + tool_end (not tool block)', () => {
+    const questions = [{ id: 'q1', prompt: 'Pick', options: [{ id: 'a', label: 'A' }] }];
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'tool_start', {
+        callId: 'c1',
+        tool: 'askquestion',
+        input: { title: 'Title', questions },
+      }),
+      ev(2, 'tool_end', { callId: 'c1', tool: 'askquestion', isError: false }),
+    ]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({
+      kind: 'user_input',
+      requestId: 'c1',
+      title: 'Title',
+      questions,
+      resolvedBy: 'user',
+    });
+    expect(blocks.some((b) => b.kind === 'tool')).toBe(false);
+  });
+
   it('drops assistant messages that are only [REDACTED]', () => {
     const blocks = buildTranscriptBlocks([
       ev(1, 'assistant_message', { text: '[REDACTED]' }),
