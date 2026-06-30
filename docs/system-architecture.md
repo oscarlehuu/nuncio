@@ -41,19 +41,51 @@ flowchart LR
 
 ### Interface
 
+Defined in `apps/server/src/agents/agents.types.ts`.
+
 ```typescript
+interface AgentCapabilities {
+  interrupt: boolean;                          // can abort an in-flight turn
+  modelSwitch: 'in-session' | 'restart' | 'none';
+  effortSwitch: 'in-session' | 'restart' | 'none';
+  images: boolean;                             // accepts image attachments
+}
+
 interface AgentProvider {
   readonly id: string;          // 'pi' | 'mock' | ...
   readonly name: string;
+  readonly capabilities: AgentCapabilities;
   isAvailable(): Promise<boolean>;
   listModels(): Promise<ModelProviderDto[]>;
   run(sessionId, prompt, ctx: AgentRunContext): Promise<void>;
   steer(sessionId, message, ctx: AgentRunContext): Promise<void>;
+  interrupt?(sessionId): Promise<void>;        // present iff capabilities.interrupt
+  setModel?(sessionId, model, options?): Promise<void>; // present iff modelSwitch==='in-session'
   dispose(sessionId): void;
+  bustCache(): void;
 }
 ```
 
-`BaseAgentProvider` implements the shared `run`/`steer` orchestration (status RUNNING → user/steer_message → `executePrompt()` → status IDLE, plus error → ERROR) via a template method. Concrete providers implement only `executePrompt()`, `isAvailable()`, `listModels()`, and (optionally) `dispose()`.
+`AgentRunContext.attachments?: AgentAttachment[]` carries `{ kind: 'image', mimeType, data }` (base64) into a run/steer for providers that declare `images`.
+
+`BaseAgentProvider` (`agents.base-provider.ts`) implements the shared `run`/`steer` orchestration (status RUNNING → user/steer_message → `executePrompt()` → status IDLE, plus error → ERROR) via a template method. Concrete providers implement only `executePrompt()`, `isAvailable()`, `listModels()`, and (optionally) `dispose()`/`interrupt()`/`setModel()`.
+
+### Capabilities (invariants)
+
+`BaseAgentProvider.capabilities` defaults to **all-off**: `{ interrupt: false, modelSwitch: 'none', effortSwitch: 'none', images: false }`. Providers opt in by overriding the field.
+
+| Provider | interrupt | modelSwitch | effortSwitch | images | Notes |
+|----------|-----------|-------------|--------------|--------|-------|
+| Pi | true | in-session | in-session | true | `pi-agent.provider.ts` overrides all four |
+| Codex | false | none | none | false | inherits base defaults |
+| Cursor (SDK) | false | none | none | false | inherits base defaults |
+| Cursor CLI | false | none | none | false | inherits base defaults |
+| Mock | false | none | none | false | inherits base defaults |
+
+- **NEVER** call `provider.interrupt()`/`setModel()` without first checking the matching capability — the methods are optional and absent on providers that don't support them. `SessionsService` guards every call (see below).
+- **NEVER** assume a capability is on by default; new providers inherit all-off until they explicitly override.
+
+
 
 `AgentRegistry` holds all providers, exposes `all()`, `available()` (async, filters by `isAvailable`), `get(id)` (sync), `getAvailable(id)` (async, throws `BadRequestException` if unavailable), and `defaultId()` (Cursor if configured, then Codex, then Pi, else Mock).
 
@@ -90,6 +122,19 @@ this.cachedAvailable = registry.getAvailable().length > 0;   // models with conf
 
 `session.model` is stored as `provider:modelId` (e.g. `codex:gpt-5.5`, `cursor:composer-2`, `anthropic:claude-sonnet-4`). `PiAgentProvider.createPiSession` resolves Pi model ids back to a Pi `Model` via `resolveModelId` (handles both `provider/modelId` slash and `provider:modelId` colon conventions) + `registry.find(provider, id)`, then passes it to `createAgentSession({ model })`. `CodexAgentProvider` strips the `codex:` prefix before sending `turn/start` to the Codex app-server. If a provider cannot resolve the requested model, it falls back to its default. `GET /api/models` aggregates `listModels()` across all available providers.
 
+`GET /api/models` also exposes `capabilities` per provider entry: `ModelsService.list()` (`models.service.ts`) sets `capabilities: entry.capabilities ?? provider.capabilities` on every `ModelProviderDto`, so the frontend can show/hide interrupt, in-session model/effort switch, and image-upload affordances per provider.
+
+## Pi capabilities (interrupt / live model switch / images)
+
+`PiAgentProvider` (`pi-agent.provider.ts`) declares `{ interrupt: true, modelSwitch: 'in-session', effortSwitch: 'in-session', images: true }` and implements the matching optional methods against the live Pi SDK session handle held in `activeSessions: Map<sessionId, PiSessionHandle>`.
+
+- **`interrupt(sessionId)`** → `session.abort()`. If `session.isStreaming` is false, abort best-effort and return without flagging. If streaming, add the id to `interruptedSessions` *before* awaiting `abort()`; on abort failure the flag is removed and the error rethrown.
+- **Stale-flag invariant:** `executePrompt` clears `interruptedSessions.delete(sessionId)` at the **top** (before awaiting the prompt) so a leftover flag from a prior turn can never swallow a later real error. The `catch` only suppresses an error when `interruptedSessions.delete(sessionId)` returns true (i.e. an interrupt for *this* turn). NEVER move that top-of-turn clear below the `await handle.prompt(...)`.
+- **`setModel(sessionId, modelId, options?)`** → live `session.setModel(...)` then `session.setThinkingLevel(...)` (effort). No-op when the session isn't active or the model id can't be resolved.
+- **Images:** `context.attachments` of `kind: 'image'` are mapped to Pi `{ type: 'image', data, mimeType }` prompt content. Mapped only when present.
+
+**Product intent (do NOT change):** Pi's `setModel` persists to the global `~/.pi/agent/settings.json` (Pi is single-config). The integration suite snapshots and restores that file in `beforeAll`/`afterAll`, so a test run leaves it byte-identical.
+
 ## Codex app-server provider
 
 The Codex provider runs the local Codex CLI app server over stdio. `CodexAppServerClient` owns the JSON-RPC line protocol: request/response correlation, notifications, server-initiated requests, and pending-request cleanup on process exit.
@@ -115,6 +160,15 @@ apps/server/src/sessions/
 ```
 
 Session FSM: `CREATED → RUNNING → IDLE | ERROR | PAUSED`; `IDLE/PAUSED → RUNNING` (steer); `IDLE/PAUSED/ERROR → ARCHIVED` (terminal). FSM, event log, and provider approval request state persist in SQLite; the `provider` and provider-runtime columns are added with idempotent `ALTER TABLE` migrations for existing databases.
+
+### Capability-guarded session endpoints
+
+`sessions.controller.ts` / `sessions.service.ts`:
+
+- **`POST /api/sessions/:id/interrupt`** → `SessionsService.interrupt(id)`. Resolves the provider for the stored session row and throws `BadRequestException` unless `provider.capabilities.interrupt && provider.interrupt`; otherwise calls `provider.interrupt(id)`.
+- **`PATCH /api/sessions/:id/model`** (body `{ model, options? }`) → `SessionsService.setSessionModel(id, model, options)`. **Order invariant:** when `capabilities.modelSwitch === 'in-session' && provider.setModel`, the live switch (`provider.setModel`) runs **BEFORE** persisting the row via `sessions.updateModel(...)`. NEVER persist the model row before the live switch — a failed live switch must not leave the DB pointing at a model the running session never adopted.
+- **Attachments** are threaded through `POST /api/sessions` (create) and `POST /api/sessions/:id/steer` as `attachments?: AgentAttachment[]`, passed into `run`/`steer` via `AgentRunContext.attachments`.
+- **Body limit:** `main.ts` sets the express `json`/`urlencoded` body limit to `25mb` so base64 image attachments fit.
 
 ## Workspace selection
 
@@ -202,6 +256,8 @@ Each provider row is a single line (monochrome brand glyph + name + status subti
 | Unit | `bun run --filter @nuncio/server test` (`test/unit/`) | FSM, registry, providers, sessions service, models, DB migration |
 | E2E | `bun run --filter @nuncio/server test:e2e` (`test/e2e/`) | HTTP lifecycle via supertest with simulated providers |
 | Integration | `bun run --filter @nuncio/server test:integration` (`test/integration/`) | Real provider auth checks and prompts; gated so CI stays safe |
+
+The Pi integration suite (`test/integration/pi-agent.integration.spec.ts`) exercises the real capabilities: in-session model switch, interrupt-and-resume, cwd tool-use pinned to `cliproxyapi:claude-opus-4-8`, and persist/resume. **Invariant:** it snapshots `~/.pi/agent/settings.json` in `beforeAll` and restores it in `afterAll`, so a run leaves that file byte-identical even though Pi's `setModel` intentionally writes to it.
 
 Server tests run on `bun test`. Unit tests use fakes for provider subprocess/SDK boundaries, so they do not require Codex, Cursor, or Pi credentials.
 

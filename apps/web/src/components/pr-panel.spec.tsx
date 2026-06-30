@@ -27,6 +27,7 @@ const BASE_SESSION: Session = {
   branch: 'nuncio/abc-feature',
   cursorBackend: null,
   cursorChatId: null,
+  supportsInteraction: false,
   createdAt: 0,
   updatedAt: 0,
 };

@@ -176,21 +176,24 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 |--------|------|-------------|
 | GET | `/api/health` | Health check |
 | GET | `/api/sessions` | List sessions (`?includeArchived=1`) |
-| POST | `/api/sessions` | Create session `{ "prompt": "...", "provider?": "pi\|codex\|cursor", "model?": "...", "projectPath?": "/abs/repo", "useWorktree?": true, "baseBranch?": "main" }`; `projectPath` without `useWorktree` runs in the selected repo and records `baseBranch` as the selected branch, while `useWorktree: true` creates a generated `nuncio/<id>-<slug>` worktree from `baseBranch` |
+| POST | `/api/sessions` | Create session `{ "prompt": "...", "provider?": "pi\|codex\|cursor", "model?": "...", "attachments?": [{ "kind": "image", "mimeType": "image/png", "data": "base64" }], "projectPath?": "/abs/repo", "useWorktree?": true, "baseBranch?": "main" }`; `projectPath` without `useWorktree` runs in the selected repo and records `baseBranch` as the selected branch, while `useWorktree: true` creates a generated `nuncio/<id>-<slug>` worktree from `baseBranch` |
 | POST | `/api/sessions/handoff` | Import a Cursor IDE/CLI chat `{ "cursorChatId": "...", "workspace": "/abs/path", "title?": "..." }` → `IDLE` session with transcript hydrated |
 | GET | `/api/cursor/local-sessions?workspace=` | List in-progress Cursor chats on this Mac for the handoff picker |
-| GET | `/api/sessions/:id` | Session detail (incl. `provider`, `model`, `cursorBackend`, `cursorChatId`) |
+| GET | `/api/sessions/:id` | Session detail (incl. `provider`, `model`, `supportsInteraction`, `cursorBackend`, `cursorChatId`) |
 | GET | `/api/sessions/:id/events?since=` | Event log (cursor) |
 | GET | `/api/sessions/:id/active-run` | `{ "active": boolean }` — whether Cursor IDE/CLI is likely still running this handoff chat on the host (transcript/store mtime < 60s) |
 | POST | `/api/sessions/:id/refresh-transcript` | Append new turns from the on-disk Cursor transcript; emits `transcript_refreshed` via SSE when rows land |
 | GET | `/api/sessions/:id/stream?since=` | SSE stream |
-| POST | `/api/sessions/:id/steer` | Steer agent `{ "message": "...", "forceResume?": true }` — `forceResume` skips the active-run guard for CLI handoff sessions |
+| POST | `/api/sessions/:id/steer` | Steer agent `{ "message": "...", "forceResume?": true, "attachments?": [...] }` — `forceResume` skips the active-run guard for CLI handoff sessions |
+| POST | `/api/sessions/:id/interrupt` | Interrupt a live run when the provider advertises `capabilities.interrupt` (Pi supports this without disposing the session) |
+| PATCH | `/api/sessions/:id/model` | Persist a session model/options update `{ "model": "provider:model", "options?": { ... } }`; providers with in-session switching (Pi) apply it live |
+| POST | `/api/sessions/:id/interactions/:requestId/respond` | Submit answers for a live interactive tool prompt `{ "answers": [...], "resolvedBy": "user\|skip" }` |
 | POST | `/api/sessions/:id/provider-requests/:requestId/respond` | Approve or deny a pending provider request `{ "decision": "approve" \| "deny" }` |
 | POST | `/api/sessions/:id/pause` | Pause session |
 | POST | `/api/sessions/:id/archive` | Archive session (recoverable via `restore`) |
 | POST | `/api/sessions/:id/restore` | Restore an archived session → IDLE |
 | DELETE | `/api/sessions/:id` | Permanently delete an archived session + its event log |
-| GET | `/api/models` | Model catalog (aggregated from available providers) |
+| GET | `/api/models` | Model catalog (aggregated from available providers, including per-provider `capabilities`) |
 | GET | `/api/settings` | List all settings (secrets masked, never raw) |
 | PUT | `/api/settings/:key` | Update a setting `{ "value": "..." }` (encrypts secrets, busts provider caches) |
 | DELETE | `/api/settings/:key` | Clear a setting (falls back to env/default) |

@@ -2,7 +2,12 @@ import { HttpException } from '@nestjs/common';
 import type { ModelProviderDto } from '../models/models.types';
 import { EventsRepository } from '../sessions/persistence/events.repository';
 import { SessionsRepository } from '../sessions/persistence/sessions.repository';
-import type { AgentProvider, AgentRunContext, EventEmitter } from './agents.types';
+import type {
+  AgentCapabilities,
+  AgentProvider,
+  AgentRunContext,
+  EventEmitter,
+} from './agents.types';
 
 export class AgentRunCancelledError extends Error {
   constructor(message = 'Agent run cancelled.') {
@@ -14,6 +19,12 @@ export class AgentRunCancelledError extends Error {
 export abstract class BaseAgentProvider implements AgentProvider {
   abstract readonly id: string;
   abstract readonly name: string;
+  readonly capabilities: AgentCapabilities = {
+    interrupt: false,
+    modelSwitch: 'none',
+    effortSwitch: 'none',
+    images: false,
+  };
 
   constructor(
     protected readonly sessions: SessionsRepository,

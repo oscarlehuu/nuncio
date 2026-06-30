@@ -32,6 +32,7 @@ function cliSession(id = 's1'): Session {
     branch: null,
     cursorBackend: 'cli',
     cursorChatId: 'chat-1',
+    supportsInteraction: false,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
