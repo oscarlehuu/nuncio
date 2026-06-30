@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Archive, ArrowRightLeft, Check, FolderGit2, GitBranch, Pause, Pencil, RotateCcw, Send, Square, Trash2, X } from 'lucide-react';
+import { toast } from 'sonner';
 import type { ProviderRequestDecision, Session, SessionEvent } from '../lib/api';
+import { InteractionApiError, interactionErrorMessage, respondInteraction } from '../lib/api';
+import { derivePendingUserInput } from '../lib/derive-pending-user-input';
 import { projectDisplayName } from '../lib/projects';
 import { FALLBACK_PROVIDERS, modelById, prettyModelName, type ModelProvider } from '../lib/model-providers';
 import { isCodexApprovalEngine } from '../lib/codex-approval-engine';
 import { useContextUsage } from '../lib/use-context-usage';
 import { ContextUsageButton } from './context-usage-button';
 import { Transcript } from './session-transcript';
+import { PendingUserInputBanner } from './pending-user-input-banner';
 import { ApprovalModePicker, type ApprovalMode } from './approval-mode-picker';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -83,11 +87,22 @@ export function SessionDetail({
   const streaming = session.status === 'RUNNING';
   const isRunning = session.status === 'RUNNING';
   const isArchived = session.status === 'ARCHIVED';
+  const pendingUserInput = useMemo(() => derivePendingUserInput(events), [events]);
+  const pendingRequestIds = useMemo(
+    () => new Set(pendingUserInput.map((item) => item.requestId)),
+    [pendingUserInput],
+  );
+  const hasPendingUserInput = pendingUserInput.length > 0;
+  const interactionSupported = session.supportsInteraction ?? false;
+  const providerLabel = session.provider === 'cursor' ? 'Cursor' : session.provider === 'pi' ? 'Pi' : session.provider;
+  const showApprovalMode =
+    !!onApprovalModeChange && isCodexApprovalEngine(session.provider, session.model);
   const steerDisabled =
     session.status === 'RUNNING' ||
     session.status === 'ARCHIVED' ||
     steering ||
-    lifecycleBusy;
+    lifecycleBusy ||
+    hasPendingUserInput;
   const showHeaderPause = !isRunning && session.status !== 'PAUSED' && !isArchived;
   const canArchive = !isArchived;
   const canRestore = isArchived && !!onRestore;
@@ -110,8 +125,6 @@ export function SessionDetail({
   const repoName = projectDisplayName(session.projectPath) ?? projectDisplayName(session.workspace);
   const branchName = session.branch;
   const contextUsage = useContextUsage(events);
-  const showApprovalMode =
-    !!onApprovalModeChange && isCodexApprovalEngine(session.provider, session.model);
 
   useEffect(() => {
     pendingScrollToBottomRef.current = true;
@@ -327,6 +340,7 @@ export function SessionDetail({
           <Transcript
             events={events}
             streaming={streaming}
+            pendingRequestIds={pendingRequestIds}
             respondingRequestId={respondingRequestId}
             onRespondProviderRequest={
               onRespondProviderRequest ? handleRespondProviderRequest : undefined
@@ -336,6 +350,24 @@ export function SessionDetail({
       </div>
 
       <div className="shrink-0 px-4 md:px-5 pt-2.5 pb-3 md:pb-4">
+        <div className="max-w-[760px] mx-auto">
+          <PendingUserInputBanner
+            pending={pendingUserInput}
+            supported={interactionSupported}
+            providerLabel={providerLabel}
+            onRespond={async (requestId, response) => {
+              try {
+                await respondInteraction(session.id, requestId, response);
+              } catch (error) {
+                const message =
+                  error instanceof InteractionApiError
+                    ? error.message
+                    : interactionErrorMessage(501, 'Failed to submit response');
+                toast.error(message);
+              }
+            }}
+          />
+        </div>
         <div className="max-w-[760px] mx-auto rounded-xl border border-border/50 bg-muted/20 transition-colors focus-within:border-border/80">
           <Textarea
             value={steerText}
@@ -350,11 +382,13 @@ export function SessionDetail({
             placeholder={
               session.status === 'ARCHIVED'
                 ? 'Session archived — steering disabled'
-                : machineActive
-                  ? 'Cursor is running this chat on your Mac — wait for it to finish…'
-                  : session.status === 'RUNNING'
-                    ? 'Agent is running — wait for idle or stop first…'
-                    : 'Steer the agent — add context, change direction, ask a question…'
+                : hasPendingUserInput
+                  ? 'Answer the question above to continue…'
+                  : machineActive
+                    ? 'Cursor is running this chat on your Mac — wait for it to finish…'
+                    : session.status === 'RUNNING'
+                      ? 'Agent is running — wait for idle or stop first…'
+                      : 'Steer the agent — add context, change direction, ask a question…'
             }
             className="min-h-[44px] resize-none border-0 shadow-none bg-transparent focus-visible:ring-0 focus-visible:border-0 text-[14px]"
           />
@@ -417,7 +451,7 @@ export function SessionDetail({
               <span className={`size-1.5 rounded-full ${machineActive ? 'bg-info animate-pulse' : 'bg-success'}`} />
               Local
             </span>
-            {machineActive && (
+            {machineActive && !hasPendingUserInput && (
               <span className="flex items-center gap-1 shrink-0 text-info">
                 Running on machine
               </span>
