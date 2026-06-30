@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Check, Copy } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { MermaidDiagram } from '@/components/mermaid-diagram';
 
 interface MarkdownViewProps {
   text: string;
@@ -106,10 +107,15 @@ export function MarkdownView({ text, className }: MarkdownViewProps) {
                 </code>
               );
             }
+            const language = match?.[1];
+            const code = String(children);
+            if (language === 'mermaid') {
+              return <MermaidDiagram code={code} />;
+            }
             return (
               <CodeBlock
-                language={match?.[1]}
-                code={String(children)}
+                language={language}
+                code={code}
               />
             );
           },

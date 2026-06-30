@@ -14,6 +14,7 @@ import type { Response } from 'express';
 import type {
   CreateSessionDto,
   HandoffSessionDto,
+  RespondInteractionDto,
   RespondProviderRequestDto,
   SteerSessionDto,
 } from '../domain/sessions.types';
@@ -74,6 +75,15 @@ export class SessionsController {
   @Post(':id/steer')
   steer(@Param('id') id: string, @Body() body: SteerSessionDto) {
     return this.sessions.steer(id, body?.message ?? '', body?.forceResume);
+  }
+
+  @Post(':id/interactions/:requestId/respond')
+  respondInteraction(
+    @Param('id') id: string,
+    @Param('requestId') requestId: string,
+    @Body() body: RespondInteractionDto,
+  ) {
+    return this.sessions.respondInteraction(id, requestId, body);
   }
 
   @Post(':id/provider-requests/:requestId/respond')

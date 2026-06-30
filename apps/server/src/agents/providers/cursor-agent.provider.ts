@@ -25,6 +25,8 @@ import {
 } from './cursor-agent.helpers';
 import type { ModelProviderDto } from '../../models/models.types';
 import { truncatePayload } from '../../sessions/domain/events.types';
+import { buildUserInputRequestedPayload } from '../../sessions/domain/interactive-tool-events';
+import { isInteractiveTool } from '../tool-interaction.registry';
 
 @Injectable()
 export class CursorAgentProvider extends BaseAgentProvider {
@@ -228,6 +230,11 @@ export class CursorAgentProvider extends BaseAgentProvider {
         const callId = update.toolCall?.id ?? crypto.randomUUID();
         const tool = update.toolCall?.type ?? 'unknown';
         const input = update.toolCall?.args;
+        const userInputPayload = buildUserInputRequestedPayload(tool, input, callId);
+        if (userInputPayload) {
+          this.pushEvent(sessionId, 'user_input_requested', userInputPayload, context.emit);
+          return;
+        }
         const truncatedInput = input !== undefined ? truncatePayload(input).value : undefined;
         this.pushEvent(
           sessionId,
@@ -240,6 +247,18 @@ export class CursorAgentProvider extends BaseAgentProvider {
       case 'tool-call-completed': {
         const callId = update.toolCall?.id;
         const tool = update.toolCall?.type ?? 'unknown';
+        if (callId && isInteractiveTool(tool)) {
+          this.pushEvent(
+            sessionId,
+            'user_input_resolved',
+            {
+              requestId: callId,
+              resolvedBy: isCursorToolCallError(update.toolCall) ? 'skip' : 'user',
+            },
+            context.emit,
+          );
+          return;
+        }
         const result = update.toolCall?.result;
         const truncatedOutput = result !== undefined ? truncatePayload(result).value : undefined;
         this.pushEvent(

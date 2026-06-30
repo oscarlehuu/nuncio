@@ -4,7 +4,8 @@ import { resolve } from 'node:path';
 export function toProjectSlug(absPath: string): string {
   const normalized = resolve(absPath).replace(/\/+$/, '');
   const withoutLeading = normalized.startsWith('/') ? normalized.slice(1) : normalized;
-  return withoutLeading.replace(/\//g, '-');
+  const segments = withoutLeading.split('/').map((segment) => segment.replace(/^\.+/, ''));
+  return segments.join('-');
 }
 
 export function agentTranscriptsRoot(homeDir: string): string {

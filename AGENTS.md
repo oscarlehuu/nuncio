@@ -380,7 +380,7 @@ The harness is provider-agnostic: an `AgentProvider` runs/steers/disposes a sess
 
 #### Token streaming (per-provider delta sources)
 
-The event contract is **shared** across providers (emitted via `BaseAgentProvider.pushEvent`): `assistant_delta { delta }` (token-by-token text), `tool_start { callId?, tool, input? }` / `tool_end { callId?, tool, isError?, output? }`, `thinking_start` / `thinking_delta` / `thinking_message` (Cursor SDK only today; Pi deferred), `assistant_message { text }` (final), `status` / `error`. Payloads are truncated to 4KB at the adapter boundary (`sessions/domain/events.types.ts`). The frontend `Transcript` renders via `buildTranscriptBlocks()` — collapsible tool/thinking blocks, no per-provider UI branching.
+The event contract is **shared** across providers (emitted via `BaseAgentProvider.pushEvent`): `assistant_delta { delta }` (token-by-token text), `tool_start { callId?, tool, input? }` / `tool_end { callId?, tool, isError?, output? }`, `user_input_requested { requestId, questions, title? }` / `user_input_resolved { requestId, resolvedBy }` (interactive tools — historical handoff imports; live respond stubbed), `thinking_start` / `thinking_delta` / `thinking_message` (Cursor SDK only today; Pi deferred), `assistant_message { text }` (final), `status` / `error`. Payloads are truncated to 4KB at the adapter boundary (`sessions/domain/events.types.ts`). The frontend `Transcript` renders via `buildTranscriptBlocks()` — collapsible tool/thinking blocks + inline `UserInputBlock` for AskQuestion, no per-provider UI branching.
 
 | Provider | Delta source | Maps to |
 |---|---|---|
@@ -405,10 +405,11 @@ The event contract is **shared** across providers (emitted via `BaseAgentProvide
 | POST | `/api/sessions` | `{ prompt, model?, provider?, workspace?, projectPath?, useWorktree?, baseBranch? }` — `projectPath` without `useWorktree` runs the provider in that selected repo and stores `baseBranch` as the selected branch; `useWorktree: true` creates a git worktree on branch `nuncio/<id>-<slug>` branched from `baseBranch` (default repo branch); `workspace` is the cwd fallback; starts run in background; `provider` defaults to `registry.defaultId()` (cursor if `CURSOR_API_KEY` set, else codex if logged in, else pi if authed; `503` when none configured) |
 | POST | `/api/sessions/handoff` | `{ cursorChatId, workspace, title? }` — selective import of a Cursor IDE/CLI chat from `~/.cursor/projects/<slug>/agent-transcripts/`; creates `provider: cursor`, `cursor_backend: cli`, hydrates transcript into the event log, status `IDLE` (no auto-run). Idempotent per `cursor_chat_id`. |
 | GET | `/api/cursor/local-sessions?workspace=&limit=` | read-only picker feed — scans agent transcripts for the workspace slug; marks chats already imported |
-| GET | `/api/sessions/:id` | detail (includes `workspace`, `projectPath`, `baseBranch`, `worktreePath`, `branch`, `cursorBackend`, `cursorChatId` when set) |
+| GET | `/api/sessions/:id` | detail (includes `workspace`, `projectPath`, `baseBranch`, `worktreePath`, `branch`, `supportsInteraction`, `cursorBackend`, `cursorChatId` when set) |
 | GET | `/api/sessions/:id/events?since=` | event log (cursor) |
 | GET | `/api/sessions/:id/stream?since=` | SSE stream |
 | POST | `/api/sessions/:id/steer` | `{ message }` — mid-run steering (routes through `provider.steer()`; Pi uses `streamingBehavior: 'steer'`) |
+| POST | `/api/sessions/:id/interactions/:requestId/respond` | `{ answers, resolvedBy }` — live interactive tool respond (CLI handoff sessions) |
 | POST | `/api/sessions/:id/provider-requests/:requestId/respond` | `{ decision: "approve" \| "deny" }` — resolves a pending provider approval request and resumes the provider response path |
 | POST | `/api/sessions/:id/pause` | |
 | POST | `/api/sessions/:id/archive` | disposes the session's agent handle (worktree + branch kept on disk); recoverable via `restore` |
@@ -509,6 +510,14 @@ When a phase is large it is split into lanes working on isolated branches, then 
 **Codex provider (shipped):** `CodexAgentProvider` launches `codex app-server` over stdio, initializes the experimental API, discovers models via `model/list`, starts or resumes Codex threads, maps `item/agentMessage/delta` to the shared `assistant_delta`, emits final `assistant_message` on `turn/completed`, persists `provider_thread_id` / `provider_active_turn_id`, persists provider approval request state in SQLite, waits for Nuncio approval decisions when the app-server sends provider requests, and interrupts active turns on dispose. Availability checks `codex --version` plus `codex login status`.
 
 **Remaining gaps:** Pi uses `SessionManager.inMemory()`, so active Pi sessions are lost on server restart and a `steer` on a revived session creates a fresh Pi session (conversation history is replayed from the event log, not restored into Pi) — the lazy-revive design (`SessionManager.create(cwd)` / `open(path)`) from the brainstorm is not yet implemented. Pi's `tools: ['read','bash','grep','find','ls']` are hardcoded (not configurable per session or via env). Cursor agent handles lost on server restart (same as Pi in-memory), though `JsonlLocalAgentStore` persists state for future `Agent.resume()`. Codex persists thread ids and approval request state, but a request waiting inside the app-server cannot continue across a server/app-server restart; stale pending requests are auto-denied with `server_restarted`. Cloud runtime (GitHub repo + PR) not yet supported. Real-provider integration tests are gated by local credentials.
+
+### Interactive tools (AskQuestion)
+
+**Status: historical display shipped; live respond stubbed.** Cursor `AskQuestion` / `AskUserQuestion` tool uses in handoff JSONL are mapped at hydrate time to paired `user_input_requested` + `user_input_resolved` events (no answers stored — the user's reply is the next `user_message` in the log). The web transcript renders them inline via `UserInputBlock`; a composer banner shell (`PendingUserInputBanner`) derives open prompts from the event log but stays read-only until a provider implements live respond.
+
+**Contract:** optional `AgentProvider.supportsInteraction?()` + `submitInteraction?()`; `POST /api/sessions/:id/interactions/:requestId/respond` returns **501** for Cursor/Pi today. `SessionDto.supportsInteraction` exposes capability to the UI.
+
+**`@cursor/sdk` limitation (verified):** headless `onDelta` does not surface AskQuestion prompts and there is no respond callback — live phone answers require a future SDK/ACP path. No `AWAITING_INPUT` FSM state in this slice; pending input is a derived projection only.
 
 ### Handoff (Continue on mobile)
 
