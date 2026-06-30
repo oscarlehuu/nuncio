@@ -209,6 +209,21 @@ describe('Nuncio API', () => {
     });
   });
 
+  it('POST /api/sessions/:id/interactions/:requestId/respond returns 501 for cursor sessions', async () => {
+    const created = await request(app.getHttpServer())
+      .post('/api/sessions')
+      .send({ prompt: 'Ask me something' });
+    const id = created.body.id;
+    await waitForIdle(app, id);
+
+    const res = await request(app.getHttpServer())
+      .post(`/api/sessions/${id}/interactions/req-1/respond`)
+      .send({ answers: [], resolvedBy: 'skip' });
+
+    expect(res.status).toBe(501);
+    expect(res.body.error).toContain('does not support live interaction respond');
+  });
+
   describe('phase 4 workspace integration', () => {
     it('GET /api/projects lists git repos from configured roots', async () => {
       const res = await request(app.getHttpServer()).get('/api/projects');

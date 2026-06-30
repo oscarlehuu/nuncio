@@ -608,4 +608,73 @@ describe('CursorAgentProvider', () => {
     expect(all.filter((e) => e.type === 'tool_start')).toHaveLength(0);
     expect(all.filter((e) => e.type === 'thinking_delta')).toHaveLength(0);
   });
+
+  it('maps askquestion tool-call to user_input_requested + user_input_resolved', async () => {
+    const sampleQuestion = {
+      id: 'q1',
+      prompt: 'Pick one',
+      options: [{ id: 'a', label: 'A' }],
+    };
+    const { sdk } = makeStubSdk({
+      deltaUpdates: [
+        {
+          type: 'tool-call-started',
+          toolCall: {
+            id: 'call-aq',
+            type: 'askquestion',
+            args: { title: 'Title', questions: [sampleQuestion] },
+          },
+        },
+        { type: 'tool-call-completed', toolCall: { id: 'call-aq', type: 'askquestion' } },
+      ],
+      waitResult: 'done',
+    });
+    provider.sdkOverride = sdk as never;
+    process.env.CURSOR_API_KEY = 'cursor_test_key';
+
+    const created = sessions.create({ prompt: 'ask', provider: 'cursor' });
+    await provider.run(created.id, created.prompt, { emit: () => {} });
+
+    const all = events.list(created.id);
+    expect(all.some((e) => e.type === 'tool_start')).toBe(false);
+    expect(all.some((e) => e.type === 'tool_end')).toBe(false);
+
+    const requested = all.find((e) => e.type === 'user_input_requested');
+    expect((requested?.payload as { requestId: string }).requestId).toBe('call-aq');
+    expect((requested?.payload as { questions: unknown[] }).questions).toEqual([sampleQuestion]);
+
+    const resolved = all.find((e) => e.type === 'user_input_resolved');
+    expect(resolved?.payload).toEqual({ requestId: 'call-aq', resolvedBy: 'user' });
+  });
+
+  it('maps askquestion tool-call error to user_input_resolved skip', async () => {
+    const { sdk } = makeStubSdk({
+      deltaUpdates: [
+        {
+          type: 'tool-call-started',
+          toolCall: {
+            id: 'call-aq',
+            type: 'askquestion',
+            args: {
+              questions: [{ id: 'q1', prompt: 'Pick', options: [{ id: 'a', label: 'A' }] }],
+            },
+          },
+        },
+        {
+          type: 'tool-call-completed',
+          toolCall: { id: 'call-aq', type: 'askquestion', status: 'error' },
+        },
+      ],
+      waitResult: 'done',
+    });
+    provider.sdkOverride = sdk as never;
+    process.env.CURSOR_API_KEY = 'cursor_test_key';
+
+    const created = sessions.create({ prompt: 'ask', provider: 'cursor' });
+    await provider.run(created.id, created.prompt, { emit: () => {} });
+
+    const resolved = events.list(created.id).find((e) => e.type === 'user_input_resolved');
+    expect(resolved?.payload).toEqual({ requestId: 'call-aq', resolvedBy: 'skip' });
+  });
+
 });
