@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { join } from 'node:path';
+import type { ModelOptionsMap } from '../../models/model-options.types';
 import type { ModelGroupDto, ModelItemDto, ModelProviderDto } from '../../models/models.types';
 import { STATIC_MODEL_PROVIDERS } from '../../models/models.static';
 import { EventsRepository } from '../../sessions/persistence/events.repository';
@@ -11,8 +12,34 @@ import { piThinkingDescriptors, resolvePiThinkingLevel } from './pi-thinking.hel
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent');
 
+type PiImageContent = { type: 'image'; data: string; mimeType: string };
+
+type PiPromptOptions = {
+  streamingBehavior?: 'steer' | 'followUp';
+  images?: PiImageContent[];
+};
+
+type PiRegistryModel = {
+  provider?: string;
+  id?: string;
+  reasoning?: boolean;
+  thinkingLevelMap?: Record<string, string | null>;
+};
+
+type PiLiveSession = {
+  prompt: (text: string, options?: PiPromptOptions) => Promise<void>;
+  abort: () => Promise<void>;
+  setModel: (model: PiRegistryModel) => Promise<void>;
+  setThinkingLevel: (level: string) => void;
+  readonly model?: PiRegistryModel;
+  readonly thinkingLevel?: string;
+  readonly isStreaming?: boolean;
+};
+
 type PiSessionHandle = {
-  prompt: (text: string, options?: { streamingBehavior?: 'steer' | 'followUp' }) => Promise<void>;
+  session: PiLiveSession;
+  modelRegistry: PiModelRegistry;
+  prompt: (text: string, options?: PiPromptOptions) => Promise<void>;
   unsubscribe: () => void;
   resetAssistantText: () => void;
   getAssistantText: () => string;
@@ -27,15 +54,7 @@ type PiModelRegistry = {
     reasoning?: boolean;
     thinkingLevelMap?: Record<string, string | null>;
   }>;
-  find: (
-    provider: string,
-    id: string,
-  ) =>
-    | {
-        reasoning?: boolean;
-        thinkingLevelMap?: Record<string, string | null>;
-      }
-    | undefined;
+  find: (provider: string, id: string) => PiRegistryModel | undefined;
   getProviderDisplayName: (provider: string) => string;
 };
 
@@ -43,7 +62,14 @@ type PiModelRegistry = {
 export class PiAgentProvider extends BaseAgentProvider {
   readonly id = 'pi';
   readonly name = 'Pi';
+  readonly capabilities = {
+    interrupt: true,
+    modelSwitch: 'in-session',
+    effortSwitch: 'in-session',
+    images: true,
+  } as const;
   private readonly activeSessions = new Map<string, PiSessionHandle>();
+  private readonly interruptedSessions = new Set<string>();
   private piSdkPromise?: Promise<PiSdk>;
   private cachedAvailable?: boolean;
 
@@ -87,6 +113,37 @@ export class PiAgentProvider extends BaseAgentProvider {
     if (!handle) return;
     handle.unsubscribe();
     this.activeSessions.delete(sessionId);
+    this.interruptedSessions.delete(sessionId);
+  }
+
+  async interrupt(sessionId: string): Promise<void> {
+    const handle = this.activeSessions.get(sessionId);
+    if (!handle) return;
+    if (!handle.session.isStreaming) {
+      await handle.session.abort().catch(() => undefined);
+      return;
+    }
+    this.interruptedSessions.add(sessionId);
+    try {
+      await handle.session.abort();
+    } catch (error) {
+      this.interruptedSessions.delete(sessionId);
+      throw error;
+    }
+  }
+
+  async setModel(
+    sessionId: string,
+    modelId: string,
+    options?: ModelOptionsMap | null,
+  ): Promise<void> {
+    const handle = this.activeSessions.get(sessionId);
+    if (!handle) return;
+    const model = resolveModelId(modelId, (provider, id) => handle.modelRegistry.find(provider, id));
+    if (!model) return;
+    await handle.session.setModel(model);
+    const thinkingLevel = resolvePiThinkingLevel(options, model);
+    if (thinkingLevel) handle.session.setThinkingLevel(thinkingLevel);
   }
 
   protected async executePrompt(
@@ -101,8 +158,27 @@ export class PiAgentProvider extends BaseAgentProvider {
       this.activeSessions.set(sessionId, handle);
     }
 
+    const images = (context.attachments ?? [])
+      .filter((attachment) => attachment.kind === 'image')
+      .map((attachment): PiImageContent => ({
+        type: 'image',
+        data: attachment.data,
+        mimeType: attachment.mimeType,
+      }));
+    const promptOptions: PiPromptOptions = {
+      ...(images.length ? { images } : {}),
+      ...(isSteer ? { streamingBehavior: 'steer' as const } : {}),
+    };
+
     handle.resetAssistantText();
-    await handle.prompt(text, isSteer ? { streamingBehavior: 'steer' } : undefined);
+    this.interruptedSessions.delete(sessionId);
+    try {
+      await handle.prompt(text, Object.keys(promptOptions).length ? promptOptions : undefined);
+    } catch (error) {
+      if (this.interruptedSessions.delete(sessionId)) return;
+      throw error;
+    }
+    this.interruptedSessions.delete(sessionId);
     this.pushEvent(
       sessionId,
       'assistant_message',
@@ -184,7 +260,9 @@ export class PiAgentProvider extends BaseAgentProvider {
     });
 
     return {
-      prompt: (prompt, options) => session.prompt(prompt, options),
+      session: session as PiLiveSession,
+      modelRegistry,
+      prompt: (prompt, options) => session.prompt(prompt, options as never),
       unsubscribe,
       resetAssistantText: () => {
         assistantText = '';

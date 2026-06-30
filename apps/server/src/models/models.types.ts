@@ -1,3 +1,4 @@
+import type { AgentCapabilities } from '../agents/agents.types';
 import type { ModelOptionDescriptorDto } from './model-options.types';
 
 export interface ModelVariantDto {
@@ -31,5 +32,6 @@ export interface ModelProviderDto {
   icon?: string;
   badge?: string;
   unavailable?: boolean;
+  capabilities?: AgentCapabilities;
   groups?: ModelGroupDto[];
 }

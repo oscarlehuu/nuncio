@@ -14,7 +14,9 @@ import { SettingsModule } from '../../src/settings/settings.module';
 // Gate the suite on the same agent dir the Pi SDK resolves (PI_CODING_AGENT_DIR
 // or ~/.pi/agent). Skips entirely in CI / machines without real Pi auth, so the
 // Pi SDK native module is never loaded there.
+const TEST_MODEL = 'cliproxyapi:claude-opus-4-8';
 const piAgentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent');
+const piSettingsPath = join(piAgentDir, 'settings.json');
 const hasRealPiAuth = existsSync(join(piAgentDir, 'auth.json'));
 const suite = hasRealPiAuth ? describe : describe.skip;
 
@@ -24,8 +26,13 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
   let sessions: SessionsRepository;
   let events: EventsRepository;
   let dataDir: string;
+  let originalPiSettingsJson: Buffer | null = null;
 
   beforeAll(async () => {
+    if (existsSync(piSettingsPath)) {
+      originalPiSettingsJson = readFileSync(piSettingsPath);
+    }
+
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-pi-integration-'));
     process.env.NUNCIO_DATA_DIR = dataDir;
 
@@ -40,9 +47,20 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
   });
 
   afterAll(async () => {
-    await module.close();
-    rmSync(dataDir, { recursive: true, force: true });
-    delete process.env.NUNCIO_DATA_DIR;
+    try {
+      for (const sessionId of (provider as unknown as { activeSessions?: Map<string, unknown> }).activeSessions?.keys() ?? []) {
+        provider.dispose(sessionId);
+      }
+      await module.close();
+    } finally {
+      if (originalPiSettingsJson) {
+        writeFileSync(piSettingsPath, originalPiSettingsJson);
+      } else if (existsSync(piSettingsPath)) {
+        rmSync(piSettingsPath, { force: true });
+      }
+      rmSync(dataDir, { recursive: true, force: true });
+      delete process.env.NUNCIO_DATA_DIR;
+    }
   });
 
   it('reports availability when Pi auth is configured', async () => {
@@ -63,14 +81,61 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
     async () => {
       const created = sessions.create({ prompt: 'Reply with the single word: pong', provider: 'pi' });
 
-      await provider.run(created.id, created.prompt, { emit: () => {} });
+      await provider.run(created.id, created.prompt, { emit: () => {}, model: TEST_MODEL });
 
-      const all = events.list(created.id);
-      expect(all.some((e) => e.type === 'user_message')).toBe(true);
-      expect(all.some((e) => e.type === 'assistant_message')).toBe(true);
-      expect(sessions.findById(created.id)?.status).toBe('IDLE');
+      try {
+        const all = events.list(created.id);
+        expect(all.some((e) => e.type === 'user_message')).toBe(true);
+        expect(all.some((e) => e.type === 'assistant_message')).toBe(true);
+        expect(sessions.findById(created.id)?.status).toBe('IDLE');
+      } finally {
+        provider.dispose(created.id);
+      }
     },
     60_000,
+  );
+
+  // Real LLM calls — proves Pi can switch the live SDK session model without
+  // recreating the Nuncio session.
+  it(
+    'switches the model in-session and remains usable',
+    async () => {
+      const providerDtos = await provider.listModels();
+      const modelIds = providerDtos.flatMap((p) =>
+        (p.groups ?? []).flatMap((g) => (g.models ?? []).map((m) => m.id)),
+      );
+      expect(modelIds.length).toBeGreaterThan(1);
+
+      expect(modelIds).toContain(TEST_MODEL);
+      const firstModel = TEST_MODEL;
+      const secondModel = modelIds.find((id) => id !== TEST_MODEL)!;
+      const created = sessions.create({
+        prompt: 'Reply with the single word: one',
+        provider: 'pi',
+        model: firstModel,
+      });
+
+      try {
+        await provider.run(created.id, created.prompt, { emit: () => {}, model: firstModel });
+        expect(sessions.findById(created.id)?.status).toBe('IDLE');
+
+        await provider.setModel(created.id, secondModel, null);
+        const liveHandle = (provider as unknown as {
+          activeSessions: Map<string, { session: { model?: { provider?: string; id?: string } } }>;
+        }).activeSessions.get(created.id);
+        expect(liveHandle?.session.model?.id).toBe(secondModel.split(':').at(-1));
+
+        await provider.run(created.id, 'Reply with the single word: two', {
+          emit: () => {},
+          model: secondModel,
+        });
+        expect(sessions.findById(created.id)?.status).toBe('IDLE');
+      } finally {
+        await provider.setModel(created.id, firstModel, null).catch(() => undefined);
+        provider.dispose(created.id);
+      }
+    },
+    120_000,
   );
 
   // Real LLM calls — proves the Pi provider stores the disk-backed session file
@@ -82,22 +147,26 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
       const secondPrompt = 'Reply with the single word: two';
       const created = sessions.create({ prompt: firstPrompt, provider: 'pi' });
 
-      await provider.run(created.id, firstPrompt, { emit: () => {} });
+      await provider.run(created.id, firstPrompt, { emit: () => {}, model: TEST_MODEL });
       const firstThreadId = sessions.findById(created.id)?.providerThreadId;
       expect(firstThreadId).toBeTruthy();
       expect(existsSync(firstThreadId!)).toBe(true);
       expect(sessions.findById(created.id)?.status).toBe('IDLE');
 
       provider.dispose(created.id);
-      await provider.run(created.id, secondPrompt, { emit: () => {} });
+      await provider.run(created.id, secondPrompt, { emit: () => {}, model: TEST_MODEL });
 
       const secondThreadId = sessions.findById(created.id)?.providerThreadId;
       expect(secondThreadId).toBe(firstThreadId);
       expect(sessions.findById(created.id)?.status).toBe('IDLE');
 
-      const sessionLog = readFileSync(firstThreadId!, 'utf8');
-      expect(sessionLog).toContain(firstPrompt);
-      expect(sessionLog).toContain(secondPrompt);
+      try {
+        const sessionLog = readFileSync(firstThreadId!, 'utf8');
+        expect(sessionLog).toContain(firstPrompt);
+        expect(sessionLog).toContain(secondPrompt);
+      } finally {
+        provider.dispose(created.id);
+      }
     },
     60_000,
   );
@@ -141,6 +210,7 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
         await provider.run(created.id, created.prompt, {
           emit: (event) => emitted.push(event),
           cwd: worktreePath,
+          model: TEST_MODEL,
         });
 
         const all = events.list(created.id);
@@ -150,6 +220,7 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
 
         expect(blob).toContain(marker);
         expect(sessions.findById(created.id)?.status).toBe('IDLE');
+        provider.dispose(created.id);
       } finally {
         try {
           await git.removeWorktree(repoDir, worktreePath);
@@ -163,7 +234,37 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
     },
     120_000,
   );
+
+  it(
+    'interrupts a live prompt and keeps the session resumable',
+    async () => {
+      const created = sessions.create({
+        prompt: 'Count from 1 to 30, one number per line.',
+        provider: 'pi',
+      });
+
+      try {
+        const runPromise = provider.run(created.id, created.prompt, { emit: () => {}, model: TEST_MODEL });
+        await sleep(1_500);
+        await expect(provider.interrupt(created.id)).resolves.toBeUndefined();
+        await expect(runPromise).resolves.toBeUndefined();
+        expect(sessions.findById(created.id)?.status).not.toBe('ERROR');
+
+        await provider.run(created.id, 'Reply with the single word: pong', { emit: () => {}, model: TEST_MODEL });
+        expect(sessions.findById(created.id)?.status).toBe('IDLE');
+        const blob = JSON.stringify(events.list(created.id).map((e) => e.payload));
+        expect(blob.toLowerCase()).toContain('pong');
+      } finally {
+        provider.dispose(created.id);
+      }
+    },
+    120_000,
+  );
 });
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function runGitAsync(cwd: string, args: string[]): Promise<void> {
   const proc = Bun.spawn(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });

@@ -65,6 +65,15 @@ describe('BaseAgentProvider error path', () => {
     delete process.env.NUNCIO_DATA_DIR;
   });
 
+  it('defaults capabilities to all-off for non-overriding providers', () => {
+    expect(provider.capabilities).toEqual({
+      interrupt: false,
+      modelSwitch: 'none',
+      effortSwitch: 'none',
+      images: false,
+    });
+  });
+
   it('routes an executePrompt failure to ERROR status + error event', async () => {
     const created = sessions.create({ prompt: 'fail me', provider: 'throwing' });
     const emitted: { type: string; payload: unknown }[] = [];
