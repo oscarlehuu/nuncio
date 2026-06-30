@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AgentsModule } from '../../../src/agents/agents.module';
+import { CodexAgentProvider } from '../../../src/agents/providers/codex-agent.provider';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { ModelsService } from '../../../src/models/models.service';
 import {
@@ -25,7 +26,16 @@ describe('ModelsService', () => {
         imports: [DatabaseModule, AgentsModule],
         providers: [ModelsService],
       }),
-    ).compile();
+    )
+      .overrideProvider(CodexAgentProvider)
+      .useValue({
+        id: 'codex',
+        name: 'Codex',
+        isAvailable: async () => false,
+        listModels: async () => [],
+        dispose: () => undefined,
+      })
+      .compile();
 
     models = module.get(ModelsService);
   });
@@ -37,9 +47,15 @@ describe('ModelsService', () => {
     delete process.env.CURSOR_API_KEY;
   });
 
-  it('aggregates models from available providers only', async () => {
+  it('aggregates models from available providers only and attaches provider capabilities', async () => {
     const result = await models.list();
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe('cursor');
+    expect(result[0].capabilities).toEqual({
+      interrupt: false,
+      modelSwitch: 'none',
+      effortSwitch: 'none',
+      images: false,
+    });
   });
 });

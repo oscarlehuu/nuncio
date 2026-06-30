@@ -6,9 +6,11 @@ import {
   deleteSession,
   fetchArchivedSessions,
   fetchModels,
+  fetchSession,
   fetchSessions,
   pauseSession,
   relativeTime,
+  respondProviderRequest,
   restoreSession,
   statusLabel,
   steerSession,
@@ -92,6 +94,42 @@ describe('api fetch functions', () => {
     });
   });
 
+  it('createSession posts a selected project and branch as a direct workspace by default', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ id: 's4' }));
+    await createSession('go', 'cursor:composer-2.5', 'cursor', '/code/nuncio', 'main');
+    const call = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(call.body as string)).toEqual({
+      prompt: 'go',
+      model: 'cursor:composer-2.5',
+      provider: 'cursor',
+      projectPath: '/code/nuncio',
+      baseBranch: 'main',
+      workspace: '/code/nuncio',
+    });
+  });
+
+  it('createSession posts worktree metadata only when requested', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ id: 's5' }));
+    await createSession(
+      'go',
+      'cursor:composer-2.5',
+      'cursor',
+      '/code/nuncio',
+      'main',
+      undefined,
+      true,
+    );
+    const call = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(call.body as string)).toEqual({
+      prompt: 'go',
+      model: 'cursor:composer-2.5',
+      provider: 'cursor',
+      projectPath: '/code/nuncio',
+      baseBranch: 'main',
+      useWorktree: true,
+    });
+  });
+
   it('fetchSessions parses the JSON list', async () => {
     fetchMock.mockResolvedValue(jsonRes([{ id: 'a' }]));
     expect(await fetchSessions()).toEqual([{ id: 'a' }]);
@@ -100,6 +138,17 @@ describe('api fetch functions', () => {
   it('fetchSessions throws when the response is not ok', async () => {
     fetchMock.mockResolvedValue(jsonRes(null, false, 500));
     await expect(fetchSessions()).rejects.toThrow('Failed to load sessions');
+  });
+
+  it('fetchSession parses a single session', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ id: 's1', title: 'Test' }));
+    expect(await fetchSession('s1')).toEqual({ id: 's1', title: 'Test' });
+    expect(fetchMock).toHaveBeenCalledWith('/api/sessions/s1');
+  });
+
+  it('fetchSession throws when the response is not ok', async () => {
+    fetchMock.mockResolvedValue(jsonRes(null, false, 404));
+    await expect(fetchSession('missing')).rejects.toThrow('Failed to load session');
   });
 
   it('fetchModels returns the array from a 200 response', async () => {
@@ -189,5 +238,17 @@ describe('api fetch functions', () => {
   it('deleteSession throws when the response is not ok', async () => {
     fetchMock.mockResolvedValue(jsonRes(null, false, 400));
     await expect(deleteSession('s1')).rejects.toThrow('Failed to delete session');
+  });
+
+  it('respondProviderRequest posts the approval decision', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ requestId: 'req-1', decision: 'approve' }));
+    await respondProviderRequest('s1', 'req-1', 'approve');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/sessions/s1/provider-requests/req-1/respond',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ decision: 'approve' }),
+      }),
+    );
   });
 });

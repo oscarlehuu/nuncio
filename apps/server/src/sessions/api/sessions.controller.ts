@@ -5,12 +5,19 @@ import {
   Get,
   NotFoundException,
   Param,
+  Patch,
   Post,
   Query,
   Res,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import type { CreateSessionDto, HandoffSessionDto, SteerSessionDto } from '../domain/sessions.types';
+import type {
+  CreateSessionDto,
+  HandoffSessionDto,
+  RespondProviderRequestDto,
+  SetSessionModelDto,
+  SteerSessionDto,
+} from '../domain/sessions.types';
 import { SessionsService } from '../sessions.service';
 
 @Controller('sessions')
@@ -31,15 +38,32 @@ export class SessionsController {
       prompt: body.prompt.trim(),
       provider: body.provider,
       model: body.model,
+      modelOptions: body.modelOptions,
+      attachments: body.attachments,
       workspace: body.workspace,
       projectPath: body.projectPath,
       baseBranch: body.baseBranch,
+      useWorktree: body.useWorktree,
     });
   }
 
   @Post('handoff')
   handoff(@Body() body: HandoffSessionDto) {
     return this.sessions.handoff(body);
+  }
+
+  @Get(':id/active-run')
+  activeRun(@Param('id') id: string) {
+    const session = this.sessions.get(id);
+    if (!session) throw new NotFoundException('Session not found');
+    return { active: this.sessions.isCursorCliActive(id) };
+  }
+
+  @Post(':id/refresh-transcript')
+  refreshTranscript(@Param('id') id: string) {
+    const session = this.sessions.get(id);
+    if (!session) throw new NotFoundException('Session not found');
+    return this.sessions.refreshTranscript(id);
   }
 
   @Get(':id')
@@ -51,7 +75,26 @@ export class SessionsController {
 
   @Post(':id/steer')
   steer(@Param('id') id: string, @Body() body: SteerSessionDto) {
-    return this.sessions.steer(id, body?.message ?? '', body?.forceResume);
+    return this.sessions.steer(id, body?.message ?? '', body?.forceResume, body?.attachments);
+  }
+
+  @Post(':id/interrupt')
+  interrupt(@Param('id') id: string) {
+    return this.sessions.interrupt(id);
+  }
+
+  @Patch(':id/model')
+  setModel(@Param('id') id: string, @Body() body: SetSessionModelDto) {
+    return this.sessions.setSessionModel(id, body?.model ?? '', body?.options);
+  }
+
+  @Post(':id/provider-requests/:requestId/respond')
+  respondProviderRequest(
+    @Param('id') id: string,
+    @Param('requestId') requestId: string,
+    @Body() body: RespondProviderRequestDto,
+  ) {
+    return this.sessions.respondProviderRequest(id, requestId, body?.decision);
   }
 
   @Post(':id/pause')
@@ -67,6 +110,14 @@ export class SessionsController {
   @Post(':id/restore')
   restore(@Param('id') id: string) {
     return this.sessions.restore(id);
+  }
+
+  @Patch(':id')
+  rename(@Param('id') id: string, @Body() body: { title?: string }) {
+    if (!body?.title?.trim()) {
+      return { error: 'title is required' };
+    }
+    return this.sessions.rename(id, body.title.trim());
   }
 
   @Delete(':id')

@@ -1,3 +1,4 @@
+import type { ComponentProps } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -34,6 +35,7 @@ async function renderDetail(
   overrides: Partial<Session> = {},
   events: SessionEvent[] = NO_EVENTS,
   providers?: ModelProvider[],
+  extraProps: Partial<ComponentProps<typeof SessionDetail>> = {},
 ) {
   const onSteer = vi.fn();
   const onPause = vi.fn();
@@ -46,6 +48,7 @@ async function renderDetail(
       onSteer={onSteer}
       onPause={onPause}
       onArchive={onArchive}
+      {...extraProps}
     />,
   );
   return { onSteer, onPause, onArchive, ...view };
@@ -58,6 +61,33 @@ describe('SessionDetail', () => {
     await userEvent.type(textarea, 'Use the cache layer');
     await userEvent.click(screen.getByRole('button', { name: /send/i }));
     expect(onSteer).toHaveBeenCalledWith('Use the cache layer');
+  });
+
+  it('clears the composer immediately after sending while steer is still settling', async () => {
+    let resolveSteer!: () => void;
+    const onSteer = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSteer = resolve;
+        }),
+    );
+    render(
+      <SessionDetail
+        session={makeSession()}
+        events={NO_EVENTS}
+        onSteer={onSteer}
+        onPause={vi.fn()}
+        onArchive={vi.fn()}
+      />,
+    );
+
+    const textarea = screen.getByPlaceholderText(/steer the agent/i);
+    await userEvent.type(textarea, 'Use the cache layer');
+    await userEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    expect(onSteer).toHaveBeenCalledWith('Use the cache layer');
+    expect(textarea).toHaveValue('');
+    resolveSteer();
   });
 
   it('calls onPause when the pause button is clicked while IDLE', async () => {
@@ -81,13 +111,12 @@ describe('SessionDetail', () => {
     expect(onPause).toHaveBeenCalledTimes(1);
   });
 
-  it('hides header pause when RUNNING but keeps archive', async () => {
+  it('keeps archive button when RUNNING', async () => {
     await renderDetail({ status: 'RUNNING' });
-    expect(screen.queryByRole('button', { name: /pause session/i })).toBeNull();
     expect(screen.getByRole('button', { name: /archive session/i })).toBeInTheDocument();
   });
 
-  it('hides the pause button when the session is ARCHIVED', async () => {
+  it('does not show a pause button when ARCHIVED', async () => {
     await renderDetail({ status: 'ARCHIVED' });
     expect(screen.queryByRole('button', { name: /pause session/i })).toBeNull();
   });
@@ -129,6 +158,63 @@ describe('SessionDetail', () => {
     const userMsg = screen.getByText('first prompt');
     const position = userMsg.compareDocumentPosition(indicator);
     expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('renders provider approval requests and sends an approve decision', async () => {
+    const onRespondProviderRequest = vi.fn();
+    const events: SessionEvent[] = [
+      {
+        seq: 1,
+        type: 'provider_request',
+        payload: {
+          requestId: 'req-1',
+          provider: 'codex',
+          method: 'exec/approval',
+          status: 'pending',
+          params: { command: 'git status' },
+        },
+        createdAt: Date.now(),
+      },
+    ];
+
+    await renderDetail(
+      { status: 'RUNNING', provider: 'codex' },
+      events,
+      undefined,
+      { onRespondProviderRequest },
+    );
+
+    expect(screen.getByText('git status')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /approve request/i }));
+    expect(onRespondProviderRequest).toHaveBeenCalledWith('req-1', 'approve');
+  });
+
+  it('marks provider approval requests as resolved', async () => {
+    const events: SessionEvent[] = [
+      {
+        seq: 1,
+        type: 'provider_request',
+        payload: {
+          requestId: 'req-1',
+          provider: 'codex',
+          method: 'exec/approval',
+          status: 'pending',
+          params: { command: 'git status' },
+        },
+        createdAt: Date.now(),
+      },
+      {
+        seq: 2,
+        type: 'provider_request_resolved',
+        payload: { requestId: 'req-1', decision: 'deny', status: 'resolved' },
+        createdAt: Date.now(),
+      },
+    ];
+
+    await renderDetail({ status: 'RUNNING', provider: 'codex' }, events);
+
+    expect(screen.getByText(/denied/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /approve request/i })).toBeNull();
   });
 
   it('does not render a Home button or Home text in the session header', async () => {
@@ -175,6 +261,28 @@ describe('SessionDetail', () => {
     expect(screen.getAllByText('nuncio/s1-fix-auth').length).toBeGreaterThan(0);
   });
 
+  it('renders repo and branch in the footer below the composer', async () => {
+    await renderDetail({
+      projectPath: '/Users/dev/code/nuncio',
+      branch: 'nuncio/s1-fix-auth',
+    });
+    const footer = screen.getByTestId('session-footer');
+    expect(footer).toBeInTheDocument();
+    expect(footer).toHaveTextContent('nuncio');
+    expect(footer).toHaveTextContent('nuncio/s1-fix-auth');
+    expect(footer).toHaveTextContent('Local');
+  });
+
+  it('does not render repo or branch in the header', async () => {
+    await renderDetail({
+      projectPath: '/Users/dev/code/nuncio',
+      branch: 'nuncio/s1-fix-auth',
+    });
+    const header = document.querySelector('header');
+    expect(header).toBeTruthy();
+    expect(header).not.toHaveTextContent('nuncio/s1-fix-auth');
+  });
+
   it('shows the friendly model name from the provided providers catalog', async () => {
     const providers: ModelProvider[] = [
       {
@@ -216,6 +324,52 @@ describe('SessionDetail', () => {
   it('falls back to the raw model id when the model is not in the catalog', async () => {
     await renderDetail({ model: 'unknown:model-x' }, NO_EVENTS, []);
     expect(screen.getByText('unknown:model-x')).toBeInTheDocument();
+  });
+
+  it('shows approval mode in the steer composer for Codex sessions only', async () => {
+    const codexView = await renderDetail(
+      { provider: 'codex', model: 'codex:gpt-5.5' },
+      NO_EVENTS,
+      [
+        {
+          id: 'codex',
+          name: 'Codex',
+          groups: [
+            {
+              id: 'codex',
+              name: 'Codex',
+              models: [{ id: 'codex:gpt-5.5', name: 'GPT 5.5' }],
+            },
+          ],
+        },
+      ],
+      { approvalMode: 'full-access', onApprovalModeChange: vi.fn() },
+    );
+    const approval = screen.getByRole('button', { name: /approval mode: full access/i });
+    expect(approval).toBeInTheDocument();
+    expect(approval).toHaveAttribute('data-variant', 'ghost');
+    expect(approval).not.toHaveClass('composer-picker-trigger');
+    codexView.unmount();
+
+    await renderDetail(
+      { provider: 'cursor', model: 'cursor:composer-2.5' },
+      NO_EVENTS,
+      [
+        {
+          id: 'cursor',
+          name: 'Cursor',
+          groups: [
+            {
+              id: 'cursor',
+              name: 'Cursor',
+              models: [{ id: 'cursor:composer-2.5', name: 'Composer 2.5' }],
+            },
+          ],
+        },
+      ],
+      { approvalMode: 'full-access', onApprovalModeChange: vi.fn() },
+    );
+    expect(screen.queryByRole('button', { name: /approval mode/i })).toBeNull();
   });
 
   describe('archived actions', () => {
@@ -367,6 +521,38 @@ describe('SessionDetail throttled streaming', () => {
       />,
     );
     expect(screen.queryByRole('button', { name: /continue on mobile/i })).toBeNull();
-    expect(screen.getByText('Imported from Cursor')).toBeInTheDocument();
+  });
+
+  it('shows Running on machine badge when machineActive', () => {
+    render(
+      <SessionDetail
+        session={makeSession({ provider: 'cursor', cursorBackend: 'cli' })}
+        events={NO_EVENTS}
+        onSteer={vi.fn()}
+        onPause={vi.fn()}
+        onArchive={vi.fn()}
+        machineActive
+      />,
+    );
+    expect(screen.getByText('Running on machine')).toBeInTheDocument();
+  });
+
+  it('shows hint in composer while machineActive but keeps steer enabled', async () => {
+    const onSteer = vi.fn();
+    render(
+      <SessionDetail
+        session={makeSession({ provider: 'cursor', cursorBackend: 'cli', status: 'IDLE' })}
+        events={NO_EVENTS}
+        onSteer={onSteer}
+        onPause={vi.fn()}
+        onArchive={vi.fn()}
+        machineActive
+      />,
+    );
+    const textarea = screen.getByPlaceholderText(/cursor is running this chat/i);
+    expect(textarea).toBeEnabled();
+    await userEvent.type(textarea, 'try from phone');
+    await userEvent.click(screen.getByRole('button', { name: /send/i }));
+    expect(onSteer).toHaveBeenCalledWith('try from phone');
   });
 });

@@ -57,27 +57,27 @@ const CURSOR_PROVIDER: ModelProvider = {
 };
 
 const CODEX_PROVIDER: ModelProvider = {
-  id: 'cursor',
-  name: 'Cursor',
+  id: 'codex',
+  name: 'Codex',
   groups: [
     {
-      id: 'cursor',
-      name: 'Cursor',
+      id: 'openai',
+      name: 'OpenAI',
       models: [
         {
-          id: 'cursor:codex-5.1-max',
-          name: 'Codex 5.1 Max',
+          id: 'codex:gpt-5.5',
+          name: 'GPT-5.5',
           options: [
-            { id: 'fast', label: 'Fast', type: 'boolean', defaultValue: false },
+            { id: 'fast', label: 'Priority', type: 'boolean', defaultValue: false },
             {
-              id: 'reasoning',
+              id: 'reasoningEffort',
               label: 'Reasoning',
               type: 'select',
               options: [
-                { id: 'low', label: 'Low', isDefault: true },
-                { id: 'high', label: 'High' },
+                { id: 'medium', label: 'Medium', isDefault: true },
+                { id: 'xhigh', label: 'Xhigh' },
               ],
-              defaultValue: 'low',
+              defaultValue: 'medium',
             },
           ],
         },
@@ -151,33 +151,39 @@ describe('ModelPicker', () => {
     expect(screen.getByRole('button', { name: /turn off fast mode/i })).toBeInTheDocument();
   });
 
-  it('renders a reasoning effort slider instead of reasoning menu rows', async () => {
+  it('renders Codex reasoning effort as a slider and Priority as fast', async () => {
     const onChange = vi.fn();
     render(
       <ModelPicker
-        value="cursor:codex-5.1-max"
-        modelOptions={{ fast: false, reasoning: 'low' }}
+        value="codex:gpt-5.5"
+        modelOptions={{ fast: false, reasoningEffort: 'medium' }}
         onChange={onChange}
         providers={[CODEX_PROVIDER]}
       />,
     );
 
-    await userEvent.click(screen.getByRole('button', { name: /codex 5\.1 max/i }));
-    const cursorEngine = await screen.findByRole('menuitem', { name: /cursor/i });
-    await userEvent.hover(cursorEngine);
+    await userEvent.click(screen.getByRole('button', { name: /gpt 5\.5/i }));
+    const codexEngine = await screen.findByRole('menuitem', { name: /codex/i });
+    await userEvent.hover(codexEngine);
 
-    const codex = await screen.findByRole('menuitem', { name: /codex 5\.1 max/i });
+    const codex = await screen.findByRole('menuitem', { name: /gpt 5\.5/i });
     await userEvent.click(codex);
 
     expect(screen.getByRole('slider', { name: /reasoning effort/i })).toBeInTheDocument();
-    expect(screen.queryByRole('menuitem', { name: /^high$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /^xhigh$/i })).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByRole('slider', { name: /reasoning effort/i }), {
       target: { value: '1' },
     });
-    expect(onChange).toHaveBeenCalledWith('cursor:codex-5.1-max', 'cursor', {
+    expect(onChange).toHaveBeenCalledWith('codex:gpt-5.5', 'codex', {
       fast: false,
-      reasoning: 'high',
+      reasoningEffort: 'xhigh',
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: /turn on fast mode/i }));
+    expect(onChange).toHaveBeenLastCalledWith('codex:gpt-5.5', 'codex', {
+      fast: true,
+      reasoningEffort: 'medium',
     });
   });
 

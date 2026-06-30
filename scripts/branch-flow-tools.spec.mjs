@@ -31,10 +31,27 @@ describe('validateBranchFlow', () => {
     });
   });
 
+  describe('codex-sdk', () => {
+    it('accepts codex feature branches', () => {
+      expect(validateBranchFlow('codex-sdk', 'codex/provider-integration')).toEqual({ ok: true });
+    });
+
+    it('accepts main sync-back', () => {
+      expect(validateBranchFlow('codex-sdk', 'main')).toEqual({ ok: true });
+    });
+
+    it('rejects other SDK lane branches', () => {
+      expect(validateBranchFlow('codex-sdk', 'cursor/feat-handoff').ok).toBe(false);
+      expect(validateBranchFlow('codex-sdk', 'pi/cwd-fix').ok).toBe(false);
+      expect(validateBranchFlow('codex-sdk', 'feat/foo').ok).toBe(false);
+    });
+  });
+
   describe('main', () => {
     it('accepts SDK integration branches', () => {
       expect(validateBranchFlow('main', 'cursor-sdk')).toEqual({ ok: true });
       expect(validateBranchFlow('main', 'pi-sdk')).toEqual({ ok: true });
+      expect(validateBranchFlow('main', 'codex-sdk')).toEqual({ ok: true });
     });
 
     it('accepts changesets release branch', () => {
@@ -44,6 +61,7 @@ describe('validateBranchFlow', () => {
     it('rejects direct feature branches', () => {
       expect(validateBranchFlow('main', 'cursor/feat-handoff').ok).toBe(false);
       expect(validateBranchFlow('main', 'pi/cwd-fix').ok).toBe(false);
+      expect(validateBranchFlow('main', 'codex/provider-integration').ok).toBe(false);
       expect(validateBranchFlow('main', 'feat/foo').ok).toBe(false);
     });
   });

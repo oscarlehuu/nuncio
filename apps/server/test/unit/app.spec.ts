@@ -162,6 +162,33 @@ describe('Nuncio API', () => {
       expect(archived.body.status).toBe('ARCHIVED');
     });
 
+    it('PATCH /api/sessions/:id renames the session', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/sessions')
+        .send({ prompt: 'Original title' });
+      const id = created.body.id;
+      await waitForIdle(app, id);
+
+      const renamed = await request(app.getHttpServer())
+        .patch(`/api/sessions/${id}`)
+        .send({ title: 'My custom name' });
+      expect(renamed.status).toBe(200);
+      expect(renamed.body.title).toBe('My custom name');
+      expect(renamed.body.id).toBe(id);
+    });
+
+    it('PATCH /api/sessions/:id rejects empty title', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/sessions')
+        .send({ prompt: 'Some prompt' });
+      const id = created.body.id;
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/sessions/${id}`)
+        .send({ title: '   ' });
+      expect(res.body.error).toBeDefined();
+    });
+
     it('GET /api/sessions excludes archived sessions', async () => {
       const created = await request(app.getHttpServer())
         .post('/api/sessions')
@@ -195,16 +222,36 @@ describe('Nuncio API', () => {
       expect(res.body.some((branch: { name: string }) => branch.name === 'main')).toBe(true);
     });
 
-    it('POST /api/sessions with projectPath creates worktree metadata', async () => {
+    it('POST /api/sessions with projectPath defaults to the selected workspace', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/sessions')
+        .send({
+          prompt: 'Inspect workspace support',
+          projectPath: repoPath,
+          baseBranch: 'main',
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body.projectPath).toBe(repoPath);
+      expect(res.body.workspace).toBe(repoPath);
+      expect(res.body.baseBranch).toBe('main');
+      expect(res.body.worktreePath).toBeNull();
+      expect(res.body.branch).toBeNull();
+      await waitForIdle(app, res.body.id);
+    });
+
+    it('POST /api/sessions creates worktree metadata when requested', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/sessions')
         .send({
           prompt: 'Add workspace support',
           projectPath: repoPath,
           baseBranch: 'main',
+          useWorktree: true,
         });
 
       expect(res.status).toBe(201);
+      expect(res.body.workspace).toBeNull();
       expect(res.body.worktreePath).toBe(join(workspacesDir, res.body.id));
       expect(res.body.branch).toBe(`nuncio/${res.body.id}-add-workspace-support`);
       await waitForIdle(app, res.body.id);

@@ -8,6 +8,7 @@ export function stubAgentProvider(
   return {
     id,
     name,
+    capabilities: { interrupt: false, modelSwitch: 'none', effortSwitch: 'none', images: false },
     isAvailable: async () => available,
     listModels: async () => [],
     run: async () => undefined,

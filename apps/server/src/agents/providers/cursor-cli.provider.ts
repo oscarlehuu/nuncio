@@ -13,8 +13,7 @@ import {
   parseCursorCliStreamLine,
   resolveCursorAgentBin,
 } from './cursor-cli.helpers';
-
-const ACTIVE_RUN_MS = 60_000;
+import { isCursorCliRecentlyActive } from './cursor-cli.active-run';
 
 @Injectable()
 export class CursorCliProvider extends BaseAgentProvider {
@@ -108,16 +107,16 @@ export class CursorCliProvider extends BaseAgentProvider {
   private assertNotRecentlyActive(context: AgentRunContext): void {
     if (context.forceResume) return;
 
-    const now = Date.now();
-    const candidates = [context.transcriptMtimeMs, context.chatStoreMtimeMs].filter(
-      (mtime): mtime is number => mtime != null,
-    );
-    for (const mtime of candidates) {
-      if (now - mtime < ACTIVE_RUN_MS) {
-        throw new ConflictException(
-          'Cursor may still be running this chat on your Mac. Pause it in Cursor, then retry.',
-        );
-      }
+    if (
+      isCursorCliRecentlyActive(
+        context.transcriptMtimeMs,
+        context.chatStoreMtimeMs,
+        context.transcriptTurnEnded,
+      )
+    ) {
+      throw new ConflictException(
+        'Cursor may still be running this chat on your Mac. Pause it in Cursor, then retry.',
+      );
     }
   }
 
@@ -184,6 +183,31 @@ export class CursorCliProvider extends BaseAgentProvider {
       case 'assistant_message':
         this.pushEvent(sessionId, 'assistant_message', { text: event.text }, context.emit);
         this.sessions.touchPreview(sessionId, event.text);
+        break;
+      case 'tool_start':
+        this.pushEvent(
+          sessionId,
+          'tool_start',
+          {
+            callId: event.callId,
+            tool: event.tool,
+            ...(event.input !== undefined ? { input: event.input } : {}),
+          },
+          context.emit,
+        );
+        break;
+      case 'tool_end':
+        this.pushEvent(
+          sessionId,
+          'tool_end',
+          {
+            callId: event.callId,
+            tool: event.tool,
+            isError: event.isError ?? false,
+            ...(event.output !== undefined ? { output: event.output } : {}),
+          },
+          context.emit,
+        );
         break;
       case 'error':
         throw new Error(event.message);

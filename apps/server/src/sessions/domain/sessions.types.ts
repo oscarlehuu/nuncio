@@ -1,3 +1,4 @@
+import type { AgentAttachment } from '../../agents/agents.types';
 import type { ModelOptionsMap } from '../../models/model-options.types';
 
 export type SessionStatus =
@@ -22,6 +23,9 @@ export interface SessionRow {
   base_branch: string | null;
   worktree_path: string | null;
   branch: string | null;
+  provider_thread_id: string | null;
+  provider_active_turn_id: string | null;
+  provider_state_json: string | null;
   cursor_backend: string | null;
   cursor_chat_id: string | null;
   created_at: number;
@@ -44,6 +48,46 @@ export interface SessionEvent {
   createdAt: number;
 }
 
+export type ProviderRequestDecision = 'approve' | 'deny';
+export type ProviderRequestStatus = 'pending' | 'resolved';
+
+export interface ProviderRequestInput {
+  provider: string;
+  method: string;
+  params?: unknown;
+}
+
+export interface ProviderRequestResult {
+  requestId: string;
+  decision: ProviderRequestDecision;
+}
+
+export interface ProviderRequestRow {
+  request_id: string;
+  session_id: string;
+  provider: string;
+  method: string;
+  params_json: string | null;
+  status: string;
+  decision: string | null;
+  reason: string | null;
+  created_at: number;
+  resolved_at: number | null;
+}
+
+export interface ProviderRequestRecord {
+  requestId: string;
+  sessionId: string;
+  provider: string;
+  method: string;
+  params?: unknown;
+  status: ProviderRequestStatus;
+  decision: ProviderRequestDecision | null;
+  reason: string | null;
+  createdAt: number;
+  resolvedAt: number | null;
+}
+
 export interface SessionDto {
   id: string;
   title: string;
@@ -58,6 +102,9 @@ export interface SessionDto {
   baseBranch: string | null;
   worktreePath: string | null;
   branch: string | null;
+  providerThreadId: string | null;
+  providerActiveTurnId: string | null;
+  providerState: Record<string, unknown> | null;
   cursorBackend: 'sdk' | 'cli' | null;
   cursorChatId: string | null;
   createdAt: number;
@@ -75,12 +122,17 @@ export interface CreateSessionDto {
   provider?: string;
   model?: string;
   modelOptions?: ModelOptionsMap;
+  attachments?: AgentAttachment[];
   workspace?: string;
   id?: string;
   projectPath?: string;
   baseBranch?: string;
+  useWorktree?: boolean;
   worktreePath?: string;
   branch?: string;
+  providerThreadId?: string | null;
+  providerActiveTurnId?: string | null;
+  providerState?: Record<string, unknown> | null;
   cursorBackend?: 'sdk' | 'cli' | null;
   cursorChatId?: string | null;
 }
@@ -88,4 +140,14 @@ export interface CreateSessionDto {
 export interface SteerSessionDto {
   message: string;
   forceResume?: boolean;
+  attachments?: AgentAttachment[];
+}
+
+export interface SetSessionModelDto {
+  model: string;
+  options?: ModelOptionsMap;
+}
+
+export interface RespondProviderRequestDto {
+  decision: ProviderRequestDecision;
 }

@@ -69,6 +69,35 @@ describe('project-preference', () => {
     });
   });
 
+  it('does not remember generated Nuncio session branches as base branches', () => {
+    recordProjectSelection('/code/nuncio', 'nuncio');
+    recordBranchSelection('/code/nuncio', 'nuncio/028ea01c-what-is-your-model');
+
+    expect(resolveWorkspacePreference()).toEqual({
+      projectPath: '/code/nuncio',
+      baseBranch: undefined,
+    });
+    expect(loadProjectPreference().lastBranchByProject?.['/code/nuncio']).toBeUndefined();
+  });
+
+  it('ignores stale generated session branches in existing storage', () => {
+    localStorage.setItem(
+      PROJECT_PREFERENCE_STORAGE_KEY,
+      JSON.stringify({
+        recentProjects: [{ path: '/code/nuncio', name: 'nuncio' }],
+        lastProjectPath: '/code/nuncio',
+        lastBranchByProject: {
+          '/code/nuncio': 'nuncio/028ea01c-what-is-your-model',
+        },
+      }),
+    );
+
+    expect(resolveWorkspacePreference()).toEqual({
+      projectPath: '/code/nuncio',
+      baseBranch: undefined,
+    });
+  });
+
   it('ignores corrupt storage', () => {
     localStorage.setItem(PROJECT_PREFERENCE_STORAGE_KEY, '{not json');
     expect(loadProjectPreference()).toEqual({ recentProjects: [] });

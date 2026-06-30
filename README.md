@@ -6,22 +6,24 @@
 [![runtime: Bun](https://img.shields.io/badge/runtime-Bun%20%E2%89%A5%201.3-f9f1e1?logo=bun)](https://bun.sh)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-A self-hosted, mobile-first web app for delegating tasks to AI coding agents. Run it on your own machine, point it at your own Pi / Anthropic / OpenAI credentials, and assign work from your phone — agents keep going while you're away, and you can steer them mid-task.
+A self-hosted, mobile-first web app for delegating tasks to AI coding agents. Run it on your own machine, point it at your own Pi / Codex / Cursor credentials, and assign work from your phone — agents keep going while you're away, and you can steer them mid-task.
 
-Think Devin, but self-hosted and provider-neutral: the agent layer is a single interface, so Pi runs today and any future agent SDK (Cursor, …) can plug in uniformly.
+Think Devin, but self-hosted and provider-neutral: the agent layer is a single interface, so Pi, Codex, Cursor, and future agent SDKs plug in uniformly.
 
 ## Features
 
 - **Delegate tasks** — create a session with a prompt; the agent runs in-process and streams output as events
-- **Per-session provider + model** — choose the agent provider (`pi` / `cursor`) and the exact model (e.g. `cursor:composer-2`, `anthropic:claude-sonnet-4`) per session; both are stored on the session and wired through to the SDK
-- **Steer mid-task** — send follow-up messages that continue the same agent conversation (the Pi session handle is retained)
+- **Per-session provider + model** — choose the agent provider (`pi` / `codex` / `cursor`) and the exact model (e.g. `codex:gpt-5.5`, `cursor:composer-2`, `anthropic:claude-sonnet-4`) per session; both are stored on the session and wired through to the provider runtime
+- **Steer mid-task** — send follow-up messages that continue the same agent conversation when the provider supports it
 - **Pause / archive / restore / delete** — suspend a running session, retire it to the Archived tab, restore it back to IDLE, or permanently delete it; a session FSM enforces valid transitions and a confirm dialog guards deletes
 - **Real-time + replay** — SSE stream for live updates, event log with cursor for replay
 - **Mobile-first PWA** — installable on iPhone via Tailscale HTTPS; standalone dark UI, safe-area aware
 - **Self-hosted** — your machine, your SQLite, your credentials; nothing leaves your tailnet
-- **Provider-neutral agent layer** — `AgentProvider` interface + `AgentRegistry`; Pi, Cursor, and Mock today, extensible
+- **Provider-neutral agent layer** — `AgentProvider` interface + `AgentRegistry`; Pi, Codex, Cursor, and Mock today, extensible
 - **Settings store** — runtime-configurable env vars (API keys, paths, flags) stored in SQLite and editable via the frontend; secrets encrypted at rest (AES-256-GCM), env vars still honoured as fallback
+- **Codex approvals** — switch Codex between full-access and approval-required mode from the composer, then approve or deny pending provider actions in the transcript
 - **Folder picker** — browse the host machine's directories to pick a project (server-side, works on iPhone PWA), or paste a custom path
+- **Workspace control** — choose a project, run in the local checkout, or create a new `nuncio/<sessionId>-<slug>` worktree forked from the selected branch
 - **Continue on mobile** — import an in-progress Cursor IDE/CLI chat from your Mac and steer it from the phone PWA (CLI `--resume` for imported sessions)
 
 ## Screenshots
@@ -30,7 +32,7 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 
 ## Status
 
-Phase 0–3 complete (vertical slice · PWA/mobile · steer + model picker) with agent-provider abstraction and Pi auth hardening. Phase 4 (git workspace / branch / PR) and Phase 5 (web push / webhooks) planned — see [Roadmap](#roadmap).
+Phase 0–3 complete (vertical slice · PWA/mobile · steer + model picker) with agent-provider abstraction and Pi/Codex/Cursor providers. Phase 4 workspace support is partially shipped (project picker + Work locally/New worktree mode picker); PR flow/cleanup and Phase 5 (web push / webhooks) remain planned — see [Roadmap](#roadmap).
 
 ## Changelog
 
@@ -48,17 +50,54 @@ bun run changeset        # select "nuncio", pick minor/patch, write a release-no
 
 Merging PRs triggers a `chore: release version` PR that bumps the version and updates `CHANGELOG.md`; merging that PR cuts the release (git tag + GitHub Release). See [`.changeset/README.md`](.changeset/README.md) and [AGENTS.md → Releases & changelog](AGENTS.md) for the full workflow.
 
+## SDK lane branches
+
+Provider SDK work lands through integration branches before `main`:
+
+```bash
+cursor/<feature>  →  cursor-sdk  →  main
+pi/<feature>      →  pi-sdk      →  main
+codex/<feature>   →  codex-sdk   →  main
+```
+
+Use `codex/<slug>` branches for Codex provider work and open PRs against `codex-sdk`. Verify locally with:
+
+```bash
+BASE_REF=codex-sdk HEAD_REF=codex/my-feature bun run check-branch-flow
+```
+
 ## Quick start
 
 Requires [Bun](https://bun.sh) ≥ 1.3 (the server uses `bun:sqlite`, a Bun builtin — Node won't work).
 
 ```bash
 bun install
+cp .env.example .env   # optional but recommended — shared SQLite across worktrees
 bun run dev
 ```
 
 - **API:** http://localhost:3000/api/health
 - **Web:** http://localhost:5173 (proxies `/api` → 3000)
+
+### Local data (sessions & settings)
+
+SQLite lives under `NUNCIO_DATA_DIR` (default: `./data` relative to the **server process cwd**, which is usually `apps/server/data/` when you run `bun run dev` from the repo root). Each git checkout or worktree without a shared path gets its **own empty database** — that is why a feature worktree can show an empty sidebar while your main clone has sessions.
+
+**Recommended:** point every checkout at one directory:
+
+```bash
+cp .env.example .env
+# edit if needed — default is $HOME/.nuncio/data
+```
+
+Migrate existing data once (example if your sessions were under `apps/server/data/`):
+
+```bash
+mkdir -p ~/.nuncio/data
+cp -a apps/server/data/. ~/.nuncio/data/
+```
+
+Restart `bun run dev` on port **3000** only — see [CONTRIBUTING.md → Dev server ports](CONTRIBUTING.md#dev-server-ports--dont-squat-new-ports).
 
 ```bash
 bun run build   # build server + web
@@ -72,11 +111,22 @@ Nuncio drives the [Pi SDK](https://github.com/earendil-works/pi) in-process. Log
 
 Set `CURSOR_API_KEY` (from [Cursor dashboard](https://cursor.com/dashboard/cloud-agents)) to enable the **Cursor** provider (`provider: "cursor"`). Uses `@cursor/sdk` local runtime under Bun with `useHttp1ForAgent` + `JsonlLocalAgentStore` escape hatches. Default cwd: `NUNCIO_CURSOR_CWD` or `process.cwd()`. Per-session `workspace` field (Phase 4 UI) overrides cwd when set. The key can also be set via the **Settings** UI (gear icon in the sidebar) — it's stored encrypted at rest and overrides the env var without a restart.
 
+### Codex credentials
+
+Nuncio launches the local Codex CLI's **app server** (`codex app-server`) for the **Codex** provider (`provider: "codex"`). Log in once with the CLI first:
+
+```bash
+codex login
+codex login status
+```
+
+The default binary is `codex` on `PATH`. Override it with `NUNCIO_CODEX_BIN`; override Codex's home with `NUNCIO_CODEX_HOME`; override the default cwd with `NUNCIO_CODEX_CWD`. `NUNCIO_CODEX_RUNTIME_MODE=full-access` is the default for local self-hosted use. `approval-required` starts Codex in read-only/untrusted mode and surfaces pending provider approval requests in the session transcript. Pending request state is stored in SQLite; if the server restarts while Codex is waiting, Nuncio marks that stale request denied because the original app-server callback is gone.
+
 ## Testing
 
 ```bash
-bun run test                                       # server unit tests (simulated cursor provider)
-bun run --filter @nuncio/server test:e2e           # HTTP e2e (simulated cursor provider)
+bun run test                                       # server unit tests (simulated providers)
+bun run --filter @nuncio/server test:e2e           # HTTP e2e (simulated provider)
 bun run --filter @nuncio/server test:integration   # real Pi auth — skips when ~/.pi/agent absent
 bun run --filter @nuncio/web test                  # web component tests (vitest)
 ```
@@ -113,10 +163,10 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 
 ## Architecture
 
-- **Agent providers:** Pi SDK + Mock behind a common `AgentProvider` interface; `AgentRegistry` selects per session. Pi auth via the SDK's `AuthStorage` (API key **or** OAuth/subscription) at `~/.pi/agent` (override: `PI_CODING_AGENT_DIR`). Falls back to Mock when Pi has no configured credentials. See [docs/system-architecture.md](docs/system-architecture.md).
+- **Agent providers:** Pi SDK, Codex app-server, Cursor SDK, and Mock behind a common `AgentProvider` interface; `AgentRegistry` selects per session. Pi auth via the SDK's `AuthStorage` at `~/.pi/agent`; Codex auth via the local `codex` CLI login; Cursor auth via `CURSOR_API_KEY`. See [docs/system-architecture.md](docs/system-architecture.md).
 - **Backend:** NestJS (`apps/server`) on port 3000
-- **Frontend:** Vite + React + Tailwind + shadcn/ui (`apps/web`) on port 5173
-- **Persistence:** SQLite (`bun:sqlite`) in `data/nuncio.db` — sessions (with `provider` + `model`), append-only event log, and a `settings` table for runtime-configurable env overrides (secrets encrypted at rest)
+- **Frontend:** Vite + React + Tailwind + shadcn/ui (`apps/web`) on port 5173 by default (`NUNCIO_WEB_PORT` overrides dev/preview; `NUNCIO_API_ORIGIN` overrides the `/api` proxy target)
+- **Persistence:** SQLite (`bun:sqlite`) in `data/nuncio.db` — sessions (with `provider`, `model`, and provider runtime state), append-only event log, and a `settings` table for runtime-configurable env overrides (secrets encrypted at rest)
 - **Auth:** Tailscale (network) + static app token (planned)
 - **Distribution:** Open source — friends/colleagues self-host on their own Linux/macOS machines
 
@@ -126,18 +176,23 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 |--------|------|-------------|
 | GET | `/api/health` | Health check |
 | GET | `/api/sessions` | List sessions (`?includeArchived=1`) |
-| POST | `/api/sessions` | Create session `{ "prompt": "...", "provider?": "pi\|cursor", "model?": "..." }` |
+| POST | `/api/sessions` | Create session `{ "prompt": "...", "provider?": "pi\|codex\|cursor", "model?": "...", "attachments?": [{ "kind": "image", "mimeType": "image/png", "data": "base64" }], "projectPath?": "/abs/repo", "useWorktree?": true, "baseBranch?": "main" }`; `projectPath` without `useWorktree` runs in the selected repo and records `baseBranch` as the selected branch, while `useWorktree: true` creates a generated `nuncio/<id>-<slug>` worktree from `baseBranch` |
 | POST | `/api/sessions/handoff` | Import a Cursor IDE/CLI chat `{ "cursorChatId": "...", "workspace": "/abs/path", "title?": "..." }` → `IDLE` session with transcript hydrated |
 | GET | `/api/cursor/local-sessions?workspace=` | List in-progress Cursor chats on this Mac for the handoff picker |
 | GET | `/api/sessions/:id` | Session detail (incl. `provider`, `model`, `cursorBackend`, `cursorChatId`) |
 | GET | `/api/sessions/:id/events?since=` | Event log (cursor) |
+| GET | `/api/sessions/:id/active-run` | `{ "active": boolean }` — whether Cursor IDE/CLI is likely still running this handoff chat on the host (transcript/store mtime < 60s) |
+| POST | `/api/sessions/:id/refresh-transcript` | Append new turns from the on-disk Cursor transcript; emits `transcript_refreshed` via SSE when rows land |
 | GET | `/api/sessions/:id/stream?since=` | SSE stream |
-| POST | `/api/sessions/:id/steer` | Steer agent `{ "message": "...", "forceResume?": true }` — `forceResume` skips the active-run guard for CLI handoff sessions |
+| POST | `/api/sessions/:id/steer` | Steer agent `{ "message": "...", "forceResume?": true, "attachments?": [...] }` — `forceResume` skips the active-run guard for CLI handoff sessions |
+| POST | `/api/sessions/:id/interrupt` | Interrupt a live run when the provider advertises `capabilities.interrupt` (Pi supports this without disposing the session) |
+| PATCH | `/api/sessions/:id/model` | Persist a session model/options update `{ "model": "provider:model", "options?": { ... } }`; providers with in-session switching (Pi) apply it live |
+| POST | `/api/sessions/:id/provider-requests/:requestId/respond` | Approve or deny a pending provider request `{ "decision": "approve" \| "deny" }` |
 | POST | `/api/sessions/:id/pause` | Pause session |
 | POST | `/api/sessions/:id/archive` | Archive session (recoverable via `restore`) |
 | POST | `/api/sessions/:id/restore` | Restore an archived session → IDLE |
 | DELETE | `/api/sessions/:id` | Permanently delete an archived session + its event log |
-| GET | `/api/models` | Model catalog (aggregated from available providers) |
+| GET | `/api/models` | Model catalog (aggregated from available providers, including per-provider `capabilities`) |
 | GET | `/api/settings` | List all settings (secrets masked, never raw) |
 | PUT | `/api/settings/:key` | Update a setting `{ "value": "..." }` (encrypts secrets, busts provider caches) |
 | DELETE | `/api/settings/:key` | Clear a setting (falls back to env/default) |
@@ -185,7 +240,7 @@ Imported sessions use `cursor_backend=cli` and resume via the CLI subprocess. Se
 apps/
   server/
     src/
-      agents/        AgentProvider interface + BaseAgentProvider + AgentRegistry + providers/ (pi, cursor)
+      agents/        AgentProvider interface + BaseAgentProvider + AgentRegistry + providers/ (pi, codex, cursor)
       sessions/      api/ · domain/ (types, fsm) · persistence/ (repositories) + service + module
       models/        model catalog aggregation from providers
       health/ · db/
@@ -203,7 +258,7 @@ assets/     Screenshots for the README (un-ignored only here — see .gitignore)
 ## Design principles
 
 - **3-layer state decoupling:** Conversation (durable) / Agent loop (replaceable) / Machine state (FSM)
-- **Provider-neutral agent layer:** every agent SDK implements `AgentProvider`; `AgentRegistry` resolves per session so Pi/Cursor/any future SDK plug in uniformly
+- **Provider-neutral agent layer:** every agent SDK implements `AgentProvider`; `AgentRegistry` resolves per session so Pi/Codex/Cursor/any future SDK plug in uniformly
 - **Per-session provider + model selection** — `provider` + `model` stored on the session, wired through to the SDK
 - **Long-running, resumable sessions** — FSM + event log persist in SQLite; Pi conversation history is in-memory pending session revival (planned)
 
@@ -216,8 +271,8 @@ Phase plans and milestones: [plans/260626-nuncio-roadmap/](plans/260626-nuncio-r
 | 0–1 | Vertical slice (sessions, events, SSE, Pi harness) | Done |
 | 2 | PWA + mobile + Tailscale prod | Done |
 | 3 | Steer, pause, model picker | Done |
-| — | Agent-provider abstraction + Pi auth hardening | Done |
-| 4 | Git workspace, branch, PR | Planned |
+| — | Agent-provider abstraction + Pi/Codex/Cursor providers | Done |
+| 4 | Git workspace, branch, PR | Workspace support partially shipped; PR/cleanup planned |
 | 5 | Web Push + webhooks | Planned |
 
 ## Contributing

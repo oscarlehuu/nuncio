@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS sessions (
   base_branch TEXT,
   worktree_path TEXT,
   branch TEXT,
+  provider_thread_id TEXT,
+  provider_active_turn_id TEXT,
+  provider_state_json TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -33,6 +36,23 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_session_seq ON events(session_id, seq);
+
+CREATE TABLE IF NOT EXISTS provider_requests (
+  request_id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  method TEXT NOT NULL,
+  params_json TEXT,
+  status TEXT NOT NULL,
+  decision TEXT,
+  reason TEXT,
+  created_at INTEGER NOT NULL,
+  resolved_at INTEGER,
+  FOREIGN KEY(session_id) REFERENCES sessions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_provider_requests_session_status
+ON provider_requests(session_id, status);
 
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
@@ -100,9 +120,42 @@ export class DatabaseService implements OnModuleDestroy {
       this.db.exec('ALTER TABLE sessions ADD COLUMN cursor_chat_id TEXT');
     }
 
+    const providerRuntimeColumns = [
+      'provider_thread_id',
+      'provider_active_turn_id',
+      'provider_state_json',
+    ] as const;
+
+    for (const column of providerRuntimeColumns) {
+      if (!sessionColumns.some((entry) => entry.name === column)) {
+        this.db.exec(`ALTER TABLE sessions ADD COLUMN ${column} TEXT`);
+      }
+    }
+
     this.db.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS sessions_cli_chat_unique
       ON sessions(cursor_chat_id) WHERE cursor_backend = 'cli'
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS provider_requests (
+        request_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        method TEXT NOT NULL,
+        params_json TEXT,
+        status TEXT NOT NULL,
+        decision TEXT,
+        reason TEXT,
+        created_at INTEGER NOT NULL,
+        resolved_at INTEGER,
+        FOREIGN KEY(session_id) REFERENCES sessions(id)
+      )
+    `);
+
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_provider_requests_session_status
+      ON provider_requests(session_id, status)
     `);
   }
 }

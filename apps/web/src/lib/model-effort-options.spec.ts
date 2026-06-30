@@ -10,7 +10,7 @@ import type { ModelOptionDescriptor } from './model-options';
 const CODEX_OPTIONS: ModelOptionDescriptor[] = [
   { id: 'fast', label: 'Fast', type: 'boolean', defaultValue: false },
   {
-    id: 'reasoning',
+    id: 'reasoningEffort',
     label: 'Reasoning',
     type: 'select',
     options: [
@@ -34,13 +34,14 @@ const CODEX_OPTIONS: ModelOptionDescriptor[] = [
 describe('model-effort-options', () => {
   it('classifies reasoning-style selects as effort sliders', () => {
     expect(isEffortSliderOption('reasoning')).toBe(true);
+    expect(isEffortSliderOption('reasoningEffort')).toBe(true);
     expect(isEffortSliderOption('thinkingLevel')).toBe(true);
     expect(isEffortSliderOption('context')).toBe(false);
   });
 
   it('splits effort sliders from menu selects', () => {
     const model = { options: CODEX_OPTIONS };
-    expect(effortSliderOptions(model).map((option) => option.id)).toEqual(['reasoning']);
+    expect(effortSliderOptions(model).map((option) => option.id)).toEqual(['reasoningEffort']);
     expect(menuSelectOptions(model).map((option) => option.id)).toEqual(['context']);
   });
 

@@ -32,7 +32,12 @@ type StubOpts = {
   waitStatus?: 'finished' | 'error' | 'cancelled';
   waitResult?: string;
   streamEvents?: Array<{ type: string; [key: string]: unknown }>;
-  deltaUpdates?: Array<{ type: string; text?: string; toolCall?: { type?: string; status?: string; isError?: boolean }; [key: string]: unknown }>;
+  deltaUpdates?: Array<{
+    type: string;
+    text?: string;
+    toolCall?: { id?: string; type?: string; status?: string; isError?: boolean; args?: unknown; result?: unknown };
+    [key: string]: unknown;
+  }>;
 };
 
 function makeStubSdk(opts: StubOpts = {}) {
@@ -519,8 +524,8 @@ describe('CursorAgentProvider', () => {
   it('maps tool-call-started/completed to tool_start/tool_end via onDelta', async () => {
     const { sdk } = makeStubSdk({
       deltaUpdates: [
-        { type: 'tool-call-started', toolCall: { type: 'bash' } },
-        { type: 'tool-call-completed', toolCall: { type: 'bash' } },
+        { type: 'tool-call-started', toolCall: { id: 'call-1', type: 'bash', args: { cmd: 'ls' } } },
+        { type: 'tool-call-completed', toolCall: { id: 'call-1', type: 'bash', result: 'ok' } },
       ],
       waitResult: 'done',
     });
@@ -533,8 +538,12 @@ describe('CursorAgentProvider', () => {
     const all = events.list(created.id);
     const toolStart = all.find((e) => e.type === 'tool_start');
     const toolEnd = all.find((e) => e.type === 'tool_end');
-    expect((toolStart?.payload as { tool: string }).tool).toBe('bash');
-    expect((toolEnd?.payload as { tool: string }).tool).toBe('bash');
+    expect((toolStart?.payload as { tool: string; callId: string; input: unknown }).tool).toBe('bash');
+    expect((toolStart?.payload as { callId: string }).callId).toBe('call-1');
+    expect((toolStart?.payload as { input: unknown }).input).toEqual({ cmd: 'ls' });
+    expect((toolEnd?.payload as { tool: string; callId: string; output: unknown }).tool).toBe('bash');
+    expect((toolEnd?.payload as { callId: string }).callId).toBe('call-1');
+    expect((toolEnd?.payload as { output: unknown }).output).toBe('ok');
   });
 
   it('maps tool-call-completed error status to tool_end isError=true', async () => {
@@ -554,10 +563,35 @@ describe('CursorAgentProvider', () => {
     expect((toolEnd?.payload as { isError: boolean }).isError).toBe(true);
   });
 
-  it('ignores non-text/non-tool interaction updates', async () => {
+  it('maps thinking-delta and thinking-completed to thinking events', async () => {
     const { sdk } = makeStubSdk({
       deltaUpdates: [
-        { type: 'thinking-delta', text: 'pondering' },
+        { type: 'thinking-delta', text: 'ponder' },
+        { type: 'thinking-delta', text: 'ing' },
+        { type: 'thinking-completed', thinkingDurationMs: 1200 },
+      ],
+      waitResult: 'ok',
+    });
+    provider.sdkOverride = sdk as never;
+    process.env.CURSOR_API_KEY = 'cursor_test_key';
+
+    const created = sessions.create({ prompt: 'think', provider: 'cursor' });
+    await provider.run(created.id, created.prompt, { emit: () => {} });
+
+    const all = events.list(created.id);
+    expect(all.some((e) => e.type === 'thinking_start')).toBe(true);
+    expect(all.filter((e) => e.type === 'thinking_delta').map((e) => (e.payload as { delta: string }).delta)).toEqual([
+      'ponder',
+      'ing',
+    ]);
+    const thinkingMessage = all.find((e) => e.type === 'thinking_message');
+    expect((thinkingMessage?.payload as { text: string }).text).toBe('pondering');
+    expect(all.filter((e) => e.type === 'assistant_delta')).toHaveLength(0);
+  });
+
+  it('ignores token-delta and step updates but surfaces thinking-delta', async () => {
+    const { sdk } = makeStubSdk({
+      deltaUpdates: [
         { type: 'token-delta', tokens: 5 },
         { type: 'step-started' },
       ],
@@ -572,5 +606,6 @@ describe('CursorAgentProvider', () => {
     const all = events.list(created.id);
     expect(all.filter((e) => e.type === 'assistant_delta')).toHaveLength(0);
     expect(all.filter((e) => e.type === 'tool_start')).toHaveLength(0);
+    expect(all.filter((e) => e.type === 'thinking_delta')).toHaveLength(0);
   });
 });
