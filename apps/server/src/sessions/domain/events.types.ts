@@ -1,5 +1,7 @@
 export const DEFAULT_PAYLOAD_MAX_BYTES = 4096;
 
+import type { UserInputQuestion } from './user-input.types';
+
 export type SessionEventType =
   | 'user_message'
   | 'assistant_delta'
@@ -9,10 +11,25 @@ export type SessionEventType =
   | 'thinking_start'
   | 'thinking_delta'
   | 'thinking_message'
+  | 'user_input_requested'
+  | 'user_input_resolved'
   | 'error'
   | 'status'
   | 'transcript_refreshed'
   | 'steer_message';
+
+export type UserInputResolvedBy = 'user' | 'timeout' | 'skip' | 'provider';
+
+export interface UserInputRequestedPayload {
+  requestId: string;
+  questions: UserInputQuestion[];
+  title?: string;
+}
+
+export interface UserInputResolvedPayload {
+  requestId: string;
+  resolvedBy: UserInputResolvedBy;
+}
 
 export interface ToolStartPayload {
   callId?: string;
@@ -94,5 +111,31 @@ export function isThinkingDeltaEvent(event: {
     typeof event.payload === 'object' &&
     event.payload !== null &&
     typeof (event.payload as ThinkingDeltaPayload).delta === 'string'
+  );
+}
+
+export function isUserInputRequestedEvent(event: {
+  type: string;
+  payload: unknown;
+}): event is { type: 'user_input_requested'; payload: UserInputRequestedPayload } {
+  return (
+    event.type === 'user_input_requested' &&
+    typeof event.payload === 'object' &&
+    event.payload !== null &&
+    typeof (event.payload as UserInputRequestedPayload).requestId === 'string' &&
+    Array.isArray((event.payload as UserInputRequestedPayload).questions)
+  );
+}
+
+export function isUserInputResolvedEvent(event: {
+  type: string;
+  payload: unknown;
+}): event is { type: 'user_input_resolved'; payload: UserInputResolvedPayload } {
+  return (
+    event.type === 'user_input_resolved' &&
+    typeof event.payload === 'object' &&
+    event.payload !== null &&
+    typeof (event.payload as UserInputResolvedPayload).requestId === 'string' &&
+    typeof (event.payload as UserInputResolvedPayload).resolvedBy === 'string'
   );
 }

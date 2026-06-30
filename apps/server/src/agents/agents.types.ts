@@ -4,6 +4,7 @@ import type {
   ProviderRequestInput,
   ProviderRequestResult,
 } from '../sessions/domain/sessions.types';
+import type { UserInputAnswer } from '../sessions/domain/user-input.types';
 
 export type EventEmitter = (event: { type: string; payload: unknown }) => void;
 
@@ -18,6 +19,11 @@ export interface AgentAttachment {
   kind: 'image';
   mimeType: string;
   data: string;
+}
+
+export interface InteractionResponse {
+  answers: UserInputAnswer[];
+  resolvedBy: 'user' | 'skip';
 }
 
 export interface AgentRunContext {
@@ -52,6 +58,15 @@ export interface AgentProvider {
   interrupt?(sessionId: string): Promise<void>;
   setModel?(sessionId: string, model: string, options?: ModelOptionsMap | null): Promise<void>;
   dispose(sessionId: string): void;
+  /** Whether this provider can respond to live interactive tool prompts (e.g. AskQuestion). */
+  supportsInteraction?(): boolean;
+  /** Submit answers for a pending interactive tool prompt. Live path only — historical imports skip this. */
+  submitInteraction?(
+    sessionId: string,
+    requestId: string,
+    response: InteractionResponse,
+    context: AgentRunContext,
+  ): Promise<void>;
   /** Clear any cached availability/model state so the next call re-resolves from current settings. */
   bustCache(): void;
 }

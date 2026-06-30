@@ -3,6 +3,8 @@ import {
   isThinkingDeltaEvent,
   isToolEndEvent,
   isToolStartEvent,
+  isUserInputRequestedEvent,
+  isUserInputResolvedEvent,
   truncatePayload,
 } from '../../../src/sessions/domain/events.types';
 
@@ -43,6 +45,26 @@ describe('events.types', () => {
     it('isThinkingDeltaEvent matches thinking_delta with delta', () => {
       expect(isThinkingDeltaEvent({ type: 'thinking_delta', payload: { delta: 'hmm' } })).toBe(true);
       expect(isThinkingDeltaEvent({ type: 'assistant_delta', payload: { delta: 'hi' } })).toBe(false);
+    });
+
+    it('isUserInputRequestedEvent matches user_input_requested with requestId + questions', () => {
+      expect(
+        isUserInputRequestedEvent({
+          type: 'user_input_requested',
+          payload: { requestId: 'r1', questions: [{ id: 'q1', prompt: 'p', options: [] }] },
+        }),
+      ).toBe(true);
+      expect(isUserInputRequestedEvent({ type: 'user_input_resolved', payload: {} })).toBe(false);
+    });
+
+    it('isUserInputResolvedEvent matches user_input_resolved with requestId + resolvedBy', () => {
+      expect(
+        isUserInputResolvedEvent({
+          type: 'user_input_resolved',
+          payload: { requestId: 'r1', resolvedBy: 'user' },
+        }),
+      ).toBe(true);
+      expect(isUserInputResolvedEvent({ type: 'user_input_requested', payload: {} })).toBe(false);
     });
   });
 });
