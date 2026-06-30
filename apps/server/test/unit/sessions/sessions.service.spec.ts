@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AgentsModule } from '../../../src/agents/agents.module';
 import { AgentRegistry } from '../../../src/agents/agents.registry';
+import type { AgentProvider } from '../../../src/agents/agents.types';
 import { CursorLocalModule } from '../../../src/cursor-local/cursor-local.module';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { GitModule } from '../../../src/git/git.module';
@@ -244,6 +245,114 @@ describe('SessionsService lifecycle (phase 3)', () => {
       await expect(
         service.create({ prompt: 'pi without auth', provider: 'pi' }),
       ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('provider capabilities', () => {
+    function stubProvider(overrides: Partial<AgentProvider> = {}): AgentProvider {
+      return {
+        id: 'stub',
+        name: 'Stub',
+        capabilities: { interrupt: false, modelSwitch: 'none', effortSwitch: 'none', images: false },
+        isAvailable: async () => true,
+        listModels: async () => [],
+        run: async () => undefined,
+        steer: async () => undefined,
+        dispose: () => undefined,
+        bustCache: () => undefined,
+        ...overrides,
+      };
+    }
+
+    it('interrupt rejects providers without interrupt support', async () => {
+      const id = seedSession('RUNNING');
+      const originalResolve = registry.resolveForSession.bind(registry);
+      registry.resolveForSession = (() => stubProvider({ id: 'plain' })) as AgentRegistry['resolveForSession'];
+
+      try {
+        await expect(service.interrupt(id)).rejects.toThrow(BadRequestException);
+      } finally {
+        registry.resolveForSession = originalResolve;
+      }
+    });
+
+    it('interrupt calls capable providers without disposing the session', async () => {
+      const id = seedSession('RUNNING');
+      const interrupt = jest.fn(async () => undefined);
+      const dispose = jest.fn();
+      const originalResolve = registry.resolveForSession.bind(registry);
+      registry.resolveForSession = (() =>
+        stubProvider({
+          id: 'capable',
+          capabilities: { interrupt: true, modelSwitch: 'none', effortSwitch: 'none', images: false },
+          interrupt,
+          dispose,
+        })) as AgentRegistry['resolveForSession'];
+
+      try {
+        await service.interrupt(id);
+        expect(interrupt).toHaveBeenCalledWith(id);
+        expect(dispose).not.toHaveBeenCalled();
+        expect(service.get(id)?.status).toBe('RUNNING');
+      } finally {
+        registry.resolveForSession = originalResolve;
+      }
+    });
+
+    it('persists model changes and live-switches when the provider supports it', async () => {
+      const id = seedSession('IDLE');
+      const setModel = jest.fn(async () => undefined);
+      const originalResolve = registry.resolveForSession.bind(registry);
+      registry.resolveForSession = (() =>
+        stubProvider({
+          id: 'capable',
+          capabilities: {
+            interrupt: false,
+            modelSwitch: 'in-session',
+            effortSwitch: 'in-session',
+            images: false,
+          },
+          setModel,
+        })) as AgentRegistry['resolveForSession'];
+
+      try {
+        const updated = await service.setSessionModel(id, 'provider:model-b', { thinkingLevel: 'high' });
+        expect(updated.model).toBe('provider:model-b');
+        expect(updated.modelOptions).toEqual({ thinkingLevel: 'high' });
+        expect(setModel).toHaveBeenCalledWith(id, 'provider:model-b', { thinkingLevel: 'high' });
+      } finally {
+        registry.resolveForSession = originalResolve;
+      }
+    });
+
+    it('does not persist an in-session model change when live-switching fails', async () => {
+      const id = seedSession('IDLE');
+      sessions.updateModel(id, 'provider:model-a', { thinkingLevel: 'low' });
+      const setModel = jest.fn(async () => {
+        throw new Error('live switch failed');
+      });
+      const originalResolve = registry.resolveForSession.bind(registry);
+      registry.resolveForSession = (() =>
+        stubProvider({
+          id: 'capable',
+          capabilities: {
+            interrupt: false,
+            modelSwitch: 'in-session',
+            effortSwitch: 'in-session',
+            images: false,
+          },
+          setModel,
+        })) as AgentRegistry['resolveForSession'];
+
+      try {
+        await expect(
+          service.setSessionModel(id, 'provider:model-b', { thinkingLevel: 'high' }),
+        ).rejects.toThrow('live switch failed');
+        expect(sessions.findById(id)?.model).toBe('provider:model-a');
+        expect(sessions.findById(id)?.modelOptions).toEqual({ thinkingLevel: 'low' });
+      } finally {
+        registry.resolveForSession = originalResolve;
+      }
     });
   });
 

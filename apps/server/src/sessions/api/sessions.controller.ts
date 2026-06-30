@@ -16,6 +16,7 @@ import type {
   HandoffSessionDto,
   RespondInteractionDto,
   RespondProviderRequestDto,
+  SetSessionModelDto,
   SteerSessionDto,
 } from '../domain/sessions.types';
 import { SessionsService } from '../sessions.service';
@@ -39,6 +40,7 @@ export class SessionsController {
       provider: body.provider,
       model: body.model,
       modelOptions: body.modelOptions,
+      attachments: body.attachments,
       workspace: body.workspace,
       projectPath: body.projectPath,
       baseBranch: body.baseBranch,
@@ -74,7 +76,17 @@ export class SessionsController {
 
   @Post(':id/steer')
   steer(@Param('id') id: string, @Body() body: SteerSessionDto) {
-    return this.sessions.steer(id, body?.message ?? '', body?.forceResume);
+    return this.sessions.steer(id, body?.message ?? '', body?.forceResume, body?.attachments);
+  }
+
+  @Post(':id/interrupt')
+  interrupt(@Param('id') id: string) {
+    return this.sessions.interrupt(id);
+  }
+
+  @Patch(':id/model')
+  setModel(@Param('id') id: string, @Body() body: SetSessionModelDto) {
+    return this.sessions.setSessionModel(id, body?.model ?? '', body?.options);
   }
 
   @Post(':id/interactions/:requestId/respond')

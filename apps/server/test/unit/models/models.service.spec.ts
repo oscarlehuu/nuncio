@@ -47,9 +47,15 @@ describe('ModelsService', () => {
     delete process.env.CURSOR_API_KEY;
   });
 
-  it('aggregates models from available providers only', async () => {
+  it('aggregates models from available providers only and attaches provider capabilities', async () => {
     const result = await models.list();
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe('cursor');
+    expect(result[0].capabilities).toEqual({
+      interrupt: false,
+      modelSwitch: 'none',
+      effortSwitch: 'none',
+      images: false,
+    });
   });
 });
