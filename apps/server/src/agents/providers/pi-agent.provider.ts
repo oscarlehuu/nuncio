@@ -134,11 +134,20 @@ export class PiAgentProvider extends BaseAgentProvider {
     const modelRegistry = pi.ModelRegistry.create(authStorage, join(agentDir, 'models.json'));
     const model = resolveModelId(context.model, (provider, id) => modelRegistry.find(provider, id));
     const thinkingLevel = resolvePiThinkingLevel(context.modelOptions, model);
-    const cwdOptions = buildPiCwdOptions(context.cwd, pi.SessionManager.inMemory);
+    const persistedFile = this.sessions.findById(sessionId)?.providerThreadId ?? null;
+    let resumeManager: ReturnType<typeof pi.SessionManager.open> | undefined;
+    if (persistedFile) {
+      try {
+        resumeManager = pi.SessionManager.open(persistedFile, undefined, context.cwd);
+      } catch {
+        resumeManager = undefined;
+      }
+    }
     const customTools = buildPiCustomTools(context.cwd, pi);
     const { session } = await pi.createAgentSession({
       agentDir,
-      ...cwdOptions,
+      ...(context.cwd ? { cwd: context.cwd } : {}),
+      ...(resumeManager ? { sessionManager: resumeManager } : {}),
       authStorage,
       modelRegistry,
       tools: ['read', 'bash', 'grep', 'find', 'ls'],
@@ -146,6 +155,10 @@ export class PiAgentProvider extends BaseAgentProvider {
       ...(model ? { model } : {}),
       ...(thinkingLevel ? { thinkingLevel } : {}),
     });
+
+    if (session.sessionFile && session.sessionFile !== persistedFile) {
+      this.sessions.updateProviderRuntimeState(sessionId, { providerThreadId: session.sessionFile });
+    }
 
     let assistantText = '';
     const unsubscribe = session.subscribe((event: { type: string; [key: string]: unknown }) => {
@@ -240,23 +253,6 @@ export function resolveModelId<T>(
   const id = trimmed.slice(idx + 1);
   if (!provider || !id) return undefined;
   return find(provider, id);
-}
-
-/**
- * Build the cwd-related `createAgentSession` options. When a worktree cwd is set,
- * pass `cwd` + an in-memory session manager bound to it; otherwise use the default
- * in-memory manager with no cwd (Pi falls back to `process.cwd()`).
- *
- * Extracted as a pure helper so the cwd wiring can be unit-tested with a stub
- * session-manager factory, independent of the real Pi SDK + auth (CI-safe).
- */
-export function buildPiCwdOptions<S>(
-  cwd: string | undefined,
-  inMemory: (cwd?: string) => S,
-): { cwd?: string; sessionManager: S } {
-  return cwd
-    ? { cwd, sessionManager: inMemory(cwd) }
-    : { sessionManager: inMemory() };
 }
 
 /**

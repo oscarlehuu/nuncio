@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PiAgentProvider } from '../../src/agents/providers/pi-agent.provider';
@@ -73,7 +73,36 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
     60_000,
   );
 
-  // Real LLM call — proves the Pi SDK actually honors `cwd` + `SessionManager.inMemory(cwd)`
+  // Real LLM calls — proves the Pi provider stores the disk-backed session file
+  // and resumes it after the in-memory handle is disposed.
+  it(
+    'persists and resumes a Pi session file across provider disposal',
+    async () => {
+      const firstPrompt = 'Reply with the single word: one';
+      const secondPrompt = 'Reply with the single word: two';
+      const created = sessions.create({ prompt: firstPrompt, provider: 'pi' });
+
+      await provider.run(created.id, firstPrompt, { emit: () => {} });
+      const firstThreadId = sessions.findById(created.id)?.providerThreadId;
+      expect(firstThreadId).toBeTruthy();
+      expect(existsSync(firstThreadId!)).toBe(true);
+      expect(sessions.findById(created.id)?.status).toBe('IDLE');
+
+      provider.dispose(created.id);
+      await provider.run(created.id, secondPrompt, { emit: () => {} });
+
+      const secondThreadId = sessions.findById(created.id)?.providerThreadId;
+      expect(secondThreadId).toBe(firstThreadId);
+      expect(sessions.findById(created.id)?.status).toBe('IDLE');
+
+      const sessionLog = readFileSync(firstThreadId!, 'utf8');
+      expect(sessionLog).toContain(firstPrompt);
+      expect(sessionLog).toContain(secondPrompt);
+    },
+    60_000,
+  );
+
+  // Real LLM call — proves the Pi SDK actually honors `cwd` + disk-backed SessionManager
   // and runs its tools inside the worktree. Drops a uniquely-named marker file in the
   // worktree, asks the agent to `ls` the current directory, and asserts the marker
   // filename appears in the streamed events. This is the only test that exercises the
