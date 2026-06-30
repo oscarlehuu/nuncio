@@ -1,6 +1,8 @@
 export const PROJECT_PREFERENCE_STORAGE_KEY = 'nuncio-project-preference';
 export const MAX_RECENT_PROJECTS = 8;
 
+const NUNCIO_SESSION_BRANCH_PATTERN = /^nuncio\/[0-9a-f]{8}-/i;
+
 export type RecentProject = {
   path: string;
   name?: string;
@@ -13,6 +15,10 @@ export type ProjectPreference = {
 };
 
 const EMPTY: ProjectPreference = { recentProjects: [] };
+
+export function isNuncioSessionBranch(branch: string | undefined): boolean {
+  return Boolean(branch && NUNCIO_SESSION_BRANCH_PATTERN.test(branch));
+}
 
 export function loadProjectPreference(storage: Storage = localStorage): ProjectPreference {
   try {
@@ -59,6 +65,8 @@ export function recordBranchSelection(
   branch: string,
   storage: Storage = localStorage,
 ): void {
+  if (isNuncioSessionBranch(branch)) return;
+
   const pref = loadProjectPreference(storage);
   saveProjectPreference(
     {
@@ -75,8 +83,9 @@ export function resolveWorkspacePreference(storage: Storage = localStorage): {
 } {
   const pref = loadProjectPreference(storage);
   if (!pref.lastProjectPath) return {};
+  const baseBranch = pref.lastBranchByProject?.[pref.lastProjectPath];
   return {
     projectPath: pref.lastProjectPath,
-    baseBranch: pref.lastBranchByProject?.[pref.lastProjectPath],
+    baseBranch: isNuncioSessionBranch(baseBranch) ? undefined : baseBranch,
   };
 }

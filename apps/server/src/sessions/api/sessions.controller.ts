@@ -11,7 +11,13 @@ import {
   Res,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import type { CreateSessionDto, HandoffSessionDto, RespondInteractionDto, SteerSessionDto } from '../domain/sessions.types';
+import type {
+  CreateSessionDto,
+  HandoffSessionDto,
+  RespondInteractionDto,
+  RespondProviderRequestDto,
+  SteerSessionDto,
+} from '../domain/sessions.types';
 import { SessionsService } from '../sessions.service';
 
 @Controller('sessions')
@@ -32,9 +38,11 @@ export class SessionsController {
       prompt: body.prompt.trim(),
       provider: body.provider,
       model: body.model,
+      modelOptions: body.modelOptions,
       workspace: body.workspace,
       projectPath: body.projectPath,
       baseBranch: body.baseBranch,
+      useWorktree: body.useWorktree,
     });
   }
 
@@ -76,6 +84,15 @@ export class SessionsController {
     @Body() body: RespondInteractionDto,
   ) {
     return this.sessions.respondInteraction(id, requestId, body);
+  }
+
+  @Post(':id/provider-requests/:requestId/respond')
+  respondProviderRequest(
+    @Param('id') id: string,
+    @Param('requestId') requestId: string,
+    @Body() body: RespondProviderRequestDto,
+  ) {
+    return this.sessions.respondProviderRequest(id, requestId, body?.decision);
   }
 
   @Post(':id/pause')

@@ -3,6 +3,7 @@ import { SessionsService } from '../../../src/sessions/sessions.service';
 import type { AgentRegistry } from '../../../src/agents/agents.registry';
 import type { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
 import type { EventsRepository } from '../../../src/sessions/persistence/events.repository';
+import type { ProviderRequestsRepository } from '../../../src/sessions/persistence/provider-requests.repository';
 import type { SessionDto } from '../../../src/sessions/domain/sessions.types';
 
 function makeSession(overrides: Partial<SessionDto> = {}): SessionDto {
@@ -20,6 +21,9 @@ function makeSession(overrides: Partial<SessionDto> = {}): SessionDto {
     baseBranch: null,
     worktreePath: null,
     branch: null,
+    providerThreadId: null,
+    providerActiveTurnId: null,
+    providerState: null,
     cursorBackend: 'sdk',
     cursorChatId: null,
     supportsInteraction: false,
@@ -40,9 +44,14 @@ describe('SessionsService interaction', () => {
     resolveForSession: jest.fn(),
   } as unknown as AgentRegistry;
 
+  const providerRequestRecords = {
+    resolveAllPending: jest.fn().mockReturnValue([]),
+  } as unknown as ProviderRequestsRepository;
+
   const service = new SessionsService(
     sessionsRepo,
     {} as EventsRepository,
+    providerRequestRecords,
     agents,
     {} as never,
     {} as never,

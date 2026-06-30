@@ -1,4 +1,5 @@
 import type { SessionEvent } from './api';
+import type { ProviderRequestDecision } from './api';
 import type { UserInputQuestion, UserInputResolvedBy } from './user-input.types';
 import { summarizeToolCall, type ToolSummary } from './tool-summary';
 import {
@@ -42,6 +43,15 @@ export type TranscriptBlock =
       title?: string;
       questions: UserInputQuestion[];
       resolvedBy?: UserInputResolvedBy;
+    }
+  | {
+      kind: 'provider_request';
+      requestId: string;
+      provider: string;
+      method: string;
+      params?: unknown;
+      status: 'pending' | 'resolved';
+      decision?: ProviderRequestDecision;
     }
   | { kind: 'error'; message: string };
 
@@ -159,6 +169,10 @@ export function buildTranscriptBlocks(events: SessionEvent[]): TranscriptBlock[]
   let thinkingId = '';
   const openTools = new Map<string, OpenTool>();
   const pendingInteractive = new Map<string, PendingInteractive>();
+  const providerRequests = new Map<
+    string,
+    Extract<TranscriptBlock, { kind: 'provider_request' }>
+  >();
   const legacyStack: string[] = [];
   let legacySeq = 0;
 
@@ -400,6 +414,37 @@ export function buildTranscriptBlocks(events: SessionEvent[]): TranscriptBlock[]
       continue;
     }
 
+    if (event.type === 'provider_request') {
+      flushAssistant();
+      flushThinking();
+      const request = providerRequestFromPayload(payload);
+      if (request) {
+        providerRequests.set(request.requestId, request);
+        out.push(request);
+      }
+      continue;
+    }
+
+    if (event.type === 'provider_request_resolved') {
+      const requestId = payloadString(payload, 'requestId');
+      const existing = requestId ? providerRequests.get(requestId) : undefined;
+      const decision = providerRequestDecision(payload);
+      if (existing) {
+        existing.status = 'resolved';
+        existing.decision = decision;
+      } else if (requestId) {
+        out.push({
+          kind: 'provider_request',
+          requestId,
+          provider: payloadString(payload, 'provider') ?? 'provider',
+          method: payloadString(payload, 'method') ?? 'request',
+          status: 'resolved',
+          decision,
+        });
+      }
+      continue;
+    }
+
     if (event.type === 'error') {
       flushAssistant();
       flushThinking();
@@ -425,4 +470,32 @@ export function workingIndicatorLabel(blocks: TranscriptBlock[], streaming: bool
   }
   if (blocks.some((b) => b.kind === 'thinking' && b.streaming)) return 'Nuncio is thinking…';
   return 'Nuncio is working…';
+}
+
+function providerRequestFromPayload(
+  payload: Record<string, unknown>,
+): Extract<TranscriptBlock, { kind: 'provider_request' }> | null {
+  const requestId = payloadString(payload, 'requestId');
+  if (!requestId) return null;
+  return {
+    kind: 'provider_request',
+    requestId,
+    provider: payloadString(payload, 'provider') ?? 'provider',
+    method: payloadString(payload, 'method') ?? 'request',
+    params: payload.params,
+    status: payloadString(payload, 'status') === 'resolved' ? 'resolved' : 'pending',
+    decision: providerRequestDecision(payload),
+  };
+}
+
+function providerRequestDecision(
+  payload: Record<string, unknown>,
+): ProviderRequestDecision | undefined {
+  const decision = payloadString(payload, 'decision');
+  return decision === 'approve' || decision === 'deny' ? decision : undefined;
+}
+
+function payloadString(payload: Record<string, unknown>, key: string): string | undefined {
+  const value = payload[key];
+  return typeof value === 'string' ? value : undefined;
 }

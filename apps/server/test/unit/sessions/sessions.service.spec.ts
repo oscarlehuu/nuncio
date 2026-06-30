@@ -248,15 +248,34 @@ describe('SessionsService lifecycle (phase 3)', () => {
   });
 
   describe('workspace worktree integration', () => {
-    it('creates a session with worktree when projectPath is provided', async () => {
+    it('uses the selected project directly when worktree is not requested', async () => {
       const session = await service.create({
-        prompt: 'Fix auth middleware',
+        prompt: 'Inspect auth middleware',
         provider: 'cursor',
         projectPath: repoPath,
         baseBranch: 'main',
       });
 
       expect(session.projectPath).toBe(repoPath);
+      expect(session.workspace).toBe(repoPath);
+      expect(session.baseBranch).toBe('main');
+      expect(session.worktreePath).toBeNull();
+      expect(session.branch).toBeNull();
+
+      await waitForIdle(service, session.id);
+    });
+
+    it('creates a session with worktree when explicitly requested', async () => {
+      const session = await service.create({
+        prompt: 'Fix auth middleware',
+        provider: 'cursor',
+        projectPath: repoPath,
+        baseBranch: 'main',
+        useWorktree: true,
+      });
+
+      expect(session.projectPath).toBe(repoPath);
+      expect(session.workspace).toBeNull();
       expect(session.baseBranch).toBe('main');
       expect(session.worktreePath).toBe(join(workspacesDir, session.id));
       expect(session.branch).toBe(`nuncio/${session.id}-fix-auth-middleware`);
@@ -272,6 +291,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
           provider: 'cursor',
           projectPath: '/definitely/not/a/git/repo',
           baseBranch: 'main',
+          useWorktree: true,
         }),
       ).rejects.toThrow(BadRequestException);
       expect(service.list(true).length).toBe(before);

@@ -24,6 +24,36 @@ describe('DatabaseService schema + migration', () => {
     const cols = db.db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>;
     expect(cols.map((column) => column.name)).toContain('provider');
     expect(cols.map((column) => column.name)).toContain('model_options');
+    expect(cols.map((column) => column.name)).toContain('provider_thread_id');
+    expect(cols.map((column) => column.name)).toContain('provider_active_turn_id');
+    expect(cols.map((column) => column.name)).toContain('provider_state_json');
+  });
+
+  it('fresh schema includes provider request persistence', () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-provider-requests-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
+
+    db = new DatabaseService();
+    const tables = db.db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .all() as Array<{ name: string }>;
+    const cols = db.db.prepare('PRAGMA table_info(provider_requests)').all() as Array<{
+      name: string;
+    }>;
+
+    expect(tables.map((table) => table.name)).toContain('provider_requests');
+    expect(cols.map((column) => column.name)).toEqual([
+      'request_id',
+      'session_id',
+      'provider',
+      'method',
+      'params_json',
+      'status',
+      'decision',
+      'reason',
+      'created_at',
+      'resolved_at',
+    ]);
   });
 
   it('defaults provider to pi when omitted on insert', () => {
@@ -44,7 +74,7 @@ describe('DatabaseService schema + migration', () => {
     expect(row.provider).toBe('pi');
   });
 
-  it('migrates a pre-existing sessions table by adding the provider column', () => {
+  it('migrates a pre-existing sessions table by adding provider runtime columns', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-migrate-'));
     process.env.NUNCIO_DATA_DIR = dataDir;
 
@@ -73,11 +103,25 @@ describe('DatabaseService schema + migration', () => {
 
     const cols = db.db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>;
     expect(cols.map((column) => column.name)).toContain('provider');
+    expect(cols.map((column) => column.name)).toContain('provider_thread_id');
+    expect(cols.map((column) => column.name)).toContain('provider_active_turn_id');
+    expect(cols.map((column) => column.name)).toContain('provider_state_json');
 
-    const row = db.db.prepare('SELECT provider FROM sessions WHERE id = ?').get('old') as {
+    const row = db.db
+      .prepare(
+        `SELECT provider, provider_thread_id, provider_active_turn_id, provider_state_json
+         FROM sessions WHERE id = ?`,
+      )
+      .get('old') as {
       provider: string;
+      provider_thread_id: string | null;
+      provider_active_turn_id: string | null;
+      provider_state_json: string | null;
     };
     expect(row.provider).toBe('pi');
+    expect(row.provider_thread_id).toBeNull();
+    expect(row.provider_active_turn_id).toBeNull();
+    expect(row.provider_state_json).toBeNull();
   });
 
   it('enables WAL journal mode', () => {

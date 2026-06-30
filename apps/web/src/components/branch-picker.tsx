@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, GitBranch } from 'lucide-react';
 import { fetchBranches, type Branch } from '../lib/projects';
+import { isNuncioSessionBranch } from '../lib/project-preference';
 import { Button } from '@/components/ui/button';
 import {
   Command,
@@ -44,9 +45,17 @@ export function BranchPicker({ projectPath, value, onChange }: BranchPickerProps
     void fetchBranches(projectPath)
       .then((items) => {
         if (cancelled) return;
-        setBranches(items);
-        if (!valueRef.current) {
-          const preferred = items.find((branch) => branch.isDefault) ?? items[0];
+        const baseBranches = items.filter((branch) => !isNuncioSessionBranch(branch.name));
+        setBranches(baseBranches);
+        if (
+          !valueRef.current ||
+          isNuncioSessionBranch(valueRef.current) ||
+          !baseBranches.some((branch) => branch.name === valueRef.current)
+        ) {
+          const preferred =
+            baseBranches.find((branch) => branch.isCurrent) ??
+            baseBranches.find((branch) => branch.isDefault) ??
+            baseBranches[0];
           if (preferred) onChange(preferred.name);
         }
       })
@@ -65,7 +74,13 @@ export function BranchPicker({ projectPath, value, onChange }: BranchPickerProps
     };
   }, [projectPath, onChange]);
 
-  const selected = branches.find((branch) => branch.name === value);
+  const safeValue = isNuncioSessionBranch(value) ? undefined : value;
+  const selected = branches.find((branch) => branch.name === safeValue);
+  const label = disabled
+    ? 'Base branch'
+    : loadError
+      ? 'Branch unavailable'
+      : selected?.name ?? safeValue ?? 'Base branch';
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -76,22 +91,22 @@ export function BranchPicker({ projectPath, value, onChange }: BranchPickerProps
           disabled={disabled}
         >
           <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
-          <span className={`truncate text-[13px] ${value ? 'font-medium' : 'text-muted-foreground'}`}>
-            {disabled ? 'Branch' : loadError ? 'Branch unavailable' : selected?.name ?? value ?? 'Branch'}
+          <span className={`truncate text-[13px] ${safeValue ? 'font-medium' : 'text-muted-foreground'}`}>
+            {label}
           </span>
           <ChevronDown data-icon="inline-end" />
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-[280px] p-0" align="start">
         <Command>
-          <CommandInput placeholder="Search branches…" />
+          <CommandInput placeholder="Search base branches…" />
           <CommandList>
             {loading ? (
               <div className="py-6 text-center text-sm text-muted-foreground">Loading branches…</div>
             ) : (
               <>
                 <CommandEmpty>No branch found.</CommandEmpty>
-                <CommandGroup heading="Branches">
+                <CommandGroup heading="Base branches">
                   {branches.map((branch) => (
                     <CommandItem
                       key={branch.name}
@@ -100,7 +115,7 @@ export function BranchPicker({ projectPath, value, onChange }: BranchPickerProps
                         onChange(branch.name);
                         setOpen(false);
                       }}
-                      data-checked={branch.name === value ? 'true' : undefined}
+                      data-checked={branch.name === safeValue ? 'true' : undefined}
                     >
                       <span className="truncate">{branch.name}</span>
                       {branch.isDefault && (

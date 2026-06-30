@@ -30,6 +30,15 @@ function changelogPlugin() {
   };
 }
 
+function readPort(value: string | undefined, fallback: number): number {
+  if (!value?.trim()) return fallback;
+  const port = Number(value);
+  return Number.isInteger(port) && port > 0 ? port : fallback;
+}
+
+const webPort = readPort(process.env.NUNCIO_WEB_PORT, 5173);
+const apiTarget = process.env.NUNCIO_API_ORIGIN ?? 'http://localhost:3000';
+
 export default defineConfig({
   appType: 'spa',
   plugins: [
@@ -101,10 +110,21 @@ export default defineConfig({
     globals: true,
   },
   server: {
-    port: 5173,
+    port: webPort,
+    strictPort: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:3000',
+        target: apiTarget,
+        changeOrigin: true,
+      },
+    },
+  },
+  preview: {
+    port: webPort,
+    strictPort: true,
+    proxy: {
+      '/api': {
+        target: apiTarget,
         changeOrigin: true,
       },
     },
