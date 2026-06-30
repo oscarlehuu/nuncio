@@ -3,7 +3,17 @@ import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { SettingsService } from '../settings/settings.service';
-import type { BranchDto, ProjectDto, WorktreeResult } from './git.types';
+import type {
+  BranchDto,
+  CommitResultDto,
+  GitDiffDto,
+  GitFileChange,
+  GitStatusDto,
+  ProjectDto,
+  PushResultDto,
+  RemoteInfoDto,
+  WorktreeResult,
+} from './git.types';
 
 function expandHome(path: string): string {
   return path.startsWith('~/') ? join(homedir(), path.slice(2)) : path;
@@ -34,6 +44,62 @@ async function git(args: string[], cwd?: string): Promise<string> {
 
 function isGitRepo(dir: string): boolean {
   return existsSync(join(dir, '.git'));
+}
+
+function parseStatusHeader(header: string): Pick<GitStatusDto, 'branch' | 'ahead' | 'behind'> {
+  const branchPart = header
+    .replace(/^##\s*/, '')
+    .split('...')[0]
+    ?.split(' [')[0]
+    ?.trim();
+  const aheadMatch = header.match(/ahead (\d+)/);
+  const behindMatch = header.match(/behind (\d+)/);
+
+  return {
+    branch: branchPart || 'HEAD',
+    ahead: aheadMatch ? Number(aheadMatch[1]) : 0,
+    behind: behindMatch ? Number(behindMatch[1]) : 0,
+  };
+}
+
+function parseStatusFile(line: string): GitFileChange | null {
+  if (line.length < 4) return null;
+  const index = line[0] ?? ' ';
+  const workTree = line[1] ?? ' ';
+  const path = line.slice(3).trim();
+  if (!path) return null;
+
+  return {
+    path,
+    index,
+    workTree,
+    staged: index !== ' ' && index !== '?',
+  };
+}
+
+function truncateDiff(diff: string): GitDiffDto {
+  const maxDiffChars = 200_000;
+  if (diff.length <= maxDiffChars) {
+    return { diff, truncated: false };
+  }
+  return { diff: diff.slice(0, maxDiffChars), truncated: true };
+}
+
+function parseRemoteUrl(url: string): RemoteInfoDto | null {
+  const sshMatch = url.match(/^git@([^:]+):([^/]+)\/(.+?)(?:\.git)?$/);
+  if (sshMatch) {
+    return { host: sshMatch[1], owner: sshMatch[2], repo: sshMatch[3] };
+  }
+
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:') return null;
+    const [owner, repoWithSuffix] = parsed.pathname.replace(/^\/+/, '').split('/');
+    if (!owner || !repoWithSuffix) return null;
+    return { host: parsed.host, owner, repo: repoWithSuffix.replace(/\.git$/, '') };
+  } catch {
+    return null;
+  }
 }
 
 @Injectable()
@@ -194,6 +260,110 @@ export class GitService {
       // fall through to 'main' as a last resort
     }
     return 'main';
+  }
+
+  async status(path: string): Promise<GitStatusDto> {
+    const repoRoot = await this.resolveRepoRoot(path);
+    const output = await git(['status', '--porcelain=v1', '-b'], repoRoot);
+    const lines = output.split('\n').filter(Boolean);
+    const header = lines.find((line) => line.startsWith('## ')) ?? '## HEAD';
+    const branchState = parseStatusHeader(header);
+    const files = lines
+      .filter((line) => !line.startsWith('## '))
+      .map(parseStatusFile)
+      .filter((file): file is GitFileChange => file !== null);
+
+    return {
+      ...branchState,
+      clean: files.length === 0,
+      files,
+    };
+  }
+
+  async diff(
+    path: string,
+    options: { staged?: boolean; base?: string } = {},
+  ): Promise<GitDiffDto> {
+    const repoRoot = await this.resolveRepoRoot(path);
+    const args = ['diff'];
+    if (options.staged === true) {
+      args.push('--staged');
+    } else if (options.base?.trim()) {
+      const base = options.base.trim();
+      // Guard against option injection (e.g. `--output=`): a `base` beginning with
+      // `-` would be parsed as a git flag, not a revision. Reject it and pin the
+      // value as a revision with a trailing `--`.
+      if (base.startsWith('-')) {
+        throw new BadRequestException('Invalid base ref');
+      }
+      args.push(base, '--');
+    }
+
+    const output = await git(args, repoRoot);
+    return truncateDiff(output);
+  }
+
+  async stageAll(path: string): Promise<void> {
+    const repoRoot = await this.resolveRepoRoot(path);
+    await git(['add', '-A'], repoRoot);
+  }
+
+  async commit(path: string, message: string): Promise<CommitResultDto> {
+    const repoRoot = await this.resolveRepoRoot(path);
+    const trimmed = message.trim();
+    if (!trimmed) {
+      throw new BadRequestException('Commit message is required');
+    }
+
+    try {
+      await git(['commit', '-m', trimmed], repoRoot);
+      const sha = await git(['rev-parse', 'HEAD'], repoRoot);
+      return { sha, committed: true };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new BadRequestException(`Failed to commit changes: ${errorMessage}`);
+    }
+  }
+
+  async remoteInfo(path: string): Promise<RemoteInfoDto> {
+    const repoRoot = await this.resolveRepoRoot(path);
+    try {
+      const remoteUrl = await git(['remote', 'get-url', 'origin'], repoRoot);
+      const info = parseRemoteUrl(remoteUrl);
+      if (!info) {
+        throw new BadRequestException(`Unsupported origin remote URL: ${remoteUrl}`);
+      }
+      return info;
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new BadRequestException(`Failed to read origin remote: ${errorMessage}`);
+    }
+  }
+
+  async push(
+    path: string,
+    branch: string,
+    options: { force?: boolean } = {},
+  ): Promise<PushResultDto> {
+    const repoRoot = await this.resolveRepoRoot(path);
+    const remoteBranch = branch.trim();
+    if (!remoteBranch) {
+      throw new BadRequestException('Branch is required');
+    }
+
+    const args = ['push', 'origin', remoteBranch];
+    if (options.force === true) {
+      args.push('--force-with-lease');
+    }
+
+    try {
+      await git(args, repoRoot);
+      return { pushed: true, remoteBranch };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new BadRequestException(`Failed to push branch: ${errorMessage}`);
+    }
   }
 
   async removeWorktree(repoRoot: string, worktreePath: string): Promise<void> {

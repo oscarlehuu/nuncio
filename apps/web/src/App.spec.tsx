@@ -520,6 +520,11 @@ describe('App settings', () => {
 
     await pinDesktopSidebar();
     await userEvent.click(screen.getByRole('button', { name: /settings/i }));
+    
+    // We need to click "Connect" on the Cursor row to expand the settings and reveal "Cursor API Key"
+    const connectButton = await screen.findByRole('button', { name: /Connect Cursor/i });
+    await userEvent.click(connectButton);
+
     await waitFor(() => expect(screen.getByText('Cursor API Key')).toBeInTheDocument());
 
     const callsBeforeSave = vi.mocked(fetchModels).mock.calls.length;

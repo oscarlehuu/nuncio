@@ -637,6 +637,8 @@ Minimal web GUI for coding agents (Codex, Claude, Cursor, OpenCode). Synara fork
 
 ## Learned Corrections
 
+- For GitLab API auth use `Authorization: Bearer <token>` — it works for both PATs and `glab`'s OAuth tokens, whereas `PRIVATE-TOKEN` fails for an OAuth token.
+- Normalize forge webhook vocabulary to the shared contract inside each provider (e.g. GitLab's `open` → `opened`) so the provider-neutral `WebhooksService` matches across GitHub/GitLab; add an e2e that proves auto-create actually fires.
 - Verify existing/scaffolded provider code actually works (run unit + real integration suites) before building on top of it — don't assume it's broken or complete.
 - Tests must never mutate the real `~/.pi/agent/settings.json`; `session.setModel()`/`setThinkingLevel()` persist to that global file, so snapshot + restore around any test that switches model/effort.
 - Pin model-brittle Pi integration tests (cwd/tool-use) to a known tool-capable model (`cliproxyapi:claude-opus-4-8`) instead of relying on the default model.
@@ -647,7 +649,11 @@ Minimal web GUI for coding agents (Codex, Claude, Cursor, OpenCode). Synara fork
 
 - User communicates in Vietnamese; match the user's language in chat replies only — code, docs, commits, PRs, and changesets stay English.
 - User orchestrates through agents — agents own coding, PRs, changesets, and merges when asked; do not expect the user to run interactive CLI (`bun run changeset`).
+- When asked, actually start/restart the dev server yourself and verify health — the user expects the agent to run it, not just hand over commands.
+- Prefer an orchestrator + subagent workflow (scout/planner/developer/ui-developer/tester/reviewer, or Foreman with plan/ship gates) when the user asks you to orchestrate.
 - User often wants you to act as orchestrator and delegate implementation to subagents (scout → developer → tester → reviewer, or the Foreman gated loop).
+- Surface integrations as visible UI, not backend-only — the user wants to see and test features in the app.
+- Settings UI follows Cursor's Source-Control layout: grouped sections (Providers / Source Control) where each provider is one row (brand SVG icon + name + status subtitle + right-aligned Manage/Connect pill) that expands to the key editors.
 - Prefer a thin generic contract every provider can inherit (capability-based: declarative flags + optional methods) over per-engine branching; validate it against one real provider (Pi) first.
 - Mirror Cursor IDE UX for model controls: reasoning effort as a slider, fast as a per-model lightning toggle (not a separate model row), badges inline with the model name.
 - Consult Synara first for multi-provider UI patterns before inventing alternatives.
@@ -660,6 +666,9 @@ Minimal web GUI for coding agents (Codex, Claude, Cursor, OpenCode). Synara fork
 - Nuncio per-session worktrees live under `~/.nuncio/workspaces/<sessionId>/` on target project repos — separate from Nuncio repo dev worktrees.
 - Cloud agents (Devin, etc.) clone from GitHub on their VM; the local Mac needs `git fetch`/`pull` after they push.
 - PWA icons and static assets in `apps/web/public/` must remain git-tracked — watch `.gitignore` for accidental excludes.
+- This `github-gitlab-integration` worktree uses non-conflicting ports API 3002 / web 5175 via a gitignored root `.env` (shared `NUNCIO_DATA_DIR=~/.nuncio/data`); start with `bun --env-file=./.env run dev` so Vite picks up the port/proxy. Main checkout owns 3000/5173, cline-sdk 3001/5174.
+- `gh` and `glab` CLIs are installed and authenticated on this machine (gh as `oscarlehuu`, glab as `oscar.lehuu`); forge providers fall back to CLI tokens (`gh auth token`, `glab auth status -t`) when no PAT is set.
+- Forge integration shipped: `apps/server/src/forges/` module (ForgeProvider/BaseForgeProvider/ForgeRegistry mirroring the agent triad), `GITHUB_*`/`GITLAB_*` settings keys, `GET /api/forges` status, session-scoped git + PR routes, and signature-verified `POST /api/webhooks/forge/:provider`.
 - Pi SDK is `@earendil-works/pi-coding-agent@^0.80.2`; v0.80.2 exposes `session.sessionFile` getter, `SessionManager.open/create/inMemory`, `abort()`, `setModel()`, `setThinkingLevel()`, and `PromptOptions.images`/`steer(text, images?)`. `getDefaultSessionDir` is NOT a public export — omit `sessionManager` in `createAgentSession` for new sessions so the SDK builds the dir under the configured `agentDir`.
 - Synara reference repo is cloned at sibling `Oscar/synara` (not in-repo).
 - Pi provider `cliproxyapi` (`anthropic-messages`, `forceAdaptiveThinking: true`) routes Claude (`claude-opus-4-8`, `claude-sonnet-4-6`) via CLIProxyAPI, configured in `~/.pi/agent/models.json`; user's default is `cliproxyapi/claude-opus-4-8`.

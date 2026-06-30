@@ -13,6 +13,50 @@ export type SessionStatus =
   | 'ARCHIVED'
   | 'ERROR';
 
+export interface GitFileChange {
+  path: string;
+  index: string;
+  workTree: string;
+  staged: boolean;
+}
+
+export interface GitStatusDto {
+  branch: string;
+  ahead: number;
+  behind: number;
+  clean: boolean;
+  files: GitFileChange[];
+}
+
+export interface GitDiffDto {
+  diff: string;
+  truncated: boolean;
+}
+
+export interface CommitResultDto {
+  sha: string;
+  committed: boolean;
+}
+
+export interface PushResultDto {
+  pushed: boolean;
+  remoteBranch: string;
+}
+
+export interface ForgeCheck {
+  name: string;
+  status: string;
+  conclusion: string | null;
+}
+
+export interface ForgePullRequest {
+  number: number;
+  url: string;
+  state: string;
+  title: string;
+  checks?: ForgeCheck[];
+}
+
 export interface Session {
   id: string;
   title: string;
@@ -29,6 +73,11 @@ export interface Session {
   branch: string | null;
   cursorBackend: 'sdk' | 'cli' | null;
   cursorChatId: string | null;
+  forgeProvider?: string | null;
+  pullRequestUrl?: string | null;
+  pullRequestNumber?: number | null;
+  pullRequestState?: string | null;
+  forgeStatus?: string;
   supportsInteraction: boolean;
   createdAt: number;
   updatedAt: number;
@@ -301,4 +350,74 @@ export function relativeTime(ts: number): string {
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
   return `${Math.floor(diff / 86_400_000)}d ago`;
+}
+
+export async function fetchGitStatus(id: string): Promise<GitStatusDto> {
+  const res = await fetch(`/api/sessions/${id}/git/status`);
+  if (!res.ok) throw new Error('Failed to fetch Git status');
+  return res.json();
+}
+
+export async function fetchGitDiff(
+  id: string,
+  opts?: { staged?: boolean; base?: string },
+): Promise<GitDiffDto> {
+  const params = new URLSearchParams();
+  if (opts?.staged) params.append('staged', '1');
+  if (opts?.base) params.append('base', opts.base);
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const res = await fetch(`/api/sessions/${id}/git/diff${query}`);
+  if (!res.ok) throw new Error('Failed to fetch Git diff');
+  return res.json();
+}
+
+export async function commitSession(
+  id: string,
+  message: string,
+  stageAll?: boolean,
+): Promise<CommitResultDto> {
+  const res = await fetch(`/api/sessions/${id}/git/commit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, stageAll }),
+  });
+  if (!res.ok) throw new Error('Failed to commit session');
+  return res.json();
+}
+
+export async function pushSession(
+  id: string,
+  opts?: { force?: boolean },
+): Promise<PushResultDto> {
+  const res = await fetch(`/api/sessions/${id}/git/push`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force: opts?.force }),
+  });
+  if (!res.ok) throw new Error('Failed to push session');
+  return res.json();
+}
+
+async function forgeErrorMessage(res: Response, fallback: string): Promise<string> {
+  const body = (await res.json().catch(() => null)) as { message?: string } | null;
+  return body?.message ?? fallback;
+}
+
+export async function openPullRequest(
+  id: string,
+  opts?: { title?: string; body?: string; draft?: boolean; base?: string },
+): Promise<ForgePullRequest> {
+  const res = await fetch(`/api/sessions/${id}/forge/pull-request`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts),
+  });
+  if (!res.ok) throw new Error(await forgeErrorMessage(res, 'Failed to open pull request'));
+  return res.json();
+}
+
+export async function fetchPullRequest(id: string): Promise<ForgePullRequest> {
+  const res = await fetch(`/api/sessions/${id}/forge/pull-request`);
+  if (!res.ok) throw new Error(await forgeErrorMessage(res, 'Failed to fetch pull request'));
+  return res.json();
 }

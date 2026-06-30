@@ -2,6 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createHmac } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AppModule } from '../../src/app.module';
@@ -56,7 +57,7 @@ describe('Nuncio API (e2e)', () => {
       }),
     ).compile();
 
-    app = moduleFixture.createNestApplication();
+    app = moduleFixture.createNestApplication({ rawBody: true });
     app.setGlobalPrefix('api');
     await app.init();
   });
@@ -254,6 +255,210 @@ describe('Nuncio API (e2e)', () => {
           baseBranch: 'main',
         });
       expect(res.status).toBe(400);
+    });
+  });
+
+  describe('session git ops (e2e)', () => {
+    it('status → commit → push for a worktree session', async () => {
+      const bareRemote = mkdtempSync(join(tmpdir(), 'nuncio-e2e-bare-'));
+      await runGitAsync(bareRemote, ['init', '--bare', '-b', 'main']);
+      try {
+        const created = await request(app.getHttpServer())
+          .post('/api/sessions')
+          .send({
+            prompt: 'Edit a file for git e2e',
+            provider: 'cursor',
+            projectPath: repoPath,
+            baseBranch: 'main',
+            useWorktree: true,
+          });
+        expect(created.status).toBe(201);
+        const id = created.body.id as string;
+        const worktreePath = created.body.worktreePath as string;
+        const branch = created.body.branch as string;
+        await waitForIdle(app, id);
+
+        // Wire a push target onto the shared repo so the worktree can push origin.
+        await runGitAsync(worktreePath, ['remote', 'add', 'origin', bareRemote]);
+
+        // Make a change in the worktree.
+        writeFileSync(join(worktreePath, 'feature.txt'), 'hello from e2e\n');
+
+        const dirty = await request(app.getHttpServer()).get(`/api/sessions/${id}/git/status`);
+        expect(dirty.status).toBe(200);
+        expect(dirty.body.clean).toBe(false);
+        expect(dirty.body.files.some((f: { path: string }) => f.path.includes('feature.txt'))).toBe(true);
+
+        const diff = await request(app.getHttpServer()).get(`/api/sessions/${id}/git/diff`);
+        expect(diff.status).toBe(200);
+        expect(typeof diff.body.diff).toBe('string');
+
+        const commit = await request(app.getHttpServer())
+          .post(`/api/sessions/${id}/git/commit`)
+          .send({ message: 'e2e: add feature.txt' });
+        expect(commit.status).toBe(201);
+        expect(commit.body.committed).toBe(true);
+        expect(commit.body.sha).toMatch(/^[0-9a-f]{40}$/);
+
+        const clean = await request(app.getHttpServer()).get(`/api/sessions/${id}/git/status`);
+        expect(clean.body.clean).toBe(true);
+
+        const push = await request(app.getHttpServer())
+          .post(`/api/sessions/${id}/git/push`)
+          .send({});
+        expect(push.status).toBe(201);
+        expect(push.body.pushed).toBe(true);
+        expect(push.body.remoteBranch).toBe(branch);
+
+        // The bare remote actually received the pushed branch.
+        const verify = Bun.spawn(['git', '-C', bareRemote, 'rev-parse', '--verify', branch], {
+          stdout: 'pipe',
+          stderr: 'pipe',
+        });
+        expect(await verify.exited).toBe(0);
+      } finally {
+        rmSync(bareRemote, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('forge webhooks (e2e)', () => {
+    const SECRET = 'e2e-webhook-secret';
+    let webhookRepo: string;
+    let gitlabRepo: string;
+
+    beforeAll(async () => {
+      webhookRepo = join(rootsDir, 'webhook-repo');
+      await initRepo(webhookRepo);
+      await runGitAsync(webhookRepo, [
+        'remote',
+        'add',
+        'origin',
+        'https://github.com/octo/webhook-repo.git',
+      ]);
+      process.env.GITHUB_WEBHOOK_SECRET = SECRET;
+
+      gitlabRepo = join(rootsDir, 'gl-repo');
+      await initRepo(gitlabRepo);
+      await runGitAsync(gitlabRepo, [
+        'remote',
+        'add',
+        'origin',
+        'https://gitlab.com/octo/gl-repo.git',
+      ]);
+      process.env.GITLAB_WEBHOOK_SECRET = SECRET;
+    });
+
+    afterAll(() => {
+      delete process.env.GITHUB_WEBHOOK_SECRET;
+      delete process.env.GITLAB_WEBHOOK_SECRET;
+    });
+
+    function signedPayload(deliveryId: string) {
+      const payload = {
+        action: 'opened',
+        issue: {
+          number: 5,
+          title: 'Webhook task',
+          body: 'do the thing',
+          labels: [{ name: 'nuncio' }],
+        },
+        repository: {
+          name: 'webhook-repo',
+          full_name: 'octo/webhook-repo',
+          default_branch: 'main',
+          owner: { login: 'octo' },
+        },
+      };
+      const raw = JSON.stringify(payload);
+      const sig = `sha256=${createHmac('sha256', SECRET).update(raw).digest('hex')}`;
+      return { raw, sig, deliveryId };
+    }
+
+    it('rejects a bad signature with 401 and creates no session', async () => {
+      const { raw } = signedPayload('e2e-bad-1');
+      const res = await request(app.getHttpServer())
+        .post('/api/webhooks/forge/github')
+        .set('Content-Type', 'application/json')
+        .set('x-github-event', 'issues')
+        .set('x-github-delivery', 'e2e-bad-1')
+        .set('x-hub-signature-256', 'sha256=deadbeef')
+        .send(raw);
+      expect(res.status).toBe(401);
+    });
+
+    it('accepts a signed issue.opened, creates a session, and dedupes replays', async () => {
+      const before = (await request(app.getHttpServer()).get('/api/sessions')).body.length;
+      const { raw, sig } = signedPayload('e2e-deliver-1');
+
+      const res = await request(app.getHttpServer())
+        .post('/api/webhooks/forge/github')
+        .set('Content-Type', 'application/json')
+        .set('x-github-event', 'issues')
+        .set('x-github-delivery', 'e2e-deliver-1')
+        .set('x-hub-signature-256', sig)
+        .send(raw);
+      expect(res.status).toBe(202);
+      expect(res.body.created).toBe(true);
+      expect(res.body.sessionId).toBeDefined();
+
+      const replay = await request(app.getHttpServer())
+        .post('/api/webhooks/forge/github')
+        .set('Content-Type', 'application/json')
+        .set('x-github-event', 'issues')
+        .set('x-github-delivery', 'e2e-deliver-1')
+        .set('x-hub-signature-256', sig)
+        .send(raw);
+      expect(replay.status).toBe(202);
+      expect(replay.body.created).toBe(false);
+      expect(replay.body.reason).toBe('duplicate');
+
+      const after = (await request(app.getHttpServer()).get('/api/sessions')).body.length;
+      expect(after).toBe(before + 1);
+
+      await waitForIdle(app, res.body.sessionId);
+    });
+
+    it('accepts a GitLab Issue Hook (token-verified) and creates a session', async () => {
+      const before = (await request(app.getHttpServer()).get('/api/sessions')).body.length;
+      const payload = {
+        object_attributes: {
+          iid: 8,
+          title: 'GitLab webhook task',
+          description: 'do the gitlab thing',
+          action: 'open',
+          target_branch: 'main',
+        },
+        project: { path_with_namespace: 'octo/gl-repo', default_branch: 'main' },
+        labels: [{ title: 'nuncio' }],
+      };
+      const raw = JSON.stringify(payload);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/webhooks/forge/gitlab')
+        .set('Content-Type', 'application/json')
+        .set('x-gitlab-event', 'Issue Hook')
+        .set('x-gitlab-event-uuid', 'gl-deliver-1')
+        .set('x-gitlab-token', SECRET)
+        .send(raw);
+      expect(res.status).toBe(202);
+      expect(res.body.created).toBe(true);
+      expect(res.body.sessionId).toBeDefined();
+
+      // A wrong token is rejected.
+      const bad = await request(app.getHttpServer())
+        .post('/api/webhooks/forge/gitlab')
+        .set('Content-Type', 'application/json')
+        .set('x-gitlab-event', 'Issue Hook')
+        .set('x-gitlab-event-uuid', 'gl-deliver-2')
+        .set('x-gitlab-token', 'wrong-token')
+        .send(raw);
+      expect(bad.status).toBe(401);
+
+      const after = (await request(app.getHttpServer()).get('/api/sessions')).body.length;
+      expect(after).toBe(before + 1);
+
+      await waitForIdle(app, res.body.sessionId);
     });
   });
 
