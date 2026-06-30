@@ -168,7 +168,16 @@ Session FSM: `CREATED → RUNNING → IDLE | ERROR | PAUSED`; `IDLE/PAUSED → R
 - **`POST /api/sessions/:id/interrupt`** → `SessionsService.interrupt(id)`. Resolves the provider for the stored session row and throws `BadRequestException` unless `provider.capabilities.interrupt && provider.interrupt`; otherwise calls `provider.interrupt(id)`.
 - **`PATCH /api/sessions/:id/model`** (body `{ model, options? }`) → `SessionsService.setSessionModel(id, model, options)`. **Order invariant:** when `capabilities.modelSwitch === 'in-session' && provider.setModel`, the live switch (`provider.setModel`) runs **BEFORE** persisting the row via `sessions.updateModel(...)`. NEVER persist the model row before the live switch — a failed live switch must not leave the DB pointing at a model the running session never adopted.
 - **Attachments** are threaded through `POST /api/sessions` (create) and `POST /api/sessions/:id/steer` as `attachments?: AgentAttachment[]`, passed into `run`/`steer` via `AgentRunContext.attachments`.
-- **Body limit:** `main.ts` sets the express `json`/`urlencoded` body limit to `25mb` so base64 image attachments fit.
+- **Body limit:** `main.ts` sets the Nest `json`/`urlencoded` body limit to `25mb` via `app.useBodyParser(...)` so base64 image attachments fit. Native Nest body-parser config is used (not `import 'express'`) because `express` is only a transitive dep and is not resolvable as a bare specifier under Bun's isolated module store.
+
+## App bootstrap (`main.ts`)
+
+`NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true })` (`main.ts:42`). The bootstrap composes **two independent concerns** that must coexist:
+
+- **`rawBody: true`** preserves the exact request bytes on `req.rawBody` so inbound forge webhooks can verify their signature over the unmodified payload (`webhooks.controller.ts` reads `req.rawBody`). NEVER remove `rawBody: true` — webhook HMAC/`x-gitlab-token` verification depends on byte-exact bodies, and a re-serialized JSON body will fail verification.
+- **Body-parser limit** (`useBodyParser('json' | 'urlencoded', { limit: '25mb' })`) for base64 image attachments.
+
+Order is `create({ rawBody })` → `setGlobalPrefix('api')` → `enableCors({ origin: true })` → `useBodyParser(...)`. Both the global `/api` prefix and CORS stay as-is; webhook routes live under `/api/webhooks/forge/:provider`.
 
 ## Workspace selection
 
@@ -248,6 +257,66 @@ Each provider row is a single line (monochrome brand glyph + name + status subti
 - **AI providers** derive connected from the primary credential setting's `hasValue` (cursor→`CURSOR_API_KEY`, pi→`PI_AGENT_DIR`, codex→`NUNCIO_CODEX_BIN`); button is always "Manage".
 - Status is fetched internally on mount (`fetchForgeStatus()` in `apps/web/src/lib/forge-status-api.ts`, `GET /api/forges`) and **defaults to `[]` on error** so the view renders without a server (important for tests). Initial render does not block on the fetch.
 - Brand glyphs come from `ProviderIcon` (`apps/web/src/components/provider-icon.tsx`); `GitHubIcon`/`GitLabIcon` use simple-icons paths with `fill="currentColor"` so they adapt to light/dark, registered in `SVG_BY_PROVIDER`.
+
+## Local git ops + Review-changes UI
+
+`GitService` (`apps/server/src/git/git.service.ts`) extends the local git layer with working-tree operations, all routed through the private `git()` `Bun.spawn` helper and `resolveRepoRoot(path)` (`git.service.ts:160`):
+
+- `status(path)` (`git.service.ts:265`) → `GitStatusDto { branch; ahead; behind; clean; files: GitFileChange[] }`.
+- `diff(path, { staged?, base? })` (`git.service.ts:283`) → `GitDiffDto { diff; truncated }`.
+- `stageAll(path)` (`git.service.ts:306`) → `git add -A`.
+- `commit(path, message)` (`git.service.ts:311`) → `CommitResultDto { sha; committed }`.
+- `remoteInfo(path)` (`git.service.ts:328`) → `RemoteInfoDto { host; owner; repo }`, parsing `git remote get-url origin` (ssh + https forms). Used to auto-pick the forge provider by host.
+- `push(path, branch, { force? })` (`git.service.ts:344`) → `PushResultDto`; force uses `--force-with-lease`.
+
+Session-scoped HTTP routes live in `GitSessionController` (`apps/server/src/sessions/api/git-session.controller.ts:23`, `@Controller('sessions/:id/git')`), registered in `SessionsModule` to avoid a Git→Sessions circular import (Sessions already imports Git):
+
+| Method | Path | Returns |
+|--------|------|---------|
+| GET | `/api/sessions/:id/git/status` | `GitStatusDto` |
+| GET | `/api/sessions/:id/git/diff?staged=1&base=<ref>` | `GitDiffDto` |
+| POST | `/api/sessions/:id/git/commit` (`{ message, stageAll? }`) | `CommitResultDto` |
+| POST | `/api/sessions/:id/git/push` (`{ force? }`) | `PushResultDto` |
+
+The web client calls these via `fetchGitStatus`/`fetchGitDiff`/`commitSession`/`pushSession` (`apps/web/src/lib/api.ts`). `<ReviewChanges sessionId=… />` (`apps/web/src/components/review-changes.tsx`) renders the file list + diff viewer with Commit/Push, mounted in `session-detail.tsx` alongside `<PrPanel session=… />`.
+
+## Forge session metadata + outbound PR/MR flow
+
+Session rows carry forge provenance (snake_case `SessionRow`, camelCase `SessionDto` in `apps/server/src/sessions/domain/sessions.types.ts`): `forge_provider`/`forgeProvider`, `pull_request_url`/`pullRequestUrl`, `pull_request_number`/`pullRequestNumber`, `pull_request_state`/`pullRequestState`, `forge_status`/`forgeStatus` (`none|opening|open|merged|closed|error`).
+
+**DTO invariants**
+
+- The forge fields on `SessionDto` are **optional** (`forgeProvider?`, `pullRequestUrl?`, `pullRequestNumber?`, `pullRequestState?`, `forgeStatus?`).
+- `toDto` (`sessions.repository.ts`) coerces with `?? null` for the nullable forge fields and `?? 'none'` for `forge_status`/`forgeStatus`; `pull_request_number` is normalized through `parsePullRequestNumber` (string|number → `number | null`).
+- `updateForgeState(id, { … })` (`sessions.repository.ts`) mirrors `updateProviderRuntimeState`: `undefined` keeps the current value, an explicit value (including `null`) overwrites. NEVER widen the INSERT column list / VALUES / positional args inconsistently — `insertRow`, `create`, and `createHandoff` must all carry the five forge columns (`forge_provider, pull_request_url, pull_request_number, pull_request_state, forge_status`) defaulting to `null`/`'none'`.
+
+`ForgesService` (`apps/server/src/forges/forges.service.ts`) is the session-facing facade:
+
+- `openPullRequestForSession(id, opts)` (`forges.service.ts:28`): requires `session.branch` and a working dir (`worktreePath ?? projectPath`), resolves the provider via `remoteInfo(repoPath).host`, calls `provider.createPullRequest(...)`, then persists via `updateForgeState({ forgeProvider, pullRequestUrl, pullRequestNumber, pullRequestState, forgeStatus: 'open' })`.
+- `getPullRequestForSession(id)` (`forges.service.ts:64`): refreshes state + checks, persists `{ pullRequestState, forgeStatus: pr.state }`.
+- `addCommentForSession(id, body)` (`forges.service.ts:91`).
+
+Routes (`apps/server/src/forges/api/forges.controller.ts:11`, `@Controller('sessions/:id/forge')`):
+
+| Method | Path | Returns |
+|--------|------|---------|
+| POST | `/api/sessions/:id/forge/pull-request` (`{ title?, body?, draft?, base? }`) | `ForgePullRequest` |
+| GET | `/api/sessions/:id/forge/pull-request` | `ForgePullRequest` (refreshed status + checks) |
+| POST | `/api/sessions/:id/forge/pull-request/comment` (`{ body }`) | `{ ok }` |
+
+Web helpers `openPullRequest(id)`/`fetchPullRequest(id)` (`apps/web/src/lib/api.ts`) back `<PrPanel>`. The `Session` type in `api.ts` carries the forge fields.
+
+## Inbound webhooks (issue/PR → session)
+
+`WebhooksController` (`apps/server/src/forges/webhooks/webhooks.controller.ts:21`, `@Controller('webhooks/forge')`) exposes a single `@Post(':provider')` returning `202`. It reads `req.rawBody` (enabled by `rawBody: true` in `main.ts`), verifies `registry.get(provider).verifyWebhookSignature(headers, rawBody)` (`401` on failure), parses via `provider.parseWebhookEvent(headers, payload)` (ignored events return `{ ok, ignored }`), then delegates to `WebhooksService.handleEvent`.
+
+`WebhooksService.handleEvent` (`webhooks.service.ts:30`):
+
+- **Refuses header-less deliveries:** no `event.deliveryId` → `{ created: false, reason: 'missing-delivery-id' }` (cannot dedupe a replay safely).
+- **Idempotency:** `recordDelivery(provider, deliveryId)` is an `INSERT OR IGNORE` into `forge_webhook_deliveries(provider, delivery_id, created_at)`; a replay returns `false` and no session is created.
+- On a fresh known event, calls `SessionsService.create({ prompt, projectPath, baseBranch, useWorktree: true })`.
+
+**NEVER** verify a webhook against a re-serialized JSON body — always the raw bytes; GitHub uses HMAC-SHA256 over `x-hub-signature-256`, GitLab compares the shared `x-gitlab-token` (handled inside each provider so the `ForgeProvider` interface stays uniform).
 
 ## Tests
 
