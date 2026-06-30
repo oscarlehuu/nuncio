@@ -22,6 +22,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     branch: null,
     cursorBackend: null,
     cursorChatId: null,
+    supportsInteraction: false,
     createdAt: Date.now() - 3_600_000,
     updatedAt: Date.now() - 120_000,
     ...overrides,

@@ -2,6 +2,9 @@ import type { ModelProvider } from './model-providers';
 import type { ModelOptionsMap } from './model-options';
 import { FALLBACK_PROVIDERS, normalizeModelCatalog } from './model-providers';
 
+export type { UserInputAnswer, InteractionResponse, PendingUserInput, UserInputQuestion, UserInputOption, UserInputResolvedBy } from './user-input.types';
+import type { InteractionResponse } from './user-input.types';
+
 export type SessionStatus =
   | 'CREATED'
   | 'RUNNING'
@@ -26,6 +29,7 @@ export interface Session {
   branch: string | null;
   cursorBackend: 'sdk' | 'cli' | null;
   cursorChatId: string | null;
+  supportsInteraction: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -47,6 +51,16 @@ export class SteerApiError extends Error {
   }
 }
 
+export class InteractionApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'InteractionApiError';
+    this.status = status;
+  }
+}
+
 export function steerErrorMessage(status: number, fallback: string): string {
   switch (status) {
     case 409:
@@ -56,6 +70,13 @@ export function steerErrorMessage(status: number, fallback: string): string {
     default:
       return fallback;
   }
+}
+
+export function interactionErrorMessage(status: number, fallback: string): string {
+  if (status === 501) {
+    return 'Answering from phone is not yet supported for this provider.';
+  }
+  return fallback;
 }
 
 export interface ActiveRunStatus {
@@ -149,6 +170,33 @@ export async function steerSession(
     throw new SteerApiError(
       res.status,
       steerErrorMessage(res.status, detail || 'Failed to steer session'),
+    );
+  }
+  return res.json();
+}
+
+export async function respondInteraction(
+  sessionId: string,
+  requestId: string,
+  response: InteractionResponse,
+): Promise<{ ok: true }> {
+  const res = await fetch(`/api/sessions/${sessionId}/interactions/${requestId}/respond`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(response),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let detail = text;
+    try {
+      const parsed = JSON.parse(text) as { message?: string; error?: string };
+      detail = parsed.message ?? parsed.error ?? detail;
+    } catch {
+      // keep raw text
+    }
+    throw new InteractionApiError(
+      res.status,
+      interactionErrorMessage(res.status, detail || 'Failed to submit response'),
     );
   }
   return res.json();

@@ -75,4 +75,14 @@ export class AgentRegistry {
   bustCaches(): void {
     for (const provider of this.providers) provider.bustCache();
   }
+
+  supportsInteraction(providerId: string): boolean {
+    const provider = this.get(providerId);
+    return provider.supportsInteraction?.() ?? false;
+  }
+
+  supportsInteractionForSession(session: SessionDto): boolean {
+    const provider = this.resolveForSession(session);
+    return provider.supportsInteraction?.() ?? false;
+  }
 }

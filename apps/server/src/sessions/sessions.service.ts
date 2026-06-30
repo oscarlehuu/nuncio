@@ -1,5 +1,7 @@
 import {
   BadRequestException,
+  HttpException,
+  HttpStatus,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -7,6 +9,7 @@ import { EventEmitter } from 'events';
 import { homedir } from 'node:os';
 import { v4 as uuidv4 } from 'uuid';
 import { AgentRegistry } from '../agents/agents.registry';
+import type { AgentRunContext } from '../agents/agents.types';
 import { CursorLocalSessionsService } from '../cursor-local/cursor-local-sessions.service';
 import { turnsToSessionEvents } from '../cursor-local/cursor-transcript-hydrate';
 import { readCursorChatMetadata } from '../cursor-local/cursor-chat-store';
@@ -15,6 +18,7 @@ import { canTransition } from './domain/sessions.fsm';
 import type {
   CreateSessionDto,
   HandoffSessionDto,
+  RespondInteractionDto,
   SessionDto,
   SessionEvent,
   SessionStatus,
@@ -39,14 +43,15 @@ export class SessionsService {
   ) {}
 
   list(includeArchived = false): SessionDto[] {
-    return this.sessions.list(includeArchived);
+    return this.sessions.list(includeArchived).map((session) => this.enrichSession(session));
   }
 
   get(id: string): SessionDto | null {
     const session = this.sessions.findById(id);
     if (!session) return null;
     this.hydrateIfNeeded(session);
-    return this.sessions.findById(id);
+    const refreshed = this.sessions.findById(id);
+    return refreshed ? this.enrichSession(refreshed) : null;
   }
 
   getEvents(id: string, since = 0): SessionEvent[] {
@@ -107,7 +112,7 @@ export class SessionsService {
       cursorBackend: 'sdk',
     });
     void this.startRun(session);
-    return session;
+    return this.enrichSession(session);
   }
 
   async handoff(input: HandoffSessionDto): Promise<SessionDto> {
@@ -117,7 +122,7 @@ export class SessionsService {
     if (!workspace) throw new BadRequestException('workspace is required');
 
     const existing = this.sessions.findByCursorChatId(chatId, 'cli');
-    if (existing) return existing;
+    if (existing) return this.enrichSession(existing);
 
     const local = this.cursorLocal.find(chatId, workspace);
     if (!local) {
@@ -137,7 +142,8 @@ export class SessionsService {
       branch: cursorMeta.branch ?? null,
     });
     this.hydrateIfNeeded(session);
-    return this.sessions.findById(session.id)!;
+    const refreshed = this.sessions.findById(session.id)!;
+    return this.enrichSession(refreshed);
   }
 
   async steer(id: string, message: string, forceResume?: boolean): Promise<SessionDto> {
@@ -155,33 +161,41 @@ export class SessionsService {
     this.refreshTranscriptIfNeeded(current);
 
     const provider = await this.agents.resolveAvailableForSession(current);
-    const workspace = current.worktreePath ?? current.workspace ?? undefined;
-    const transcriptMtimeMs =
-      current.cursorBackend === 'cli' && current.cursorChatId && workspace
-        ? this.cursorLocal.transcriptMtime(current.cursorChatId, workspace)
-        : null;
-    const chatStoreMtimeMs =
-      current.cursorBackend === 'cli' && current.cursorChatId
-        ? this.cursorLocal.chatStoreMtime(current.cursorChatId)
-        : null;
-    const transcriptTurnEnded =
-      current.cursorBackend === 'cli' && current.cursorChatId && workspace
-        ? this.cursorLocal.isTranscriptTurnEnded(current.cursorChatId, workspace)
-        : false;
 
     await provider.steer(id, trimmed, {
-      emit: (event) => this.onAgentEvent(id, event),
-      model: current.model,
-      modelOptions: current.modelOptions,
-      workspace,
-      cwd: current.worktreePath ?? undefined,
-      cursorChatId: current.cursorChatId,
-      transcriptMtimeMs,
-      chatStoreMtimeMs,
-      transcriptTurnEnded,
+      ...this.buildAgentRunContext(current),
       forceResume: forceResume === true,
     });
     return this.requireSession(id);
+  }
+
+  async respondInteraction(
+    id: string,
+    requestId: string,
+    body: RespondInteractionDto,
+  ): Promise<{ ok: true }> {
+    const session = this.requireSession(id);
+    const trimmedRequestId = requestId?.trim();
+    if (!trimmedRequestId) {
+      throw new BadRequestException('requestId is required');
+    }
+    if (!this.agents.supportsInteractionForSession(session)) {
+      throw new HttpException(
+        { error: 'Provider does not support live interaction respond' },
+        HttpStatus.NOT_IMPLEMENTED,
+      );
+    }
+
+    const provider = this.agents.resolveForSession(session);
+    if (!provider.submitInteraction) {
+      throw new HttpException(
+        { error: 'Provider does not support live interaction respond' },
+        HttpStatus.NOT_IMPLEMENTED,
+      );
+    }
+
+    await provider.submitInteraction(id, trimmedRequestId, body, this.buildAgentRunContext(session));
+    return { ok: true };
   }
 
   pause(id: string): SessionDto {
@@ -223,7 +237,7 @@ export class SessionsService {
     this.requireSession(id);
     const updated = this.sessions.updateTitle(id, trimmed);
     if (!updated) throw new NotFoundException(`Session ${id} not found`);
-    return updated;
+    return this.enrichSession(updated);
   }
 
   delete(id: string): void {
@@ -299,7 +313,42 @@ export class SessionsService {
   private requireSession(id: string): SessionDto {
     const session = this.sessions.findById(id);
     if (!session) throw new NotFoundException('Session not found');
-    return session;
+    return this.enrichSession(session);
+  }
+
+  private enrichSession(session: SessionDto): SessionDto {
+    return {
+      ...session,
+      supportsInteraction: this.agents.supportsInteractionForSession(session),
+    };
+  }
+
+  private buildAgentRunContext(session: SessionDto): AgentRunContext {
+    const workspace = session.worktreePath ?? session.workspace ?? undefined;
+    const transcriptMtimeMs =
+      session.cursorBackend === 'cli' && session.cursorChatId && workspace
+        ? this.cursorLocal.transcriptMtime(session.cursorChatId, workspace)
+        : null;
+    const chatStoreMtimeMs =
+      session.cursorBackend === 'cli' && session.cursorChatId
+        ? this.cursorLocal.chatStoreMtime(session.cursorChatId)
+        : null;
+    const transcriptTurnEnded =
+      session.cursorBackend === 'cli' && session.cursorChatId && workspace
+        ? this.cursorLocal.isTranscriptTurnEnded(session.cursorChatId, workspace)
+        : false;
+
+    return {
+      emit: (event) => this.onAgentEvent(session.id, event),
+      model: session.model,
+      modelOptions: session.modelOptions,
+      workspace,
+      cwd: session.worktreePath ?? undefined,
+      cursorChatId: session.cursorChatId,
+      transcriptMtimeMs,
+      chatStoreMtimeMs,
+      transcriptTurnEnded,
+    };
   }
 
   private transition(id: string, status: SessionStatus): void {

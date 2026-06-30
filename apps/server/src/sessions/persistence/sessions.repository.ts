@@ -22,6 +22,7 @@ function toDto(row: SessionRow): SessionDto {
     branch: row.branch,
     cursorBackend: row.cursor_backend === 'cli' ? 'cli' : row.cursor_backend === 'sdk' ? 'sdk' : null,
     cursorChatId: row.cursor_chat_id ?? null,
+    supportsInteraction: false,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

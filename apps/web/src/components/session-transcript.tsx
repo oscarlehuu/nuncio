@@ -8,6 +8,7 @@ import {
 import { ThinkingBlock } from './transcript-blocks/thinking-block';
 import { ToolGroup, type ToolGroupTool } from './transcript-blocks/tool-group';
 import { CursorContextBlock } from './transcript-blocks/cursor-context-block';
+import { UserInputBlock } from './transcript-blocks/user-input-block';
 import {
   AssistantBubble,
   ErrorBlock,
@@ -17,6 +18,7 @@ import {
 interface TranscriptProps {
   events: SessionEvent[];
   streaming?: boolean;
+  pendingRequestIds?: ReadonlySet<string>;
 }
 
 type RenderItem =
@@ -89,7 +91,15 @@ function ErrorRow({ message }: { message: string }) {
   );
 }
 
-function RenderItemView({ item, streaming }: { item: RenderItem; streaming?: boolean }) {
+function RenderItemView({
+  item,
+  streaming,
+  pendingRequestIds,
+}: {
+  item: RenderItem;
+  streaming?: boolean;
+  pendingRequestIds?: ReadonlySet<string>;
+}) {
   if (item.type === 'tool-group') {
     return <ToolGroup tools={item.tools} />;
   }
@@ -125,6 +135,16 @@ function RenderItemView({ item, streaming }: { item: RenderItem; streaming?: boo
           sections={block.sections}
         />
       );
+    case 'user_input':
+      return (
+        <UserInputBlock
+          requestId={block.requestId}
+          questions={block.questions}
+          defaultOpen={pendingRequestIds?.has(block.requestId)}
+          {...(block.title ? { title: block.title } : {})}
+          {...(block.resolvedBy ? { resolvedBy: block.resolvedBy } : {})}
+        />
+      );
     case 'error':
       return <ErrorRow message={block.message} />;
     default: {
@@ -135,7 +155,11 @@ function RenderItemView({ item, streaming }: { item: RenderItem; streaming?: boo
   }
 }
 
-export const Transcript = memo(function Transcript({ events, streaming }: TranscriptProps) {
+export const Transcript = memo(function Transcript({
+  events,
+  streaming,
+  pendingRequestIds,
+}: TranscriptProps) {
   const blocks = useMemo(() => buildTranscriptBlocks(events), [events]);
   const items = useMemo(() => groupConsecutiveTools(blocks), [blocks]);
   const indicatorLabel = workingIndicatorLabel(blocks, streaming ?? false);
@@ -155,7 +179,11 @@ export const Transcript = memo(function Transcript({ events, streaming }: Transc
       {items.map((item, i) => (
         <Fragment key={`item-${i}`}>
           {i === indicatorIndex && <WorkingIndicator label={indicatorLabel} />}
-          <RenderItemView item={item} streaming={streaming} />
+          <RenderItemView
+            item={item}
+            streaming={streaming}
+            pendingRequestIds={pendingRequestIds}
+          />
         </Fragment>
       ))}
       {streaming && indicatorIndex >= items.length && (

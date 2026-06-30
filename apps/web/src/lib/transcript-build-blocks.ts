@@ -1,10 +1,15 @@
 import type { SessionEvent } from './api';
+import type { UserInputQuestion, UserInputResolvedBy } from './user-input.types';
 import { summarizeToolCall, type ToolSummary } from './tool-summary';
 import {
   isCursorContextMessage,
   parseCursorContextMessage,
   type CursorContextSection,
 } from './cursor-context';
+import {
+  isInteractiveToolName,
+  parseInteractiveToolInput,
+} from './interactive-tool-input';
 
 export type TranscriptBlock =
   | { kind: 'user'; text: string }
@@ -31,6 +36,13 @@ export type TranscriptBlock =
       instruction: string;
       sections: CursorContextSection[];
     }
+  | {
+      kind: 'user_input';
+      requestId: string;
+      title?: string;
+      questions: UserInputQuestion[];
+      resolvedBy?: UserInputResolvedBy;
+    }
   | { kind: 'error'; message: string };
 
 interface OpenTool {
@@ -39,6 +51,13 @@ interface OpenTool {
   input?: unknown;
   status: 'running' | 'done' | 'error';
   output?: unknown;
+}
+
+interface PendingInteractive {
+  callId: string;
+  requestId: string;
+  title?: string;
+  questions: UserInputQuestion[];
 }
 
 /** Strips Cursor's "[REDACTED]" placeholders from exported transcripts. */
@@ -139,6 +158,7 @@ export function buildTranscriptBlocks(events: SessionEvent[]): TranscriptBlock[]
   let thinkingOpen = false;
   let thinkingId = '';
   const openTools = new Map<string, OpenTool>();
+  const pendingInteractive = new Map<string, PendingInteractive>();
   const legacyStack: string[] = [];
   let legacySeq = 0;
 
@@ -234,11 +254,67 @@ export function buildTranscriptBlocks(events: SessionEvent[]): TranscriptBlock[]
       continue;
     }
 
+    if (event.type === 'user_input_requested') {
+      flushAssistant();
+      flushThinking();
+      const requestId = typeof payload.requestId === 'string' ? payload.requestId : '';
+      const questions = Array.isArray(payload.questions)
+        ? (payload.questions as UserInputQuestion[])
+        : [];
+      if (requestId && questions.length > 0) {
+        out.push({
+          kind: 'user_input',
+          requestId,
+          questions,
+          ...(typeof payload.title === 'string' ? { title: payload.title } : {}),
+        });
+      }
+      continue;
+    }
+
+    if (event.type === 'user_input_resolved') {
+      const requestId = typeof payload.requestId === 'string' ? payload.requestId : '';
+      const resolvedBy =
+        typeof payload.resolvedBy === 'string'
+          ? (payload.resolvedBy as UserInputResolvedBy)
+          : undefined;
+      if (requestId && resolvedBy) {
+        const idx = out.findIndex(
+          (b) => b.kind === 'user_input' && b.requestId === requestId,
+        );
+        if (idx >= 0) {
+          const block = out[idx];
+          if (block.kind === 'user_input') {
+            out[idx] = { ...block, resolvedBy };
+          }
+        }
+      }
+      continue;
+    }
+
     if (event.type === 'tool_start') {
       flushAssistant();
       flushThinking();
       const tool = String(payload.tool ?? 'unknown');
       const callId = resolveCallId(payload, tool);
+      const parsed = isInteractiveToolName(tool)
+        ? parseInteractiveToolInput(payload.input)
+        : undefined;
+      if (parsed) {
+        pendingInteractive.set(callId, {
+          callId,
+          requestId: callId,
+          questions: parsed.questions,
+          ...(parsed.title ? { title: parsed.title } : {}),
+        });
+        out.push({
+          kind: 'user_input',
+          requestId: callId,
+          questions: parsed.questions,
+          ...(parsed.title ? { title: parsed.title } : {}),
+        });
+        continue;
+      }
       const entry: OpenTool = {
         callId,
         tool,
@@ -257,6 +333,30 @@ export function buildTranscriptBlocks(events: SessionEvent[]): TranscriptBlock[]
         typeof payload.callId === 'string'
           ? payload.callId
           : legacyStack.find((id) => openTools.get(id)?.tool === tool && openTools.get(id)?.status === 'running');
+      const pending = callId ? pendingInteractive.get(callId) : undefined;
+      if (pending || (callId && isInteractiveToolName(tool) && pendingInteractive.has(callId))) {
+        const requestId = pending?.requestId ?? callId!;
+        pendingInteractive.delete(callId!);
+        const resolvedBy = payload.isError ? 'skip' : 'user';
+        const idx = out.findIndex(
+          (b) => b.kind === 'user_input' && b.requestId === requestId,
+        );
+        if (idx >= 0) {
+          const block = out[idx];
+          if (block.kind === 'user_input') {
+            out[idx] = { ...block, resolvedBy };
+          }
+        } else if (pending) {
+          out.push({
+            kind: 'user_input',
+            requestId,
+            questions: pending.questions,
+            resolvedBy,
+            ...(pending.title ? { title: pending.title } : {}),
+          });
+        }
+        continue;
+      }
       const entry = callId ? openTools.get(callId) : undefined;
       if (entry) {
         entry.status = payload.isError ? 'error' : 'done';
