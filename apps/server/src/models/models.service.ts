@@ -8,7 +8,15 @@ export class ModelsService {
 
   async list(): Promise<ModelProviderDto[]> {
     const providers = await this.agents.available();
-    const modelLists = await Promise.all(providers.map((provider) => provider.listModels()));
+    const modelLists = await Promise.all(
+      providers.map(async (provider) => {
+        const models = await provider.listModels();
+        return models.map((entry) => ({
+          ...entry,
+          capabilities: entry.capabilities ?? provider.capabilities,
+        }));
+      }),
+    );
     return modelLists.flat();
   }
 }

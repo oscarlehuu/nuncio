@@ -20,6 +20,11 @@ CREATE TABLE IF NOT EXISTS sessions (
   provider_thread_id TEXT,
   provider_active_turn_id TEXT,
   provider_state_json TEXT,
+  forge_provider TEXT,
+  pull_request_url TEXT,
+  pull_request_number INTEGER,
+  pull_request_state TEXT,
+  forge_status TEXT NOT NULL DEFAULT 'none',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -132,6 +137,20 @@ export class DatabaseService implements OnModuleDestroy {
       }
     }
 
+    const forgeColumns = [
+      ['forge_provider', 'TEXT'],
+      ['pull_request_url', 'TEXT'],
+      ['pull_request_number', 'INTEGER'],
+      ['pull_request_state', 'TEXT'],
+      ['forge_status', "TEXT NOT NULL DEFAULT 'none'"],
+    ] as const;
+
+    for (const [column, type] of forgeColumns) {
+      if (!sessionColumns.some((entry) => entry.name === column)) {
+        this.db.exec(`ALTER TABLE sessions ADD COLUMN ${column} ${type}`);
+      }
+    }
+
     this.db.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS sessions_cli_chat_unique
       ON sessions(cursor_chat_id) WHERE cursor_backend = 'cli'
@@ -156,6 +175,15 @@ export class DatabaseService implements OnModuleDestroy {
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_provider_requests_session_status
       ON provider_requests(session_id, status)
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS forge_webhook_deliveries (
+        provider TEXT NOT NULL,
+        delivery_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (provider, delivery_id)
+      )
     `);
   }
 }

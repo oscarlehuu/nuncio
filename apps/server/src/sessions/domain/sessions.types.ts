@@ -1,3 +1,4 @@
+import type { AgentAttachment } from '../../agents/agents.types';
 import type { ModelOptionsMap } from '../../models/model-options.types';
 
 export type SessionStatus =
@@ -27,6 +28,11 @@ export interface SessionRow {
   provider_state_json: string | null;
   cursor_backend: string | null;
   cursor_chat_id: string | null;
+  forge_provider: string | null;
+  pull_request_url: string | null;
+  pull_request_number: number | string | null;
+  pull_request_state: string | null;
+  forge_status: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -106,6 +112,11 @@ export interface SessionDto {
   providerState: Record<string, unknown> | null;
   cursorBackend: 'sdk' | 'cli' | null;
   cursorChatId: string | null;
+  forgeProvider?: string | null;
+  pullRequestUrl?: string | null;
+  pullRequestNumber?: number | null;
+  pullRequestState?: string | null;
+  forgeStatus?: string;
   supportsInteraction: boolean;
   createdAt: number;
   updatedAt: number;
@@ -122,6 +133,7 @@ export interface CreateSessionDto {
   provider?: string;
   model?: string;
   modelOptions?: ModelOptionsMap;
+  attachments?: AgentAttachment[];
   workspace?: string;
   id?: string;
   projectPath?: string;
@@ -139,6 +151,12 @@ export interface CreateSessionDto {
 export interface SteerSessionDto {
   message: string;
   forceResume?: boolean;
+  attachments?: AgentAttachment[];
+}
+
+export interface SetSessionModelDto {
+  model: string;
+  options?: ModelOptionsMap;
 }
 
 export interface RespondInteractionDto {

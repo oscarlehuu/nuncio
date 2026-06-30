@@ -9,11 +9,12 @@ import { EventEmitter } from 'events';
 import { homedir } from 'node:os';
 import { v4 as uuidv4 } from 'uuid';
 import { AgentRegistry } from '../agents/agents.registry';
-import type { AgentRunContext } from '../agents/agents.types';
+import type { AgentAttachment, AgentRunContext } from '../agents/agents.types';
 import { CursorLocalSessionsService } from '../cursor-local/cursor-local-sessions.service';
 import { turnsToSessionEvents } from '../cursor-local/cursor-transcript-hydrate';
 import { readCursorChatMetadata } from '../cursor-local/cursor-chat-store';
 import { GitService } from '../git/git.service';
+import type { ModelOptionsMap } from '../models/model-options.types';
 import { canTransition } from './domain/sessions.fsm';
 import type {
   CreateSessionDto,
@@ -135,7 +136,7 @@ export class SessionsService {
       branch,
       cursorBackend: 'sdk',
     });
-    void this.startRun(session);
+    void this.startRun(session, input.attachments);
     return this.enrichSession(session);
   }
 
@@ -170,7 +171,12 @@ export class SessionsService {
     return this.enrichSession(refreshed);
   }
 
-  async steer(id: string, message: string, forceResume?: boolean): Promise<SessionDto> {
+  async steer(
+    id: string,
+    message: string,
+    forceResume?: boolean,
+    attachments?: AgentAttachment[],
+  ): Promise<SessionDto> {
     this.requireSession(id);
     const trimmed = message?.trim();
     if (!trimmed) {
@@ -188,9 +194,36 @@ export class SessionsService {
 
     await provider.steer(id, trimmed, {
       ...this.buildAgentRunContext(current),
+      attachments,
       forceResume: forceResume === true,
     });
     return this.requireSession(id);
+  }
+
+  async interrupt(id: string): Promise<void> {
+    const session = this.requireSession(id);
+    const provider = this.agents.resolveForSession(session);
+    if (!provider.capabilities.interrupt || !provider.interrupt) {
+      throw new BadRequestException(`Interrupt not supported by provider ${provider.id}`);
+    }
+    await provider.interrupt(id);
+  }
+
+  async setSessionModel(
+    id: string,
+    model: string,
+    options?: ModelOptionsMap | null,
+  ): Promise<SessionDto> {
+    const session = this.requireSession(id);
+    const trimmed = model?.trim();
+    if (!trimmed) throw new BadRequestException('model is required');
+    const provider = this.agents.resolveForSession(session);
+    if (provider.capabilities.modelSwitch === 'in-session' && provider.setModel) {
+      await provider.setModel(id, trimmed, options ?? null);
+    }
+    const updated = this.sessions.updateModel(id, trimmed, options ?? null);
+    if (!updated) throw new NotFoundException(`Session ${id} not found`);
+    return updated;
   }
 
   async respondInteraction(
@@ -467,7 +500,7 @@ export class SessionsService {
     this.getOrCreateBus(id).emit('event', event);
   }
 
-  private startRun(session: SessionDto): void {
+  private startRun(session: SessionDto, attachments?: AgentAttachment[]): void {
     if (session.cursorBackend === 'cli') return;
     void (async () => {
       const provider = await this.agents.resolveAvailableForSession(session);
@@ -477,6 +510,7 @@ export class SessionsService {
           this.requestProviderApproval(session.id, request),
         model: session.model,
         modelOptions: session.modelOptions,
+        attachments,
         workspace: session.worktreePath ?? session.workspace ?? undefined,
         cwd: session.worktreePath ?? undefined,
         cursorChatId: session.cursorChatId,

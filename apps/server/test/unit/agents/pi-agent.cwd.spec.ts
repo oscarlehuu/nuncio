@@ -1,38 +1,169 @@
-import { describe, it, expect } from 'bun:test';
-import { buildPiCwdOptions, buildPiCustomTools } from '../../../src/agents/providers/pi-agent.provider';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'bun:test';
+import { Test, TestingModule } from '@nestjs/testing';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { PiAgentProvider, buildPiCustomTools } from '../../../src/agents/providers/pi-agent.provider';
+import { DatabaseModule } from '../../../src/db/database.module';
+import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
+import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
+import { SettingsModule } from '../../../src/settings/settings.module';
 
-// Pure unit tests for the Pi cwd wiring. These exercise the option-building
-// helpers with stub factories — no real Pi SDK, no auth, no module mocking — so
-// they are deterministic in CI (the previous mock.module approach raced with the
-// SDK dynamic import in CI). End-to-end behavior with real Pi is covered by
-// pi-agent.integration.spec.ts (gated on ~/.pi/agent/auth.json).
+// Unit tests for the Pi cwd/session-manager wiring. The provider is exercised
+// with a tiny SDK stub injected into its lazy SDK promise — no real Pi SDK, auth,
+// or module-level mocking required. End-to-end behavior with real Pi is covered
+// by pi-agent.integration.spec.ts (gated on ~/.pi/agent/auth.json).
 
-describe('buildPiCwdOptions', () => {
-  it('passes cwd + inMemory(cwd) when cwd is set', () => {
-    const calls: Array<string | undefined> = [];
-    const inMemory = (cwd?: string) => {
-      calls.push(cwd);
-      return { kind: 'inMemory', cwd };
+type CreateAgentSessionOptions = Record<string, unknown>;
+
+type OpenCall = { path: string; sessionDir: undefined; cwd?: string };
+
+let createAgentSessionOptions: CreateAgentSessionOptions[] = [];
+let sessionManagerOpenCalls: OpenCall[] = [];
+let sessionManagerOpenShouldThrow = false;
+let fakeSessionFile = '/tmp/fake-pi/session.jsonl';
+
+const makePiSdkStub = () => ({
+  AuthStorage: { create: () => ({}) },
+  ModelRegistry: {
+    create: () => ({
+      getAvailable: () => [],
+      getProviderDisplayName: (provider: string) => provider,
+      find: () => undefined,
+    }),
+  },
+  SessionManager: {
+    open: (path: string, sessionDir: undefined, cwd?: string) => {
+      sessionManagerOpenCalls.push({ path, sessionDir, cwd });
+      if (sessionManagerOpenShouldThrow) throw new Error('cannot open persisted Pi session');
+      return { kind: 'open', path, sessionDir, cwd };
+    },
+  },
+  createAgentSession: (options: CreateAgentSessionOptions) => {
+    createAgentSessionOptions.push(options);
+    return {
+      session: {
+        sessionFile: fakeSessionFile,
+        subscribe: () => () => {},
+        prompt: async () => {},
+      },
     };
+  },
+  getAgentDir: () => '/tmp/default-pi-agent',
+  createReadTool: (cwd: string) => ({ name: 'read', cwd }),
+  createBashTool: (cwd: string) => ({ name: 'bash', cwd }),
+  createEditTool: (cwd: string) => ({ name: 'edit', cwd }),
+  createWriteTool: (cwd: string) => ({ name: 'write', cwd }),
+  createGrepTool: (cwd: string) => ({ name: 'grep', cwd }),
+  createFindTool: (cwd: string) => ({ name: 'find', cwd }),
+  createLsTool: (cwd: string) => ({ name: 'ls', cwd }),
+});
 
-    const opts = buildPiCwdOptions('/tmp/workspaces/abc', inMemory);
+function injectPiSdkStub(provider: PiAgentProvider): void {
+  (provider as unknown as { piSdkPromise: Promise<unknown> }).piSdkPromise = Promise.resolve(makePiSdkStub());
+}
 
-    expect(opts.cwd).toBe('/tmp/workspaces/abc');
-    expect(opts.sessionManager).toEqual({ kind: 'inMemory', cwd: '/tmp/workspaces/abc' });
-    expect(calls).toEqual(['/tmp/workspaces/abc']);
+function latestCreateOptions(): CreateAgentSessionOptions {
+  const options = createAgentSessionOptions.at(-1);
+  if (!options) throw new Error('createAgentSession was not called');
+  return options;
+}
+
+describe('PiAgentProvider cwd/session-manager wiring', () => {
+  let module: TestingModule;
+  let provider: PiAgentProvider;
+  let sessions: SessionsRepository;
+  let dataDir: string;
+
+  beforeAll(async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-pi-cwd-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
+
+    module = await Test.createTestingModule({
+      imports: [DatabaseModule, SessionsPersistenceModule, SettingsModule],
+      providers: [PiAgentProvider],
+    }).compile();
+
+    provider = module.get(PiAgentProvider);
+    sessions = module.get(SessionsRepository);
   });
 
-  it('omits cwd and calls inMemory() with no argument when cwd is absent', () => {
-    const calls: Array<string | undefined> = [];
-    const inMemory = (cwd?: string) => {
-      calls.push(cwd);
-      return { kind: 'inMemory' };
-    };
+  afterAll(async () => {
+    await module.close();
+    rmSync(dataDir, { recursive: true, force: true });
+    delete process.env.NUNCIO_DATA_DIR;
+    delete process.env.PI_AGENT_DIR;
+  });
 
-    const opts = buildPiCwdOptions(undefined, inMemory);
+  beforeEach(() => {
+    createAgentSessionOptions = [];
+    sessionManagerOpenCalls = [];
+    sessionManagerOpenShouldThrow = false;
+    fakeSessionFile = '/tmp/fake-pi/session.jsonl';
+    process.env.PI_AGENT_DIR = '/tmp/custom-pi-agent';
+    injectPiSdkStub(provider);
+  });
 
-    expect(opts.cwd).toBeUndefined();
-    expect(calls).toEqual([undefined]);
+  it('omits sessionManager for a new session while passing the configured agentDir', async () => {
+    const created = sessions.create({ prompt: 'new Pi session', provider: 'pi' });
+
+    await provider.run(created.id, created.prompt, {
+      cwd: '/tmp/workspaces/new-session',
+      emit: () => {},
+    });
+
+    const options = latestCreateOptions();
+    expect(options.agentDir).toBe('/tmp/custom-pi-agent');
+    expect(options.cwd).toBe('/tmp/workspaces/new-session');
+    expect('sessionManager' in options).toBe(false);
+    expect(sessionManagerOpenCalls).toEqual([]);
+  });
+
+  it('passes a resume manager opened from the persisted Pi session file', async () => {
+    const persistedFile = '/tmp/custom-pi-agent/sessions/persisted.jsonl';
+    fakeSessionFile = persistedFile;
+    const created = sessions.create({
+      prompt: 'resume Pi session',
+      provider: 'pi',
+      providerThreadId: persistedFile,
+    });
+
+    await provider.run(created.id, created.prompt, {
+      cwd: '/tmp/workspaces/resume-session',
+      emit: () => {},
+    });
+
+    const options = latestCreateOptions();
+    expect(sessionManagerOpenCalls).toEqual([
+      { path: persistedFile, sessionDir: undefined, cwd: '/tmp/workspaces/resume-session' },
+    ]);
+    expect(options.sessionManager).toEqual({
+      kind: 'open',
+      path: persistedFile,
+      sessionDir: undefined,
+      cwd: '/tmp/workspaces/resume-session',
+    });
+  });
+
+  it('falls back to a fresh SDK-created session when opening the persisted file fails', async () => {
+    sessionManagerOpenShouldThrow = true;
+    const persistedFile = '/tmp/custom-pi-agent/sessions/missing.jsonl';
+    const created = sessions.create({
+      prompt: 'fallback Pi session',
+      provider: 'pi',
+      providerThreadId: persistedFile,
+    });
+
+    await provider.run(created.id, created.prompt, {
+      cwd: '/tmp/workspaces/fallback-session',
+      emit: () => {},
+    });
+
+    const options = latestCreateOptions();
+    expect(sessionManagerOpenCalls).toEqual([
+      { path: persistedFile, sessionDir: undefined, cwd: '/tmp/workspaces/fallback-session' },
+    ]);
+    expect('sessionManager' in options).toBe(false);
   });
 });
 
