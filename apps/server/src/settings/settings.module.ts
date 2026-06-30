@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { DatabaseModule } from '../db/database.module';
 import { DatabaseService } from '../db/database.service';
 import { SettingsController } from './api/settings.controller';
 import { loadSettingsKey } from './settings.crypto';
@@ -11,6 +12,7 @@ import { SETTINGS_KEY, SettingsService } from './settings.service';
  * `loadSettingsKey` for the resolution order.
  */
 @Module({
+  imports: [DatabaseModule],
   providers: [
     SettingsRepository,
     {

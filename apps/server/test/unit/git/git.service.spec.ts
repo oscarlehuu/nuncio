@@ -189,4 +189,155 @@ describe('GitService', () => {
       rmSync(developWs, { recursive: true, force: true });
     }
   });
+  describe('Phase 1 — status / diff / stage / commit / push', () => {
+    let repo: string;
+
+    beforeEach(async () => {
+      repo = mkdtempSync(join(tmpdir(), 'nuncio-status-repo-'));
+      await initRepo(repo);
+    });
+
+    afterEach(() => {
+      rmSync(repo, { recursive: true, force: true });
+    });
+
+    it('status reports a clean tree with no file entries', async () => {
+      const status = await service.status(repo);
+      expect(status.branch).toBe('main');
+      expect(status.clean).toBe(true);
+      expect(status.files).toEqual([]);
+    });
+
+    it('status lists an untracked file with the correct staged flag', async () => {
+      writeFileSync(join(repo, 'new.txt'), 'hello\n');
+      const status = await service.status(repo);
+      expect(status.clean).toBe(false);
+      const entry = status.files.find((f) => f.path === 'new.txt');
+      expect(entry).toBeDefined();
+      // Untracked → index column is '?', so not staged.
+      expect(entry?.staged).toBe(false);
+    });
+
+    it('status marks a git-added file as staged', async () => {
+      writeFileSync(join(repo, 'staged.txt'), 'content\n');
+      await runGitAsync(repo, ['add', 'staged.txt']);
+      const status = await service.status(repo);
+      const entry = status.files.find((f) => f.path === 'staged.txt');
+      expect(entry).toBeDefined();
+      expect(entry?.staged).toBe(true);
+    });
+
+    it('diff returns the changed filename and hunk for unstaged work', async () => {
+      writeFileSync(join(repo, 'README.md'), '# test\nchanged line\n');
+      const result = await service.diff(repo);
+      expect(result.diff).toContain('README.md');
+      expect(result.diff).toContain('changed line');
+      expect(result.truncated).toBe(false);
+    });
+
+    it('diff with staged option returns staged changes only', async () => {
+      writeFileSync(join(repo, 'README.md'), '# test\nstaged change\n');
+      await runGitAsync(repo, ['add', 'README.md']);
+      const result = await service.diff(repo, { staged: true });
+      expect(result.diff).toContain('staged change');
+    });
+
+    it('stageAll + commit produces a 40-char sha and clears the tree', async () => {
+      writeFileSync(join(repo, 'feature.txt'), 'work\n');
+      await service.stageAll(repo);
+      const commit = await service.commit(repo, 'add feature');
+      expect(commit.committed).toBe(true);
+      expect(commit.sha).toMatch(/^[0-9a-f]{40}$/);
+
+      const status = await service.status(repo);
+      expect(status.clean).toBe(true);
+      expect(status.files).toEqual([]);
+    });
+
+    it('push to a bare local remote reports pushed + remoteBranch and lands the branch', async () => {
+      const bare = mkdtempSync(join(tmpdir(), 'nuncio-bare-'));
+      try {
+        await runGitAsync(bare, ['init', '--bare']);
+        await runGitAsync(repo, ['remote', 'add', 'origin', bare]);
+
+        const result = await service.push(repo, 'main');
+        expect(result.pushed).toBe(true);
+        expect(result.remoteBranch).toBe('main');
+
+        const proc = Bun.spawn(['git', '-C', bare, 'rev-parse', '--verify', 'main'], {
+          stdout: 'pipe',
+          stderr: 'pipe',
+        });
+        const code = await proc.exited;
+        expect(code).toBe(0);
+      } finally {
+        rmSync(bare, { recursive: true, force: true });
+      }
+    });
+
+    it('force push uses --force-with-lease and succeeds after diverging history', async () => {
+      const bare = mkdtempSync(join(tmpdir(), 'nuncio-bare-force-'));
+      try {
+        await runGitAsync(bare, ['init', '--bare']);
+        await runGitAsync(repo, ['remote', 'add', 'origin', bare]);
+        await service.push(repo, 'main');
+
+        // Diverge local history with an amended commit so a plain push would be rejected.
+        writeFileSync(join(repo, 'README.md'), '# test\namended\n');
+        await runGitAsync(repo, ['add', 'README.md']);
+        await runGitAsync(repo, ['commit', '--amend', '-m', 'amended init']);
+
+        const result = await service.push(repo, 'main', { force: true });
+        expect(result.pushed).toBe(true);
+        expect(result.remoteBranch).toBe('main');
+
+        const proc = Bun.spawn(['git', '-C', repo, 'rev-parse', 'main'], {
+          stdout: 'pipe',
+          stderr: 'pipe',
+        });
+        await proc.exited;
+        const localSha = (await new Response(proc.stdout).text()).trim();
+        const remoteProc = Bun.spawn(['git', '-C', bare, 'rev-parse', 'main'], {
+          stdout: 'pipe',
+          stderr: 'pipe',
+        });
+        await remoteProc.exited;
+        const remoteSha = (await new Response(remoteProc.stdout).text()).trim();
+        expect(remoteSha).toBe(localSha);
+      } finally {
+        rmSync(bare, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('Phase 3 — remoteInfo', () => {
+    let repo: string;
+
+    beforeEach(async () => {
+      repo = mkdtempSync(join(tmpdir(), 'nuncio-remote-repo-'));
+      await initRepo(repo);
+    });
+
+    afterEach(() => {
+      rmSync(repo, { recursive: true, force: true });
+    });
+
+    it('parses an ssh origin (git@github.com:owner/repo.git)', async () => {
+      await runGitAsync(repo, ['remote', 'add', 'origin', 'git@github.com:octo/nuncio.git']);
+      const info = await service.remoteInfo(repo);
+      expect(info).toEqual({ host: 'github.com', owner: 'octo', repo: 'nuncio' });
+    });
+
+    it('parses an https origin and strips the .git suffix', async () => {
+      await runGitAsync(repo, ['remote', 'add', 'origin', 'https://github.com/octo/nuncio.git']);
+      const info = await service.remoteInfo(repo);
+      expect(info).toEqual({ host: 'github.com', owner: 'octo', repo: 'nuncio' });
+    });
+
+    it('parses an https origin without a .git suffix', async () => {
+      await runGitAsync(repo, ['remote', 'add', 'origin', 'https://github.com/octo/nuncio']);
+      const info = await service.remoteInfo(repo);
+      expect(info).toEqual({ host: 'github.com', owner: 'octo', repo: 'nuncio' });
+    });
+  });
 });
