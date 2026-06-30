@@ -1,3 +1,4 @@
+import type { AgentAttachment } from '../../agents/agents.types';
 import type { ModelOptionsMap } from '../../models/model-options.types';
 
 export type SessionStatus =
@@ -116,6 +117,7 @@ export interface SessionDto {
   pullRequestNumber?: number | null;
   pullRequestState?: string | null;
   forgeStatus?: string;
+  supportsInteraction: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -131,6 +133,7 @@ export interface CreateSessionDto {
   provider?: string;
   model?: string;
   modelOptions?: ModelOptionsMap;
+  attachments?: AgentAttachment[];
   workspace?: string;
   id?: string;
   projectPath?: string;
@@ -148,6 +151,21 @@ export interface CreateSessionDto {
 export interface SteerSessionDto {
   message: string;
   forceResume?: boolean;
+  attachments?: AgentAttachment[];
+}
+
+export interface SetSessionModelDto {
+  model: string;
+  options?: ModelOptionsMap;
+}
+
+export interface RespondInteractionDto {
+  answers: Array<{
+    questionId: string;
+    selectedOptionIds: string[];
+    freeText?: string;
+  }>;
+  resolvedBy: 'user' | 'skip';
 }
 
 export interface RespondProviderRequestDto {

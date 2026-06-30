@@ -1,7 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { v4 as uuidv4 } from 'uuid';
 import { DatabaseService } from '../../db/database.service';
-import { parseModelOptionsJson, stringifyModelOptions } from '../../models/model-options.types';
+import {
+  parseModelOptionsJson,
+  stringifyModelOptions,
+  type ModelOptionsMap,
+} from '../../models/model-options.types';
 import { assertTransition } from '../domain/sessions.fsm';
 import type { CreateSessionDto, SessionDto, SessionRow, SessionStatus } from '../domain/sessions.types';
 
@@ -52,6 +56,7 @@ function toDto(row: SessionRow): SessionDto {
     pullRequestNumber: parsePullRequestNumber(row.pull_request_number),
     pullRequestState: row.pull_request_state ?? null,
     forgeStatus: row.forge_status ?? 'none',
+    supportsInteraction: false,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -185,6 +190,14 @@ export class SessionsRepository {
     this.database.db
       .prepare('UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?')
       .run(title, now, id);
+    return this.findById(id);
+  }
+
+  updateModel(id: string, model: string, modelOptions?: ModelOptionsMap | null): SessionDto | null {
+    const now = Date.now();
+    this.database.db
+      .prepare('UPDATE sessions SET model = ?, model_options = ?, updated_at = ? WHERE id = ?')
+      .run(model, stringifyModelOptions(modelOptions), now, id);
     return this.findById(id);
   }
 

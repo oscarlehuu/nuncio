@@ -380,7 +380,7 @@ The harness is provider-agnostic: an `AgentProvider` runs/steers/disposes a sess
 
 #### Token streaming (per-provider delta sources)
 
-The event contract is **shared** across providers (emitted via `BaseAgentProvider.pushEvent`): `assistant_delta { delta }` (token-by-token text), `tool_start { callId?, tool, input? }` / `tool_end { callId?, tool, isError?, output? }`, `thinking_start` / `thinking_delta` / `thinking_message` (Cursor SDK only today; Pi deferred), `assistant_message { text }` (final), `status` / `error`. Payloads are truncated to 4KB at the adapter boundary (`sessions/domain/events.types.ts`). The frontend `Transcript` renders via `buildTranscriptBlocks()` — collapsible tool/thinking blocks, no per-provider UI branching.
+The event contract is **shared** across providers (emitted via `BaseAgentProvider.pushEvent`): `assistant_delta { delta }` (token-by-token text), `tool_start { callId?, tool, input? }` / `tool_end { callId?, tool, isError?, output? }`, `user_input_requested { requestId, questions, title? }` / `user_input_resolved { requestId, resolvedBy }` (interactive tools — historical handoff imports; live respond stubbed), `thinking_start` / `thinking_delta` / `thinking_message` (Cursor SDK only today; Pi deferred), `assistant_message { text }` (final), `status` / `error`. Payloads are truncated to 4KB at the adapter boundary (`sessions/domain/events.types.ts`). The frontend `Transcript` renders via `buildTranscriptBlocks()` — collapsible tool/thinking blocks + inline `UserInputBlock` for AskQuestion, no per-provider UI branching.
 
 | Provider | Delta source | Maps to |
 |---|---|---|
@@ -405,10 +405,11 @@ The event contract is **shared** across providers (emitted via `BaseAgentProvide
 | POST | `/api/sessions` | `{ prompt, model?, provider?, workspace?, projectPath?, useWorktree?, baseBranch? }` — `projectPath` without `useWorktree` runs the provider in that selected repo and stores `baseBranch` as the selected branch; `useWorktree: true` creates a git worktree on branch `nuncio/<id>-<slug>` branched from `baseBranch` (default repo branch); `workspace` is the cwd fallback; starts run in background; `provider` defaults to `registry.defaultId()` (cursor if `CURSOR_API_KEY` set, else codex if logged in, else pi if authed; `503` when none configured) |
 | POST | `/api/sessions/handoff` | `{ cursorChatId, workspace, title? }` — selective import of a Cursor IDE/CLI chat from `~/.cursor/projects/<slug>/agent-transcripts/`; creates `provider: cursor`, `cursor_backend: cli`, hydrates transcript into the event log, status `IDLE` (no auto-run). Idempotent per `cursor_chat_id`. |
 | GET | `/api/cursor/local-sessions?workspace=&limit=` | read-only picker feed — scans agent transcripts for the workspace slug; marks chats already imported |
-| GET | `/api/sessions/:id` | detail (includes `workspace`, `projectPath`, `baseBranch`, `worktreePath`, `branch`, `cursorBackend`, `cursorChatId` when set) |
+| GET | `/api/sessions/:id` | detail (includes `workspace`, `projectPath`, `baseBranch`, `worktreePath`, `branch`, `supportsInteraction`, `cursorBackend`, `cursorChatId` when set) |
 | GET | `/api/sessions/:id/events?since=` | event log (cursor) |
 | GET | `/api/sessions/:id/stream?since=` | SSE stream |
 | POST | `/api/sessions/:id/steer` | `{ message }` — mid-run steering (routes through `provider.steer()`; Pi uses `streamingBehavior: 'steer'`) |
+| POST | `/api/sessions/:id/interactions/:requestId/respond` | `{ answers, resolvedBy }` — live interactive tool respond (CLI handoff sessions) |
 | POST | `/api/sessions/:id/provider-requests/:requestId/respond` | `{ decision: "approve" \| "deny" }` — resolves a pending provider approval request and resumes the provider response path |
 | POST | `/api/sessions/:id/pause` | |
 | POST | `/api/sessions/:id/archive` | disposes the session's agent handle (worktree + branch kept on disk); recoverable via `restore` |
@@ -509,6 +510,14 @@ When a phase is large it is split into lanes working on isolated branches, then 
 **Codex provider (shipped):** `CodexAgentProvider` launches `codex app-server` over stdio, initializes the experimental API, discovers models via `model/list`, starts or resumes Codex threads, maps `item/agentMessage/delta` to the shared `assistant_delta`, emits final `assistant_message` on `turn/completed`, persists `provider_thread_id` / `provider_active_turn_id`, persists provider approval request state in SQLite, waits for Nuncio approval decisions when the app-server sends provider requests, and interrupts active turns on dispose. Availability checks `codex --version` plus `codex login status`.
 
 **Remaining gaps:** Pi uses `SessionManager.inMemory()`, so active Pi sessions are lost on server restart and a `steer` on a revived session creates a fresh Pi session (conversation history is replayed from the event log, not restored into Pi) — the lazy-revive design (`SessionManager.create(cwd)` / `open(path)`) from the brainstorm is not yet implemented. Pi's `tools: ['read','bash','grep','find','ls']` are hardcoded (not configurable per session or via env). Cursor agent handles lost on server restart (same as Pi in-memory), though `JsonlLocalAgentStore` persists state for future `Agent.resume()`. Codex persists thread ids and approval request state, but a request waiting inside the app-server cannot continue across a server/app-server restart; stale pending requests are auto-denied with `server_restarted`. Cloud runtime (GitHub repo + PR) not yet supported. Real-provider integration tests are gated by local credentials.
+
+### Interactive tools (AskQuestion)
+
+**Status: historical display shipped; live respond stubbed.** Cursor `AskQuestion` / `AskUserQuestion` tool uses in handoff JSONL are mapped at hydrate time to paired `user_input_requested` + `user_input_resolved` events (no answers stored — the user's reply is the next `user_message` in the log). The web transcript renders them inline via `UserInputBlock`; a composer banner shell (`PendingUserInputBanner`) derives open prompts from the event log but stays read-only until a provider implements live respond.
+
+**Contract:** optional `AgentProvider.supportsInteraction?()` + `submitInteraction?()`; `POST /api/sessions/:id/interactions/:requestId/respond` returns **501** for Cursor/Pi today. `SessionDto.supportsInteraction` exposes capability to the UI.
+
+**`@cursor/sdk` limitation (verified):** headless `onDelta` does not surface AskQuestion prompts and there is no respond callback — live phone answers require a future SDK/ACP path. No `AWAITING_INPUT` FSM state in this slice; pending input is a derived projection only.
 
 ### Handoff (Continue on mobile)
 
@@ -630,6 +639,11 @@ Minimal web GUI for coding agents (Codex, Claude, Cursor, OpenCode). Synara fork
 
 - For GitLab API auth use `Authorization: Bearer <token>` — it works for both PATs and `glab`'s OAuth tokens, whereas `PRIVATE-TOKEN` fails for an OAuth token.
 - Normalize forge webhook vocabulary to the shared contract inside each provider (e.g. GitLab's `open` → `opened`) so the provider-neutral `WebhooksService` matches across GitHub/GitLab; add an e2e that proves auto-create actually fires.
+- Verify existing/scaffolded provider code actually works (run unit + real integration suites) before building on top of it — don't assume it's broken or complete.
+- Tests must never mutate the real `~/.pi/agent/settings.json`; `session.setModel()`/`setThinkingLevel()` persist to that global file, so snapshot + restore around any test that switches model/effort.
+- Pin model-brittle Pi integration tests (cwd/tool-use) to a known tool-capable model (`cliproxyapi:claude-opus-4-8`) instead of relying on the default model.
+- Add new provider capabilities additively (e.g. `attachments` on `AgentRunContext`, optional `interrupt?`/`setModel?` methods) — don't break shared `run()`/provider signatures.
+- Route provider capability differences through capability flags + optional methods (base all-off), not `if (id === 'pi')` branches in SessionsService/UI.
 
 ## Learned User Preferences
 
@@ -637,8 +651,10 @@ Minimal web GUI for coding agents (Codex, Claude, Cursor, OpenCode). Synara fork
 - User orchestrates through agents — agents own coding, PRs, changesets, and merges when asked; do not expect the user to run interactive CLI (`bun run changeset`).
 - When asked, actually start/restart the dev server yourself and verify health — the user expects the agent to run it, not just hand over commands.
 - Prefer an orchestrator + subagent workflow (scout/planner/developer/ui-developer/tester/reviewer, or Foreman with plan/ship gates) when the user asks you to orchestrate.
+- User often wants you to act as orchestrator and delegate implementation to subagents (scout → developer → tester → reviewer, or the Foreman gated loop).
 - Surface integrations as visible UI, not backend-only — the user wants to see and test features in the app.
 - Settings UI follows Cursor's Source-Control layout: grouped sections (Providers / Source Control) where each provider is one row (brand SVG icon + name + status subtitle + right-aligned Manage/Connect pill) that expands to the key editors.
+- Prefer a thin generic contract every provider can inherit (capability-based: declarative flags + optional methods) over per-engine branching; validate it against one real provider (Pi) first.
 - Mirror Cursor IDE UX for model controls: reasoning effort as a slider, fast as a per-model lightning toggle (not a separate model row), badges inline with the model name.
 - Consult Synara first for multi-provider UI patterns before inventing alternatives.
 - Prefer conservative version bumps: default `patch` unless the change is a clear new end-to-end user workflow.
@@ -653,3 +669,8 @@ Minimal web GUI for coding agents (Codex, Claude, Cursor, OpenCode). Synara fork
 - This `github-gitlab-integration` worktree uses non-conflicting ports API 3002 / web 5175 via a gitignored root `.env` (shared `NUNCIO_DATA_DIR=~/.nuncio/data`); start with `bun --env-file=./.env run dev` so Vite picks up the port/proxy. Main checkout owns 3000/5173, cline-sdk 3001/5174.
 - `gh` and `glab` CLIs are installed and authenticated on this machine (gh as `oscarlehuu`, glab as `oscar.lehuu`); forge providers fall back to CLI tokens (`gh auth token`, `glab auth status -t`) when no PAT is set.
 - Forge integration shipped: `apps/server/src/forges/` module (ForgeProvider/BaseForgeProvider/ForgeRegistry mirroring the agent triad), `GITHUB_*`/`GITLAB_*` settings keys, `GET /api/forges` status, session-scoped git + PR routes, and signature-verified `POST /api/webhooks/forge/:provider`.
+- Pi SDK is `@earendil-works/pi-coding-agent@^0.80.2`; v0.80.2 exposes `session.sessionFile` getter, `SessionManager.open/create/inMemory`, `abort()`, `setModel()`, `setThinkingLevel()`, and `PromptOptions.images`/`steer(text, images?)`. `getDefaultSessionDir` is NOT a public export — omit `sessionManager` in `createAgentSession` for new sessions so the SDK builds the dir under the configured `agentDir`.
+- Synara reference repo is cloned at sibling `Oscar/synara` (not in-repo).
+- Pi provider `cliproxyapi` (`anthropic-messages`, `forceAdaptiveThinking: true`) routes Claude (`claude-opus-4-8`, `claude-sonnet-4-6`) via CLIProxyAPI, configured in `~/.pi/agent/models.json`; user's default is `cliproxyapi/claude-opus-4-8`.
+- Pi has no `max` thinking level (ceiling `xhigh`; levels `off/minimal/low/medium/high/xhigh`). Reaching Anthropic `max` effort needs a per-model remap (Opus 4.8 supports low/medium/high/xhigh/max; Sonnet 4.6 supports low/medium/high/max, no xhigh).
+- `session.setModel()` persists the default model to the real `~/.pi/agent/settings.json` (global config shared with the `pi` CLI) — by design, but it mutates global state.

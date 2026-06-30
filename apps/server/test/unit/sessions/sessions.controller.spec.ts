@@ -22,6 +22,7 @@ function makeSession(over: Partial<SessionDto> = {}): SessionDto {
     providerState: null,
     cursorBackend: null,
     cursorChatId: null,
+    supportsInteraction: false,
     createdAt: 0,
     updatedAt: 0,
     ...over,
@@ -104,7 +105,7 @@ describe('SessionsController', () => {
     expect(controller.create({ prompt: '   ' })).toEqual({ error: 'prompt is required' });
   });
 
-  it('create forwards workspace, worktree, and model options to the service', () => {
+  it('create forwards workspace, worktree, model options, and attachments to the service', () => {
     const create = jest.fn(() => makeSession());
     const controller = new SessionsController({ create } as never);
 
@@ -117,6 +118,7 @@ describe('SessionsController', () => {
       projectPath: '/code/nuncio',
       baseBranch: 'main',
       useWorktree: true,
+      attachments: [{ kind: 'image', mimeType: 'image/png', data: 'abc' }],
     });
 
     expect(create).toHaveBeenCalledWith({
@@ -128,7 +130,41 @@ describe('SessionsController', () => {
       projectPath: '/code/nuncio',
       baseBranch: 'main',
       useWorktree: true,
+      attachments: [{ kind: 'image', mimeType: 'image/png', data: 'abc' }],
     });
+  });
+
+  it('steer forwards message, forceResume, and attachments to the service', () => {
+    const steer = jest.fn(() => makeSession());
+    const controller = new SessionsController({ steer } as never);
+
+    controller.steer('s1', {
+      message: 'continue',
+      forceResume: true,
+      attachments: [{ kind: 'image', mimeType: 'image/jpeg', data: 'xyz' }],
+    });
+
+    expect(steer).toHaveBeenCalledWith('s1', 'continue', true, [
+      { kind: 'image', mimeType: 'image/jpeg', data: 'xyz' },
+    ]);
+  });
+
+  it('interrupt delegates to sessions.interrupt', async () => {
+    const interrupt = jest.fn(async () => undefined);
+    const controller = new SessionsController({ interrupt } as never);
+
+    await expect(controller.interrupt('s1')).resolves.toBeUndefined();
+    expect(interrupt).toHaveBeenCalledWith('s1');
+  });
+
+  it('setModel delegates to sessions.setSessionModel', () => {
+    const setSessionModel = jest.fn(() => makeSession({ model: 'pi:model-2' }));
+    const controller = new SessionsController({ setSessionModel } as never);
+
+    expect(controller.setModel('s1', { model: 'pi:model-2', options: { thinkingLevel: 'high' } })).toMatchObject({
+      model: 'pi:model-2',
+    });
+    expect(setSessionModel).toHaveBeenCalledWith('s1', 'pi:model-2', { thinkingLevel: 'high' });
   });
 
   it('get throws NotFoundException when the session is missing', () => {
