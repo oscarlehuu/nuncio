@@ -1,5 +1,5 @@
 import { NestFactory } from '@nestjs/core';
-import { json, urlencoded } from 'express';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { AgentRegistry } from './agents/agents.registry';
 
@@ -37,11 +37,15 @@ process.on('unhandledRejection', (reason) => {
 });
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
   app.setGlobalPrefix('api');
   app.enableCors({ origin: true });
-  app.use(json({ limit: '25mb' }));
-  app.use(urlencoded({ extended: true, limit: '25mb' }));
+  // Raise the body limit so base64 image attachments fit (default is 100kb).
+  // Use Nest's native body parser config rather than importing `express`
+  // directly — `express` is only a transitive dep and is not resolvable as a
+  // bare specifier under Bun's isolated module store.
+  app.useBodyParser('json', { limit: '25mb' });
+  app.useBodyParser('urlencoded', { extended: true, limit: '25mb' });
 
   const shutdown = () => {
     try {
