@@ -17,6 +17,9 @@ function makeSession(over: Partial<SessionDto> = {}): SessionDto {
     baseBranch: null,
     worktreePath: null,
     branch: null,
+    providerThreadId: null,
+    providerActiveTurnId: null,
+    providerState: null,
     cursorBackend: null,
     cursorChatId: null,
     supportsInteraction: false,
@@ -102,6 +105,33 @@ describe('SessionsController', () => {
     expect(controller.create({ prompt: '   ' })).toEqual({ error: 'prompt is required' });
   });
 
+  it('create forwards workspace, worktree, and model options to the service', () => {
+    const create = jest.fn(() => makeSession());
+    const controller = new SessionsController({ create } as never);
+
+    controller.create({
+      prompt: '  build it  ',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+      modelOptions: { reasoningEffort: 'high', fast: true },
+      workspace: '/code/nuncio',
+      projectPath: '/code/nuncio',
+      baseBranch: 'main',
+      useWorktree: true,
+    });
+
+    expect(create).toHaveBeenCalledWith({
+      prompt: 'build it',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+      modelOptions: { reasoningEffort: 'high', fast: true },
+      workspace: '/code/nuncio',
+      projectPath: '/code/nuncio',
+      baseBranch: 'main',
+      useWorktree: true,
+    });
+  });
+
   it('get throws NotFoundException when the session is missing', () => {
     const service = { get: () => null } as never;
     const controller = new SessionsController(service);
@@ -132,5 +162,17 @@ describe('SessionsController', () => {
 
     controller.delete('s1');
     expect(del).toHaveBeenCalledWith('s1');
+  });
+
+  it('respondProviderRequest delegates to sessions.respondProviderRequest', () => {
+    const respondProviderRequest = jest.fn(() => ({ requestId: 'req-1', decision: 'approve' }));
+    const service = { respondProviderRequest } as never;
+    const controller = new SessionsController(service);
+
+    expect(controller.respondProviderRequest('s1', 'req-1', { decision: 'approve' })).toEqual({
+      requestId: 'req-1',
+      decision: 'approve',
+    });
+    expect(respondProviderRequest).toHaveBeenCalledWith('s1', 'req-1', 'approve');
   });
 });

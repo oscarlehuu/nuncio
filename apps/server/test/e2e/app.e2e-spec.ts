@@ -190,11 +190,11 @@ describe('Nuncio API (e2e)', () => {
       expect(res.body.some((b: { name: string }) => b.name === 'main')).toBe(true);
     });
 
-    it('POST /api/sessions with projectPath creates worktree metadata + on-disk worktree', async () => {
+    it('POST /api/sessions with projectPath defaults to the selected workspace', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/sessions')
         .send({
-          prompt: 'Add workspace e2e flow',
+          prompt: 'Inspect workspace e2e flow',
           provider: 'cursor',
           projectPath: repoPath,
           baseBranch: 'main',
@@ -203,6 +203,28 @@ describe('Nuncio API (e2e)', () => {
       expect(res.status).toBe(201);
       expect(res.body.id).toBeDefined();
       expect(res.body.projectPath).toBe(repoPath);
+      expect(res.body.workspace).toBe(repoPath);
+      expect(res.body.baseBranch).toBe('main');
+      expect(res.body.worktreePath).toBeNull();
+      expect(res.body.branch).toBeNull();
+      await waitForIdle(app, res.body.id);
+    });
+
+    it('POST /api/sessions creates worktree metadata + on-disk worktree when requested', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/sessions')
+        .send({
+          prompt: 'Add workspace e2e flow',
+          provider: 'cursor',
+          projectPath: repoPath,
+          baseBranch: 'main',
+          useWorktree: true,
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body.id).toBeDefined();
+      expect(res.body.projectPath).toBe(repoPath);
+      expect(res.body.workspace).toBeNull();
       expect(res.body.baseBranch).toBe('main');
       expect(res.body.worktreePath).toBe(join(workspacesDir, res.body.id));
       expect(res.body.branch).toBe(`nuncio/${res.body.id}-add-workspace-e2e-flow`);

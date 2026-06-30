@@ -45,6 +45,28 @@ const COMPOSER_MODEL: FlatModel = {
   variants: [{ label: 'Composer 2.5 Fast', params: [{ id: 'fast', value: 'true' }] }],
 };
 
+const CODEX_MODEL: FlatModel = {
+  id: 'codex:gpt-5.5',
+  name: 'GPT-5.5',
+  providerId: 'codex',
+  providerName: 'Codex',
+  groupId: 'openai',
+  groupName: 'OpenAI',
+  options: [
+    { id: 'fast', label: 'Priority', type: 'boolean', defaultValue: false },
+    {
+      id: 'reasoningEffort',
+      label: 'Reasoning',
+      type: 'select',
+      options: [
+        { id: 'medium', label: 'Medium', isDefault: true },
+        { id: 'xhigh', label: 'Xhigh' },
+      ],
+      defaultValue: 'medium',
+    },
+  ],
+};
+
 describe('variantParamsToOptions', () => {
   it('maps cursor variant params to modelOptions', () => {
     expect(
@@ -144,6 +166,7 @@ describe('activeModelOptionBadges', () => {
   it('omits fast and reasoning effort from text badges', () => {
     expect(activeModelOptionBadges(COMPOSER_MODEL, { fast: true })).toEqual([]);
     expect(activeModelOptionBadges(OPUS_MODEL, { thinkingLevel: 'high' })).toEqual([]);
+    expect(activeModelOptionBadges(CODEX_MODEL, { reasoningEffort: 'xhigh' })).toEqual([]);
   });
 
   it('keeps context-style selects as text badges', () => {
@@ -214,6 +237,7 @@ describe('formatModelPickerLabel', () => {
     expect(formatModelPickerLabel(OPUS_MODEL, { thinkingLevel: 'high' })).toBe(
       'Claude Opus 4.6',
     );
+    expect(formatModelPickerLabel(CODEX_MODEL, { reasoningEffort: 'xhigh' })).toBe('GPT 5.5');
   });
 
   it('omits default thinking from the trigger label', () => {

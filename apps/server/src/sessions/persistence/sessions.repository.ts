@@ -5,6 +5,22 @@ import { parseModelOptionsJson, stringifyModelOptions } from '../../models/model
 import { assertTransition } from '../domain/sessions.fsm';
 import type { CreateSessionDto, SessionDto, SessionRow, SessionStatus } from '../domain/sessions.types';
 
+function parseProviderStateJson(raw: string | null | undefined): Record<string, unknown> | null {
+  if (!raw?.trim()) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function stringifyProviderState(state: Record<string, unknown> | null | undefined): string | null {
+  if (!state || Object.keys(state).length === 0) return null;
+  return JSON.stringify(state);
+}
+
 function toDto(row: SessionRow): SessionDto {
   return {
     id: row.id,
@@ -20,6 +36,9 @@ function toDto(row: SessionRow): SessionDto {
     baseBranch: row.base_branch,
     worktreePath: row.worktree_path,
     branch: row.branch,
+    providerThreadId: row.provider_thread_id ?? null,
+    providerActiveTurnId: row.provider_active_turn_id ?? null,
+    providerState: parseProviderStateJson(row.provider_state_json),
     cursorBackend: row.cursor_backend === 'cli' ? 'cli' : row.cursor_backend === 'sdk' ? 'sdk' : null,
     cursorChatId: row.cursor_chat_id ?? null,
     supportsInteraction: false,
@@ -78,6 +97,9 @@ export class SessionsRepository {
       base_branch: input.baseBranch ?? null,
       worktree_path: input.worktreePath ?? null,
       branch: input.branch ?? null,
+      provider_thread_id: input.providerThreadId ?? null,
+      provider_active_turn_id: input.providerActiveTurnId ?? null,
+      provider_state_json: stringifyProviderState(input.providerState),
       cursor_backend: input.cursorBackend ?? null,
       cursor_chat_id: input.cursorChatId ?? null,
       created_at: now,
@@ -113,6 +135,9 @@ export class SessionsRepository {
       base_branch: null,
       worktree_path: null,
       branch: input.branch ?? null,
+      provider_thread_id: null,
+      provider_active_turn_id: null,
+      provider_state_json: null,
       cursor_backend: 'cli',
       cursor_chat_id: input.cursorChatId,
       created_at: now,
@@ -150,10 +175,50 @@ export class SessionsRepository {
       .run(preview.slice(0, 200), now, id);
   }
 
+  updateProviderRuntimeState(
+    id: string,
+    state: {
+      providerThreadId?: string | null;
+      providerActiveTurnId?: string | null;
+      providerState?: Record<string, unknown> | null;
+    },
+  ): SessionDto {
+    const current = this.findById(id);
+    if (!current) throw new Error(`Session ${id} not found`);
+    const now = Date.now();
+    const providerThreadId =
+      state.providerThreadId !== undefined ? state.providerThreadId : current.providerThreadId;
+    const providerActiveTurnId =
+      state.providerActiveTurnId !== undefined
+        ? state.providerActiveTurnId
+        : current.providerActiveTurnId;
+    const providerState =
+      state.providerState !== undefined ? state.providerState : current.providerState;
+
+    this.database.db
+      .prepare(
+        `UPDATE sessions
+         SET provider_thread_id = ?, provider_active_turn_id = ?, provider_state_json = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        providerThreadId,
+        providerActiveTurnId,
+        stringifyProviderState(providerState),
+        now,
+        id,
+      );
+    return this.findById(id)!;
+  }
+
   delete(id: string): void {
+    const deleteProviderRequests = this.database.db.prepare(
+      'DELETE FROM provider_requests WHERE session_id = ?',
+    );
     const deleteEvents = this.database.db.prepare('DELETE FROM events WHERE session_id = ?');
     const deleteSession = this.database.db.prepare('DELETE FROM sessions WHERE id = ?');
     const tx = this.database.db.transaction(() => {
+      deleteProviderRequests.run(id);
       deleteEvents.run(id);
       deleteSession.run(id);
     });
@@ -166,8 +231,9 @@ export class SessionsRepository {
         `INSERT INTO sessions (
           id, title, status, provider, model, model_options, workspace, prompt, preview,
           project_path, base_branch, worktree_path, branch,
+          provider_thread_id, provider_active_turn_id, provider_state_json,
           cursor_backend, cursor_chat_id, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -183,6 +249,9 @@ export class SessionsRepository {
         row.base_branch,
         row.worktree_path,
         row.branch,
+        row.provider_thread_id,
+        row.provider_active_turn_id,
+        row.provider_state_json,
         row.cursor_backend,
         row.cursor_chat_id,
         row.created_at,
