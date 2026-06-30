@@ -7,6 +7,8 @@ import { isCodexApprovalEngine } from '../lib/codex-approval-engine';
 import { useContextUsage } from '../lib/use-context-usage';
 import { ContextUsageButton } from './context-usage-button';
 import { Transcript } from './session-transcript';
+import { ReviewChanges } from './review-changes';
+import { PrPanel } from './pr-panel';
 import { ApprovalModePicker, type ApprovalMode } from './approval-mode-picker';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -332,6 +334,12 @@ export function SessionDetail({
               onRespondProviderRequest ? handleRespondProviderRequest : undefined
             }
           />
+          {(session.worktreePath || session.branch || session.projectPath) && (
+            <div className="mt-4 flex flex-col gap-4">
+              <ReviewChanges sessionId={session.id} defaultMessage={session.title} />
+              <PrPanel session={session} />
+            </div>
+          )}
         </div>
       </div>
 

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render } from '@testing-library/react';
-import { ProviderIcon, CursorIcon, PiIcon, CodexIcon } from './provider-icon';
+import { ProviderIcon, CursorIcon, PiIcon, CodexIcon, GitHubIcon, GitLabIcon } from './provider-icon';
 
 describe('ProviderIcon', () => {
   it('renders the Cursor SVG for providerId "cursor"', () => {
@@ -25,18 +25,36 @@ describe('ProviderIcon', () => {
     expect(queryByText('C')).not.toBeInTheDocument();
   });
 
+  it('renders the GitHub SVG for providerId "github"', () => {
+    const { container } = render(<ProviderIcon providerId="github" className="size-4" />);
+    const svg = container.querySelector('svg');
+    expect(svg).not.toBeNull();
+    expect(svg?.getAttribute('viewBox')).toBe('0 0 24 24');
+  });
+
+  it('renders the GitLab SVG for providerId "gitlab"', () => {
+    const { container } = render(<ProviderIcon providerId="gitlab" className="size-4" />);
+    const svg = container.querySelector('svg');
+    expect(svg).not.toBeNull();
+    expect(svg?.getAttribute('viewBox')).toBe('0 0 24 24');
+  });
+
   it('falls back to the char icon for an unknown provider', () => {
     const { container, getByText } = render(<ProviderIcon providerId="zebra" />);
     expect(container.querySelector('svg')).toBeNull();
     expect(getByText('Z')).toBeInTheDocument();
   });
 
-  it('CursorIcon, PiIcon, and CodexIcon are exported as SVG components', () => {
+  it('CursorIcon, PiIcon, CodexIcon, GitHubIcon, and GitLabIcon are exported as SVG components', () => {
     const { container: cursor } = render(<CursorIcon className="size-4" />);
     const { container: pi } = render(<PiIcon className="size-4" />);
     const { container: codex } = render(<CodexIcon className="size-4" />);
+    const { container: github } = render(<GitHubIcon className="size-4" />);
+    const { container: gitlab } = render(<GitLabIcon className="size-4" />);
     expect(cursor.querySelector('svg')).not.toBeNull();
     expect(pi.querySelector('svg')).not.toBeNull();
     expect(codex.querySelector('svg')).not.toBeNull();
+    expect(github.querySelector('svg')).not.toBeNull();
+    expect(gitlab.querySelector('svg')).not.toBeNull();
   });
 });

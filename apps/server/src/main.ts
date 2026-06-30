@@ -36,7 +36,9 @@ process.on('unhandledRejection', (reason) => {
 });
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // rawBody: true preserves the exact request bytes (app.rawBody) so inbound
+  // forge webhooks can verify their HMAC signature over the unmodified payload.
+  const app = await NestFactory.create(AppModule, { rawBody: true });
   app.setGlobalPrefix('api');
   app.enableCors({ origin: true });
 

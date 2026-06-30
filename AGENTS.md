@@ -626,10 +626,19 @@ Minimal web GUI for coding agents (Codex, Claude, Cursor, OpenCode). Synara fork
 - Stuck on **web-GUI-for-agents architecture** → T3Code `docs/architecture/overview.md`.
 - Add more references here as they're discovered.
 
+## Learned Corrections
+
+- For GitLab API auth use `Authorization: Bearer <token>` — it works for both PATs and `glab`'s OAuth tokens, whereas `PRIVATE-TOKEN` fails for an OAuth token.
+- Normalize forge webhook vocabulary to the shared contract inside each provider (e.g. GitLab's `open` → `opened`) so the provider-neutral `WebhooksService` matches across GitHub/GitLab; add an e2e that proves auto-create actually fires.
+
 ## Learned User Preferences
 
 - User communicates in Vietnamese; match the user's language in chat replies only — code, docs, commits, PRs, and changesets stay English.
 - User orchestrates through agents — agents own coding, PRs, changesets, and merges when asked; do not expect the user to run interactive CLI (`bun run changeset`).
+- When asked, actually start/restart the dev server yourself and verify health — the user expects the agent to run it, not just hand over commands.
+- Prefer an orchestrator + subagent workflow (scout/planner/developer/ui-developer/tester/reviewer, or Foreman with plan/ship gates) when the user asks you to orchestrate.
+- Surface integrations as visible UI, not backend-only — the user wants to see and test features in the app.
+- Settings UI follows Cursor's Source-Control layout: grouped sections (Providers / Source Control) where each provider is one row (brand SVG icon + name + status subtitle + right-aligned Manage/Connect pill) that expands to the key editors.
 - Mirror Cursor IDE UX for model controls: reasoning effort as a slider, fast as a per-model lightning toggle (not a separate model row), badges inline with the model name.
 - Consult Synara first for multi-provider UI patterns before inventing alternatives.
 - Prefer conservative version bumps: default `patch` unless the change is a clear new end-to-end user workflow.
@@ -641,3 +650,6 @@ Minimal web GUI for coding agents (Codex, Claude, Cursor, OpenCode). Synara fork
 - Nuncio per-session worktrees live under `~/.nuncio/workspaces/<sessionId>/` on target project repos — separate from Nuncio repo dev worktrees.
 - Cloud agents (Devin, etc.) clone from GitHub on their VM; the local Mac needs `git fetch`/`pull` after they push.
 - PWA icons and static assets in `apps/web/public/` must remain git-tracked — watch `.gitignore` for accidental excludes.
+- This `github-gitlab-integration` worktree uses non-conflicting ports API 3002 / web 5175 via a gitignored root `.env` (shared `NUNCIO_DATA_DIR=~/.nuncio/data`); start with `bun --env-file=./.env run dev` so Vite picks up the port/proxy. Main checkout owns 3000/5173, cline-sdk 3001/5174.
+- `gh` and `glab` CLIs are installed and authenticated on this machine (gh as `oscarlehuu`, glab as `oscar.lehuu`); forge providers fall back to CLI tokens (`gh auth token`, `glab auth status -t`) when no PAT is set.
+- Forge integration shipped: `apps/server/src/forges/` module (ForgeProvider/BaseForgeProvider/ForgeRegistry mirroring the agent triad), `GITHUB_*`/`GITLAB_*` settings keys, `GET /api/forges` status, session-scoped git + PR routes, and signature-verified `POST /api/webhooks/forge/:provider`.

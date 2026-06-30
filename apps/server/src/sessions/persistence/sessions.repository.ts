@@ -21,6 +21,12 @@ function stringifyProviderState(state: Record<string, unknown> | null | undefine
   return JSON.stringify(state);
 }
 
+function parsePullRequestNumber(raw: number | string | null): number | null {
+  if (raw === null) return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function toDto(row: SessionRow): SessionDto {
   return {
     id: row.id,
@@ -41,6 +47,11 @@ function toDto(row: SessionRow): SessionDto {
     providerState: parseProviderStateJson(row.provider_state_json),
     cursorBackend: row.cursor_backend === 'cli' ? 'cli' : row.cursor_backend === 'sdk' ? 'sdk' : null,
     cursorChatId: row.cursor_chat_id ?? null,
+    forgeProvider: row.forge_provider ?? null,
+    pullRequestUrl: row.pull_request_url ?? null,
+    pullRequestNumber: parsePullRequestNumber(row.pull_request_number),
+    pullRequestState: row.pull_request_state ?? null,
+    forgeStatus: row.forge_status ?? 'none',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -101,6 +112,11 @@ export class SessionsRepository {
       provider_state_json: stringifyProviderState(input.providerState),
       cursor_backend: input.cursorBackend ?? null,
       cursor_chat_id: input.cursorChatId ?? null,
+      forge_provider: null,
+      pull_request_url: null,
+      pull_request_number: null,
+      pull_request_state: null,
+      forge_status: 'none',
       created_at: now,
       updated_at: now,
     };
@@ -139,6 +155,11 @@ export class SessionsRepository {
       provider_state_json: null,
       cursor_backend: 'cli',
       cursor_chat_id: input.cursorChatId,
+      forge_provider: null,
+      pull_request_url: null,
+      pull_request_number: null,
+      pull_request_state: null,
+      forge_status: 'none',
       created_at: now,
       updated_at: now,
     };
@@ -210,6 +231,47 @@ export class SessionsRepository {
     return this.findById(id)!;
   }
 
+  updateForgeState(
+    id: string,
+    state: {
+      forgeProvider?: string | null;
+      pullRequestUrl?: string | null;
+      pullRequestNumber?: number | null;
+      pullRequestState?: string | null;
+      forgeStatus?: string;
+    },
+  ): SessionDto {
+    const current = this.findById(id);
+    if (!current) throw new Error(`Session ${id} not found`);
+    const now = Date.now();
+    const forgeProvider = state.forgeProvider !== undefined ? state.forgeProvider : current.forgeProvider;
+    const pullRequestUrl =
+      state.pullRequestUrl !== undefined ? state.pullRequestUrl : current.pullRequestUrl;
+    const pullRequestNumber =
+      state.pullRequestNumber !== undefined ? state.pullRequestNumber : current.pullRequestNumber;
+    const pullRequestState =
+      state.pullRequestState !== undefined ? state.pullRequestState : current.pullRequestState;
+    const forgeStatus = state.forgeStatus !== undefined ? state.forgeStatus : current.forgeStatus;
+
+    this.database.db
+      .prepare(
+        `UPDATE sessions
+         SET forge_provider = ?, pull_request_url = ?, pull_request_number = ?,
+             pull_request_state = ?, forge_status = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        forgeProvider ?? null,
+        pullRequestUrl ?? null,
+        pullRequestNumber ?? null,
+        pullRequestState ?? null,
+        forgeStatus ?? 'none',
+        now,
+        id,
+      );
+    return this.findById(id)!;
+  }
+
   delete(id: string): void {
     const deleteProviderRequests = this.database.db.prepare(
       'DELETE FROM provider_requests WHERE session_id = ?',
@@ -231,8 +293,10 @@ export class SessionsRepository {
           id, title, status, provider, model, model_options, workspace, prompt, preview,
           project_path, base_branch, worktree_path, branch,
           provider_thread_id, provider_active_turn_id, provider_state_json,
-          cursor_backend, cursor_chat_id, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          cursor_backend, cursor_chat_id,
+          forge_provider, pull_request_url, pull_request_number, pull_request_state, forge_status,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -253,6 +317,11 @@ export class SessionsRepository {
         row.provider_state_json,
         row.cursor_backend,
         row.cursor_chat_id,
+        row.forge_provider,
+        row.pull_request_url,
+        row.pull_request_number,
+        row.pull_request_state,
+        row.forge_status,
         row.created_at,
         row.updated_at,
       );
