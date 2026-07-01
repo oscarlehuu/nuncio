@@ -161,304 +161,360 @@ function splitThinking(text: string): { response: string; thinking: string | nul
   return { response: text, thinking: null };
 }
 
-export function buildTranscriptBlocks(events: SessionEvent[]): TranscriptBlock[] {
-  const out: TranscriptBlock[] = [];
-  let assistantBuf = '';
-  let thinkingBuf = '';
-  let thinkingOpen = false;
-  let thinkingId = '';
-  const openTools = new Map<string, OpenTool>();
-  const pendingInteractive = new Map<string, PendingInteractive>();
-  const providerRequests = new Map<
-    string,
-    Extract<TranscriptBlock, { kind: 'provider_request' }>
-  >();
-  const legacyStack: string[] = [];
-  let legacySeq = 0;
+export interface ParserState {
+  out: TranscriptBlock[];
+  assistantBuf: string;
+  thinkingBuf: string;
+  thinkingOpen: boolean;
+  thinkingId: string;
+  openTools: Map<string, OpenTool>;
+  pendingInteractive: Map<string, PendingInteractive>;
+  providerRequests: Map<string, Extract<TranscriptBlock, { kind: 'provider_request' }>>;
+  legacyStack: string[];
+  legacySeq: number;
+}
 
-  const flushAssistant = (streaming = false) => {
-    const cleaned = stripRedacted(assistantBuf);
-    if (!cleaned && !streaming) return;
-    const { response, thinking } = splitThinking(cleaned || assistantBuf);
-    if (response || streaming) {
-      out.push({ kind: 'assistant', text: response, ...(streaming ? { streaming: true } : {}) });
-    }
-    if (thinking) {
-      out.push({
-        kind: 'thinking',
-        thinkingId: 'imported-thinking',
-        text: thinking,
-        collapsedDefault: true,
-      } as TranscriptBlock);
-    }
-    assistantBuf = '';
+export function createParserState(): ParserState {
+  return {
+    out: [],
+    assistantBuf: '',
+    thinkingBuf: '',
+    thinkingOpen: false,
+    thinkingId: '',
+    openTools: new Map(),
+    pendingInteractive: new Map(),
+    providerRequests: new Map(),
+    legacyStack: [],
+    legacySeq: 0,
   };
+}
 
-  const flushThinking = (streaming = false) => {
-    if (!thinkingOpen && !thinkingBuf.trim()) return;
-    out.push({
-      kind: 'thinking',
-      thinkingId: thinkingId || 'thinking',
-      text: thinkingBuf,
-      collapsedDefault: true,
+function flushAssistant(state: ParserState, streaming = false) {
+  const cleaned = stripRedacted(state.assistantBuf);
+  if (!cleaned && !streaming) return;
+  const { response, thinking } = splitThinking(cleaned || state.assistantBuf);
+  if (response || streaming) {
+    state.out.push({
+      kind: 'assistant',
+      text: response,
       ...(streaming ? { streaming: true } : {}),
     });
-    thinkingBuf = '';
-    thinkingOpen = false;
-    thinkingId = '';
-  };
+  }
+  if (thinking) {
+    state.out.push({
+      kind: 'thinking',
+      thinkingId: 'imported-thinking',
+      text: thinking,
+      collapsedDefault: true,
+    } as TranscriptBlock);
+  }
+  state.assistantBuf = '';
+}
 
-  const resolveCallId = (payload: Record<string, unknown>, tool: string): string => {
-    const explicit = typeof payload.callId === 'string' ? payload.callId : undefined;
-    if (explicit) return explicit;
-    return `legacy-${legacySeq++}-${tool}`;
-  };
+function flushThinking(state: ParserState, streaming = false) {
+  if (!state.thinkingOpen && !state.thinkingBuf.trim()) return;
+  state.out.push({
+    kind: 'thinking',
+    thinkingId: state.thinkingId || 'thinking',
+    text: state.thinkingBuf,
+    collapsedDefault: true,
+    ...(streaming ? { streaming: true } : {}),
+  });
+  state.thinkingBuf = '';
+  state.thinkingOpen = false;
+  state.thinkingId = '';
+}
 
-  const pushOpenToolBlock = (entry: OpenTool) => {
-    out.push({
-      kind: 'tool',
-      callId: entry.callId,
-      tool: entry.tool,
-      status: entry.status,
-      summary: summarizeToolCall(entry.tool, entry.input),
-      ...(entry.input !== undefined ? { input: entry.input } : {}),
-      ...(entry.output !== undefined ? { output: entry.output } : {}),
-    });
-  };
+function resolveCallId(
+  state: ParserState,
+  payload: Record<string, unknown>,
+  tool: string,
+): string {
+  const explicit = typeof payload.callId === 'string' ? payload.callId : undefined;
+  if (explicit) return explicit;
+  return `legacy-${state.legacySeq++}-${tool}`;
+}
 
-  for (const event of events) {
-    const payload = event.payload ?? {};
+function pushOpenToolBlock(state: ParserState, entry: OpenTool) {
+  state.out.push({
+    kind: 'tool',
+    callId: entry.callId,
+    tool: entry.tool,
+    status: entry.status,
+    summary: summarizeToolCall(entry.tool, entry.input),
+    ...(entry.input !== undefined ? { input: entry.input } : {}),
+    ...(entry.output !== undefined ? { output: entry.output } : {}),
+  });
+}
 
-    if (event.type === 'user_message') {
-      flushAssistant();
-      flushThinking();
-      const rawText = String(payload.text ?? '');
-      if (isCursorContextMessage(rawText)) {
-        const parsed = parseCursorContextMessage(rawText);
-        out.push({
-          kind: 'cursor-context',
-          summary: parsed.summary,
-          instruction: parsed.instruction,
-          sections: parsed.sections,
-        });
-      } else {
-        out.push({ kind: 'user', text: rawText });
-      }
-      continue;
+/**
+ * Applies a single event's effect onto the parser state (mutating `out` and
+ * any open buffers/maps in place). This is the single source of truth for
+ * per-event transcript logic — both the batch `buildTranscriptBlocks` and
+ * the incremental builder in `use-transcript-blocks.ts` call this.
+ */
+export function stepEvent(state: ParserState, event: SessionEvent): void {
+  const payload = event.payload ?? {};
+
+  if (event.type === 'user_message' || event.type === 'steer_message') {
+    flushAssistant(state);
+    flushThinking(state);
+    const rawText = String(payload.text ?? '');
+    if (isCursorContextMessage(rawText)) {
+      const parsed = parseCursorContextMessage(rawText);
+      state.out.push({
+        kind: 'cursor-context',
+        summary: parsed.summary,
+        instruction: parsed.instruction,
+        sections: parsed.sections,
+      });
+    } else {
+      state.out.push({ kind: 'user', text: rawText });
     }
+    return;
+  }
 
-    if (event.type === 'thinking_start') {
-      flushAssistant();
-      thinkingOpen = true;
-      thinkingId = String(payload.thinkingId ?? `thinking-${event.seq}`);
-      thinkingBuf = '';
-      continue;
+  if (event.type === 'thinking_start') {
+    flushAssistant(state);
+    state.thinkingOpen = true;
+    state.thinkingId = String(payload.thinkingId ?? `thinking-${event.seq}`);
+    state.thinkingBuf = '';
+    return;
+  }
+
+  if (event.type === 'thinking_delta') {
+    state.thinkingOpen = true;
+    if (!state.thinkingId) state.thinkingId = String(payload.thinkingId ?? `thinking-${event.seq}`);
+    state.thinkingBuf += String(payload.delta ?? '');
+    return;
+  }
+
+  if (event.type === 'thinking_message') {
+    state.thinkingBuf = String(payload.text ?? state.thinkingBuf);
+    flushThinking(state);
+    return;
+  }
+
+  if (event.type === 'user_input_requested') {
+    flushAssistant(state);
+    flushThinking(state);
+    const requestId = typeof payload.requestId === 'string' ? payload.requestId : '';
+    const questions = Array.isArray(payload.questions)
+      ? (payload.questions as UserInputQuestion[])
+      : [];
+    if (requestId && questions.length > 0) {
+      state.out.push({
+        kind: 'user_input',
+        requestId,
+        questions,
+        ...(typeof payload.title === 'string' ? { title: payload.title } : {}),
+      });
     }
+    return;
+  }
 
-    if (event.type === 'thinking_delta') {
-      thinkingOpen = true;
-      if (!thinkingId) thinkingId = String(payload.thinkingId ?? `thinking-${event.seq}`);
-      thinkingBuf += String(payload.delta ?? '');
-      continue;
-    }
-
-    if (event.type === 'thinking_message') {
-      thinkingBuf = String(payload.text ?? thinkingBuf);
-      flushThinking();
-      continue;
-    }
-
-    if (event.type === 'user_input_requested') {
-      flushAssistant();
-      flushThinking();
-      const requestId = typeof payload.requestId === 'string' ? payload.requestId : '';
-      const questions = Array.isArray(payload.questions)
-        ? (payload.questions as UserInputQuestion[])
-        : [];
-      if (requestId && questions.length > 0) {
-        out.push({
-          kind: 'user_input',
-          requestId,
-          questions,
-          ...(typeof payload.title === 'string' ? { title: payload.title } : {}),
-        });
-      }
-      continue;
-    }
-
-    if (event.type === 'user_input_resolved') {
-      const requestId = typeof payload.requestId === 'string' ? payload.requestId : '';
-      const resolvedBy =
-        typeof payload.resolvedBy === 'string'
-          ? (payload.resolvedBy as UserInputResolvedBy)
-          : undefined;
-      if (requestId && resolvedBy) {
-        const idx = out.findIndex(
-          (b) => b.kind === 'user_input' && b.requestId === requestId,
-        );
-        if (idx >= 0) {
-          const block = out[idx];
-          if (block.kind === 'user_input') {
-            out[idx] = { ...block, resolvedBy };
-          }
-        }
-      }
-      continue;
-    }
-
-    if (event.type === 'tool_start') {
-      flushAssistant();
-      flushThinking();
-      const tool = String(payload.tool ?? 'unknown');
-      const callId = resolveCallId(payload, tool);
-      const parsed = isInteractiveToolName(tool)
-        ? parseInteractiveToolInput(payload.input)
+  if (event.type === 'user_input_resolved') {
+    const requestId = typeof payload.requestId === 'string' ? payload.requestId : '';
+    const resolvedBy =
+      typeof payload.resolvedBy === 'string'
+        ? (payload.resolvedBy as UserInputResolvedBy)
         : undefined;
-      if (parsed) {
-        pendingInteractive.set(callId, {
-          callId,
-          requestId: callId,
-          questions: parsed.questions,
-          ...(parsed.title ? { title: parsed.title } : {}),
-        });
-        out.push({
-          kind: 'user_input',
-          requestId: callId,
-          questions: parsed.questions,
-          ...(parsed.title ? { title: parsed.title } : {}),
-        });
-        continue;
+    if (requestId && resolvedBy) {
+      const idx = state.out.findIndex(
+        (b) => b.kind === 'user_input' && b.requestId === requestId,
+      );
+      if (idx >= 0) {
+        const block = state.out[idx];
+        if (block.kind === 'user_input') {
+          state.out[idx] = { ...block, resolvedBy };
+        }
       }
-      const entry: OpenTool = {
+    }
+    return;
+  }
+
+  if (event.type === 'tool_start') {
+    flushAssistant(state);
+    flushThinking(state);
+    const tool = String(payload.tool ?? 'unknown');
+    const callId = resolveCallId(state, payload, tool);
+    const parsed = isInteractiveToolName(tool)
+      ? parseInteractiveToolInput(payload.input)
+      : undefined;
+    if (parsed) {
+      state.pendingInteractive.set(callId, {
         callId,
-        tool,
-        status: 'running',
-        ...(payload.input !== undefined ? { input: payload.input } : {}),
-      };
-      openTools.set(callId, entry);
-      legacyStack.push(callId);
-      pushOpenToolBlock(entry);
-      continue;
+        requestId: callId,
+        questions: parsed.questions,
+        ...(parsed.title ? { title: parsed.title } : {}),
+      });
+      state.out.push({
+        kind: 'user_input',
+        requestId: callId,
+        questions: parsed.questions,
+        ...(parsed.title ? { title: parsed.title } : {}),
+      });
+      return;
     }
+    const entry: OpenTool = {
+      callId,
+      tool,
+      status: 'running',
+      ...(payload.input !== undefined ? { input: payload.input } : {}),
+    };
+    state.openTools.set(callId, entry);
+    state.legacyStack.push(callId);
+    pushOpenToolBlock(state, entry);
+    return;
+  }
 
-    if (event.type === 'tool_end') {
-      const tool = String(payload.tool ?? 'unknown');
-      const callId =
-        typeof payload.callId === 'string'
-          ? payload.callId
-          : legacyStack.find((id) => openTools.get(id)?.tool === tool && openTools.get(id)?.status === 'running');
-      const pending = callId ? pendingInteractive.get(callId) : undefined;
-      if (pending || (callId && isInteractiveToolName(tool) && pendingInteractive.has(callId))) {
-        const requestId = pending?.requestId ?? callId!;
-        pendingInteractive.delete(callId!);
-        const resolvedBy = payload.isError ? 'skip' : 'user';
-        const idx = out.findIndex(
-          (b) => b.kind === 'user_input' && b.requestId === requestId,
-        );
-        if (idx >= 0) {
-          const block = out[idx];
-          if (block.kind === 'user_input') {
-            out[idx] = { ...block, resolvedBy };
-          }
-        } else if (pending) {
-          out.push({
-            kind: 'user_input',
-            requestId,
-            questions: pending.questions,
-            resolvedBy,
-            ...(pending.title ? { title: pending.title } : {}),
-          });
+  if (event.type === 'tool_end') {
+    const tool = String(payload.tool ?? 'unknown');
+    const callId =
+      typeof payload.callId === 'string'
+        ? payload.callId
+        : state.legacyStack.find(
+            (id) =>
+              state.openTools.get(id)?.tool === tool &&
+              state.openTools.get(id)?.status === 'running',
+          );
+    const pending = callId ? state.pendingInteractive.get(callId) : undefined;
+    if (pending || (callId && isInteractiveToolName(tool) && state.pendingInteractive.has(callId))) {
+      const requestId = pending?.requestId ?? callId!;
+      state.pendingInteractive.delete(callId!);
+      const resolvedBy = payload.isError ? 'skip' : 'user';
+      const idx = state.out.findIndex(
+        (b) => b.kind === 'user_input' && b.requestId === requestId,
+      );
+      if (idx >= 0) {
+        const block = state.out[idx];
+        if (block.kind === 'user_input') {
+          state.out[idx] = { ...block, resolvedBy };
         }
-        continue;
-      }
-      const entry = callId ? openTools.get(callId) : undefined;
-      if (entry) {
-        entry.status = payload.isError ? 'error' : 'done';
-        if (payload.output !== undefined) entry.output = payload.output;
-        const idx = out.findIndex((b) => b.kind === 'tool' && b.callId === entry.callId);
-        if (idx >= 0) {
-          out[idx] = {
-            kind: 'tool',
-            callId: entry.callId,
-            tool: entry.tool,
-            status: entry.status,
-            summary: summarizeToolCall(entry.tool, entry.input),
-            ...(entry.input !== undefined ? { input: entry.input } : {}),
-            ...(entry.output !== undefined ? { output: entry.output } : {}),
-          };
-        }
-        openTools.delete(entry.callId);
-        const stackIdx = legacyStack.indexOf(entry.callId);
-        if (stackIdx >= 0) legacyStack.splice(stackIdx, 1);
-      } else {
-        out.push({
-          kind: 'tool',
-          callId: resolveCallId(payload, tool),
-          tool,
-          status: payload.isError ? 'error' : 'done',
-          summary: summarizeToolCall(tool, payload.input),
-          ...(payload.output !== undefined ? { output: payload.output } : {}),
-        });
-      }
-      continue;
-    }
-
-    if (event.type === 'assistant_delta') {
-      assistantBuf += String(payload.delta ?? '');
-      continue;
-    }
-
-    if (event.type === 'assistant_message') {
-      assistantBuf = String(payload.text ?? assistantBuf);
-      flushAssistant();
-      continue;
-    }
-
-    if (event.type === 'provider_request') {
-      flushAssistant();
-      flushThinking();
-      const request = providerRequestFromPayload(payload);
-      if (request) {
-        providerRequests.set(request.requestId, request);
-        out.push(request);
-      }
-      continue;
-    }
-
-    if (event.type === 'provider_request_resolved') {
-      const requestId = payloadString(payload, 'requestId');
-      const existing = requestId ? providerRequests.get(requestId) : undefined;
-      const decision = providerRequestDecision(payload);
-      if (existing) {
-        existing.status = 'resolved';
-        existing.decision = decision;
-      } else if (requestId) {
-        out.push({
-          kind: 'provider_request',
+      } else if (pending) {
+        state.out.push({
+          kind: 'user_input',
           requestId,
-          provider: payloadString(payload, 'provider') ?? 'provider',
-          method: payloadString(payload, 'method') ?? 'request',
-          status: 'resolved',
-          decision,
+          questions: pending.questions,
+          resolvedBy,
+          ...(pending.title ? { title: pending.title } : {}),
         });
       }
-      continue;
+      return;
     }
-
-    if (event.type === 'error') {
-      flushAssistant();
-      flushThinking();
-      out.push({ kind: 'error', message: String(payload.message ?? 'unknown') });
+    const entry = callId ? state.openTools.get(callId) : undefined;
+    if (entry) {
+      entry.status = payload.isError ? 'error' : 'done';
+      if (payload.output !== undefined) entry.output = payload.output;
+      const idx = state.out.findIndex((b) => b.kind === 'tool' && b.callId === entry.callId);
+      if (idx >= 0) {
+        state.out[idx] = {
+          kind: 'tool',
+          callId: entry.callId,
+          tool: entry.tool,
+          status: entry.status,
+          summary: summarizeToolCall(entry.tool, entry.input),
+          ...(entry.input !== undefined ? { input: entry.input } : {}),
+          ...(entry.output !== undefined ? { output: entry.output } : {}),
+        };
+      }
+      state.openTools.delete(entry.callId);
+      const stackIdx = state.legacyStack.indexOf(entry.callId);
+      if (stackIdx >= 0) state.legacyStack.splice(stackIdx, 1);
+    } else {
+      state.out.push({
+        kind: 'tool',
+        callId: resolveCallId(state, payload, tool),
+        tool,
+        status: payload.isError ? 'error' : 'done',
+        summary: summarizeToolCall(tool, payload.input),
+        ...(payload.output !== undefined ? { output: payload.output } : {}),
+      });
     }
+    return;
   }
 
-  if (thinkingOpen || thinkingBuf) {
-    flushThinking(true);
-  } else if (assistantBuf) {
-    flushAssistant(true);
+  if (event.type === 'assistant_delta') {
+    state.assistantBuf += String(payload.delta ?? '');
+    return;
   }
 
-  return out;
+  if (event.type === 'assistant_message') {
+    state.assistantBuf = String(payload.text ?? state.assistantBuf);
+    flushAssistant(state);
+    return;
+  }
+
+  if (event.type === 'provider_request') {
+    flushAssistant(state);
+    flushThinking(state);
+    const request = providerRequestFromPayload(payload);
+    if (request) {
+      state.providerRequests.set(request.requestId, request);
+      state.out.push(request);
+    }
+    return;
+  }
+
+  if (event.type === 'provider_request_resolved') {
+    const requestId = payloadString(payload, 'requestId');
+    const existing = requestId ? state.providerRequests.get(requestId) : undefined;
+    const decision = providerRequestDecision(payload);
+    if (existing) {
+      existing.status = 'resolved';
+      existing.decision = decision;
+    } else if (requestId) {
+      state.out.push({
+        kind: 'provider_request',
+        requestId,
+        provider: payloadString(payload, 'provider') ?? 'provider',
+        method: payloadString(payload, 'method') ?? 'request',
+        status: 'resolved',
+        decision,
+      });
+    }
+    return;
+  }
+
+  if (event.type === 'error') {
+    flushAssistant(state);
+    flushThinking(state);
+    state.out.push({ kind: 'error', message: String(payload.message ?? 'unknown') });
+  }
+}
+
+/**
+ * Returns the committed blocks (state.out) plus any trailing
+ * streaming-tail block for unterminated assistant/thinking buffers, WITHOUT
+ * mutating `state`. Safe to call repeatedly and to keep stepping events
+ * afterward.
+ */
+export function finalizeBlocks(state: ParserState): TranscriptBlock[] {
+  if (state.thinkingOpen || state.thinkingBuf) {
+    const scratch: ParserState = {
+      ...state,
+      out: state.out.slice(),
+    };
+    flushThinking(scratch, true);
+    return scratch.out;
+  }
+  if (state.assistantBuf) {
+    const scratch: ParserState = {
+      ...state,
+      out: state.out.slice(),
+    };
+    flushAssistant(scratch, true);
+    return scratch.out;
+  }
+  return state.out.slice();
+}
+
+export function buildTranscriptBlocks(events: SessionEvent[]): TranscriptBlock[] {
+  const state = createParserState();
+  for (const event of events) {
+    stepEvent(state, event);
+  }
+  return finalizeBlocks(state);
 }
 
 export function workingIndicatorLabel(blocks: TranscriptBlock[], streaming: boolean): string {

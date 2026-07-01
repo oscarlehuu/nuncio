@@ -5,6 +5,7 @@ import {
   workingIndicatorLabel,
   type TranscriptBlock,
 } from '../lib/transcript-build-blocks';
+import { useTranscriptBlocks } from '../lib/use-transcript-blocks';
 import { ThinkingBlock } from './transcript-blocks/thinking-block';
 import { ToolGroup, type ToolGroupTool } from './transcript-blocks/tool-group';
 import { CursorContextBlock } from './transcript-blocks/cursor-context-block';
@@ -179,7 +180,7 @@ export const Transcript = memo(function Transcript({
   respondingRequestId,
   onRespondProviderRequest,
 }: TranscriptProps) {
-  const blocks = useMemo(() => buildTranscriptBlocks(events), [events]);
+  const blocks = useTranscriptBlocks(events);
   const items = useMemo(() => groupConsecutiveTools(blocks), [blocks]);
   const indicatorLabel = workingIndicatorLabel(blocks, streaming ?? false);
 
