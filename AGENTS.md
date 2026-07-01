@@ -647,6 +647,8 @@ Minimal web GUI for coding agents (Codex, Claude, Cursor, OpenCode). Synara fork
 - Add new provider capabilities additively (e.g. `attachments` on `AgentRunContext`, optional `interrupt?`/`setModel?` methods) — don't break shared `run()`/provider signatures.
 - Route provider capability differences through capability flags + optional methods (base all-off), not `if (id === 'pi')` branches in SessionsService/UI.
 - Syncing `main` into an SDK integration branch (`pi-sdk`/`cursor-sdk`/`codex-sdk`) cannot be done by a direct `git push` — GitHub branch protection blocks it ("must be through PR"). Open a sync PR branch instead (e.g. `pi/sync-main-to-pi-sdk`) even for a fast-forward main merge.
+- Foreman's ledger lives in `.pi/` which is gitignored, so it is tied to the repo folder, not the git branch — creating a new branch does NOT reset Foreman; stale/escalated tasks from earlier sessions persist across branches until cleaned from `.pi/plans/`.
+- When resuming a Foreman task, pass the correct `cwd` and an explicit `slug` — `resume: true` without a slug in a repo that has open tasks from other sessions resumes the wrong (foreign) task.
 
 ## Learned User Preferences
 
@@ -661,6 +663,8 @@ Minimal web GUI for coding agents (Codex, Claude, Cursor, OpenCode). Synara fork
 - Mirror Cursor IDE UX for model controls: reasoning effort as a slider, fast as a per-model lightning toggle (not a separate model row), badges inline with the model name.
 - Consult Synara first for multi-provider UI patterns before inventing alternatives.
 - Prefer conservative version bumps: default `patch` unless the change is a clear new end-to-end user workflow.
+- When brainstorming architecture/product direction, the user wants a grounded opinionated recommendation with the trade-off named — read the actual code first, then give a decisive call, not a menu of neutral options.
+- Benchmark against Synara/T3Code as the reference apps; validate stack and UX choices against what they actually do before committing.
 
 ## Learned Workspace Facts
 
@@ -679,3 +683,7 @@ Minimal web GUI for coding agents (Codex, Claude, Cursor, OpenCode). Synara fork
 - `session.setModel()` persists the default model to the real `~/.pi/agent/settings.json` (global config shared with the `pi` CLI) — by design, but it mutates global state.
 - Nuncio's phone client is a thin client (agent runs on the Mac; phone only streams SSE + sends steer over Tailscale). There is no native mobile track — the PWA *is* the mobile app, and full native (RN/Swift) is mostly downside while self-hosted. Native's only material gain here is notification reliability, which Phase 5 Web Push covers; Capacitor wrap is the escape hatch if Web Push proves flaky.
 - The user's active Pi agent config (`~/.pi/agent`) has Foreman removed — only the `AskUserQuestion` extension is kept, and `~/.pi/agent/AGENTS.md` is now a minimal AskUserQuestion-only file (backups under `~/.pi/agent/backups/`).
+- The repo is at `/Users/a1241968/Desktop/Oscar/nuncio` (parent dir `Oscar`, not `Oscar_Prj`); Synara is a sibling clone at `Oscar/synara`.
+- Desktop/mobile roadmap lives in `plans/260701-desktop-daemon-mobile/` on the `frontend` branch (a lane outside the SDK-lane convention). Locked decisions: Electron wraps existing shadcn `apps/web` (no UI rewrite, supervises the Bun daemon as a child process); mobile is a separate Expo app (`apps/mobile`) using react-native-reusables + NativeWind; shared logic + design tokens go in `packages/core`; PWA is dropped (desktop=host + Expo=remote makes it redundant). One monorepo, not separate repos.
+- "Web version" is a serving mode, not a rewrite: the daemon (`apps/server`) serving the built `apps/web` (via NestJS `ServeStatic`, not yet wired) makes UI + API same-origin — desktop, remote web, and mobile are all clients of the one daemon.
+- The transcript event contract (persisted event log + `seq` cursor + `since=` replay + client-side throttled reveal via `use-throttled-stream-text`) already delivers resumable smooth streaming; the missing piece vs Synara is server-side backpressure. `use-throttled-stream-text` reveals at a fixed 40 chars/sec (typewriter, not adaptive).

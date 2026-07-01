@@ -139,16 +139,13 @@ Build and run the production stack on your machine, then expose it over Tailscal
 
 ```bash
 bun run build
-bun run --filter @nuncio/server start:prod   # API on :3000
-bun run --filter @nuncio/web preview         # built UI on :5173 (proxies /api → 3000)
-tailscale serve --bg 5173
+bun run --filter @nuncio/server start:prod   # API + built UI on :3000
+tailscale serve --bg 3000
 ```
 
 Open `https://<your-machine>.<tailnet>.ts.net` — Tailscale terminates TLS so iPhone PWA install works.
 
-**API on port 3000:** In dev, Vite proxies `/api` to the NestJS server. The same proxy applies when using `vite preview`, so a single `tailscale serve --bg 5173` is usually enough — the browser only talks to 5173 and the preview server forwards API calls to localhost:3000.
-
-If you serve the API and web separately (e.g. static files from another host without a proxy), you may need a **second** `tailscale serve` for port 3000, or a **unified reverse proxy** (nginx, Caddy, etc.) that routes `/` → web and `/api` → server under one HTTPS origin.
+**Single-port serving:** In dev, Vite still runs on :5173 and proxies `/api` to the NestJS server on :3000. After `bun run build`, the Nest/Bun daemon serves `apps/web/dist` itself: `/api/*` remains JSON API traffic and every other app route falls back to the built SPA shell.
 
 ## PWA install (iPhone)
 
@@ -164,8 +161,8 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 ## Architecture
 
 - **Agent providers:** Pi SDK, Codex app-server, Cursor SDK, and Mock behind a common `AgentProvider` interface; `AgentRegistry` selects per session. Pi auth via the SDK's `AuthStorage` at `~/.pi/agent`; Codex auth via the local `codex` CLI login; Cursor auth via `CURSOR_API_KEY`. See [docs/system-architecture.md](docs/system-architecture.md).
-- **Backend:** NestJS (`apps/server`) on port 3000
-- **Frontend:** Vite + React + Tailwind + shadcn/ui (`apps/web`) on port 5173 by default (`NUNCIO_WEB_PORT` overrides dev/preview; `NUNCIO_API_ORIGIN` overrides the `/api` proxy target)
+- **Backend:** NestJS (`apps/server`) on port 3000; after `bun run build`, it also serves `apps/web/dist` at `/` while keeping `/api/*` for JSON routes
+- **Frontend:** Vite + React + Tailwind + shadcn/ui (`apps/web`) on port 5173 in dev/preview (`NUNCIO_WEB_PORT` overrides dev/preview; `NUNCIO_API_ORIGIN` overrides the `/api` proxy target)
 - **Persistence:** SQLite (`bun:sqlite`) in `data/nuncio.db` — sessions (with `provider`, `model`, and provider runtime state), append-only event log, and a `settings` table for runtime-configurable env overrides (secrets encrypted at rest)
 - **Auth:** Tailscale (network) + static app token (planned)
 - **Distribution:** Open source — friends/colleagues self-host on their own Linux/macOS machines

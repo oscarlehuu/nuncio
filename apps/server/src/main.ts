@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { AgentRegistry } from './agents/agents.registry';
+import { configureWebAppServing } from './web-static-assets';
 
 // The Cursor SDK under Bun emits stray NGHTTP2_FRAME_SIZE_ERROR / ERR_HTTP2_STREAM_ERROR
 // events from its HTTP/2 streams (model discovery, Agent.create validation) that escape the
@@ -43,11 +44,11 @@ async function bootstrap() {
   app.setGlobalPrefix('api');
   app.enableCors({ origin: true });
   // Raise the body limit so base64 image attachments fit (default is 100kb).
-  // Use Nest's native body parser config rather than importing `express`
-  // directly — `express` is only a transitive dep and is not resolvable as a
-  // bare specifier under Bun's isolated module store.
+  // Use Nest's native body parser config rather than wiring Express parsers
+  // directly so Nest's rawBody integration stays intact.
   app.useBodyParser('json', { limit: '25mb' });
   app.useBodyParser('urlencoded', { extended: true, limit: '25mb' });
+  configureWebAppServing(app);
 
   const shutdown = () => {
     try {

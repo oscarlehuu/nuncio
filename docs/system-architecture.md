@@ -186,7 +186,30 @@ Session FSM: `CREATED → RUNNING → IDLE | ERROR | PAUSED`; `IDLE/PAUSED → R
 - **`rawBody: true`** preserves the exact request bytes on `req.rawBody` so inbound forge webhooks can verify their signature over the unmodified payload (`webhooks.controller.ts` reads `req.rawBody`). NEVER remove `rawBody: true` — webhook HMAC/`x-gitlab-token` verification depends on byte-exact bodies, and a re-serialized JSON body will fail verification.
 - **Body-parser limit** (`useBodyParser('json' | 'urlencoded', { limit: '25mb' })`) for base64 image attachments.
 
-Order is `create({ rawBody })` → `setGlobalPrefix('api')` → `enableCors({ origin: true })` → `useBodyParser(...)`. Both the global `/api` prefix and CORS stay as-is; webhook routes live under `/api/webhooks/forge/:provider`.
+Order is `create({ rawBody })` → `setGlobalPrefix('api')` → `enableCors({ origin: true })` → `useBodyParser(...)` → `configureWebAppServing(app)` (`main.ts:54`). Both the global `/api` prefix and CORS stay as-is; webhook routes live under `/api/webhooks/forge/:provider`. **Order invariant:** `configureWebAppServing` runs **after** `setGlobalPrefix`/`enableCors`/`useBodyParser` and its middleware never touches `/api/*` (see below), so rawBody, body-parser limits, CORS, and webhook HMAC-over-rawBody are all unaffected. NEVER move static serving before the body-parser/rawBody wiring.
+
+## Single-port web serving (`web-static-assets.ts`)
+
+`configureWebAppServing(app, distPath?)` (`apps/server/src/web-static-assets.ts:16`) makes the daemon serve the built Vite SPA (`apps/web/dist`) as same-origin static assets, so the UI and API share one port with no Vite dev proxy. This is the keystone for the Electron shell (loads `http://localhost:PORT` directly) and a future remote web deployment.
+
+- **Dist path resolution.** `resolveWebDistPath()` (`web-static-assets.ts:8`) returns `resolve(__dirname, '../../web/dist')` — an absolute path anchored to the **module location**, NOT `process.cwd()`. This survives dev, a different cwd, and later Electron packaging. NEVER switch this to a `process.cwd()`-relative path.
+- **No-op guard.** `configureWebAppServing` returns `false` and wires nothing when `rootPath` or `rootPath/index.html` is absent (`existsSync`). So in local dev (`bun run dev`, no build) and any environment without a built web app, static serving is inert and `/api` boots normally. Returns `true` when serving is active.
+- **Two middlewares, both `/api`-guarded.**
+  1. `express.static(rootPath, { fallthrough: true, index: false })` gated by `!isApiRequest(req)` — serves real files (`/assets/*.js`, etc.). `fallthrough: true` lets a non-matching path continue to the SPA fallback.
+  2. SPA fallback: for non-`/api` `GET`/`HEAD` requests, `res.sendFile(indexPath)` returns `index.html` so react-router deep-links and hard refreshes resolve client-side.
+- **`/api` precedence invariant.** `isApiRequest(req)` (`web-static-assets.ts:12`) is true when `req.path === '/api'` or starts with `/api/`. **Both** middlewares `next()` immediately for API requests, so static serving can NEVER shadow or intercept a Nest route. A missing `/api/*` route still returns the Nest JSON 404 (`Cannot GET /api/...`), NOT `index.html`. NEVER let the SPA fallback answer an `/api` path — a build fixture may contain an `api/health` file, and it must still be shadowed by the live Nest handler.
+
+**State transitions (per request, when dist present):**
+
+| Request | Outcome |
+|---------|---------|
+| `GET /api/*` (known) | Nest controller (JSON) |
+| `GET /api/*` (unknown) | Nest JSON 404 — never HTML |
+| `GET /assets/app.js` (file exists) | static file, real content-type |
+| `GET /sessions/deep-link` (no file) | `index.html`, `text/html` (SPA) |
+| `POST` non-`/api` | falls through (no SPA rewrite for non-GET/HEAD) |
+
+**Tests.** `apps/server/test/unit/web-static-assets.spec.ts` (bun test) uses a temp fixture dist to prove: (a) app route → `index.html`/`text/html`, (b) static asset served, (c) `/api` route stays on the Nest handler even when a matching static file exists, (d) missing `/api` route → JSON 404 (not HTML), (e) dist absent → app still boots and `/api` works.
 
 ## Continue on mobile (session handoff)
 
