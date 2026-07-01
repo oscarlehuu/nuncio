@@ -251,7 +251,7 @@ describe('ModelPicker', () => {
     });
   });
 
-  it('lists cursor before pi in the engine menu', async () => {
+  it('lists pi before cursor in the engine menu', async () => {
     render(
       <ModelPicker
         value="anthropic:claude-haiku-4-5"
@@ -263,7 +263,41 @@ describe('ModelPicker', () => {
     await userEvent.click(screen.getByRole('button', { name: /claude haiku 4\.5/i }));
 
     const engines = await screen.findAllByRole('menuitem', { name: /^(cursor|pi)$/i });
-    expect(engines[0]).toHaveAccessibleName(/cursor/i);
-    expect(engines[1]).toHaveAccessibleName(/pi/i);
+    expect(engines[0]).toHaveAccessibleName(/pi/i);
+    expect(engines[1]).toHaveAccessibleName(/cursor/i);
+  });
+
+  it('shows a header per group when pi has more than one group', async () => {
+    const multiGroupPi: ModelProvider = {
+      id: 'pi',
+      name: 'Pi',
+      groups: [
+        {
+          id: 'g1',
+          name: 'Anthropic',
+          models: [{ id: 'anthropic:claude-haiku-4-5', name: 'Claude Haiku 4.5 (latest)' }],
+        },
+        {
+          id: 'g2',
+          name: 'OpenAI',
+          models: [{ id: 'codex:gpt-5.5', name: 'GPT-5.5' }],
+        },
+      ],
+    };
+
+    render(
+      <ModelPicker
+        value="anthropic:claude-haiku-4-5"
+        onChange={vi.fn()}
+        providers={[multiGroupPi]}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /claude haiku 4\.5/i }));
+    const piEngine = await screen.findByRole('menuitem', { name: /^pi$/i });
+    await userEvent.hover(piEngine);
+
+    expect(await screen.findByText('Anthropic')).toBeInTheDocument();
+    expect(await screen.findByText('OpenAI')).toBeInTheDocument();
   });
 });

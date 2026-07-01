@@ -81,8 +81,8 @@ describe('model-preference', () => {
       modelId: 'cursor:removed-model',
       providerId: 'cursor',
     });
-    expect(resolved?.modelId).toBe('cursor:codex-5.1-max');
-    expect(resolved?.providerId).toBe('cursor');
+    expect(resolved?.modelId).toBe('anthropic:claude-haiku-4');
+    expect(resolved?.providerId).toBe('pi');
   });
 
   it('falls back when provider id does not match the stored model', () => {
@@ -90,13 +90,13 @@ describe('model-preference', () => {
       modelId: 'cursor:composer-2.5',
       providerId: 'pi',
     });
-    expect(resolved?.modelId).toBe('cursor:codex-5.1-max');
-    expect(resolved?.providerId).toBe('cursor');
+    expect(resolved?.modelId).toBe('anthropic:claude-haiku-4');
+    expect(resolved?.providerId).toBe('pi');
   });
 
   it('uses catalog default when nothing is stored', () => {
     expect(localStorage.getItem(MODEL_PREFERENCE_STORAGE_KEY)).toBeNull();
     const resolved = resolveModelSelection(CURSOR_AND_PI, null);
-    expect(resolved?.modelId).toBe('cursor:codex-5.1-max');
+    expect(resolved?.modelId).toBe('anthropic:claude-haiku-4');
   });
 });

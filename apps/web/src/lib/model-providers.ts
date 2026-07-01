@@ -186,11 +186,11 @@ function isCursorDefaultModelId(id: string): boolean {
   return bare === 'default';
 }
 
-export const DEFAULT_PROVIDER_ID = 'cursor';
-export const DEFAULT_MODEL_ID = 'cursor:composer-2.5';
+export const DEFAULT_PROVIDER_ID = 'pi';
+export const DEFAULT_MODEL_ID = 'claude-fable-5';
 
-/** Provider menu order — cursor first (matches defaultId + Synara-style preference). */
-export const DEFAULT_PROVIDER_ORDER = ['cursor', 'pi'] as const;
+/** Provider menu order — pi first (Pi is the first-class engine). */
+export const DEFAULT_PROVIDER_ORDER = ['pi', 'cursor'] as const;
 
 export function compareProvidersByOrder(
   leftId: string,
@@ -243,7 +243,7 @@ export function normalizeModelCatalog(providers: ModelProvider[]): ModelProvider
   return sortModelProviders(sanitizeCursorModels(providers));
 }
 
-/** First available model in catalog order (cursor → pi when present). */
+/** First available model in catalog order (pi → cursor when present). */
 export function pickDefaultModelSelection(
   providers: ModelProvider[],
 ): { modelId: string; providerId: string } | null {
