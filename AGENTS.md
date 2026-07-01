@@ -403,8 +403,9 @@ The event contract is **shared** across providers (emitted via `BaseAgentProvide
 | GET | `/api/projects/branches?path=` | list branches for a repo path (also accepts custom absolute paths) |
 | GET | `/api/sessions` | list (excludes `ARCHIVED` unless `?includeArchived=1\|true`) |
 | POST | `/api/sessions` | `{ prompt, model?, provider?, workspace?, projectPath?, useWorktree?, baseBranch? }` — `projectPath` without `useWorktree` runs the provider in that selected repo and stores `baseBranch` as the selected branch; `useWorktree: true` creates a git worktree on branch `nuncio/<id>-<slug>` branched from `baseBranch` (default repo branch); `workspace` is the cwd fallback; starts run in background; `provider` defaults to `registry.defaultId()` (cursor if `CURSOR_API_KEY` set, else codex if logged in, else pi if authed; `503` when none configured) |
-| POST | `/api/sessions/handoff` | `{ cursorChatId, workspace, title? }` — selective import of a Cursor IDE/CLI chat from `~/.cursor/projects/<slug>/agent-transcripts/`; creates `provider: cursor`, `cursor_backend: cli`, hydrates transcript into the event log, status `IDLE` (no auto-run). Idempotent per `cursor_chat_id`. |
-| GET | `/api/cursor/local-sessions?workspace=&limit=` | read-only picker feed — scans agent transcripts for the workspace slug; marks chats already imported |
+| POST | `/api/sessions/handoff` | `{ cursorChatId, workspace, title? }` imports a Cursor IDE/CLI chat; `{ piSessionPath, workspace, title? }` imports a Pi CLI session. Cursor creates `provider: cursor`, `cursor_backend: cli` and is idempotent per `cursor_chat_id`; Pi creates `provider: pi`, `provider_thread_id: piSessionPath`, `cursor_backend: null` and is idempotent per `provider_thread_id`. Both hydrate transcript into the event log, status `IDLE` (no auto-run). |
+| GET | `/api/cursor/local-sessions?workspace=&limit=` | read-only picker feed — scans Cursor agent transcripts for the workspace slug; marks chats already imported |
+| GET | `/api/pi/local-sessions?workspace=&limit=` | read-only picker feed — lists Pi SDK sessions via `SessionManager.list(cwd)`; marks sessions already imported by `provider_thread_id` |
 | GET | `/api/sessions/:id` | detail (includes `workspace`, `projectPath`, `baseBranch`, `worktreePath`, `branch`, `supportsInteraction`, `cursorBackend`, `cursorChatId` when set) |
 | GET | `/api/sessions/:id/events?since=` | event log (cursor) |
 | GET | `/api/sessions/:id/stream?since=` | SSE stream |
@@ -521,16 +522,17 @@ When a phase is large it is split into lanes working on isolated branches, then 
 
 ### Handoff (Continue on mobile)
 
-**Status: shipped.** Selective import of a Cursor IDE/CLI chat into Nuncio for phone steering.
+**Status: shipped.** Selective import of a Cursor IDE/CLI chat or Pi CLI session into Nuncio for phone steering.
 
-| Source | `cursor_backend` | Steer backend | Store |
-|--------|------------------|---------------|-------|
-| `POST /api/sessions` (Nuncio create) | `sdk` (default) | `CursorAgentProvider` (`@cursor/sdk`) | `data/cursor-store/*.ndjson` |
-| `POST /api/sessions/handoff` (import) | `cli` | `CursorCliProvider` (`agent -p --resume`) | Cursor's `~/.cursor/chats/<hash>/<chatId>/` |
+| Source | Stored provider/backend | Steer backend | Store |
+|--------|-------------------------|---------------|-------|
+| `POST /api/sessions` (Nuncio create) | `cursor_backend=sdk` (default for Cursor) | `CursorAgentProvider` (`@cursor/sdk`) | `data/cursor-store/*.ndjson` |
+| `POST /api/sessions/handoff` with `cursorChatId` | `cursor_backend=cli` | `CursorCliProvider` (`agent -p --resume`) | Cursor's `~/.cursor/chats/<hash>/<chatId>/` |
+| `POST /api/sessions/handoff` with `piSessionPath` | `provider=pi`, `providerThreadId=<jsonl path>`, `cursorBackend=null` | `PiAgentProvider` in-process (`SessionManager.open`) | Pi's `~/.pi/agent/sessions/<encoded-cwd>/*.jsonl` |
 
-**Modules:** `cursor-local/` scans `~/.cursor/projects/<slug>/agent-transcripts/` for the picker (`GET /api/cursor/local-sessions`) and hydrates JSONL into the event log on import. `CursorCliProvider` spawns the CLI, parses `stream-json` → shared `assistant_delta` / `assistant_message` / `tool_start` / `tool_end` events (CLI `tool_call` lines included).
+**Modules:** `cursor-local/` scans `~/.cursor/projects/<slug>/agent-transcripts/` for the picker (`GET /api/cursor/local-sessions`) and hydrates JSONL into the event log on import. `pi-local/` scans Pi SDK sessions via `SessionManager.list(cwd)` (`GET /api/pi/local-sessions`) and hydrates parsed `SessionManager.open(path).getEntries()` (no hand-parsed JSONL). `CursorCliProvider` spawns the CLI, parses `stream-json` → shared `assistant_delta` / `assistant_message` / `tool_start` / `tool_end` events (CLI `tool_call` lines included); Pi handoff uses the existing `PiAgentProvider` and adds no provider code.
 
-**Idempotent import:** `POST /api/sessions/handoff` keyed on `cursor_chat_id` — re-import returns the existing session row (no duplicate transcript append).
+**Idempotent import:** Cursor handoff is keyed on `cursor_chat_id`; Pi handoff is keyed on `provider_thread_id` (the Pi session JSONL path). Re-import returns the existing session row (no duplicate transcript append).
 
 **Active-run guard:** Before CLI steer, block if transcript mtime **or** `store.db` mtime under `~/.cursor/chats/*/<chatId>/` is fresher than 60s (Cursor may still be running in IDE). Pass `forceResume: true` on `POST /api/sessions/:id/steer` to skip. `chatStoreMtime()` scans all workspace-hash dirs (hash algorithm not stable across Cursor versions — scan is intentional).
 
@@ -538,7 +540,7 @@ When a phase is large it is split into lanes working on isolated branches, then 
 
 **Subprocess lifecycle:** `CursorCliProvider.dispose()` kills the active `Bun.spawn` handle; `pause()` / `archive()` route through `agents.resolveForSession(session).dispose(id)`. `main.ts` shutdown calls `registry.cli().disposeAll()`.
 
-**Frontend:** `HandoffPicker` (bottom sheet) — project picker, search, refresh, day-grouped list with "On Nuncio" badge. Entry points: home composer + session-detail header (SDK Cursor sessions only). Errors map to actionable toasts via `HandoffApiError` (409/503/404).
+**Frontend:** `HandoffPicker` (bottom sheet) currently exposes the Cursor path — project picker, search, refresh, day-grouped list with "On Nuncio" badge. Pi picker UI is the follow-up; backend endpoints are ready. Entry points: home composer + session-detail header (SDK Cursor sessions only). Errors map to actionable toasts via `HandoffApiError` (409/503/404).
 
 ## shadcn/ui adoption
 
@@ -644,6 +646,7 @@ Minimal web GUI for coding agents (Codex, Claude, Cursor, OpenCode). Synara fork
 - Pin model-brittle Pi integration tests (cwd/tool-use) to a known tool-capable model (`cliproxyapi:claude-opus-4-8`) instead of relying on the default model.
 - Add new provider capabilities additively (e.g. `attachments` on `AgentRunContext`, optional `interrupt?`/`setModel?` methods) — don't break shared `run()`/provider signatures.
 - Route provider capability differences through capability flags + optional methods (base all-off), not `if (id === 'pi')` branches in SessionsService/UI.
+- Syncing `main` into an SDK integration branch (`pi-sdk`/`cursor-sdk`/`codex-sdk`) cannot be done by a direct `git push` — GitHub branch protection blocks it ("must be through PR"). Open a sync PR branch instead (e.g. `pi/sync-main-to-pi-sdk`) even for a fast-forward main merge.
 
 ## Learned User Preferences
 
@@ -674,3 +677,5 @@ Minimal web GUI for coding agents (Codex, Claude, Cursor, OpenCode). Synara fork
 - Pi provider `cliproxyapi` (`anthropic-messages`, `forceAdaptiveThinking: true`) routes Claude (`claude-opus-4-8`, `claude-sonnet-4-6`) via CLIProxyAPI, configured in `~/.pi/agent/models.json`; user's default is `cliproxyapi/claude-opus-4-8`.
 - Pi has no `max` thinking level (ceiling `xhigh`; levels `off/minimal/low/medium/high/xhigh`). Reaching Anthropic `max` effort needs a per-model remap (Opus 4.8 supports low/medium/high/xhigh/max; Sonnet 4.6 supports low/medium/high/max, no xhigh).
 - `session.setModel()` persists the default model to the real `~/.pi/agent/settings.json` (global config shared with the `pi` CLI) — by design, but it mutates global state.
+- Nuncio's phone client is a thin client (agent runs on the Mac; phone only streams SSE + sends steer over Tailscale). There is no native mobile track — the PWA *is* the mobile app, and full native (RN/Swift) is mostly downside while self-hosted. Native's only material gain here is notification reliability, which Phase 5 Web Push covers; Capacitor wrap is the escape hatch if Web Push proves flaky.
+- The user's active Pi agent config (`~/.pi/agent`) has Foreman removed — only the `AskUserQuestion` extension is kept, and `~/.pi/agent/AGENTS.md` is now a minimal AskUserQuestion-only file (backups under `~/.pi/agent/backups/`).
