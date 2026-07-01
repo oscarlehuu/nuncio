@@ -13,6 +13,7 @@ export interface ModelItemDto {
   sub?: string;
   badge?: string;
   cost?: string;
+  contextWindow?: number;
   options?: ModelOptionDescriptorDto[];
   variants?: ModelVariantDto[];
 }

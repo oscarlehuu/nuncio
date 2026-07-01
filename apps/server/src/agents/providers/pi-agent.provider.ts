@@ -24,6 +24,7 @@ type PiRegistryModel = {
   id?: string;
   reasoning?: boolean;
   thinkingLevelMap?: Record<string, string | null>;
+  contextWindow?: number;
 };
 
 type PiLiveSession = {
@@ -51,6 +52,7 @@ type PiModelRegistry = {
     id: string;
     name: string;
     cost?: { input: number; output: number };
+    contextWindow?: number;
     reasoning?: boolean;
     thinkingLevelMap?: Record<string, string | null>;
   }>;
@@ -279,10 +281,16 @@ export class PiAgentProvider extends BaseAgentProvider {
     for (const model of models) {
       const registryModel = modelRegistry.find(model.provider, model.id);
       const options = piThinkingDescriptors(registryModel ?? model);
+      const contextWindow = registryModel?.contextWindow ?? model.contextWindow;
+      const validContextWindow =
+        typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0
+          ? contextWindow
+          : undefined;
       const item: ModelItemDto = {
         id: `${model.provider}:${model.id}`,
         name: model.name,
         sub: model.id,
+        ...(validContextWindow !== undefined ? { contextWindow: validContextWindow } : {}),
         ...(options.length > 0 ? { options } : {}),
       };
       if (model.cost) item.cost = `$${model.cost.input} / $${model.cost.output}`;
