@@ -242,14 +242,12 @@ function ModelSubmenuRow({
   model,
   value,
   modelOptions,
-  onSelect,
   onToggle,
   onActivate,
 }: {
   model: FlatModel;
   value: string;
   modelOptions?: ModelOptionsMap;
-  onSelect: (options: ModelOptionsMap) => void;
   onToggle: (options: ModelOptionsMap) => void;
   onActivate: (options: ModelOptionsMap) => void;
 }) {
@@ -263,7 +261,7 @@ function ModelSubmenuRow({
 
   const patchOptions = (next: ModelOptionsMap) => {
     if (active) onToggle(next);
-    else onSelect(next);
+    else onActivate(next);
   };
 
   return (
@@ -333,7 +331,6 @@ function ModelRows({
               model={model}
               value={value}
               modelOptions={modelOptions}
-              onSelect={(options) => onPick(model.id, model.providerId, options)}
               onToggle={(options) => onToggle(model.id, model.providerId, options)}
               onActivate={(options) => onToggle(model.id, model.providerId, options)}
             />

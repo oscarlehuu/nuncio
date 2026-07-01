@@ -249,6 +249,7 @@ describe('ModelPicker', () => {
     expect(onChange).toHaveBeenCalledWith('anthropic:claude-opus-4-6', 'pi', {
       thinkingLevel: 'high',
     });
+    expect(screen.queryByRole('slider', { name: /thinking effort/i })).toBeInTheDocument();
   });
 
   it('lists pi before cursor in the engine menu', async () => {
