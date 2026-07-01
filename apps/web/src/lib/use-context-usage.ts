@@ -46,7 +46,7 @@ const TOOL_DEFINITIONS_TOKENS = 13_000;
 const RULES_TOKENS = 27_000;
 const SKILLS_TOKENS = 3_000;
 
-export function calculateContextUsage(events: SessionEvent[]): ContextUsage {
+export function calculateContextUsage(events: SessionEvent[], contextWindow?: number): ContextUsage {
     let conversation = 0;
     let tools = 0;
     let thinking = 0;
@@ -83,7 +83,7 @@ export function calculateContextUsage(events: SessionEvent[]): ContextUsage {
     }
 
     const total = conversation + tools + thinking + context + SYSTEM_PROMPT_TOKENS + TOOL_DEFINITIONS_TOKENS + RULES_TOKENS + SKILLS_TOKENS;
-    const window = DEFAULT_CONTEXT_WINDOW;
+    const window = contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT_WINDOW;
     const percentage = Math.min(100, Math.round((total / window) * 100));
 
     const breakdown: ContextBreakdownItem[] = [
@@ -100,8 +100,8 @@ export function calculateContextUsage(events: SessionEvent[]): ContextUsage {
     return { total, window, percentage, breakdown };
 }
 
-export function useContextUsage(events: SessionEvent[]): ContextUsage {
-  return useMemo(() => calculateContextUsage(events), [events]);
+export function useContextUsage(events: SessionEvent[], contextWindow?: number): ContextUsage {
+  return useMemo(() => calculateContextUsage(events, contextWindow), [events, contextWindow]);
 }
 
 function formatTokens(n: number): string {

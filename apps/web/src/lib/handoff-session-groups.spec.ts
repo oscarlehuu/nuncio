@@ -5,18 +5,11 @@ import {
   groupHandoffSessionsByDay,
   localDayKey,
 } from './handoff-session-groups';
-import type { LocalCursorSession } from './handoff-api';
 
-function session(updatedAt: number, chatId: string): LocalCursorSession {
+function session(updatedAt: number, id: string) {
   return {
-    chatId,
-    workspace: '/code/nuncio',
-    projectSlug: 'code-nuncio',
-    title: chatId,
-    preview: null,
+    id,
     updatedAt,
-    messageCount: 1,
-    alreadyImported: false,
   };
 }
 
@@ -41,9 +34,9 @@ describe('handoff-session-groups', () => {
 
     expect(groups).toHaveLength(2);
     expect(groups[0]?.label).toBe('Today');
-    expect(groups[0]?.items.map((item) => item.chatId)).toEqual(['later', 'earlier']);
+    expect(groups[0]?.items.map((item) => item.id)).toEqual(['later', 'earlier']);
     expect(groups[1]?.label).toBe('Yesterday');
-    expect(groups[1]?.items.map((item) => item.chatId)).toEqual(['old']);
+    expect(groups[1]?.items.map((item) => item.id)).toEqual(['old']);
   });
 
   it('labels today and yesterday relative to now', () => {
