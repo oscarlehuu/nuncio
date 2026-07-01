@@ -5,6 +5,7 @@ import type { Setting } from '../lib/settings-api';
 import { SettingRow } from './setting-row';
 import { ProviderIcon } from './provider-icon';
 import { fetchForgeStatus, type ForgeStatusDto } from '../lib/forge-status-api';
+import { AppearanceSettingsSection } from './appearance-settings-section';
 
 interface SettingsViewProps {
   settings: Setting[];
@@ -164,8 +165,10 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
       </header>
 
       <div className="flex-1 px-4 py-2 max-w-[640px] w-full mx-auto space-y-6">
+        <AppearanceSettingsSection />
+
         {/* Providers Section */}
-        <section className="mt-4 first:mt-0">
+        <section>
           <h2 className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold mb-2">
             Providers
           </h2>
