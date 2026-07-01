@@ -12,6 +12,32 @@ export interface LocalCursorSession {
   nuncioSessionId?: string;
 }
 
+export interface LocalPiSession {
+  sessionId: string;
+  path: string;
+  workspace: string;
+  title: string;
+  preview: string | null;
+  updatedAt: number;
+  messageCount: number;
+  alreadyImported: boolean;
+  nuncioSessionId?: string;
+}
+
+export interface LocalHandoffSession {
+  source: 'cursor' | 'pi';
+  key: string;
+  title: string;
+  preview: string | null;
+  updatedAt: number;
+  messageCount: number;
+  alreadyImported: boolean;
+  nuncioSessionId?: string;
+  workspace: string;
+  cursorChatId?: string;
+  piSessionPath?: string;
+}
+
 export class HandoffApiError extends Error {
   readonly status: number;
 
@@ -47,11 +73,81 @@ export async function fetchLocalCursorSessions(
   return body.items;
 }
 
-export async function handoffSession(input: {
-  cursorChatId: string;
+export async function fetchLocalPiSessions(
+  workspace: string,
+): Promise<LocalPiSession[]> {
+  const params = new URLSearchParams({ workspace });
+  const res = await fetch(`/api/pi/local-sessions?${params}`);
+  if (!res.ok) {
+    throw new HandoffApiError(res.status, 'Failed to load Pi sessions on this Mac');
+  }
+  const body = (await res.json()) as { items: LocalPiSession[] };
+  return body.items;
+}
+
+export async function fetchAllLocalSessions(
+  workspace: string,
+): Promise<LocalHandoffSession[]> {
+  const results = await Promise.allSettled([
+    fetchLocalPiSessions(workspace),
+    fetchLocalCursorSessions(workspace),
+  ]);
+
+  const allRejected = results.every((r) => r.status === 'rejected');
+  if (allRejected) {
+    throw (results[0] as PromiseRejectedResult).reason;
+  }
+
+  const sessions: LocalHandoffSession[] = [];
+
+  const piResult = results[0];
+  if (piResult.status === 'fulfilled') {
+    for (const item of piResult.value) {
+      sessions.push({
+        source: 'pi',
+        key: `pi:${item.path}`,
+        title: item.title,
+        preview: item.preview,
+        updatedAt: item.updatedAt,
+        messageCount: item.messageCount,
+        alreadyImported: item.alreadyImported,
+        nuncioSessionId: item.nuncioSessionId,
+        workspace: item.workspace,
+        piSessionPath: item.path,
+      });
+    }
+  }
+
+  const cursorResult = results[1];
+  if (cursorResult.status === 'fulfilled') {
+    for (const item of cursorResult.value) {
+      sessions.push({
+        source: 'cursor',
+        key: `cursor:${item.chatId}`,
+        title: item.title,
+        preview: item.preview,
+        updatedAt: item.updatedAt,
+        messageCount: item.messageCount,
+        alreadyImported: item.alreadyImported,
+        nuncioSessionId: item.nuncioSessionId,
+        workspace: item.workspace,
+        cursorChatId: item.chatId,
+      });
+    }
+  }
+
+  return sessions.sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export type HandoffInput = {
   workspace: string;
   title?: string;
-}): Promise<Session> {
+} & (
+  | { cursorChatId: string; piSessionPath?: never }
+  | { piSessionPath: string; cursorChatId?: never }
+);
+
+export async function handoffSession(input: HandoffInput): Promise<Session> {
   const res = await fetch('/api/sessions/handoff', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -61,7 +157,7 @@ export async function handoffSession(input: {
     const text = await res.text();
     throw new HandoffApiError(
       res.status,
-      handoffErrorMessage(res.status, text || 'Failed to import Cursor session'),
+      handoffErrorMessage(res.status, text || 'Failed to import session'),
     );
   }
   return res.json();

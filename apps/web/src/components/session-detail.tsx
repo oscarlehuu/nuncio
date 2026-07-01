@@ -126,7 +126,7 @@ export function SessionDetail({
     !!onContinueOnMobile;
   const repoName = projectDisplayName(session.projectPath) ?? projectDisplayName(session.workspace);
   const branchName = session.branch;
-  const contextUsage = useContextUsage(events);
+  const contextUsage = useContextUsage(events, entry?.contextWindow);
 
   useEffect(() => {
     pendingScrollToBottomRef.current = true;

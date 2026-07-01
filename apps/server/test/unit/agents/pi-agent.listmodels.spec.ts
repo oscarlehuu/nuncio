@@ -2,7 +2,13 @@ import { describe, it, expect, mock } from 'bun:test';
 import { STATIC_MODEL_PROVIDERS } from '../../../src/models/models.static';
 import { PiAgentProvider } from '../../../src/agents/providers/pi-agent.provider';
 
-type FakeModel = { provider: string; id: string; name: string; cost?: { input: number; output: number } };
+type FakeModel = {
+  provider: string;
+  id: string;
+  name: string;
+  cost?: { input: number; output: number };
+  contextWindow?: number;
+};
 
 let availableModels: FakeModel[] = [];
 let throwOnCreate = false;
@@ -36,9 +42,15 @@ function makeProvider(): PiAgentProvider {
 }
 
 describe('PiAgentProvider.listModels', () => {
-  it('groups registry models by provider with provider:modelId ids and cost formatting', async () => {
+  it('groups registry models by provider with provider:modelId ids, cost formatting, and context windows', async () => {
     availableModels = [
-      { provider: 'anthropic', id: 'claude-x', name: 'Claude X', cost: { input: 3, output: 15 } },
+      {
+        provider: 'anthropic',
+        id: 'claude-x',
+        name: 'Claude X',
+        cost: { input: 3, output: 15 },
+        contextWindow: 1_000_000,
+      },
       { provider: 'openai-codex', id: 'gpt-y', name: 'GPT Y' },
     ];
     throwOnCreate = false;
@@ -54,6 +66,7 @@ describe('PiAgentProvider.listModels', () => {
     const claude = flat.find((m) => m.id === 'anthropic:claude-x');
     expect(claude?.name).toBe('Claude X');
     expect(claude?.cost).toBe('$3 / $15');
+    expect(claude?.contextWindow).toBe(1_000_000);
   });
 
   it('falls back to static providers when the registry has no available models', async () => {

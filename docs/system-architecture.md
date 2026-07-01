@@ -124,6 +124,15 @@ this.cachedAvailable = registry.getAvailable().length > 0;   // models with conf
 
 `GET /api/models` also exposes `capabilities` per provider entry: `ModelsService.list()` (`models.service.ts`) sets `capabilities: entry.capabilities ?? provider.capabilities` on every `ModelProviderDto`, so the frontend can show/hide interrupt, in-session model/effort switch, and image-upload affordances per provider.
 
+### Model context window (real vs. fallback)
+
+`ModelItemDto.contextWindow?: number` (`apps/server/src/models/models.types.ts:16`) carries each model's real token budget through `GET /api/models` to the web client (mirrored as `ModelInfo.contextWindow` in `apps/web/src/lib/model-providers.ts:15`). It powers the per-session context-usage gauge instead of a hard-coded default.
+
+- **Source (Pi).** `PiAgentProvider.fromRegistry` (`pi-agent.provider.ts:284`) reads `registryModel?.contextWindow ?? model.contextWindow` from the Pi `ModelRegistry`. **Sanitize invariant:** the field is emitted **only** when the value is a finite number `> 0` (`validContextWindow`); otherwise it is omitted so the client falls back rather than dividing by a bogus window. NEVER forward `0`, `NaN`, or a negative window onto the DTO.
+- **Consumption (web).** `session-detail.tsx:129` resolves the session's model row via `modelById(catalog)[session.model]` and passes `entry?.contextWindow` into `useContextUsage(events, entry?.contextWindow)` (`apps/web/src/lib/use-context-usage.ts:103`).
+- **Fallback invariant.** `calculateContextUsage` (`use-context-usage.ts:49`) uses `contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT_WINDOW` where `DEFAULT_CONTEXT_WINDOW = 200_000` (`use-context-usage.ts:7`). An unknown/absent model, or a model whose provider does not report a window, degrades to 200K tokens — the gauge always renders. `percentage` is clamped to `[0, 100]`.
+- Static fallback catalog rows (`FALLBACK_PROVIDERS`) carry no `contextWindow`, so offline/test renders use the 200K default by design.
+
 ## Pi capabilities (interrupt / live model switch / images)
 
 `PiAgentProvider` (`pi-agent.provider.ts`) declares `{ interrupt: true, modelSwitch: 'in-session', effortSwitch: 'in-session', images: true }` and implements the matching optional methods against the live Pi SDK session handle held in `activeSessions: Map<sessionId, PiSessionHandle>`.
@@ -178,6 +187,96 @@ Session FSM: `CREATED → RUNNING → IDLE | ERROR | PAUSED`; `IDLE/PAUSED → R
 - **Body-parser limit** (`useBodyParser('json' | 'urlencoded', { limit: '25mb' })`) for base64 image attachments.
 
 Order is `create({ rawBody })` → `setGlobalPrefix('api')` → `enableCors({ origin: true })` → `useBodyParser(...)`. Both the global `/api` prefix and CORS stay as-is; webhook routes live under `/api/webhooks/forge/:provider`.
+
+## Continue on mobile (session handoff)
+
+A "handoff" imports an in-progress CLI/IDE agent chat from the host machine into a
+Nuncio session so the user can continue it from the phone PWA. `POST /api/sessions/handoff`
+(`sessions.controller.ts:51`) → `SessionsService.handoff()` (`sessions.service.ts:146`)
+takes a **discriminated** `HandoffSessionDto` (`sessions.types.ts:115`):
+
+- **Cursor CLI** — `{ cursorChatId, workspace, title? }` → spawns `agent` as a subprocess
+  and reparses `stream-json` (the Cursor SDK cannot resume IDE/CLI chats; separate store).
+- **Pi** — `{ piSessionPath, workspace, title? }` → in-process resume via the Pi SDK
+  `SessionManager`, which reads the *same* JSONL store the pi CLI writes
+  (`~/.pi/agent/sessions/<encoded-cwd>/<ts>_<uuid>.jsonl`). No subprocess, no new provider code.
+
+The two branches are keyed by `'piSessionPath' in input` (`sessions.service.ts:150`);
+`handoffPi()` (`sessions.service.ts:182`) handles the Pi lane.
+
+### Pi handoff design (invariants)
+
+- **Zero new provider code.** `PiAgentProvider.createPiSession` (`pi-agent.provider.ts:229`)
+  already resumes when `providerThreadId` is set (`SessionManager.open`) and streams via
+  `session.subscribe`. A handoff row simply sets `provider: 'pi'`, `providerThreadId = piSessionPath`,
+  `cursorBackend: null` so `AgentRegistry.resolveForSession` (`agents.registry.ts:54`) — `cursorBackend === 'cli'`
+  is false — falls through to `get(session.provider)` = the Pi SDK provider. **NEVER** set
+  `cursorBackend` on a Pi handoff; that would misroute it to the Cursor CLI subprocess.
+- **Dedup key = `provider_thread_id`.** `SessionsRepository.findByProviderThreadId()`
+  (`sessions.repository.ts:87`) looks up an existing import by the jsonl path stored in
+  `provider_thread_id`. Import is **idempotent**: `handoffPi` returns the existing session if
+  found (`sessions.service.ts:190`). **NEVER** add a migration or overload `cursor_chat_id`
+  for Pi — `provider_thread_id` already holds `session.sessionFile`.
+- **Resume in place.** Nuncio opens the *same* session file (one continuous append-only
+  session), not a fork. `SessionManager.forkFrom` is out of scope.
+- **No collision guards, no dialogs.** Import always succeeds silently. If the pi agent is
+  mid-turn the composer's send button reflects live state (steer/stop) exactly as for a
+  native Nuncio session — there is no `assertNotRecentlyActive` equivalent on the Pi path.
+- **Row shape.** `SessionsRepository.createHandoff()` (`sessions.repository.ts:125`) is a
+  discriminated union: `provider: 'pi'` → `{ provider_thread_id, cursor_backend: null }`;
+  otherwise `provider: 'cursor'` → `{ cursor_backend: 'cli', cursor_chat_id }`. Handoff rows
+  start in status `IDLE` (already checkpointed, not a fresh run).
+
+### Local session discovery
+
+`apps/server/src/pi-local/` mirrors `cursor-local/`:
+
+```
+apps/server/src/pi-local/
+  pi-local-sessions.service.ts   PiLocalSessionsService — list/read via SessionManager
+  pi-local-sessions.types.ts     LocalPiSessionDto
+  pi-transcript-hydrate.ts       piEntriesToSessionEvents — getEntries() → Nuncio events
+  pi-local.controller.ts         GET /api/pi/local-sessions
+  pi-local.module.ts             Nest wiring (registered in app.module.ts + sessions.module.ts)
+```
+
+- **`GET /api/pi/local-sessions?workspace=<abs>&limit=?`** (`pi-local.controller.ts`) →
+  `{ items: LocalPiSessionDto[] }`. `workspace` is required (400 otherwise); `limit` clamps
+  to `[1, 50]`, default 20, newest-first by `updatedAt`.
+- `PiLocalSessionsService.listForWorkspace` calls `SessionManager.list(cwd)` and maps each
+  `SessionInfo` (`id, path, name, firstMessage, messageCount, modified, cwd`) to
+  `LocalPiSessionDto { sessionId, path, workspace, title, preview, updatedAt, messageCount,
+  alreadyImported, nuncioSessionId? }`. `alreadyImported` / `nuncioSessionId` come from
+  `findByProviderThreadId(info.path)`.
+- The SDK is lazy-loaded via `loadSdk` and `SessionManager.open` via `openSession`; both are
+  instance fields overridable in unit tests. A failed `SessionManager.list` returns `[]`
+  (empty, not an error) so discovery degrades gracefully when the store is absent.
+
+### Transcript hydration (Pi + Cursor)
+
+`SessionsService.hydrateIfNeeded` (`sessions.service.ts:414`) backfills the event log once on
+import (guarded by `events.count === 0`); `refreshTranscriptIfNeeded` (`sessions.service.ts:424`)
+appends only *new* entries on later reads/steers, keyed by transcript mtime. Both dispatch
+through `readTranscriptEvents` (`sessions.service.ts:444`) and `transcriptMtime`
+(`sessions.service.ts:454`), which are now **provider-aware**:
+
+- Cursor CLI (`cursorBackend === 'cli' && cursorChatId`) → `cursorLocal.readTranscript(...)`.
+- Pi (`provider === 'pi' && providerThreadId`) → `piLocal.readTranscriptEvents(providerThreadId)`.
+
+`piEntriesToSessionEvents` (`pi-transcript-hydrate.ts`) builds events from the SDK's parsed
+`SessionManager.open(path).getEntries()` — **NEVER** hand-parse the JSONL. Mapping:
+
+| Pi entry | Nuncio event |
+|----------|--------------|
+| message `role: user`, `text` block | `user_message` |
+| message `role: assistant`, `text` block | `assistant_message` |
+| message `role: assistant`, `toolCall` block (`id`, `name`, `arguments`) | `tool_start` (payload `callId`, `tool`, parsed `input`) |
+| message `role: toolResult`, `text` block | `tool_end` (matched to a pending `tool_start` FIFO) |
+| message `role: assistant`, `thinking` block | skipped |
+
+Pi uses `toolCall` / role `toolResult` (NOT Cursor's `tool_use` / `tool_result`), so it needs
+its own mapper. Tool payloads pass through `truncatePayload`. Pending `toolCall`s are matched
+to `toolResult`s in FIFO order to recover `callId`/`tool` on the `tool_end`.
 
 ## Workspace selection
 
@@ -328,11 +427,11 @@ Web helpers `openPullRequest(id)`/`fetchPullRequest(id)` (`apps/web/src/lib/api.
 
 The Pi integration suite (`test/integration/pi-agent.integration.spec.ts`) exercises the real capabilities: in-session model switch, interrupt-and-resume, cwd tool-use pinned to `cliproxyapi:claude-opus-4-8`, and persist/resume. **Invariant:** it snapshots `~/.pi/agent/settings.json` in `beforeAll` and restores it in `afterAll`, so a run leaves that file byte-identical even though Pi's `setModel` intentionally writes to it.
 
-Server tests run on `bun test`. Unit tests use fakes for provider subprocess/SDK boundaries, so they do not require Codex, Cursor, or Pi credentials.
+Server tests run on `bun test`. Unit tests use fakes for provider subprocess/SDK boundaries, so they do not require Codex, Cursor, or Pi credentials. Pi handoff is covered by `test/unit/pi-local/` (`pi-local-sessions.service.spec.ts`, `pi-transcript-hydrate.spec.ts`) plus `sessions.handoff.spec.ts` and `sessions.repository.spec.ts` (`findByProviderThreadId`, discriminated `createHandoff`); the `PiLocalSessionsService` SDK boundary is faked via its `loadSdk`/`openSession` overrides.
 
 ## Known gaps (follow-up)
 
-- **Pi session revival:** `SessionManager.inMemory()` means Pi conversation history is lost on server restart. File-backed `SessionManager.create(cwd)` + lazy revive is planned to make the "resumable sessions" principle true for Pi.
+- **Pi session revival:** `SessionManager.inMemory()` means Pi conversation history is lost on server restart. File-backed `SessionManager.create(cwd)` + lazy revive is planned to make the "resumable sessions" principle true for Pi. (Note: **imported** Pi handoff sessions are already file-backed — they resume the on-disk jsonl via `providerThreadId` — so they survive restart.)
 - **Approval continuity:** approval request state is durable, but a request waiting inside the Codex app-server cannot continue across a server/app-server restart; stale pending requests are auto-denied on boot with `server_restarted`.
 - **Tool configuration:** Pi tools are hardcoded (`read, bash, grep, find, ls`); env/per-session config is planned.
 - **Additional providers:** future SDKs can be added by implementing `AgentProvider` and registering them in `AgentRegistry`.

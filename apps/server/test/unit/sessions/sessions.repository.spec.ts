@@ -63,6 +63,31 @@ describe('SessionsRepository', () => {
     expect(repo.findById('nope')).toBeNull();
   });
 
+  it('findByProviderThreadId dedupes imported pi sessions by session file path', () => {
+    const piPath = '/Users/me/.pi/agent/sessions/demo/20260701_session.jsonl';
+    const s = repo.create({ prompt: 'imported pi', provider: 'pi', providerThreadId: piPath });
+
+    expect(repo.findByProviderThreadId(piPath)?.id).toBe(s.id);
+    expect(repo.findByProviderThreadId('/missing.jsonl')).toBeNull();
+  });
+
+  it('createHandoff can create a pi session resumed in-place from providerThreadId', () => {
+    const piPath = '/Users/me/.pi/agent/sessions/demo/20260701_other.jsonl';
+    const s = repo.createHandoff({
+      provider: 'pi',
+      title: 'Pi handoff',
+      workspace: '/repo',
+      providerThreadId: piPath,
+      prompt: 'Pi handoff',
+    });
+
+    expect(s.provider).toBe('pi');
+    expect(s.providerThreadId).toBe(piPath);
+    expect(s.cursorBackend).toBeNull();
+    expect(s.cursorChatId).toBeNull();
+    expect(s.status).toBe('IDLE');
+  });
+
   it('touchPreview truncates the preview to 200 characters', () => {
     const s = repo.create({ prompt: 'preview me' });
     repo.touchPreview(s.id, 'x'.repeat(500));

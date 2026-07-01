@@ -8,10 +8,10 @@ import { Badge } from '@/components/ui/badge';
 import { ProjectPicker } from './project-picker';
 import { resolveWorkspacePreference } from '../lib/project-preference';
 import {
-  fetchLocalCursorSessions,
+  fetchAllLocalSessions,
   handoffSession,
   HandoffApiError,
-  type LocalCursorSession,
+  type LocalHandoffSession,
 } from '../lib/handoff-api';
 import {
   formatHandoffSessionTime,
@@ -31,9 +31,9 @@ function HandoffSessionRow({
   active,
   onSelect,
 }: {
-  item: LocalCursorSession;
+  item: LocalHandoffSession;
   active: boolean;
-  onSelect: (chatId: string) => void;
+  onSelect: (key: string) => void;
 }) {
   const imported = item.alreadyImported;
   return (
@@ -42,7 +42,7 @@ function HandoffSessionRow({
         type="button"
         role="option"
         aria-selected={active}
-        onClick={() => onSelect(item.chatId)}
+        onClick={() => onSelect(item.key)}
         className={cn(
           'relative w-full text-left rounded-lg border px-3 py-3 transition-colors',
           imported && !active && 'border-success/35 bg-success/5 hover:bg-success/10',
@@ -66,12 +66,15 @@ function HandoffSessionRow({
         {item.preview ? (
           <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{item.preview}</p>
         ) : null}
-        <div className="flex gap-2 mt-2">
+        <div className="flex gap-2 mt-2 items-center">
           {imported ? (
             <Badge variant="outline" className="text-xs border-success/40 bg-success/15 text-success">
               On Nuncio
             </Badge>
           ) : null}
+          <Badge variant="outline" className="text-xs uppercase">
+            {item.source}
+          </Badge>
           <Badge variant="outline" className="text-xs">
             {item.messageCount} messages
           </Badge>
@@ -97,8 +100,8 @@ export function HandoffPicker({
   const [workspace, setWorkspace] = useState<string | undefined>(
     initialWorkspace ?? preferred.projectPath,
   );
-  const [sessions, setSessions] = useState<LocalCursorSession[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<LocalHandoffSession[]>([]);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -118,11 +121,11 @@ export function HandoffPicker({
   const loadSessions = useCallback(async (ws: string, opts?: { silent?: boolean }) => {
     setLoading(true);
     try {
-      const items = await fetchLocalCursorSessions(ws);
+      const items = await fetchAllLocalSessions(ws);
       setSessions(items);
-      setSelectedId((prev) => {
-        if (prev && items.some((s) => s.chatId === prev)) return prev;
-        return items[0]?.chatId ?? null;
+      setSelectedKey((prev) => {
+        if (prev && items.some((s) => s.key === prev)) return prev;
+        return items[0]?.key ?? null;
       });
       if (opts?.silent) {
         toast.success('Refreshed');
@@ -131,7 +134,7 @@ export function HandoffPicker({
       const message =
         err instanceof HandoffApiError || err instanceof Error
           ? err.message
-          : 'Failed to load Cursor chats';
+          : 'Failed to load local sessions';
       toast.error(message);
     } finally {
       setLoading(false);
@@ -141,7 +144,7 @@ export function HandoffPicker({
   useEffect(() => {
     if (!open || !workspace) {
       setSessions([]);
-      setSelectedId(null);
+      setSelectedKey(null);
       return;
     }
     void loadSessions(workspace);
@@ -157,7 +160,7 @@ export function HandoffPicker({
     );
   }, [sessions, searchQuery]);
 
-  const selected = sessions.find((s) => s.chatId === selectedId) ?? null;
+  const selected = sessions.find((s) => s.key === selectedKey) ?? null;
   const sessionGroups = groupHandoffSessionsByDay(filteredSessions);
   const folderLabel = workspaceFolderName(workspace);
 
@@ -170,14 +173,13 @@ export function HandoffPicker({
         onOpenChange(false);
         return;
       }
-      const session = await handoffSession({
-        cursorChatId: selected.chatId,
-        workspace,
-        title: selected.title,
-      });
+      const handoffInput = selected.source === 'pi'
+        ? { piSessionPath: selected.piSessionPath!, workspace, title: selected.title }
+        : { cursorChatId: selected.cursorChatId!, workspace, title: selected.title };
+      const session = await handoffSession(handoffInput);
       onImported(session.id);
       onOpenChange(false);
-      toast.success('Imported Cursor chat');
+      toast.success(`Imported ${selected.source === 'pi' ? 'Pi' : 'Cursor'} chat`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Import failed');
     } finally {
@@ -194,7 +196,7 @@ export function HandoffPicker({
             Continue on mobile
           </SheetTitle>
           <SheetDescription className="text-[13px] leading-snug">
-            Pick an in-progress Cursor chat from this Mac to continue on your phone.
+            Pick an in-progress chat from this Mac to continue on your phone.
           </SheetDescription>
         </SheetHeader>
 
@@ -247,23 +249,22 @@ export function HandoffPicker({
           {loading ? (
             <div className="flex items-center justify-center py-8 text-muted-foreground gap-2">
               <Loader2 className="size-4 animate-spin" />
-              Scanning Cursor chats…
+              Scanning chats…
             </div>
           ) : !workspace ? (
             <p className="text-sm text-muted-foreground py-4">
-              Pick a project folder to see Cursor chats on this Mac.
+              Pick a project folder to see chats on this Mac.
             </p>
           ) : sessions.length === 0 ? (
             <p className="text-sm text-muted-foreground py-4">
-              No Cursor agent chats found for &ldquo;{folderLabel}&rdquo;. Open a chat in Cursor
-              first.
+              No agent chats found for &ldquo;{folderLabel}&rdquo;. Open a chat first.
             </p>
           ) : filteredSessions.length === 0 ? (
             <p className="text-sm text-muted-foreground py-4">
               No chats match &ldquo;{searchQuery.trim()}&rdquo;.
             </p>
           ) : (
-            <div className="space-y-4" role="listbox" aria-label="Cursor chats">
+            <div className="space-y-4" role="listbox" aria-label="Chats">
               {sessionGroups.map((group) => (
                 <section key={group.dayKey} aria-label={group.label}>
                   <h3 className="sticky top-0 z-10 bg-background/95 backdrop-blur px-1 py-1.5 mb-2 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
@@ -272,10 +273,10 @@ export function HandoffPicker({
                   <ul className="space-y-2">
                     {group.items.map((item) => (
                       <HandoffSessionRow
-                        key={item.chatId}
+                        key={item.key}
                         item={item}
-                        active={item.chatId === selectedId}
-                        onSelect={setSelectedId}
+                        active={item.key === selectedKey}
+                        onSelect={setSelectedKey}
                       />
                     ))}
                   </ul>

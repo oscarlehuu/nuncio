@@ -12,7 +12,7 @@ vi.mock('./project-picker', () => ({
 }));
 
 vi.mock('../lib/handoff-api', () => ({
-  fetchLocalCursorSessions: vi.fn(),
+  fetchAllLocalSessions: vi.fn(),
   handoffSession: vi.fn(),
   HandoffApiError: class HandoffApiError extends Error {
     status: number;
@@ -23,33 +23,45 @@ vi.mock('../lib/handoff-api', () => ({
   },
 }));
 
-import { fetchLocalCursorSessions, handoffSession } from '../lib/handoff-api';
+import { fetchAllLocalSessions, handoffSession } from '../lib/handoff-api';
 import { localDayKey } from '../lib/handoff-session-groups';
 
-const mockSessions = [
-  {
-    chatId: 'chat-1',
-    workspace: '/code/nuncio',
-    projectSlug: 'code-nuncio',
-    title: 'Fix login',
-    preview: 'Continue the auth work',
-    updatedAt: Date.now() - 60_000,
-    messageCount: 5,
-    alreadyImported: false,
-  },
-];
+const mockCursorSession = {
+  source: 'cursor' as const,
+  key: 'cursor:chat-1',
+  title: 'Fix login',
+  preview: 'Continue the auth work',
+  updatedAt: Date.now() - 60_000,
+  messageCount: 5,
+  alreadyImported: false,
+  workspace: '/code/nuncio',
+  cursorChatId: 'chat-1',
+};
+
+const mockPiSession = {
+  source: 'pi' as const,
+  key: 'pi:/path/to/pi-session',
+  title: 'Refactor DB',
+  preview: 'Database refactoring work',
+  updatedAt: Date.now() - 120_000,
+  messageCount: 3,
+  alreadyImported: false,
+  workspace: '/code/nuncio',
+  piSessionPath: '/path/to/pi-session',
+};
 
 const importedSession = {
-  ...mockSessions[0],
-  chatId: 'chat-2',
+  ...mockCursorSession,
+  key: 'cursor:chat-2',
   title: 'Already on Nuncio',
   alreadyImported: true,
   nuncioSessionId: 'sess-existing',
+  cursorChatId: 'chat-2',
 };
 
 describe('HandoffPicker', () => {
   beforeEach(() => {
-    vi.mocked(fetchLocalCursorSessions).mockResolvedValue(mockSessions);
+    vi.mocked(fetchAllLocalSessions).mockResolvedValue([mockCursorSession, mockPiSession]);
     vi.mocked(handoffSession).mockReset();
     vi.mocked(handoffSession).mockResolvedValue({ id: 'imported-1' } as never);
   });
@@ -63,12 +75,13 @@ describe('HandoffPicker', () => {
     await userEvent.click(screen.getByRole('button', { name: /pick project|nuncio/i }));
 
     await waitFor(() => {
-      expect(fetchLocalCursorSessions).toHaveBeenCalledWith('/code/nuncio');
+      expect(fetchAllLocalSessions).toHaveBeenCalledWith('/code/nuncio');
     });
     expect(screen.getByText('Fix login')).toBeInTheDocument();
+    expect(screen.getByText('Refactor DB')).toBeInTheDocument();
   });
 
-  it('imports the selected chat', async () => {
+  it('imports the selected cursor chat', async () => {
     const onImported = vi.fn();
     render(
       <HandoffPicker open onOpenChange={() => {}} onImported={onImported} />,
@@ -77,6 +90,7 @@ describe('HandoffPicker', () => {
     await userEvent.click(screen.getByRole('button', { name: /pick project|nuncio/i }));
     await waitFor(() => screen.getByText('Fix login'));
 
+    // Select the cursor chat (default selected is first item, which is 'Fix login')
     await userEvent.click(screen.getByRole('button', { name: /^import$/i }));
 
     await waitFor(() => {
@@ -89,8 +103,31 @@ describe('HandoffPicker', () => {
     });
   });
 
+  it('imports the selected pi session', async () => {
+    const onImported = vi.fn();
+    render(
+      <HandoffPicker open onOpenChange={() => {}} onImported={onImported} />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /pick project|nuncio/i }));
+    await waitFor(() => screen.getByText('Refactor DB'));
+
+    // Click to select the Pi row
+    await userEvent.click(screen.getByText('Refactor DB'));
+    await userEvent.click(screen.getByRole('button', { name: /^import$/i }));
+
+    await waitFor(() => {
+      expect(handoffSession).toHaveBeenCalledWith({
+        piSessionPath: '/path/to/pi-session',
+        workspace: '/code/nuncio',
+        title: 'Refactor DB',
+      });
+      expect(onImported).toHaveBeenCalledWith('imported-1');
+    });
+  });
+
   it('shows Open for already-imported chats and skips handoff API', async () => {
-    vi.mocked(fetchLocalCursorSessions).mockResolvedValue([importedSession]);
+    vi.mocked(fetchAllLocalSessions).mockResolvedValue([importedSession]);
     const onImported = vi.fn();
     render(
       <HandoffPicker open onOpenChange={() => {}} onImported={onImported} />,
@@ -110,18 +147,20 @@ describe('HandoffPicker', () => {
 
   it('groups sessions by day label in the list', async () => {
     const todayKey = localDayKey(Date.now());
-    vi.mocked(fetchLocalCursorSessions).mockResolvedValue([
+    vi.mocked(fetchAllLocalSessions).mockResolvedValue([
       {
-        ...mockSessions[0],
-        chatId: 'today-1',
+        ...mockCursorSession,
+        key: 'cursor:today-1',
         title: 'Today chat',
         updatedAt: todayKey + 10 * 3_600_000,
+        cursorChatId: 'today-1',
       },
       {
-        ...mockSessions[0],
-        chatId: 'yesterday-1',
+        ...mockCursorSession,
+        key: 'cursor:yesterday-1',
         title: 'Yesterday chat',
         updatedAt: todayKey - 14 * 3_600_000,
+        cursorChatId: 'yesterday-1',
       },
     ]);
 
@@ -140,9 +179,9 @@ describe('HandoffPicker', () => {
   });
 
   it('filters sessions by search query', async () => {
-    vi.mocked(fetchLocalCursorSessions).mockResolvedValue([
-      { ...mockSessions[0], chatId: 'a', title: 'Alpha task' },
-      { ...mockSessions[0], chatId: 'b', title: 'Beta refactor' },
+    vi.mocked(fetchAllLocalSessions).mockResolvedValue([
+      { ...mockCursorSession, key: 'a', title: 'Alpha task' },
+      { ...mockCursorSession, key: 'b', title: 'Beta refactor' },
     ]);
 
     render(
