@@ -24,7 +24,7 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 - **Codex approvals** — switch Codex between full-access and approval-required mode from the composer, then approve or deny pending provider actions in the transcript
 - **Folder picker** — browse the host machine's directories to pick a project (server-side, works on iPhone PWA), or paste a custom path
 - **Workspace control** — choose a project, run in the local checkout, or create a new `nuncio/<sessionId>-<slug>` worktree forked from the selected branch
-- **Continue on mobile** — import an in-progress Cursor IDE/CLI chat from your Mac and steer it from the phone PWA (CLI `--resume` for imported sessions)
+- **Continue on mobile** — import an in-progress Cursor IDE/CLI chat or Pi CLI session from your Mac and steer it from the phone PWA (Cursor uses CLI `--resume`; Pi resumes in-process through the SDK)
 
 ## Screenshots
 
@@ -177,8 +177,9 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 | GET | `/api/health` | Health check |
 | GET | `/api/sessions` | List sessions (`?includeArchived=1`) |
 | POST | `/api/sessions` | Create session `{ "prompt": "...", "provider?": "pi\|codex\|cursor", "model?": "...", "attachments?": [{ "kind": "image", "mimeType": "image/png", "data": "base64" }], "projectPath?": "/abs/repo", "useWorktree?": true, "baseBranch?": "main" }`; `projectPath` without `useWorktree` runs in the selected repo and records `baseBranch` as the selected branch, while `useWorktree: true` creates a generated `nuncio/<id>-<slug>` worktree from `baseBranch` |
-| POST | `/api/sessions/handoff` | Import a Cursor IDE/CLI chat `{ "cursorChatId": "...", "workspace": "/abs/path", "title?": "..." }` → `IDLE` session with transcript hydrated |
+| POST | `/api/sessions/handoff` | Import a Cursor IDE/CLI chat `{ "cursorChatId": "...", "workspace": "/abs/path", "title?": "..." }` or Pi CLI session `{ "piSessionPath": "/abs/session.jsonl", "workspace": "/abs/path", "title?": "..." }` → `IDLE` session with transcript hydrated |
 | GET | `/api/cursor/local-sessions?workspace=` | List in-progress Cursor chats on this Mac for the handoff picker |
+| GET | `/api/pi/local-sessions?workspace=` | List local Pi CLI sessions for a workspace using the Pi SDK session store |
 | GET | `/api/sessions/:id` | Session detail (incl. `provider`, `model`, `supportsInteraction`, `cursorBackend`, `cursorChatId`) |
 | GET | `/api/sessions/:id/events?since=` | Event log (cursor) |
 | GET | `/api/sessions/:id/active-run` | `{ "active": boolean }` — whether Cursor IDE/CLI is likely still running this handoff chat on the host (transcript/store mtime < 60s) |
@@ -206,9 +207,9 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 
 Archived sessions are browsable in the sidebar's **Archived** tab (search by title/prompt, restore to IDLE, or delete permanently with a confirm dialog).
 
-### Continue on mobile (Cursor handoff)
+### Continue on mobile (handoff)
 
-Pick **one** in-progress Cursor chat on your Mac and continue it from the Nuncio phone PWA without losing transcript context.
+Pick **one** in-progress Cursor chat or Pi CLI session on your Mac and continue it from the Nuncio phone PWA without losing transcript context.
 
 **Setup**
 
@@ -233,7 +234,7 @@ Pick **one** in-progress Cursor chat on your Mac and continue it from the Nuncio
 | "Chat no longer exists" (404) | The transcript folder was removed; start a new chat in Cursor. |
 | Steer hangs / no output | Run the server with `bun run --filter @nuncio/server start` (not `dev`) when testing Cursor — `--watch` reloads on DB writes and kills in-flight CLI runs. |
 
-Imported sessions use `cursor_backend=cli` and resume via the CLI subprocess. Sessions you **create** in Nuncio still use `@cursor/sdk` in-process (`cursor_backend=sdk`).
+Imported Cursor sessions use `cursor_backend=cli` and resume via the CLI subprocess. Imported Pi sessions use `provider='pi'`, store the Pi session JSONL path in `providerThreadId`, and resume the same file in-process through `SessionManager.open(path)`. Sessions you **create** in Nuncio still use the provider's normal in-process path (`cursor_backend=sdk` for Cursor).
 
 ## Project layout
 

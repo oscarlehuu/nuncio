@@ -42,11 +42,14 @@ describe('calculateContextUsage', () => {
     expect(usage.total).toBeGreaterThan(0);
   });
 
-  it('calculates percentage of context window', () => {
-    const usage = calculateContextUsage([]);
-    expect(usage.percentage).toBeGreaterThanOrEqual(0);
-    expect(usage.percentage).toBeLessThanOrEqual(100);
-    expect(usage.window).toBe(DEFAULT_CONTEXT_WINDOW);
+  it('uses a passed context window for percentage and falls back to the default when omitted', () => {
+    const defaultUsage = calculateContextUsage([]);
+    const largeWindowUsage = calculateContextUsage([], 1_000_000);
+
+    expect(defaultUsage.window).toBe(DEFAULT_CONTEXT_WINDOW);
+    expect(largeWindowUsage.window).toBe(1_000_000);
+    expect(largeWindowUsage.total).toBe(defaultUsage.total);
+    expect(largeWindowUsage.percentage).toBeLessThan(defaultUsage.percentage);
   });
 
   it('shows fixed system categories even with no events', () => {

@@ -11,7 +11,10 @@ import { SessionsModule } from '../../../src/sessions/sessions.module';
 import { SessionsService } from '../../../src/sessions/sessions.service';
 import { AgentsModule } from '../../../src/agents/agents.module';
 import { GitModule } from '../../../src/git/git.module';
+import { GitService } from '../../../src/git/git.service';
 import { SettingsModule } from '../../../src/settings/settings.module';
+import { PiLocalModule } from '../../../src/pi-local/pi-local.module';
+import { PiLocalSessionsService } from '../../../src/pi-local/pi-local-sessions.service';
 
 describe('SessionsService.handoff', () => {
   let module: TestingModule;
@@ -19,7 +22,9 @@ describe('SessionsService.handoff', () => {
   let fakeHome: string;
   let workspace: string;
   let dataDir: string;
+  let currentBranchCalls: string[];
   const chatId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  const piPath = '/Users/me/.pi/agent/sessions/repo/20260701_pi.jsonl';
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-handoff-db-'));
@@ -39,11 +44,59 @@ describe('SessionsService.handoff', () => {
     );
 
     module = await Test.createTestingModule({
-      imports: [DatabaseModule, SettingsModule, AgentsModule, GitModule, CursorLocalModule, SessionsModule],
+      imports: [
+        DatabaseModule,
+        SettingsModule,
+        AgentsModule,
+        GitModule,
+        CursorLocalModule,
+        PiLocalModule,
+        SessionsModule,
+      ],
     }).compile();
     service = module.get(SessionsService);
+    currentBranchCalls = [];
     const local = module.get(CursorLocalSessionsService);
     local.homeDir = () => fakeHome;
+    const piLocal = module.get(PiLocalSessionsService);
+    piLocal.loadSdk = async () => ({
+      SessionManager: {
+        list: async () => [
+          {
+            id: 'pi-session-id',
+            path: piPath,
+            cwd: workspace,
+            name: 'Pi CLI task',
+            firstMessage: 'Continue pi',
+            messageCount: 2,
+            modified: new Date('2026-07-01T12:00:00Z'),
+            created: new Date('2026-07-01T11:00:00Z'),
+            allMessagesText: 'Continue pi\nPi reply',
+          },
+        ],
+      },
+    } as never);
+    piLocal.openSession = (path: string) => ({
+      getEntries: () => [
+        {
+          type: 'message',
+          message: { role: 'user', content: [{ type: 'text', text: `opened ${path}` }] },
+        },
+      ],
+    }) as never;
+    (piLocal as PiLocalSessionsService & {
+      readModelMeta: (path: string) => { model: string | null; thinkingLevel: string | null };
+    }).readModelMeta = (path: string) => {
+      expect(path).toBe(piPath);
+      return { model: 'cliproxy:claude-opus-4-8', thinkingLevel: 'xhigh' };
+    };
+    const git = module.get(GitService) as GitService & {
+      currentBranch: (path: string) => Promise<string | null>;
+    };
+    git.currentBranch = async (path: string) => {
+      currentBranchCalls.push(path);
+      return 'feature/pi-import-meta';
+    };
   });
 
   afterAll(async () => {
@@ -67,6 +120,31 @@ describe('SessionsService.handoff', () => {
   it('is idempotent for the same chatId', async () => {
     const first = await service.handoff({ cursorChatId: chatId, workspace });
     const second = await service.handoff({ cursorChatId: chatId, workspace });
+    expect(second.id).toBe(first.id);
+  });
+
+  it('imports a selected pi CLI session with model metadata and current git branch', async () => {
+    const session = await service.handoff({ piSessionPath: piPath, workspace, title: 'Pi CLI task' });
+
+    expect(session.provider).toBe('pi');
+    expect(session.providerThreadId).toBe(piPath);
+    expect(session.cursorBackend).toBeNull();
+    expect(session.cursorChatId).toBeNull();
+    expect(session.status).toBe('IDLE');
+    expect(session.model).toBe('cliproxy:claude-opus-4-8');
+    expect(session.modelOptions).toEqual({ thinkingLevel: 'xhigh' });
+    expect(session.branch).toBe('feature/pi-import-meta');
+    expect(currentBranchCalls).toContain(workspace);
+
+    const events = service.getEvents(session.id);
+    expect(events).toEqual([
+      expect.objectContaining({ type: 'user_message', payload: { text: `opened ${piPath}` } }),
+    ]);
+  });
+
+  it('is idempotent for the same pi providerThreadId', async () => {
+    const first = await service.handoff({ piSessionPath: piPath, workspace, title: 'Pi CLI task' });
+    const second = await service.handoff({ piSessionPath: piPath, workspace, title: 'Pi CLI task' });
     expect(second.id).toBe(first.id);
   });
 

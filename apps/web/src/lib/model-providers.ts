@@ -12,6 +12,7 @@ export interface ModelInfo {
   sub?: string;
   badge?: string;
   cost?: string;
+  contextWindow?: number;
   options?: ModelOptionDescriptor[];
   variants?: ModelVariant[];
 }

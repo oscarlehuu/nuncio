@@ -1,9 +1,7 @@
-import type { LocalCursorSession } from './handoff-api';
-
-export interface HandoffSessionDayGroup {
+export interface HandoffSessionDayGroup<T = any> {
   dayKey: number;
   label: string;
-  items: LocalCursorSession[];
+  items: T[];
 }
 
 export function localDayKey(ms: number): number {
@@ -30,11 +28,11 @@ export function formatHandoffSessionTime(ms: number): string {
   }).format(new Date(ms));
 }
 
-export function groupHandoffSessionsByDay(
-  sessions: LocalCursorSession[],
+export function groupHandoffSessionsByDay<T extends { updatedAt: number }>(
+  sessions: T[],
   nowMs = Date.now(),
-): HandoffSessionDayGroup[] {
-  const byDay = new Map<number, LocalCursorSession[]>();
+): HandoffSessionDayGroup<T>[] {
+  const byDay = new Map<number, T[]>();
   for (const session of sessions) {
     const key = localDayKey(session.updatedAt);
     const bucket = byDay.get(key) ?? [];

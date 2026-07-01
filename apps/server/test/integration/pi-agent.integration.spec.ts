@@ -14,7 +14,10 @@ import { SettingsModule } from '../../src/settings/settings.module';
 // Gate the suite on the same agent dir the Pi SDK resolves (PI_CODING_AGENT_DIR
 // or ~/.pi/agent). Skips entirely in CI / machines without real Pi auth, so the
 // Pi SDK native module is never loaded there.
-const TEST_MODEL = 'cliproxyapi:claude-opus-4-8';
+const TEST_MODEL_CANDIDATES = [
+  'cliproxyapi:claude-opus-4-8',
+  'cliproxy:claude-opus-4-8',
+];
 const piAgentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent');
 const piSettingsPath = join(piAgentDir, 'settings.json');
 const hasRealPiAuth = existsSync(join(piAgentDir, 'auth.json'));
@@ -27,6 +30,7 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
   let events: EventsRepository;
   let dataDir: string;
   let originalPiSettingsJson: Buffer | null = null;
+  let testModel: string;
 
   beforeAll(async () => {
     if (existsSync(piSettingsPath)) {
@@ -44,6 +48,7 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
     provider = module.get(PiAgentProvider);
     sessions = module.get(SessionsRepository);
     events = module.get(EventsRepository);
+    testModel = await resolveToolCapableTestModel(provider);
   });
 
   afterAll(async () => {
@@ -81,7 +86,7 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
     async () => {
       const created = sessions.create({ prompt: 'Reply with the single word: pong', provider: 'pi' });
 
-      await provider.run(created.id, created.prompt, { emit: () => {}, model: TEST_MODEL });
+      await provider.run(created.id, created.prompt, { emit: () => {}, model: testModel });
 
       try {
         const all = events.list(created.id);
@@ -106,9 +111,9 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
       );
       expect(modelIds.length).toBeGreaterThan(1);
 
-      expect(modelIds).toContain(TEST_MODEL);
-      const firstModel = TEST_MODEL;
-      const secondModel = modelIds.find((id) => id !== TEST_MODEL)!;
+      expect(modelIds).toContain(testModel);
+      const firstModel = testModel;
+      const secondModel = modelIds.find((id) => id !== testModel)!;
       const created = sessions.create({
         prompt: 'Reply with the single word: one',
         provider: 'pi',
@@ -147,14 +152,14 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
       const secondPrompt = 'Reply with the single word: two';
       const created = sessions.create({ prompt: firstPrompt, provider: 'pi' });
 
-      await provider.run(created.id, firstPrompt, { emit: () => {}, model: TEST_MODEL });
+      await provider.run(created.id, firstPrompt, { emit: () => {}, model: testModel });
       const firstThreadId = sessions.findById(created.id)?.providerThreadId;
       expect(firstThreadId).toBeTruthy();
       expect(existsSync(firstThreadId!)).toBe(true);
       expect(sessions.findById(created.id)?.status).toBe('IDLE');
 
       provider.dispose(created.id);
-      await provider.run(created.id, secondPrompt, { emit: () => {}, model: TEST_MODEL });
+      await provider.run(created.id, secondPrompt, { emit: () => {}, model: testModel });
 
       const secondThreadId = sessions.findById(created.id)?.providerThreadId;
       expect(secondThreadId).toBe(firstThreadId);
@@ -210,7 +215,7 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
         await provider.run(created.id, created.prompt, {
           emit: (event) => emitted.push(event),
           cwd: worktreePath,
-          model: TEST_MODEL,
+          model: testModel,
         });
 
         const all = events.list(created.id);
@@ -244,13 +249,13 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
       });
 
       try {
-        const runPromise = provider.run(created.id, created.prompt, { emit: () => {}, model: TEST_MODEL });
+        const runPromise = provider.run(created.id, created.prompt, { emit: () => {}, model: testModel });
         await sleep(1_500);
         await expect(provider.interrupt(created.id)).resolves.toBeUndefined();
         await expect(runPromise).resolves.toBeUndefined();
         expect(sessions.findById(created.id)?.status).not.toBe('ERROR');
 
-        await provider.run(created.id, 'Reply with the single word: pong', { emit: () => {}, model: TEST_MODEL });
+        await provider.run(created.id, 'Reply with the single word: pong', { emit: () => {}, model: testModel });
         expect(sessions.findById(created.id)?.status).toBe('IDLE');
         const blob = JSON.stringify(events.list(created.id).map((e) => e.payload));
         expect(blob.toLowerCase()).toContain('pong');
@@ -261,6 +266,15 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
     120_000,
   );
 });
+
+async function resolveToolCapableTestModel(provider: PiAgentProvider): Promise<string> {
+  const providerDtos = await provider.listModels();
+  const modelIds = providerDtos.flatMap((p) =>
+    (p.groups ?? []).flatMap((g) => (g.models ?? []).map((m) => m.id)),
+  );
+  const preferred = TEST_MODEL_CANDIDATES.find((candidate) => modelIds.includes(candidate));
+  return preferred ?? modelIds[0] ?? TEST_MODEL_CANDIDATES[0]!;
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
