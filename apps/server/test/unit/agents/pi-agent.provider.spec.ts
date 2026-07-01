@@ -14,6 +14,7 @@ let fakeSessionFile = '/tmp/fake-pi/session.jsonl';
 let promptCalls: Array<{ text: string; options: unknown }> = [];
 let promptBehavior: ((text: string, options?: unknown) => Promise<void>) | null = null;
 let isStreaming = false;
+let subscribedHandler: ((event: { type: string; [key: string]: unknown }) => void) | null = null;
 const abortMock = mock(async () => undefined);
 const setModelMock = mock(async (_model: unknown) => undefined);
 const setThinkingLevelMock = mock((_level: unknown) => undefined);
@@ -56,7 +57,12 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
       get isStreaming() {
         return isStreaming;
       },
-      subscribe: () => () => {},
+      subscribe: (handler: (event: { type: string; [key: string]: unknown }) => void) => {
+        subscribedHandler = handler;
+        return () => {
+          if (subscribedHandler === handler) subscribedHandler = null;
+        };
+      },
       prompt: async (text: string, options?: unknown) => {
         promptCalls.push({ text, options });
         await promptBehavior?.(text, options);
@@ -100,6 +106,7 @@ describe('PiAgentProvider', () => {
     promptCalls = [];
     promptBehavior = null;
     isStreaming = false;
+    subscribedHandler = null;
     abortMock.mockClear();
     setModelMock.mockClear();
     setThinkingLevelMock.mockClear();
@@ -214,6 +221,116 @@ describe('PiAgentProvider', () => {
     await provider.run(created.id, created.prompt, { emit: () => {} });
 
     expect(promptCalls[0]).toEqual({ text: created.prompt, options: undefined });
+  });
+
+  it('emits Pi tool events with callId, summarized input, output, and error state', async () => {
+    const emitted: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    promptBehavior = async () => {
+      subscribedHandler?.({
+        type: 'tool_execution_start',
+        toolCallId: 'call-1',
+        toolName: 'bash',
+        args: { command: 'bun test apps/server/test/unit/agents/pi-agent.provider.spec.ts' },
+      });
+      subscribedHandler?.({
+        type: 'tool_execution_end',
+        toolCallId: 'call-1',
+        toolName: 'bash',
+        result: 'ok',
+        isError: false,
+      });
+    };
+    const created = sessions.create({ prompt: 'run a command', provider: 'pi' });
+
+    await provider.run(created.id, created.prompt, {
+      emit: (event) => emitted.push(event as { type: string; payload: Record<string, unknown> }),
+    });
+
+    expect(emitted).toContainEqual({
+      type: 'tool_start',
+      payload: {
+        callId: 'call-1',
+        tool: 'bash',
+        input: { command: 'bun test apps/server/test/unit/agents/pi-agent.provider.spec.ts' },
+      },
+    });
+    expect(emitted).toContainEqual({
+      type: 'tool_end',
+      payload: { callId: 'call-1', tool: 'bash', isError: false, output: 'ok' },
+    });
+  });
+
+  it('emits Pi thinking events from message_update reasoning without adding it to assistant text', async () => {
+    const emitted: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    promptBehavior = async () => {
+      subscribedHandler?.({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'thinking_start' },
+      });
+      subscribedHandler?.({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'thinking_delta', delta: 'plan' },
+      });
+      subscribedHandler?.({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'thinking_end', content: 'plan' },
+      });
+      subscribedHandler?.({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'Answer' },
+      });
+    };
+    const created = sessions.create({ prompt: 'think', provider: 'pi' });
+
+    await provider.run(created.id, created.prompt, {
+      emit: (event) => emitted.push(event as { type: string; payload: Record<string, unknown> }),
+    });
+
+    const thinkingStart = emitted.find((event) => event.type === 'thinking_start');
+    expect(thinkingStart?.payload.thinkingId).toEqual(expect.any(String));
+    expect(emitted).toContainEqual({
+      type: 'thinking_delta',
+      payload: { thinkingId: thinkingStart?.payload.thinkingId, delta: 'plan' },
+    });
+    expect(emitted).toContainEqual({
+      type: 'thinking_message',
+      payload: { thinkingId: thinkingStart?.payload.thinkingId, text: 'plan' },
+    });
+    expect(emitted.findLast((event) => event.type === 'assistant_message')?.payload).toEqual({
+      text: 'Answer',
+    });
+  });
+
+  it('seals any still-running Pi tool when the prompt completes', async () => {
+    const emitted: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    promptBehavior = async () => {
+      subscribedHandler?.({
+        type: 'tool_execution_start',
+        toolCallId: 'open-call',
+        toolName: 'grep',
+        args: { pattern: 'TODO', path: 'src' },
+      });
+      subscribedHandler?.({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'Done' },
+      });
+    };
+    const created = sessions.create({ prompt: 'leave tool open', provider: 'pi' });
+
+    await provider.run(created.id, created.prompt, {
+      emit: (event) => emitted.push(event as { type: string; payload: Record<string, unknown> }),
+    });
+
+    const toolEndIndex = emitted.findIndex(
+      (event) => event.type === 'tool_end' && event.payload.callId === 'open-call',
+    );
+    const assistantMessageIndex = emitted.findIndex((event) => event.type === 'assistant_message');
+    expect(emitted[toolEndIndex]).toEqual({
+      type: 'tool_end',
+      payload: { callId: 'open-call', tool: 'grep', isError: false },
+    });
+    expect(toolEndIndex).toBeGreaterThan(-1);
+    expect(assistantMessageIndex).toBeGreaterThan(toolEndIndex);
   });
 
   it('persists the Pi session file after creating an agent session', async () => {

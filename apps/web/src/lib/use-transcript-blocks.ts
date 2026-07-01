@@ -43,6 +43,8 @@ function cloneParserState(state: ParserState): ParserState {
     providerRequests: new Map(state.providerRequests),
     legacyStack: state.legacyStack.slice(),
     legacySeq: state.legacySeq,
+    currentTurnHasThinking: state.currentTurnHasThinking,
+    assistantBufFromDelta: state.assistantBufFromDelta,
   };
 }
 

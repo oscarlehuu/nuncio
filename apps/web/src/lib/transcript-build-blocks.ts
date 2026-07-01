@@ -167,6 +167,8 @@ export interface ParserState {
   thinkingBuf: string;
   thinkingOpen: boolean;
   thinkingId: string;
+  currentTurnHasThinking: boolean;
+  assistantBufFromDelta: boolean;
   openTools: Map<string, OpenTool>;
   pendingInteractive: Map<string, PendingInteractive>;
   providerRequests: Map<string, Extract<TranscriptBlock, { kind: 'provider_request' }>>;
@@ -181,6 +183,8 @@ export function createParserState(): ParserState {
     thinkingBuf: '',
     thinkingOpen: false,
     thinkingId: '',
+    currentTurnHasThinking: false,
+    assistantBufFromDelta: false,
     openTools: new Map(),
     pendingInteractive: new Map(),
     providerRequests: new Map(),
@@ -192,7 +196,10 @@ export function createParserState(): ParserState {
 function flushAssistant(state: ParserState, streaming = false) {
   const cleaned = stripRedacted(state.assistantBuf);
   if (!cleaned && !streaming) return;
-  const { response, thinking } = splitThinking(cleaned || state.assistantBuf);
+  const shouldSplitImportedThinking = !streaming && !state.currentTurnHasThinking && !state.assistantBufFromDelta;
+  const { response, thinking } = shouldSplitImportedThinking
+    ? splitThinking(cleaned || state.assistantBuf)
+    : { response: cleaned || state.assistantBuf, thinking: null };
   if (response || streaming) {
     state.out.push({
       kind: 'assistant',
@@ -209,6 +216,7 @@ function flushAssistant(state: ParserState, streaming = false) {
     } as TranscriptBlock);
   }
   state.assistantBuf = '';
+  state.assistantBufFromDelta = false;
 }
 
 function flushThinking(state: ParserState, streaming = false) {
@@ -271,12 +279,15 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
     } else {
       state.out.push({ kind: 'user', text: rawText });
     }
+    state.currentTurnHasThinking = false;
+    state.assistantBufFromDelta = false;
     return;
   }
 
   if (event.type === 'thinking_start') {
     flushAssistant(state);
     state.thinkingOpen = true;
+    state.currentTurnHasThinking = true;
     state.thinkingId = String(payload.thinkingId ?? `thinking-${event.seq}`);
     state.thinkingBuf = '';
     return;
@@ -284,12 +295,14 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
 
   if (event.type === 'thinking_delta') {
     state.thinkingOpen = true;
+    state.currentTurnHasThinking = true;
     if (!state.thinkingId) state.thinkingId = String(payload.thinkingId ?? `thinking-${event.seq}`);
     state.thinkingBuf += String(payload.delta ?? '');
     return;
   }
 
   if (event.type === 'thinking_message') {
+    state.currentTurnHasThinking = true;
     state.thinkingBuf = String(payload.text ?? state.thinkingBuf);
     flushThinking(state);
     return;
@@ -435,6 +448,7 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
   }
 
   if (event.type === 'assistant_delta') {
+    state.assistantBufFromDelta = true;
     state.assistantBuf += String(payload.delta ?? '');
     return;
   }
