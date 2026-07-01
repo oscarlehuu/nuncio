@@ -33,6 +33,8 @@ export function useSessionStream(sessionId: string | null) {
       const event = JSON.parse(msg.data) as SessionEvent;
       sinceRef.current = Math.max(sinceRef.current, event.seq);
       setEvents((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && event.seq > last.seq) return [...prev, event];
         if (prev.some((e) => e.seq === event.seq)) return prev;
         return [...prev, event].sort((a, b) => a.seq - b.seq);
       });
