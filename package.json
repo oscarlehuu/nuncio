@@ -6,7 +6,8 @@
     ".",
     "apps/server",
     "apps/web",
-    "apps/landing"
+    "apps/landing",
+    "apps/desktop"
   ],
   "scripts": {
     "dev": "concurrently -n server,web -c blue,green \"bun run --filter @nuncio/server dev\" \"bun run --filter @nuncio/web dev\"",

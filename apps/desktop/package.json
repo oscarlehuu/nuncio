@@ -1,0 +1,15 @@
+{
+  "name": "@nuncio/desktop",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Nuncio desktop shell — Electron window that supervises the Bun/Nest daemon and loads the single-port UI.",
+  "main": "src/main.js",
+  "scripts": {
+    "dev": "electron .",
+    "test": "bun test",
+    "lint": "echo \"(desktop lint: n/a during spike)\""
+  },
+  "devDependencies": {
+    "electron": "^42.5.2"
+  }
+}
