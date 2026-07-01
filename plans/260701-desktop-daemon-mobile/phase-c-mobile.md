@@ -7,14 +7,15 @@
 ## Stack
 
 - **Expo (managed workflow)** — `expo-notifications` (the justification), OTA updates, dev velocity.
-- **NativeWind** — Tailwind syntax in RN; reuses the team's class mental model.
+- **react-native-reusables + NativeWind** — the canonical shadcn *port* to RN: same component names (button/dialog/dropdown/sheet…), lucide icons, Tailwind DX. Gives the shadcn look on native.
 - **Expo Router** — navigation.
-- Imports `packages/core` — relay client, types, pure logic all reused.
+- Imports `packages/core` — relay client, types, pure logic, **and design tokens** all reused.
 
 ## What transfers vs. rebuilds
 
-- Transfers: all of `packages/core` (client + types + logic). WS client already transport-correct from B2.
-- Rebuilds: every screen. RN has no radix/shadcn/cmdk/react-markdown. ~30 web components → RN equivalents. NativeWind softens styling only.
+- Transfers: all of `packages/core` (client + types + logic + tokens). WS client already transport-correct from B2.
+- Rebuilds: every screen. RN renders native views, not DOM — radix/shadcn/cmdk/react-markdown don't run. Web components → react-native-reusables equivalents.
+- **Uniform look via tokens, not shared components:** web-shadcn reads tokens as CSS vars (`index.css`); mobile-RN reads the *same* token values from `packages/core` via NativeWind config. Same palette/radius/type → identical design language, two renderers.
 
 ## Mobile-specific work
 

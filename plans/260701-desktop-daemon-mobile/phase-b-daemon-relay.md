@@ -6,8 +6,9 @@
 
 Move from `apps/web/src/lib` (pure, portable) into `packages/core`:
 
-- Ports as-is: `api.ts`, `model-*`, `handoff-*`, `transcript-build-blocks`, `tool-summary`, `parse-changelog`, `cursor-context`, all types.
+- Ports as-is: `api.ts`, `model-*`, `handoff-*`, `transcript-build-blocks`, `tool-summary`, `parse-changelog`, `cursor-context`, `derive-pending-user-input`, `interactive-tool-input`, `forge-status-api`, `user-input.types`, all types. (Surface grew with the Codex/forge/interactive-tools merge — more reuse.)
 - Adapt: replace relative `fetch('/api/...')` with an injected **host base URL** (no origin assumption). Relay client becomes transport-agnostic (SSE today, WS after B2).
+- **Extract design tokens:** pull palette/radius/typography out of `apps/web/src/index.css` into a framework-neutral token source in `packages/core` (TS object). `apps/web` CSS vars import from it; mobile NativeWind config (Phase C) imports the same values. One source → uniform look across renderers.
 - Stays in `apps/web`: every component (DOM/radix/shadcn/Tailwind) — not portable.
 
 `apps/web` imports `packages/core`. No behavior change; tests move with the code.

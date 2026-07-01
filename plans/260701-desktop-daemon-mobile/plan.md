@@ -1,17 +1,22 @@
 # Nuncio Desktop → Daemon → Mobile Roadmap
 
 **Status:** Planning · supersedes nothing (extends Phases 0–3 shipped)
-**Thesis:** The host that runs agents is a desktop. Mobile is a remote control. Build the host + relay first (Pi SDK lane), then point clients at it. Synara-shaped: local-first daemon + unified GUI + token-gated remote access.
+**Thesis:** The host that runs agents is a desktop. Mobile is a native remote control. Build the host + relay first (Pi SDK lane), then point clients at it. Synara-shaped: local-first daemon + unified GUI + token-gated remote access.
+
+**Reference validation:** Synara (fork of T3Code) — the app we're modeling — independently uses our exact stack: shadcn/ui + Radix + Tailwind + React/Vite + Electron + Bun + Turborepo (`apps/desktop` + `apps/web` + `packages/`). We match its proven structure for desktop, and go one step beyond it on mobile (Synara has no native app — its "mobile" is responsive web over the daemon; we ship a real Expo app for push).
 
 ## Decisions (locked)
 
 | Decision | Choice | Why |
 |----------|--------|-----|
-| Desktop shell | **Electron** | Runs the Bun/Nest daemon as a child process with no packaging gymnastics; best tray/notifications/auto-update. Synara uses the same class. Install size is irrelevant for a local host. |
-| Shared logic | **Extract `packages/core`** | One typed relay contract consumed by web + Electron + future RN. Done during desktop phase so mobile is a thin client, not a second codebase. |
+| Desktop shell | **Electron** | Renders Chromium/DOM → reuses existing shadcn `apps/web` verbatim, no UI rewrite. Runs the Bun/Nest daemon as a child process. Best tray/notifications/auto-update. Exactly what Synara uses. |
+| Desktop UI | **Existing shadcn/ui, re-tuned desktop-first** | shadcn is Radix-based (real keyboard nav, focus, ARIA) and copy-owned (tune every pixel native-dense). Same library Synara ships at scale. No new UI library for desktop. |
+| Mobile UI | **react-native-reusables + NativeWind** | The canonical shadcn *port* to RN — same component names, lucide icons, Tailwind DX. Delivers the shadcn look on native by sharing design tokens (not component code). |
+| Shared logic + tokens | **Extract `packages/core`** | One typed relay contract + one design-token source (palette/radius/typography) consumed by web-shadcn (CSS vars) and mobile-RN (NativeWind config). Mobile is a thin client, not a second codebase. |
 | Transport | **WebSocket RPC + event-log cursor** | Matches Synara (`wsRpc`, backpressure). Bidirectional/multiplexed for steer + future terminals/dev-server logs. Keep our persisted `seq` cursor on top for gap-free resume that raw WS doesn't give. |
-| Mobile stack | **Expo (React Native) + NativeWind + Expo Router** | Push notifications ("agent finished") are the only real justification for native; Expo delivers that + OTA. NativeWind reuses Tailwind mental model. |
+| Mobile stack | **Expo (React Native) + NativeWind + Expo Router** | Push notifications ("agent finished") are the justification for going native beyond Synara's PWA model; Expo delivers that + OTA. |
 | Render feel | **Throttled reveal + backpressure** | "Better than CLI" = token-granular events + adaptive client reveal + server backpressure. Not a transport property. |
+| ~~PWA~~ | **Dropped** | The PWA existed only to reach a phone without a native app; desktop (host) + Expo (remote) now cover both surfaces. Removing it frees `apps/web` from mobile-first compromise → desktop-first. No phone access between desktop ship and Expo ship — accepted, since order is desktop→mobile. Stop investing now; delete scaffolding when Expo lands. |
 
 ## Why this order (dependency, not preference)
 
@@ -38,12 +43,14 @@ Ordering rule: **A ships a usable desktop on today's SSE. B hardens the relay to
 ## Target repo shape
 
 ```
-packages/core     ← relay client + types + pure lib (no DOM, explicit host base URL)
+packages/core     ← relay client + types + pure lib + design tokens (no DOM, explicit host base URL)
 apps/server       ← Bun/Nest daemon (WS relay, token auth, backpressure)
-apps/web          ← browser client, imports core
-apps/desktop      ← Electron shell, supervises daemon, wraps web
-apps/mobile       ← Expo client, imports core (Phase C)
+apps/web          ← shadcn client (Chromium/DOM), imports core; re-tuned desktop-first, PWA dropped
+apps/desktop      ← Electron shell, supervises daemon, wraps apps/web
+apps/mobile       ← Expo + react-native-reusables + NativeWind, imports core (Phase C)
 ```
+
+Mirrors Synara's Turborepo layout (`apps/desktop` + `apps/web` + `packages/`), extended with `apps/mobile`.
 
 ## Open tuning items (flagged, not blocking)
 
