@@ -95,6 +95,15 @@ export class SessionsRepository {
     return row ? toDto(row) : null;
   }
 
+  findByProviderThreadId(providerThreadId: string): SessionDto | null {
+    const row = this.database.db
+      .prepare<SessionRow, [string]>(
+        'SELECT * FROM sessions WHERE provider_thread_id = ? LIMIT 1',
+      )
+      .get(providerThreadId);
+    return row ? toDto(row) : null;
+  }
+
   create(input: CreateSessionDto): SessionDto {
     const now = Date.now();
     const id = input.id ?? uuidv4().slice(0, 8);
@@ -129,25 +138,41 @@ export class SessionsRepository {
     return toDto(row);
   }
 
-  createHandoff(input: {
-    id?: string;
-    title: string;
-    workspace: string;
-    cursorChatId: string;
-    prompt: string;
-    model?: string | null;
-    projectPath?: string | null;
-    branch?: string | null;
-  }): SessionDto {
+  createHandoff(input:
+    | {
+        id?: string;
+        provider?: 'cursor';
+        title: string;
+        workspace: string;
+        cursorChatId: string;
+        prompt: string;
+        model?: string | null;
+        modelOptions?: ModelOptionsMap | null;
+        projectPath?: string | null;
+        branch?: string | null;
+      }
+    | {
+        id?: string;
+        provider: 'pi';
+        title: string;
+        workspace: string;
+        providerThreadId: string;
+        prompt: string;
+        model?: string | null;
+        modelOptions?: ModelOptionsMap | null;
+        projectPath?: string | null;
+        branch?: string | null;
+      }): SessionDto {
     const now = Date.now();
     const id = input.id ?? uuidv4().slice(0, 8);
+    const isPi = input.provider === 'pi';
     const row: SessionRow = {
       id,
       title: input.title,
       status: 'IDLE',
-      provider: 'cursor',
+      provider: isPi ? 'pi' : 'cursor',
       model: input.model ?? null,
-      model_options: null,
+      model_options: stringifyModelOptions(input.modelOptions),
       workspace: input.workspace.trim(),
       prompt: input.prompt,
       preview: null,
@@ -155,11 +180,11 @@ export class SessionsRepository {
       base_branch: null,
       worktree_path: null,
       branch: input.branch ?? null,
-      provider_thread_id: null,
+      provider_thread_id: isPi ? input.providerThreadId : null,
       provider_active_turn_id: null,
       provider_state_json: null,
-      cursor_backend: 'cli',
-      cursor_chat_id: input.cursorChatId,
+      cursor_backend: isPi ? null : 'cli',
+      cursor_chat_id: isPi ? null : 'cursorChatId' in input ? input.cursorChatId : null,
       forge_provider: null,
       pull_request_url: null,
       pull_request_number: null,

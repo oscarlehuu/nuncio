@@ -122,11 +122,19 @@ export interface SessionDto {
   updatedAt: number;
 }
 
-export interface HandoffSessionDto {
-  cursorChatId: string;
-  workspace: string;
-  title?: string;
-}
+export type HandoffSessionDto =
+  | {
+      cursorChatId: string;
+      piSessionPath?: never;
+      workspace: string;
+      title?: string;
+    }
+  | {
+      piSessionPath: string;
+      cursorChatId?: never;
+      workspace: string;
+      title?: string;
+    };
 
 export interface CreateSessionDto {
   prompt: string;

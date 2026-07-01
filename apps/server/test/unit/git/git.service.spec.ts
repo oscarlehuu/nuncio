@@ -90,6 +90,28 @@ describe('GitService', () => {
     expect(branches.some((b) => b.name === 'main')).toBe(true);
   });
 
+  it('currentBranch resolves the checked out branch from a nested workspace path', async () => {
+    const subdir = join(repoA, 'packages', 'server');
+    mkdirSync(subdir, { recursive: true });
+
+    await expect(service.currentBranch(subdir)).resolves.toBe('main');
+  });
+
+  it('currentBranch returns null for detached HEAD and non-git paths', async () => {
+    const detachedRepo = mkdtempSync(join(tmpdir(), 'nuncio-detached-repo-'));
+    const notRepo = mkdtempSync(join(tmpdir(), 'nuncio-current-branch-not-git-'));
+    try {
+      await initRepo(detachedRepo);
+      await runGitAsync(detachedRepo, ['checkout', '--detach', 'HEAD']);
+
+      await expect(service.currentBranch(detachedRepo)).resolves.toBeNull();
+      await expect(service.currentBranch(notRepo)).resolves.toBeNull();
+    } finally {
+      rmSync(detachedRepo, { recursive: true, force: true });
+      rmSync(notRepo, { recursive: true, force: true });
+    }
+  });
+
   it('listBranches returns the unborn branch when the repo has no commits yet', async () => {
     const emptyRepo = mkdtempSync(join(tmpdir(), 'nuncio-empty-repo-'));
     try {

@@ -4,6 +4,7 @@ import {
   HttpStatus,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { EventEmitter } from 'events';
 import { homedir } from 'node:os';
@@ -15,6 +16,7 @@ import { turnsToSessionEvents } from '../cursor-local/cursor-transcript-hydrate'
 import { readCursorChatMetadata } from '../cursor-local/cursor-chat-store';
 import { GitService } from '../git/git.service';
 import type { ModelOptionsMap } from '../models/model-options.types';
+import { PiLocalSessionsService } from '../pi-local/pi-local-sessions.service';
 import { canTransition } from './domain/sessions.fsm';
 import type {
   CreateSessionDto,
@@ -55,6 +57,7 @@ export class SessionsService {
     private readonly agents: AgentRegistry,
     private readonly git: GitService,
     private readonly cursorLocal: CursorLocalSessionsService,
+    @Optional() private readonly piLocal?: PiLocalSessionsService,
   ) {
     this.resolveStaleProviderRequests();
   }
@@ -141,10 +144,15 @@ export class SessionsService {
   }
 
   async handoff(input: HandoffSessionDto): Promise<SessionDto> {
-    const chatId = input.cursorChatId?.trim();
     const workspace = input.workspace?.trim();
-    if (!chatId) throw new BadRequestException('cursorChatId is required');
     if (!workspace) throw new BadRequestException('workspace is required');
+
+    if ('piSessionPath' in input) {
+      return this.handoffPi(input.piSessionPath, workspace, input.title);
+    }
+
+    const chatId = input.cursorChatId?.trim();
+    if (!chatId) throw new BadRequestException('cursorChatId is required');
 
     const existing = this.sessions.findByCursorChatId(chatId, 'cli');
     if (existing) return this.enrichSession(existing);
@@ -165,6 +173,42 @@ export class SessionsService {
       model,
       projectPath: cursorMeta.repoPath ?? workspace,
       branch: cursorMeta.branch ?? null,
+    });
+    this.hydrateIfNeeded(session);
+    const refreshed = this.sessions.findById(session.id)!;
+    return this.enrichSession(refreshed);
+  }
+
+  private async handoffPi(
+    piSessionPath: string | undefined,
+    workspace: string,
+    requestedTitle?: string,
+  ): Promise<SessionDto> {
+    const path = piSessionPath?.trim();
+    if (!path) throw new BadRequestException('piSessionPath is required');
+
+    const existing = this.sessions.findByProviderThreadId(path);
+    if (existing) return this.enrichSession(existing);
+
+    const local = await this.piLocal?.find(path, workspace);
+    if (!local) {
+      throw new NotFoundException(`Pi session ${path} not found for workspace`);
+    }
+
+    const title = requestedTitle?.trim() || local.title;
+    const sessionWorkspace = local.workspace || workspace;
+    const meta = this.piLocal?.readModelMeta(path) ?? { model: null, thinkingLevel: null };
+    const branch = await this.git.currentBranch(sessionWorkspace);
+    const session = this.sessions.createHandoff({
+      provider: 'pi',
+      title,
+      workspace: sessionWorkspace,
+      providerThreadId: path,
+      prompt: title,
+      model: meta.model,
+      modelOptions: meta.thinkingLevel ? { thinkingLevel: meta.thinkingLevel } : null,
+      projectPath: workspace,
+      branch,
     });
     this.hydrateIfNeeded(session);
     const refreshed = this.sessions.findById(session.id)!;
@@ -374,33 +418,62 @@ export class SessionsService {
   }
 
   private hydrateIfNeeded(session: SessionDto): void {
-    if (session.cursorBackend !== 'cli' || !session.cursorChatId || !session.workspace) return;
     if (this.events.count(session.id) > 0) return;
 
-    const turns = this.cursorLocal.readTranscript(session.cursorChatId, session.workspace);
-    const batch = turnsToSessionEvents(turns);
+    const batch = this.readTranscriptEvents(session);
     if (batch.length === 0) return;
     this.events.appendBatch(session.id, batch);
-    const workspace = session.worktreePath ?? session.workspace;
-    const mtime = this.cursorLocal.transcriptMtime(session.cursorChatId, workspace);
+    const mtime = this.transcriptMtime(session);
     if (mtime !== null) this.transcriptMtimeCache.set(session.id, mtime);
   }
 
   private refreshTranscriptIfNeeded(session: SessionDto): void {
-    if (session.cursorBackend !== 'cli' || !session.cursorChatId || !session.workspace) return;
-
-    const workspace = session.worktreePath ?? session.workspace;
-    const currentMtime = this.cursorLocal.transcriptMtime(session.cursorChatId, workspace);
+    const currentMtime = this.transcriptMtime(session);
     if (currentMtime === null) return;
     const cachedMtime = this.transcriptMtimeCache.get(session.id);
     if (cachedMtime !== undefined && currentMtime === cachedMtime) return;
 
-    const turns = this.cursorLocal.readTranscript(session.cursorChatId, workspace);
-    const hydrated = turnsToSessionEvents(turns);
+    const hydrated = this.readTranscriptEvents(session);
     this.transcriptMtimeCache.set(session.id, currentMtime);
     if (hydrated.length === 0) return;
 
-    const existing = this.events.list(session.id, 0);
+    const toAppend = this.missingTranscriptEvents(session.id, hydrated);
+    if (toAppend.length === 0) return;
+
+    const appended = this.events.appendBatch(session.id, toAppend);
+    for (const event of appended) {
+      this.emit(session.id, event);
+    }
+    this.appendAndEmit(session.id, 'transcript_refreshed', { added: toAppend.length });
+  }
+
+  private readTranscriptEvents(session: SessionDto): Array<{ type: string; payload: unknown }> {
+    if (session.cursorBackend === 'cli' && session.cursorChatId && session.workspace) {
+      const workspace = session.worktreePath ?? session.workspace;
+      return turnsToSessionEvents(this.cursorLocal.readTranscript(session.cursorChatId, workspace));
+    }
+    if (session.provider === 'pi' && session.providerThreadId) {
+      return this.piLocal?.readTranscriptEvents(session.providerThreadId) ?? [];
+    }
+    return [];
+  }
+
+  private transcriptMtime(session: SessionDto): number | null {
+    if (session.cursorBackend === 'cli' && session.cursorChatId && session.workspace) {
+      const workspace = session.worktreePath ?? session.workspace;
+      return this.cursorLocal.transcriptMtime(session.cursorChatId, workspace);
+    }
+    if (session.provider === 'pi' && session.providerThreadId) {
+      return this.piLocal?.transcriptMtime(session.providerThreadId) ?? null;
+    }
+    return null;
+  }
+
+  private missingTranscriptEvents(
+    sessionId: string,
+    hydrated: Array<{ type: string; payload: unknown }>,
+  ): Array<{ type: string; payload: unknown }> {
+    const existing = this.events.list(sessionId, 0);
     const existingCounts = new Map<string, number>();
     for (const e of existing) {
       const key = `${e.type}:${JSON.stringify(e.payload)}`;
@@ -417,13 +490,7 @@ export class SessionsService {
         toAppend.push(e);
       }
     }
-    if (toAppend.length === 0) return;
-
-    const appended = this.events.appendBatch(session.id, toAppend);
-    for (const event of appended) {
-      this.emit(session.id, event);
-    }
-    this.appendAndEmit(session.id, 'transcript_refreshed', { added: toAppend.length });
+    return toAppend;
   }
 
   private requireSession(id: string): SessionDto {

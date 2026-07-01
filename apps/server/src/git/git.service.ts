@@ -167,6 +167,16 @@ export class GitService {
     }
   }
 
+  async currentBranch(path: string): Promise<string | null> {
+    try {
+      const repoRoot = await this.resolveRepoRoot(path);
+      const head = await git(['rev-parse', '--abbrev-ref', 'HEAD'], repoRoot);
+      return head && head !== 'HEAD' ? head : null;
+    } catch {
+      return null;
+    }
+  }
+
   async listBranches(projectPath: string): Promise<BranchDto[]> {
     const repoRoot = await this.resolveRepoRoot(projectPath);
 
