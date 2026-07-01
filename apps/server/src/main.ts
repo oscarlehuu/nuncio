@@ -50,13 +50,27 @@ async function bootstrap() {
   app.useBodyParser('urlencoded', { extended: true, limit: '25mb' });
   configureWebAppServing(app);
 
-  const shutdown = () => {
+  let shuttingDown = false;
+  const shutdown = async () => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+
     try {
       const registry = app.get(AgentRegistry);
       registry.cli().disposeAll();
     } catch {
       // App may not have finished booting.
     }
+
+    try {
+      await app.close();
+    } catch {
+      // App may not have finished booting.
+    }
+
+    process.exit(0);
   };
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
