@@ -3,8 +3,28 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SessionDetail } from './session-detail';
+import { fetchGitStatus } from '../lib/api';
 import type { Session, SessionEvent } from '../lib/api';
 import type { ModelProvider } from '../lib/model-providers';
+
+vi.mock('../lib/api', async () => {
+  const actual = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+  return {
+    ...actual,
+    fetchGitStatus: vi.fn(async () => ({
+      branch: 'nuncio/s1-fix-auth',
+      ahead: 0,
+      behind: 0,
+      clean: true,
+      files: [],
+    })),
+    fetchGitDiff: vi.fn(async () => ({ diff: '', truncated: false })),
+    fetchPullRequest: vi.fn(async () => null),
+    commitSession: vi.fn(),
+    pushSession: vi.fn(),
+    openPullRequest: vi.fn(),
+  };
+});
 
 function makeSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -251,6 +271,51 @@ describe('SessionDetail', () => {
 
     expect(scrollEl.scrollTop).toBe(0);
     vi.useRealTimers();
+  });
+
+  it('toggles the source control dock open and closed', async () => {
+    await renderDetail({
+      projectPath: '/Users/dev/code/nuncio',
+      branch: 'nuncio/s1-fix-auth',
+    });
+    expect(screen.queryByText('Source Control')).toBeNull();
+
+    const toggle = screen.getByRole('button', { name: /toggle source control/i });
+    await userEvent.click(toggle);
+    expect(await screen.findByText('Source Control')).toBeInTheDocument();
+
+    const close = screen.getByRole('button', { name: /close source control/i });
+    await userEvent.click(close);
+    expect(screen.queryByText('Source Control')).toBeNull();
+  });
+
+  it('opens source control with an empty commit message instead of the session title', async () => {
+    vi.mocked(fetchGitStatus).mockResolvedValueOnce({
+      branch: 'nuncio/s1-fix-auth',
+      ahead: 0,
+      behind: 0,
+      clean: false,
+      files: [
+        { path: 'src/app.ts', index: 'M', workTree: ' ', staged: true, insertions: 1, deletions: 0 },
+      ],
+    });
+
+    await renderDetail({
+      title: 'Session title should not prefill commits',
+      projectPath: '/Users/dev/code/nuncio',
+      branch: 'nuncio/s1-fix-auth',
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: /toggle source control/i }));
+    const message = await screen.findByPlaceholderText(/commit message/i);
+
+    expect(message).toHaveValue('');
+    expect(screen.getByRole('button', { name: /^commit/i })).toBeDisabled();
+  });
+
+  it('does not show the source control toggle when there is no git context', async () => {
+    await renderDetail();
+    expect(screen.queryByRole('button', { name: /toggle source control/i })).toBeNull();
   });
 
   it('shows repo and branch badges when workspace metadata is present', async () => {

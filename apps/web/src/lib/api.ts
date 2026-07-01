@@ -18,6 +18,8 @@ export interface GitFileChange {
   index: string;
   workTree: string;
   staged: boolean;
+  insertions: number;
+  deletions: number;
 }
 
 export interface GitStatusDto {
@@ -360,11 +362,12 @@ export async function fetchGitStatus(id: string): Promise<GitStatusDto> {
 
 export async function fetchGitDiff(
   id: string,
-  opts?: { staged?: boolean; base?: string },
+  opts?: { staged?: boolean; base?: string; path?: string },
 ): Promise<GitDiffDto> {
   const params = new URLSearchParams();
   if (opts?.staged) params.append('staged', '1');
   if (opts?.base) params.append('base', opts.base);
+  if (opts?.path) params.append('path', opts.path);
   const query = params.toString() ? `?${params.toString()}` : '';
   const res = await fetch(`/api/sessions/${id}/git/diff${query}`);
   if (!res.ok) throw new Error('Failed to fetch Git diff');

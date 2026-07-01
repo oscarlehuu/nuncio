@@ -59,6 +59,15 @@ describe('SessionsRepository', () => {
     expect(s.branch).toBeNull();
   });
 
+  it('uses the full first prompt line as the session title without truncating it', () => {
+    const longFirstLine = 'Implement the complete source control commit message behavior without prefilled titles in the review dock';
+    expect(longFirstLine.length).toBeGreaterThan(80);
+
+    const s = repo.create({ prompt: `${longFirstLine}\nIgnore this second line for the title` });
+
+    expect(s.title).toBe(longFirstLine);
+  });
+
   it('findById returns null for a missing id', () => {
     expect(repo.findById('nope')).toBeNull();
   });

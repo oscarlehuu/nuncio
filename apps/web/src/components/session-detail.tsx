@@ -11,7 +11,6 @@ import { useContextUsage } from '../lib/use-context-usage';
 import { ContextUsageButton } from './context-usage-button';
 import { Transcript } from './session-transcript';
 import { ReviewChanges } from './review-changes';
-import { PrPanel } from './pr-panel';
 import { PendingUserInputBanner } from './pending-user-input-banner';
 import { ApprovalModePicker, type ApprovalMode } from './approval-mode-picker';
 import { Button } from '@/components/ui/button';
@@ -84,6 +83,7 @@ export function SessionDetail({
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const [respondingRequestId, setRespondingRequestId] = useState<string | null>(null);
+  const [scmOpen, setScmOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pendingScrollToBottomRef = useRef(true);
   const streaming = session.status === 'RUNNING';
@@ -183,8 +183,11 @@ export function SessionDetail({
     }
   };
 
+  const hasGitContext = !!(session.worktreePath || session.branch || session.projectPath);
+
   return (
-    <section className="flex-1 flex flex-col min-h-0">
+    <section className="flex-1 flex min-h-0">
+      <div className="flex-1 min-w-0 flex flex-col min-h-0">
       <TooltipProvider>
       <header className="shrink-0 flex items-center gap-3 px-4 md:px-5 py-3 border-b border-border bg-card/80 backdrop-blur min-h-[52px]">
         <div className="flex-1 min-w-0 flex justify-center items-center">
@@ -252,6 +255,22 @@ export function SessionDetail({
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
+            {hasGitContext && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setScmOpen((open) => !open)}
+                  aria-label="Toggle source control"
+                  aria-pressed={scmOpen}
+                >
+                    <GitBranch />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Source control</TooltipContent>
+              </Tooltip>
+            )}
             {showContinueOnMobile && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -348,12 +367,6 @@ export function SessionDetail({
               onRespondProviderRequest ? handleRespondProviderRequest : undefined
             }
           />
-          {(session.worktreePath || session.branch || session.projectPath) && (
-            <div className="mt-4 flex flex-col gap-4">
-              <ReviewChanges sessionId={session.id} defaultMessage={session.title} />
-              <PrPanel session={session} />
-            </div>
-          )}
         </div>
       </div>
 
@@ -467,6 +480,28 @@ export function SessionDetail({
           </div>
         </div>
       </div>
+      </div>
+
+      {hasGitContext && scmOpen && (
+        <aside className="w-[360px] shrink-0 border-l border-border bg-card/40 flex flex-col min-h-0">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-border">
+            <span className="text-sm font-medium">Source Control</span>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => setScmOpen(false)}
+              aria-label="Close source control"
+            >
+              <X className="size-3.5" />
+            </Button>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            <div className="border-b border-border/60 bg-card/40">
+              <ReviewChanges sessionId={session.id} />
+            </div>
+          </div>
+        </aside>
+      )}
 
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <DialogContent>

@@ -63,8 +63,8 @@ function toDto(row: SessionRow): SessionDto {
 }
 
 function titleFromPrompt(prompt: string): string {
-  const line = prompt.trim().split('\n')[0] ?? 'Untitled session';
-  return line.length > 80 ? `${line.slice(0, 77)}...` : line;
+  const line = (prompt.split('\n')[0] ?? '').trim();
+  return line || 'Untitled session';
 }
 
 @Injectable()

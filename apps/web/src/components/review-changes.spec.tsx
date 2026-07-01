@@ -23,7 +23,8 @@ const STATUS = {
   behind: 0,
   clean: false,
   files: [
-    { path: 'src/app.ts', index: 'M', workTree: ' ', staged: true },
+    { path: 'src/app.ts', index: 'M', workTree: ' ', staged: true, insertions: 5, deletions: 2 },
+    { path: 'notes.txt', index: '?', workTree: '?', staged: false, insertions: 3, deletions: 0 },
   ],
 };
 
@@ -44,21 +45,47 @@ describe('ReviewChanges', () => {
     render(<ReviewChanges sessionId="s1" />);
     await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledWith('s1'));
     expect(await screen.findByText(/nuncio\/abc-fix/)).toBeInTheDocument();
-    expect(await screen.findByText(/src\/app\.ts/)).toBeInTheDocument();
+    expect(await screen.findByText('app.ts')).toBeInTheDocument();
+    expect(await screen.findByLabelText('Modified')).toBeInTheDocument();
+  });
+
+  it('shows the collapsible uncommitted changes header', async () => {
+    render(<ReviewChanges sessionId="s1" />);
+    expect(await screen.findByText(/2 Uncommitted Changes/i)).toBeInTheDocument();
+  });
+
+  it('renders aggregate and per-file line stats including the New tag', async () => {
+    render(<ReviewChanges sessionId="s1" />);
+    await screen.findByText(/2 Uncommitted Changes/i);
+    expect(screen.getAllByText('+8').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('-2').length).toBeGreaterThan(0);
+    expect(screen.getByTitle('src/app.ts')).toHaveTextContent('+5');
+    expect(screen.getByTitle('src/app.ts')).toHaveTextContent('-2');
+    expect(screen.getByTitle('notes.txt')).toHaveTextContent('+3');
+    expect(screen.getByText('New')).toBeInTheDocument();
+  });
+
+  it('fetches and renders a per-file diff when a file row is clicked', async () => {
+    render(<ReviewChanges sessionId="s1" />);
+    const row = await screen.findByTitle('src/app.ts');
+    expect(fetchGitDiff).not.toHaveBeenCalled();
+    await userEvent.click(row);
+    await waitFor(() => expect(fetchGitDiff).toHaveBeenCalledWith('s1', { path: 'src/app.ts' }));
+    expect(await screen.findByText(/\+changed line/)).toBeInTheDocument();
   });
 
   it('disables Commit when the message is empty', async () => {
     render(<ReviewChanges sessionId="s1" />);
-    const commit = await screen.findByRole('button', { name: /commit/i });
+    const commit = await screen.findByRole('button', { name: /^commit/i });
     expect(commit).toBeDisabled();
   });
 
   it('commits with the typed message when Commit is clicked', async () => {
     render(<ReviewChanges sessionId="s1" />);
-    await screen.findByText(/src\/app\.ts/);
+    await screen.findByText('app.ts');
     const input = screen.getByPlaceholderText(/message/i);
     await userEvent.type(input, 'Fix the bug');
-    const commit = screen.getByRole('button', { name: /commit/i });
+    const commit = screen.getByRole('button', { name: /^commit/i });
     expect(commit).toBeEnabled();
     await userEvent.click(commit);
     await waitFor(() =>
