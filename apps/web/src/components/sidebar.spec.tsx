@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import userEvent from '@testing-library/user-event';
@@ -35,6 +35,10 @@ function makeSession(overrides: Partial<Session> = {}): Session {
 }
 
 describe('Sidebar', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
   it('renders session titles', () => {
     const sessions = [
       makeSession({ id: 's1', title: 'Build feature X' }),
@@ -67,7 +71,7 @@ describe('Sidebar', () => {
     expect(screen.getByText(/no sessions yet/i)).toBeInTheDocument();
   });
 
-  it('shows the project name on the subtitle when projectPath is set', () => {
+  it('shows the project name on the group header when projectPath is set', () => {
     const sessions = [
       makeSession({
         id: 's1',
@@ -79,7 +83,7 @@ describe('Sidebar', () => {
     renderWithTheme(
       <Sidebar sessions={sessions} activeId={null} onSelect={() => {}} onNew={() => {}} />,
     );
-    expect(screen.getByText(/nuncio ·/i)).toBeInTheDocument();
+    expect(screen.getByText('nuncio')).toBeInTheDocument();
   });
 
   it('shows a provider indicator per session', () => {
@@ -236,6 +240,112 @@ describe('Sidebar', () => {
       expect(screen.getByRole('button', { name: /archive idle task/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /archive paused task/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /archive error task/i })).toBeInTheDocument();
+    });
+  });
+
+  describe('recent project grouping', () => {
+    beforeEach(() => {
+      localStorage.clear();
+    });
+
+    it('renders a Chat group header for sessions with no projectPath', () => {
+      const sessions = [makeSession({ id: 's1', title: 'Build feature X', projectPath: null })];
+      renderWithTheme(
+        <Sidebar sessions={sessions} activeId={null} onSelect={() => {}} onNew={() => {}} />,
+      );
+      expect(screen.getAllByText('Chat').length).toBeGreaterThan(0);
+    });
+
+    it('groups sessions under their project header with a session count', () => {
+      const sessions = [
+        makeSession({ id: 's1', title: 'Fix auth', projectPath: '/Users/dev/code/nuncio' }),
+        makeSession({ id: 's2', title: 'Add tests', projectPath: '/Users/dev/code/nuncio' }),
+        makeSession({ id: 's3', title: 'Random chat', projectPath: null }),
+      ];
+      renderWithTheme(
+        <Sidebar sessions={sessions} activeId={null} onSelect={() => {}} onNew={() => {}} />,
+      );
+      expect(screen.getByText('nuncio')).toBeInTheDocument();
+      expect(screen.getAllByText('Chat').length).toBeGreaterThan(0);
+      expect(screen.getByText('Fix auth')).toBeInTheDocument();
+      expect(screen.getByText('Add tests')).toBeInTheDocument();
+      expect(screen.getByText('Random chat')).toBeInTheDocument();
+    });
+
+    it('collapses a group and hides its sessions when the header is clicked', async () => {
+      const sessions = [
+        makeSession({ id: 's1', title: 'Fix auth', projectPath: '/Users/dev/code/nuncio' }),
+      ];
+      renderWithTheme(
+        <Sidebar sessions={sessions} activeId={null} onSelect={() => {}} onNew={() => {}} />,
+      );
+      expect(screen.getByText('Fix auth')).toBeInTheDocument();
+      await userEvent.click(screen.getByText('nuncio'));
+      expect(screen.queryByText('Fix auth')).not.toBeInTheDocument();
+      await userEvent.click(screen.getByText('nuncio'));
+      expect(screen.getByText('Fix auth')).toBeInTheDocument();
+    });
+
+    it('renders a PROJECTS divider only when there are project-backed sessions', () => {
+      const sessions = [
+        makeSession({ id: 's1', title: 'Fix auth', projectPath: '/Users/dev/code/nuncio' }),
+      ];
+      renderWithTheme(
+        <Sidebar sessions={sessions} activeId={null} onSelect={() => {}} onNew={() => {}} />,
+      );
+      expect(screen.getByTestId('recent-divider-projects')).toBeInTheDocument();
+      expect(screen.queryByTestId('recent-divider-chat')).not.toBeInTheDocument();
+    });
+
+    it('renders a CHAT divider only when there are project-less sessions', () => {
+      const sessions = [makeSession({ id: 's1', title: 'Random chat', projectPath: null })];
+      renderWithTheme(
+        <Sidebar sessions={sessions} activeId={null} onSelect={() => {}} onNew={() => {}} />,
+      );
+      expect(screen.getByTestId('recent-divider-chat')).toBeInTheDocument();
+      expect(screen.queryByTestId('recent-divider-projects')).not.toBeInTheDocument();
+    });
+
+    it('always renders the Chat section last, after all project sections', () => {
+      const sessions = [
+        makeSession({ id: 's1', title: 'Chat only', projectPath: null, updatedAt: Date.now() }),
+        makeSession({
+          id: 's2',
+          title: 'Older project work',
+          projectPath: '/Users/dev/code/nuncio',
+          updatedAt: Date.now() - 1_000_000,
+        }),
+      ];
+      renderWithTheme(
+        <Sidebar sessions={sessions} activeId={null} onSelect={() => {}} onNew={() => {}} />,
+      );
+      const projectsDivider = screen.getByTestId('recent-divider-projects');
+      const chatDivider = screen.getByTestId('recent-divider-chat');
+      expect(
+        projectsDivider.compareDocumentPosition(chatDivider) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it('shows a FolderGit2 icon on project group headers and a MessageSquare icon on the Chat header', () => {
+      const sessions = [
+        makeSession({ id: 's1', title: 'Fix auth', projectPath: '/Users/dev/code/nuncio' }),
+        makeSession({ id: 's2', title: 'Random chat', projectPath: null }),
+      ];
+      const { container } = renderWithTheme(
+        <Sidebar sessions={sessions} activeId={null} onSelect={() => {}} onNew={() => {}} />,
+      );
+      expect(container.querySelector('.lucide-folder-git-2')).toBeInTheDocument();
+      expect(container.querySelector('.lucide-message-square')).toBeInTheDocument();
+    });
+
+    it('renders chat sessions directly under the CHAT divider without a collapsible wrapper', () => {
+      const sessions = [makeSession({ id: 's1', title: 'Random chat', projectPath: null })];
+      renderWithTheme(
+        <Sidebar sessions={sessions} activeId={null} onSelect={() => {}} onNew={() => {}} />,
+      );
+      expect(screen.getByText('Random chat')).toBeInTheDocument();
+      const chatHeaders = screen.getAllByText('Chat');
+      expect(chatHeaders.every((el) => !el.closest('button'))).toBe(true);
     });
   });
 
