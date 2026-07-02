@@ -46,6 +46,10 @@ type PiSessionHandle = {
   unsubscribe: () => void;
   resetAssistantText: () => void;
   getAssistantText: () => string;
+  /** Turn-final assistant messages already emitted during the current prompt. */
+  getAssistantTurnsEmitted: () => number;
+  /** Error message of a turn that failed (stopReason 'error'), if any. */
+  getTurnError: () => string | null;
   sealOpenTools: (emit?: AgentRunContext['emit']) => void;
 };
 
@@ -214,12 +218,20 @@ export class PiAgentProvider extends BaseAgentProvider {
     }
     if (interrupted) return;
     this.interruptedSessions.delete(sessionId);
-    this.pushEvent(
-      sessionId,
-      'assistant_message',
-      { text: handle.getAssistantText() || '(no response)' },
-      context.emit,
-    );
+    const turnError = handle.getTurnError();
+    if (turnError) {
+      // Route through the shared error path: ERROR status + error event.
+      throw new Error(turnError);
+    }
+    if (handle.getAssistantTurnsEmitted() === 0) {
+      // Fallback for runs where no message_end fired (older SDK shapes).
+      this.pushEvent(
+        sessionId,
+        'assistant_message',
+        { text: handle.getAssistantText() || '(no response)' },
+        context.emit,
+      );
+    }
   }
 
   private loadSdk(): Promise<PiSdk> {
@@ -273,6 +285,8 @@ export class PiAgentProvider extends BaseAgentProvider {
     }
 
     let assistantText = '';
+    let assistantTurnsEmitted = 0;
+    let lastTurnError: string | null = null;
     let accumulatedThinking = '';
     let thinkingOpen = false;
     let thinkingId: string | undefined;
@@ -358,6 +372,34 @@ export class PiAgentProvider extends BaseAgentProvider {
           context.emit,
         );
       }
+      if (event.type === 'message_end') {
+        const message = event.message as
+          | {
+              role?: string;
+              stopReason?: string;
+              errorMessage?: string;
+              content?: Array<{ type?: string; text?: string }>;
+            }
+          | undefined;
+        if (message?.role === 'assistant') {
+          if (message.stopReason === 'error') {
+            // Remembered here, surfaced by executePrompt through the shared
+            // error path so the session lands in ERROR with an error event.
+            lastTurnError = message.errorMessage || 'Model call failed.';
+          } else if (message.stopReason !== 'aborted') {
+            const text = (message.content ?? [])
+              .filter((block) => block?.type === 'text' && typeof block.text === 'string')
+              .map((block) => block.text)
+              .join('');
+            if (text.trim()) {
+              // Per-turn final message: mirrors the pi session file exactly, so
+              // transcript refreshes dedupe instead of duplicating steered runs.
+              this.pushEvent(sessionId, 'assistant_message', { text }, context.emit);
+              assistantTurnsEmitted += 1;
+            }
+          }
+        }
+      }
       if (event.type === 'agent_end') {
         sealOpenTools(context.emit);
       }
@@ -370,9 +412,13 @@ export class PiAgentProvider extends BaseAgentProvider {
       unsubscribe,
       resetAssistantText: () => {
         assistantText = '';
+        assistantTurnsEmitted = 0;
+        lastTurnError = null;
         resetThinking();
       },
       getAssistantText: () => assistantText,
+      getAssistantTurnsEmitted: () => assistantTurnsEmitted,
+      getTurnError: () => lastTurnError,
       sealOpenTools,
     };
   }

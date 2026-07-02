@@ -319,6 +319,9 @@ export class SessionsService implements OnModuleDestroy {
     });
   }
 
+  /** Grace period before a non-unwinding interrupted run is forced idle. */
+  private interruptForceIdleMs = 5000;
+
   async interrupt(id: string): Promise<void> {
     const session = this.requireSession(id);
     const provider = this.agents.resolveForSession(session);
@@ -327,6 +330,20 @@ export class SessionsService implements OnModuleDestroy {
     }
     await provider.interrupt(id);
     this.appendAndEmit(id, 'interrupted', {});
+    // A hung provider stream can swallow the abort and leave the run pending
+    // forever; if the session is still RUNNING after the grace period, drop
+    // the zombie handle and force it idle so the user is never stuck.
+    setTimeout(() => {
+      try {
+        const current = this.sessions.findById(id);
+        if (current?.status !== 'RUNNING') return;
+        this.agents.resolveForSession(current).dispose(id);
+        this.locallyProducing.delete(id);
+        this.transition(id, 'IDLE');
+      } catch {
+        // Session deleted while the grace timer was pending — nothing to do.
+      }
+    }, this.interruptForceIdleMs);
   }
 
   async setSessionModel(
@@ -678,17 +695,21 @@ export class SessionsService implements OnModuleDestroy {
     sessionId: string,
     hydrated: Array<{ type: string; payload: unknown }>,
   ): Array<{ type: string; payload: unknown }> {
+    // Session files record every user input as user_message, while live steers
+    // persist as steer_message — same message, so dedupe them as one family.
+    const dedupeKey = (type: string, payload: unknown) =>
+      `${type === 'steer_message' ? 'user_message' : type}:${JSON.stringify(payload)}`;
     const existing = this.events.list(sessionId, 0);
     const existingCounts = new Map<string, number>();
     for (const e of existing) {
-      const key = `${e.type}:${JSON.stringify(e.payload)}`;
+      const key = dedupeKey(e.type, e.payload);
       existingCounts.set(key, (existingCounts.get(key) ?? 0) + 1);
     }
 
     const toAppend: Array<{ type: string; payload: unknown }> = [];
     const hydratedCounts = new Map<string, number>();
     for (const e of hydrated) {
-      const key = `${e.type}:${JSON.stringify(e.payload)}`;
+      const key = dedupeKey(e.type, e.payload);
       const hydratedCount = (hydratedCounts.get(key) ?? 0) + 1;
       hydratedCounts.set(key, hydratedCount);
       if (hydratedCount > (existingCounts.get(key) ?? 0)) {
@@ -746,6 +767,9 @@ export class SessionsService implements OnModuleDestroy {
   private transition(id: string, status: SessionStatus): void {
     this.sessions.updateStatus(id, status);
     this.appendAndEmit(id, 'status', { status });
+    if (status === 'IDLE') {
+      setTimeout(() => this.drainSteerQueue(id), 0);
+    }
   }
 
   private appendAndEmit(id: string, type: string, payload: unknown): SessionEvent {

@@ -195,6 +195,24 @@ describe('SessionsService steer while RUNNING', () => {
     expect(steerCalls).toEqual(['first message', 'second message']);
   });
 
+  it('dedupes steer_message against hydrated user_message on transcript refresh', () => {
+    const created = sessions.create({ prompt: 'dedupe test', provider: 'cursor' });
+    events.append(created.id, 'steer_message', { text: 'follow the plan' });
+
+    const missing = (
+      service as unknown as {
+        missingTranscriptEvents: (
+          id: string,
+          hydrated: Array<{ type: string; payload: unknown }>,
+        ) => Array<{ type: string; payload: unknown }>;
+      }
+    ).missingTranscriptEvents(created.id, [
+      { type: 'user_message', payload: { text: 'follow the plan' } },
+    ]);
+
+    expect(missing).toEqual([]);
+  });
+
   it('still rejects steer for ARCHIVED sessions', async () => {
     const created = sessions.create({ prompt: 'archived', provider: 'cursor' });
     sessions.updateStatus(created.id, 'RUNNING');
@@ -225,6 +243,35 @@ describe('SessionsService steer while RUNNING', () => {
 
     expect(interrupt).toHaveBeenCalledWith(id);
     expect(events.list(id).some((e) => e.type === 'interrupted')).toBe(true);
+  });
+
+  it('forces a hung run to IDLE when interrupt does not unwind it, then drains the queue', async () => {
+    const id = seedRunning();
+    const steer = jest.fn(async (_sessionId: string, _message: string) => undefined);
+    installProvider(
+      stubProvider({
+        capabilities: {
+          interrupt: true,
+          modelSwitch: 'none',
+          effortSwitch: 'none',
+          images: false,
+          steerWhileRunning: false,
+        },
+        // Interrupt "succeeds" but the provider run never unwinds (hung stream).
+        interrupt: async () => undefined,
+        steer,
+      }),
+    );
+    (service as unknown as { interruptForceIdleMs: number }).interruptForceIdleMs = 20;
+
+    await service.steer(id, 'queued while hung');
+    await service.interrupt(id);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    expect(sessions.findById(id)?.status).toBe('IDLE');
+    // The force-idle transition also delivers what was queued.
+    expect(steer).toHaveBeenCalledTimes(1);
+    expect(steer.mock.calls[0]?.[1]).toBe('queued while hung');
   });
 
   it('exposes interrupt and steer-while-running capabilities on the session DTO', async () => {
