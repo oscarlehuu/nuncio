@@ -181,12 +181,19 @@ token once.
 To work on a project that lives on another machine, run the server there and connect from here:
 
 ```bash
-# on the project machine
+# one-shot: deploy the current working tree to a tailnet machine and register
+# it as a user service (launchd on macOS, systemd --user on Linux)
+scripts/remote/deploy.sh user@machine.tailnet.ts.net
+
+# or manually on the project machine
 bun run build && bun run --filter @nuncio/server start:prod
 cat apps/server/data/auth-token   # or copy it from the boot log
-
-# from your machine: open http://<machine>:3000 (or the Tailscale URL) and paste the token
 ```
+
+`scripts/remote/deploy.sh` rsyncs the repo (never the target's `data/`) and runs
+`scripts/remote/bootstrap.sh` there — idempotent, re-run it to update. On the same
+Tailscale account you then connect with no token at all; otherwise open
+`http://<machine>:3000` and paste the printed token once.
 
 ## PWA install (iPhone)
 
