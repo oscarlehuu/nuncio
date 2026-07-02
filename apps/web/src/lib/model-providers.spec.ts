@@ -55,8 +55,8 @@ describe('modelById', () => {
   it('DEFAULT_MODEL_ID resolves against the fallback catalog', () => {
     const lookup = modelById(FALLBACK_PROVIDERS);
     expect(lookup[DEFAULT_MODEL_ID]).toBeDefined();
-    expect(DEFAULT_MODEL_ID).toBe('cursor:composer-2.5');
-    expect(DEFAULT_PROVIDER_ID).toBe('cursor');
+    expect(DEFAULT_MODEL_ID).toBe('claude-fable-5');
+    expect(DEFAULT_PROVIDER_ID).toBe('pi');
   });
 });
 
@@ -107,12 +107,12 @@ describe('sanitizeCursorModels', () => {
 });
 
 describe('sortModelProviders', () => {
-  it('orders cursor before pi regardless of input order', () => {
+  it('orders pi before cursor regardless of input order', () => {
     const providers: ModelProvider[] = [
       { id: 'pi', name: 'Pi', groups: [{ id: 'g', name: 'G', models: [{ id: 'm1', name: 'M1' }] }] },
       { id: 'cursor', name: 'Cursor', groups: [{ id: 'g', name: 'G', models: [{ id: 'm2', name: 'M2' }] }] },
     ];
-    expect(sortModelProviders(providers).map((p) => p.id)).toEqual(['cursor', 'pi']);
+    expect(sortModelProviders(providers).map((p) => p.id)).toEqual(['pi', 'cursor']);
   });
 
   it('sorts unknown providers after known ones alphabetically', () => {
@@ -121,7 +121,7 @@ describe('sortModelProviders', () => {
       { id: 'pi', name: 'Pi', groups: [{ id: 'g', name: 'G', models: [{ id: 'm1', name: 'M1' }] }] },
       { id: 'cursor', name: 'Cursor', groups: [{ id: 'g', name: 'G', models: [{ id: 'm2', name: 'M2' }] }] },
     ];
-    expect(sortModelProviders(providers).map((p) => p.id)).toEqual(['cursor', 'pi', 'zulu']);
+    expect(sortModelProviders(providers).map((p) => p.id)).toEqual(['pi', 'cursor', 'zulu']);
   });
 
   it('sorts unavailable providers after available ones', () => {
@@ -196,10 +196,10 @@ describe('normalizeModelCatalog', () => {
       },
     ];
     const catalog = normalizeModelCatalog(providers);
-    expect(catalog.map((p) => p.id)).toEqual(['cursor', 'pi']);
+    expect(catalog.map((p) => p.id)).toEqual(['pi', 'cursor']);
     expect(flattenProviders(catalog).map((m) => m.id)).toEqual([
-      'cursor:composer-2.5',
       'pi:m',
+      'cursor:composer-2.5',
     ]);
   });
 });
@@ -222,17 +222,17 @@ describe('pickDefaultModelSelection', () => {
     },
   ];
 
-  it('prefers cursor when available', () => {
+  it('prefers pi when available', () => {
     expect(pickDefaultModelSelection(withCursor)).toEqual({
-      modelId: 'cursor:composer-2.5',
-      providerId: 'cursor',
+      modelId: 'anthropic:claude-haiku-4',
+      providerId: 'pi',
     });
   });
 
-  it('falls back to pi when cursor is absent', () => {
-    expect(pickDefaultModelSelection(piOnly)).toEqual({
-      modelId: 'anthropic:claude-haiku-4',
-      providerId: 'pi',
+  it('falls back to cursor when pi is absent', () => {
+    expect(pickDefaultModelSelection([withCursor[1]])).toEqual({
+      modelId: 'cursor:composer-2.5',
+      providerId: 'cursor',
     });
   });
 

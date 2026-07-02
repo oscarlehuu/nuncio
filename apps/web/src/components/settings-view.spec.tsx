@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from './theme-provider';
+import { AppearanceProvider } from './appearance-provider';
 import { SettingsView } from './settings-view';
 import type { Setting } from '../lib/settings-api';
 
@@ -15,7 +16,11 @@ vi.mock('../lib/forge-status-api', () => ({
 }));
 
 function renderWithTheme(ui: ReactElement) {
-  return render(<ThemeProvider defaultTheme="light">{ui}</ThemeProvider>);
+  return render(
+    <ThemeProvider defaultTheme="light">
+      <AppearanceProvider>{ui}</AppearanceProvider>
+    </ThemeProvider>,
+  );
 }
 
 function makeSetting(over: Partial<Setting> = {}): Setting {
@@ -229,6 +234,46 @@ describe('SettingsView', () => {
     );
     await userEvent.click(screen.getByRole('button', { name: /back/i }));
     expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders the Appearance section with theme, font size, and density controls', () => {
+    renderWithTheme(
+      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    expect(screen.getByText('Appearance')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Theme' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Chat font size')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Density' })).toBeInTheDocument();
+  });
+
+  it('moving the font size slider updates the applied --chat-font-scale', async () => {
+    renderWithTheme(
+      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    const slider = screen.getByLabelText('Chat font size');
+    fireEvent.change(slider, { target: { value: '1.2' } });
+    await waitFor(() => {
+      expect(document.documentElement.style.getPropertyValue('--chat-font-scale')).toBe('1.2');
+    });
+  });
+
+  it('clicking a density option toggles the pressed state', async () => {
+    renderWithTheme(
+      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    const compactBtn = screen.getByRole('button', { name: 'Compact' });
+    await userEvent.click(compactBtn);
+    expect(compactBtn).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('clicking a theme option calls setTheme (reflected as pressed)', async () => {
+    renderWithTheme(
+      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    const darkBtn = screen.getByRole('button', { name: 'Dark' });
+    await userEvent.click(darkBtn);
+    expect(darkBtn).toHaveAttribute('aria-pressed', 'true');
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
   });
 
   it('shows a saving indicator while an update is in flight', async () => {

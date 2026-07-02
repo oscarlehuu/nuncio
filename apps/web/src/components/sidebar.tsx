@@ -1,6 +1,19 @@
-import { useMemo, useState } from 'react';
-import { Archive, Plus, RotateCcw, Search, Settings, Sparkles, Trash2 } from 'lucide-react';
+import { useMemo, useState, type ReactNode } from 'react';
+import {
+  Archive,
+  ChevronDown,
+  ChevronRight,
+  FolderGit2,
+  MessageSquare,
+  Plus,
+  RotateCcw,
+  Search,
+  Settings,
+  Sparkles,
+  Trash2,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { MachineSwitcher } from './machine-switcher';
 import { ModeToggle } from '@/components/mode-toggle';
 import { Input } from '@/components/ui/input';
 import {
@@ -16,6 +29,12 @@ import type { Session } from '../lib/api';
 import { relativeTime, statusLabel } from '../lib/api';
 import { projectDisplayName } from '../lib/projects';
 import { providerMeta } from '../lib/model-providers';
+import {
+  groupSessionsByProject,
+  loadCollapsedGroups,
+  saveCollapsedGroups,
+  type SessionGroup,
+} from '../lib/group-sessions';
 import { ProviderIcon } from './provider-icon';
 import { StatusDot } from './status-dot';
 
@@ -50,6 +69,30 @@ export function Sidebar({
   const [view, setView] = useState<View>('recent');
   const [query, setQuery] = useState('');
   const [pendingDelete, setPendingDelete] = useState<Session | null>(null);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => loadCollapsedGroups());
+
+  const recentGroups = useMemo(() => groupSessionsByProject(sessions), [sessions]);
+  const projectGroups = useMemo(
+    () => recentGroups.filter((g) => g.projectPath !== null),
+    [recentGroups],
+  );
+  const chatGroup = useMemo(
+    () => recentGroups.find((g) => g.projectPath === null) ?? null,
+    [recentGroups],
+  );
+
+  const toggleGroup = (key: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      saveCollapsedGroups(next);
+      return next;
+    });
+  };
 
   const filteredArchived = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -79,6 +122,7 @@ export function Sidebar({
           />
           <span className="font-semibold text-[14.5px] tracking-tight">Nuncio</span>
         </div>
+        <MachineSwitcher />
         <nav className="mt-3.5 flex flex-col gap-px">
           <Button
             variant="secondary"
@@ -154,26 +198,74 @@ export function Sidebar({
           </span>
         </div>
         <div className="flex flex-col gap-0.5">
-          {view === 'recent'
-            ? sessions.map((s) => (
-                <RecentRow
-                  key={s.id}
-                  session={s}
-                  active={activeId === s.id}
-                  onSelect={onSelect}
-                  onArchive={onArchive}
-                />
-              ))
-            : filteredArchived.map((s) => (
-                <ArchivedRow
-                  key={s.id}
-                  session={s}
-                  active={activeId === s.id}
-                  onSelect={onSelect}
-                  onRestore={onRestore}
-                  onDelete={(sess) => setPendingDelete(sess)}
-                />
-              ))}
+          {view === 'recent' ? (
+            <>
+              {projectGroups.length > 0 && (
+                <>
+                  <div className="px-2 pt-1 pb-1">
+                    <span
+                      data-testid="recent-divider-projects"
+                      className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold"
+                    >
+                      Projects
+                    </span>
+                  </div>
+                  {projectGroups.map((group) => (
+                    <RecentGroupSection
+                      key={group.key}
+                      group={group}
+                      collapsed={collapsedGroups.has(group.key)}
+                      onToggle={() => toggleGroup(group.key)}
+                      activeId={activeId}
+                      onSelect={onSelect}
+                      onArchive={onArchive}
+                      icon={<FolderGit2 className="size-3.5 text-muted-foreground shrink-0" />}
+                    />
+                  ))}
+                </>
+              )}
+              {chatGroup && chatGroup.sessions.length > 0 && (
+                <>
+                  <div
+                    className={cn(
+                      'flex items-center gap-1 px-2 pb-1',
+                      projectGroups.length > 0 ? 'pt-3' : 'pt-1',
+                    )}
+                  >
+                    <MessageSquare className="size-3 text-muted-foreground shrink-0" />
+                    <span
+                      data-testid="recent-divider-chat"
+                      className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold"
+                    >
+                      Chat
+                    </span>
+                  </div>
+                  <div className="flex flex-col gap-0.5">
+                    {chatGroup.sessions.map((s) => (
+                      <RecentRow
+                        key={s.id}
+                        session={s}
+                        active={activeId === s.id}
+                        onSelect={onSelect}
+                        onArchive={onArchive}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
+            </>
+          ) : (
+            filteredArchived.map((s) => (
+              <ArchivedRow
+                key={s.id}
+                session={s}
+                active={activeId === s.id}
+                onSelect={onSelect}
+                onRestore={onRestore}
+                onDelete={(sess) => setPendingDelete(sess)}
+              />
+            ))
+          )}
           {view === 'recent' && sessions.length === 0 && (
             <p className="px-2 text-muted-foreground text-xs">No sessions yet</p>
           )}
@@ -234,6 +326,61 @@ export function Sidebar({
   );
 }
 
+interface RecentGroupSectionProps {
+  group: SessionGroup;
+  collapsed: boolean;
+  onToggle: () => void;
+  activeId: string | null;
+  onSelect: (id: string | null) => void;
+  onArchive?: (id: string) => void | Promise<void>;
+  icon?: ReactNode;
+}
+
+function RecentGroupSection({
+  group,
+  collapsed,
+  onToggle,
+  activeId,
+  onSelect,
+  onArchive,
+  icon,
+}: RecentGroupSectionProps) {
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={!collapsed}
+        className="flex items-center gap-1 w-full px-2 py-1.5 rounded-md text-left hover:bg-sidebar-accent/40 transition-colors"
+      >
+        {collapsed ? (
+          <ChevronRight className="size-3.5 text-muted-foreground shrink-0" />
+        ) : (
+          <ChevronDown className="size-3.5 text-muted-foreground shrink-0" />
+        )}
+        {icon}
+        <span className="text-[12px] font-medium text-sidebar-foreground truncate">{group.name}</span>
+        <span className="text-[11px] tabular-nums text-muted-foreground ml-auto shrink-0">
+          {group.sessions.length}
+        </span>
+      </button>
+      {!collapsed && (
+        <div className="flex flex-col gap-0.5">
+          {group.sessions.map((s) => (
+            <RecentRow
+              key={s.id}
+              session={s}
+              active={activeId === s.id}
+              onSelect={onSelect}
+              onArchive={onArchive}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface RecentRowProps {
   session: Session;
   active: boolean;
@@ -276,7 +423,7 @@ function RecentRow({ session, active, onSelect, onArchive }: RecentRowProps) {
             <ProviderIcon providerId={session.provider} className="size-3" />
           </span>
           <span className="truncate">
-            {projectDisplayName(session.projectPath) ?? session.preview ?? statusLabel(session.status)} · {relativeTime(session.updatedAt)}
+            {session.preview ?? statusLabel(session.status)} · {relativeTime(session.updatedAt)}
           </span>
         </div>
       </button>

@@ -37,10 +37,12 @@ export class GitSessionController {
     @Param('id') id: string,
     @Query('staged') staged?: string,
     @Query('base') base?: string,
+    @Query('path') path?: string,
   ) {
     return this.git.diff(this.requireSessionGitDir(id), {
       staged: staged === '1' || staged === 'true',
       base: base?.trim() || undefined,
+      path,
     });
   }
 

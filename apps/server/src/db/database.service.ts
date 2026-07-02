@@ -185,5 +185,13 @@ export class DatabaseService implements OnModuleDestroy {
         PRIMARY KEY (provider, delivery_id)
       )
     `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS recent_projects (
+        path TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        last_used_at INTEGER NOT NULL
+      )
+    `);
   }
 }

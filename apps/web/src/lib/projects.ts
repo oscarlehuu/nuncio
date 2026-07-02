@@ -28,6 +28,32 @@ export async function fetchProjects(): Promise<Project[]> {
   }
 }
 
+export async function fetchRecentProjects(): Promise<Array<{ path: string; name?: string }>> {
+  try {
+    const res = await fetch('/api/projects/recent');
+    if (!res.ok) return [];
+    const data = await res.json();
+    const items = Array.isArray(data?.items) ? data.items : [];
+    return items
+      .filter((item: unknown): item is { path: string; name?: string } =>
+        typeof (item as { path?: unknown })?.path === 'string')
+      .map((item: { path: string; name?: string }) => ({ path: item.path, name: item.name }));
+  } catch {
+    return [];
+  }
+}
+
+/** Fire-and-forget: persist a project selection server-side. */
+export function recordRecentProject(path: string): void {
+  void fetch('/api/projects/recent', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  }).catch(() => {
+    // Offline or server error — localStorage recents still cover this device.
+  });
+}
+
 export async function fetchBranches(projectPath: string): Promise<Branch[]> {
   const res = await fetch(`/api/projects/branches?path=${encodeURIComponent(projectPath)}`);
   if (!res.ok) throw new Error('Failed to load branches');

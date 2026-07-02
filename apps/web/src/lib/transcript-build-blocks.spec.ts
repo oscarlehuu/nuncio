@@ -55,6 +55,55 @@ describe('buildTranscriptBlocks', () => {
     }
   });
 
+  it('renders Pi bash tool rows with command input and completion state', () => {
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'tool_start', {
+        callId: 'pi-call',
+        tool: 'bash',
+        input: { command: 'bun test apps/web/src/lib/transcript-build-blocks.spec.ts' },
+      }),
+      ev(2, 'tool_end', {
+        callId: 'pi-call',
+        tool: 'bash',
+        isError: false,
+        output: 'passed',
+      }),
+    ]);
+    expect(blocks).toHaveLength(1);
+    const tool = blocks[0];
+    expect(tool.kind).toBe('tool');
+    if (tool.kind === 'tool') {
+      expect(tool.status).toBe('done');
+      expect(tool.input).toEqual({ command: 'bun test apps/web/src/lib/transcript-build-blocks.spec.ts' });
+      expect(tool.output).toBe('passed');
+      expect(tool.summary).toEqual({
+        verb: 'Ran',
+        subject: 'bun test apps/web/src/lib/transcript-build-blocks.spec.ts',
+      });
+    }
+  });
+
+  it('keeps live Pi thinking inline and does not split streamed answer text into trailing thinking', () => {
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'user_message', { text: 'help' }),
+      ev(2, 'thinking_start', { thinkingId: 'pi-think' }),
+      ev(3, 'thinking_delta', { thinkingId: 'pi-think', delta: 'I should inspect first.' }),
+      ev(4, 'thinking_message', { thinkingId: 'pi-think', text: 'I should inspect first.' }),
+      ev(5, 'tool_start', { callId: 'pi-tool', tool: 'read', input: { path: 'src/main.ts' } }),
+      ev(6, 'tool_end', { callId: 'pi-tool', tool: 'read', isError: false }),
+      ev(7, 'assistant_delta', { delta: 'Here is the response.\n\nLet me think is a phrase in the answer.' }),
+      ev(8, 'assistant_message', { text: 'Here is the response.\n\nLet me think is a phrase in the answer.' }),
+    ]);
+
+    expect(blocks.map((block) => block.kind)).toEqual(['user', 'thinking', 'tool', 'assistant']);
+    expect(blocks.filter((block) => block.kind === 'thinking')).toHaveLength(1);
+    expect(blocks[1]).toMatchObject({ kind: 'thinking', thinkingId: 'pi-think' });
+    expect(blocks[3]).toMatchObject({
+      kind: 'assistant',
+      text: 'Here is the response.\n\nLet me think is a phrase in the answer.',
+    });
+  });
+
   it('builds user_input block from requested + resolved events', () => {
     const questions = [{ id: 'q1', prompt: 'Pick', options: [{ id: 'a', label: 'A' }] }];
     const blocks = buildTranscriptBlocks([
@@ -142,6 +191,14 @@ describe('buildTranscriptBlocks', () => {
     expect(blocks[0].kind).toBe('user');
   });
 
+  it('emits a user block for steer_message events', () => {
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'steer_message', { text: 'Actually, do this instead' }),
+    ]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ kind: 'user', text: 'Actually, do this instead' });
+  });
+
   it('interleaves user, tool, and assistant content in order', () => {
     const blocks = buildTranscriptBlocks([
       ev(1, 'user_message', { text: 'hi' }),
@@ -162,6 +219,29 @@ describe('buildTranscriptBlocks', () => {
     ]);
     expect(blocks.some((b) => b.kind === 'thinking' && b.text === 'hmm')).toBe(true);
     expect(blocks.find((b) => b.kind === 'assistant')?.text).toBe('Answer');
+  });
+
+  it('deduplicates a hydrated assistant_message that repeats a delta-assembled message', () => {
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'assistant_delta', { delta: 'Hello ' }),
+      ev(2, 'assistant_delta', { delta: 'world' }),
+      ev(3, 'assistant_message', { text: 'Hello world' }),
+      ev(4, 'assistant_message', { text: 'Hello world' }),
+    ]);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ kind: 'assistant', text: 'Hello world' });
+  });
+
+  it('deduplicates hydrated assistant_message even when the live full message had trailing whitespace', () => {
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'assistant_delta', { delta: 'Hello world\n' }),
+      ev(2, 'assistant_message', { text: 'Hello world\n' }),
+      ev(3, 'assistant_message', { text: 'Hello world' }),
+    ]);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ kind: 'assistant', text: 'Hello world' });
   });
 
   it('marks streaming assistant buffer at end', () => {

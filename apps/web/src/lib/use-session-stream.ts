@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SessionEvent } from './api';
 import { fetchEvents } from './api';
+import { withBase } from './api-base';
 
 const SSE_RECONNECT_MS = 2000;
 
@@ -25,7 +26,7 @@ export function useSessionStream(sessionId: string | null) {
     if (!activeSessionId || cancelledRef.current) return;
     clearReconnectTimer();
     sourceRef.current?.close();
-    const url = `/api/sessions/${activeSessionId}/stream?since=${sinceRef.current}`;
+    const url = withBase(`/api/sessions/${activeSessionId}/stream?since=${sinceRef.current}`);
     const source = new EventSource(url);
     sourceRef.current = source;
 
@@ -33,6 +34,8 @@ export function useSessionStream(sessionId: string | null) {
       const event = JSON.parse(msg.data) as SessionEvent;
       sinceRef.current = Math.max(sinceRef.current, event.seq);
       setEvents((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && event.seq > last.seq) return [...prev, event];
         if (prev.some((e) => e.seq === event.seq)) return prev;
         return [...prev, event].sort((a, b) => a.seq - b.seq);
       });

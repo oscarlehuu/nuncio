@@ -50,16 +50,16 @@ export function ToolCallBlock({
 
   const row = (
     <>
-      <span className="text-[12.5px] shrink-0">
+      <span className="text-[length:calc(12.5px*var(--chat-font-scale))] shrink-0">
         {summary.verb}
       </span>
       {summary.subject && (
-        <code className="text-[12px] font-mono text-muted-foreground/90 bg-muted/25 px-1 py-0.5 rounded max-w-[55%] truncate">
+        <code className="text-[length:calc(12px*var(--chat-font-scale))] font-mono text-muted-foreground/90 bg-muted/25 px-1 py-0.5 rounded max-w-[55%] truncate">
           {truncate(summary.subject)}
         </code>
       )}
       {summary.context && (
-        <span className="text-[12px] text-muted-foreground/70 font-mono truncate">
+        <span className="text-[length:calc(12px*var(--chat-font-scale))] text-muted-foreground/70 font-mono truncate">
           {summary.context}
         </span>
       )}

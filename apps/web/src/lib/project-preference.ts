@@ -1,3 +1,5 @@
+import { recordRecentProject } from './projects';
+
 export const PROJECT_PREFERENCE_STORAGE_KEY = 'nuncio-project-preference';
 export const MAX_RECENT_PROJECTS = 8;
 
@@ -58,6 +60,7 @@ export function recordProjectSelection(
     },
     storage,
   );
+  recordRecentProject(path);
 }
 
 export function recordBranchSelection(

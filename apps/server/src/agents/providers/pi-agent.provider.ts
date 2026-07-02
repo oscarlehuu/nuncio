@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { ModelOptionsMap } from '../../models/model-options.types';
 import type { ModelGroupDto, ModelItemDto, ModelProviderDto } from '../../models/models.types';
 import { STATIC_MODEL_PROVIDERS } from '../../models/models.static';
+import { truncatePayload } from '../../sessions/domain/events.types';
 import { EventsRepository } from '../../sessions/persistence/events.repository';
 import { SessionsRepository } from '../../sessions/persistence/sessions.repository';
 import { SettingsService } from '../../settings/settings.service';
@@ -44,6 +45,7 @@ type PiSessionHandle = {
   unsubscribe: () => void;
   resetAssistantText: () => void;
   getAssistantText: () => string;
+  sealOpenTools: (emit?: AgentRunContext['emit']) => void;
 };
 
 type PiModelRegistry = {
@@ -174,12 +176,19 @@ export class PiAgentProvider extends BaseAgentProvider {
 
     handle.resetAssistantText();
     this.interruptedSessions.delete(sessionId);
+    let interrupted = false;
     try {
       await handle.prompt(text, Object.keys(promptOptions).length ? promptOptions : undefined);
     } catch (error) {
-      if (this.interruptedSessions.delete(sessionId)) return;
-      throw error;
+      if (this.interruptedSessions.delete(sessionId)) {
+        interrupted = true;
+      } else {
+        throw error;
+      }
+    } finally {
+      handle.sealOpenTools(context.emit);
     }
+    if (interrupted) return;
     this.interruptedSessions.delete(sessionId);
     this.pushEvent(
       sessionId,
@@ -228,7 +237,8 @@ export class PiAgentProvider extends BaseAgentProvider {
       ...(resumeManager ? { sessionManager: resumeManager } : {}),
       authStorage,
       modelRegistry,
-      tools: ['read', 'bash', 'grep', 'find', 'ls'],
+      // No `tools` allowlist: match pi CLI defaults (read/bash/edit/write active)
+      // and keep extension-registered tools (foreman, subagent, ...) enabled.
       ...(customTools ? { customTools: customTools as never } : {}),
       ...(model ? { model } : {}),
       ...(thinkingLevel ? { thinkingLevel } : {}),
@@ -239,25 +249,93 @@ export class PiAgentProvider extends BaseAgentProvider {
     }
 
     let assistantText = '';
+    let accumulatedThinking = '';
+    let thinkingOpen = false;
+    let thinkingId: string | undefined;
+    const openTools = new Map<string, string>();
+
+    const resetThinking = () => {
+      accumulatedThinking = '';
+      thinkingOpen = false;
+      thinkingId = undefined;
+    };
+    const ensureThinkingStarted = () => {
+      if (thinkingOpen) return;
+      thinkingOpen = true;
+      thinkingId = crypto.randomUUID();
+      accumulatedThinking = '';
+      this.pushEvent(sessionId, 'thinking_start', { thinkingId }, context.emit);
+    };
+    const sealOpenTools = (emit?: AgentRunContext['emit']) => {
+      for (const [callId, tool] of openTools) {
+        this.pushEvent(sessionId, 'tool_end', { callId, tool, isError: false }, emit);
+      }
+      openTools.clear();
+    };
+
     const unsubscribe = session.subscribe((event: { type: string; [key: string]: unknown }) => {
       if (event.type === 'message_update') {
-        const inner = event.assistantMessageEvent as { type?: string; delta?: string } | undefined;
+        const inner = event.assistantMessageEvent as {
+          type?: string;
+          delta?: string;
+          content?: string;
+        } | undefined;
         if (inner?.type === 'text_delta' && inner.delta) {
           assistantText += inner.delta;
           this.pushEvent(sessionId, 'assistant_delta', { delta: inner.delta }, context.emit);
           this.sessions.touchPreview(sessionId, assistantText);
         }
+        if (inner?.type === 'thinking_start') {
+          ensureThinkingStarted();
+        }
+        if (inner?.type === 'thinking_delta' && inner.delta) {
+          ensureThinkingStarted();
+          accumulatedThinking += inner.delta;
+          this.pushEvent(
+            sessionId,
+            'thinking_delta',
+            { thinkingId, delta: inner.delta },
+            context.emit,
+          );
+        }
+        if (inner?.type === 'thinking_end') {
+          ensureThinkingStarted();
+          const text = typeof inner.content === 'string' ? inner.content : accumulatedThinking;
+          this.pushEvent(sessionId, 'thinking_message', { thinkingId, text }, context.emit);
+          resetThinking();
+        }
       }
       if (event.type === 'tool_execution_start') {
-        this.pushEvent(sessionId, 'tool_start', { tool: event.toolName }, context.emit);
+        const callId = typeof event.toolCallId === 'string' ? event.toolCallId : crypto.randomUUID();
+        const tool = typeof event.toolName === 'string' ? event.toolName : 'unknown';
+        openTools.set(callId, tool);
+        const input = event.args !== undefined ? truncatePayload(event.args).value : undefined;
+        this.pushEvent(
+          sessionId,
+          'tool_start',
+          { callId, tool, ...(input !== undefined ? { input } : {}) },
+          context.emit,
+        );
       }
       if (event.type === 'tool_execution_end') {
+        const callId = typeof event.toolCallId === 'string' ? event.toolCallId : undefined;
+        const tool = typeof event.toolName === 'string' ? event.toolName : 'unknown';
+        if (callId) openTools.delete(callId);
+        const output = event.result !== undefined ? truncatePayload(event.result).value : undefined;
         this.pushEvent(
           sessionId,
           'tool_end',
-          { tool: event.toolName, isError: event.isError },
+          {
+            ...(callId ? { callId } : {}),
+            tool,
+            isError: event.isError,
+            ...(output !== undefined ? { output } : {}),
+          },
           context.emit,
         );
+      }
+      if (event.type === 'agent_end') {
+        sealOpenTools(context.emit);
       }
     });
 
@@ -268,8 +346,10 @@ export class PiAgentProvider extends BaseAgentProvider {
       unsubscribe,
       resetAssistantText: () => {
         assistantText = '';
+        resetThinking();
       },
       getAssistantText: () => assistantText,
+      sealOpenTools,
     };
   }
 
@@ -347,11 +427,9 @@ export function resolveModelId<T>(
  * registered by local extensions (e.g. claude-studio binds bash/read/edit/write to
  * `process.cwd()` at load time, which would make the agent operate in the server's
  * cwd instead of the worktree). SDK customTools take precedence over extension
- * `pi.registerTool` overrides. All built-ins are rebound (not just the active
- * `tools` allowlist) so the allowlist can evolve without drift — an inactive
- * customTool is filtered out by the allowlist, but a cwd-correct instance is always
- * ready. Returns `undefined` when no worktree is set so extension overrides apply
- * as-is.
+ * `pi.registerTool` overrides. All built-ins are rebound so every tool the agent
+ * can activate has a cwd-correct instance ready. Returns `undefined` when no
+ * worktree is set so extension overrides apply as-is.
  */
 export function buildPiCustomTools(
   cwd: string | undefined,

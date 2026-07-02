@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, join, resolve, sep } from 'node:path';
 import { SettingsService } from '../settings/settings.service';
 import type {
   BranchDto,
@@ -42,6 +42,21 @@ async function git(args: string[], cwd?: string): Promise<string> {
   return stdout;
 }
 
+async function gitAllowExit(args: string[], cwd: string, allowedExitCodes: number[]): Promise<string> {
+  const proc = Bun.spawn(['git', ...args], {
+    cwd,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const code = await proc.exited;
+  const stdout = (await new Response(proc.stdout).text()).trim();
+  const stderr = (await new Response(proc.stderr).text()).trim();
+  if (!allowedExitCodes.includes(code)) {
+    throw new Error(stderr || stdout || `git ${args.join(' ')} failed`);
+  }
+  return stdout;
+}
+
 function isGitRepo(dir: string): boolean {
   return existsSync(join(dir, '.git'));
 }
@@ -74,7 +89,50 @@ function parseStatusFile(line: string): GitFileChange | null {
     index,
     workTree,
     staged: index !== ' ' && index !== '?',
+    insertions: 0,
+    deletions: 0,
   };
+}
+
+function parseNumstat(output: string): Map<string, { insertions: number; deletions: number }> {
+  const stats = new Map<string, { insertions: number; deletions: number }>();
+  for (const line of output.split('\n')) {
+    if (!line.trim()) continue;
+    const [insertionsRaw, deletionsRaw, ...pathParts] = line.split('\t');
+    const path = pathParts.join('\t').trim();
+    if (!path) continue;
+    const insertions = insertionsRaw === '-' ? 0 : Number(insertionsRaw);
+    const deletions = deletionsRaw === '-' ? 0 : Number(deletionsRaw);
+    stats.set(path, {
+      insertions: Number.isFinite(insertions) ? insertions : 0,
+      deletions: Number.isFinite(deletions) ? deletions : 0,
+    });
+  }
+  return stats;
+}
+
+function lineCount(text: string): number {
+  if (text.length === 0) return 0;
+  const newlines = text.match(/\n/g)?.length ?? 0;
+  return text.endsWith('\n') ? newlines : newlines + 1;
+}
+
+function isInsideRepo(repoRoot: string, candidate: string): boolean {
+  return candidate.startsWith(`${repoRoot}${sep}`);
+}
+
+function validateGitPath(path: string): string {
+  const trimmed = path.trim();
+  if (
+    !trimmed ||
+    trimmed.startsWith('-') ||
+    trimmed.startsWith('/') ||
+    trimmed.includes('\0') ||
+    trimmed.split('/').includes('..')
+  ) {
+    throw new BadRequestException('Invalid path');
+  }
+  return trimmed;
 }
 
 function truncateDiff(diff: string): GitDiffDto {
@@ -283,6 +341,8 @@ export class GitService {
       .map(parseStatusFile)
       .filter((file): file is GitFileChange => file !== null);
 
+    await this.populateFileStats(repoRoot, files);
+
     return {
       ...branchState,
       clean: files.length === 0,
@@ -290,11 +350,53 @@ export class GitService {
     };
   }
 
+  private async populateFileStats(repoRoot: string, files: GitFileChange[]): Promise<void> {
+    let trackedStats = new Map<string, { insertions: number; deletions: number }>();
+    try {
+      trackedStats = parseNumstat(await git(['diff', '--numstat', 'HEAD', '--'], repoRoot));
+    } catch {
+      trackedStats = new Map();
+    }
+
+    for (const file of files) {
+      const stats = trackedStats.get(file.path);
+      if (stats) {
+        file.insertions = stats.insertions;
+        file.deletions = stats.deletions;
+        continue;
+      }
+
+      if (file.index !== '?') continue;
+      file.insertions = this.countUntrackedLines(repoRoot, file.path);
+      file.deletions = 0;
+    }
+  }
+
+  private countUntrackedLines(repoRoot: string, path: string): number {
+    if (path.endsWith('/')) return 0;
+    try {
+      const candidate = resolve(repoRoot, path);
+      const real = realpathSync.native(candidate);
+      if (!isInsideRepo(repoRoot, real)) return 0;
+      if (!statSync(real).isFile()) return 0;
+      return lineCount(readFileSync(real, 'utf8'));
+    } catch {
+      return 0;
+    }
+  }
+
   async diff(
     path: string,
-    options: { staged?: boolean; base?: string } = {},
+    options: { staged?: boolean; base?: string; path?: string } = {},
   ): Promise<GitDiffDto> {
     const repoRoot = await this.resolveRepoRoot(path);
+
+    if (options.path !== undefined) {
+      const filePath = validateGitPath(options.path);
+      const output = await this.diffPath(repoRoot, filePath);
+      return truncateDiff(output);
+    }
+
     const args = ['diff'];
     if (options.staged === true) {
       args.push('--staged');
@@ -311,6 +413,41 @@ export class GitService {
 
     const output = await git(args, repoRoot);
     return truncateDiff(output);
+  }
+
+  private async diffPath(repoRoot: string, path: string): Promise<string> {
+    let output: string;
+    if (await this.hasHead(repoRoot)) {
+      output = await git(['diff', 'HEAD', '--', path], repoRoot);
+    } else {
+      output = await git(['diff', '--', path], repoRoot);
+    }
+
+    if (output) return output;
+
+    const status = await git(['status', '--porcelain=v1', '--', path], repoRoot).catch(() => '');
+    const isUntracked = status
+      .split('\n')
+      .some((line) => line.startsWith('?? '));
+    if (!isUntracked) return output;
+
+    const candidate = resolve(repoRoot, path);
+    const real = realpathSync.native(candidate);
+    if (!isInsideRepo(repoRoot, real)) {
+      throw new BadRequestException('Invalid path');
+    }
+    if (!statSync(real).isFile()) return output;
+
+    return gitAllowExit(['diff', '--no-index', '--', '/dev/null', path], repoRoot, [0, 1]);
+  }
+
+  private async hasHead(repoRoot: string): Promise<boolean> {
+    try {
+      await git(['rev-parse', '--verify', 'HEAD'], repoRoot);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async stageAll(path: string): Promise<void> {

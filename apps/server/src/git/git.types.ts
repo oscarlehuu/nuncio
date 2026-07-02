@@ -21,6 +21,8 @@ export interface GitFileChange {
   index: string;
   workTree: string;
   staged: boolean;
+  insertions: number;
+  deletions: number;
 }
 
 export interface GitStatusDto {

@@ -19,6 +19,10 @@ function isCliHandoffSession(session: Session | null): session is Session {
   );
 }
 
+function isPiSession(session: Session | null): session is Session {
+  return session != null && session.provider === 'pi';
+}
+
 /** Poll Cursor CLI handoff sessions for IDE activity on the host Mac. */
 export function useActiveRun(
   session: Session | null,
@@ -30,10 +34,13 @@ export function useActiveRun(
   onRefreshedRef.current = onTranscriptRefreshed;
 
   useEffect(() => {
-    if (!isCliHandoffSession(session)) {
+    const isCli = isCliHandoffSession(session);
+    const isPi = isPiSession(session);
+    if (!isCli && !isPi) {
       setActive(false);
       return;
     }
+    if (isPi) setActive(false);
 
     let cancelled = false;
     const sessionId = session.id;
@@ -41,11 +48,12 @@ export function useActiveRun(
     const poll = async () => {
       try {
         const [activeResult, refreshResult] = await Promise.all([
-          fetchActiveRun(sessionId),
+          // fetchActiveRun is cursor-specific; skip it for pi sessions.
+          isCli ? fetchActiveRun(sessionId) : Promise.resolve({ active: false }),
           refreshSessionTranscript(sessionId).catch(() => ({ added: 0 })),
         ]);
         if (cancelled) return;
-        setActive(activeResult.active);
+        if (isCli) setActive(activeResult.active);
         if (refreshResult.added > 0) {
           onRefreshedRef.current?.();
         }

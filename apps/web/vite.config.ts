@@ -116,6 +116,8 @@ export default defineConfig({
       '/api': {
         target: apiTarget,
         changeOrigin: true,
+        // Forward /api/terminal PTY WebSocket upgrades to the API server in dev.
+        ws: true,
       },
     },
   },
@@ -126,6 +128,7 @@ export default defineConfig({
       '/api': {
         target: apiTarget,
         changeOrigin: true,
+        ws: true,
       },
     },
   },

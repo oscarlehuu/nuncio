@@ -12,12 +12,14 @@ import type { RawBodyRequest } from '@nestjs/common';
 import type { Request } from 'express';
 import { ForgeRegistry } from '../forges.registry';
 import { WebhooksService } from './webhooks.service';
+import { Public } from '../../auth/public.decorator';
 
 /**
  * Public, signature-verified inbound webhook endpoint. Requires the raw request
  * body (enabled via `rawBody: true` in main.ts) so the HMAC is computed over the
  * exact bytes GitHub/GitLab signed. Responds 202 fast; 401 on a bad signature.
  */
+@Public()
 @Controller('webhooks/forge')
 export class WebhooksController {
   constructor(

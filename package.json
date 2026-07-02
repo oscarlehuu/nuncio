@@ -6,10 +6,12 @@
     ".",
     "apps/server",
     "apps/web",
-    "apps/landing"
+    "apps/landing",
+    "apps/desktop"
   ],
   "scripts": {
-    "dev": "concurrently -n server,web -c blue,green \"bun run --filter @nuncio/server dev\" \"bun run --filter @nuncio/web dev\"",
+    "dev": "concurrently -n server,web,desktop -c blue,green,magenta \"bun run --filter @nuncio/server dev\" \"bun run --filter @nuncio/web dev\" \"NUNCIO_DESKTOP_DEV=1 bun run --filter @nuncio/desktop dev\"",
+    "dev:web": "concurrently -n server,web -c blue,green \"bun run --filter @nuncio/server dev\" \"bun run --filter @nuncio/web dev\"",
     "build": "bun run --filter @nuncio/server build && bun run --filter @nuncio/web build",
     "build:landing": "bun run --filter @nuncio/landing build",
     "test": "bun run --filter @nuncio/server test",

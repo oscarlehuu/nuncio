@@ -1,0 +1,287 @@
+const fs = require('node:fs');
+const http = require('node:http');
+const net = require('node:net');
+const os = require('node:os');
+const path = require('node:path');
+const { spawn } = require('node:child_process');
+
+const DEFAULT_HOST = '127.0.0.1';
+const DEFAULT_HEALTH_TIMEOUT_MS = 20_000;
+const DEFAULT_HEALTH_INTERVAL_MS = 200;
+const DEFAULT_MAX_RESTARTS = 3;
+const DEFAULT_KILL_GRACE_MS = 5_000;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function resolveBunPath() {
+  if (process.env.NUNCIO_BUN_PATH) {
+    return path.resolve(process.env.NUNCIO_BUN_PATH);
+  }
+
+  const candidates = [
+    path.join(os.homedir(), '.bun', 'bin', 'bun'),
+    '/opt/homebrew/bin/bun',
+    '/usr/local/bin/bun',
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return 'bun';
+}
+
+function findFreePort(host = DEFAULT_HOST) {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+
+    server.once('error', reject);
+    server.listen(0, host, () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : undefined;
+
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        if (!port) {
+          reject(new Error('Unable to lease a free TCP port'));
+          return;
+        }
+
+        resolve(port);
+      });
+    });
+  });
+}
+
+function hasChildExited(child) {
+  return (
+    (child.exitCode !== null && child.exitCode !== undefined) ||
+    (child.signalCode !== null && child.signalCode !== undefined)
+  );
+}
+
+function requestHealth(port, host = DEFAULT_HOST) {
+  return new Promise((resolve) => {
+    const request = http.get(
+      {
+        host,
+        port,
+        path: '/api/health',
+        timeout: 1_000,
+      },
+      (response) => {
+        response.resume();
+        response.on('end', () => resolve(response.statusCode === 200));
+      },
+    );
+
+    request.on('timeout', () => {
+      request.destroy();
+      resolve(false);
+    });
+    request.on('error', () => resolve(false));
+  });
+}
+
+async function waitForHealth(port, options = {}) {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS;
+  const intervalMs = options.intervalMs ?? DEFAULT_HEALTH_INTERVAL_MS;
+  const host = options.host ?? DEFAULT_HOST;
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() <= deadline) {
+    if (await requestHealth(port, host)) {
+      return true;
+    }
+
+    if (Date.now() >= deadline) {
+      break;
+    }
+
+    await sleep(Math.min(intervalMs, Math.max(0, deadline - Date.now())));
+  }
+
+  return false;
+}
+
+class DaemonSupervisor {
+  constructor(options = {}) {
+    const repoRoot = path.resolve(__dirname, '../../..');
+
+    this.host = options.host ?? DEFAULT_HOST;
+    this.bunPath = options.bunPath ?? resolveBunPath();
+    this.serverDir = options.serverDir ?? path.join(repoRoot, 'apps', 'server');
+    this.entryPath = options.entryPath ?? path.join(this.serverDir, 'src', 'main.ts');
+    this.env = options.env ?? process.env;
+    this.log = options.log ?? ((message) => console.log(message));
+    this.maxRestarts = options.maxRestarts ?? DEFAULT_MAX_RESTARTS;
+    this.healthTimeoutMs = options.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS;
+    this.healthIntervalMs = options.healthIntervalMs ?? DEFAULT_HEALTH_INTERVAL_MS;
+    this.killGraceMs = options.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
+
+    this.child = null;
+    this.port = null;
+    this.url = null;
+    this.stopping = false;
+    this.restartAttempts = 0;
+  }
+
+  async start() {
+    this.stopping = false;
+    this.restartAttempts = 0;
+    this.port = await findFreePort(this.host);
+    this.url = `http://${this.host}:${this.port}/`;
+
+    this.spawnDaemon();
+
+    const healthy = await waitForHealth(this.port, {
+      host: this.host,
+      timeoutMs: this.healthTimeoutMs,
+      intervalMs: this.healthIntervalMs,
+    });
+
+    if (!healthy) {
+      await this.stop();
+      throw new Error(`Nuncio daemon did not become healthy within ${this.healthTimeoutMs}ms`);
+    }
+
+    return { port: this.port, url: this.url };
+  }
+
+  spawnDaemon() {
+    const child = spawn(this.bunPath, [this.entryPath], {
+      cwd: this.serverDir,
+      env: {
+        ...this.env,
+        PORT: String(this.port),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    this.child = child;
+    this.pipeLogs(child.stdout, 'stdout');
+    this.pipeLogs(child.stderr, 'stderr');
+
+    child.once('error', (error) => {
+      this.log(`[daemon error] ${error.message}`);
+    });
+
+    child.once('exit', (code, signal) => {
+      if (this.child === child) {
+        this.child = null;
+      }
+
+      this.log(`[daemon exit] code=${code ?? 'null'} signal=${signal ?? 'null'}`);
+
+      if (this.stopping) {
+        return;
+      }
+
+      this.restartAfterUnexpectedExit();
+    });
+  }
+
+  pipeLogs(stream, label) {
+    if (!stream) {
+      return;
+    }
+
+    stream.setEncoding('utf8');
+    stream.on('data', (chunk) => {
+      for (const line of String(chunk).split(/\r?\n/)) {
+        if (line.length > 0) {
+          this.log(`[daemon ${label}] ${line}`);
+        }
+      }
+    });
+  }
+
+  restartAfterUnexpectedExit() {
+    if (this.restartAttempts >= this.maxRestarts) {
+      this.log(`[daemon] restart cap reached (${this.maxRestarts}); not restarting`);
+      return;
+    }
+
+    this.restartAttempts += 1;
+    const attempt = this.restartAttempts;
+    this.log(`[daemon] unexpected exit; restarting (${attempt}/${this.maxRestarts})`);
+
+    setTimeout(async () => {
+      if (this.stopping) {
+        return;
+      }
+
+      try {
+        this.spawnDaemon();
+        const healthy = await waitForHealth(this.port, {
+          host: this.host,
+          timeoutMs: this.healthTimeoutMs,
+          intervalMs: this.healthIntervalMs,
+        });
+
+        if (!healthy) {
+          this.log('[daemon] restarted process did not become healthy');
+        }
+      } catch (error) {
+        this.log(`[daemon] restart failed: ${error.message}`);
+      }
+    }, 250);
+  }
+
+  stop() {
+    this.stopping = true;
+    const child = this.child;
+
+    if (!child) {
+      return Promise.resolve();
+    }
+
+    if (hasChildExited(child)) {
+      this.child = null;
+      return Promise.resolve();
+    }
+
+    return new Promise((resolve) => {
+      let exited = false;
+      const finish = () => {
+        if (exited) {
+          return;
+        }
+        exited = true;
+        clearTimeout(killTimer);
+        if (this.child === child) {
+          this.child = null;
+        }
+        resolve();
+      };
+
+      const killTimer = setTimeout(() => {
+        if (!exited) {
+          child.kill('SIGKILL');
+        }
+      }, this.killGraceMs);
+
+      child.once('exit', finish);
+
+      if (!child.kill('SIGTERM')) {
+        child.off('exit', finish);
+        finish();
+      }
+    });
+  }
+}
+
+module.exports = {
+  DaemonSupervisor,
+  resolveBunPath,
+  findFreePort,
+  waitForHealth,
+};

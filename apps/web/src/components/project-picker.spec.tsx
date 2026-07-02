@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { ProjectPicker } from './project-picker';
 
 const mockFetchProjects = vi.fn();
+const mockFetchRecentProjects = vi.fn();
 const mockFolderBrowserSelect = vi.fn();
 
 vi.mock('../lib/projects', async (importOriginal) => {
@@ -12,6 +13,8 @@ vi.mock('../lib/projects', async (importOriginal) => {
   return {
     ...actual,
     fetchProjects: (...args: unknown[]) => mockFetchProjects(...args),
+    fetchRecentProjects: (...args: unknown[]) => mockFetchRecentProjects(...args),
+    recordRecentProject: vi.fn(),
   };
 });
 
@@ -38,10 +41,32 @@ describe('ProjectPicker', () => {
   beforeEach(() => {
     localStorage.clear();
     mockFetchProjects.mockReset();
+    mockFetchRecentProjects.mockReset();
     mockFolderBrowserSelect.mockReset();
     mockFetchProjects.mockResolvedValue([
       { id: '/code/nuncio', name: 'nuncio', path: '/code/nuncio', isGit: true },
     ]);
+    mockFetchRecentProjects.mockResolvedValue([]);
+  });
+
+  it('merges server recents ahead of local ones without duplicates', async () => {
+    recordProjectSelection('/Users/dev/local-repo', 'local-repo');
+    recordProjectSelection('/Users/dev/shared-repo', 'shared-repo');
+    mockFetchRecentProjects.mockResolvedValue([
+      { path: '/Users/dev/server-repo', name: 'server-repo' },
+      { path: '/Users/dev/shared-repo', name: 'shared-repo' },
+    ]);
+    render(<ProjectPicker onChange={vi.fn()} />);
+
+    await userEvent.click(await screen.findByRole('button', { name: /no repo/i }));
+    const serverOption = await screen.findByRole('option', { name: /server-repo/i });
+    expect(serverOption).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /local-repo/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('option', { name: /shared-repo/i })).toHaveLength(1);
+    const optionNames = screen.getAllByRole('option').map((option) => option.textContent ?? '');
+    expect(optionNames.findIndex((text) => text.includes('server-repo'))).toBeLessThan(
+      optionNames.findIndex((text) => text.includes('local-repo')),
+    );
   });
 
   it('shows recent projects above the catalog list', async () => {

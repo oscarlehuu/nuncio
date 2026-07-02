@@ -11,6 +11,14 @@ vi.mock('./project-picker', () => ({
   ),
 }));
 
+vi.mock('../lib/project-preference', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/project-preference')>();
+  return {
+    ...actual,
+    recordProjectSelection: vi.fn(),
+  };
+});
+
 vi.mock('../lib/handoff-api', () => ({
   fetchAllLocalSessions: vi.fn(),
   handoffSession: vi.fn(),
@@ -24,6 +32,7 @@ vi.mock('../lib/handoff-api', () => ({
 }));
 
 import { fetchAllLocalSessions, handoffSession } from '../lib/handoff-api';
+import { recordProjectSelection } from '../lib/project-preference';
 import { localDayKey } from '../lib/handoff-session-groups';
 
 const mockCursorSession = {
@@ -77,6 +86,7 @@ describe('HandoffPicker', () => {
     await waitFor(() => {
       expect(fetchAllLocalSessions).toHaveBeenCalledWith('/code/nuncio');
     });
+    expect(recordProjectSelection).toHaveBeenCalledWith('/code/nuncio', 'nuncio');
     expect(screen.getByText('Fix login')).toBeInTheDocument();
     expect(screen.getByText('Refactor DB')).toBeInTheDocument();
   });

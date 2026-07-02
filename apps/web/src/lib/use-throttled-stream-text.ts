@@ -36,11 +36,7 @@ export function useThrottledStreamText(
     }, tickMs);
 
     return () => clearInterval(id);
-  }, [active, fullText.length, charsPerSecond]);
-
-  useEffect(() => {
-    if (!active) setRevealedLen(fullText.length);
-  }, [fullText, active]);
+  }, [active, charsPerSecond]);
 
   if (!active) return fullText;
   return fullText.slice(0, revealedLen);

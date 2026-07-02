@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { recordRecentProject } from './projects';
 import {
   loadProjectPreference,
   MAX_RECENT_PROJECTS,
@@ -8,9 +9,23 @@ import {
   resolveWorkspacePreference,
 } from './project-preference';
 
+vi.mock('./projects', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./projects')>();
+  return {
+    ...actual,
+    recordRecentProject: vi.fn(),
+  };
+});
+
 describe('project-preference', () => {
   beforeEach(() => {
     localStorage.clear();
+    vi.mocked(recordRecentProject).mockClear();
+  });
+
+  it('syncs project selections to the server', () => {
+    recordProjectSelection('/code/nuncio', 'nuncio');
+    expect(recordRecentProject).toHaveBeenCalledWith('/code/nuncio');
   });
 
   it('starts empty', () => {

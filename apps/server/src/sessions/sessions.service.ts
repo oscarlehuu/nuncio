@@ -4,9 +4,11 @@ import {
   HttpStatus,
   Injectable,
   NotFoundException,
+  OnModuleDestroy,
   Optional,
 } from '@nestjs/common';
 import { EventEmitter } from 'events';
+import { existsSync, watch, type FSWatcher } from 'node:fs';
 import { homedir } from 'node:os';
 import { v4 as uuidv4 } from 'uuid';
 import { AgentRegistry } from '../agents/agents.registry';
@@ -45,10 +47,15 @@ interface PendingProviderRequest {
 }
 
 @Injectable()
-export class SessionsService {
+export class SessionsService implements OnModuleDestroy {
   private readonly streams = new Map<string, EventEmitter>();
   private readonly providerRequests = new Map<string, PendingProviderRequest>();
   private readonly transcriptMtimeCache = new Map<string, number>();
+  private readonly locallyProducing = new Set<string>();
+  private readonly transcriptWatchers = new Map<
+    string,
+    { watcher: FSWatcher; count: number; debounce?: ReturnType<typeof setTimeout> }
+  >();
 
   constructor(
     private readonly sessions: SessionsRepository,
@@ -77,7 +84,18 @@ export class SessionsService {
   getEvents(id: string, since = 0): SessionEvent[] {
     const session = this.requireSession(id);
     this.hydrateIfNeeded(session);
+    this.safeRefreshTranscript(id, session);
     return this.events.list(id, since);
+  }
+
+  /** Catch-up refresh guarded against local live runs and transient fs errors. */
+  private safeRefreshTranscript(id: string, session: SessionDto): void {
+    if (this.locallyProducing.has(id)) return;
+    try {
+      this.refreshTranscriptIfNeeded(session);
+    } catch {
+      // Transient fs errors must not break event listing.
+    }
   }
 
   /** Whether Cursor IDE/CLI is likely still running this handoff chat on the host. */
@@ -96,6 +114,7 @@ export class SessionsService {
   /** Append new transcript turns from disk; emits transcript_refreshed when rows land. */
   refreshTranscript(id: string): { added: number } {
     const session = this.requireSession(id);
+    if (this.locallyProducing.has(id)) return { added: 0 };
     const before = this.events.list(id, 0).length;
     this.refreshTranscriptIfNeeded(session);
     const after = this.events.list(id, 0).length;
@@ -236,11 +255,16 @@ export class SessionsService {
 
     const provider = await this.agents.resolveAvailableForSession(current);
 
-    await provider.steer(id, trimmed, {
-      ...this.buildAgentRunContext(current),
-      attachments,
-      forceResume: forceResume === true,
-    });
+    this.locallyProducing.add(id);
+    try {
+      await provider.steer(id, trimmed, {
+        ...this.buildAgentRunContext(current),
+        attachments,
+        forceResume: forceResume === true,
+      });
+    } finally {
+      this.locallyProducing.delete(id);
+    }
     return this.requireSession(id);
   }
 
@@ -358,7 +382,25 @@ export class SessionsService {
     const bus = this.getOrCreateBus(id);
     const handler = (event: SessionEvent) => listener(event);
     bus.on('event', handler);
-    return () => bus.off('event', handler);
+    const session = this.sessions.findById(id);
+    if (session) this.safeRefreshTranscript(id, session);
+    this.startTranscriptWatch(id);
+    return () => {
+      bus.off('event', handler);
+      this.stopTranscriptWatch(id);
+    };
+  }
+
+  onModuleDestroy(): void {
+    for (const entry of this.transcriptWatchers.values()) {
+      if (entry.debounce) clearTimeout(entry.debounce);
+      try {
+        entry.watcher.close();
+      } catch {
+        // Ignore watcher close failures during shutdown.
+      }
+    }
+    this.transcriptWatchers.clear();
   }
 
   requestProviderApproval(
@@ -469,6 +511,115 @@ export class SessionsService {
     return null;
   }
 
+  private transcriptPath(session: SessionDto): string | null {
+    if (session.provider === 'pi' && session.providerThreadId) {
+      return session.providerThreadId;
+    }
+    if (session.cursorBackend === 'cli' && session.cursorChatId && session.workspace) {
+      const workspace = session.worktreePath ?? session.workspace;
+      return this.cursorLocal.transcriptPath(session.cursorChatId, workspace);
+    }
+    return null;
+  }
+
+  private startTranscriptWatch(id: string): void {
+    const session = this.sessions.findById(id);
+    if (!session) return;
+    const path = this.transcriptPath(session);
+    if (!path) return;
+
+    const existing = this.transcriptWatchers.get(id);
+    if (existing) {
+      existing.count += 1;
+      return;
+    }
+
+    if (!existsSync(path)) return;
+
+    const watcher = this.createTranscriptWatcher(id, path);
+    if (watcher) this.transcriptWatchers.set(id, { watcher, count: 1 });
+  }
+
+  private createTranscriptWatcher(id: string, path: string): FSWatcher | null {
+    try {
+      const watcher = watch(path, (eventType) => {
+        const entry = this.transcriptWatchers.get(id);
+        if (!entry) return;
+        if (entry.debounce) clearTimeout(entry.debounce);
+        entry.debounce = setTimeout(() => {
+          const current = this.transcriptWatchers.get(id);
+          if (current) delete current.debounce;
+          // The pi SDK may rewrite the file (rename); re-arm the watch so we
+          // keep following the new inode at the same path.
+          if (eventType === 'rename') {
+            if (!existsSync(path)) return;
+            this.rearmTranscriptWatch(id, path);
+          }
+          if (this.locallyProducing.has(id)) return;
+          try {
+            this.refreshTranscriptIfNeeded(this.requireSession(id));
+          } catch {
+            // Ignore transient read/session errors so the stream stays alive.
+          }
+        }, 150);
+      });
+      watcher.on('error', () => {
+        // Without this handler an FSWatcher error would crash the process.
+        const entry = this.transcriptWatchers.get(id);
+        if (!entry || entry.watcher !== watcher) return;
+        if (entry.debounce) clearTimeout(entry.debounce);
+        delete entry.debounce;
+        try {
+          watcher.close();
+        } catch {
+          // Ignore close failures.
+        }
+        this.transcriptWatchers.delete(id);
+        const count = entry.count;
+        setTimeout(() => {
+          if (this.transcriptWatchers.has(id) || !existsSync(path)) return;
+          const replacement = this.createTranscriptWatcher(id, path);
+          if (replacement) this.transcriptWatchers.set(id, { watcher: replacement, count });
+        }, 1000);
+      });
+      return watcher;
+    } catch {
+      // fs.watch may throw for unsupported or unavailable filesystems.
+      return null;
+    }
+  }
+
+  /** Close and re-create the watch on the same path, preserving the refcount. */
+  private rearmTranscriptWatch(id: string, path: string): void {
+    const entry = this.transcriptWatchers.get(id);
+    if (!entry) return;
+    try {
+      entry.watcher.close();
+    } catch {
+      // Ignore close failures.
+    }
+    const replacement = this.createTranscriptWatcher(id, path);
+    if (replacement) {
+      entry.watcher = replacement;
+    } else {
+      this.transcriptWatchers.delete(id);
+    }
+  }
+
+  private stopTranscriptWatch(id: string): void {
+    const entry = this.transcriptWatchers.get(id);
+    if (!entry) return;
+    entry.count -= 1;
+    if (entry.count > 0) return;
+    if (entry.debounce) clearTimeout(entry.debounce);
+    try {
+      entry.watcher.close();
+    } catch {
+      // Ignore watcher close failures.
+    }
+    this.transcriptWatchers.delete(id);
+  }
+
   private missingTranscriptEvents(
     sessionId: string,
     hydrated: Array<{ type: string; payload: unknown }>,
@@ -569,19 +720,24 @@ export class SessionsService {
 
   private startRun(session: SessionDto, attachments?: AgentAttachment[]): void {
     if (session.cursorBackend === 'cli') return;
+    this.locallyProducing.add(session.id);
     void (async () => {
-      const provider = await this.agents.resolveAvailableForSession(session);
-      await provider.run(session.id, session.prompt, {
-        emit: (event) => this.onAgentEvent(session.id, event),
-        requestProviderApproval: (request) =>
-          this.requestProviderApproval(session.id, request),
-        model: session.model,
-        modelOptions: session.modelOptions,
-        attachments,
-        workspace: session.worktreePath ?? session.workspace ?? undefined,
-        cwd: session.worktreePath ?? undefined,
-        cursorChatId: session.cursorChatId,
-      });
+      try {
+        const provider = await this.agents.resolveAvailableForSession(session);
+        await provider.run(session.id, session.prompt, {
+          emit: (event) => this.onAgentEvent(session.id, event),
+          requestProviderApproval: (request) =>
+            this.requestProviderApproval(session.id, request),
+          model: session.model,
+          modelOptions: session.modelOptions,
+          attachments,
+          workspace: session.worktreePath ?? session.workspace ?? undefined,
+          cwd: session.worktreePath ?? undefined,
+          cursorChatId: session.cursorChatId,
+        });
+      } finally {
+        this.locallyProducing.delete(session.id);
+      }
     })();
   }
 

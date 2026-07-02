@@ -68,7 +68,7 @@ export function PrPanel({ session }: PrPanelProps) {
   };
 
   return (
-    <div className="flex flex-col gap-4 p-4 border rounded-lg bg-card text-card-foreground">
+    <div className="flex flex-col gap-4 border-t border-border/50 px-3 py-3 text-card-foreground">
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2">
           <GitPullRequest className="size-4 text-muted-foreground" />

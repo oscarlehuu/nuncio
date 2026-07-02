@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Archive, ArrowRightLeft, Check, FolderGit2, GitBranch, Pause, Pencil, RotateCcw, Send, Square, Trash2, X } from 'lucide-react';
+import { Archive, ArrowRightLeft, Check, Ellipsis, FolderGit2, FolderTree, GitBranch, Globe2, PanelRightClose, PanelRightOpen, Pause, Pencil, RotateCcw, Send, Square, SquareTerminal, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import type { ProviderRequestDecision, Session, SessionEvent } from '../lib/api';
 import { InteractionApiError, interactionErrorMessage, respondInteraction } from '../lib/api';
@@ -11,10 +11,18 @@ import { useContextUsage } from '../lib/use-context-usage';
 import { ContextUsageButton } from './context-usage-button';
 import { Transcript } from './session-transcript';
 import { ReviewChanges } from './review-changes';
-import { PrPanel } from './pr-panel';
 import { PendingUserInputBanner } from './pending-user-input-banner';
 import { ApprovalModePicker, type ApprovalMode } from './approval-mode-picker';
+import { BrowserPanel, getDesktopBrowserBridge } from './browser-panel';
+import { FileExplorerPanel } from './file-explorer-panel';
+import { TerminalDock } from './terminal-dock';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -84,6 +92,10 @@ export function SessionDetail({
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const [respondingRequestId, setRespondingRequestId] = useState<string | null>(null);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [activeTool, setActiveTool] = useState<'scm' | 'files' | 'terminal' | 'browser' | null>(null);
+  const [terminalMounted, setTerminalMounted] = useState(false);
+  const [fileExplorerMounted, setFileExplorerMounted] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pendingScrollToBottomRef = useRef(true);
   const streaming = session.status === 'RUNNING';
@@ -127,6 +139,8 @@ export function SessionDetail({
   const repoName = projectDisplayName(session.projectPath) ?? projectDisplayName(session.workspace);
   const branchName = session.branch;
   const contextUsage = useContextUsage(events, entry?.contextWindow);
+  const hasDesktopBrowser = !!getDesktopBrowserBridge();
+  const workingDir = session.worktreePath ?? session.workspace ?? session.projectPath ?? undefined;
 
   useEffect(() => {
     pendingScrollToBottomRef.current = true;
@@ -183,10 +197,19 @@ export function SessionDetail({
     }
   };
 
+  const hasGitContext = !!(session.worktreePath || session.branch || session.projectPath);
+
+  const firstAvailableTool = (): 'scm' | 'files' | 'terminal' | 'browser' => {
+    if (hasGitContext) return 'scm';
+    if (workingDir) return 'files';
+    return 'terminal';
+  };
+
   return (
-    <section className="flex-1 flex flex-col min-h-0">
+    <section className="flex-1 flex min-h-0">
       <TooltipProvider>
-      <header className="shrink-0 flex items-center gap-3 px-4 md:px-5 py-3 border-b border-border bg-card/80 backdrop-blur min-h-[52px]">
+      <div className="flex-1 min-w-0 flex flex-col min-h-0">
+      <header className="shrink-0 relative flex items-center gap-3 px-4 md:px-5 py-3 border-b border-border bg-card/80 backdrop-blur min-h-[52px]">
         <div className="flex-1 min-w-0 flex justify-center items-center">
           {editingTitle ? (
             <div className="flex items-center gap-1.5 max-w-[60%]">
@@ -251,91 +274,91 @@ export function SessionDetail({
           )}
         </div>
 
-        <div className="flex items-center gap-1 shrink-0">
-            {showContinueOnMobile && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
+        <div className="absolute right-4 md:right-5 top-1/2 -translate-y-1/2 flex items-center gap-1">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Toggle panel"
+                aria-pressed={panelOpen}
+                onClick={() => {
+                  setPanelOpen((open) => {
+                    if (!open) setActiveTool((tool) => tool ?? firstAvailableTool());
+                    return !open;
+                  });
+                }}
+              >
+                {panelOpen ? <PanelRightClose /> : <PanelRightOpen />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Panel</TooltipContent>
+          </Tooltip>
+
+          {(showContinueOnMobile || showHeaderPause || canArchive || canRestore || canDelete) && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" aria-label="Session actions">
+                  <Ellipsis />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {showContinueOnMobile && (
+                  <DropdownMenuItem
                     onClick={onContinueOnMobile}
                     disabled={lifecycleBusy}
                     aria-label="Continue on mobile"
                   >
                     <ArrowRightLeft />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Continue on mobile</TooltipContent>
-              </Tooltip>
-            )}
-            {showHeaderPause && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
+                    Continue on mobile
+                  </DropdownMenuItem>
+                )}
+                {showHeaderPause && (
+                  <DropdownMenuItem
                     onClick={() => void onPause()}
                     disabled={lifecycleBusy}
                     aria-label="Pause session"
                   >
                     <Pause />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Pause session</TooltipContent>
-              </Tooltip>
-            )}
-            {canArchive && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
+                    Pause session
+                  </DropdownMenuItem>
+                )}
+                {canArchive && (
+                  <DropdownMenuItem
                     onClick={() => void onArchive()}
                     disabled={lifecycleBusy}
                     aria-label="Archive session"
                   >
                     <Archive />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Archive session</TooltipContent>
-              </Tooltip>
-            )}
-            {canRestore && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
+                    Archive session
+                  </DropdownMenuItem>
+                )}
+                {canRestore && (
+                  <DropdownMenuItem
                     onClick={() => void onRestore?.(session.id)}
                     disabled={lifecycleBusy}
                     aria-label="Restore session"
                   >
                     <RotateCcw />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Restore session</TooltipContent>
-              </Tooltip>
-            )}
-            {canDelete && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
+                    Restore session
+                  </DropdownMenuItem>
+                )}
+                {canDelete && (
+                  <DropdownMenuItem
                     onClick={() => setConfirmDelete(true)}
                     disabled={lifecycleBusy}
                     aria-label="Delete session"
-                    className="text-destructive hover:text-destructive"
+                    variant="destructive"
                   >
                     <Trash2 />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Delete session permanently</TooltipContent>
-              </Tooltip>
-            )}
-          </div>
+                    Delete session permanently
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
       </header>
-      </TooltipProvider>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 md:px-8 min-h-0">
         <div className="max-w-[760px] mx-auto">
@@ -348,12 +371,6 @@ export function SessionDetail({
               onRespondProviderRequest ? handleRespondProviderRequest : undefined
             }
           />
-          {(session.worktreePath || session.branch || session.projectPath) && (
-            <div className="mt-4 flex flex-col gap-4">
-              <ReviewChanges sessionId={session.id} defaultMessage={session.title} />
-              <PrPanel session={session} />
-            </div>
-          )}
         </div>
       </div>
 
@@ -467,6 +484,147 @@ export function SessionDetail({
           </div>
         </div>
       </div>
+
+      </div>
+
+      {panelOpen && (
+        <aside
+          className={
+            activeTool === 'browser'
+              ? 'w-[520px] max-w-[48vw] shrink-0 border-l border-border bg-card/40 flex flex-col min-h-0'
+              : 'w-[360px] shrink-0 border-l border-border bg-card/40 flex flex-col min-h-0'
+          }
+        >
+          <div className="flex items-center gap-1 px-2 py-1.5 border-b border-border">
+            {hasGitContext && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => setActiveTool('scm')}
+                    aria-label="Toggle source control"
+                    aria-pressed={activeTool === 'scm'}
+                    data-active={activeTool === 'scm'}
+                  >
+                    <GitBranch />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Source control</TooltipContent>
+              </Tooltip>
+            )}
+            {workingDir && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => {
+                      setFileExplorerMounted(true);
+                      setActiveTool('files');
+                    }}
+                    aria-label="Toggle files"
+                    aria-pressed={activeTool === 'files'}
+                    data-active={activeTool === 'files'}
+                  >
+                    <FolderTree />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Files</TooltipContent>
+              </Tooltip>
+            )}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => {
+                    if (terminalMounted && activeTool === 'terminal') {
+                      setActiveTool(null);
+                    } else {
+                      setTerminalMounted(true);
+                      setActiveTool('terminal');
+                    }
+                  }}
+                  aria-label="Toggle terminal"
+                  aria-pressed={activeTool === 'terminal'}
+                  data-active={activeTool === 'terminal'}
+                >
+                  <SquareTerminal />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Terminal</TooltipContent>
+            </Tooltip>
+            {hasDesktopBrowser && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => setActiveTool('browser')}
+                    aria-label="Toggle browser"
+                    aria-pressed={activeTool === 'browser'}
+                    data-active={activeTool === 'browser'}
+                  >
+                    <Globe2 />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Browser</TooltipContent>
+              </Tooltip>
+            )}
+            <span className="ml-1 text-sm font-medium truncate">
+              {activeTool === 'scm'
+                ? 'Source Control'
+                : activeTool === 'files'
+                  ? 'Files'
+                  : activeTool === 'browser'
+                    ? 'Browser'
+                    : 'Terminal'}
+            </span>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => setPanelOpen(false)}
+              aria-label="Close panel"
+              className="ml-auto"
+            >
+              <X className="size-3.5" />
+            </Button>
+          </div>
+
+          {activeTool === 'scm' && hasGitContext && (
+            <div className="flex-1 min-h-0">
+              <div className="h-full overflow-y-auto">
+                <div className="border-b border-border/60 bg-card/40">
+                  <ReviewChanges sessionId={session.id} />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTool === 'files' && fileExplorerMounted && (
+            <div className="flex-1 min-h-0">
+              <FileExplorerPanel root={workingDir} />
+            </div>
+          )}
+
+          {activeTool === 'browser' && (
+            <div className="flex-1 min-h-0">
+              <BrowserPanel sessionId={session.id} />
+            </div>
+          )}
+
+          {terminalMounted && (
+            <div
+              className="flex-1 min-h-0 bg-card/60"
+              style={activeTool === 'terminal' ? undefined : { display: 'none' }}
+            >
+              <TerminalDock cwd={workingDir} />
+            </div>
+          )}
+        </aside>
+      )}
+      </TooltipProvider>
 
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <DialogContent>

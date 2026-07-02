@@ -240,6 +240,49 @@ describe('GitService', () => {
       expect(entry?.staged).toBe(false);
     });
 
+    it('status populates insertions/deletions for a modified tracked file', async () => {
+      writeFileSync(join(repo, 'README.md'), '# test\nchanged line\nanother line\n');
+      const status = await service.status(repo);
+      const entry = status.files.find((f) => f.path === 'README.md');
+      expect(entry).toBeDefined();
+      expect(entry?.insertions).toBeGreaterThan(0);
+      expect(entry?.deletions).toBe(0);
+    });
+
+    it('status counts an untracked file line total as insertions', async () => {
+      writeFileSync(join(repo, 'new.txt'), 'one\ntwo\nthree');
+      const status = await service.status(repo);
+      const entry = status.files.find((f) => f.path === 'new.txt');
+      expect(entry).toBeDefined();
+      expect(entry?.insertions).toBe(3);
+      expect(entry?.deletions).toBe(0);
+    });
+
+    it('status does not throw while counting an untracked directory entry', async () => {
+      mkdirSync(join(repo, 'new-dir'), { recursive: true });
+      writeFileSync(join(repo, 'new-dir', 'child.txt'), 'nested\n');
+      const status = await service.status(repo);
+      const entry = status.files.find((f) => f.path === 'new-dir/');
+      expect(entry).toBeDefined();
+      expect(entry?.insertions).toBe(0);
+      expect(entry?.deletions).toBe(0);
+    });
+
+    it('status still returns stats for untracked files on an unborn branch', async () => {
+      const unbornRepo = mkdtempSync(join(tmpdir(), 'nuncio-unborn-repo-'));
+      try {
+        await runGitAsync(unbornRepo, ['init', '-b', 'main']);
+        writeFileSync(join(unbornRepo, 'fresh.txt'), 'alpha\nbeta\n');
+        const status = await service.status(unbornRepo);
+        const entry = status.files.find((f) => f.path === 'fresh.txt');
+        expect(entry).toBeDefined();
+        expect(entry?.insertions).toBe(2);
+        expect(entry?.deletions).toBe(0);
+      } finally {
+        rmSync(unbornRepo, { recursive: true, force: true });
+      }
+    });
+
     it('status marks a git-added file as staged', async () => {
       writeFileSync(join(repo, 'staged.txt'), 'content\n');
       await runGitAsync(repo, ['add', 'staged.txt']);
@@ -262,6 +305,34 @@ describe('GitService', () => {
       await runGitAsync(repo, ['add', 'README.md']);
       const result = await service.diff(repo, { staged: true });
       expect(result.diff).toContain('staged change');
+    });
+
+    it('diff with a path returns only that tracked file diff', async () => {
+      writeFileSync(join(repo, 'README.md'), '# test\nreadme change\n');
+      writeFileSync(join(repo, 'other.txt'), 'other change\n');
+      await runGitAsync(repo, ['add', 'other.txt']);
+      await runGitAsync(repo, ['commit', '-m', 'add other']);
+      writeFileSync(join(repo, 'other.txt'), 'other change\nsecond change\n');
+
+      const result = await service.diff(repo, { path: 'README.md' });
+      expect(result.diff).toContain('README.md');
+      expect(result.diff).toContain('readme change');
+      expect(result.diff).not.toContain('other.txt');
+      expect(result.diff).not.toContain('second change');
+    });
+
+    it('diff with a path returns an add-style diff for an untracked file', async () => {
+      writeFileSync(join(repo, 'new.txt'), 'hello\nworld\n');
+      const result = await service.diff(repo, { path: 'new.txt' });
+      expect(result.diff).toContain('new.txt');
+      expect(result.diff).toContain('+hello');
+      expect(result.diff).toContain('+world');
+    });
+
+    it('diff with a path rejects unsafe path values', async () => {
+      await expect(service.diff(repo, { path: '../etc/passwd' })).rejects.toBeInstanceOf(BadRequestException);
+      await expect(service.diff(repo, { path: '-c/core.sshCommand=touch hacked' })).rejects.toBeInstanceOf(BadRequestException);
+      await expect(service.diff(repo, { path: '/etc/passwd' })).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('stageAll + commit produces a 40-char sha and clears the tree', async () => {

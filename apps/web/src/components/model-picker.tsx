@@ -38,6 +38,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -241,14 +242,12 @@ function ModelSubmenuRow({
   model,
   value,
   modelOptions,
-  onSelect,
   onToggle,
   onActivate,
 }: {
   model: FlatModel;
   value: string;
   modelOptions?: ModelOptionsMap;
-  onSelect: (options: ModelOptionsMap) => void;
   onToggle: (options: ModelOptionsMap) => void;
   onActivate: (options: ModelOptionsMap) => void;
 }) {
@@ -262,7 +261,7 @@ function ModelSubmenuRow({
 
   const patchOptions = (next: ModelOptionsMap) => {
     if (active) onToggle(next);
-    else onSelect(next);
+    else onActivate(next);
   };
 
   return (
@@ -332,7 +331,6 @@ function ModelRows({
               model={model}
               value={value}
               modelOptions={modelOptions}
-              onSelect={(options) => onPick(model.id, model.providerId, options)}
               onToggle={(options) => onToggle(model.id, model.providerId, options)}
               onActivate={(options) => onToggle(model.id, model.providerId, options)}
             />
@@ -418,6 +416,8 @@ export function ModelPicker({ value, modelOptions, onChange, providers }: ModelP
         {catalog.map((p, idx) => {
           const flat = flattenProviders([p]);
           if (flat.length === 0) return null;
+          const groups = p.groups ?? [];
+          const showGroupHeaders = groups.length > 1;
           return (
             <div key={p.id}>
               {idx > 0 && <DropdownMenuSeparator />}
@@ -429,13 +429,33 @@ export function ModelPicker({ value, modelOptions, onChange, providers }: ModelP
                 <DropdownMenuSubContent
                   className={cn('max-h-[360px] overflow-y-auto', flat.length > 8 ? 'w-[280px]' : 'w-[260px]')}
                 >
-                  <ModelRows
-                    models={flat}
-                    value={value}
-                    modelOptions={modelOptions}
-                    onPick={pick}
-                    onToggle={toggleBoolean}
-                  />
+                  {showGroupHeaders
+                    ? groups.map((group, groupIdx) => {
+                        if (group.models.length === 0) return null;
+                        const groupModels = flattenProviders([{ ...p, groups: [group] }]);
+                        return (
+                          <div key={group.id}>
+                            {groupIdx > 0 && <DropdownMenuSeparator />}
+                            <DropdownMenuLabel>{group.name}</DropdownMenuLabel>
+                            <ModelRows
+                              models={groupModels}
+                              value={value}
+                              modelOptions={modelOptions}
+                              onPick={pick}
+                              onToggle={toggleBoolean}
+                            />
+                          </div>
+                        );
+                      })
+                    : (
+                      <ModelRows
+                        models={flat}
+                        value={value}
+                        modelOptions={modelOptions}
+                        onPick={pick}
+                        onToggle={toggleBoolean}
+                      />
+                    )}
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
             </div>

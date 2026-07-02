@@ -179,7 +179,7 @@ describe('HomeView', () => {
       />,
     );
 
-    expect(await screen.findByRole('button', { name: /composer 2.5/i })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /haiku/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /approval mode/i })).toBeNull();
   });
 
@@ -191,8 +191,8 @@ describe('HomeView', () => {
     await userEvent.type(screen.getByPlaceholderText(/ask nuncio/i), 'Add workspace{Enter}');
     expect(onSubmit).toHaveBeenCalledWith(
       'Add workspace',
-      'cursor:composer-2.5',
-      'cursor',
+      'anthropic:claude-haiku-4',
+      'pi',
       '/code/nuncio',
       'main',
       undefined,
@@ -210,8 +210,8 @@ describe('HomeView', () => {
     await userEvent.type(screen.getByPlaceholderText(/ask nuncio/i), 'Add worktree{Enter}');
     expect(onSubmit).toHaveBeenCalledWith(
       'Add worktree',
-      'cursor:composer-2.5',
-      'cursor',
+      'anthropic:claude-haiku-4',
+      'pi',
       '/code/nuncio',
       'main',
       undefined,
