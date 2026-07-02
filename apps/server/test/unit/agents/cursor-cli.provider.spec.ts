@@ -50,8 +50,8 @@ describe('CursorCliProvider', () => {
 
     const emitted: string[] = [];
     provider.runOverride = async (_id, _args, ctx) => {
-      ctx.emit?.({ type: 'assistant_delta', payload: { delta: 'P' } });
-      ctx.emit?.({ type: 'assistant_message', payload: { text: 'PONG' } });
+      ctx.emit?.({ seq: 0, createdAt: Date.now(), type: 'assistant_delta', payload: { delta: 'P' } });
+      ctx.emit?.({ seq: 0, createdAt: Date.now(), type: 'assistant_message', payload: { text: 'PONG' } });
       return 0;
     };
 

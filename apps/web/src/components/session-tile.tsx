@@ -1,8 +1,10 @@
-import { useMemo, useRef, useState, useEffect } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Maximize2, Send } from 'lucide-react';
 import type { Session, SessionStatus } from '../lib/api';
 import { statusLabel } from '../lib/api';
+import { isComposingEvent } from '../lib/keyboard';
 import { useSessionStream } from '../lib/use-session-stream';
+import { useStickToBottom } from '../lib/use-stick-to-bottom';
 import { useTranscriptBlocks } from '../lib/use-transcript-blocks';
 import { derivePendingUserInput } from '../lib/derive-pending-user-input';
 import { deriveVerifyStatus } from '../lib/derive-verify-status';
@@ -92,10 +94,7 @@ export function SessionTile({
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Keep the tail pinned to the newest block as the stream grows.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [tail]);
+  useStickToBottom(scrollRef, tail, { always: true });
 
   const projectName = projectDisplayName(session.projectPath);
   const modelName = session.model ? prettyModelName(session.model) : null;
@@ -104,7 +103,13 @@ export function SessionTile({
     const text = steerText.trim();
     if (!text || !onSteer || steering) return;
     setSteerText('');
-    await onSteer(text);
+    try {
+      await onSteer(text);
+    } catch (error) {
+      // Give the message back rather than losing it on a failed send.
+      setSteerText((current) => (current.trim() ? current : text));
+      throw error;
+    }
   };
 
   return (
@@ -197,7 +202,7 @@ export function SessionTile({
             value={steerText}
             onChange={(e) => setSteerText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
+              if (e.key === 'Enter' && !e.shiftKey && !isComposingEvent(e)) {
                 e.preventDefault();
                 void submitSteer();
               }
@@ -227,7 +232,14 @@ export function SessionTile({
 function TileBlock({ block }: { block: ReturnType<typeof useTranscriptBlocks>[number] }) {
   switch (block.kind) {
     case 'user':
-      return <p className="text-muted-foreground"><span className="text-foreground/70">›</span> {block.text}</p>;
+      return (
+        <p className="text-muted-foreground">
+          <span className="text-foreground/70">›</span> {block.text}
+          {block.queued ? <span className="text-muted-foreground/70"> (queued)</span> : null}
+        </p>
+      );
+    case 'interrupted':
+      return <p className="text-muted-foreground/70 italic">— interrupted —</p>;
     case 'assistant':
       return <p className="text-foreground/90 whitespace-pre-wrap break-words">{block.text}</p>;
     case 'thinking':

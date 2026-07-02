@@ -1,8 +1,14 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { GitService } from '../git/git.service';
 import { SessionsRepository } from '../sessions/persistence/sessions.repository';
-import { ForgeRegistry } from './forges.registry';
-import type { ForgeCheck, ForgePullRequest, ForgeRepoRef, ForgeStatusDto } from './forges.types';
+import { ForgeRegistry, providerIdForHost } from './forges.registry';
+import type {
+  ForgeCheck,
+  ForgePullRequest,
+  ForgePullRequestDetail,
+  ForgeRepoRef,
+  ForgeStatusDto,
+} from './forges.types';
 
 export interface OpenPullRequestOptions {
   title?: string;
@@ -61,7 +67,9 @@ export class ForgesService {
     return pr;
   }
 
-  async getPullRequestForSession(id: string): Promise<ForgePullRequest> {
+  async getPullRequestForSession(
+    id: string,
+  ): Promise<ForgePullRequestDetail & { checks: ForgeCheck[] }> {
     const session = this.sessions.findById(id);
     if (!session) throw new BadRequestException(`Session ${id} not found`);
     if (session.pullRequestNumber == null) {
@@ -78,7 +86,7 @@ export class ForgesService {
       session.forgeProvider ?? this.providerIdForHost(remote.host),
     );
 
-    const pr = await provider.getPullRequest(repo, session.pullRequestNumber);
+    const pr = await provider.getPullRequestDetail(repo, session.pullRequestNumber);
     const checks: ForgeCheck[] = session.branch
       ? await provider.listChecks(repo, session.branch)
       : [];
@@ -146,6 +154,6 @@ export class ForgesService {
   }
 
   private providerIdForHost(host: string): string {
-    return host.includes('gitlab') ? 'gitlab' : 'github';
+    return providerIdForHost(host);
   }
 }

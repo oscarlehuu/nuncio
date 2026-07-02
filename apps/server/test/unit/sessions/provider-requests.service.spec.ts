@@ -26,7 +26,7 @@ describe('SessionsService provider requests', () => {
       imports: [DatabaseModule, SessionsPersistenceModule],
       providers: [
         SessionsService,
-        { provide: AgentRegistry, useValue: { supportsInteractionForSession: () => false } },
+        { provide: AgentRegistry, useValue: { supportsInteractionForSession: () => false, resolveForSession: () => ({ capabilities: { interrupt: false, modelSwitch: 'none', effortSwitch: 'none', images: false, steerWhileRunning: false } }) } },
         { provide: GitService, useValue: {} },
         { provide: CursorLocalSessionsService, useValue: {} },
       ],
@@ -98,7 +98,7 @@ describe('SessionsService provider requests', () => {
       imports: [DatabaseModule, SessionsPersistenceModule],
       providers: [
         SessionsService,
-        { provide: AgentRegistry, useValue: { supportsInteractionForSession: () => false } },
+        { provide: AgentRegistry, useValue: { supportsInteractionForSession: () => false, resolveForSession: () => ({ capabilities: { interrupt: false, modelSwitch: 'none', effortSwitch: 'none', images: false, steerWhileRunning: false } }) } },
         { provide: GitService, useValue: {} },
         { provide: CursorLocalSessionsService, useValue: {} },
       ],

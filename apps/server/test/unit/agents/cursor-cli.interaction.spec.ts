@@ -126,7 +126,7 @@ describe('CursorCliProvider interaction', () => {
     let steeredMessage: string | undefined;
     provider.runOverride = async (_sessionId, args, ctx) => {
       steeredMessage = args[args.length - 1];
-      ctx.emit?.({ type: 'assistant_message', payload: { text: 'ok' } });
+      ctx.emit?.({ seq: 0, createdAt: Date.now(), type: 'assistant_message', payload: { text: 'ok' } });
       return 0;
     };
 

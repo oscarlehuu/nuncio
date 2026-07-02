@@ -27,6 +27,8 @@ function makeSession(overrides: Partial<SessionDto> = {}): SessionDto {
     cursorBackend: 'sdk',
     cursorChatId: null,
     supportsInteraction: false,
+    supportsInterrupt: false,
+    supportsSteerWhileRunning: false,
     createdAt: 1,
     updatedAt: 1,
     ...overrides,
@@ -62,6 +64,15 @@ describe('SessionsService interaction', () => {
     jest.clearAllMocks();
     (sessionsRepo.findById as jest.Mock).mockReturnValue(makeSession());
     (agents.supportsInteractionForSession as jest.Mock).mockReturnValue(false);
+    (agents.resolveForSession as jest.Mock).mockReturnValue({
+      capabilities: {
+        interrupt: false,
+        modelSwitch: 'none',
+        effortSwitch: 'none',
+        images: false,
+        steerWhileRunning: false,
+      },
+    });
   });
 
   it('respondInteraction returns 501 when provider does not support interaction', async () => {
@@ -72,12 +83,20 @@ describe('SessionsService interaction', () => {
     ).rejects.toMatchObject({
       status: 501,
     });
-    expect(agents.resolveForSession).not.toHaveBeenCalled();
   });
 
   it('respondInteraction returns 501 when provider omits submitInteraction', async () => {
     (agents.supportsInteractionForSession as jest.Mock).mockReturnValue(true);
-    (agents.resolveForSession as jest.Mock).mockReturnValue({});
+    // Provider with capabilities but no submitInteraction implementation.
+    (agents.resolveForSession as jest.Mock).mockReturnValue({
+      capabilities: {
+        interrupt: false,
+        modelSwitch: 'none',
+        effortSwitch: 'none',
+        images: false,
+        steerWhileRunning: false,
+      },
+    });
 
     await expect(
       service.respondInteraction('abc12345', 'req-1', { answers: [], resolvedBy: 'skip' }),

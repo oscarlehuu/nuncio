@@ -16,6 +16,7 @@ let promptBehavior: ((text: string, options?: unknown) => Promise<void>) | null 
 let isStreaming = false;
 let subscribedHandler: ((event: { type: string; [key: string]: unknown }) => void) | null = null;
 const abortMock = mock(async () => undefined);
+const steerMock = mock(async (_text: string, _images?: unknown) => undefined);
 const setModelMock = mock(async (_model: unknown) => undefined);
 const setThinkingLevelMock = mock((_level: unknown) => undefined);
 
@@ -68,6 +69,7 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
         await promptBehavior?.(text, options);
       },
       abort: abortMock,
+      steer: steerMock,
       setModel: setModelMock,
       setThinkingLevel: setThinkingLevelMock,
     },
@@ -108,6 +110,7 @@ describe('PiAgentProvider', () => {
     isStreaming = false;
     subscribedHandler = null;
     abortMock.mockClear();
+    steerMock.mockClear();
     setModelMock.mockClear();
     setThinkingLevelMock.mockClear();
     provider.bustCache();
@@ -119,6 +122,7 @@ describe('PiAgentProvider', () => {
       modelSwitch: 'in-session',
       effortSwitch: 'in-session',
       images: true,
+      steerWhileRunning: true,
     });
   });
 
@@ -213,6 +217,92 @@ describe('PiAgentProvider', () => {
       text: created.prompt,
       options: { images: [{ type: 'image', mimeType: 'image/png', data: 'base64-data' }] },
     });
+  });
+
+  it('steerMidRun queues into a live streaming run and records the steer message', async () => {
+    const created = sessions.create({ prompt: 'long task', provider: 'pi' });
+    await provider.run(created.id, created.prompt, { emit: () => {} });
+
+    isStreaming = true;
+    const emitted: Array<{ type: string }> = [];
+    const handled = await provider.steerMidRun(created.id, 'change course', {
+      emit: (event) => emitted.push(event),
+    });
+
+    expect(handled).toBe(true);
+    expect(steerMock).toHaveBeenCalledTimes(1);
+    expect(steerMock.mock.calls[0]?.[0]).toBe('change course');
+    expect(emitted.some((e) => e.type === 'steer_message')).toBe(true);
+  });
+
+  it('steerMidRun reports false when the session is not streaming', async () => {
+    const created = sessions.create({ prompt: 'idle task', provider: 'pi' });
+    await provider.run(created.id, created.prompt, { emit: () => {} });
+
+    isStreaming = false;
+    const handled = await provider.steerMidRun(created.id, 'nothing to steer', { emit: () => {} });
+
+    expect(handled).toBe(false);
+    expect(steerMock).not.toHaveBeenCalled();
+  });
+
+  it('emits one assistant_message per completed turn, matching the session file', async () => {
+    const emitted: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    promptBehavior = async () => {
+      subscribedHandler?.({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'first turn' },
+      });
+      subscribedHandler?.({
+        type: 'message_end',
+        message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'first turn' }] },
+      });
+      subscribedHandler?.({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'second turn' },
+      });
+      subscribedHandler?.({
+        type: 'message_end',
+        message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'second turn' }] },
+      });
+    };
+    const created = sessions.create({ prompt: 'two turns', provider: 'pi' });
+
+    await provider.run(created.id, created.prompt, {
+      emit: (event) => emitted.push(event as { type: string; payload: Record<string, unknown> }),
+    });
+
+    const messages = emitted
+      .filter((e) => e.type === 'assistant_message')
+      .map((e) => e.payload.text);
+    expect(messages).toEqual(['first turn', 'second turn']);
+  });
+
+  it('surfaces a turn error as an error event and ERROR status instead of "(no response)"', async () => {
+    const emitted: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    promptBehavior = async () => {
+      subscribedHandler?.({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          stopReason: 'error',
+          errorMessage: "400 You're out of extra usage.",
+          content: [],
+        },
+      });
+    };
+    const created = sessions.create({ prompt: 'quota exceeded', provider: 'pi' });
+
+    await provider.run(created.id, created.prompt, {
+      emit: (event) => emitted.push(event as { type: string; payload: Record<string, unknown> }),
+    });
+
+    expect(sessions.findById(created.id)?.status).toBe('ERROR');
+    const error = emitted.find((e) => e.type === 'error');
+    expect(String(error?.payload.message)).toContain('out of extra usage');
+    expect(
+      emitted.some((e) => e.type === 'assistant_message' && e.payload.text === '(no response)'),
+    ).toBe(false);
   });
 
   it('omits image options when there are no attachments', async () => {
