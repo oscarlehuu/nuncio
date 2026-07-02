@@ -3,6 +3,7 @@ import { fetchGitStatus, fetchGitDiff, commitSession, pushSession } from '../lib
 import type { GitStatusDto, GitDiffDto, GitFileChange } from '../lib/api';
 import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
+import { DiffView } from './diff-view';
 import { toast } from 'sonner';
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, GitBranch } from 'lucide-react';
 
@@ -233,9 +234,7 @@ export function ReviewChanges({ sessionId, defaultMessage = '' }: ReviewChangesP
                           Loading diff…
                         </div>
                       ) : (
-                        <pre className="max-h-72 overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-xs">
-                          {diff?.diff ?? ''}
-                        </pre>
+                        <DiffView diff={diff?.diff ?? ''} />
                       )}
                     </div>
                   )}
