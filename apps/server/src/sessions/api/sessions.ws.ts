@@ -30,6 +30,16 @@ interface RpcError {
   message: string;
 }
 
+export interface SessionsWsOptions {
+  /** Outbound-buffer bound per connection; a subscription that overflows it is
+   * dropped to cursor recovery instead of buffering unboundedly. */
+  maxBufferedBytes?: number;
+  /** Test seam — production reads ws.bufferedAmount. */
+  getBufferedAmount?: (ws: WebSocket) => number;
+}
+
+const DEFAULT_MAX_BUFFERED_BYTES = 1_000_000;
+
 function errorOf(err: unknown): RpcError {
   const maybe = err as { getStatus?: () => number; message?: unknown } | null;
   const code = typeof maybe?.getStatus === 'function' ? maybe.getStatus() : 500;
@@ -48,8 +58,11 @@ export function attachSessionsWebSocketServer(
   sessions: SessionRelayService,
   authTokens?: TokenValidator,
   trust?: RemoteTrust,
+  options?: SessionsWsOptions,
 ): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
+  const maxBuffered = options?.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES;
+  const bufferedAmount = options?.getBufferedAmount ?? ((socket: WebSocket) => socket.bufferedAmount);
 
   httpServer.on('upgrade', (req, socket, head) => {
     const path = new URL(req.url ?? '/', 'http://localhost').pathname;
@@ -99,13 +112,31 @@ export function attachSessionsWebSocketServer(
         // Resubscribe replaces the previous subscription (drop-to-cursor recovery).
         subscriptions.get(sessionId)?.();
         send(ws, { id, result: { ok: true } });
+
+        // A subscription that outruns the socket is dropped, not buffered: the
+        // client gets one small "behind" marker and recovers by resubscribing
+        // from its last seen seq.
         for (const event of sessions.getEvents(sessionId, since)) {
+          if (bufferedAmount(ws) > maxBuffered) {
+            send(ws, { channel: sessionId, behind: true });
+            return;
+          }
           send(ws, { channel: sessionId, event });
         }
-        const unsubscribe = sessions.subscribe(sessionId, (event) => {
+        let liveUnsub: () => void = () => {};
+        let dropped = false;
+        liveUnsub = sessions.subscribe(sessionId, (event) => {
+          if (dropped) return;
+          if (bufferedAmount(ws) > maxBuffered) {
+            dropped = true;
+            liveUnsub();
+            subscriptions.delete(sessionId);
+            send(ws, { channel: sessionId, behind: true });
+            return;
+          }
           send(ws, { channel: sessionId, event });
         });
-        subscriptions.set(sessionId, unsubscribe);
+        subscriptions.set(sessionId, liveUnsub);
         return;
       }
 

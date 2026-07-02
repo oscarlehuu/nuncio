@@ -5,6 +5,7 @@ import {
   attachSessionsWebSocketServer,
   SESSIONS_WS_PATH,
   type SessionRelayService,
+  type SessionsWsOptions,
 } from '../../../src/sessions/api/sessions.ws';
 import type { SessionEvent } from '../../../src/sessions/domain/sessions.types';
 
@@ -78,8 +79,11 @@ function connect(port: number): Promise<TestClient> {
     };
     ws.addEventListener('message', (e) => {
       const msg = JSON.parse(String(e.data));
-      if ('channel' in msg) client.events.push(msg.event as SessionEvent);
-      else client.responses.push(msg);
+      if ('channel' in msg) {
+        if (msg.event) client.events.push(msg.event as SessionEvent);
+      } else {
+        client.responses.push(msg);
+      }
     });
     ws.addEventListener('open', () => resolve(client));
     ws.addEventListener('error', () => reject(new Error('connect failed')));
@@ -88,9 +92,9 @@ function connect(port: number): Promise<TestClient> {
 
 let server: Server | null = null;
 
-function startServer(fake: SessionRelayService): Promise<number> {
+function startServer(fake: SessionRelayService, options?: SessionsWsOptions): Promise<number> {
   server = createServer();
-  attachSessionsWebSocketServer(server, fake);
+  attachSessionsWebSocketServer(server, fake, undefined, undefined, options);
   return new Promise((resolve) => {
     server!.listen(0, '127.0.0.1', () => {
       resolve((server!.address() as AddressInfo).port);
@@ -194,6 +198,42 @@ describe('sessions WS relay', () => {
     fake.emit({ seq: 2, type: 'assistant_delta', payload: {}, createdAt: 2 });
     await new Promise((r) => setTimeout(r, 50));
     expect(client.events.map((e) => e.seq)).toEqual([1]);
+    await client.close();
+  });
+
+  it('drops an overflowing subscription with one behind marker instead of buffering', async () => {
+    const fake = makeFakeSessions([1]);
+    let buffered = 0;
+    const port = await startServer(fake, {
+      maxBufferedBytes: 100,
+      getBufferedAmount: () => buffered,
+    });
+    const client = await connect(port);
+    const behind: unknown[] = [];
+    client.ws.addEventListener('message', (e) => {
+      const msg = JSON.parse(String(e.data));
+      if (msg.behind) behind.push(msg);
+    });
+
+    client.send({ id: 1, method: 'subscribe', params: { sessionId: 'sess-1', since: 0 } });
+    await client.waitFor(() => client.events.length === 1);
+
+    buffered = 10_000; // consumer stalls: socket queue over the bound
+    fake.emit({ seq: 2, type: 'assistant_delta', payload: {}, createdAt: 2 });
+    fake.emit({ seq: 3, type: 'assistant_delta', payload: {}, createdAt: 3 });
+    await client.waitFor(() => behind.length === 1);
+
+    // Subscription is gone — nothing more is pushed even after more emits.
+    fake.emit({ seq: 4, type: 'assistant_delta', payload: {}, createdAt: 4 });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(client.events.map((e) => e.seq)).toEqual([1]);
+    expect(behind.length).toBe(1);
+
+    // Recovery: consumer catches up and resubscribes from its last seen seq.
+    buffered = 0;
+    client.send({ id: 2, method: 'subscribe', params: { sessionId: 'sess-1', since: 1 } });
+    await client.waitFor(() => client.events.length === 4);
+    expect(client.events.map((e) => e.seq)).toEqual([1, 2, 3, 4]);
     await client.close();
   });
 
