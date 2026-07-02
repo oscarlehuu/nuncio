@@ -15,9 +15,11 @@ import { SessionsModule } from './sessions/sessions.module';
 import { SettingsModule } from './settings/settings.module';
 import { TailscaleModule } from './tailscale/tailscale.module';
 import { TerminalModule } from './terminal/terminal.module';
+import { PushModule } from './push/push.module';
 
 @Module({
   imports: [
+    PushModule,
     DatabaseModule,
     AuthModule,
     SettingsModule,

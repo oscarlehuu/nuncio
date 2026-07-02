@@ -33,7 +33,8 @@ export function isChangesetReleaseBranch(head) {
  *   cursor/*  → cursor-sdk → main
  *   pi/*      → pi-sdk     → main
  *   codex/*   → codex-sdk  → main
- *   main      → cursor-sdk | pi-sdk | codex-sdk  (sync-back only)
+ *   main      → cursor-sdk | pi-sdk | codex-sdk  (sync-back)
+ *   any non-lane branch → main (general feature work)
  *
  * @param {string} base  PR target branch (e.g. main, cursor-sdk)
  * @param {string} head  PR source branch (e.g. cursor/feat-handoff)
@@ -69,19 +70,16 @@ export function validateBranchFlow(base, head) {
       };
 
     case 'main':
-      if (
-        head === 'cursor-sdk' ||
-        head === 'pi-sdk' ||
-        head === 'codex-sdk' ||
-        isChangesetReleaseBranch(head)
-      ) {
-        return { ok: true };
+      // The invariant is that provider SDK work cannot skip its integration
+      // lane — not that main only accepts lanes. General feature branches
+      // (feat/*, docs/*, frontend, …) merge to main directly.
+      if (isCursorFeatureBranch(head) || isPiFeatureBranch(head) || isCodexFeatureBranch(head)) {
+        return {
+          ok: false,
+          reason: `SDK feature branches must land through their integration lane first (${head} → <provider>-sdk → main).`,
+        };
       }
-      return {
-        ok: false,
-        reason:
-          `main only accepts PRs from cursor-sdk, pi-sdk, codex-sdk, or changeset-release/* (release bot). Got: ${head}`,
-      };
+      return { ok: true };
 
     default:
       return { ok: true };
