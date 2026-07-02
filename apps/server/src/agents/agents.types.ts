@@ -7,7 +7,16 @@ import type {
 } from '../sessions/domain/sessions.types';
 import type { UserInputAnswer } from '../sessions/domain/user-input.types';
 
-export type EventEmitter = (event: { type: string; payload: unknown }) => void;
+/**
+ * Providers emit the event exactly as it was appended to the log: when `seq`
+ * is present the consumer can fan it out without re-reading the event table.
+ */
+export type EventEmitter = (event: {
+  type: string;
+  payload: unknown;
+  seq?: number;
+  createdAt?: number;
+}) => void;
 
 export interface AgentCapabilities {
   interrupt: boolean;

@@ -2,13 +2,16 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { AgentsModule } from '../../src/agents/agents.module';
 import { PiAgentProvider } from '../../src/agents/providers/pi-agent.provider';
+import { CursorLocalModule } from '../../src/cursor-local/cursor-local.module';
 import { DatabaseModule } from '../../src/db/database.module';
 import { GitModule } from '../../src/git/git.module';
 import { GitService } from '../../src/git/git.service';
 import { EventsRepository } from '../../src/sessions/persistence/events.repository';
 import { SessionsPersistenceModule } from '../../src/sessions/sessions.persistence.module';
 import { SessionsRepository } from '../../src/sessions/persistence/sessions.repository';
+import { SessionsService } from '../../src/sessions/sessions.service';
 import { SettingsModule } from '../../src/settings/settings.module';
 
 // Gate the suite on the same agent dir the Pi SDK resolves (PI_CODING_AGENT_DIR
@@ -258,9 +261,6 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
       sessions.updateStatus(created.id, 'RUNNING');
       provider.dispose(created.id);
 
-      const { AgentsModule } = await import('../../src/agents/agents.module');
-      const { CursorLocalModule } = await import('../../src/cursor-local/cursor-local.module');
-      const { SessionsService } = await import('../../src/sessions/sessions.service');
       const restarted = await Test.createTestingModule({
         imports: [DatabaseModule, GitModule, SessionsPersistenceModule, AgentsModule, CursorLocalModule],
         providers: [SessionsService],

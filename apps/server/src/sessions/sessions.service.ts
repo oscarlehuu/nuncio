@@ -38,6 +38,8 @@ import { SessionsRepository } from './persistence/sessions.repository';
 
 type StreamListener = (event: SessionEvent) => void;
 
+const DEFAULT_BACKFILL_LIMIT = 200;
+
 interface PendingProviderRequest {
   sessionId: string;
   provider: string;
@@ -82,11 +84,21 @@ export class SessionsService implements OnModuleDestroy {
     return refreshed ? this.enrichSession(refreshed) : null;
   }
 
-  getEvents(id: string, since = 0): SessionEvent[] {
+  getEvents(
+    id: string,
+    since = 0,
+    opts?: { limit?: number; tail?: number; before?: number },
+  ): SessionEvent[] {
     const session = this.requireSession(id);
     this.hydrateIfNeeded(session);
     this.safeRefreshTranscript(id, session);
-    return this.events.list(id, since);
+    if (opts?.tail !== undefined) {
+      return this.events.listTail(id, opts.tail);
+    }
+    if (opts?.before !== undefined) {
+      return this.events.listBefore(id, opts.before, opts.limit ?? DEFAULT_BACKFILL_LIMIT);
+    }
+    return this.events.list(id, since, opts?.limit);
   }
 
   /** Catch-up refresh guarded against local live runs and transient fs errors. */
@@ -698,9 +710,21 @@ export class SessionsService implements OnModuleDestroy {
     return event;
   }
 
-  private onAgentEvent(id: string, event: { type: string; payload: unknown }): void {
-    const events = this.events.list(id);
-    const latest = events[events.length - 1];
+  private onAgentEvent(
+    id: string,
+    event: { type: string; payload: unknown; seq?: number; createdAt?: number },
+  ): void {
+    if (typeof event.seq === 'number' && event.seq > 0) {
+      this.emit(id, {
+        seq: event.seq,
+        type: event.type,
+        payload: event.payload,
+        createdAt: event.createdAt ?? Date.now(),
+      });
+      return;
+    }
+    // Emitter did not append first — fall back to fanning out the stored tail.
+    const [latest] = this.events.listTail(id, 1);
     if (latest) this.emit(id, latest);
     else this.emit(id, { seq: 0, type: event.type, payload: event.payload, createdAt: Date.now() });
   }
