@@ -697,11 +697,8 @@ export class SessionsService implements OnModuleDestroy {
     return event;
   }
 
-  private onAgentEvent(id: string, event: { type: string; payload: unknown }): void {
-    const events = this.events.list(id);
-    const latest = events[events.length - 1];
-    if (latest) this.emit(id, latest);
-    else this.emit(id, { seq: 0, type: event.type, payload: event.payload, createdAt: Date.now() });
+  private onAgentEvent(id: string, event: SessionEvent): void {
+    this.emit(id, event);
   }
 
   private getOrCreateBus(id: string): EventEmitter {

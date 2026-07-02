@@ -3,10 +3,15 @@ import type { ModelProviderDto } from '../models/models.types';
 import type {
   ProviderRequestInput,
   ProviderRequestResult,
+  SessionEvent,
 } from '../sessions/domain/sessions.types';
 import type { UserInputAnswer } from '../sessions/domain/user-input.types';
 
-export type EventEmitter = (event: { type: string; payload: unknown }) => void;
+/**
+ * Receives the persisted event row (seq/createdAt included) so subscribers can
+ * forward it directly without re-reading the event log.
+ */
+export type EventEmitter = (event: SessionEvent) => void;
 
 export interface AgentCapabilities {
   interrupt: boolean;

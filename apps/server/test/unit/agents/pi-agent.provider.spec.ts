@@ -246,18 +246,18 @@ describe('PiAgentProvider', () => {
       emit: (event) => emitted.push(event as { type: string; payload: Record<string, unknown> }),
     });
 
-    expect(emitted).toContainEqual({
+    expect(emitted).toContainEqual(expect.objectContaining({
       type: 'tool_start',
       payload: {
         callId: 'call-1',
         tool: 'bash',
         input: { command: 'bun test apps/server/test/unit/agents/pi-agent.provider.spec.ts' },
       },
-    });
-    expect(emitted).toContainEqual({
+    }));
+    expect(emitted).toContainEqual(expect.objectContaining({
       type: 'tool_end',
       payload: { callId: 'call-1', tool: 'bash', isError: false, output: 'ok' },
-    });
+    }));
   });
 
   it('emits Pi thinking events from message_update reasoning without adding it to assistant text', async () => {
@@ -288,14 +288,14 @@ describe('PiAgentProvider', () => {
 
     const thinkingStart = emitted.find((event) => event.type === 'thinking_start');
     expect(thinkingStart?.payload.thinkingId).toEqual(expect.any(String));
-    expect(emitted).toContainEqual({
+    expect(emitted).toContainEqual(expect.objectContaining({
       type: 'thinking_delta',
       payload: { thinkingId: thinkingStart?.payload.thinkingId, delta: 'plan' },
-    });
-    expect(emitted).toContainEqual({
+    }));
+    expect(emitted).toContainEqual(expect.objectContaining({
       type: 'thinking_message',
       payload: { thinkingId: thinkingStart?.payload.thinkingId, text: 'plan' },
-    });
+    }));
     expect(emitted.findLast((event) => event.type === 'assistant_message')?.payload).toEqual({
       text: 'Answer',
     });
@@ -325,7 +325,7 @@ describe('PiAgentProvider', () => {
       (event) => event.type === 'tool_end' && event.payload.callId === 'open-call',
     );
     const assistantMessageIndex = emitted.findIndex((event) => event.type === 'assistant_message');
-    expect(emitted[toolEndIndex]).toEqual({
+    expect(emitted[toolEndIndex]).toMatchObject({
       type: 'tool_end',
       payload: { callId: 'open-call', tool: 'grep', isError: false },
     });
