@@ -132,7 +132,7 @@ export function RemoteSessionTile({
         // Full-fidelity view lives on the machine's own base path.
         window.location.assign(`${machineHref(machineId)}session/${sessionId}`);
       }}
-      onSteer={focused ? steer : undefined}
+      onSteer={steer}
       steering={steering}
       apiBase={base}
     />

@@ -14,4 +14,11 @@ describe('cn', () => {
     const cond = false;
     expect(cn('base', cond && 'no', 'ok', undefined, null)).toBe('base ok');
   });
+
+  it('treats the UI type scale as font-size, not text color', () => {
+    // text-ui-xs must not evict a color utility…
+    expect(cn('text-primary-foreground', 'text-ui-xs')).toBe('text-primary-foreground text-ui-xs');
+    // …but must still replace a real font-size.
+    expect(cn('text-sm', 'text-ui-lg')).toBe('text-ui-lg');
+  });
 });

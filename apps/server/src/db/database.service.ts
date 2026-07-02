@@ -219,5 +219,14 @@ export class DatabaseService implements OnModuleDestroy {
       CREATE INDEX IF NOT EXISTS idx_tasks_status_created
       ON tasks(status, created_at)
     `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS push_tokens (
+        token TEXT PRIMARY KEY,
+        platform TEXT,
+        device_name TEXT,
+        created_at INTEGER NOT NULL
+      )
+    `);
   }
 }

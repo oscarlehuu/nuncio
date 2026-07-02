@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { DatabaseService } from '../../db/database.service';
 import { truncatePayload } from '../domain/events.types';
+import { notifySessionEventHooks } from '../domain/session-event-hooks';
 import type { EventRow, SessionEvent } from '../domain/sessions.types';
 
 /**
@@ -79,7 +80,9 @@ export class EventsRepository {
          VALUES (?, ?, ?, ?, ?)`,
       )
       .run(row.session_id, row.seq, row.type, row.payload, row.created_at);
-    return { seq, type, payload: stored, createdAt: now };
+    const event: SessionEvent = { seq, type, payload: stored, createdAt: now };
+    notifySessionEventHooks(sessionId, event);
+    return event;
   }
 
   appendBatch(

@@ -2,8 +2,8 @@ import type { Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { TerminalService } from './terminal.service';
-import { isLoopbackAddress } from './loopback';
-import { isAuthorizedRequest, type AuthRequestLike, type TokenValidator } from '../auth/auth-request';
+import type { AuthRequestLike, TokenValidator } from '../auth/auth-request';
+import { isAuthorizedUpgrade, type RemoteTrust } from '../auth/upgrade-auth';
 
 interface TerminalClientMessage {
   type?: unknown;
@@ -13,35 +13,15 @@ interface TerminalClientMessage {
   data?: unknown;
 }
 
-export interface RemoteTrust {
-  isTrustedRemote(remoteAddress: unknown): Promise<boolean>;
-}
+export type { RemoteTrust } from '../auth/upgrade-auth';
 
-/**
- * Terminal upgrade authorization — the same rule the HTTP AuthGuard enforces
- * on /api routes: loopback always passes; remote clients need the access token
- * (auth cookie or Bearer header) or a trusted tailnet identity. Without a
- * token validator/trust checker (tests, callers that opt out) remote is refused.
- */
-export async function isAuthorizedTerminalUpgrade(
+/** Shared WS upgrade rule (see auth/upgrade-auth.ts), kept under its historical name. */
+export function isAuthorizedTerminalUpgrade(
   req: AuthRequestLike,
   authTokens?: TokenValidator,
   trust?: RemoteTrust,
 ): Promise<boolean> {
-  if (isLoopbackAddress(req.socket?.remoteAddress)) {
-    return true;
-  }
-  if (authTokens && isAuthorizedRequest(req, authTokens)) {
-    return true;
-  }
-  if (trust) {
-    try {
-      return await trust.isTrustedRemote(req.socket?.remoteAddress);
-    } catch {
-      return false;
-    }
-  }
-  return false;
+  return isAuthorizedUpgrade(req, authTokens, trust);
 }
 
 export function attachTerminalWebSocketServer(

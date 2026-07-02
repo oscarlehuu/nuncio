@@ -113,6 +113,9 @@ export function SessionTile({
       tabIndex={0}
       onClick={onFocus}
       onKeyDown={(e) => {
+        // Only keys aimed at the tile itself — never swallow typing that
+        // bubbles up from the steer input (Space would otherwise be eaten).
+        if (e.target !== e.currentTarget) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           onFocus();
@@ -188,11 +191,8 @@ export function SessionTile({
         )}
       </div>
 
-      {focused && onSteer ? (
-        <div
-          className="flex items-center gap-1.5 border-t border-border/60 p-2 shrink-0"
-          onClick={(e) => e.stopPropagation()}
-        >
+      {onSteer ? (
+        <div className="flex items-center gap-1.5 border-t border-border/60 p-2 shrink-0">
           <Input
             value={steerText}
             onChange={(e) => setSteerText(e.target.value)}

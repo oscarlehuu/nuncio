@@ -387,13 +387,13 @@ export default function App() {
     void refreshSettings();
   }, [refreshSettings]);
 
-  const handleOpenGrid = useCallback(() => {
-    navigate('/grid');
+  const handleOpenTasks = useCallback(() => {
+    navigate('/tasks');
     dismissTransientSidebar();
   }, [dismissTransientSidebar, navigate]);
 
-  const handleOpenTasks = useCallback(() => {
-    navigate('/tasks');
+  const handleOpenGrid = useCallback(() => {
+    navigate('/grid');
     dismissTransientSidebar();
   }, [dismissTransientSidebar, navigate]);
 
@@ -564,6 +564,7 @@ export default function App() {
                 onCreate={handleCreateReturning}
                 steering={steering}
                 lifecycleBusy={lifecycleBusy}
+                railOverlay={!desktopSidebar.pinned}
               />
             }
           />

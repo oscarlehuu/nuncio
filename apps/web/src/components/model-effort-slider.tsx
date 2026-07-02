@@ -87,11 +87,11 @@ export function ModelEffortSlider({
   return (
     <div className={cn('model-effort-slider select-none', className)} onClick={stopOnly}>
       <div className="mb-2.5 flex items-baseline gap-1.5">
-        <span className="text-[13px] font-medium text-muted-foreground">{label}</span>
-        <span className="text-[13px] font-semibold text-foreground">{currentLabel}</span>
+        <span className="text-ui-lg font-medium text-muted-foreground">{label}</span>
+        <span className="text-ui-lg font-semibold text-foreground">{currentLabel}</span>
       </div>
 
-      <div className="mb-2 flex justify-between text-[11px] text-muted-foreground">
+      <div className="mb-2 flex justify-between text-ui-sm text-muted-foreground">
         <span>Faster</span>
         <span>Smarter</span>
       </div>
@@ -139,7 +139,7 @@ export function ModelEffortSlider({
           })}
 
           <div
-            className="pointer-events-none absolute top-1/2 z-[2] h-5 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[oklch(0.88_0.02_85)] shadow-md ring-1 ring-black/15"
+            className="pointer-events-none absolute top-1/2 z-[2] h-5 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary shadow-md ring-1 ring-black/15"
             style={{ left: `${thumbPercent}%` }}
             aria-hidden
           />

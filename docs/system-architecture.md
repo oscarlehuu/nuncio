@@ -336,13 +336,18 @@ apps/server/src/hub/
 - **Auto-discovery.** `HubRegistryService` lists same-account, online tailnet peers (from
   `TailscaleService.status`) that answer `GET /api/health`, plus self; cached ~15s. This
   registry is the sole source of proxy targets. Machine id = MagicDNS first label.
-- **Hub→machine auth = tailnet identity.** The hub dials the target over its MagicDNS name,
-  so the target sees the hub's tailnet address and trusts it via whois (same-account). No
-  token flows between hub and machine, though the client's cookie/Authorization is forwarded.
+- **Hub→machine auth = tailnet identity, client auth at the hub edge.** The hub dials the
+  target over its MagicDNS name, so the target sees the hub's tailnet address and trusts it
+  via whois (same-account). Because of that trust, the hub itself authorizes every proxied
+  request and WS upgrade (same loopback/token/whois rule as `/api`; `isAuthorizedHubRequest`
+  in `hub.proxy.ts`) before relaying — otherwise an unauthenticated client could reach any
+  machine through the hub. Target paths that are `@Public` on the machine (`/api/auth/login`,
+  `/api/health`, `/api/webhooks/*`) pass the edge without credentials.
 - **Streaming.** `configureHubProxy` reads the upstream `fetch` body with a reader and
   `res.write`s chunks as they arrive — SSE must not be buffered. `attachHubWebSocketProxy`
-  relays terminal frames verbatim both ways (buffering client frames until the upstream WS
-  opens). Both run before static serving / the local terminal WS handler and ignore non-hub
+  relays terminal AND session-relay frames (`/api/terminal`, `/api/sessions/ws` — see
+  docs/ws-relay-contract.md) verbatim both ways (buffering client frames until the upstream
+  WS opens). Both run before static serving / the local WS handlers and ignore non-hub
   paths, so the hub is also a normal nuncio for its own machine at the root.
 - **Frontend base path.** `apps/web/src/lib/api-base.ts`: `resolveBasePath(location.pathname)`
   yields `/m/<machine>` (or `''` when served directly). `installApiBaseFetch` wraps `fetch`

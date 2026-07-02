@@ -3,6 +3,40 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { parseHubPath, resolveMachineTarget } from './hub-routing';
 import { HubService } from './hub.service';
 import { HubRegistryService } from './hub-registry.service';
+import type { TokenValidator } from '../auth/auth-request';
+import { isAuthorizedUpgrade, type RemoteTrust } from '../auth/upgrade-auth';
+
+/**
+ * Target paths a client may reach through the hub without credentials —
+ * mirrors the target's own @Public routes (token exchange, health, HMAC-signed
+ * webhooks). Everything else must be authorized AT THE HUB EDGE: the target
+ * trusts the hub by whois identity, so an unauthenticated relay would bypass
+ * the target's token check entirely.
+ */
+export function isPublicHubTargetPath(targetPath: string): boolean {
+  const pathOnly = targetPath.split('?')[0];
+  return (
+    pathOnly === '/api/auth/login' ||
+    pathOnly === '/api/health' ||
+    pathOnly.startsWith('/api/webhooks/')
+  );
+}
+
+export function isAuthorizedHubRequest(
+  req: { headers?: Record<string, string | string[] | undefined>; socket?: { remoteAddress?: string } },
+  targetPath: string,
+  authTokens?: TokenValidator,
+  trust?: RemoteTrust,
+): Promise<boolean> {
+  if (isPublicHubTargetPath(targetPath)) {
+    return Promise.resolve(true);
+  }
+  return isAuthorizedUpgrade(
+    { headers: req.headers, socket: { remoteAddress: req.socket?.remoteAddress } },
+    authTokens,
+    trust,
+  );
+}
 
 // Hop-by-hop headers must not be forwarded (fetch manages framing itself).
 const HOP_BY_HOP = new Set([
@@ -61,6 +95,8 @@ export function configureHubProxy(
   app: NestExpressApplication,
   hub: HubService,
   registry: HubRegistryService,
+  authTokens?: TokenValidator,
+  trust?: RemoteTrust,
 ): void {
   app.use(async (req: Request, res: Response, next: NextFunction) => {
     if (!hub.enabled()) return next();
@@ -71,6 +107,11 @@ export function configureHubProxy(
     // (the shell boots, computes its base path, and calls /m/<machine>/api/*).
     if (parsed.targetPath !== '/api' && !parsed.targetPath.startsWith('/api/')) {
       return next();
+    }
+
+    if (!(await isAuthorizedHubRequest(req, parsed.targetPath, authTokens, trust))) {
+      res.status(401).json({ message: 'Unauthorized' });
+      return;
     }
 
     let target: string | null;

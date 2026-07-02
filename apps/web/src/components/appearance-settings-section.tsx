@@ -32,29 +32,23 @@ export function AppearanceSettingsSection() {
   return (
     <section className="mt-4 first:mt-0">
       <div className="flex items-center justify-between mb-2">
-        <h2 className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">
-          Appearance
-        </h2>
+        <h2 className="text-ui-lg font-medium text-muted-foreground">Appearance</h2>
         <button
           type="button"
           onClick={resetToDefaults}
-          className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+          className="text-ui-sm text-muted-foreground hover:text-foreground transition-colors"
         >
           Reset to defaults
         </button>
       </div>
-      <div className="border border-border rounded-lg overflow-hidden bg-card px-4 divide-y divide-border/60">
+      <div className="border border-border rounded-xl overflow-hidden bg-card px-4 divide-y divide-border/60">
         {/* Theme */}
         <div className="flex items-center justify-between py-3 gap-3">
           <div className="flex flex-col">
-            <span className="text-[13.5px] font-medium text-foreground">Theme</span>
-            <span className="text-[12px] text-muted-foreground">Light, dark, or match your system</span>
+            <span className="text-ui-lg font-medium text-foreground">Theme</span>
+            <span className="text-ui text-muted-foreground">Light, dark, or match your system</span>
           </div>
-          <div
-            role="group"
-            aria-label="Theme"
-            className="flex items-center gap-1 rounded-md bg-muted/40 p-0.5"
-          >
+          <div role="group" aria-label="Theme" className="flex items-center gap-0.5">
             {THEME_OPTIONS.map((opt) => (
               <button
                 key={opt.value}
@@ -62,9 +56,9 @@ export function AppearanceSettingsSection() {
                 onClick={() => setTheme(opt.value)}
                 aria-pressed={theme === opt.value}
                 className={cn(
-                  'rounded-[5px] px-2.5 py-1 text-[12px] font-medium transition-colors',
+                  'rounded-md px-2.5 py-1 text-ui font-medium transition-colors',
                   theme === opt.value
-                    ? 'bg-background text-foreground shadow-sm'
+                    ? 'bg-secondary text-foreground'
                     : 'text-muted-foreground hover:text-foreground',
                 )}
               >
@@ -78,10 +72,10 @@ export function AppearanceSettingsSection() {
         <div className="py-3">
           <div className="flex items-center justify-between gap-3 mb-2">
             <div className="flex flex-col">
-              <span className="text-[13.5px] font-medium text-foreground">Chat font size</span>
-              <span className="text-[12px] text-muted-foreground">Scales chat text; code blocks stay fixed</span>
+              <span className="text-ui-lg font-medium text-foreground">Chat font size</span>
+              <span className="text-ui text-muted-foreground">Scales chat text; code blocks stay fixed</span>
             </div>
-            <span className="text-[12px] tabular-nums text-muted-foreground">
+            <span className="text-ui tabular-nums text-muted-foreground">
               {Math.round((fontScale / 1) * 100)}%
             </span>
           </div>
@@ -107,14 +101,10 @@ export function AppearanceSettingsSection() {
         {/* Density */}
         <div className="flex items-center justify-between py-3 gap-3">
           <div className="flex flex-col">
-            <span className="text-[13.5px] font-medium text-foreground">Density</span>
-            <span className="text-[12px] text-muted-foreground">Vertical spacing between messages</span>
+            <span className="text-ui-lg font-medium text-foreground">Density</span>
+            <span className="text-ui text-muted-foreground">Vertical spacing between messages</span>
           </div>
-          <div
-            role="group"
-            aria-label="Density"
-            className="flex items-center gap-1 rounded-md bg-muted/40 p-0.5"
-          >
+          <div role="group" aria-label="Density" className="flex items-center gap-0.5">
             {DENSITY_OPTIONS.map((opt) => (
               <Button
                 key={opt.value}
@@ -124,9 +114,9 @@ export function AppearanceSettingsSection() {
                 onClick={() => setDensity(opt.value)}
                 aria-pressed={density === opt.value}
                 className={cn(
-                  'h-auto rounded-[5px] px-2.5 py-1 text-[12px] font-medium',
+                  'h-auto rounded-md px-2.5 py-1 text-ui font-medium',
                   density === opt.value
-                    ? 'bg-background text-foreground shadow-sm hover:bg-background'
+                    ? 'bg-secondary text-foreground hover:bg-secondary'
                     : 'text-muted-foreground hover:text-foreground',
                 )}
               >

@@ -51,6 +51,8 @@ interface GridViewProps {
   ) => Promise<Session | null>;
   steering?: boolean;
   lifecycleBusy?: boolean;
+  /** True when the unpinned sidebar hover rail overlays the content's left edge. */
+  railOverlay?: boolean;
 }
 
 export function GridView(props: GridViewProps) {
@@ -197,7 +199,13 @@ export function GridView(props: GridViewProps) {
       </div>
 
       <div className="hidden min-h-0 flex-1 flex-col md:flex">
-        <header className="flex items-center gap-3 border-b border-border px-4 py-2.5 shrink-0">
+        <header
+          className={cn(
+            'flex items-center gap-3 border-b border-border px-4 py-2.5 shrink-0',
+            // Clear the fixed hover rail; the heading was clipped under the hamburger.
+            props.railOverlay && 'pl-16',
+          )}
+        >
           <div>
             <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
               Workbench
@@ -271,7 +279,7 @@ export function GridView(props: GridViewProps) {
                   focused={focused}
                   onFocus={() => setFocusedSlot(index)}
                   onMaximize={() => setMaximizedSlot(index)}
-                  onSteer={focused ? (msg) => props.onSteerSession(session.id, msg) : undefined}
+                  onSteer={(msg) => props.onSteerSession(session.id, msg)}
                   steering={props.steering}
                 />
               );

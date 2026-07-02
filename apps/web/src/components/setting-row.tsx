@@ -3,6 +3,7 @@ import { Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import type { Setting } from '../lib/settings-api';
 
@@ -50,25 +51,33 @@ export function SettingRow({ setting, onUpdate, onClear }: SettingRowProps) {
     }
   };
 
+  const isBooleanToggle = !setting.readOnly && setting.type === 'boolean';
+
   return (
     <div className="flex flex-col gap-1.5 py-3.5 border-b border-border last:border-0">
       <div className="flex items-center gap-2">
-        <span className="text-[13.5px] font-medium">{setting.label}</span>
+        <span className="text-ui-lg font-medium">{setting.label}</span>
         {setting.source && (
-          <Badge variant="outline" className="text-[10px] font-mono px-1.5 py-0 h-[18px]">
+          <Badge variant="outline" className="text-ui-xs font-mono px-1.5 py-0 h-[18px]">
             {setting.source}
           </Badge>
         )}
-        {saving && <span className="text-[11px] text-muted-foreground">saving…</span>}
+        {saving && <span className="text-ui-sm text-muted-foreground">saving…</span>}
+        {isBooleanToggle && (
+          <Switch
+            checked={isOn}
+            onCheckedChange={() => void handleToggle()}
+            disabled={saving}
+            aria-label={setting.label}
+            className="ml-auto"
+          />
+        )}
       </div>
-      <p className="text-[12px] text-muted-foreground leading-snug">{setting.description}</p>
-      <div className="text-[12.5px] font-mono text-foreground/80 mt-0.5">
-        {setting.hasValue ? setting.value : <span className="text-muted-foreground italic">Not set</span>}
-      </div>
-      {!setting.readOnly && setting.type === 'boolean' && (
-        <Button size="sm" variant={isOn ? 'secondary' : 'outline'} onClick={handleToggle} disabled={saving} className="mt-1 w-fit">
-          {isOn ? 'On' : 'Off'}
-        </Button>
+      <p className="text-ui text-muted-foreground leading-snug">{setting.description}</p>
+      {!isBooleanToggle && (
+        <div className="text-ui font-mono text-foreground/80 mt-0.5">
+          {setting.hasValue ? setting.value : <span className="text-muted-foreground italic">Not set</span>}
+        </div>
       )}
       {!setting.readOnly && setting.type !== 'boolean' && (
         <div className="flex items-center gap-2 mt-1.5">
@@ -76,7 +85,7 @@ export function SettingRow({ setting, onUpdate, onClear }: SettingRowProps) {
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder="Enter new value"
-            className="h-8 text-[12.5px] font-mono"
+            className="h-8 text-ui font-mono"
             onKeyDown={(e) => { if (e.key === 'Enter') void handleSave(); }}
           />
           <Button size="sm" onClick={handleSave} disabled={!draft.trim() || saving} className={cn('h-8')}>
