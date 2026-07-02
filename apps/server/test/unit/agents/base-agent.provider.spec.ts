@@ -71,6 +71,7 @@ describe('BaseAgentProvider error path', () => {
       modelSwitch: 'none',
       effortSwitch: 'none',
       images: false,
+      steerWhileRunning: false,
     });
   });
 

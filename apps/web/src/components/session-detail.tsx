@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Archive, ArrowRightLeft, Check, Ellipsis, FolderGit2, FolderTree, GitBranch, Globe2, PanelRightClose, PanelRightOpen, Pause, Pencil, RotateCcw, Send, Square, SquareTerminal, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import type { ProviderRequestDecision, Session, SessionEvent } from '../lib/api';
 import { InteractionApiError, interactionErrorMessage, respondInteraction } from '../lib/api';
 import { derivePendingUserInput } from '../lib/derive-pending-user-input';
+import { isComposingEvent } from '../lib/keyboard';
+import { useStickToBottom } from '../lib/use-stick-to-bottom';
 import { deriveVerifyStatus } from '../lib/derive-verify-status';
 import { VerifyChip } from './verify-chip';
 import { projectDisplayName } from '../lib/projects';
@@ -56,6 +58,8 @@ interface SessionDetailProps {
   providers?: ModelProvider[];
   onSteer: (message: string) => Promise<void>;
   onPause: () => Promise<void>;
+  /** Abort the live run (providers with interrupt support); falls back to pause. */
+  onInterrupt?: () => Promise<void>;
   onArchive: () => Promise<void>;
   /** Restore an archived session back to IDLE. Only invoked when status === 'ARCHIVED'. */
   onRestore?: (id: string) => void | Promise<void>;
@@ -91,6 +95,7 @@ export function SessionDetail({
   providers,
   onSteer,
   onPause,
+  onInterrupt,
   onArchive,
   onRestore,
   onDelete,
@@ -145,7 +150,6 @@ export function SessionDetail({
     saveInspectorPreference({ version: 1, open: panelOpen, tool: activeTool, scmSegment });
   }, [panelOpen, activeTool, scmSegment]);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const pendingScrollToBottomRef = useRef(true);
   const streaming = session.status === 'RUNNING';
   const isRunning = session.status === 'RUNNING';
   const isArchived = session.status === 'ARCHIVED';
@@ -160,13 +164,13 @@ export function SessionDetail({
   const providerLabel = session.provider === 'cursor' ? 'Cursor' : session.provider === 'pi' ? 'Pi' : session.provider;
   const showApprovalMode =
     !!onApprovalModeChange && isCodexApprovalEngine(session.provider, session.model);
+  const steerWhileRunning = session.supportsSteerWhileRunning ?? false;
   const steerDisabled =
-    session.status === 'RUNNING' ||
     session.status === 'ARCHIVED' ||
     steering ||
     lifecycleBusy ||
     hasPendingUserInput;
-  const showHeaderPause = !isRunning && session.status !== 'PAUSED' && !isArchived;
+  const showHeaderPause = session.status !== 'PAUSED' && !isArchived;
   const canArchive = !isArchived;
   const canRestore = isArchived && !!onRestore;
   const canDelete = isArchived && !!onDelete;
@@ -189,21 +193,7 @@ export function SessionDetail({
   const branchName = session.branch;
   const contextUsage = useContextUsage(events, entry?.contextWindow);
 
-  useEffect(() => {
-    pendingScrollToBottomRef.current = true;
-  }, [session.id]);
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    if (pendingScrollToBottomRef.current || nearBottom) {
-      el.scrollTop = el.scrollHeight;
-      if (el.scrollHeight > el.clientHeight) {
-        pendingScrollToBottomRef.current = false;
-      }
-    }
-  }, [events.length, session.id]);
+  useStickToBottom(scrollRef, events.length, { resetKey: session.id });
 
   const handleSteer = async () => {
     const text = steerText.trim();
@@ -231,18 +221,21 @@ export function SessionDetail({
     setTitleDraft('');
   };
 
-  const handleRespondProviderRequest = async (
-    requestId: string,
-    decision: ProviderRequestDecision,
-  ) => {
-    if (!onRespondProviderRequest || respondingRequestId) return;
-    setRespondingRequestId(requestId);
-    try {
-      await onRespondProviderRequest(requestId, decision);
-    } finally {
-      setRespondingRequestId(null);
-    }
-  };
+  const respondingRef = useRef<string | null>(null);
+  const handleRespondProviderRequest = useCallback(
+    async (requestId: string, decision: ProviderRequestDecision) => {
+      if (!onRespondProviderRequest || respondingRef.current) return;
+      respondingRef.current = requestId;
+      setRespondingRequestId(requestId);
+      try {
+        await onRespondProviderRequest(requestId, decision);
+      } finally {
+        respondingRef.current = null;
+        setRespondingRequestId(null);
+      }
+    },
+    [onRespondProviderRequest],
+  );
 
   return (
     <section className="flex-1 flex min-h-0">
@@ -462,7 +455,7 @@ export function SessionDetail({
             value={steerText}
             onChange={(e) => setSteerText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
+              if (e.key === 'Enter' && !e.shiftKey && !isComposingEvent(e)) {
                 e.preventDefault();
                 void handleSteer();
               }
@@ -476,7 +469,9 @@ export function SessionDetail({
                   : machineActive
                     ? 'Cursor is running this chat on your Mac — wait for it to finish…'
                     : session.status === 'RUNNING'
-                      ? 'Agent is running — wait for idle or stop first…'
+                      ? steerWhileRunning
+                        ? 'Steer the live run — delivered before the next model call…'
+                        : 'Agent is busy — your message will be queued…'
                       : 'Steer the agent — add context, change direction, ask a question…'
             }
             className="min-h-[44px] resize-none border-0 shadow-none bg-transparent focus-visible:ring-0 focus-visible:border-0 text-body"
@@ -497,18 +492,22 @@ export function SessionDetail({
                 />
               ) : null}
             </div>
-            {isRunning ? (
-              <Button
-                size="icon"
-                variant="destructive"
-                aria-label="Stop session"
-                onClick={() => void onPause()}
-                disabled={lifecycleBusy}
-                className="shrink-0 rounded-full"
-              >
-                <Square className="size-3.5" />
-              </Button>
-            ) : (
+            <div className="flex items-center gap-1.5 shrink-0">
+              {isRunning && (
+                <Button
+                  size="icon"
+                  variant="destructive"
+                  aria-label="Stop session"
+                  onClick={() => {
+                    if (session.supportsInterrupt && onInterrupt) void onInterrupt();
+                    else void onPause();
+                  }}
+                  disabled={lifecycleBusy}
+                  className="shrink-0 rounded-full"
+                >
+                  <Square className="size-3.5" />
+                </Button>
+              )}
               <Button
                 size="icon"
                 aria-label="Send"
@@ -518,7 +517,7 @@ export function SessionDetail({
               >
                 <Send className="size-4" />
               </Button>
-            )}
+            </div>
           </div>
           <div
             data-testid="session-footer"

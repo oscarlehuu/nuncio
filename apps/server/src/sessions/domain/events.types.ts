@@ -19,7 +19,9 @@ export type SessionEventType =
   | 'runtime_restarted'
   | 'verify_start'
   | 'verify_result'
-  | 'steer_message';
+  | 'steer_message'
+  | 'steer_queued'
+  | 'interrupted';
 
 export type UserInputResolvedBy = 'user' | 'timeout' | 'skip' | 'provider';
 

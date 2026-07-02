@@ -13,10 +13,11 @@ import {
 } from './interactive-tool-input';
 
 export type TranscriptBlock =
-  | { kind: 'user'; text: string }
-  | { kind: 'assistant'; text: string; streaming?: boolean }
+  | { kind: 'user'; key: string; text: string; queued?: boolean }
+  | { kind: 'assistant'; key: string; text: string; streaming?: boolean }
   | {
       kind: 'tool';
+      key: string;
       callId: string;
       tool: string;
       status: 'running' | 'done' | 'error';
@@ -26,6 +27,7 @@ export type TranscriptBlock =
     }
   | {
       kind: 'thinking';
+      key: string;
       thinkingId: string;
       text: string;
       streaming?: boolean;
@@ -33,12 +35,14 @@ export type TranscriptBlock =
     }
   | {
       kind: 'cursor-context';
+      key: string;
       summary: string;
       instruction: string;
       sections: CursorContextSection[];
     }
   | {
       kind: 'user_input';
+      key: string;
       requestId: string;
       title?: string;
       questions: UserInputQuestion[];
@@ -46,6 +50,7 @@ export type TranscriptBlock =
     }
   | {
       kind: 'provider_request';
+      key: string;
       requestId: string;
       provider: string;
       method: string;
@@ -53,7 +58,8 @@ export type TranscriptBlock =
       status: 'pending' | 'resolved';
       decision?: ProviderRequestDecision;
     }
-  | { kind: 'error'; message: string };
+  | { kind: 'interrupted'; key: string }
+  | { kind: 'error'; key: string; message: string };
 
 interface OpenTool {
   callId: string;
@@ -174,6 +180,13 @@ export interface ParserState {
   providerRequests: Map<string, Extract<TranscriptBlock, { kind: 'provider_request' }>>;
   legacyStack: string[];
   legacySeq: number;
+  /** seq of the event currently being stepped — key source for point blocks. */
+  lastSeq: number;
+  /** seq of the first delta of the open assistant buffer — keeps the block key
+   * stable from the first streamed token through the final flush. */
+  assistantStartSeq: number | null;
+  /** Same for the open thinking buffer. */
+  thinkingStartSeq: number | null;
 }
 
 export function createParserState(): ParserState {
@@ -190,6 +203,9 @@ export function createParserState(): ParserState {
     providerRequests: new Map(),
     legacyStack: [],
     legacySeq: 0,
+    lastSeq: 0,
+    assistantStartSeq: null,
+    thinkingStartSeq: null,
   };
 }
 
@@ -208,6 +224,7 @@ function flushAssistant(state: ParserState, streaming = false) {
   if ((response || streaming) && !repeatsLastAssistant) {
     state.out.push({
       kind: 'assistant',
+      key: `assistant-${state.assistantStartSeq ?? state.lastSeq}`,
       text: response,
       ...(streaming ? { streaming: true } : {}),
     });
@@ -215,6 +232,7 @@ function flushAssistant(state: ParserState, streaming = false) {
   if (thinking) {
     state.out.push({
       kind: 'thinking',
+      key: `imported-thinking-${state.lastSeq}`,
       thinkingId: 'imported-thinking',
       text: thinking,
       collapsedDefault: true,
@@ -222,12 +240,14 @@ function flushAssistant(state: ParserState, streaming = false) {
   }
   state.assistantBuf = '';
   state.assistantBufFromDelta = false;
+  if (!streaming) state.assistantStartSeq = null;
 }
 
 function flushThinking(state: ParserState, streaming = false) {
   if (!state.thinkingOpen && !state.thinkingBuf.trim()) return;
   state.out.push({
     kind: 'thinking',
+    key: `thinking-${state.thinkingStartSeq ?? state.lastSeq}`,
     thinkingId: state.thinkingId || 'thinking',
     text: state.thinkingBuf,
     collapsedDefault: true,
@@ -236,6 +256,7 @@ function flushThinking(state: ParserState, streaming = false) {
   state.thinkingBuf = '';
   state.thinkingOpen = false;
   state.thinkingId = '';
+  if (!streaming) state.thinkingStartSeq = null;
 }
 
 function resolveCallId(
@@ -251,6 +272,7 @@ function resolveCallId(
 function pushOpenToolBlock(state: ParserState, entry: OpenTool) {
   state.out.push({
     kind: 'tool',
+    key: `tool-${entry.callId}`,
     callId: entry.callId,
     tool: entry.tool,
     status: entry.status,
@@ -268,6 +290,7 @@ function pushOpenToolBlock(state: ParserState, entry: OpenTool) {
  */
 export function stepEvent(state: ParserState, event: SessionEvent): void {
   const payload = event.payload ?? {};
+  state.lastSeq = event.seq;
 
   if (event.type === 'user_message' || event.type === 'steer_message') {
     flushAssistant(state);
@@ -277,15 +300,42 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
       const parsed = parseCursorContextMessage(rawText);
       state.out.push({
         kind: 'cursor-context',
+        key: `ctx-${event.seq}`,
         summary: parsed.summary,
         instruction: parsed.instruction,
         sections: parsed.sections,
       });
     } else {
-      state.out.push({ kind: 'user', text: rawText });
+      // A queued steer that is now being delivered replaces its placeholder.
+      for (let i = state.out.length - 1; i >= 0; i--) {
+        const block = state.out[i];
+        if (block.kind === 'user' && block.queued && block.text === rawText) {
+          state.out.splice(i, 1);
+          break;
+        }
+      }
+      state.out.push({ kind: 'user', key: `user-${event.seq}`, text: rawText });
     }
     state.currentTurnHasThinking = false;
     state.assistantBufFromDelta = false;
+    return;
+  }
+
+  if (event.type === 'steer_queued') {
+    // Arrives mid-run: do NOT flush streaming buffers — the run keeps going.
+    state.out.push({
+      kind: 'user',
+      key: `queued-${event.seq}`,
+      text: String(payload.text ?? ''),
+      queued: true,
+    });
+    return;
+  }
+
+  if (event.type === 'interrupted') {
+    flushAssistant(state);
+    flushThinking(state);
+    state.out.push({ kind: 'interrupted', key: `interrupted-${event.seq}` });
     return;
   }
 
@@ -295,6 +345,7 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
     state.currentTurnHasThinking = true;
     state.thinkingId = String(payload.thinkingId ?? `thinking-${event.seq}`);
     state.thinkingBuf = '';
+    state.thinkingStartSeq = event.seq;
     return;
   }
 
@@ -302,12 +353,14 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
     state.thinkingOpen = true;
     state.currentTurnHasThinking = true;
     if (!state.thinkingId) state.thinkingId = String(payload.thinkingId ?? `thinking-${event.seq}`);
+    if (state.thinkingStartSeq === null) state.thinkingStartSeq = event.seq;
     state.thinkingBuf += String(payload.delta ?? '');
     return;
   }
 
   if (event.type === 'thinking_message') {
     state.currentTurnHasThinking = true;
+    if (state.thinkingStartSeq === null) state.thinkingStartSeq = event.seq;
     state.thinkingBuf = String(payload.text ?? state.thinkingBuf);
     flushThinking(state);
     return;
@@ -323,6 +376,7 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
     if (requestId && questions.length > 0) {
       state.out.push({
         kind: 'user_input',
+        key: `input-${requestId}`,
         requestId,
         questions,
         ...(typeof payload.title === 'string' ? { title: payload.title } : {}),
@@ -368,6 +422,7 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
       });
       state.out.push({
         kind: 'user_input',
+        key: `input-${callId}`,
         requestId: callId,
         questions: parsed.questions,
         ...(parsed.title ? { title: parsed.title } : {}),
@@ -412,6 +467,7 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
       } else if (pending) {
         state.out.push({
           kind: 'user_input',
+          key: `input-${requestId}`,
           requestId,
           questions: pending.questions,
           resolvedBy,
@@ -428,6 +484,7 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
       if (idx >= 0) {
         state.out[idx] = {
           kind: 'tool',
+          key: `tool-${entry.callId}`,
           callId: entry.callId,
           tool: entry.tool,
           status: entry.status,
@@ -440,9 +497,11 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
       const stackIdx = state.legacyStack.indexOf(entry.callId);
       if (stackIdx >= 0) state.legacyStack.splice(stackIdx, 1);
     } else {
+      const orphanCallId = resolveCallId(state, payload, tool);
       state.out.push({
         kind: 'tool',
-        callId: resolveCallId(state, payload, tool),
+        key: `tool-${orphanCallId}`,
+        callId: orphanCallId,
         tool,
         status: payload.isError ? 'error' : 'done',
         summary: summarizeToolCall(tool, payload.input),
@@ -454,11 +513,13 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
 
   if (event.type === 'assistant_delta') {
     state.assistantBufFromDelta = true;
+    if (state.assistantStartSeq === null) state.assistantStartSeq = event.seq;
     state.assistantBuf += String(payload.delta ?? '');
     return;
   }
 
   if (event.type === 'assistant_message') {
+    if (state.assistantStartSeq === null) state.assistantStartSeq = event.seq;
     state.assistantBuf = String(payload.text ?? state.assistantBuf);
     flushAssistant(state);
     return;
@@ -485,6 +546,7 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
     } else if (requestId) {
       state.out.push({
         kind: 'provider_request',
+        key: `pr-${requestId}`,
         requestId,
         provider: payloadString(payload, 'provider') ?? 'provider',
         method: payloadString(payload, 'method') ?? 'request',
@@ -498,7 +560,7 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
   if (event.type === 'error') {
     flushAssistant(state);
     flushThinking(state);
-    state.out.push({ kind: 'error', message: String(payload.message ?? 'unknown') });
+    state.out.push({ kind: 'error', key: `error-${event.seq}`, message: String(payload.message ?? 'unknown') });
   }
 }
 
@@ -554,6 +616,7 @@ function providerRequestFromPayload(
   if (!requestId) return null;
   return {
     kind: 'provider_request',
+    key: `pr-${requestId}`,
     requestId,
     provider: payloadString(payload, 'provider') ?? 'provider',
     method: payloadString(payload, 'method') ?? 'request',

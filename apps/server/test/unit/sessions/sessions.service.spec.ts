@@ -114,9 +114,11 @@ describe('SessionsService lifecycle (phase 3)', () => {
     });
   });
 
-  it('rejects steer when session is RUNNING', async () => {
+  it('queues a steer while the session is RUNNING instead of rejecting', async () => {
     const id = seedSession('RUNNING');
-    await expect(service.steer(id, 'Not yet')).rejects.toBeInstanceOf(BadRequestException);
+    const result = await service.steer(id, 'Not yet');
+    expect(result.status).toBe('RUNNING');
+    expect(events.list(id).some((e) => e.type === 'steer_queued')).toBe(true);
   });
 
   it('rejects steer when session is ARCHIVED', async () => {
@@ -259,7 +261,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
       return {
         id: 'stub',
         name: 'Stub',
-        capabilities: { interrupt: false, modelSwitch: 'none', effortSwitch: 'none', images: false },
+        capabilities: { interrupt: false, modelSwitch: 'none', effortSwitch: 'none', images: false, steerWhileRunning: false },
         isAvailable: async () => true,
         listModels: async () => [],
         run: async () => undefined,
@@ -290,7 +292,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
       registry.resolveForSession = (() =>
         stubProvider({
           id: 'capable',
-          capabilities: { interrupt: true, modelSwitch: 'none', effortSwitch: 'none', images: false },
+          capabilities: { interrupt: true, modelSwitch: 'none', effortSwitch: 'none', images: false, steerWhileRunning: false },
           interrupt,
           dispose,
         })) as AgentRegistry['resolveForSession'];
@@ -317,6 +319,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
             modelSwitch: 'in-session',
             effortSwitch: 'in-session',
             images: false,
+            steerWhileRunning: false,
           },
           setModel,
         })) as AgentRegistry['resolveForSession'];
@@ -346,6 +349,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
             modelSwitch: 'in-session',
             effortSwitch: 'in-session',
             images: false,
+            steerWhileRunning: false,
           },
           setModel,
         })) as AgentRegistry['resolveForSession'];
