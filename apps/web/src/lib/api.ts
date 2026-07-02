@@ -81,6 +81,8 @@ export interface Session {
   pullRequestState?: string | null;
   forgeStatus?: string;
   supportsInteraction: boolean;
+  supportsInterrupt?: boolean;
+  supportsSteerWhileRunning?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -272,6 +274,12 @@ export async function pauseSession(id: string): Promise<Session> {
   const res = await fetch(`/api/sessions/${id}/pause`, { method: 'POST' });
   if (!res.ok) throw new Error('Failed to pause session');
   return res.json();
+}
+
+/** Abort the live run in place — session lands IDLE with partial output kept. */
+export async function interruptSession(id: string): Promise<void> {
+  const res = await fetch(`/api/sessions/${id}/interrupt`, { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to interrupt session');
 }
 
 export async function archiveSession(id: string): Promise<Session> {

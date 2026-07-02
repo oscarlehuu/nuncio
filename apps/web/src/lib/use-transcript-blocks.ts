@@ -45,10 +45,13 @@ function cloneParserState(state: ParserState): ParserState {
     legacySeq: state.legacySeq,
     currentTurnHasThinking: state.currentTurnHasThinking,
     assistantBufFromDelta: state.assistantBufFromDelta,
+    lastSeq: state.lastSeq,
+    assistantStartSeq: state.assistantStartSeq,
+    thinkingStartSeq: state.thinkingStartSeq,
   };
 }
 
-class IncrementalTranscriptBuilder {
+export class IncrementalTranscriptBuilder {
   /** Parser state folded up to (but not including) events[checkpointIndex]. */
   private checkpointState: ParserState = createParserState();
   /** Number of events folded into checkpointState. Always a safe boundary. */

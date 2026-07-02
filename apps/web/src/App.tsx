@@ -10,6 +10,7 @@ import {
   fetchModels,
   fetchSession,
   fetchSessions,
+  interruptSession,
   pauseSession,
   renameSession,
   respondProviderRequest,
@@ -313,6 +314,19 @@ export default function App() {
     }
   };
 
+  const handleInterrupt = async () => {
+    if (!activeId) return;
+    setLifecycleBusy(true);
+    try {
+      await interruptSession(activeId);
+      await refresh();
+    } catch {
+      toast.error('Failed to stop the run');
+    } finally {
+      setLifecycleBusy(false);
+    }
+  };
+
   const handleArchiveById = async (id: string) => {
     setLifecycleBusy(true);
     try {
@@ -574,6 +588,7 @@ export default function App() {
                 onRespondProviderRequest={handleRespondProviderRequest}
                 onSteer={handleSteer}
                 onPause={handlePause}
+                onInterrupt={handleInterrupt}
                 onArchive={handleArchive}
                 onRestore={handleRestore}
                 onDelete={handleDelete}
@@ -678,6 +693,7 @@ interface SessionRouteProps {
   ) => void | Promise<void>;
   onSteer: (message: string, options?: { forceResume?: boolean }) => Promise<void>;
   onPause: () => Promise<void>;
+  onInterrupt: () => Promise<void>;
   onArchive: () => Promise<void>;
   onRestore: (id: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
@@ -700,6 +716,7 @@ function SessionRoute({
   onRespondProviderRequest,
   onSteer,
   onPause,
+  onInterrupt,
   onArchive,
   onRestore,
   onDelete,
@@ -773,6 +790,7 @@ function SessionRoute({
       providers={providers}
       onSteer={onSteer}
       onPause={onPause}
+      onInterrupt={onInterrupt}
       onArchive={onArchive}
       onRestore={onRestore}
       onDelete={onDelete}
