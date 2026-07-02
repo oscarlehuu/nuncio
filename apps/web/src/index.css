@@ -18,6 +18,7 @@
   --color-success: #7fb98c;
   --color-error: #c97474;
   --color-info: #74a5c9;
+  --color-warning: #d6a25c;
 }
 
 @theme inline {

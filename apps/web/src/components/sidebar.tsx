@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronRight,
   FolderGit2,
+  LayoutGrid,
   MessageSquare,
   Plus,
   RotateCcw,
@@ -45,6 +46,8 @@ interface SidebarProps {
   activeId: string | null;
   onSelect: (id: string | null) => void;
   onNew: () => void;
+  /** Desktop-only multi-session workbench. */
+  onGrid?: () => void;
   onSettings?: () => void;
   onChangelog?: () => void;
   onArchive?: (id: string) => void | Promise<void>;
@@ -60,6 +63,7 @@ export function Sidebar({
   activeId,
   onSelect,
   onNew,
+  onGrid,
   onSettings,
   onChangelog,
   onArchive,
@@ -132,6 +136,16 @@ export function Sidebar({
             <Plus data-icon="inline-start" />
             <span>New Agent</span>
           </Button>
+          {onGrid ? (
+            <Button
+              variant="ghost"
+              onClick={onGrid}
+              className="hidden w-full justify-start text-muted-foreground hover:text-sidebar-foreground md:flex"
+            >
+              <LayoutGrid data-icon="inline-start" />
+              <span>Grid</span>
+            </Button>
+          ) : null}
         </nav>
 
         <div
