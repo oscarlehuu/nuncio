@@ -65,12 +65,14 @@ function subscribeSince(socket: MockWebSocket): number {
 
 function Harness({
   sid,
+  tail,
   onReady,
 }: {
   sid: string | null;
+  tail?: number;
   onReady?: (api: ReturnType<typeof useSessionStream>) => void;
 }) {
-  const stream = useSessionStream(sid);
+  const stream = useSessionStream(sid, '', tail);
   onReady?.(stream);
   return <div data-testid="count">{stream.events.length}</div>;
 }
@@ -120,6 +122,50 @@ describe('useSessionStream', () => {
     await waitFor(() => expect(getByTestId('count').textContent).toBe('0'));
     expect(fetchEvents).not.toHaveBeenCalled();
     expect(lastSocket).toBeUndefined();
+  });
+
+  it('requests only the tail window on mount when a tail depth is set', async () => {
+    vi.mocked(fetchEvents).mockResolvedValue([ev(5), ev(6)]);
+    render(<Harness sid="s1" tail={50} />);
+    await waitFor(() => expect(fetchEvents).toHaveBeenCalledWith('s1', 0, '', { tail: 50 }));
+    await waitFor(() => expect(lastSocket).toBeDefined());
+    await waitFor(() => expect(subscribeSince(lastSocket!)).toBe(6));
+  });
+
+  it('loadEarlier prepends the previous page and reports exhausted history', async () => {
+    vi.mocked(fetchEvents)
+      .mockResolvedValueOnce([ev(5), ev(6)])
+      .mockResolvedValueOnce([ev(3), ev(4)])
+      .mockResolvedValueOnce([ev(1), ev(2)]);
+    let api: ReturnType<typeof useSessionStream> | undefined;
+    const { getByTestId } = render(
+      <Harness sid="s1" tail={2} onReady={(stream) => { api = stream; }} />,
+    );
+    await waitFor(() => expect(getByTestId('count').textContent).toBe('2'));
+    expect(api!.hasEarlier).toBe(true);
+
+    await act(async () => {
+      await api!.loadEarlier();
+    });
+    expect(fetchEvents).toHaveBeenLastCalledWith('s1', 0, '', { before: 5 });
+    await waitFor(() => expect(api!.events.map((e) => e.seq)).toEqual([3, 4, 5, 6]));
+    expect(api!.hasEarlier).toBe(true);
+
+    await act(async () => {
+      await api!.loadEarlier();
+    });
+    await waitFor(() => expect(api!.events.map((e) => e.seq)).toEqual([1, 2, 3, 4, 5, 6]));
+    expect(api!.hasEarlier).toBe(false);
+  });
+
+  it('hasEarlier is false when the full history is already loaded', async () => {
+    vi.mocked(fetchEvents).mockResolvedValue([ev(1), ev(2)]);
+    let api: ReturnType<typeof useSessionStream> | undefined;
+    const { getByTestId } = render(
+      <Harness sid="s1" onReady={(stream) => { api = stream; }} />,
+    );
+    await waitFor(() => expect(getByTestId('count').textContent).toBe('2'));
+    expect(api!.hasEarlier).toBe(false);
   });
 
   it('opens the relay socket and subscribes with the since cursor', async () => {

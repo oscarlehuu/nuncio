@@ -178,7 +178,33 @@ describe('SessionsController', () => {
     const service = { get: () => null } as never;
     const controller = new SessionsController(service);
 
-    expect(() => controller.events('nope', undefined)).toThrow(NotFoundException);
+    expect(() => controller.events('nope', undefined, undefined, undefined, undefined)).toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('events forwards since, limit, tail, and before to the service', () => {
+    const getEvents = jest.fn(() => SAMPLE_EVENTS);
+    const service = { get: () => makeSession(), getEvents } as never;
+    const controller = new SessionsController(service);
+
+    controller.events('s1', '3', '50', undefined, undefined);
+    expect(getEvents).toHaveBeenCalledWith('s1', 3, { limit: 50 });
+
+    controller.events('s1', undefined, undefined, '30', undefined);
+    expect(getEvents).toHaveBeenCalledWith('s1', 0, { tail: 30 });
+
+    controller.events('s1', undefined, '20', undefined, '90');
+    expect(getEvents).toHaveBeenCalledWith('s1', 0, { limit: 20, before: 90 });
+  });
+
+  it('events ignores non-numeric limit, tail, and before', () => {
+    const getEvents = jest.fn(() => SAMPLE_EVENTS);
+    const service = { get: () => makeSession(), getEvents } as never;
+    const controller = new SessionsController(service);
+
+    controller.events('s1', undefined, 'abc', 'nan', 'huh');
+    expect(getEvents).toHaveBeenCalledWith('s1', 0, {});
   });
 
   it('restore delegates to sessions.restore', () => {

@@ -61,7 +61,7 @@ export abstract class BaseAgentProvider implements AgentProvider {
     emit?: EventEmitter,
   ): void {
     const event = this.events.append(sessionId, type, payload);
-    emit?.({ type, payload: event.payload });
+    emit?.(event);
   }
 
   private async runOrSteer(

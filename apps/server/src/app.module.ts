@@ -14,6 +14,7 @@ import { ProvisionModule } from './provision/provision.module';
 import { SessionsModule } from './sessions/sessions.module';
 import { SettingsModule } from './settings/settings.module';
 import { TailscaleModule } from './tailscale/tailscale.module';
+import { TasksModule } from './tasks/tasks.module';
 import { TerminalModule } from './terminal/terminal.module';
 import { PushModule } from './push/push.module';
 
@@ -35,6 +36,7 @@ import { PushModule } from './push/push.module';
     ProvisionModule,
     SessionsModule,
     TailscaleModule,
+    TasksModule,
     TerminalModule,
   ],
 })

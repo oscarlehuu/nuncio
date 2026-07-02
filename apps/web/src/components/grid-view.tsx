@@ -3,7 +3,7 @@ import { Minimize2, MonitorSmartphone } from 'lucide-react';
 import type { ProviderRequestDecision, Session } from '../lib/api';
 import type { ModelProvider } from '../lib/model-providers';
 import type { ModelOptionsMap } from '../lib/model-options';
-import { useSessionStream } from '../lib/use-session-stream';
+import { DETAIL_EVENT_TAIL, useSessionStream } from '../lib/use-session-stream';
 import { useActiveRun } from '../lib/use-active-run';
 import {
   fitSlots,
@@ -361,7 +361,11 @@ function MaximizedSession({
   onRestoreGrid,
 }: MaximizedSessionProps) {
   // Same stream + active-run wiring SessionRoute uses; resumes via the hook's cursor.
-  const { events, refetch } = useSessionStream(session.id);
+  const { events, refetch, loadEarlier, hasEarlier } = useSessionStream(
+    session.id,
+    '',
+    DETAIL_EVENT_TAIL,
+  );
   const machineActive = useActiveRun(session, { onTranscriptRefreshed: refetch });
 
   return (
@@ -382,6 +386,8 @@ function MaximizedSession({
         }
         session={session}
         events={events}
+        hasEarlier={hasEarlier}
+        onLoadEarlier={loadEarlier}
         providers={providers}
         onSteer={onSteer}
         onPause={onPause}

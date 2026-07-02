@@ -66,7 +66,8 @@ vi.mock('./remote-session-tile', () => ({
 }));
 
 vi.mock('../lib/use-session-stream', () => ({
-  useSessionStream: () => ({ events: [], refetch: vi.fn() }),
+  DETAIL_EVENT_TAIL: 1000,
+  useSessionStream: () => ({ events: [], refetch: vi.fn(), loadEarlier: vi.fn(), hasEarlier: false }),
 }));
 
 vi.mock('../lib/use-active-run', () => ({

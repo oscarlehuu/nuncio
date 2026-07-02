@@ -7,6 +7,9 @@ import {
   type SessionSubscription,
 } from '@nuncio/core/session-relay-client';
 
+/** Initial window for the full session view; older history pages in on demand. */
+export const DETAIL_EVENT_TAIL = 1000;
+
 /** ws(s):// URL of the session relay (page hub base, or an explicit machine base). */
 export function sessionRelayUrl(base = ''): string {
   const path = '/api/sessions/ws';
@@ -16,12 +19,24 @@ export function sessionRelayUrl(base = ''): string {
   return url.toString();
 }
 
+function mergeEvents(prev: SessionEvent[], incoming: SessionEvent[]): SessionEvent[] {
+  if (incoming.length === 0) return prev;
+  const seen = new Set(prev.map((e) => e.seq));
+  const fresh = incoming.filter((e) => !seen.has(e.seq));
+  if (fresh.length === 0) return prev;
+  return [...prev, ...fresh].sort((a, b) => a.seq - b.seq);
+}
+
 /**
  * `base` targets a specific machine's API (origin-absolute, hub mode); the
  * default empty string keeps page-relative behavior (rewritten by the page's
  * own hub base where applicable).
+ *
+ * `tail` bounds the initial load to the last N events; earlier history stays
+ * on the server until `loadEarlier` pages it in (seq 1 is always the start,
+ * so `hasEarlier` is simply "oldest loaded seq > 1").
  */
-export function useSessionStream(sessionId: string | null, base = '') {
+export function useSessionStream(sessionId: string | null, base = '', tail?: number) {
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const sinceRef = useRef(0);
   const subscriptionRef = useRef<SessionSubscription | null>(null);
@@ -30,6 +45,14 @@ export function useSessionStream(sessionId: string | null, base = '') {
   sessionIdRef.current = sessionId;
   const baseRef = useRef(base);
   baseRef.current = base;
+  const tailRef = useRef(tail);
+  tailRef.current = tail;
+  const eventsRef = useRef<SessionEvent[]>([]);
+  const loadingEarlierRef = useRef(false);
+
+  useEffect(() => {
+    eventsRef.current = events;
+  }, [events]);
 
   const onEvent = useCallback((event: SessionEvent) => {
     sinceRef.current = Math.max(sinceRef.current, event.seq);
@@ -39,6 +62,13 @@ export function useSessionStream(sessionId: string | null, base = '') {
       if (prev.some((e) => e.seq === event.seq)) return prev;
       return [...prev, event].sort((a, b) => a.seq - b.seq);
     });
+  }, []);
+
+  const fetchInitial = useCallback((id: string) => {
+    const depth = tailRef.current;
+    return depth !== undefined
+      ? fetchEvents(id, 0, baseRef.current, { tail: depth })
+      : fetchEvents(id, 0, baseRef.current);
   }, []);
 
   const connect = useCallback(() => {
@@ -55,12 +85,28 @@ export function useSessionStream(sessionId: string | null, base = '') {
 
   const refetch = useCallback(async () => {
     if (!sessionId || cancelledRef.current) return;
-    const initial = await fetchEvents(sessionId, 0, baseRef.current);
+    const initial = await fetchInitial(sessionId);
     if (cancelledRef.current) return;
     setEvents(initial);
     sinceRef.current = initial.reduce((max, e) => Math.max(max, e.seq), 0);
     connect();
-  }, [sessionId, connect]);
+  }, [sessionId, connect, fetchInitial]);
+
+  /** Page one window of history in before the oldest loaded event. */
+  const loadEarlier = useCallback(async () => {
+    const id = sessionIdRef.current;
+    if (!id || cancelledRef.current || loadingEarlierRef.current) return;
+    const oldestSeq = eventsRef.current[0]?.seq ?? 0;
+    if (oldestSeq <= 1) return;
+    loadingEarlierRef.current = true;
+    try {
+      const earlier = await fetchEvents(id, 0, baseRef.current, { before: oldestSeq });
+      if (cancelledRef.current || sessionIdRef.current !== id) return;
+      setEvents((prev) => mergeEvents(prev, earlier));
+    } finally {
+      loadingEarlierRef.current = false;
+    }
+  }, []);
 
   useEffect(() => {
     if (!sessionId) {
@@ -73,7 +119,7 @@ export function useSessionStream(sessionId: string | null, base = '') {
     cancelledRef.current = false;
     let cancelled = false;
 
-    fetchEvents(sessionId, 0, baseRef.current).then((initial) => {
+    fetchInitial(sessionId).then((initial) => {
       if (cancelled) return;
       setEvents(initial);
       sinceRef.current = initial.reduce((max, e) => Math.max(max, e.seq), 0);
@@ -94,7 +140,9 @@ export function useSessionStream(sessionId: string | null, base = '') {
       subscriptionRef.current?.close();
       subscriptionRef.current = null;
     };
-  }, [sessionId, base, connect]);
+  }, [sessionId, base, connect, fetchInitial]);
 
-  return { events, refetch };
+  const hasEarlier = (events[0]?.seq ?? 0) > 1;
+
+  return { events, refetch, loadEarlier, hasEarlier };
 }

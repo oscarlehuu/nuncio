@@ -122,6 +122,25 @@ describe('SessionTile', () => {
     expect(container.querySelector('.border-success\\/70')).toBeNull();
   });
 
+  it('shows a verify chip when the last verify run failed', () => {
+    streamEvents = [
+      statusEvent(1, 'IDLE'),
+      { seq: 2, type: 'verify_result', payload: { command: 'bun test', ok: false, exitCode: 1 }, createdAt: 2 },
+    ];
+    render(
+      <SessionTile session={fakeSession()} focused={false} onFocus={noop} onMaximize={noop} />,
+    );
+    expect(screen.getByLabelText(/checks failed/i)).toBeInTheDocument();
+  });
+
+  it('shows no verify chip without verify events', () => {
+    streamEvents = [statusEvent(1, 'IDLE')];
+    render(
+      <SessionTile session={fakeSession()} focused={false} onFocus={noop} onMaximize={noop} />,
+    );
+    expect(screen.queryByLabelText(/checks/i)).not.toBeInTheDocument();
+  });
+
   it('shows the steer input on every tile — each cell is a chat box', () => {
     streamEvents = [statusEvent(1, 'IDLE')];
     render(

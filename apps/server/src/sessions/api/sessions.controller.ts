@@ -21,6 +21,12 @@ import type {
 } from '../domain/sessions.types';
 import { SessionsService } from '../sessions.service';
 
+function parsePositiveInt(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 @Controller('sessions')
 export class SessionsController {
   constructor(private readonly sessions: SessionsService) {}
@@ -137,11 +143,21 @@ export class SessionsController {
   }
 
   @Get(':id/events')
-  events(@Param('id') id: string, @Query('since') since?: string) {
+  events(
+    @Param('id') id: string,
+    @Query('since') since?: string,
+    @Query('limit') limit?: string,
+    @Query('tail') tail?: string,
+    @Query('before') before?: string,
+  ) {
     const session = this.sessions.get(id);
     if (!session) throw new NotFoundException('Session not found');
     const cursor = since ? Number(since) : 0;
-    return this.sessions.getEvents(id, Number.isFinite(cursor) ? cursor : 0);
+    return this.sessions.getEvents(id, Number.isFinite(cursor) ? cursor : 0, {
+      ...(parsePositiveInt(limit) !== undefined ? { limit: parsePositiveInt(limit) } : {}),
+      ...(parsePositiveInt(tail) !== undefined ? { tail: parsePositiveInt(tail) } : {}),
+      ...(parsePositiveInt(before) !== undefined ? { before: parsePositiveInt(before) } : {}),
+    });
   }
 
   @Get(':id/stream')

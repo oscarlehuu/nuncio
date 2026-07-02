@@ -35,8 +35,12 @@ import { isCursorCliRecentlyActive } from '../agents/providers/cursor-cli.active
 import { EventsRepository } from './persistence/events.repository';
 import { ProviderRequestsRepository } from './persistence/provider-requests.repository';
 import { SessionsRepository } from './persistence/sessions.repository';
+import { resolveVerifyCommand, runVerifyCommand } from './session-verifier';
+import { SettingsService } from '../settings/settings.service';
 
 type StreamListener = (event: SessionEvent) => void;
+
+const DEFAULT_BACKFILL_LIMIT = 200;
 
 interface PendingProviderRequest {
   sessionId: string;
@@ -52,6 +56,8 @@ export class SessionsService implements OnModuleDestroy {
   private readonly providerRequests = new Map<string, PendingProviderRequest>();
   private readonly transcriptMtimeCache = new Map<string, number>();
   private readonly locallyProducing = new Set<string>();
+  private readonly verifying = new Set<string>();
+  private readonly runPromises = new Map<string, Promise<void>>();
   private readonly transcriptWatchers = new Map<
     string,
     { watcher: FSWatcher; count: number; debounce?: ReturnType<typeof setTimeout> }
@@ -65,7 +71,9 @@ export class SessionsService implements OnModuleDestroy {
     private readonly git: GitService,
     private readonly cursorLocal: CursorLocalSessionsService,
     @Optional() private readonly piLocal?: PiLocalSessionsService,
+    @Optional() private readonly settings?: SettingsService,
   ) {
+    this.reconcileInterruptedSessions();
     this.resolveStaleProviderRequests();
   }
 
@@ -81,11 +89,21 @@ export class SessionsService implements OnModuleDestroy {
     return refreshed ? this.enrichSession(refreshed) : null;
   }
 
-  getEvents(id: string, since = 0): SessionEvent[] {
+  getEvents(
+    id: string,
+    since = 0,
+    opts?: { limit?: number; tail?: number; before?: number },
+  ): SessionEvent[] {
     const session = this.requireSession(id);
     this.hydrateIfNeeded(session);
     this.safeRefreshTranscript(id, session);
-    return this.events.list(id, since);
+    if (opts?.tail !== undefined) {
+      return this.events.listTail(id, opts.tail);
+    }
+    if (opts?.before !== undefined) {
+      return this.events.listBefore(id, opts.before, opts.limit ?? DEFAULT_BACKFILL_LIMIT);
+    }
+    return this.events.list(id, since, opts?.limit);
   }
 
   /** Catch-up refresh guarded against local live runs and transient fs errors. */
@@ -265,6 +283,7 @@ export class SessionsService implements OnModuleDestroy {
     } finally {
       this.locallyProducing.delete(id);
     }
+    void this.maybeVerify(id);
     return this.requireSession(id);
   }
 
@@ -697,9 +716,21 @@ export class SessionsService implements OnModuleDestroy {
     return event;
   }
 
-  private onAgentEvent(id: string, event: { type: string; payload: unknown }): void {
-    const events = this.events.list(id);
-    const latest = events[events.length - 1];
+  private onAgentEvent(
+    id: string,
+    event: { type: string; payload: unknown; seq?: number; createdAt?: number },
+  ): void {
+    if (typeof event.seq === 'number' && event.seq > 0) {
+      this.emit(id, {
+        seq: event.seq,
+        type: event.type,
+        payload: event.payload,
+        createdAt: event.createdAt ?? Date.now(),
+      });
+      return;
+    }
+    // Emitter did not append first — fall back to fanning out the stored tail.
+    const [latest] = this.events.listTail(id, 1);
     if (latest) this.emit(id, latest);
     else this.emit(id, { seq: 0, type: event.type, payload: event.payload, createdAt: Date.now() });
   }
@@ -718,10 +749,15 @@ export class SessionsService implements OnModuleDestroy {
     this.getOrCreateBus(id).emit('event', event);
   }
 
+  /** Resolves when the in-flight local run — including post-turn verification — settles. */
+  awaitRun(id: string): Promise<void> {
+    return this.runPromises.get(id) ?? Promise.resolve();
+  }
+
   private startRun(session: SessionDto, attachments?: AgentAttachment[]): void {
     if (session.cursorBackend === 'cli') return;
     this.locallyProducing.add(session.id);
-    void (async () => {
+    const run = (async () => {
       try {
         const provider = await this.agents.resolveAvailableForSession(session);
         await provider.run(session.id, session.prompt, {
@@ -738,7 +774,50 @@ export class SessionsService implements OnModuleDestroy {
       } finally {
         this.locallyProducing.delete(session.id);
       }
+      await this.maybeVerify(session.id);
     })();
+    this.runPromises.set(session.id, run);
+    // Subscribe a guard so a rejection without an awaitRun caller can't
+    // surface as an unhandled rejection; awaiters still see the rejection.
+    run.catch(() => undefined).finally(() => {
+      if (this.runPromises.get(session.id) === run) this.runPromises.delete(session.id);
+    });
+  }
+
+  /**
+   * Post-turn verification: annotate, never block. Runs the project's check
+   * command after a local turn settles on IDLE and appends the outcome to the
+   * event log; the FSM is untouched so a red suite can't wedge the session.
+   */
+  private async maybeVerify(sessionId: string): Promise<void> {
+    if (this.verifying.has(sessionId)) return;
+    const session = this.sessions.findById(sessionId);
+    if (!session || session.status !== 'IDLE') return;
+    const cwd = session.worktreePath ?? session.workspace ?? session.projectPath;
+    if (!cwd) return;
+    const command = resolveVerifyCommand(cwd, this.settings?.resolve('NUNCIO_VERIFY_COMMAND'));
+    if (!command) return;
+
+    this.verifying.add(sessionId);
+    try {
+      this.appendAndEmit(sessionId, 'verify_start', { command: command.display });
+      const result = await runVerifyCommand(command, cwd);
+      if (!this.sessions.findById(sessionId)) return;
+      this.appendAndEmit(sessionId, 'verify_result', { command: command.display, ...result });
+    } catch (error) {
+      if (!this.sessions.findById(sessionId)) return;
+      const message = error instanceof Error ? error.message : String(error);
+      this.appendAndEmit(sessionId, 'verify_result', {
+        command: command.display,
+        ok: false,
+        exitCode: null,
+        durationMs: 0,
+        outputTail: message,
+        timedOut: false,
+      });
+    } finally {
+      this.verifying.delete(sessionId);
+    }
   }
 
   private cancelProviderRequests(id: string): void {
@@ -754,6 +833,32 @@ export class SessionsService implements OnModuleDestroy {
         pending.resolve({ requestId: record.requestId, decision: 'deny' });
       }
       this.appendAndEmit(id, 'provider_request_resolved', this.providerRequestPayload(record));
+    }
+  }
+
+  /**
+   * A RUNNING row at boot means the previous daemon died mid-turn — no
+   * in-process run survives a process replacement. Make the state honest:
+   * clear the active turn, record what happened, and settle on IDLE so the
+   * user can steer (resumable threads) or restart the task.
+   */
+  private reconcileInterruptedSessions(): void {
+    for (const session of this.sessions.list(false)) {
+      if (session.status !== 'RUNNING') continue;
+      this.sessions.updateProviderRuntimeState(session.id, { providerActiveTurnId: null });
+      this.appendAndEmit(session.id, 'runtime_restarted', {
+        resumable: this.isResumableAfterRestart(session),
+      });
+      this.transition(session.id, 'IDLE');
+    }
+  }
+
+  private isResumableAfterRestart(session: SessionDto): boolean {
+    if (session.cursorBackend === 'cli') return Boolean(session.cursorChatId);
+    try {
+      return this.agents.resolveForSession(session).canResumeThread?.(session) ?? false;
+    } catch {
+      return false;
     }
   }
 

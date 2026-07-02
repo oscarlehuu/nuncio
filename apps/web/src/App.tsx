@@ -20,11 +20,12 @@ import {
   type Session,
 } from './lib/api';
 import { clearSetting, fetchSettings, updateSetting, type Setting } from './lib/settings-api';
-import { useSessionStream } from './lib/use-session-stream';
+import { DETAIL_EVENT_TAIL, useSessionStream } from './lib/use-session-stream';
 import { useActiveRun } from './lib/use-active-run';
 import { useSessionNotifications } from './lib/use-session-notifications';
 import { HomeView } from './components/home-view';
 import { GridView } from './components/grid-view';
+import { TaskInbox } from './components/task-inbox';
 import type { ApprovalMode } from './components/approval-mode-picker';
 import { HandoffPicker } from './components/handoff-picker';
 import { ChangelogView } from './components/changelog-view';
@@ -386,6 +387,11 @@ export default function App() {
     void refreshSettings();
   }, [refreshSettings]);
 
+  const handleOpenTasks = useCallback(() => {
+    navigate('/tasks');
+    dismissTransientSidebar();
+  }, [dismissTransientSidebar, navigate]);
+
   const handleOpenGrid = useCallback(() => {
     navigate('/grid');
     dismissTransientSidebar();
@@ -479,6 +485,7 @@ export default function App() {
     onSelect: handleSelect,
     onNew: handleNew,
     onGrid: handleOpenGrid,
+    onTasks: handleOpenTasks,
     onSettings: handleOpenSettings,
     onChangelog: handleOpenChangelog,
     onArchive: handleArchiveById,
@@ -606,6 +613,7 @@ export default function App() {
               />
             }
           />
+          <Route path="/tasks" element={<TaskInbox providers={providers} />} />
           <Route path="/changelog" element={<ChangelogView onBack={() => navigate('/')} />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
@@ -720,7 +728,11 @@ function SessionRoute({
     archivedSessions.find((s) => s.id === sessionId) ??
     null;
   const session = listedSession ?? fetchedSession;
-  const { events, refetch } = useSessionStream(session?.id ?? null);
+  const { events, refetch, loadEarlier, hasEarlier } = useSessionStream(
+    session?.id ?? null,
+    '',
+    DETAIL_EVENT_TAIL,
+  );
   const machineActive = useActiveRun(session, { onTranscriptRefreshed: refetch });
 
   useEffect(() => {
@@ -770,6 +782,8 @@ function SessionRoute({
     <SessionDetail
       session={session}
       events={events}
+      hasEarlier={hasEarlier}
+      onLoadEarlier={loadEarlier}
       providers={providers}
       onSteer={onSteer}
       onPause={onPause}
