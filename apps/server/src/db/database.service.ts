@@ -228,5 +228,21 @@ export class DatabaseService implements OnModuleDestroy {
         created_at INTEGER NOT NULL
       )
     `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS steer_queue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        message TEXT NOT NULL,
+        attachments_json TEXT,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY(session_id) REFERENCES sessions(id)
+      )
+    `);
+
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_steer_queue_session
+      ON steer_queue(session_id, id)
+    `);
   }
 }

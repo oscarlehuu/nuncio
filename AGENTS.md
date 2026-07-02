@@ -293,6 +293,7 @@ apps/
         domain/sessions.types.ts         DTOs + row types (SessionRow, SessionDto, CreateSessionDto, …)
         persistence/sessions.repository.ts  (positional ? params — bun:sqlite)
         persistence/events.repository.ts   append-only event log (seq cursor)
+        persistence/steer-queue.repository.ts  durable FIFO of steers queued while RUNNING (drained on IDLE, restored on boot)
         sessions.service.ts              orchestrator; injects repos + AgentRegistry
         sessions.module.ts               imports AgentsModule + SessionsPersistenceModule
         sessions.persistence.module.ts   exports repositories (shared by Sessions + Agents modules)
@@ -430,7 +431,7 @@ The event contract is **shared** across providers (emitted via `BaseAgentProvide
 | WS | `/api/sessions/ws` | session relay — `subscribe`/`unsubscribe`/`steer` RPC + `{channel, event}` pushes; replay from `since`, `behind` marker on overflow; upgrade auth = loopback/Bearer/cookie/tailnet (`docs/ws-relay-contract.md`) |
 | POST | `/api/push/register` | `{ token, platform?, deviceName? }` — register a device Expo push token; server pushes on session IDLE/ERROR/needs-input |
 | POST | `/api/push/unregister` | `{ token }` — remove a device push token |
-| POST | `/api/sessions/:id/steer` | `{ message }` — steer any non-archived session. IDLE/PAUSED/ERROR → `provider.steer()`. RUNNING → `provider.steerMidRun()` when the provider supports it (Pi: `session.steer()`, delivered before the next model call), otherwise queued in-memory (`steer_queued` event) and auto-sent when the run settles |
+| POST | `/api/sessions/:id/steer` | `{ message }` — steer any non-archived session. IDLE/PAUSED/ERROR → `provider.steer()`. RUNNING → `provider.steerMidRun()` when the provider supports it (Pi: `session.steer()`, delivered before the next model call), otherwise queued durably in SQLite (`steer_queue` table + `steer_queued` event; survives restarts) and auto-sent when the run settles |
 | POST | `/api/sessions/:id/interrupt` | abort the live run in place (providers with `capabilities.interrupt`; Pi `session.abort()`); appends an `interrupted` event, session lands IDLE with partial output kept |
 | POST | `/api/sessions/:id/interactions/:requestId/respond` | `{ answers, resolvedBy }` — live interactive tool respond (CLI handoff sessions) |
 | POST | `/api/sessions/:id/provider-requests/:requestId/respond` | `{ decision: "approve" \| "deny" }` — resolves a pending provider approval request and resumes the provider response path |

@@ -4,6 +4,7 @@ import type { AgentRegistry } from '../../../src/agents/agents.registry';
 import type { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
 import type { EventsRepository } from '../../../src/sessions/persistence/events.repository';
 import type { ProviderRequestsRepository } from '../../../src/sessions/persistence/provider-requests.repository';
+import type { SteerQueueRepository } from '../../../src/sessions/persistence/steer-queue.repository';
 import type { SessionDto } from '../../../src/sessions/domain/sessions.types';
 
 function makeSession(overrides: Partial<SessionDto> = {}): SessionDto {
@@ -51,10 +52,15 @@ describe('SessionsService interaction', () => {
     resolveAllPending: jest.fn().mockReturnValue([]),
   } as unknown as ProviderRequestsRepository;
 
+  const steerQueue = {
+    sessionIdsWithPending: jest.fn().mockReturnValue([]),
+  } as unknown as SteerQueueRepository;
+
   const service = new SessionsService(
     sessionsRepo,
     {} as EventsRepository,
     providerRequestRecords,
+    steerQueue,
     agents,
     {} as never,
     {} as never,

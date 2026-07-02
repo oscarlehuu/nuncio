@@ -35,6 +35,7 @@ import { isCursorCliRecentlyActive } from '../agents/providers/cursor-cli.active
 import { EventsRepository } from './persistence/events.repository';
 import { ProviderRequestsRepository } from './persistence/provider-requests.repository';
 import { SessionsRepository } from './persistence/sessions.repository';
+import { SteerQueueRepository } from './persistence/steer-queue.repository';
 import { resolveVerifyCommand, runVerifyCommand } from './session-verifier';
 import { SettingsService } from '../settings/settings.service';
 
@@ -53,10 +54,6 @@ interface PendingProviderRequest {
 @Injectable()
 export class SessionsService implements OnModuleDestroy {
   private readonly streams = new Map<string, EventEmitter>();
-  private readonly steerQueues = new Map<
-    string,
-    Array<{ message: string; attachments?: AgentAttachment[] }>
-  >();
   private readonly providerRequests = new Map<string, PendingProviderRequest>();
   private readonly transcriptMtimeCache = new Map<string, number>();
   private readonly locallyProducing = new Set<string>();
@@ -71,12 +68,16 @@ export class SessionsService implements OnModuleDestroy {
     private readonly sessions: SessionsRepository,
     private readonly events: EventsRepository,
     private readonly providerRequestRecords: ProviderRequestsRepository,
+    private readonly steerQueue: SteerQueueRepository,
     private readonly agents: AgentRegistry,
     private readonly git: GitService,
     private readonly cursorLocal: CursorLocalSessionsService,
     @Optional() private readonly piLocal?: PiLocalSessionsService,
     @Optional() private readonly settings?: SettingsService,
   ) {
+    // Restore before reconcile: sessions still RUNNING here get their drain
+    // scheduled by the reconcile IDLE transition instead.
+    this.restorePendingSteerQueues();
     this.reconcileInterruptedSessions();
     this.resolveStaleProviderRequests();
   }
@@ -316,18 +317,17 @@ export class SessionsService implements OnModuleDestroy {
   }
 
   private enqueueSteer(id: string, message: string, attachments?: AgentAttachment[]): void {
-    const queue = this.steerQueues.get(id) ?? [];
-    queue.push({ message, attachments });
-    this.steerQueues.set(id, queue);
+    this.steerQueue.enqueue(id, message, attachments);
     this.appendAndEmit(id, 'steer_queued', { text: message });
   }
 
   /** Deliver the next queued steer once the foreground run has settled. */
   private drainSteerQueue(id: string): void {
-    const queue = this.steerQueues.get(id);
-    if (!queue?.length) return;
-    const next = queue.shift()!;
-    if (queue.length === 0) this.steerQueues.delete(id);
+    // Drain timers can outlive the service; after shutdown the database is
+    // closed, so touching the queue would throw from a detached timer.
+    if (this.destroyed) return;
+    const next = this.steerQueue.dequeue(id);
+    if (!next) return;
     void this.steer(id, next.message, undefined, next.attachments).catch((error) => {
       const reason = error instanceof Error ? error.message : String(error);
       try {
@@ -431,7 +431,7 @@ export class SessionsService implements OnModuleDestroy {
     }
     this.agents.resolveForSession(session).dispose(id);
     this.cancelProviderRequests(id);
-    this.steerQueues.delete(id);
+    this.steerQueue.deleteForSession(id);
     this.transition(id, 'ARCHIVED');
     return this.requireSession(id);
   }
@@ -464,7 +464,7 @@ export class SessionsService implements OnModuleDestroy {
     this.agents.resolveForSession(session).dispose(id);
     this.cancelProviderRequests(id);
     this.streams.delete(id);
-    this.steerQueues.delete(id);
+    this.steerQueue.deleteForSession(id);
     this.sessions.delete(id);
   }
 
@@ -481,7 +481,10 @@ export class SessionsService implements OnModuleDestroy {
     };
   }
 
+  private destroyed = false;
+
   onModuleDestroy(): void {
+    this.destroyed = true;
     for (const entry of this.transcriptWatchers.values()) {
       if (entry.debounce) clearTimeout(entry.debounce);
       try {
@@ -936,6 +939,21 @@ export class SessionsService implements OnModuleDestroy {
         resumable: this.isResumableAfterRestart(session),
       });
       this.transition(session.id, 'IDLE');
+    }
+  }
+
+  /**
+   * Queued steers live in SQLite, so they survive a process replacement.
+   * Sessions already settled (IDLE/ERROR) get their drain scheduled here;
+   * RUNNING sessions drain via the reconcile IDLE transition, and PAUSED
+   * sessions keep their queue until the next IDLE, as they would live.
+   */
+  private restorePendingSteerQueues(): void {
+    for (const id of this.steerQueue.sessionIdsWithPending()) {
+      const session = this.sessions.findById(id);
+      if (!session) continue;
+      if (session.status !== 'IDLE' && session.status !== 'ERROR') continue;
+      setTimeout(() => this.drainSteerQueue(id), 0);
     }
   }
 
