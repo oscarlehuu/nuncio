@@ -28,16 +28,16 @@ export function ChangelogView({ onBack }: ChangelogViewProps) {
         <Button variant="ghost" size="icon" onClick={onBack} aria-label="Back">
           <ArrowLeft className="size-4" />
         </Button>
-        <h1 className="text-[16px] font-semibold tracking-tight">What's new</h1>
+        <h1 className="text-lg font-semibold tracking-tight">What's new</h1>
       </header>
 
       <div className="flex-1 px-4 py-2 max-w-[640px] w-full mx-auto">
-        <p className="text-[12px] text-muted-foreground mt-3 leading-relaxed">
+        <p className="text-ui text-muted-foreground mt-3 leading-relaxed">
           New releases and improvements to Nuncio. Each entry links back to the pull request that shipped it.
         </p>
 
         {releases.length === 0 ? (
-          <p className="text-[13px] text-muted-foreground mt-8">No releases yet.</p>
+          <p className="text-ui-lg text-muted-foreground mt-8">No releases yet.</p>
         ) : (
           <div className="mt-6">
             {releases.map((release) => (
@@ -59,13 +59,13 @@ function ReleaseBlock({ release }: { release: ChangelogRelease }) {
           v{release.version}
         </Badge>
         {release.date && (
-          <time className="text-[11px] text-muted-foreground tabular-nums">{release.date}</time>
+          <time className="text-ui-sm text-muted-foreground tabular-nums">{release.date}</time>
         )}
         <a
           href={releaseUrl}
           target="_blank"
           rel="noreferrer"
-          className="ml-auto inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+          className="ml-auto inline-flex items-center gap-1 text-ui-sm text-muted-foreground hover:text-foreground transition-colors"
         >
           Release notes <ExternalLink className="size-3" />
         </a>
@@ -85,13 +85,13 @@ function SectionBlock({ section }: { section: ChangelogSection }) {
     <div className="-ml-[17px] pl-0">
       <div className="flex items-center gap-1.5 mb-2">
         <span className={cn('size-1.5 rounded-full', dot)} />
-        <h3 className="text-[10px] uppercase tracking-widest font-semibold text-muted-foreground">
+        <h3 className="text-ui-sm font-medium text-muted-foreground">
           {section.title}
         </h3>
       </div>
       <ul className="space-y-1.5 pl-[9px]">
         {section.entries.map((entry, i) => (
-          <li key={i} className="text-[13.5px] leading-relaxed text-foreground flex gap-2">
+          <li key={i} className="text-ui-lg leading-relaxed text-foreground flex gap-2">
             <span className="text-muted-foreground select-none mt-[1px]">–</span>
             <span>{renderInline(entry)}</span>
           </li>
@@ -112,7 +112,7 @@ function renderInline(text: string) {
         );
       case 'code':
         return (
-          <code key={i} className="font-mono text-[12px] bg-muted px-1 py-0.5 rounded">
+          <code key={i} className="font-mono text-ui bg-muted px-1 py-0.5 rounded">
             {token.value}
           </code>
         );

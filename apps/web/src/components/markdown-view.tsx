@@ -47,12 +47,12 @@ export function CodeBlock({ language, code }: { language?: string; code: string 
   return (
     <div className="my-2 rounded-md border border-border/40 bg-muted/25 overflow-hidden">
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/40 bg-muted/30">
-        <span className="text-[11px] font-mono text-muted-foreground tracking-wide">
+        <span className="text-ui-sm font-mono text-muted-foreground tracking-wide">
           {displayLang}
         </span>
         <CopyButton getText={() => body} label="Copy code" />
       </div>
-      <pre className="px-3 py-2.5 overflow-x-auto text-[12.5px] leading-relaxed font-mono text-foreground/90">
+      <pre className="px-3 py-2.5 overflow-x-auto text-ui leading-relaxed font-mono text-foreground/90">
         <code>{body}</code>
       </pre>
     </div>
@@ -72,7 +72,7 @@ export function MarkdownView({ text, className }: MarkdownViewProps) {
   return (
     <div
       className={cn(
-        'text-[length:calc(14px*var(--chat-font-scale))] leading-relaxed text-foreground',
+        'chat-text-body leading-relaxed text-foreground',
         '[&_p]:my-1.5 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0',
         '[&_h1]:text-[length:calc(18px*var(--chat-font-scale))] [&_h1]:font-semibold [&_h1]:mt-4 [&_h1]:mb-2',
         '[&_h2]:text-[length:calc(16px*var(--chat-font-scale))] [&_h2]:font-semibold [&_h2]:mt-3.5 [&_h2]:mb-1.5',

@@ -91,21 +91,21 @@ export const PendingUserInputBanner = memo(function PendingUserInputBanner({
         data-testid="pending-user-input-banner"
       >
         {current.title && (
-          <p className="mb-2 text-[13px] font-medium text-foreground">{current.title}</p>
+          <p className="mb-2 text-ui-lg font-medium text-foreground">{current.title}</p>
         )}
         {totalQuestions > 1 && (
-          <p className="mb-2 text-[11px] text-muted-foreground">
+          <p className="mb-2 text-ui-sm text-muted-foreground">
             Question {questionIndex + 1} of {totalQuestions}
           </p>
         )}
         {question && (
           <div className="flex flex-col gap-2">
             {question.header && (
-              <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
+              <span className="text-ui-sm uppercase tracking-wide text-muted-foreground">
                 {question.header}
               </span>
             )}
-            <p className="text-[13px] text-foreground">{question.prompt}</p>
+            <p className="text-ui-lg text-foreground">{question.prompt}</p>
             <div className="flex flex-col gap-1.5" role="listbox" aria-label={question.prompt}>
               {question.options.map((option) => {
                 const selected = selectedForQuestion.includes(option.id);
@@ -125,9 +125,9 @@ export const PendingUserInputBanner = memo(function PendingUserInputBanner({
                       !supported && 'opacity-70 cursor-not-allowed hover:bg-muted/20',
                     )}
                   >
-                    <span className="text-[13px] text-foreground">{option.label}</span>
+                    <span className="text-ui-lg text-foreground">{option.label}</span>
                     {option.description && (
-                      <span className="mt-0.5 block text-[12px] text-muted-foreground">
+                      <span className="mt-0.5 block text-ui text-muted-foreground">
                         {option.description}
                       </span>
                     )}

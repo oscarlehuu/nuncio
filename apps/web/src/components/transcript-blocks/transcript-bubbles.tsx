@@ -38,13 +38,13 @@ export function UserBubble({ text }: { text: string }) {
     <div className="text-foreground/90" data-testid="user-bubble-collapsible">
       <MarkdownView text={expanded ? text : preview} />
       {!expanded && (
-        <div className="mt-1 text-muted-foreground/60 text-[12px]">
+        <div className="mt-1 text-muted-foreground/60 text-ui">
           … {text.length - USER_MSG_PREVIEW} more chars
         </div>
       )}
       <button
         type="button"
-        className="group mt-1.5 flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground transition-colors"
+        className="group mt-1.5 flex items-center gap-1 text-ui text-muted-foreground hover:text-foreground transition-colors"
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
         data-testid="user-bubble-toggle"

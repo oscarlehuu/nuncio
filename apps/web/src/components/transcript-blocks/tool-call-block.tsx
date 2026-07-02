@@ -50,16 +50,16 @@ export function ToolCallBlock({
 
   const row = (
     <>
-      <span className="text-[length:calc(12.5px*var(--chat-font-scale))] shrink-0">
+      <span className="chat-text-xs shrink-0">
         {summary.verb}
       </span>
       {summary.subject && (
-        <code className="text-[length:calc(12px*var(--chat-font-scale))] font-mono text-muted-foreground/90 bg-muted/25 px-1 py-0.5 rounded max-w-[55%] truncate">
+        <code className="chat-text-2xs font-mono text-muted-foreground/90 bg-muted/25 px-1 py-0.5 rounded max-w-[55%] truncate">
           {truncate(summary.subject)}
         </code>
       )}
       {summary.context && (
-        <span className="text-[length:calc(12px*var(--chat-font-scale))] text-muted-foreground/70 font-mono truncate">
+        <span className="chat-text-2xs text-muted-foreground/70 font-mono truncate">
           {summary.context}
         </span>
       )}
@@ -70,7 +70,7 @@ export function ToolCallBlock({
         {statusLabel && (
           <span
             className={cn(
-              'text-[11px]',
+              'text-ui-sm',
               status === 'error' && 'text-destructive',
               status === 'running' && 'text-muted-foreground',
             )}
@@ -118,18 +118,18 @@ export function ToolCallBlock({
         <div className="pl-3 pr-1 py-1">
           <div className="rounded bg-muted/20 border border-border/30 overflow-hidden max-h-[40vh] overflow-y-auto">
             {bashCmd && (
-              <pre className="px-2.5 py-1.5 text-[11.5px] font-mono text-foreground/80 border-b border-border/30 whitespace-pre-wrap break-all">
+              <pre className="px-2.5 py-1.5 text-ui-sm font-mono text-foreground/80 border-b border-border/30 whitespace-pre-wrap break-all">
                 <span className="text-muted-foreground">{'$ '}</span>
                 <span>{bashCmd}</span>
               </pre>
             )}
             {!bashCmd && input !== undefined && (
-              <pre className="px-2.5 py-1.5 text-[11.5px] font-mono text-muted-foreground whitespace-pre-wrap break-all">
+              <pre className="px-2.5 py-1.5 text-ui-sm font-mono text-muted-foreground whitespace-pre-wrap break-all">
                 {formatPayload(input)}
               </pre>
             )}
             {output !== undefined && (
-              <pre className="px-2.5 py-1.5 text-[11.5px] font-mono text-foreground/80 whitespace-pre-wrap break-all">
+              <pre className="px-2.5 py-1.5 text-ui-sm font-mono text-foreground/80 whitespace-pre-wrap break-all">
                 {formatPayload(output)}
               </pre>
             )}
