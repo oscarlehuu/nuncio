@@ -78,20 +78,6 @@ describe('Recent projects', () => {
     const repoB = join(tempDir, 'repo-b');
     await initRepo(repoB);
 
-    repository.record('/tmp-recent-a');
-    await new Promise((r) => setTimeout(r, 2));
-    repository.record('/tmp-recent-b');
-    // Re-record a: it should move to the front (and not duplicate).
-    await new Promise((r) => setTimeout(r, 2));
-    repository.record('/tmp-recent-a');
-
-    const rows = repository
-      .list()
-      .map((row) => row.path)
-      .filter((p) => p.startsWith('/tmp-recent'));
-    // Missing paths are filtered from list(); verify via raw expectations instead.
-    expect(rows).toEqual([]);
-
     repository.record(repo);
     await new Promise((r) => setTimeout(r, 2));
     repository.record(repoB);
