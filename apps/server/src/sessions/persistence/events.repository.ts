@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { DatabaseService } from '../../db/database.service';
+import { notifySessionEventHooks } from '../domain/session-event-hooks';
 import type { EventRow, SessionEvent } from '../domain/sessions.types';
 
 function parseEvent(row: EventRow): SessionEvent {
@@ -43,7 +44,9 @@ export class EventsRepository {
          VALUES (?, ?, ?, ?, ?)`,
       )
       .run(row.session_id, row.seq, row.type, row.payload, row.created_at);
-    return { seq, type, payload, createdAt: now };
+    const event = { seq, type, payload, createdAt: now } as SessionEvent;
+    notifySessionEventHooks(sessionId, event);
+    return event;
   }
 
   appendBatch(

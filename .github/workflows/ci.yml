@@ -37,10 +37,10 @@ jobs:
       - name: Build (server + web)
         run: bun run build
 
-      - name: Lint (server tsc + web oxlint)
+      - name: Lint + typecheck (server, web, core, mobile)
         run: bun run lint
 
-      - name: Server unit tests
+      - name: Unit tests (server, core, mobile)
         run: bun run test
 
       - name: Web unit tests

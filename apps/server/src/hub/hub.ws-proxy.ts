@@ -4,18 +4,28 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { parseHubPath, resolveMachineTarget } from './hub-routing';
 import { HubService } from './hub.service';
 import { HubRegistryService } from './hub-registry.service';
+import { SESSIONS_WS_PATH } from '../sessions/api/sessions.ws';
+import type { TokenValidator } from '../auth/auth-request';
+import { isAuthorizedUpgrade, type RemoteTrust } from '../auth/upgrade-auth';
+
+/** WS paths the hub is willing to relay to a target machine. */
+const RELAYED_WS_PATHS = new Set(['/api/terminal', SESSIONS_WS_PATH]);
 
 /**
- * Relays a /m/<machine>/api/terminal WebSocket upgrade to the target machine's
- * own terminal WS. The hub dials the target over the tailnet, so the target
- * trusts the hub by whois identity. Frames are piped verbatim in both
- * directions. Non-hub upgrades and disabled hub mode are left untouched so the
- * local terminal WS handler still owns /api/terminal.
+ * Relays /m/<machine>/api/terminal and /m/<machine>/api/sessions/ws upgrades
+ * to the target machine's own WS endpoint. The hub dials the target over the
+ * tailnet, so the target trusts the hub by whois identity — which is exactly
+ * why the CLIENT must be authorized here at the hub edge (loopback, token, or
+ * tailnet trust) before any frame is relayed. Frames are piped verbatim in
+ * both directions. Non-hub upgrades and disabled hub mode are left untouched
+ * so the local WS handlers still own their paths.
  */
 export function attachHubWebSocketProxy(
   httpServer: Server,
   hub: HubService,
   registry: HubRegistryService,
+  authTokens?: TokenValidator,
+  trust?: RemoteTrust,
 ): void {
   const wss = new WebSocketServer({ noServer: true });
 
@@ -23,12 +33,34 @@ export function attachHubWebSocketProxy(
     if (!hub.enabled()) return;
     const url = new URL(req.url ?? '/', 'http://localhost');
     const parsed = parseHubPath(url.pathname);
-    if (!parsed || parsed.targetPath !== '/api/terminal') return;
+    if (!parsed || !RELAYED_WS_PATHS.has(parsed.targetPath)) return;
 
-    void relay(req, socket, head, parsed.machine);
+    void relay(req, socket, head, parsed.machine, parsed.targetPath);
   });
 
-  async function relay(req: IncomingMessage, socket: Duplex, head: Buffer, machine: string) {
+  async function relay(
+    req: IncomingMessage,
+    socket: Duplex,
+    head: Buffer,
+    machine: string,
+    targetPath: string,
+  ) {
+    const remoteAddress = (socket as unknown as { remoteAddress?: string }).remoteAddress;
+    let authorized = false;
+    try {
+      authorized = await isAuthorizedUpgrade(
+        { headers: req.headers, socket: { remoteAddress } },
+        authTokens,
+        trust,
+      );
+    } catch {
+      authorized = false;
+    }
+    if (!authorized) {
+      socket.destroy();
+      return;
+    }
+
     let target: string | null;
     try {
       target = resolveMachineTarget(machine, await registry.registryMap());
@@ -41,7 +73,7 @@ export function attachHubWebSocketProxy(
     }
 
     wss.handleUpgrade(req, socket, head, (client) => {
-      const targetUrl = `${target.replace(/^http/, 'ws')}/api/terminal`;
+      const targetUrl = `${target.replace(/^http/, 'ws')}${targetPath}`;
       const upstream = new WebSocket(targetUrl);
       const pending: (string | Buffer | ArrayBuffer | Buffer[])[] = [];
 

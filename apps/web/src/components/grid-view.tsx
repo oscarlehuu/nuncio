@@ -4,7 +4,6 @@ import type { ProviderRequestDecision, Session } from '../lib/api';
 import type { ModelProvider } from '../lib/model-providers';
 import type { ModelOptionsMap } from '../lib/model-options';
 import { useSessionStream } from '../lib/use-session-stream';
-import { useMultiSessionStream } from '../lib/use-multi-session-stream';
 import { useActiveRun } from '../lib/use-active-run';
 import {
   fitSlots,
@@ -115,18 +114,6 @@ export function GridView(props: GridViewProps) {
     for (const s of slots) if (s.sessionId) set.add(s.sessionId);
     return set;
   }, [slots]);
-
-  // All local tiles share ONE multiplexed SSE connection — per-tile EventSources
-  // exhaust the browser's per-origin connection cap on bigger grids.
-  const localTileIds = useMemo(
-    () =>
-      slots
-        .filter((s) => s.sessionId && !s.machineId && sessionsById.has(s.sessionId))
-        .map((s) => s.sessionId!)
-        .sort(),
-    [slots, sessionsById],
-  );
-  const tileEventsById = useMultiSessionStream(localTileIds);
 
   // Grid-surface shortcuts: Cmd/Ctrl+1..9 focus a slot, Cmd/Ctrl+Enter toggles
   // maximize on the focused tile, Esc restores the grid. Never fires while the
@@ -289,7 +276,6 @@ export function GridView(props: GridViewProps) {
                 <SessionTile
                   key={session.id}
                   session={session}
-                  events={tileEventsById[session.id]}
                   focused={focused}
                   onFocus={() => setFocusedSlot(index)}
                   onMaximize={() => setMaximizedSlot(index)}

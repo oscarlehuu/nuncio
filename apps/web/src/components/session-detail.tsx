@@ -289,7 +289,7 @@ export function SessionDetail({
               </TooltipTrigger>
               <TooltipContent className="max-w-[400px]">
                 <p className="text-xs">{session.title}</p>
-                {onRename && <p className="text-[10px] text-muted-foreground mt-0.5">Click to rename</p>}
+                {onRename && <p className="text-ui-xs text-muted-foreground mt-0.5">Click to rename</p>}
               </TooltipContent>
             </Tooltip>
           )}
@@ -415,7 +415,7 @@ export function SessionDetail({
             }}
           />
         </div>
-        <div className="max-w-[760px] mx-auto rounded-xl border border-border/50 bg-muted/20 transition-colors focus-within:border-border/80">
+        <div className="max-w-[760px] mx-auto rounded-xl border border-border/70 bg-card shadow-sm transition-shadow focus-within:ring-2 focus-within:ring-ring/40">
           <Textarea
             value={steerText}
             onChange={(e) => setSteerText(e.target.value)}
@@ -439,11 +439,11 @@ export function SessionDetail({
                         : 'Agent is busy — your message will be queued…'
                       : 'Steer the agent — add context, change direction, ask a question…'
             }
-            className="min-h-[44px] resize-none border-0 shadow-none bg-transparent focus-visible:ring-0 focus-visible:border-0 text-[14px]"
+            className="min-h-[44px] resize-none border-0 shadow-none bg-transparent focus-visible:ring-0 focus-visible:border-0 text-body"
           />
           <div className="flex items-center justify-between gap-2 px-3 pb-2">
             <div className="flex items-center gap-3 min-w-0 flex-wrap">
-              <span className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+              <span className="flex items-center gap-1.5 text-ui text-muted-foreground">
                 <span className="size-1.5 rounded-full bg-primary" />
                 {modelName}
               </span>
@@ -478,7 +478,7 @@ export function SessionDetail({
                 aria-label="Send"
                 onClick={() => void handleSteer()}
                 disabled={steerDisabled || !steerText.trim()}
-                className="shrink-0 rounded-full"
+                className="shrink-0 rounded-full transition-transform active:scale-95 disabled:opacity-40"
               >
                 <Send className="size-4" />
               </Button>
@@ -486,7 +486,7 @@ export function SessionDetail({
           </div>
           <div
             data-testid="session-footer"
-            className="flex items-center gap-3 px-3 py-1.5 border-t border-border/30 text-[11px] text-muted-foreground"
+            className="flex items-center gap-3 px-3 py-1.5 border-t border-border/30 text-ui-sm text-muted-foreground"
           >
             {repoName && (
               <span className="flex items-center gap-1 shrink-0">

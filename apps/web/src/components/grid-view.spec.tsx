@@ -69,10 +69,6 @@ vi.mock('../lib/use-session-stream', () => ({
   useSessionStream: () => ({ events: [], refetch: vi.fn() }),
 }));
 
-vi.mock('../lib/use-multi-session-stream', () => ({
-  useMultiSessionStream: () => ({}),
-}));
-
 vi.mock('../lib/use-active-run', () => ({
   useActiveRun: () => false,
 }));

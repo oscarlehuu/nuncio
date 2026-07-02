@@ -175,9 +175,10 @@ After each implementation — and **before commit or PR** — run a **code revie
 | Agent harness | **Provider-agnostic by design** — any agent SDK behind a common `AgentProvider` contract. **Pi SDK** (`@earendil-works/pi-coding-agent`) is the inaugural provider, run in-process via `createAgentSession`; **Codex** runs through the local `codex app-server`; **Cursor** (`@cursor/sdk`) runs local agents when `CURSOR_API_KEY` is set. Additional SDKs plug into the same contract. |
 | Backend | NestJS 11 (`apps/server`) on port **3000**, runs on Bun |
 | Frontend | Vite 8 + React 19 + Tailwind 4 + **shadcn/ui (nova preset, light + dark)** (`apps/web`) on port **5173** by default (`NUNCIO_WEB_PORT` overrides dev/preview; `NUNCIO_API_ORIGIN` overrides the `/api` proxy target); installable **PWA** via `vite-plugin-pwa`. shadcn primitives (Radix-based) in `components/ui/`, composed into feature components; nova oklch semantic tokens adopted directly. See [shadcn/ui adoption](#shadcnui-adoption). |
+| Mobile | **Expo** (`apps/mobile`, SDK 57 + Expo Router + NativeWind) — pairs by Tailscale URL + Bearer token (SecureStore; hub `/m/<machine>` bases pair too), streams over the WS relay, registers for Expo push. Shares `@nuncio/core` (API client, transcript parser, design tokens). |
 | Persistence | SQLite (`bun:sqlite`) at `data/nuncio.db`, WAL mode |
-| Streaming | **SSE** (`EventSource`) — not WebSocket. Events are append-only with a `seq` cursor |
-| Auth | Tailscale (network layer) + planned static app token |
+| Streaming | **WS relay** at `/api/sessions/ws` (subscribe/steer RPC over one duplex channel, bounded outbound buffer, contract frozen in `docs/ws-relay-contract.md`), consumed by web + mobile through `@nuncio/core/session-relay-client`; the SSE stream + cursor replay endpoints remain for API consumers. Events are append-only with a `seq` cursor |
+| Auth | Global `AuthGuard` on every `/api` route AND on WS upgrades (`auth/upgrade-auth.ts`): loopback always trusted; remote needs the auto-generated access token (Bearer header or `nuncio_token` cookie) or Tailscale whois trust (same account). Hub `/m/<machine>/` traffic is authorized at the hub edge (`isAuthorizedHubRequest`) because targets trust the hub by whois. |
 | Runtime | **Bun ≥ 1.3** (server, build, tests) — server requires Bun (`bun:sqlite` is a Bun builtin). See [Bun runtime](#bun-runtime). |
 
 ## Commands
@@ -326,8 +327,8 @@ apps/
       integration/pi-agent.integration.spec.ts  real-Pi integration (gated on ~/.pi/agent/auth.json; opt-in)
   web/                   Vite + React + Tailwind v4 + shadcn/ui (PWA)
     src/
-      lib/               api.ts, browser-api.ts, use-session-stream.ts (SSE hook), model-providers.ts, projects.ts, utils.ts (cn()),
-                         parse-changelog.ts + render-inline-markdown.ts (changelog page support)
+      lib/               use-session-stream.ts (WS relay hook), api-base.ts (hub base), browser-api.ts, projects.ts, utils.ts (cn()),
+                         render-inline-markdown.ts + one-line re-export shims for the modules moved to packages/core
       components/
         ui/              shadcn primitives (Radix-based) — generated, rarely hand-edited
         browser-panel, home-view, session-detail, sidebar, model-picker, project-picker, branch-picker, status-dot  (feature components)
@@ -338,6 +339,15 @@ apps/
     src/
       main.js            supervises daemon, owns native BrowserView dock + node-pty terminal IPC
       preload.js         exposes narrow `window.nuncioDesktop` bridge (browser, terminal, notify)
+  mobile/                Expo app (SDK 57, Expo Router, NativeWind) — pairing, session list/create, WS transcript + steer, push
+    src/app/             _layout, index (list), new, pairing, session/[id]
+    src/lib/             connection-store (SecureStore pairing), use-session-transcript (WS + AppState resync), push-registration
+    tailwind-colors.js   GENERATED hex parity artifact of core design tokens (theme-tokens.spec.ts enforces)
+packages/
+  core/                  @nuncio/core — portable client layer shared by web + mobile: api.ts + model-*/handoff-*/transcript
+                         modules (moved from apps/web/src/lib, specs moved too), http.ts (injectable baseUrl/headers/fetch),
+                         session-relay-client.ts (WS subscribe/steer, gap-free resume), design-tokens.ts (oklch source,
+                         design-tokens.spec.ts pins it to apps/web/src/index.css)
 mockup.html              UI blueprint / reference (single-file mockup)
 data/                    SQLite (gitignored)
 plans/                   phased roadmap + per-phase reports
@@ -383,8 +393,8 @@ The harness is provider-agnostic: an `AgentProvider` runs/steers/disposes a sess
 ### Streaming
 
 - Agent → `SessionsService` via an `emit` callback → appended to `events` table (auto-incrementing `seq` per session) → fanned out to SSE subscribers via an in-memory `EventEmitter` bus per session.
-- Client (`use-session-stream.ts`): fetch events since `0`, open `EventSource` with `?since=<seq>`, dedupe by `seq`, reconnect on `visibilitychange`.
-- Event log is the cursor: `GET /api/sessions/:id/events?since=` and `GET /api/sessions/:id/stream?since=` (SSE).
+- Clients ride `@nuncio/core/session-relay-client` over the WS relay: fetch events since `0`, `subscribe(sessionId, since=<seq>)`, dedupe by `seq`; reconnects and server `behind` markers resubscribe from the last seen seq (web `use-session-stream.ts` resyncs on `visibilitychange`, mobile on AppState foreground).
+- Event log is the cursor: `GET /api/sessions/:id/events?since=`, `GET /api/sessions/:id/stream?since=` (SSE, kept for API consumers), and the `/api/sessions/ws` relay (see `docs/ws-relay-contract.md`).
 
 #### Token streaming (per-provider delta sources)
 
@@ -416,10 +426,12 @@ The event contract is **shared** across providers (emitted via `BaseAgentProvide
 | GET | `/api/pi/local-sessions?workspace=&limit=` | read-only picker feed — lists Pi SDK sessions via `SessionManager.list(cwd)`; marks sessions already imported by `provider_thread_id` |
 | GET | `/api/sessions/:id` | detail (includes `workspace`, `projectPath`, `baseBranch`, `worktreePath`, `branch`, `supportsInteraction`, `cursorBackend`, `cursorChatId` when set) |
 | GET | `/api/sessions/:id/events?since=` | event log (cursor) |
-| GET | `/api/sessions/:id/stream?since=` | SSE stream |
+| GET | `/api/sessions/:id/stream?since=` | SSE stream (API consumers; web/mobile use the WS relay) |
+| WS | `/api/sessions/ws` | session relay — `subscribe`/`unsubscribe`/`steer` RPC + `{channel, event}` pushes; replay from `since`, `behind` marker on overflow; upgrade auth = loopback/Bearer/cookie/tailnet (`docs/ws-relay-contract.md`) |
+| POST | `/api/push/register` | `{ token, platform?, deviceName? }` — register a device Expo push token; server pushes on session IDLE/ERROR/needs-input |
+| POST | `/api/push/unregister` | `{ token }` — remove a device push token |
 | POST | `/api/sessions/:id/steer` | `{ message }` — steer any non-archived session. IDLE/PAUSED/ERROR → `provider.steer()`. RUNNING → `provider.steerMidRun()` when the provider supports it (Pi: `session.steer()`, delivered before the next model call), otherwise queued in-memory (`steer_queued` event) and auto-sent when the run settles |
 | POST | `/api/sessions/:id/interrupt` | abort the live run in place (providers with `capabilities.interrupt`; Pi `session.abort()`); appends an `interrupted` event, session lands IDLE with partial output kept |
-| GET | `/api/sessions/stream/multi?sessions=id:since,…` | one SSE connection multiplexing many sessions' events (grid view; each event tagged with `sessionId`) — avoids the browser's ~6-connections-per-origin cap |
 | POST | `/api/sessions/:id/interactions/:requestId/respond` | `{ answers, resolvedBy }` — live interactive tool respond (CLI handoff sessions) |
 | POST | `/api/sessions/:id/provider-requests/:requestId/respond` | `{ decision: "approve" \| "deny" }` — resolves a pending provider approval request and resumes the provider response path |
 | POST | `/api/sessions/:id/pause` | |
@@ -448,7 +460,7 @@ Model selection is **per-session** (Provider → Group → Model, 3-level picker
 - **DTOs** live in `sessions/domain/sessions.types.ts` (`SessionRow`, `SessionDto`, `CreateSessionDto`, `SteerSessionDto`). Row types (`*_row`, snake_case columns) are mapped to DTOs (`camelCase`) in repositories.
 - **FSM is pure:** `sessions/domain/sessions.fsm.ts` has no dependencies; `TRANSITIONS` map + `assertTransition`/`canTransition`.
 - **Tests:** `bun test`, `*.spec.ts` grouped by domain under `apps/server/test/unit/<domain>/` (NOT co-located with source — the reorg moved them out deliberately for maintainability at scale); e2e under `apps/server/test/e2e/`; integration under `apps/server/test/integration/`. Layout mirrors the src domain split (`agents/`, `sessions/`, `models/`, `settings/`, `db/`). `bun run test` (unit) and `bun run test:e2e` (e2e) must stay green. Specs are written **before** implementation (TDD) — see [Working practice: TDD-first](#working-practice-tdd-first).
-- **Frontend:** Vite + React 19 + Tailwind v4 + **shadcn/ui (nova preset, light + dark)**. Primitives live in `components/ui/` (Radix-based, generated via shadcn CLI — avoid hand-editing unless fixing a primitive bug); feature components in `components/` compose them. Class merging through `cn()` in `lib/utils.ts` — no raw template-string concatenation for conditional classes. Icons via `lucide-react` (no inline SVG). Path alias `@/*` → `src`. Data/API in `lib/`, `App.tsx` is the state container. SSE via `EventSource` (no WS client). Theme is the nova oklch token system in `index.css` (`:root` light + `.dark` dark) with a Vite-native `ThemeProvider` + `ModeToggle` (see [shadcn/ui adoption](#shadcnui-adoption)).
+- **Frontend:** Vite + React 19 + Tailwind v4 + **shadcn/ui (nova preset, light + dark)**. Primitives live in `components/ui/` (Radix-based, generated via shadcn CLI — avoid hand-editing unless fixing a primitive bug); feature components in `components/` compose them. Class merging through `cn()` in `lib/utils.ts` — no raw template-string concatenation for conditional classes. Icons via `lucide-react` (no inline SVG). Path alias `@/*` → `src`. Data/API in `lib/` (pure/portable modules live in `packages/core` with one-line re-export shims at the old paths). Live transcripts use the shared WS relay client from `@nuncio/core`; SSE remains server-side for API consumers. Theme is the nova oklch token system in `index.css` (`:root` light + `.dark` dark) with a Vite-native `ThemeProvider` + `ModeToggle` (see [shadcn/ui adoption](#shadcnui-adoption)).
 - **File naming:** kebab-case, descriptive names. Keep files focused; modularize when a file grows past ~200 lines.
 - **Commit style:** conventional commits (`feat:`, `fix:`, `docs:`, `test:`, `chore:`). No AI references in messages. Keep commits focused on real code changes.
 - **Imports at the top of the file** — no inline imports. Exhaustive `switch` over unions (use a `never` check in `default`).
@@ -497,7 +509,7 @@ Runtime-configurable env vars live in a `settings` SQLite table and are configur
 | 2 | PWA + mobile UX + Tailscale prod | done |
 | 3 | steer, pause, archive, model picker | done |
 | 4 | git integration (workspace/branch/PR) | workspace subset done (`worktree` + pickers + Pi `cwd`); PR/cleanup deferred |
-| 5 | web push + webhooks | planned |
+| 5 | push + webhooks | native path shipped: Expo push via device token registry (`/api/push/register`, pushes on finish/error/needs-input); PWA web-push (VAPID) + webhooks still planned |
 
 > Runtime migration to Bun landed (see [Bun runtime](#bun-runtime)). Agent-provider abstraction + shadcn/ui also landed.
 
@@ -698,16 +710,16 @@ Minimal web GUI for coding agents (Codex, Claude, Cursor, OpenCode). Synara fork
 - Pi provider `cliproxyapi` (`anthropic-messages`, `forceAdaptiveThinking: true`) routes Claude (`claude-opus-4-8`, `claude-sonnet-4-6`) via CLIProxyAPI, configured in `~/.pi/agent/models.json`; user's default is `cliproxyapi/claude-opus-4-8`.
 - Pi has no `max` thinking level (ceiling `xhigh`; levels `off/minimal/low/medium/high/xhigh`). Reaching Anthropic `max` effort needs a per-model remap (Opus 4.8 supports low/medium/high/xhigh/max; Sonnet 4.6 supports low/medium/high/max, no xhigh).
 - `session.setModel()` persists the default model to the real `~/.pi/agent/settings.json` (global config shared with the `pi` CLI) — by design, but it mutates global state.
-- Nuncio's phone client is a thin client (agent runs on the Mac; phone only streams SSE + sends steer over Tailscale). There is no native mobile track — the PWA *is* the mobile app, and full native (RN/Swift) is mostly downside while self-hosted. Native's only material gain here is notification reliability, which Phase 5 Web Push covers; Capacitor wrap is the escape hatch if Web Push proves flaky.
+- Nuncio's phone client is a thin client (agent runs on the Mac; the phone streams the WS relay + sends steer over Tailscale). The native mobile track SHIPPED as `apps/mobile` (Expo) — it supersedes the earlier "PWA is the mobile app" position; push notifications (the reason to go native) ride Expo's push service via the server-side device-token registry. The PWA remains as the remote web surface.
 - The user's active Pi agent config (`~/.pi/agent`) has Foreman removed — only the `AskUserQuestion` extension is kept, and `~/.pi/agent/AGENTS.md` is now a minimal AskUserQuestion-only file (backups under `~/.pi/agent/backups/`).
 - The repo is at `/Users/a1241968/Desktop/Oscar/nuncio` (parent dir `Oscar`, not `Oscar_Prj`); Synara is a sibling clone at `Oscar/synara`.
-- Desktop/mobile roadmap lives in `plans/260701-desktop-daemon-mobile/` on the `frontend` branch (a lane outside the SDK-lane convention). Locked decisions: Electron wraps existing shadcn `apps/web` (no UI rewrite, supervises the Bun daemon as a child process); mobile is a separate Expo app (`apps/mobile`) using react-native-reusables + NativeWind; shared logic + design tokens go in `packages/core`. PWA remains supported as the remote web control surface for the daemon, but the Browser dock is desktop-only. One monorepo, not separate repos.
+- Desktop/mobile roadmap lives in `plans/260701-desktop-daemon-mobile/` on the `frontend` branch (a lane outside the SDK-lane convention). Locked decisions: Electron wraps existing shadcn `apps/web` (no UI rewrite, supervises the Bun daemon as a child process); mobile is a separate Expo app (`apps/mobile`) using NativeWind (react-native-reusables planned, not yet adopted — current screens are plain RN + NativeWind); shared logic + design tokens go in `packages/core`. PWA remains supported as the remote web control surface for the daemon, but the Browser dock is desktop-only. One monorepo, not separate repos. STATUS: Phase B (packages/core extraction, session WS relay + backpressure + upgrade auth + hub relay/edge auth) and Phase C (pairing, sessions, live transcript, steer, lifecycle, push) shipped; transport is WS RPC + seq cursor per `docs/ws-relay-contract.md`, not the originally sketched daemon-relay.
 - Phase A desktop shell shipped on `frontend`: `apps/desktop` Electron app with a `DaemonSupervisor` (`src/daemon.js`) that leases an ephemeral loopback port, spawns bun by absolute path running the daemon, health-gates the window on `/api/health`, restarts on unexpected exit, and stops cleanly via SIGTERM→SIGKILL (proven: no orphan). `bun run dev` now launches server + web + Electron together and waits for Vite before loading; `bun run dev:web` is browser-only. Dev mode (Vite on :5173 up, or `NUNCIO_DESKTOP_DEV=1`) attaches to the existing dev servers and spawns no supervised daemon; prod mode supervises its own.
 - "Web version" is a serving mode, not a rewrite: the daemon (`apps/server`) serves the built `apps/web` same-origin — shipped via `apps/server/src/web-static-assets.ts` (`express` promoted from transitive to direct dep for Bun resolution; API precedence, GET/HEAD SPA fallback, inert when `dist` absent). Desktop, remote web, and mobile are all clients of the one daemon.
-- The transcript event contract (persisted event log + `seq` cursor + `since=` replay + client-side throttled reveal via `use-throttled-stream-text`) already delivers resumable smooth streaming; the missing piece vs Synara is server-side backpressure. `use-throttled-stream-text` reveals at a fixed 40 chars/sec (typewriter, not adaptive).
+- The transcript event contract (persisted event log + `seq` cursor + `since=` replay + client-side throttled reveal via `use-throttled-stream-text`) delivers resumable smooth streaming, and the WS relay adds server-side backpressure (bounded per-connection buffer, drop-to-cursor + `behind` marker). Remaining tuning item: `use-throttled-stream-text` still reveals at a fixed 40 chars/sec (typewriter, not adaptive).
 - Pi is the first-class default engine: `DEFAULT_PROVIDER_ID='pi'`, `DEFAULT_MODEL_ID='claude-fable-5'`, `DEFAULT_PROVIDER_ORDER=['pi','cursor']` (`model-providers.ts`). The model picker (`model-picker.tsx`) groups a provider's models under per-group `DropdownMenuLabel` headers only when it has >1 group (Pi: cliproxy / Anthropic / ChatGPT·Codex); single-group providers stay flat.
-- Integrated terminal shipped (`frontend` branch) with a dual backend: desktop uses `node-pty` in Electron main over IPC; browser uses Bun's native PTY (`Bun.spawn({ terminal })`, verified on Bun 1.3.14) over a loopback-only WebSocket at `/api/terminal` (server code in `apps/server/src/terminal/`); renderer prefers IPC and falls back to the WS. `node-pty` installs but fails at runtime under Bun (`posix_spawnp failed`) — the Bun-native PTY is the only viable server route. Desktop path needs a native rebuild (`bun install` postinstall runs `electron-rebuild -w node-pty`).
-- The server binds `0.0.0.0` with `origin: true` and no auth layer (`main.ts`) — the browser terminal's only security control is a loopback guard rejecting non-`127.0.0.1`/`::1` WS upgrades before handshake (same-machine only by design; no token).
+- Integrated terminal shipped (`frontend` branch) with a dual backend: desktop uses `node-pty` in Electron main over IPC; browser uses Bun's native PTY (`Bun.spawn({ terminal })`, verified on Bun 1.3.14) over a WebSocket at `/api/terminal` (server code in `apps/server/src/terminal/`; upgrade gated by the shared loopback/token/tailnet rule in `auth/upgrade-auth.ts`, and hub-relayed at `/m/<machine>/api/terminal`); renderer prefers IPC and falls back to the WS. `node-pty` installs but fails at runtime under Bun (`posix_spawnp failed`) — the Bun-native PTY is the only viable server route. Desktop path needs a native rebuild (`bun install` postinstall runs `electron-rebuild -w node-pty`).
+- The server binds `0.0.0.0` with `origin: true`; the auth layer is the global `AuthGuard` (loopback / Bearer / cookie / tailnet whois) applied to every `/api` route and, via `auth/upgrade-auth.ts`, to the `/api/terminal` and `/api/sessions/ws` upgrades — remote WS clients need the token or a whois-trusted tailnet identity, and hub-relayed traffic is authorized at the hub edge.
 - Interactive browser dock is desktop-only: it uses a real Electron `BrowserView` over the React viewport with persistent partition `persist:nuncio-browser`. The web/PWA surface intentionally does not expose a browser dock. Do not use the user's daily Chrome profile and do not open a normal external browser window for the dock.
 - The `frontend` branch working tree is shared by multiple concurrent agent sessions (git/source-control panel, integrated terminal, interactive browser dock) — its cumulative diff mixes all their work; verify and commit only your own task's files.
 - Real-time CLI↔app sync uses a server-side `fs.watch` on the session's transcript `.jsonl`, ref-counted to SSE subscribers and ~150ms-debounced → `refreshTranscriptIfNeeded()` diffs the file, appends only-new events, and pushes them out the existing SSE stream (`sessions.service.ts`; Cursor path resolved via a `transcriptPath` helper in `cursor-local-sessions.service.ts`). Works for Pi (absolute `providerThreadId`) + Cursor CLI with no polling; the watcher closes when the last subscriber unsubscribes, and SDK-run sessions no-op (no external file).

@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { Maximize2, Send } from 'lucide-react';
-import type { Session, SessionEvent, SessionStatus } from '../lib/api';
+import type { Session, SessionStatus } from '../lib/api';
 import { statusLabel } from '../lib/api';
 import { isComposingEvent } from '../lib/keyboard';
 import { useSessionStream } from '../lib/use-session-stream';
@@ -20,9 +20,6 @@ const TILE_TAIL_LENGTH = 30;
 
 interface SessionTileProps {
   session: Session;
-  /** Externally-provided event stream (grid multiplexes all tiles over one SSE).
-   * When absent the tile opens its own per-session stream. */
-  events?: SessionEvent[];
   focused: boolean;
   onFocus: () => void;
   onMaximize: () => void;
@@ -76,7 +73,6 @@ function effectiveStatus(events: ReturnType<typeof useSessionStream>['events'], 
 
 export function SessionTile({
   session,
-  events: externalEvents,
   focused,
   onFocus,
   onMaximize,
@@ -84,8 +80,7 @@ export function SessionTile({
   steering,
   apiBase = '',
 }: SessionTileProps) {
-  const ownStream = useSessionStream(externalEvents ? null : session.id, apiBase);
-  const events = externalEvents ?? ownStream.events;
+  const { events } = useSessionStream(session.id, apiBase);
   const blocks = useTranscriptBlocks(events);
   const tail = useMemo(() => blocks.slice(-TILE_TAIL_LENGTH), [blocks]);
   const pending = useMemo(() => derivePendingUserInput(events).length > 0, [events]);

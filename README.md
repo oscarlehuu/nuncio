@@ -16,7 +16,7 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 - **Per-session provider + model** — choose the agent provider (`pi` / `codex` / `cursor`) and the exact model (e.g. `codex:gpt-5.5`, `cursor:composer-2`, `anthropic:claude-sonnet-4`) per session; both are stored on the session and wired through to the provider runtime
 - **Steer mid-task** — send follow-up messages that continue the same agent conversation when the provider supports it
 - **Pause / archive / restore / delete** — suspend a running session, retire it to the Archived tab, restore it back to IDLE, or permanently delete it; a session FSM enforces valid transitions and a confirm dialog guards deletes
-- **Real-time + replay** — SSE stream for live updates, event log with cursor for replay
+- **Real-time + replay** — WebSocket relay (subscribe/steer on one duplex channel, gap-free resume via the event-log cursor — see [docs/ws-relay-contract.md](docs/ws-relay-contract.md)) plus the SSE stream and cursor replay endpoints for API consumers
 - **Mobile-first PWA** — installable on iPhone via Tailscale HTTPS; standalone dark UI, safe-area aware
 - **Interactive browser dock** — desktop uses a real embedded Electron browser view with a persistent Nuncio profile; the web/PWA surface does not expose a browser dock
 - **Self-hosted** — your machine, your SQLite, your credentials; nothing leaves your tailnet
@@ -248,6 +248,8 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 | PUT | `/api/settings/:key` | Update a setting `{ "value": "..." }` (encrypts secrets, busts provider caches) |
 | DELETE | `/api/settings/:key` | Clear a setting (falls back to env/default) |
 | GET | `/api/fs/dirs?path=` | Server-side directory browser (defaults to `$HOME`); used by the folder picker |
+| POST | `/api/push/register` | Register a device Expo push token `{ "token": "...", "platform?": "ios\|android", "deviceName?": "..." }`; the server pushes on session finish / needs-input / error |
+| POST | `/api/push/unregister` | Remove a device push token `{ "token": "..." }` |
 
 ### Session FSM
 

@@ -58,6 +58,34 @@ describe('Sidebar', () => {
     expect(onNew).toHaveBeenCalledTimes(1);
   });
 
+  it('renders New Agent as a flat nav row, not a boxed button', () => {
+    renderWithTheme(<Sidebar sessions={[]} activeId={null} onSelect={() => {}} onNew={() => {}} />);
+    const newAgent = screen.getByRole('button', { name: /new agent/i });
+    // Nav row: transparent until hover, no filled/boxed background utility.
+    expect(newAgent.className).not.toMatch(/bg-(primary|secondary)\b/);
+    expect(newAgent.className).toMatch(/hover:bg-sidebar-accent/);
+  });
+
+  it('renders each recent row as a title plus a metadata line', () => {
+    const sessions = [
+      makeSession({
+        id: 's1',
+        title: 'Fix auth',
+        provider: 'pi',
+        preview: 'reading middleware',
+        status: 'IDLE',
+      }),
+    ];
+    renderWithTheme(
+      <Sidebar sessions={sessions} activeId={null} onSelect={() => {}} onNew={() => {}} />,
+    );
+    // Line one: the title. Line two: the provider indicator + status/preview meta.
+    const row = screen.getByRole('button', { name: /open fix auth/i });
+    expect(row).toHaveTextContent('Fix auth');
+    expect(row).toContainElement(screen.getByLabelText(/pi provider/i));
+    expect(row).toHaveTextContent(/reading middleware/i);
+  });
+
   it('calls onSelect with the session id when a row is clicked', async () => {
     const onSelect = vi.fn();
     const sessions = [makeSession({ id: 's1', title: 'Build feature X' })];

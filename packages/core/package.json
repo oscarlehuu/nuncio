@@ -1,0 +1,21 @@
+{
+  "name": "@nuncio/core",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "lint": "oxlint",
+    "typecheck": "tsc --noEmit",
+    "check": "bun run typecheck && bun run lint && bun run test"
+  },
+  "devDependencies": {
+    "oxlint": "^1.69.0",
+    "typescript": "~6.0.2",
+    "vitest": "^4.1.9"
+  }
+}

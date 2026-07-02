@@ -17,6 +17,8 @@ interface WorkspaceModePickerProps {
   onChange: (value: WorkspaceMode) => void;
   disabled?: boolean;
   className?: string;
+  /** 'boxed' = composer toolbar chip; 'text' = borderless Cursor context label. */
+  variant?: 'boxed' | 'text';
 }
 
 const MODES: Array<{
@@ -44,9 +46,11 @@ export function WorkspaceModePicker({
   onChange,
   disabled,
   className,
+  variant = 'boxed',
 }: WorkspaceModePickerProps) {
   const selected = MODES.find((mode) => mode.value === value) ?? MODES[0];
   const Icon = selected.icon;
+  const asText = variant === 'text';
 
   return (
     <DropdownMenu>
@@ -57,11 +61,14 @@ export function WorkspaceModePicker({
           size="sm"
           disabled={disabled}
           aria-label={`Workspace mode: ${selected.label}`}
-          className={cn('composer-picker-trigger h-8 gap-1.5 px-2.5', className)}
+          className={cn(
+            asText ? 'picker-trigger-text' : 'composer-picker-trigger h-8 gap-1.5 px-2.5',
+            className,
+          )}
         >
-          <Icon className="size-3.5" />
-          <span>{selected.label}</span>
-          <ChevronDown className="size-3.5 opacity-70" />
+          {!asText && <Icon className="size-3.5" />}
+          <span className="text-ui-lg">{selected.label}</span>
+          <ChevronDown className="size-3 opacity-70" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent className="w-[300px]">

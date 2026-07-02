@@ -84,7 +84,7 @@ export function FolderBrowser({ open, initialPath, onSelect, onCancel, apiBase =
               <ArrowUp className="size-3.5" />
             </Button>
           )}
-          <div className="text-[12.5px] font-mono text-muted-foreground truncate min-w-0 flex-1" aria-label="Current path">
+          <div className="text-ui font-mono text-muted-foreground truncate min-w-0 flex-1" aria-label="Current path">
             {listing?.current ?? '—'}
           </div>
         </div>
@@ -120,9 +120,9 @@ export function FolderBrowser({ open, initialPath, onSelect, onCancel, apiBase =
                     className="flex items-center gap-2 w-full px-3 py-2 text-left hover:bg-accent/60 transition-colors"
                   >
                     <Folder className="size-4 shrink-0 text-muted-foreground" />
-                    <span className="text-[13px] truncate flex-1">{entry.name}</span>
+                    <span className="text-ui-lg truncate flex-1">{entry.name}</span>
                     {entry.isGit && (
-                      <Badge variant="secondary" className="text-[10px] font-mono px-1.5 py-0 h-[18px] gap-1">
+                      <Badge variant="secondary" className="text-ui-xs font-mono px-1.5 py-0 h-[18px] gap-1">
                         <GitBranch className="size-2.5" />
                         git
                       </Badge>
