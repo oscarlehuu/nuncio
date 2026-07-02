@@ -152,7 +152,7 @@ describe('App URL routing', () => {
   it('renders session detail when loaded at /session/:id', async () => {
     renderApp('/session/new1');
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /archive session/i })).toBeInTheDocument(),
+      expect(screen.getByRole('button', { name: /session actions/i })).toBeInTheDocument(),
     );
   });
 
@@ -162,7 +162,7 @@ describe('App URL routing', () => {
     const textarea = screen.getByPlaceholderText(/Ask Nuncio/i);
     await userEvent.type(textarea, 'build the thing{Enter}');
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /archive session/i })).toBeInTheDocument(),
+      expect(screen.getByRole('button', { name: /session actions/i })).toBeInTheDocument(),
     );
   });
 
@@ -180,7 +180,7 @@ describe('App URL routing', () => {
     renderApp('/session/new1');
     await waitFor(() => expect(fetchSession).toHaveBeenCalledWith('new1'));
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /archive session/i })).toBeInTheDocument(),
+      expect(screen.getByRole('button', { name: /session actions/i })).toBeInTheDocument(),
     );
   });
 
@@ -339,7 +339,7 @@ describe('App lifecycle', () => {
     );
     await userEvent.click(screen.getByRole('button', { name: /open build the thing/i }));
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /archive session/i })).toBeInTheDocument(),
+      expect(screen.getByRole('button', { name: /session actions/i })).toBeInTheDocument(),
     );
   }
 
@@ -355,7 +355,9 @@ describe('App lifecycle', () => {
 
   it('handleArchive calls archiveSession with the active id', async () => {
     await openSession();
-    await userEvent.click(screen.getByRole('button', { name: /archive session/i }));
+    // Archive lives in the Session actions dropdown now.
+    await userEvent.click(screen.getByRole('button', { name: /session actions/i }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /archive session/i }));
     await waitFor(() => expect(archiveSession).toHaveBeenCalledWith('new1'));
   });
 
