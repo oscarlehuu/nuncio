@@ -49,6 +49,10 @@ interface PendingProviderRequest {
 @Injectable()
 export class SessionsService implements OnModuleDestroy {
   private readonly streams = new Map<string, EventEmitter>();
+  private readonly steerQueues = new Map<
+    string,
+    Array<{ message: string; attachments?: AgentAttachment[] }>
+  >();
   private readonly providerRequests = new Map<string, PendingProviderRequest>();
   private readonly transcriptMtimeCache = new Map<string, number>();
   private readonly locallyProducing = new Set<string>();
@@ -247,6 +251,11 @@ export class SessionsService implements OnModuleDestroy {
     }
 
     const current = this.requireSession(id);
+    if (current.status === 'RUNNING') {
+      const handled = await this.steerRunning(current, trimmed, attachments);
+      if (!handled) this.enqueueSteer(id, trimmed, attachments);
+      return this.requireSession(id);
+    }
     if (!canTransition(current.status, 'RUNNING')) {
       throw new BadRequestException(`Cannot steer session in status ${current.status}`);
     }
@@ -268,6 +277,48 @@ export class SessionsService implements OnModuleDestroy {
     return this.requireSession(id);
   }
 
+  /** Inject into the live run when the provider supports it; false → caller queues. */
+  private async steerRunning(
+    session: SessionDto,
+    message: string,
+    attachments?: AgentAttachment[],
+  ): Promise<boolean> {
+    const provider = this.agents.resolveForSession(session);
+    if (!provider.capabilities.steerWhileRunning || !provider.steerMidRun) return false;
+    this.locallyProducing.add(session.id);
+    try {
+      return await provider.steerMidRun(session.id, message, {
+        ...this.buildAgentRunContext(session),
+        attachments,
+      });
+    } finally {
+      this.locallyProducing.delete(session.id);
+    }
+  }
+
+  private enqueueSteer(id: string, message: string, attachments?: AgentAttachment[]): void {
+    const queue = this.steerQueues.get(id) ?? [];
+    queue.push({ message, attachments });
+    this.steerQueues.set(id, queue);
+    this.appendAndEmit(id, 'steer_queued', { text: message });
+  }
+
+  /** Deliver the next queued steer once the foreground run has settled. */
+  private drainSteerQueue(id: string): void {
+    const queue = this.steerQueues.get(id);
+    if (!queue?.length) return;
+    const next = queue.shift()!;
+    if (queue.length === 0) this.steerQueues.delete(id);
+    void this.steer(id, next.message, undefined, next.attachments).catch((error) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      try {
+        this.appendAndEmit(id, 'error', { message: `Queued message failed to send: ${reason}` });
+      } catch {
+        // Session gone (deleted/archived mid-drain) — nothing left to notify.
+      }
+    });
+  }
+
   async interrupt(id: string): Promise<void> {
     const session = this.requireSession(id);
     const provider = this.agents.resolveForSession(session);
@@ -275,6 +326,7 @@ export class SessionsService implements OnModuleDestroy {
       throw new BadRequestException(`Interrupt not supported by provider ${provider.id}`);
     }
     await provider.interrupt(id);
+    this.appendAndEmit(id, 'interrupted', {});
   }
 
   async setSessionModel(
@@ -343,6 +395,7 @@ export class SessionsService implements OnModuleDestroy {
     }
     this.agents.resolveForSession(session).dispose(id);
     this.cancelProviderRequests(id);
+    this.steerQueues.delete(id);
     this.transition(id, 'ARCHIVED');
     return this.requireSession(id);
   }
@@ -375,6 +428,7 @@ export class SessionsService implements OnModuleDestroy {
     this.agents.resolveForSession(session).dispose(id);
     this.cancelProviderRequests(id);
     this.streams.delete(id);
+    this.steerQueues.delete(id);
     this.sessions.delete(id);
   }
 
@@ -651,9 +705,12 @@ export class SessionsService implements OnModuleDestroy {
   }
 
   private enrichSession(session: SessionDto): SessionDto {
+    const capabilities = this.agents.resolveForSession(session).capabilities;
     return {
       ...session,
       supportsInteraction: this.agents.supportsInteractionForSession(session),
+      supportsInterrupt: capabilities.interrupt,
+      supportsSteerWhileRunning: capabilities.steerWhileRunning,
     };
   }
 
@@ -699,6 +756,11 @@ export class SessionsService implements OnModuleDestroy {
 
   private onAgentEvent(id: string, event: SessionEvent): void {
     this.emit(id, event);
+    if (event.type !== 'status') return;
+    const status = (event.payload as { status?: SessionStatus } | null)?.status;
+    if (status !== 'IDLE' && status !== 'ERROR') return;
+    // Deliver after the finishing run fully unwinds (provider finally blocks).
+    setTimeout(() => this.drainSteerQueue(id), 0);
   }
 
   private getOrCreateBus(id: string): EventEmitter {

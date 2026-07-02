@@ -118,6 +118,8 @@ export interface SessionDto {
   pullRequestState?: string | null;
   forgeStatus?: string;
   supportsInteraction: boolean;
+  supportsInterrupt: boolean;
+  supportsSteerWhileRunning: boolean;
   createdAt: number;
   updatedAt: number;
 }

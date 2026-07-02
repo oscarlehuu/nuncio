@@ -23,6 +23,8 @@ function makeSession(over: Partial<SessionDto> = {}): SessionDto {
     cursorBackend: null,
     cursorChatId: null,
     supportsInteraction: false,
+    supportsInterrupt: false,
+    supportsSteerWhileRunning: false,
     createdAt: 0,
     updatedAt: 0,
     ...over,

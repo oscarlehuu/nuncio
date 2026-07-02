@@ -59,6 +59,7 @@ export abstract class BaseAgentProvider implements AgentProvider {
     modelSwitch: 'none',
     effortSwitch: 'none',
     images: false,
+    steerWhileRunning: false,
   };
 
   constructor(

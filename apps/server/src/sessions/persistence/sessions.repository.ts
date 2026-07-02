@@ -57,6 +57,8 @@ function toDto(row: SessionRow): SessionDto {
     pullRequestState: row.pull_request_state ?? null,
     forgeStatus: row.forge_status ?? 'none',
     supportsInteraction: false,
+    supportsInterrupt: false,
+    supportsSteerWhileRunning: false,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

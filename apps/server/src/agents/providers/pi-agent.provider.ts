@@ -30,6 +30,7 @@ type PiRegistryModel = {
 
 type PiLiveSession = {
   prompt: (text: string, options?: PiPromptOptions) => Promise<void>;
+  steer: (text: string, images?: PiImageContent[]) => Promise<void>;
   abort: () => Promise<void>;
   setModel: (model: PiRegistryModel) => Promise<void>;
   setThinkingLevel: (level: string) => void;
@@ -47,6 +48,16 @@ type PiSessionHandle = {
   getAssistantText: () => string;
   sealOpenTools: (emit?: AgentRunContext['emit']) => void;
 };
+
+function piImagesFromAttachments(context: AgentRunContext): PiImageContent[] {
+  return (context.attachments ?? [])
+    .filter((attachment) => attachment.kind === 'image')
+    .map((attachment): PiImageContent => ({
+      type: 'image',
+      data: attachment.data,
+      mimeType: attachment.mimeType,
+    }));
+}
 
 type PiModelRegistry = {
   getAvailable: () => Array<{
@@ -71,6 +82,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     modelSwitch: 'in-session',
     effortSwitch: 'in-session',
     images: true,
+    steerWhileRunning: true,
   } as const;
   private readonly activeSessions = new Map<string, PiSessionHandle>();
   private readonly interruptedSessions = new Set<string>();
@@ -120,6 +132,24 @@ export class PiAgentProvider extends BaseAgentProvider {
     this.interruptedSessions.delete(sessionId);
   }
 
+  /**
+   * Inject a steer message into a live streaming run. The Pi SDK queues it and
+   * delivers after the current turn's tool calls, before the next LLM call —
+   * the same mechanism the pi CLI uses for mid-run steering.
+   */
+  async steerMidRun(
+    sessionId: string,
+    message: string,
+    context: AgentRunContext,
+  ): Promise<boolean> {
+    const handle = this.activeSessions.get(sessionId);
+    if (!handle || !handle.session.isStreaming) return false;
+    this.pushEvent(sessionId, 'steer_message', { text: message }, context.emit);
+    const images = piImagesFromAttachments(context);
+    await handle.session.steer(message, images.length ? images : undefined);
+    return true;
+  }
+
   async interrupt(sessionId: string): Promise<void> {
     const handle = this.activeSessions.get(sessionId);
     if (!handle) return;
@@ -162,13 +192,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       this.activeSessions.set(sessionId, handle);
     }
 
-    const images = (context.attachments ?? [])
-      .filter((attachment) => attachment.kind === 'image')
-      .map((attachment): PiImageContent => ({
-        type: 'image',
-        data: attachment.data,
-        mimeType: attachment.mimeType,
-      }));
+    const images = piImagesFromAttachments(context);
     const promptOptions: PiPromptOptions = {
       ...(images.length ? { images } : {}),
       ...(isSteer ? { streamingBehavior: 'steer' as const } : {}),

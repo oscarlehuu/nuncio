@@ -18,6 +18,8 @@ export interface AgentCapabilities {
   modelSwitch: 'in-session' | 'restart' | 'none';
   effortSwitch: 'in-session' | 'restart' | 'none';
   images: boolean;
+  /** Whether the provider can inject a steer message into a run that is already streaming. */
+  steerWhileRunning: boolean;
 }
 
 export interface AgentAttachment {
@@ -60,6 +62,11 @@ export interface AgentProvider {
   listModels(): Promise<ModelProviderDto[]>;
   run(sessionId: string, prompt: string, context: AgentRunContext): Promise<void>;
   steer(sessionId: string, message: string, context: AgentRunContext): Promise<void>;
+  /**
+   * Queue a steer message into a live streaming run. Returns false when there is
+   * no active in-process run to steer (caller falls back to queueing).
+   */
+  steerMidRun?(sessionId: string, message: string, context: AgentRunContext): Promise<boolean>;
   interrupt?(sessionId: string): Promise<void>;
   setModel?(sessionId: string, model: string, options?: ModelOptionsMap | null): Promise<void>;
   dispose(sessionId: string): void;
