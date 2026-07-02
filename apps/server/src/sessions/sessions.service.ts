@@ -66,6 +66,7 @@ export class SessionsService implements OnModuleDestroy {
     private readonly cursorLocal: CursorLocalSessionsService,
     @Optional() private readonly piLocal?: PiLocalSessionsService,
   ) {
+    this.reconcileInterruptedSessions();
     this.resolveStaleProviderRequests();
   }
 
@@ -754,6 +755,32 @@ export class SessionsService implements OnModuleDestroy {
         pending.resolve({ requestId: record.requestId, decision: 'deny' });
       }
       this.appendAndEmit(id, 'provider_request_resolved', this.providerRequestPayload(record));
+    }
+  }
+
+  /**
+   * A RUNNING row at boot means the previous daemon died mid-turn — no
+   * in-process run survives a process replacement. Make the state honest:
+   * clear the active turn, record what happened, and settle on IDLE so the
+   * user can steer (resumable threads) or restart the task.
+   */
+  private reconcileInterruptedSessions(): void {
+    for (const session of this.sessions.list(false)) {
+      if (session.status !== 'RUNNING') continue;
+      this.sessions.updateProviderRuntimeState(session.id, { providerActiveTurnId: null });
+      this.appendAndEmit(session.id, 'runtime_restarted', {
+        resumable: this.isResumableAfterRestart(session),
+      });
+      this.transition(session.id, 'IDLE');
+    }
+  }
+
+  private isResumableAfterRestart(session: SessionDto): boolean {
+    if (session.cursorBackend === 'cli') return Boolean(session.cursorChatId);
+    try {
+      return this.agents.resolveForSession(session).canResumeThread?.(session) ?? false;
+    } catch {
+      return false;
     }
   }
 

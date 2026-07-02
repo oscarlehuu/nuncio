@@ -3,6 +3,7 @@ import type { ModelProviderDto } from '../models/models.types';
 import type {
   ProviderRequestInput,
   ProviderRequestResult,
+  SessionDto,
 } from '../sessions/domain/sessions.types';
 import type { UserInputAnswer } from '../sessions/domain/user-input.types';
 
@@ -69,4 +70,9 @@ export interface AgentProvider {
   ): Promise<void>;
   /** Clear any cached availability/model state so the next call re-resolves from current settings. */
   bustCache(): void;
+  /**
+   * Whether a session's provider thread can be continued after the daemon
+   * process is replaced (durable thread handle exists outside daemon memory).
+   */
+  canResumeThread?(session: SessionDto): boolean;
 }
