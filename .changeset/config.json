@@ -17,7 +17,8 @@
     "@nuncio/web",
     "@nuncio/landing",
     "@nuncio/core",
-    "@nuncio/mobile"
+    "@nuncio/mobile",
+    "@nuncio/desktop"
   ],
   "privatePackages": {
     "version": true,
