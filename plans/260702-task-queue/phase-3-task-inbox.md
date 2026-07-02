@@ -1,6 +1,6 @@
 # Phase 3 — Task Inbox UI
 
-**Status:** In progress · **Depends on:** Phase 2 (tasks API)
+**Status:** Shipped (2026-07-02, TDD; end-to-end verified with a real Pi task in Chrome) · **Depends on:** Phase 2 (tasks API)
 
 ## Scope
 

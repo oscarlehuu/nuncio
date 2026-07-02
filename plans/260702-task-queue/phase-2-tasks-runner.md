@@ -1,6 +1,6 @@
 # Phase 2 — Tasks Table + Runner
 
-**Status:** In progress · **Depends on:** runtime-durability Phase 1 (restart honesty), verifier gate (outcome source)
+**Status:** Shipped (2026-07-02, TDD) · **Depends on:** runtime-durability Phase 1 (restart honesty), verifier gate (outcome source)
 
 ## Scope
 
