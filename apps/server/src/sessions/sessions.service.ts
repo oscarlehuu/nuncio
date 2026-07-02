@@ -57,6 +57,7 @@ export class SessionsService implements OnModuleDestroy {
   private readonly transcriptMtimeCache = new Map<string, number>();
   private readonly locallyProducing = new Set<string>();
   private readonly verifying = new Set<string>();
+  private readonly runPromises = new Map<string, Promise<void>>();
   private readonly transcriptWatchers = new Map<
     string,
     { watcher: FSWatcher; count: number; debounce?: ReturnType<typeof setTimeout> }
@@ -748,10 +749,15 @@ export class SessionsService implements OnModuleDestroy {
     this.getOrCreateBus(id).emit('event', event);
   }
 
+  /** Resolves when the in-flight local run — including post-turn verification — settles. */
+  awaitRun(id: string): Promise<void> {
+    return this.runPromises.get(id) ?? Promise.resolve();
+  }
+
   private startRun(session: SessionDto, attachments?: AgentAttachment[]): void {
     if (session.cursorBackend === 'cli') return;
     this.locallyProducing.add(session.id);
-    void (async () => {
+    const run = (async () => {
       try {
         const provider = await this.agents.resolveAvailableForSession(session);
         await provider.run(session.id, session.prompt, {
@@ -770,6 +776,12 @@ export class SessionsService implements OnModuleDestroy {
       }
       await this.maybeVerify(session.id);
     })();
+    this.runPromises.set(session.id, run);
+    // Subscribe a guard so a rejection without an awaitRun caller can't
+    // surface as an unhandled rejection; awaiters still see the rejection.
+    run.catch(() => undefined).finally(() => {
+      if (this.runPromises.get(session.id) === run) this.runPromises.delete(session.id);
+    });
   }
 
   /**

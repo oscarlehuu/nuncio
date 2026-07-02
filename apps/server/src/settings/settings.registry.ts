@@ -194,6 +194,16 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     default: '0',
   },
   {
+    key: 'NUNCIO_TASK_CONCURRENCY',
+    category: 'general',
+    type: 'string',
+    label: 'Task queue concurrency',
+    description:
+      'How many queued tasks may run at once on this machine. Default 1 (strict FIFO).',
+    envVar: 'NUNCIO_TASK_CONCURRENCY',
+    default: '1',
+  },
+  {
     key: 'NUNCIO_VERIFY_COMMAND',
     category: 'general',
     type: 'string',

@@ -86,6 +86,22 @@ describe('SessionsService verifier gate', () => {
     expect(service.get(session.id)?.status).toBe('IDLE');
   });
 
+  it('awaitRun resolves only after the run and its verification settle', async () => {
+    writeVerifyScript('echo verified\nexit 0\n');
+    const session = await service.create({ prompt: 'await me', provider: 'cursor', workspace });
+
+    await service.awaitRun(session.id);
+
+    // No polling: the verify outcome must already be in the log.
+    const all = events.list(session.id);
+    expect(all.some((e) => e.type === 'verify_result')).toBe(true);
+    expect(service.get(session.id)?.status).toBe('IDLE');
+  });
+
+  it('awaitRun resolves immediately for sessions with no in-flight run', async () => {
+    await expect(service.awaitRun('missing1')).resolves.toBeUndefined();
+  });
+
   it('skips verification entirely when no command is configured', async () => {
     const session = await service.create({ prompt: 'no verify', provider: 'cursor', workspace });
 
