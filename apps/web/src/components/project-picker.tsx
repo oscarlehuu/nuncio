@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, FolderGit2, FolderOpen } from 'lucide-react';
-import { fetchProjects, projectDisplayName, type Project } from '../lib/projects';
+import { fetchProjects, fetchRecentProjects, projectDisplayName, type Project } from '../lib/projects';
 import { loadProjectPreference, type RecentProject } from '../lib/project-preference';
 import { Button } from '@/components/ui/button';
 import {
@@ -38,7 +38,18 @@ export function ProjectPicker({ value, onChange }: ProjectPickerProps) {
   }, []);
 
   useEffect(() => {
-    if (open) setRecents(loadProjectPreference().recentProjects);
+    if (!open) return;
+    const local = loadProjectPreference().recentProjects;
+    setRecents(local);
+    let cancelled = false;
+    void fetchRecentProjects().then((server) => {
+      if (cancelled || server.length === 0) return;
+      const serverPaths = new Set(server.map((entry) => entry.path));
+      setRecents([...server, ...local.filter((entry) => !serverPaths.has(entry.path))]);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [open]);
 
   const recentPaths = useMemo(() => new Set(recents.map((entry) => entry.path)), [recents]);
