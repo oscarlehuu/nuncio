@@ -80,6 +80,28 @@ describe('grid-preference', () => {
     expect(restored.slots).toEqual([{}, {}]);
   });
 
+  it('round-trips a cross-machine binding (machineId survives save/load and refit)', () => {
+    localStorage.setItem(
+      GRID_PREFERENCE_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        preset: '2x1',
+        slots: [{ sessionId: 'r1', machineId: 'studio' }, { sessionId: 'a' }],
+      }),
+    );
+    const restored = loadGridPreference();
+    expect(restored.slots).toEqual([{ sessionId: 'r1', machineId: 'studio' }, { sessionId: 'a' }]);
+    // Growing the preset keeps the machine binding intact.
+    expect(fitSlots(restored.slots, '2x2')).toEqual([
+      { sessionId: 'r1', machineId: 'studio' },
+      { sessionId: 'a' },
+      {},
+      {},
+    ]);
+    // A machineId without a session is meaningless and normalizes to empty.
+    expect(fitSlots([{ machineId: 'studio' }], '1x1')).toEqual([{}]);
+  });
+
   it('fitSlots preserves bindings when growing and drops the tail when shrinking', () => {
     const slots = [{ sessionId: 'a' }, { sessionId: 'b' }, { sessionId: 'c' }, { sessionId: 'd' }];
     expect(fitSlots(slots, '3x2')).toEqual([

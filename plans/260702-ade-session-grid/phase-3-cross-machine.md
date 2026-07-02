@@ -25,3 +25,17 @@
 
 - Hidden global-base assumptions in `packages/core`/`lib` fetch helpers — audit for module-level base-path state before threading per-tile bases.
 - Connection budget doubles per machine on HTTP/1.1 SSE — this phase strongly prefers landing after `260701` Phase B2 (WS multiplex per machine).
+
+## Outcome (shipped 2026-07-02)
+
+Slots carry `{ sessionId, machineId? }`; remote tiles own their data path against the
+machine's origin-absolute base (`/m/<name>` URLs bypass the page-level fetch rewrite, so no
+global base state had to move). The composer's machine picker threads that base through the
+project picker, folder browser, and model catalog, and creates/attaches directly against the
+chosen machine. One deliberate deviation: a remote tile maximizes by navigating to the
+session on the machine's own base path instead of mounting SessionDetail in place — the
+inspector panels (SCM, terminal, files, browser) are deeply page-base-relative, and the
+machine switcher's plain-anchor philosophy already established "another machine = its own
+page". The left sidebar was left unchanged (it lists the current machine's sessions; the
+machine switcher remains the cross-machine overview) — grouping-by-machine can come later
+if mixed grids make it feel necessary.

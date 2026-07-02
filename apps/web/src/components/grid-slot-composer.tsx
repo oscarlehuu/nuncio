@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CornerDownLeft, Plus, Link2 } from 'lucide-react';
+import { CornerDownLeft, Plus, Link2, Server, Check } from 'lucide-react';
+import { toast } from 'sonner';
 import type { Session } from '../lib/api';
-import { relativeTime, statusLabel } from '../lib/api';
+import { createSession, fetchModels, fetchSessions, relativeTime, statusLabel } from '../lib/api';
+import { currentMachine, fetchHubMachines, machineApiBase, type HubMachine } from '../lib/hub-api';
 import {
   modelById,
   normalizeModelCatalog,
@@ -19,6 +21,12 @@ import { ModelPicker } from './model-picker';
 import { ProviderIcon } from './provider-icon';
 import { StatusDot } from './status-dot';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 
@@ -38,7 +46,8 @@ interface GridSlotComposerProps {
     baseBranch?: string,
     modelOptions?: ModelOptionsMap,
   ) => Promise<Session | null>;
-  onBind: (sessionId: string) => void;
+  /** Bind the slot; machineId is set when the session lives on another hub machine. */
+  onBind: (sessionId: string, machineId?: string) => void;
 }
 
 export function GridSlotComposer({
@@ -58,32 +67,99 @@ export function GridSlotComposer({
   );
   const [submitting, setSubmitting] = useState(false);
 
-  const catalog = useMemo(() => normalizeModelCatalog(providers), [providers]);
-  const catalogLoaded = providers.length > 0;
+  // Hub mode: a slot can target any tailnet machine. null = the machine this
+  // page already talks to (single-machine installs never see the picker).
+  const [machines, setMachines] = useState<HubMachine[] | null>(null);
+  const [machine, setMachine] = useState<string | null>(null);
+  const [remoteProviders, setRemoteProviders] = useState<ModelProvider[] | null>(null);
+  const [remoteSessions, setRemoteSessions] = useState<Session[] | null>(null);
+  const remoteBase = machineApiBase(machine);
+  const localName = currentMachine() ?? machines?.find((m) => m.self)?.name ?? null;
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchHubMachines()
+      .then((res) => {
+        if (!cancelled) setMachines(res.hubMode ? res.machines : []);
+      })
+      .catch(() => {
+        if (!cancelled) setMachines([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const selectMachine = (next: string | null) => {
+    if (next === machine) return;
+    setMachine(next);
+    // Machine-scoped inputs reset: paths and model catalogs are per-machine.
+    setProjectPath(next ? undefined : resolveWorkspacePreference().projectPath);
+    setModel('');
+    setProvider(undefined);
+    setModelOptions({});
+    setRemoteProviders(null);
+    setRemoteSessions(null);
+  };
+
+  useEffect(() => {
+    if (!machine || !remoteBase) return;
+    let cancelled = false;
+    fetchModels(remoteBase)
+      .then((list) => {
+        if (!cancelled) setRemoteProviders(list);
+      })
+      .catch(() => {
+        if (!cancelled) setRemoteProviders([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [machine, remoteBase]);
+
+  useEffect(() => {
+    if (!machine || !remoteBase || mode !== 'attach') return;
+    let cancelled = false;
+    fetchSessions(remoteBase)
+      .then((list) => {
+        if (!cancelled) setRemoteSessions(list);
+      })
+      .catch(() => {
+        if (!cancelled) setRemoteSessions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [machine, remoteBase, mode]);
+
+  const activeProviders = machine ? (remoteProviders ?? []) : providers;
+
+  const catalog = useMemo(() => normalizeModelCatalog(activeProviders), [activeProviders]);
+  const catalogLoaded = activeProviders.length > 0;
 
   useEffect(() => {
     if (!catalogLoaded) return;
     const lookup = modelById(catalog);
     if (model && provider && lookup[model]) return;
-    const resolved = resolveModelSelection(providers, loadModelPreference());
+    const resolved = resolveModelSelection(activeProviders, loadModelPreference());
     if (resolved) {
       setModel(resolved.modelId);
       setProvider(resolved.providerId);
       setModelOptions(resolved.modelOptions);
       return;
     }
-    const picked = pickDefaultModelSelection(providers);
+    const picked = pickDefaultModelSelection(activeProviders);
     if (picked) {
       setModel(picked.modelId);
       setProvider(picked.providerId);
       setModelOptions(defaultOptionsForModel(lookup[picked.modelId]));
     }
-  }, [catalogLoaded, providers, catalog, model, provider]);
+  }, [catalogLoaded, activeProviders, catalog, model, provider]);
 
-  const attachable = useMemo(
-    () => sessions.filter((s) => s.status !== 'ARCHIVED'),
-    [sessions],
-  );
+  const attachable = useMemo(() => {
+    const source = machine ? (remoteSessions ?? []) : sessions;
+    return source.filter((s) => s.status !== 'ARCHIVED');
+  }, [machine, remoteSessions, sessions]);
 
   const submit = async () => {
     const text = prompt.trim();
@@ -93,15 +169,34 @@ export function GridSlotComposer({
       const selected = modelById(catalog)[model];
       const hasConfigurable =
         (selected?.options?.length ?? 0) > 0 || (selected?.variants?.length ?? 0) > 0;
-      const created = await onCreate(
-        text,
-        model || undefined,
-        provider,
-        projectPath,
-        undefined,
-        hasConfigurable ? modelOptions : undefined,
-      );
-      if (created) setPrompt('');
+      if (machine && remoteBase) {
+        try {
+          const created = await createSession(
+            text,
+            model || undefined,
+            provider,
+            projectPath,
+            undefined,
+            hasConfigurable ? modelOptions : undefined,
+            false,
+            remoteBase,
+          );
+          onBind(created.id, machine);
+          setPrompt('');
+        } catch {
+          toast.error(`Failed to create session on ${machine}`);
+        }
+      } else {
+        const created = await onCreate(
+          text,
+          model || undefined,
+          provider,
+          projectPath,
+          undefined,
+          hasConfigurable ? modelOptions : undefined,
+        );
+        if (created) setPrompt('');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -122,6 +217,44 @@ export function GridSlotComposer({
         </TabButton>
       </div>
 
+      {machines && machines.length > 0 ? (
+        <div className="flex items-center border-b border-border/60 px-1.5 py-1">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-6 gap-1.5 px-1.5 text-[11.5px] text-muted-foreground"
+                aria-label="Choose machine"
+              >
+                <Server className="size-3" />
+                {machine ?? localName ?? 'This machine'}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              {machines.map((m) => {
+                const isLocal = m.name === localName;
+                const isActive = machine ? machine === m.name : isLocal;
+                return (
+                  <DropdownMenuItem
+                    key={m.name}
+                    onClick={() => selectMachine(isLocal ? null : m.name)}
+                    aria-label={`Use machine ${m.name}`}
+                  >
+                    <span className="flex-1 truncate">{m.name}</span>
+                    {isLocal ? (
+                      <span className="text-[10px] text-muted-foreground">this page</span>
+                    ) : null}
+                    {isActive ? <Check className="size-3.5" /> : null}
+                  </DropdownMenuItem>
+                );
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      ) : null}
+
       {mode === 'new' ? (
         <div className="flex min-h-0 flex-1 flex-col p-2.5">
           <Textarea
@@ -138,7 +271,7 @@ export function GridSlotComposer({
             className="min-h-0 flex-1 resize-none text-[13px]"
           />
           <div className="mt-2 flex items-center gap-2 overflow-x-auto [&_button]:shrink-0">
-            <ProjectPicker value={projectPath} onChange={setProjectPath} />
+            <ProjectPicker value={projectPath} onChange={setProjectPath} apiBase={remoteBase} />
             <ModelPicker
               value={model}
               modelOptions={modelOptions}
@@ -147,7 +280,7 @@ export function GridSlotComposer({
                 setProvider(providerId);
                 setModelOptions(options ?? {});
               }}
-              providers={providers}
+              providers={activeProviders}
             />
             <Button
               type="button"
@@ -163,9 +296,13 @@ export function GridSlotComposer({
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
-          {attachable.length === 0 ? (
+          {machine && remoteSessions === null ? (
+            <p className="p-3 text-[12px] text-muted-foreground">Loading sessions from {machine}…</p>
+          ) : attachable.length === 0 ? (
             <p className="p-3 text-[12px] text-muted-foreground">
-              No active sessions to attach. Start a new one, or spin up an agent from the sidebar.
+              {machine
+                ? `No active sessions on ${machine}.`
+                : 'No active sessions to attach. Start a new one, or spin up an agent from the sidebar.'}
             </p>
           ) : (
             <ul className="flex flex-col gap-0.5">
@@ -173,7 +310,7 @@ export function GridSlotComposer({
                 <li key={s.id}>
                   <button
                     type="button"
-                    onClick={() => onBind(s.id)}
+                    onClick={() => onBind(s.id, machine ?? undefined)}
                     className="flex w-full items-start gap-2 rounded-md p-2 text-left transition-colors hover:bg-accent/60 focus-visible:bg-accent/60 focus-visible:outline-none"
                     aria-label={`Attach ${s.title}`}
                   >

@@ -5,7 +5,12 @@ import { withBase } from './api-base';
 
 const SSE_RECONNECT_MS = 2000;
 
-export function useSessionStream(sessionId: string | null) {
+/**
+ * `base` targets a specific machine's API (origin-absolute, hub mode); the
+ * default empty string keeps page-relative behavior (rewritten by the page's
+ * own hub base where applicable).
+ */
+export function useSessionStream(sessionId: string | null, base = '') {
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const sinceRef = useRef(0);
   const sourceRef = useRef<EventSource | null>(null);
@@ -13,6 +18,8 @@ export function useSessionStream(sessionId: string | null) {
   const cancelledRef = useRef(false);
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
+  const baseRef = useRef(base);
+  baseRef.current = base;
 
   const clearReconnectTimer = useCallback(() => {
     if (reconnectTimerRef.current !== null) {
@@ -26,7 +33,10 @@ export function useSessionStream(sessionId: string | null) {
     if (!activeSessionId || cancelledRef.current) return;
     clearReconnectTimer();
     sourceRef.current?.close();
-    const url = withBase(`/api/sessions/${activeSessionId}/stream?since=${sinceRef.current}`);
+    // EventSource is not covered by the page's fetch rewrite, so the hub base
+    // (page-level or per-call) must be applied here explicitly.
+    const path = `/api/sessions/${activeSessionId}/stream?since=${sinceRef.current}`;
+    const url = baseRef.current ? withBase(path, baseRef.current) : withBase(path);
     const source = new EventSource(url);
     sourceRef.current = source;
 
@@ -55,7 +65,7 @@ export function useSessionStream(sessionId: string | null) {
 
   const refetch = useCallback(async () => {
     if (!sessionId || cancelledRef.current) return;
-    const initial = await fetchEvents(sessionId, 0);
+    const initial = await fetchEvents(sessionId, 0, baseRef.current);
     if (cancelledRef.current) return;
     setEvents(initial);
     sinceRef.current = initial.reduce((max, e) => Math.max(max, e.seq), 0);
@@ -73,7 +83,7 @@ export function useSessionStream(sessionId: string | null) {
     cancelledRef.current = false;
     let cancelled = false;
 
-    fetchEvents(sessionId, 0).then((initial) => {
+    fetchEvents(sessionId, 0, baseRef.current).then((initial) => {
       if (cancelled) return;
       setEvents(initial);
       sinceRef.current = initial.reduce((max, e) => Math.max(max, e.seq), 0);
@@ -92,7 +102,7 @@ export function useSessionStream(sessionId: string | null) {
       document.removeEventListener('visibilitychange', onVisibility);
       sourceRef.current?.close();
     };
-  }, [sessionId, connect, clearReconnectTimer]);
+  }, [sessionId, base, connect, clearReconnectTimer]);
 
   return { events, refetch };
 }

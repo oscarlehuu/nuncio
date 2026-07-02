@@ -26,9 +26,16 @@ interface ProjectPickerProps {
   onChange: (path: string) => void;
   /** 'boxed' = composer toolbar chip; 'text' = borderless Cursor context label. */
   variant?: 'boxed' | 'text';
+  /** Origin-absolute API base to browse another hub machine's filesystem. */
+  apiBase?: string;
 }
 
-export function ProjectPicker({ value, onChange, variant = 'boxed' }: ProjectPickerProps) {
+export function ProjectPicker({
+  value,
+  onChange,
+  variant = 'boxed',
+  apiBase = '',
+}: ProjectPickerProps) {
   const asText = variant === 'text';
   const [projects, setProjects] = useState<Project[]>([]);
   const [open, setOpen] = useState(false);
@@ -38,15 +45,17 @@ export function ProjectPicker({ value, onChange, variant = 'boxed' }: ProjectPic
   const [recents, setRecents] = useState<RecentProject[]>([]);
 
   useEffect(() => {
-    void fetchProjects().then(setProjects);
-  }, []);
+    setProjects([]);
+    void fetchProjects(apiBase).then(setProjects);
+  }, [apiBase]);
 
   useEffect(() => {
     if (!open) return;
-    const local = loadProjectPreference().recentProjects;
+    // Local (this-browser) recents describe THIS machine's paths only.
+    const local = apiBase ? [] : loadProjectPreference().recentProjects;
     setRecents(local);
     let cancelled = false;
-    void fetchRecentProjects().then((server) => {
+    void fetchRecentProjects(apiBase).then((server) => {
       if (cancelled || server.length === 0) return;
       const serverPaths = new Set(server.map((entry) => entry.path));
       setRecents([...server, ...local.filter((entry) => !serverPaths.has(entry.path))]);
@@ -54,7 +63,7 @@ export function ProjectPicker({ value, onChange, variant = 'boxed' }: ProjectPic
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, apiBase]);
 
   const recentPaths = useMemo(() => new Set(recents.map((entry) => entry.path)), [recents]);
   const catalogProjects = projects.filter((project) => !recentPaths.has(project.path));
@@ -187,6 +196,7 @@ export function ProjectPicker({ value, onChange, variant = 'boxed' }: ProjectPic
         open={browserOpen}
         onSelect={selectProject}
         onCancel={() => setBrowserOpen(false)}
+        apiBase={apiBase}
       />
     </>
   );

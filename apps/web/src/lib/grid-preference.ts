@@ -21,7 +21,11 @@ export const PRESET_COLUMNS: Record<GridPreset, number> = {
   '3x2': 3,
 };
 
-export type GridSlot = { sessionId?: string };
+export type GridSlot = {
+  sessionId?: string;
+  /** Hub machine the session lives on; absent = the machine this page talks to. */
+  machineId?: string;
+};
 
 export interface GridPreference {
   version: number;
@@ -58,7 +62,14 @@ export function fitSlots(slots: GridSlot[], preset: GridPreset): GridSlot[] {
   const next: GridSlot[] = [];
   for (let i = 0; i < count; i += 1) {
     const sessionId = slots[i]?.sessionId;
-    next.push(typeof sessionId === 'string' && sessionId ? { sessionId } : {});
+    if (typeof sessionId !== 'string' || !sessionId) {
+      next.push({});
+      continue;
+    }
+    const machineId = slots[i]?.machineId;
+    next.push(
+      typeof machineId === 'string' && machineId ? { sessionId, machineId } : { sessionId },
+    );
   }
   return next;
 }

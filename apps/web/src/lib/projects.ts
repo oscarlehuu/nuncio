@@ -17,9 +17,9 @@ export function projectDisplayName(path: string | null | undefined): string | nu
   return parts[parts.length - 1] ?? path;
 }
 
-export async function fetchProjects(): Promise<Project[]> {
+export async function fetchProjects(base = ''): Promise<Project[]> {
   try {
-    const res = await fetch('/api/projects');
+    const res = await fetch(`${base}/api/projects`);
     if (!res.ok) return [];
     const data = await res.json();
     return Array.isArray(data) ? (data as Project[]) : [];
@@ -28,9 +28,11 @@ export async function fetchProjects(): Promise<Project[]> {
   }
 }
 
-export async function fetchRecentProjects(): Promise<Array<{ path: string; name?: string }>> {
+export async function fetchRecentProjects(
+  base = '',
+): Promise<Array<{ path: string; name?: string }>> {
   try {
-    const res = await fetch('/api/projects/recent');
+    const res = await fetch(`${base}/api/projects/recent`);
     if (!res.ok) return [];
     const data = await res.json();
     const items = Array.isArray(data?.items) ? data.items : [];
