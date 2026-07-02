@@ -24,8 +24,17 @@ vi.mock('./session-tile', () => ({
 }));
 
 vi.mock('./session-detail', () => ({
-  SessionDetail: ({ session }: { session: Session }) => (
-    <div data-testid="session-detail">detail:{session.title}</div>
+  SessionDetail: ({
+    session,
+    headerActions,
+  }: {
+    session: Session;
+    headerActions?: React.ReactNode;
+  }) => (
+    <div data-testid="session-detail">
+      detail:{session.title}
+      {headerActions}
+    </div>
   ),
 }));
 
@@ -36,6 +45,22 @@ vi.mock('./grid-slot-composer', () => ({
         create-in-slot
       </button>
       <input aria-label="slot-input" />
+    </div>
+  ),
+}));
+
+vi.mock('./remote-session-tile', () => ({
+  RemoteSessionTile: ({
+    machineId,
+    sessionId,
+    onGone,
+  }: {
+    machineId: string;
+    sessionId: string;
+    onGone: () => void;
+  }) => (
+    <div data-testid={`remote-tile-${machineId}-${sessionId}`}>
+      <button type="button" onClick={onGone}>{`gone-${sessionId}`}</button>
     </div>
   ),
 }));
@@ -102,7 +127,7 @@ function renderGrid(sessions: Session[], over: Partial<Parameters<typeof GridVie
   return render(gridElement(sessions, over));
 }
 
-function seedPreference(preset: string, slots: Array<{ sessionId?: string }>) {
+function seedPreference(preset: string, slots: Array<{ sessionId?: string; machineId?: string }>) {
   localStorage.setItem(
     GRID_PREFERENCE_STORAGE_KEY,
     JSON.stringify({ version: 1, preset, slots }),
@@ -207,6 +232,24 @@ describe('GridView', () => {
     rerender(gridElement([created], { onCreate }));
     expect(screen.getByTestId('tile-new-1')).toBeInTheDocument();
     expect(screen.queryByTestId('empty-slot')).not.toBeInTheDocument();
+  });
+
+  it('renders a remote tile for a machine-bound slot and degrades it when gone', async () => {
+    seedPreference('2x1', [{ sessionId: 'r1', machineId: 'studio' }, {}]);
+    renderGrid([]);
+
+    expect(screen.getByTestId('remote-tile-studio-r1')).toBeInTheDocument();
+    // Local dead-session degradation must not swallow machine-bound slots.
+    expect(screen.getAllByTestId('empty-slot')).toHaveLength(1);
+
+    await userEvent.click(screen.getByRole('button', { name: 'gone-r1' }));
+
+    expect(screen.queryByTestId('remote-tile-studio-r1')).not.toBeInTheDocument();
+    expect(screen.getAllByTestId('empty-slot')).toHaveLength(2);
+    await waitFor(() => {
+      const raw = JSON.parse(localStorage.getItem(GRID_PREFERENCE_STORAGE_KEY) ?? '{}');
+      expect(raw.slots[0]).toEqual({});
+    });
   });
 
   describe('keyboard shortcuts', () => {

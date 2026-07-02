@@ -18,6 +18,8 @@ interface FolderBrowserProps {
   initialPath?: string;
   onSelect: (path: string) => void;
   onCancel: () => void;
+  /** Origin-absolute API base to browse another hub machine's filesystem. */
+  apiBase?: string;
 }
 
 /**
@@ -26,7 +28,7 @@ interface FolderBrowserProps {
  * expose host filesystem paths. Works on every client including the iPhone
  * PWA, since browsing happens via `GET /api/fs/dirs` on the server.
  */
-export function FolderBrowser({ open, initialPath, onSelect, onCancel }: FolderBrowserProps) {
+export function FolderBrowser({ open, initialPath, onSelect, onCancel, apiBase = '' }: FolderBrowserProps) {
   const [listing, setListing] = useState<DirListing | null>(null);
   const [currentPath, setCurrentPath] = useState<string | undefined>(initialPath);
   const [loading, setLoading] = useState(false);
@@ -36,7 +38,7 @@ export function FolderBrowser({ open, initialPath, onSelect, onCancel }: FolderB
     setLoading(true);
     setError(null);
     try {
-      const result = await fetchDirectories(path);
+      const result = await fetchDirectories(path, apiBase);
       setListing(result);
       setCurrentPath(result.current);
     } catch {
@@ -44,7 +46,7 @@ export function FolderBrowser({ open, initialPath, onSelect, onCancel }: FolderB
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [apiBase]);
 
   useEffect(() => {
     if (open) void load(initialPath);

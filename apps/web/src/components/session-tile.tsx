@@ -24,6 +24,8 @@ interface SessionTileProps {
   /** Steer callback, wired only for the focused tile's single-line composer. */
   onSteer?: (message: string) => Promise<void>;
   steering?: boolean;
+  /** Origin-absolute API base when the session lives on another hub machine. */
+  apiBase?: string;
 }
 
 /**
@@ -74,8 +76,9 @@ export function SessionTile({
   onMaximize,
   onSteer,
   steering,
+  apiBase = '',
 }: SessionTileProps) {
-  const { events } = useSessionStream(session.id);
+  const { events } = useSessionStream(session.id, apiBase);
   const blocks = useTranscriptBlocks(events);
   const tail = useMemo(() => blocks.slice(-TILE_TAIL_LENGTH), [blocks]);
   const pending = useMemo(() => derivePendingUserInput(events).length > 0, [events]);

@@ -73,6 +73,10 @@ interface SessionDetailProps {
   ) => void | Promise<void>;
   steering?: boolean;
   lifecycleBusy?: boolean;
+  /** Rendered in the header's right control group, before the panel toggle
+   * (e.g. the grid's restore button). In flow — the far-left column belongs
+   * to the sidebar hover rail and absolute corners collide with it. */
+  headerActions?: React.ReactNode;
 }
 
 export function SessionDetail({
@@ -92,6 +96,7 @@ export function SessionDetail({
   onRespondProviderRequest,
   steering,
   lifecycleBusy,
+  headerActions,
 }: SessionDetailProps) {
   const [steerText, setSteerText] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -298,6 +303,7 @@ export function SessionDetail({
         </div>
 
         <div className="absolute right-4 md:right-5 top-1/2 -translate-y-1/2 flex items-center gap-1">
+          {headerActions}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button

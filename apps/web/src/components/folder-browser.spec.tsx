@@ -41,7 +41,7 @@ describe('FolderBrowser', () => {
     expect(await screen.findByText('/Users/dev')).toBeInTheDocument();
     expect(screen.getByText('alpha')).toBeInTheDocument();
     expect(screen.getByText('beta-repo')).toBeInTheDocument();
-    expect(mockFetchDirectories).toHaveBeenCalledWith(undefined);
+    expect(mockFetchDirectories).toHaveBeenCalledWith(undefined, '');
   });
 
   it('shows a git badge on git-repo entries', async () => {
@@ -63,7 +63,7 @@ describe('FolderBrowser', () => {
     await userEvent.click(screen.getByText('alpha'));
 
     await waitFor(() => expect(screen.getByText('/Users/dev/alpha')).toBeInTheDocument());
-    expect(mockFetchDirectories).toHaveBeenNthCalledWith(2, '/Users/dev/alpha');
+    expect(mockFetchDirectories).toHaveBeenNthCalledWith(2, '/Users/dev/alpha', '');
   });
 
   it('navigates up via the parent button', async () => {
@@ -76,7 +76,7 @@ describe('FolderBrowser', () => {
     await userEvent.click(screen.getByRole('button', { name: /parent/i }));
 
     await waitFor(() => expect(screen.getByText('/Users')).toBeInTheDocument());
-    expect(mockFetchDirectories).toHaveBeenNthCalledWith(2, '/Users');
+    expect(mockFetchDirectories).toHaveBeenNthCalledWith(2, '/Users', '');
   });
 
   it('hides the parent button at the filesystem root', async () => {
@@ -152,6 +152,6 @@ describe('FolderBrowser', () => {
     renderWithTheme(<FolderBrowser open initialPath="/custom" onSelect={vi.fn()} onCancel={vi.fn()} />);
 
     await screen.findByText('/custom');
-    expect(mockFetchDirectories).toHaveBeenCalledWith('/custom');
+    expect(mockFetchDirectories).toHaveBeenCalledWith('/custom', '');
   });
 });

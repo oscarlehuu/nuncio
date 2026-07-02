@@ -15,8 +15,10 @@ import {
   type GridPreset,
   type GridSlot,
 } from '../lib/grid-preference';
+import { machineHref } from '../lib/hub-api';
 import { SessionDetail } from './session-detail';
 import { SessionTile } from './session-tile';
+import { RemoteSessionTile } from './remote-session-tile';
 import { GridSlotComposer } from './grid-slot-composer';
 import type { ApprovalMode } from './approval-mode-picker';
 import { Button } from '@/components/ui/button';
@@ -77,9 +79,21 @@ export function GridView(props: GridViewProps) {
   );
 
   const bindSlot = useCallback(
-    (index: number, sessionId: string) => {
+    (index: number, sessionId: string, machineId?: string) => {
       setSlots((prev) => {
-        const next = prev.map((s, i) => (i === index ? { sessionId } : s));
+        const bound: GridSlot = machineId ? { sessionId, machineId } : { sessionId };
+        const next = prev.map((s, i) => (i === index ? bound : s));
+        persist(preset, next);
+        return next;
+      });
+    },
+    [persist, preset],
+  );
+
+  const clearSlot = useCallback(
+    (index: number) => {
+      setSlots((prev) => {
+        const next = prev.map((s, i) => (i === index ? {} : s));
         persist(preset, next);
         return next;
       });
@@ -121,7 +135,13 @@ export function GridView(props: GridViewProps) {
           setMaximizedSlot(null);
         } else if (focusedSlot !== null && slots[focusedSlot]?.sessionId) {
           e.preventDefault();
-          setMaximizedSlot(focusedSlot);
+          const slot = slots[focusedSlot];
+          if (slot.machineId && slot.sessionId) {
+            // Remote sessions open full-fidelity on their machine's own base.
+            window.location.assign(`${machineHref(slot.machineId)}session/${slot.sessionId}`);
+          } else {
+            setMaximizedSlot(focusedSlot);
+          }
         }
       } else if (e.key === 'Escape' && maximizedSlot !== null) {
         e.preventDefault();
@@ -218,6 +238,18 @@ export function GridView(props: GridViewProps) {
           }}
         >
           {slots.map((slot, index) => {
+            if (slot.sessionId && slot.machineId) {
+              return (
+                <RemoteSessionTile
+                  key={`${slot.machineId}:${slot.sessionId}`}
+                  machineId={slot.machineId}
+                  sessionId={slot.sessionId}
+                  focused={focusedSlot === index}
+                  onFocus={() => setFocusedSlot(index)}
+                  onGone={() => clearSlot(index)}
+                />
+              );
+            }
             const session = slot.sessionId ? sessionsById.get(slot.sessionId) : undefined;
             // Dead-session restore: a binding whose session is gone degrades to empty.
             if (slot.sessionId && !session) {
@@ -226,7 +258,7 @@ export function GridView(props: GridViewProps) {
                   key={index}
                   {...props}
                   boundSessionIds={boundSessionIds}
-                  onBind={(id) => bindSlot(index, id)}
+                  onBind={(id, machineId) => bindSlot(index, id, machineId)}
                 />
               );
             }
@@ -249,7 +281,7 @@ export function GridView(props: GridViewProps) {
                 key={index}
                 {...props}
                 boundSessionIds={boundSessionIds}
-                onBind={(id) => bindSlot(index, id)}
+                onBind={(id, machineId) => bindSlot(index, id, machineId)}
               />
             );
           })}
@@ -265,7 +297,10 @@ function SlotComposerCell({
   boundSessionIds,
   onCreate,
   onBind,
-}: GridViewProps & { boundSessionIds: Set<string>; onBind: (id: string) => void }) {
+}: GridViewProps & {
+  boundSessionIds: Set<string>;
+  onBind: (id: string, machineId?: string) => void;
+}) {
   return (
     <GridSlotComposer
       providers={providers}
@@ -323,20 +358,20 @@ function MaximizedSession({
 
   return (
     <div className="relative flex flex-1 flex-col min-h-0">
-      <div className="absolute right-3 top-2.5 z-20">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="h-8 gap-1.5 shadow-sm"
-          onClick={onRestoreGrid}
-          aria-label="Restore grid"
-        >
-          <Minimize2 className="size-3.5" />
-          Grid
-        </Button>
-      </div>
       <SessionDetail
+        headerActions={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1.5"
+            onClick={onRestoreGrid}
+            aria-label="Restore grid"
+          >
+            <Minimize2 className="size-3.5" />
+            Grid
+          </Button>
+        }
         session={session}
         events={events}
         providers={providers}

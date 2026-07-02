@@ -23,9 +23,11 @@ import { FolderBrowser } from './folder-browser';
 interface ProjectPickerProps {
   value?: string;
   onChange: (path: string) => void;
+  /** Origin-absolute API base to browse another hub machine's filesystem. */
+  apiBase?: string;
 }
 
-export function ProjectPicker({ value, onChange }: ProjectPickerProps) {
+export function ProjectPicker({ value, onChange, apiBase = '' }: ProjectPickerProps) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [open, setOpen] = useState(false);
   const [customMode, setCustomMode] = useState(false);
@@ -34,15 +36,17 @@ export function ProjectPicker({ value, onChange }: ProjectPickerProps) {
   const [recents, setRecents] = useState<RecentProject[]>([]);
 
   useEffect(() => {
-    void fetchProjects().then(setProjects);
-  }, []);
+    setProjects([]);
+    void fetchProjects(apiBase).then(setProjects);
+  }, [apiBase]);
 
   useEffect(() => {
     if (!open) return;
-    const local = loadProjectPreference().recentProjects;
+    // Local (this-browser) recents describe THIS machine's paths only.
+    const local = apiBase ? [] : loadProjectPreference().recentProjects;
     setRecents(local);
     let cancelled = false;
-    void fetchRecentProjects().then((server) => {
+    void fetchRecentProjects(apiBase).then((server) => {
       if (cancelled || server.length === 0) return;
       const serverPaths = new Set(server.map((entry) => entry.path));
       setRecents([...server, ...local.filter((entry) => !serverPaths.has(entry.path))]);
@@ -50,7 +54,7 @@ export function ProjectPicker({ value, onChange }: ProjectPickerProps) {
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, apiBase]);
 
   const recentPaths = useMemo(() => new Set(recents.map((entry) => entry.path)), [recents]);
   const catalogProjects = projects.filter((project) => !recentPaths.has(project.path));
@@ -174,6 +178,7 @@ export function ProjectPicker({ value, onChange }: ProjectPickerProps) {
         open={browserOpen}
         onSelect={selectProject}
         onCancel={() => setBrowserOpen(false)}
+        apiBase={apiBase}
       />
     </>
   );
