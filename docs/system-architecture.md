@@ -308,6 +308,54 @@ constant-time validation, header/cookie parsing, guard allow/deny matrix) and
 `apps/server/test/unit/terminal/terminal.ws.auth.spec.ts` (upgrade authorization matrix);
 `apps/web/src/components/auth-gate.spec.tsx` (gate render, login success/failure, fail-open).
 
+## Hub mode (reach many machines through one URL)
+
+A nuncio server with **hub mode** on (setting `NUNCIO_HUB_MODE`, default off) also
+proxies `/m/<machine>/…` to your other tailnet machines running nuncio — one front door
+for N machines. Each machine stays a full, directly-reachable nuncio; the hub is a
+convenience layer, not a single point the others depend on.
+
+```
+apps/server/src/hub/
+  hub-routing.ts          parseHubPath + resolveMachineTarget — pure, SSRF-guarded
+  hub-registry.service.ts auto-discovers same-account tailnet peers running nuncio
+  hub.service.ts          enabled() — reads NUNCIO_HUB_MODE
+  hub.proxy.ts            configureHubProxy — HTTP + SSE streaming proxy (buildProxyRequest is pure)
+  hub.ws-proxy.ts         attachHubWebSocketProxy — terminal WS relay
+  hub.controller.ts       GET /api/hub/machines (switcher data)
+```
+
+- **Path routing, not cookies.** The machine lives in the URL path (`/m/<machine>/api/…`),
+  so per-tab parallelism is natural (two tabs = two machines) and SSE/WebSocket carry the
+  target automatically — `EventSource`/`WebSocket` cannot set a routing header. This is why
+  routing is path-based.
+- **SSRF guard (the review priority).** `<machine>` is untrusted URL input. `parseHubPath`
+  charset-validates it; `resolveMachineTarget` maps it **only** against the discovered
+  registry — an unknown name resolves to null (404), never to a constructed URL. NEVER build
+  a proxy target from the path segment directly.
+- **Auto-discovery.** `HubRegistryService` lists same-account, online tailnet peers (from
+  `TailscaleService.status`) that answer `GET /api/health`, plus self; cached ~15s. This
+  registry is the sole source of proxy targets. Machine id = MagicDNS first label.
+- **Hub→machine auth = tailnet identity.** The hub dials the target over its MagicDNS name,
+  so the target sees the hub's tailnet address and trusts it via whois (same-account). No
+  token flows between hub and machine, though the client's cookie/Authorization is forwarded.
+- **Streaming.** `configureHubProxy` reads the upstream `fetch` body with a reader and
+  `res.write`s chunks as they arrive — SSE must not be buffered. `attachHubWebSocketProxy`
+  relays terminal frames verbatim both ways (buffering client frames until the upstream WS
+  opens). Both run before static serving / the local terminal WS handler and ignore non-hub
+  paths, so the hub is also a normal nuncio for its own machine at the root.
+- **Frontend base path.** `apps/web/src/lib/api-base.ts`: `resolveBasePath(location.pathname)`
+  yields `/m/<machine>` (or `''` when served directly). `installApiBaseFetch` wraps `fetch`
+  once to prefix `/api` calls; SSE/WS use `withBase`/`toWsUrl`; `BrowserRouter` gets the
+  basename. `MachineSwitcher` (sidebar) queries the **hub itself** (origin-absolute, bypassing
+  the rewrite) so it persists at `/m/<machine>/`, and links each machine at `/m/<name>/` as a
+  plain anchor (cmd-click → parallel tab).
+- **Deferred:** a single aggregated session list across machines (one pane for all). The
+  current model is per-machine context, which matches how delegation works.
+- **Tests:** `apps/server/test/unit/hub/*` (routing/SSRF, registry discovery, request build);
+  `apps/web/src/lib/api-base.spec.ts` + `machine-switcher.spec.tsx`. Live-verified end to end
+  through a real browser (switcher, proxy, SSE, terminal WS, SSRF 404).
+
 ## Single-port web serving (`web-static-assets.ts`)
 
 `configureWebAppServing(app, distPath?)` (`apps/server/src/web-static-assets.ts:16`) makes the daemon serve the built Vite SPA (`apps/web/dist`) as same-origin static assets, so the UI and API share one port with no Vite dev proxy. This is the keystone for the Electron shell (loads `http://localhost:PORT` directly) and a future remote web deployment.
