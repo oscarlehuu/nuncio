@@ -13,6 +13,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { MachineSwitcher } from './machine-switcher';
 import { ModeToggle } from '@/components/mode-toggle';
 import { Input } from '@/components/ui/input';
 import {
@@ -121,6 +122,7 @@ export function Sidebar({
           />
           <span className="font-semibold text-[14.5px] tracking-tight">Nuncio</span>
         </div>
+        <MachineSwitcher />
         <nav className="mt-3.5 flex flex-col gap-px">
           <Button
             variant="secondary"

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { toWsUrl } from '../lib/api-base';
 
 interface TerminalPanelProps {
   cwd?: string;
@@ -64,7 +65,7 @@ export function TerminalPanel({ cwd, onExit }: TerminalPanelProps) {
 
     const startWebSocketBackend = () => {
       if (disposed) return;
-      const ws = new WebSocket(`${location.origin.replace(/^http/, 'ws')}/api/terminal`);
+      const ws = new WebSocket(toWsUrl(location.origin, '/api/terminal'));
       backendCleanup = () => ws.close();
       sendInputRef.current = (data) => {
         if (ws.readyState === WebSocket.OPEN) {
