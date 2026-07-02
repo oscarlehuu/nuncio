@@ -17,7 +17,7 @@ import { isCursorCliRecentlyActive } from './cursor-cli.active-run';
 import { formatInteractionAnswers } from '../../sessions/domain/format-interaction-answers';
 import {
   buildUserInputRequestedPayload,
-  type UserInputRequestedEventPayload,
+  findOpenUserInputRequest,
 } from '../../sessions/domain/interactive-tool-events';
 import { isInteractiveTool } from '../tool-interaction.registry';
 import type { InteractionResponse } from '../agents.types';
@@ -76,7 +76,7 @@ export class CursorCliProvider extends BaseAgentProvider {
     response: InteractionResponse,
     context: AgentRunContext,
   ): Promise<void> {
-    const requested = this.findOpenUserInputRequest(sessionId, requestId);
+    const requested = findOpenUserInputRequest(this.events.list(sessionId, 0), requestId);
     if (!requested) {
       throw new Error(`No pending user input request ${requestId}`);
     }
@@ -266,25 +266,4 @@ export class CursorCliProvider extends BaseAgentProvider {
     }
   }
 
-  private findOpenUserInputRequest(
-    sessionId: string,
-    requestId: string,
-  ): UserInputRequestedEventPayload | undefined {
-    let requested: UserInputRequestedEventPayload | undefined;
-    let resolved = false;
-
-    for (const event of this.events.list(sessionId, 0)) {
-      if (event.type === 'user_input_requested') {
-        const payload = event.payload as UserInputRequestedEventPayload;
-        if (payload.requestId === requestId) requested = payload;
-      }
-      if (event.type === 'user_input_resolved') {
-        const payload = event.payload as { requestId?: string };
-        if (payload.requestId === requestId) resolved = true;
-      }
-    }
-
-    if (!requested || resolved) return undefined;
-    return requested;
-  }
 }

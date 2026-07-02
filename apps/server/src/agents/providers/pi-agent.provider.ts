@@ -4,10 +4,15 @@ import type { ModelOptionsMap } from '../../models/model-options.types';
 import type { ModelGroupDto, ModelItemDto, ModelProviderDto } from '../../models/models.types';
 import { STATIC_MODEL_PROVIDERS } from '../../models/models.static';
 import { truncatePayload } from '../../sessions/domain/events.types';
+import { formatInteractionAnswers } from '../../sessions/domain/format-interaction-answers';
+import {
+  buildUserInputRequestedPayload,
+  findOpenUserInputRequest,
+} from '../../sessions/domain/interactive-tool-events';
 import { EventsRepository } from '../../sessions/persistence/events.repository';
 import { SessionsRepository } from '../../sessions/persistence/sessions.repository';
 import { SettingsService } from '../../settings/settings.service';
-import type { AgentRunContext } from '../agents.types';
+import type { AgentRunContext, InteractionResponse } from '../agents.types';
 import { BaseAgentProvider } from '../agents.base-provider';
 import { piThinkingDescriptors, resolvePiThinkingLevel } from './pi-thinking.helpers';
 
@@ -159,6 +164,41 @@ export class PiAgentProvider extends BaseAgentProvider {
     return true;
   }
 
+  supportsInteraction(): boolean {
+    return true;
+  }
+
+  /**
+   * Answer a pending interactive tool prompt. Pi extension tools resolve
+   * immediately in headless SDK runs (the extension runner has no UI context),
+   * so the answer is delivered as a steer: queued into the live stream when the
+   * run is still going, otherwise re-entering the run as a new steer prompt.
+   */
+  async submitInteraction(
+    sessionId: string,
+    requestId: string,
+    response: InteractionResponse,
+    context: AgentRunContext,
+  ): Promise<void> {
+    const requested = findOpenUserInputRequest(this.events.list(sessionId, 0), requestId);
+    if (!requested) {
+      throw new Error(`No pending user input request ${requestId}`);
+    }
+
+    this.pushEvent(
+      sessionId,
+      'user_input_resolved',
+      { requestId, resolvedBy: response.resolvedBy },
+      context.emit,
+    );
+
+    const formatted = formatInteractionAnswers(requested.questions, response);
+    const delivered = await this.steerMidRun(sessionId, formatted, context);
+    if (!delivered) {
+      await this.steer(sessionId, formatted, context);
+    }
+  }
+
   async interrupt(sessionId: string): Promise<void> {
     const handle = this.activeSessions.get(sessionId);
     if (!handle) return;
@@ -296,6 +336,8 @@ export class PiAgentProvider extends BaseAgentProvider {
     let thinkingOpen = false;
     let thinkingId: string | undefined;
     const openTools = new Map<string, string>();
+    /** Interactive tool calls surfaced as user_input_requested — no tool_start/tool_end pair. */
+    const userInputRequests = new Set<string>();
 
     const resetThinking = () => {
       accumulatedThinking = '';
@@ -351,6 +393,12 @@ export class PiAgentProvider extends BaseAgentProvider {
       if (event.type === 'tool_execution_start') {
         const callId = typeof event.toolCallId === 'string' ? event.toolCallId : crypto.randomUUID();
         const tool = typeof event.toolName === 'string' ? event.toolName : 'unknown';
+        const userInputPayload = buildUserInputRequestedPayload(tool, event.args, callId);
+        if (userInputPayload) {
+          userInputRequests.add(callId);
+          this.pushEvent(sessionId, 'user_input_requested', userInputPayload, context.emit);
+          return;
+        }
         openTools.set(callId, tool);
         const input = event.args !== undefined ? truncatePayload(event.args).value : undefined;
         this.pushEvent(
@@ -362,6 +410,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       }
       if (event.type === 'tool_execution_end') {
         const callId = typeof event.toolCallId === 'string' ? event.toolCallId : undefined;
+        if (callId && userInputRequests.delete(callId)) return;
         const tool = typeof event.toolName === 'string' ? event.toolName : 'unknown';
         if (callId) openTools.delete(callId);
         const output = event.result !== undefined ? truncatePayload(event.result).value : undefined;

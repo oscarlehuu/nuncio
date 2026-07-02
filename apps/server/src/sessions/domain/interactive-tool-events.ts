@@ -24,3 +24,29 @@ export function buildUserInputRequestedPayload(
     ...(normalized.title ? { title: normalized.title } : {}),
   };
 }
+
+/**
+ * Scan a session's event log for a user_input_requested event that has not
+ * been answered yet. Returns undefined for unknown or already-resolved ids.
+ */
+export function findOpenUserInputRequest(
+  events: Iterable<{ type: string; payload: unknown }>,
+  requestId: string,
+): UserInputRequestedEventPayload | undefined {
+  let requested: UserInputRequestedEventPayload | undefined;
+  let resolved = false;
+
+  for (const event of events) {
+    if (event.type === 'user_input_requested') {
+      const payload = event.payload as UserInputRequestedEventPayload;
+      if (payload.requestId === requestId) requested = payload;
+    }
+    if (event.type === 'user_input_resolved') {
+      const payload = event.payload as { requestId?: string };
+      if (payload.requestId === requestId) resolved = true;
+    }
+  }
+
+  if (!requested || resolved) return undefined;
+  return requested;
+}
