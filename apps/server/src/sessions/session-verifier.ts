@@ -39,6 +39,9 @@ export function resolveVerifyCommand(
   return null;
 }
 
+/** How long to keep draining output pipes after the shell itself has exited. */
+const OUTPUT_DRAIN_GRACE_MS = 500;
+
 export async function runVerifyCommand(
   command: VerifyCommand,
   cwd: string,
@@ -51,12 +54,19 @@ export async function runVerifyCommand(
     timedOut = true;
     proc.kill();
   }, timeoutMs);
+  const stdoutText = new Response(proc.stdout).text().catch(() => '');
+  const stderrText = new Response(proc.stderr).text().catch(() => '');
   try {
-    const [exitCode, stdout, stderr] = await Promise.all([
-      proc.exited,
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
+    const exitCode = await proc.exited;
+    // Grandchildren of the shell can inherit the pipes and keep them open past
+    // the shell's death (e.g. a killed `sh -c` whose child lives on). Buffered
+    // output is available immediately after exit, so cap the drain.
+    const drain = (text: Promise<string>) =>
+      Promise.race([
+        text,
+        new Promise<string>((resolve) => setTimeout(() => resolve(''), OUTPUT_DRAIN_GRACE_MS)),
+      ]);
+    const [stdout, stderr] = await Promise.all([drain(stdoutText), drain(stderrText)]);
     const output = `${stdout}${stderr}`;
     return {
       ok: !timedOut && exitCode === 0,
