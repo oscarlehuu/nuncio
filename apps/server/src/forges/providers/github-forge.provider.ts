@@ -1,223 +1,271 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { Injectable } from '@nestjs/common';
 import { SettingsService } from '../../settings/settings.service';
-import { githubCliToken } from '../cli-auth';
-import { BaseForgeProvider } from '../forges.base-provider';
 import type {
-  CreatePullRequestOptions,
-  ForgeAuth,
-  ForgeCheck,
-  ForgePullRequest,
+  CreateIssueOptions,
+  ForgeCapabilities,
+  ForgeFileDiff,
+  ForgeIssueDetail,
+  ForgeIssueSummary,
+  ForgePullRequestDetail,
+  ForgePullRequestSummary,
   ForgeRepoRef,
-  ForgeUser,
-  ForgeWebhookEvent,
+  ForgeReviewThread,
+  ForgeStateFilter,
+  MergePullRequestOptions,
+  MergeResult,
+  SubmitReviewOptions,
 } from '../forges.types';
+import { GithubForgeActions } from './github-forge.actions';
+import {
+  mapGithubComment,
+  mapGithubFileDiff,
+  mapGithubIssueSummary,
+  mapGithubPullDetail,
+  mapGithubPullSummary,
+  mapGithubReviewDecision,
+  mapGithubThread,
+  type GithubCommentResponse,
+  type GithubFileResponse,
+  type GithubIssueResponse,
+  type GithubPullDetailResponse,
+  type GithubPullSummaryResponse,
+  type GithubThreadNode,
+} from './github-forge.mappers';
 
-interface GithubWebhookActor {
-  login?: string;
-}
+const THREADS_QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviewDecision
+      reviewThreads(first: 100) {
+        nodes {
+          id isResolved isOutdated path line
+          comments(first: 100) {
+            nodes { databaseId author { login } body createdAt }
+          }
+        }
+      }
+    }
+  }
+}`;
 
-interface GithubWebhookIssue {
-  number: number;
-  title?: string;
-  body?: string | null;
-  labels?: Array<{ name: string }>;
-}
+const RESOLVE_MUTATION = `mutation($threadId: ID!) {
+  resolveReviewThread(input: { threadId: $threadId }) { thread { id } }
+}`;
 
-interface GithubWebhookPayload {
-  action?: string;
-  issue?: GithubWebhookIssue;
-  pull_request?: GithubWebhookIssue;
+const UNRESOLVE_MUTATION = `mutation($threadId: ID!) {
+  unresolveReviewThread(input: { threadId: $threadId }) { thread { id } }
+}`;
+
+interface ThreadsQueryData {
   repository?: {
-    name?: string;
-    full_name?: string;
-    default_branch?: string;
-    owner?: GithubWebhookActor;
+    pullRequest?: {
+      reviewDecision?: string | null;
+      reviewThreads?: { nodes?: GithubThreadNode[] };
+    };
   };
 }
 
-interface GithubUserResponse {
-  login: string;
-  name?: string | null;
-}
-
-interface GithubPullRequestResponse {
-  number: number;
-  html_url: string;
-  state: string;
-  title: string;
+interface GithubMergeResponse {
   merged?: boolean;
-}
-
-interface GithubCheckRunResponse {
-  name: string;
-  status: string;
-  conclusion: string | null;
-}
-
-interface GithubCheckRunsResponse {
-  check_runs?: GithubCheckRunResponse[];
+  sha?: string | null;
+  message?: string;
 }
 
 @Injectable()
-export class GithubForgeProvider extends BaseForgeProvider {
-  readonly id = 'github';
-  readonly name = 'GitHub';
-
-  private cachedAuth?: ForgeAuth | null;
-
-  constructor(private readonly settings: SettingsService) {
-    super();
+export class GithubForgeProvider extends GithubForgeActions {
+  constructor(settings: SettingsService) {
+    super(settings);
   }
 
-  async isAvailable(): Promise<boolean> {
-    return (await this.resolveAuth()) !== null;
+  capabilities(): ForgeCapabilities {
+    return {
+      requestChanges: true,
+      rebaseMerge: true,
+      mergeWhenChecksPass: false,
+      resolveThreads: true,
+      updateBranch: true,
+      rerunFailedOnly: true,
+    };
   }
 
-  async resolveAuth(): Promise<ForgeAuth | null> {
-    if (this.cachedAuth !== undefined) return this.cachedAuth;
-    const token = this.settings.resolve('GITHUB_TOKEN')?.trim();
-    if (token) {
-      this.cachedAuth = { token, method: 'token' };
-      return this.cachedAuth;
-    }
-    const cliToken = await (this.cliTokenOverride ?? githubCliToken)();
-    this.cachedAuth = cliToken ? { token: cliToken, method: 'cli' } : null;
-    return this.cachedAuth;
-  }
-
-  async getCurrentUser(): Promise<ForgeUser> {
-    const data = await this.request<GithubUserResponse>(`${this.resolveApiBase()}/user`, {
-      headers: await this.authHeaders(),
-    });
-    return { login: data.login, name: data.name ?? null };
-  }
-
-  async createPullRequest(
+  async listPullRequests(
     repo: ForgeRepoRef,
-    opts: CreatePullRequestOptions,
-  ): Promise<ForgePullRequest> {
-    const data = await this.request<GithubPullRequestResponse>(`${this.repoUrl(repo)}/pulls`, {
-      method: 'POST',
-      headers: await this.authHeaders(),
-      body: JSON.stringify({
-        title: opts.title,
-        body: opts.body,
-        head: opts.head,
-        base: opts.base,
-        draft: opts.draft,
-      }),
-    });
-    return this.mapPullRequest(data);
-  }
-
-  async getPullRequest(repo: ForgeRepoRef, number: number): Promise<ForgePullRequest> {
-    const data = await this.request<GithubPullRequestResponse>(`${this.repoUrl(repo)}/pulls/${number}`, {
-      headers: await this.authHeaders(),
-    });
-    return this.mapPullRequest(data);
-  }
-
-  async listChecks(repo: ForgeRepoRef, ref: string): Promise<ForgeCheck[]> {
-    const data = await this.request<GithubCheckRunsResponse>(
-      `${this.repoUrl(repo)}/commits/${encodeURIComponent(ref)}/check-runs`,
+    state: ForgeStateFilter,
+  ): Promise<ForgePullRequestSummary[]> {
+    const data = await this.request<GithubPullSummaryResponse[]>(
+      `${this.repoUrl(repo)}/pulls?state=${state}&sort=updated&direction=desc&per_page=50`,
       { headers: await this.authHeaders() },
     );
-    return (data.check_runs ?? []).map((check) => ({
-      name: check.name,
-      status: check.status,
-      conclusion: check.conclusion ?? null,
-    }));
+    return (data ?? []).map(mapGithubPullSummary);
   }
 
-  async addComment(repo: ForgeRepoRef, number: number, body: string): Promise<void> {
-    await this.request<unknown>(`${this.repoUrl(repo)}/issues/${number}/comments`, {
+  async getPullRequestDetail(repo: ForgeRepoRef, number: number): Promise<ForgePullRequestDetail> {
+    const [data, threads] = await Promise.all([
+      this.request<GithubPullDetailResponse>(`${this.repoUrl(repo)}/pulls/${number}`, {
+        headers: await this.authHeaders(),
+      }),
+      this.threadsQuery(repo, number).catch(() => null),
+    ]);
+    const decision = threads?.repository?.pullRequest?.reviewDecision ?? null;
+    return mapGithubPullDetail(data, mapGithubReviewDecision(decision));
+  }
+
+  async listPullRequestFiles(repo: ForgeRepoRef, number: number): Promise<ForgeFileDiff[]> {
+    const data = await this.request<GithubFileResponse[]>(
+      `${this.repoUrl(repo)}/pulls/${number}/files?per_page=100`,
+      { headers: await this.authHeaders() },
+    );
+    return (data ?? []).map(mapGithubFileDiff);
+  }
+
+  async listReviewThreads(repo: ForgeRepoRef, number: number): Promise<ForgeReviewThread[]> {
+    const data = await this.threadsQuery(repo, number);
+    const nodes = data.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+    return nodes.map(mapGithubThread);
+  }
+
+  async replyToThread(
+    repo: ForgeRepoRef,
+    number: number,
+    replyTargetId: string,
+    body: string,
+  ): Promise<void> {
+    await this.request<unknown>(
+      `${this.repoUrl(repo)}/pulls/${number}/comments/${encodeURIComponent(replyTargetId)}/replies`,
+      { method: 'POST', headers: await this.authHeaders(), body: JSON.stringify({ body }) },
+    );
+  }
+
+  async resolveThread(
+    _repo: ForgeRepoRef,
+    _number: number,
+    threadId: string,
+    resolved: boolean,
+  ): Promise<void> {
+    await this.graphql<unknown>(resolved ? RESOLVE_MUTATION : UNRESOLVE_MUTATION, { threadId });
+  }
+
+  async submitReview(repo: ForgeRepoRef, number: number, opts: SubmitReviewOptions): Promise<void> {
+    const event =
+      opts.event === 'approve'
+        ? 'APPROVE'
+        : opts.event === 'request_changes'
+          ? 'REQUEST_CHANGES'
+          : 'COMMENT';
+    await this.request<unknown>(`${this.repoUrl(repo)}/pulls/${number}/reviews`, {
       method: 'POST',
       headers: await this.authHeaders(),
-      body: JSON.stringify({ body }),
+      body: JSON.stringify({ event, body: opts.body ?? '' }),
     });
   }
 
-  verifyWebhookSignature(headers: Record<string, string | undefined>, rawBody: string): boolean {
-    const secret = this.settings.resolve('GITHUB_WEBHOOK_SECRET')?.trim();
-    if (!secret) return false; // fail closed when unconfigured
-    const provided = headers['x-hub-signature-256'];
-    if (!provided) return false;
-    const expected = `sha256=${createHmac('sha256', secret).update(rawBody).digest('hex')}`;
-    const a = Buffer.from(provided);
-    const b = Buffer.from(expected);
-    if (a.length !== b.length) return false;
-    return timingSafeEqual(a, b);
+  async mergePullRequest(
+    repo: ForgeRepoRef,
+    number: number,
+    opts: MergePullRequestOptions,
+  ): Promise<MergeResult> {
+    const data = await this.request<GithubMergeResponse>(`${this.repoUrl(repo)}/pulls/${number}/merge`, {
+      method: 'PUT',
+      headers: await this.authHeaders(),
+      body: JSON.stringify({
+        merge_method: opts.method,
+        commit_title: opts.commitTitle,
+        commit_message: opts.commitMessage,
+      }),
+    });
+    if (data.merged && opts.deleteSourceBranch) {
+      await this.deleteSourceBranch(repo, number);
+    }
+    return { merged: data.merged ?? false, sha: data.sha ?? null, message: data.message ?? '' };
   }
 
-  parseWebhookEvent(
-    headers: Record<string, string | undefined>,
-    payload: unknown,
-  ): ForgeWebhookEvent | null {
-    const eventType = headers['x-github-event'];
-    const data = (payload ?? {}) as GithubWebhookPayload;
-    const repository = data.repository;
-    if (!repository) return null;
-
-    const base = {
-      provider: this.id,
-      deliveryId: headers['x-github-delivery'] ?? '',
-      action: data.action ?? '',
-      owner: repository.owner?.login ?? '',
-      repo: repository.name ?? '',
-      repoFullName: repository.full_name ?? '',
-      defaultBranch: repository.default_branch ?? '',
-    };
-
-    if (eventType === 'issues' && data.issue) {
-      return { ...base, kind: 'issue', ...this.mapIssueFields(data.issue) };
-    }
-    if (eventType === 'pull_request' && data.pull_request) {
-      return { ...base, kind: 'pull_request', ...this.mapIssueFields(data.pull_request) };
-    }
-    return null;
+  private async deleteSourceBranch(repo: ForgeRepoRef, number: number): Promise<void> {
+    const detail = await this.request<GithubPullDetailResponse>(
+      `${this.repoUrl(repo)}/pulls/${number}`,
+      { headers: await this.authHeaders() },
+    );
+    const branch = detail.head?.ref;
+    if (!branch) return;
+    await this.request<unknown>(`${this.repoUrl(repo)}/git/refs/heads/${encodeURIComponent(branch)}`, {
+      method: 'DELETE',
+      headers: await this.authHeaders(),
+    }).catch(() => {
+      // Branch already gone (auto-delete on merge) — not an error worth surfacing.
+    });
   }
 
-  private mapIssueFields(issue: GithubWebhookIssue) {
+  async updatePullRequestState(
+    repo: ForgeRepoRef,
+    number: number,
+    state: 'open' | 'closed',
+  ): Promise<void> {
+    await this.request<unknown>(`${this.repoUrl(repo)}/pulls/${number}`, {
+      method: 'PATCH',
+      headers: await this.authHeaders(),
+      body: JSON.stringify({ state }),
+    });
+  }
+
+  async updateBranch(repo: ForgeRepoRef, number: number): Promise<void> {
+    await this.request<unknown>(`${this.repoUrl(repo)}/pulls/${number}/update-branch`, {
+      method: 'PUT',
+      headers: await this.authHeaders(),
+      body: JSON.stringify({}),
+    });
+  }
+
+  async listIssues(repo: ForgeRepoRef, state: ForgeStateFilter): Promise<ForgeIssueSummary[]> {
+    const data = await this.request<GithubIssueResponse[]>(
+      `${this.repoUrl(repo)}/issues?state=${state}&sort=updated&direction=desc&per_page=50`,
+      { headers: await this.authHeaders() },
+    );
+    // GitHub's issues endpoint also returns PRs; keep plain issues only.
+    return (data ?? []).filter((item) => !item.pull_request).map(mapGithubIssueSummary);
+  }
+
+  async getIssue(repo: ForgeRepoRef, number: number): Promise<ForgeIssueDetail> {
+    const [issue, comments] = await Promise.all([
+      this.request<GithubIssueResponse>(`${this.repoUrl(repo)}/issues/${number}`, {
+        headers: await this.authHeaders(),
+      }),
+      this.request<GithubCommentResponse[]>(
+        `${this.repoUrl(repo)}/issues/${number}/comments?per_page=100`,
+        { headers: await this.authHeaders() },
+      ),
+    ]);
     return {
-      number: issue.number,
-      title: issue.title ?? '',
+      ...mapGithubIssueSummary(issue),
       body: issue.body ?? '',
-      labels: (issue.labels ?? []).map((label) => label.name),
+      comments: (comments ?? []).map(mapGithubComment),
     };
   }
 
-  bustCache(): void {
-    this.cachedAuth = undefined;
+  async addIssueComment(repo: ForgeRepoRef, number: number, body: string): Promise<void> {
+    await this.addComment(repo, number, body);
   }
 
-  private async authHeaders(): Promise<HeadersInit> {
-    const auth = await this.resolveAuth();
-    if (!auth) {
-      throw new UnauthorizedException('GitHub token is not configured');
-    }
-    return {
-      Authorization: `Bearer ${auth.token}`,
-      Accept: 'application/vnd.github+json',
-    };
+  async updateIssueState(repo: ForgeRepoRef, number: number, state: 'open' | 'closed'): Promise<void> {
+    await this.request<unknown>(`${this.repoUrl(repo)}/issues/${number}`, {
+      method: 'PATCH',
+      headers: await this.authHeaders(),
+      body: JSON.stringify({ state }),
+    });
   }
 
-  private repoUrl(repo: ForgeRepoRef): string {
-    return `${this.resolveApiBase()}/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.repo)}`;
+  async createIssue(repo: ForgeRepoRef, opts: CreateIssueOptions): Promise<ForgeIssueSummary> {
+    const data = await this.request<GithubIssueResponse>(`${this.repoUrl(repo)}/issues`, {
+      method: 'POST',
+      headers: await this.authHeaders(),
+      body: JSON.stringify({ title: opts.title, body: opts.body, labels: opts.labels }),
+    });
+    return mapGithubIssueSummary(data);
   }
 
-  private mapPullRequest(data: GithubPullRequestResponse): ForgePullRequest {
-    return {
-      number: data.number,
-      url: data.html_url,
-      // GitHub reports a merged PR as state 'closed' + merged:true; surface 'merged'.
-      state: data.merged ? 'merged' : data.state,
-      title: data.title,
-    };
-  }
-
-  private resolveApiBase(): string {
-    const configured = this.settings.resolve('GITHUB_API_URL')?.trim() || 'https://api.github.com';
-    return configured.replace(/\/+$/, '');
+  private threadsQuery(repo: ForgeRepoRef, number: number): Promise<ThreadsQueryData> {
+    return this.graphql<ThreadsQueryData>(THREADS_QUERY, {
+      owner: repo.owner,
+      repo: repo.repo,
+      number,
+    });
   }
 }
