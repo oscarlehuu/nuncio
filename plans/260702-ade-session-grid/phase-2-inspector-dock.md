@@ -23,3 +23,12 @@
 ## Risks
 
 - Panel components may assume the old mount context (widths, containers) — verify each in the dock at realistic sidebar widths in a real browser (per memory: jsdom misses layout/Radix bugs).
+
+## Outcome (shipped 2026-07-02)
+
+The dock already existed inside `SessionDetail` (SCM/Files/Terminal/Browser tab rail), so
+this phase reduced to: wiring the orphaned `PrPanel` into the SCM tab, persisting the dock's
+open state + last tab (new `inspector-preference` localStorage key — kept separate from
+`grid-preference` because the dock lives in `SessionDetail`, so `/session/:id` benefits too),
+and the grid keyboard shortcuts. The Context tab was not moved into the dock — the context
+usage button already sits in the composer and re-homing it added nothing.
