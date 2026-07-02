@@ -1,6 +1,8 @@
 # Runtime Durability — Restart-Safe Daemon + Event-Log Hygiene
 
-**Status:** Planning
+**Status:** Shipped (2026-07-02, both phases; TDD)
+
+**Outcome notes:** pending-approval persistence + boot expiry already existed (`resolveStaleProviderRequests`, reason `server_restarted`) — Phase 1 shipped only the session sweep + Pi steer-after-restart proof. Phase 2 additionally fixed an O(n²) hot path found during implementation: the service re-read the full event list on every live agent event; providers now emit the appended event (seq included) and the service fans it out directly.
 **Thesis:** Nuncio is only trustworthy enough to dogfood ("dùng nuncio build nuncio") if a daemon restart loses nothing and long transcripts stay cheap. This plan covers the two durability gaps that `260701-desktop-daemon-mobile` Phase B (WS relay) does *not* cover: what happens to running sessions and pending approvals when the daemon dies, and how the event log behaves as transcripts grow.
 
 ## Decisions (locked — founder, 2026-07-02)

@@ -1,6 +1,6 @@
 # Phase 1 — Restart Reconciliation
 
-**Status:** Planned · **Depends on:** nothing (pure server work)
+**Status:** Shipped · **Depends on:** nothing (pure server work)
 
 ## Scope
 

@@ -1,6 +1,6 @@
 # Phase 2 — Event-Log Hygiene
 
-**Status:** Planned · **Depends on:** nothing (parallel with Phase 1)
+**Status:** Shipped · **Depends on:** nothing (parallel with Phase 1)
 
 ## Scope
 

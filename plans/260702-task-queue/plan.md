@@ -18,7 +18,7 @@ Phase docs are authored when each phase starts (keep planning honest to what Pha
 
 | Phase | Focus |
 |-------|-------|
-| 1 | **Verifier gate, no queue yet** — per-project check command (settings), run on turn end, `verify.result` event, UI chip/border. Immediate value on every existing session. |
+| 1 | **Verifier gate, no queue yet** — shipped, see [phase-1-verifier-gate.md](./phase-1-verifier-gate.md): `.nuncio/verify` script or `NUNCIO_VERIFY_COMMAND` setting, run on turn end, `verify_start`/`verify_result` events, chip in session header + grid tiles. |
 | 2 | **Tasks table + runner** — enqueue(task) → create session (optionally in a fresh worktree per the task's flag) → run → verify → outcome on the task row. Concurrency cap, simple FIFO, explicit retry (manual re-enqueue first; auto-retry policy only if manual proves annoying). |
 | 3 | **Task inbox UI** — home/grid integration: queued/running/needs-you/done lanes, one tap from "needs you" into the session. |
 

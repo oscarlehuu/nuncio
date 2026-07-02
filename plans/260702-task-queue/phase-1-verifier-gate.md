@@ -1,6 +1,6 @@
 # Phase 1 — Verifier Gate
 
-**Status:** In progress · **Depends on:** nothing (per-session value before any queue exists)
+**Status:** Shipped (2026-07-02) · **Depends on:** nothing (per-session value before any queue exists)
 
 ## Scope
 
