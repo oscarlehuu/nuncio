@@ -35,6 +35,8 @@ import { isCursorCliRecentlyActive } from '../agents/providers/cursor-cli.active
 import { EventsRepository } from './persistence/events.repository';
 import { ProviderRequestsRepository } from './persistence/provider-requests.repository';
 import { SessionsRepository } from './persistence/sessions.repository';
+import { resolveVerifyCommand, runVerifyCommand } from './session-verifier';
+import { SettingsService } from '../settings/settings.service';
 
 type StreamListener = (event: SessionEvent) => void;
 
@@ -54,6 +56,7 @@ export class SessionsService implements OnModuleDestroy {
   private readonly providerRequests = new Map<string, PendingProviderRequest>();
   private readonly transcriptMtimeCache = new Map<string, number>();
   private readonly locallyProducing = new Set<string>();
+  private readonly verifying = new Set<string>();
   private readonly transcriptWatchers = new Map<
     string,
     { watcher: FSWatcher; count: number; debounce?: ReturnType<typeof setTimeout> }
@@ -67,6 +70,7 @@ export class SessionsService implements OnModuleDestroy {
     private readonly git: GitService,
     private readonly cursorLocal: CursorLocalSessionsService,
     @Optional() private readonly piLocal?: PiLocalSessionsService,
+    @Optional() private readonly settings?: SettingsService,
   ) {
     this.reconcileInterruptedSessions();
     this.resolveStaleProviderRequests();
@@ -278,6 +282,7 @@ export class SessionsService implements OnModuleDestroy {
     } finally {
       this.locallyProducing.delete(id);
     }
+    void this.maybeVerify(id);
     return this.requireSession(id);
   }
 
@@ -763,7 +768,44 @@ export class SessionsService implements OnModuleDestroy {
       } finally {
         this.locallyProducing.delete(session.id);
       }
+      await this.maybeVerify(session.id);
     })();
+  }
+
+  /**
+   * Post-turn verification: annotate, never block. Runs the project's check
+   * command after a local turn settles on IDLE and appends the outcome to the
+   * event log; the FSM is untouched so a red suite can't wedge the session.
+   */
+  private async maybeVerify(sessionId: string): Promise<void> {
+    if (this.verifying.has(sessionId)) return;
+    const session = this.sessions.findById(sessionId);
+    if (!session || session.status !== 'IDLE') return;
+    const cwd = session.worktreePath ?? session.workspace ?? session.projectPath;
+    if (!cwd) return;
+    const command = resolveVerifyCommand(cwd, this.settings?.resolve('NUNCIO_VERIFY_COMMAND'));
+    if (!command) return;
+
+    this.verifying.add(sessionId);
+    try {
+      this.appendAndEmit(sessionId, 'verify_start', { command: command.display });
+      const result = await runVerifyCommand(command, cwd);
+      if (!this.sessions.findById(sessionId)) return;
+      this.appendAndEmit(sessionId, 'verify_result', { command: command.display, ...result });
+    } catch (error) {
+      if (!this.sessions.findById(sessionId)) return;
+      const message = error instanceof Error ? error.message : String(error);
+      this.appendAndEmit(sessionId, 'verify_result', {
+        command: command.display,
+        ok: false,
+        exitCode: null,
+        durationMs: 0,
+        outputTail: message,
+        timedOut: false,
+      });
+    } finally {
+      this.verifying.delete(sessionId);
+    }
   }
 
   private cancelProviderRequests(id: string): void {

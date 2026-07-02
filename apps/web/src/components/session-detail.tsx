@@ -4,6 +4,8 @@ import { toast } from 'sonner';
 import type { ProviderRequestDecision, Session, SessionEvent } from '../lib/api';
 import { InteractionApiError, interactionErrorMessage, respondInteraction } from '../lib/api';
 import { derivePendingUserInput } from '../lib/derive-pending-user-input';
+import { deriveVerifyStatus } from '../lib/derive-verify-status';
+import { VerifyChip } from './verify-chip';
 import { projectDisplayName } from '../lib/projects';
 import { FALLBACK_PROVIDERS, modelById, prettyModelName, type ModelProvider } from '../lib/model-providers';
 import { isCodexApprovalEngine } from '../lib/codex-approval-engine';
@@ -147,6 +149,7 @@ export function SessionDetail({
   const isRunning = session.status === 'RUNNING';
   const isArchived = session.status === 'ARCHIVED';
   const pendingUserInput = useMemo(() => derivePendingUserInput(events), [events]);
+  const verifyStatus = useMemo(() => deriveVerifyStatus(events), [events]);
   const pendingRequestIds = useMemo(
     () => new Set(pendingUserInput.map((item) => item.requestId)),
     [pendingUserInput],
@@ -307,6 +310,9 @@ export function SessionDetail({
               </TooltipContent>
             </Tooltip>
           )}
+          <span className="ml-2">
+            <VerifyChip status={verifyStatus} />
+          </span>
         </div>
 
         <div className="absolute right-4 md:right-5 top-1/2 -translate-y-1/2 flex items-center gap-1">

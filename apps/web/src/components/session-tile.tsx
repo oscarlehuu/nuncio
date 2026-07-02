@@ -5,6 +5,8 @@ import { statusLabel } from '../lib/api';
 import { useSessionStream } from '../lib/use-session-stream';
 import { useTranscriptBlocks } from '../lib/use-transcript-blocks';
 import { derivePendingUserInput } from '../lib/derive-pending-user-input';
+import { deriveVerifyStatus } from '../lib/derive-verify-status';
+import { VerifyChip } from './verify-chip';
 import { projectDisplayName } from '../lib/projects';
 import { prettyModelName } from '../lib/model-providers';
 import { ProviderIcon } from './provider-icon';
@@ -84,6 +86,7 @@ export function SessionTile({
   const blocks = useTranscriptBlocks(events);
   const tail = useMemo(() => blocks.slice(-TILE_TAIL_LENGTH), [blocks]);
   const pending = useMemo(() => derivePendingUserInput(events).length > 0, [events]);
+  const verifyStatus = useMemo(() => deriveVerifyStatus(events), [events]);
   const status = effectiveStatus(events, session.status);
   const [steerText, setSteerText] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -139,7 +142,10 @@ export function SessionTile({
           <ProviderIcon providerId={session.provider} className="size-3.5" />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] font-medium leading-tight">{session.title}</div>
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-[13px] font-medium leading-tight">{session.title}</span>
+            <VerifyChip status={verifyStatus} />
+          </div>
           <div className="truncate text-[11px] text-muted-foreground leading-tight">
             {pending ? (
               <span className="text-warning">Waiting for you</span>

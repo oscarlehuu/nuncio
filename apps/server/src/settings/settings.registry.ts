@@ -193,6 +193,15 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     envVar: 'NUNCIO_HUB_MODE',
     default: '0',
   },
+  {
+    key: 'NUNCIO_VERIFY_COMMAND',
+    category: 'general',
+    type: 'string',
+    label: 'Verify command',
+    description:
+      'Shell command run in the session workspace after each turn; the result is annotated on the transcript (verify chip). A project-level .nuncio/verify script takes precedence. Empty disables verification.',
+    envVar: 'NUNCIO_VERIFY_COMMAND',
+  },
 ];
 
 const BY_KEY = new Map(SETTING_DEFINITIONS.map((def) => [def.key, def]));

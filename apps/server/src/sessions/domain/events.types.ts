@@ -17,6 +17,8 @@ export type SessionEventType =
   | 'status'
   | 'transcript_refreshed'
   | 'runtime_restarted'
+  | 'verify_start'
+  | 'verify_result'
   | 'steer_message';
 
 export type UserInputResolvedBy = 'user' | 'timeout' | 'skip' | 'provider';
