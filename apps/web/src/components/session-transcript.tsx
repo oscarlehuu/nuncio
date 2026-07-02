@@ -283,13 +283,16 @@ export const Transcript = memo(function Transcript({
       {items.map((item, i) => (
         <Fragment key={item.key}>
           {i === indicatorIndex && <WorkingIndicator label={indicatorLabel} />}
-          <MemoRenderItemView
-            item={item}
-            streaming={streaming}
-            pendingRequestIds={pendingRequestIds}
-            respondingRequestId={respondingRequestId}
-            onRespondProviderRequest={onRespondProviderRequest}
-          />
+          {/* content-visibility keeps long-session offscreen blocks unrendered. */}
+          <div className="[content-visibility:auto] [contain-intrinsic-size:auto_60px]">
+            <MemoRenderItemView
+              item={item}
+              streaming={streaming}
+              pendingRequestIds={pendingRequestIds}
+              respondingRequestId={respondingRequestId}
+              onRespondProviderRequest={onRespondProviderRequest}
+            />
+          </div>
         </Fragment>
       ))}
       {streaming && indicatorIndex >= items.length && (

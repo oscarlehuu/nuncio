@@ -8,7 +8,7 @@ export function AssistantBubble({ text, streaming }: { text: string; streaming?:
   const displayed = useThrottledStreamText(text, streaming ?? false);
   return (
     <>
-      <MarkdownView text={displayed} />
+      <MarkdownView text={displayed} streaming={streaming} />
       {streaming && (
         <span className="inline-block w-2 h-4 ml-0.5 bg-primary animate-pulse align-middle" />
       )}
