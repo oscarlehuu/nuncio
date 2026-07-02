@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { Session, SessionEvent } from '../lib/api';
 
 // Feed a controlled event stream; the real transcript + pending-input derivations run.
@@ -121,9 +122,9 @@ describe('SessionTile', () => {
     expect(container.querySelector('.border-success\\/70')).toBeNull();
   });
 
-  it('shows the steer input only when focused', () => {
+  it('shows the steer input on every tile — each cell is a chat box', () => {
     streamEvents = [statusEvent(1, 'IDLE')];
-    const { rerender } = render(
+    render(
       <SessionTile
         session={fakeSession()}
         focused={false}
@@ -132,9 +133,12 @@ describe('SessionTile', () => {
         onSteer={vi.fn()}
       />,
     );
-    expect(screen.queryByLabelText(/steer refactor the parser/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/steer refactor the parser/i)).toBeInTheDocument();
+  });
 
-    rerender(
+  it('typing spaces in the steer input is not swallowed by the tile focus handler', async () => {
+    streamEvents = [statusEvent(1, 'IDLE')];
+    render(
       <SessionTile
         session={fakeSession()}
         focused
@@ -143,6 +147,9 @@ describe('SessionTile', () => {
         onSteer={vi.fn()}
       />,
     );
-    expect(screen.getByLabelText(/steer refactor the parser/i)).toBeInTheDocument();
+
+    const input = screen.getByLabelText(/steer refactor the parser/i);
+    await userEvent.type(input, 'hello world');
+    expect(input).toHaveValue('hello world');
   });
 });
