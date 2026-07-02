@@ -5,6 +5,8 @@ import { AgentRegistry } from './agents/agents.registry';
 import { configureWebAppServing } from './web-static-assets';
 import { TerminalService } from './terminal/terminal.service';
 import { attachTerminalWebSocketServer } from './terminal/terminal.ws';
+import { attachSessionsWebSocketServer } from './sessions/api/sessions.ws';
+import { SessionsService } from './sessions/sessions.service';
 import { AuthTokenService } from './auth/auth-token.service';
 import { TailscaleService } from './tailscale/tailscale.service';
 import { HubService } from './hub/hub.service';
@@ -95,6 +97,12 @@ async function bootstrap() {
   attachTerminalWebSocketServer(
     httpServer,
     app.get(TerminalService),
+    authTokens,
+    app.get(TailscaleService),
+  );
+  attachSessionsWebSocketServer(
+    httpServer,
+    app.get(SessionsService),
     authTokens,
     app.get(TailscaleService),
   );
