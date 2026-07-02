@@ -16,3 +16,4 @@ export * from './parse-changelog';
 export * from './tool-summary';
 export * from './transcript-build-blocks';
 export * from './user-input.types';
+export * from './session-relay-client';

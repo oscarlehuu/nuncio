@@ -60,7 +60,15 @@ async function bootstrap() {
   app.useBodyParser('urlencoded', { extended: true, limit: '25mb' });
   // Hub proxy runs before static serving so /m/<machine>/api/* is forwarded to
   // that machine; non-api /m/<machine>/ routes fall through to the SPA shell.
-  configureHubProxy(app, app.get(HubService), app.get(HubRegistryService));
+  // Client authorization happens at the hub edge — targets trust the hub by
+  // whois, so the hub must not relay unauthenticated requests.
+  configureHubProxy(
+    app,
+    app.get(HubService),
+    app.get(HubRegistryService),
+    app.get(AuthTokenService),
+    app.get(TailscaleService),
+  );
   configureWebAppServing(app);
 
   let shuttingDown = false;
@@ -91,9 +99,16 @@ async function bootstrap() {
   await app.listen(process.env.PORT ?? 3000);
   const authTokens = app.get(AuthTokenService);
   const httpServer = app.getHttpServer();
-  // Hub WS proxy first: it only claims /m/<machine>/api/terminal upgrades and
-  // ignores the rest, so the local terminal handler still owns /api/terminal.
-  attachHubWebSocketProxy(httpServer, app.get(HubService), app.get(HubRegistryService));
+  // Hub WS proxy first: it only claims /m/<machine>/api/terminal and
+  // /m/<machine>/api/sessions/ws upgrades and ignores the rest, so the local
+  // handlers still own /api/terminal and /api/sessions/ws.
+  attachHubWebSocketProxy(
+    httpServer,
+    app.get(HubService),
+    app.get(HubRegistryService),
+    authTokens,
+    app.get(TailscaleService),
+  );
   attachTerminalWebSocketServer(
     httpServer,
     app.get(TerminalService),

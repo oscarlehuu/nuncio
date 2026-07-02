@@ -2,56 +2,47 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SessionEvent } from './api';
 import { fetchEvents } from './api';
 import { withBase } from './api-base';
+import {
+  subscribeSessionEvents,
+  type SessionSubscription,
+} from '@nuncio/core/session-relay-client';
 
-const SSE_RECONNECT_MS = 2000;
+/** ws(s):// URL of the session relay for this origin (hub base path applied). */
+export function sessionRelayUrl(): string {
+  const url = new URL(withBase('/api/sessions/ws'), window.location.origin);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  return url.toString();
+}
 
 export function useSessionStream(sessionId: string | null) {
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const sinceRef = useRef(0);
-  const sourceRef = useRef<EventSource | null>(null);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const subscriptionRef = useRef<SessionSubscription | null>(null);
   const cancelledRef = useRef(false);
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
 
-  const clearReconnectTimer = useCallback(() => {
-    if (reconnectTimerRef.current !== null) {
-      clearTimeout(reconnectTimerRef.current);
-      reconnectTimerRef.current = null;
-    }
+  const onEvent = useCallback((event: SessionEvent) => {
+    sinceRef.current = Math.max(sinceRef.current, event.seq);
+    setEvents((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && event.seq > last.seq) return [...prev, event];
+      if (prev.some((e) => e.seq === event.seq)) return prev;
+      return [...prev, event].sort((a, b) => a.seq - b.seq);
+    });
   }, []);
 
   const connect = useCallback(() => {
     const activeSessionId = sessionIdRef.current;
     if (!activeSessionId || cancelledRef.current) return;
-    clearReconnectTimer();
-    sourceRef.current?.close();
-    const url = withBase(`/api/sessions/${activeSessionId}/stream?since=${sinceRef.current}`);
-    const source = new EventSource(url);
-    sourceRef.current = source;
-
-    source.onmessage = (msg) => {
-      const event = JSON.parse(msg.data) as SessionEvent;
-      sinceRef.current = Math.max(sinceRef.current, event.seq);
-      setEvents((prev) => {
-        const last = prev[prev.length - 1];
-        if (last && event.seq > last.seq) return [...prev, event];
-        if (prev.some((e) => e.seq === event.seq)) return prev;
-        return [...prev, event].sort((a, b) => a.seq - b.seq);
-      });
-    };
-
-    source.onerror = () => {
-      source.close();
-      clearReconnectTimer();
-      reconnectTimerRef.current = setTimeout(() => {
-        reconnectTimerRef.current = null;
-        if (!cancelledRef.current && sessionIdRef.current === activeSessionId) {
-          connect();
-        }
-      }, SSE_RECONNECT_MS);
-    };
-  }, [clearReconnectTimer]);
+    subscriptionRef.current?.close();
+    subscriptionRef.current = subscribeSessionEvents({
+      url: sessionRelayUrl(),
+      sessionId: activeSessionId,
+      since: sinceRef.current,
+      onEvent,
+    });
+  }, [onEvent]);
 
   const refetch = useCallback(async () => {
     if (!sessionId || cancelledRef.current) return;
@@ -81,18 +72,20 @@ export function useSessionStream(sessionId: string | null) {
     });
 
     const onVisibility = () => {
-      if (document.visibilityState === 'visible') connect();
+      if (document.visibilityState !== 'visible') return;
+      if (subscriptionRef.current) subscriptionRef.current.resync();
+      else connect();
     };
     document.addEventListener('visibilitychange', onVisibility);
 
     return () => {
       cancelled = true;
       cancelledRef.current = true;
-      clearReconnectTimer();
       document.removeEventListener('visibilitychange', onVisibility);
-      sourceRef.current?.close();
+      subscriptionRef.current?.close();
+      subscriptionRef.current = null;
     };
-  }, [sessionId, connect, clearReconnectTimer]);
+  }, [sessionId, connect]);
 
   return { events, refetch };
 }

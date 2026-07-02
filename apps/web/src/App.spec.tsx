@@ -126,9 +126,10 @@ function renderApp(initialEntry = '/') {
 
 function stubEventSource() {
   vi.stubGlobal(
-    'EventSource',
+    'WebSocket',
     class {
-      onmessage: ((msg: { data: string }) => void) | null = null;
+      addEventListener() {}
+      send() {}
       close() {}
       constructor(_url: string) {}
     },
@@ -304,21 +305,34 @@ describe('App lifecycle', () => {
   const session = fakeSession({ id: 'new1', title: 'Build the thing', status: 'IDLE' });
   let eventSources: Array<{
     url: string;
-    onmessage: ((msg: { data: string }) => void) | null;
+    emit: (event: unknown) => void;
     close: () => void;
   }>;
 
   beforeEach(() => {
     eventSources = [];
     vi.stubGlobal(
-      'EventSource',
+      'WebSocket',
       class {
         url: string;
-        onmessage: ((msg: { data: string }) => void) | null = null;
+        private listeners = new Map<string, Array<(event: { data?: unknown }) => void>>();
         close = vi.fn();
         constructor(url: string) {
           this.url = url;
           eventSources.push(this);
+          queueMicrotask(() => this.fire('open', {}));
+        }
+        addEventListener(type: string, listener: (event: { data?: unknown }) => void) {
+          const list = this.listeners.get(type) ?? [];
+          list.push(listener);
+          this.listeners.set(type, list);
+        }
+        send() {}
+        fire(type: string, event: { data?: unknown }) {
+          for (const listener of this.listeners.get(type) ?? []) listener(event);
+        }
+        emit(event: unknown) {
+          this.fire('message', { data: JSON.stringify({ channel: 's', event }) });
         }
       },
     );
@@ -416,30 +430,9 @@ describe('App lifecycle', () => {
 
     const stream = eventSources[eventSources.length - 1]!;
     act(() => {
-      stream.onmessage?.({
-        data: JSON.stringify({
-          seq: 1,
-          type: 'status',
-          payload: { status: 'RUNNING' },
-          createdAt: Date.now(),
-        }),
-      });
-      stream.onmessage?.({
-        data: JSON.stringify({
-          seq: 2,
-          type: 'assistant_message',
-          payload: { text: 'Done' },
-          createdAt: Date.now(),
-        }),
-      });
-      stream.onmessage?.({
-        data: JSON.stringify({
-          seq: 3,
-          type: 'status',
-          payload: { status: 'IDLE' },
-          createdAt: Date.now(),
-        }),
-      });
+      stream.emit({ seq: 1, type: 'status', payload: { status: 'RUNNING' }, createdAt: Date.now() });
+      stream.emit({ seq: 2, type: 'assistant_message', payload: { text: 'Done' }, createdAt: Date.now() });
+      stream.emit({ seq: 3, type: 'status', payload: { status: 'IDLE' }, createdAt: Date.now() });
     });
 
     await waitFor(() => expect(screen.getByPlaceholderText(/steer the agent/i)).toBeEnabled());
