@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { fetchAuthToken, type AuthTokenInfo } from '../lib/auth-api';
 import {
   fetchTailscaleStatus,
+  pushProvision,
   TAILSCALE_AUTO_TRUST_KEY,
   type TailscalePeer,
   type TailscaleStatus,
@@ -30,7 +31,25 @@ async function probeNuncio(dnsName: string): Promise<boolean> {
 
 function PeerRow({ peer, autoTrust }: { peer: TailscalePeer; autoTrust: boolean }) {
   const [hasNuncio, setHasNuncio] = useState(false);
+  const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'done' | 'failed'>('idle');
   const desktopServers = window.nuncioDesktop?.servers;
+
+  const handleSyncConfig = async () => {
+    if (syncState === 'syncing') return;
+    const confirmed = window.confirm(
+      `Push this server's Pi credentials and settings to ${peer.hostName}? ` +
+        'Existing files there are backed up first. Note: OAuth/subscription ' +
+        'credentials shared across machines can occasionally require a re-login.',
+    );
+    if (!confirmed) return;
+    setSyncState('syncing');
+    try {
+      await pushProvision(`http://${peer.dnsName}:3000`);
+      setSyncState('done');
+    } catch {
+      setSyncState('failed');
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -65,6 +84,23 @@ function PeerRow({ peer, autoTrust }: { peer: TailscalePeer; autoTrust: boolean 
         <Badge variant={trusted ? 'default' : 'outline'} className="text-[10.5px]">
           {trusted ? 'Trusted' : 'Token required'}
         </Badge>
+        {hasNuncio && peer.sameUser && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 px-2 text-[12px]"
+            onClick={() => void handleSyncConfig()}
+            disabled={syncState === 'syncing'}
+          >
+            {syncState === 'syncing'
+              ? 'Syncing…'
+              : syncState === 'done'
+                ? 'Synced ✓'
+                : syncState === 'failed'
+                  ? 'Sync failed — retry'
+                  : 'Sync config'}
+          </Button>
+        )}
         {hasNuncio &&
           (desktopServers ? (
             // Desktop shell: switch the whole app to that server in place.

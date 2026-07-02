@@ -6,7 +6,7 @@ import type { TailscaleStatus } from '../lib/tailscale-api';
 
 vi.mock('../lib/tailscale-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/tailscale-api')>();
-  return { ...actual, fetchTailscaleStatus: vi.fn() };
+  return { ...actual, fetchTailscaleStatus: vi.fn(), pushProvision: vi.fn() };
 });
 vi.mock('../lib/auth-api', () => ({
   fetchAuthToken: vi.fn(),
@@ -15,11 +15,12 @@ vi.mock('../lib/settings-api', () => ({
   updateSetting: vi.fn(),
 }));
 
-import { fetchTailscaleStatus } from '../lib/tailscale-api';
+import { fetchTailscaleStatus, pushProvision } from '../lib/tailscale-api';
 import { fetchAuthToken } from '../lib/auth-api';
 import { updateSetting } from '../lib/settings-api';
 
 const mockStatus = vi.mocked(fetchTailscaleStatus);
+const mockPush = vi.mocked(pushProvision);
 const mockToken = vi.mocked(fetchAuthToken);
 const mockUpdate = vi.mocked(updateSetting);
 
@@ -103,6 +104,46 @@ describe('RemoteAccessSettingsSection', () => {
 
     expect(await screen.findByText('Not detected on this machine.')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'tailscale.com/download' })).toBeInTheDocument();
+  });
+
+  it('pushes config to a same-user peer via Sync config after confirmation', async () => {
+    mockStatus.mockResolvedValue(RUNNING_STATUS);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+    mockPush.mockResolvedValue({
+      target: 'http://dev-server.tail1.ts.net:3000',
+      sent: { piFiles: ['auth.json'], settings: [] },
+      applied: { piFilesWritten: ['auth.json'], piFilesBackedUp: [], settingsApplied: [], settingsSkipped: [] },
+    });
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const user = userEvent.setup();
+
+    try {
+      render(<RemoteAccessSettingsSection />);
+      // Only the same-user online peer (dev-server) gets the button.
+      const syncButton = await screen.findByRole('button', { name: 'Sync config' });
+      await user.click(syncButton);
+      await waitFor(() =>
+        expect(mockPush).toHaveBeenCalledWith('http://dev-server.tail1.ts.net:3000'),
+      );
+      expect(await screen.findByRole('button', { name: 'Synced ✓' })).toBeInTheDocument();
+    } finally {
+      confirmSpy.mockRestore();
+    }
+  });
+
+  it('does not sync when the confirmation is declined', async () => {
+    mockStatus.mockResolvedValue(RUNNING_STATUS);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const user = userEvent.setup();
+
+    try {
+      render(<RemoteAccessSettingsSection />);
+      await user.click(await screen.findByRole('button', { name: 'Sync config' }));
+      expect(mockPush).not.toHaveBeenCalled();
+    } finally {
+      confirmSpy.mockRestore();
+    }
   });
 
   it('switches the desktop shell to a peer via Connect when the servers bridge exists', async () => {
