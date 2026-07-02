@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Session } from '../lib/api';
 import type { ModelProvider } from '../lib/model-providers';
@@ -9,12 +9,14 @@ import { GRID_PREFERENCE_STORAGE_KEY } from '../lib/grid-preference';
 vi.mock('./session-tile', () => ({
   SessionTile: ({
     session,
+    focused,
     onMaximize,
   }: {
     session: Session;
+    focused: boolean;
     onMaximize: () => void;
   }) => (
-    <div data-testid={`tile-${session.id}`}>
+    <div data-testid={`tile-${session.id}`} data-focused={focused ? 'true' : 'false'}>
       <span>{session.title}</span>
       <button type="button" onClick={onMaximize}>{`maximize-${session.id}`}</button>
     </div>
@@ -33,6 +35,7 @@ vi.mock('./grid-slot-composer', () => ({
       <button type="button" onClick={() => void onCreate('hello from slot')}>
         create-in-slot
       </button>
+      <input aria-label="slot-input" />
     </div>
   ),
 }));
@@ -204,6 +207,49 @@ describe('GridView', () => {
     rerender(gridElement([created], { onCreate }));
     expect(screen.getByTestId('tile-new-1')).toBeInTheDocument();
     expect(screen.queryByTestId('empty-slot')).not.toBeInTheDocument();
+  });
+
+  describe('keyboard shortcuts', () => {
+    it('Cmd+N focuses slot N', () => {
+      const a = fakeSession({ id: 'a', title: 'Alpha' });
+      const b = fakeSession({ id: 'b', title: 'Bravo' });
+      seedPreference('2x1', [{ sessionId: 'a' }, { sessionId: 'b' }]);
+      renderGrid([a, b]);
+
+      fireEvent.keyDown(window, { key: '2', metaKey: true });
+
+      expect(screen.getByTestId('tile-b')).toHaveAttribute('data-focused', 'true');
+      expect(screen.getByTestId('tile-a')).toHaveAttribute('data-focused', 'false');
+    });
+
+    it('Cmd+Enter maximizes the focused tile and Esc restores the grid', () => {
+      const a = fakeSession({ id: 'a', title: 'Alpha' });
+      const b = fakeSession({ id: 'b', title: 'Bravo' });
+      seedPreference('2x1', [{ sessionId: 'a' }, { sessionId: 'b' }]);
+      renderGrid([a, b]);
+
+      fireEvent.keyDown(window, { key: '1', metaKey: true });
+      fireEvent.keyDown(window, { key: 'Enter', metaKey: true });
+
+      expect(screen.getByTestId('session-detail')).toHaveTextContent('detail:Alpha');
+      expect(screen.queryByTestId('tile-b')).not.toBeInTheDocument();
+
+      fireEvent.keyDown(window, { key: 'Escape' });
+
+      expect(screen.queryByTestId('session-detail')).not.toBeInTheDocument();
+      expect(screen.getByTestId('tile-a')).toBeInTheDocument();
+      expect(screen.getByTestId('tile-b')).toBeInTheDocument();
+    });
+
+    it('ignores shortcuts while typing in a form field', () => {
+      const a = fakeSession({ id: 'a', title: 'Alpha' });
+      seedPreference('2x1', [{ sessionId: 'a' }, {}]);
+      renderGrid([a]);
+
+      fireEvent.keyDown(screen.getByLabelText('slot-input'), { key: '1', metaKey: true });
+
+      expect(screen.getByTestId('tile-a')).toHaveAttribute('data-focused', 'false');
+    });
   });
 
   it('persists a preset change to localStorage', async () => {

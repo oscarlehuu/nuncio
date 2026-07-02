@@ -26,7 +26,8 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 - **Folder picker** — browse the host machine's directories to pick a project (server-side, works on iPhone PWA), or paste a custom path
 - **Workspace control** — choose a project, run in the local checkout, or create a new `nuncio/<sessionId>-<slug>` worktree forked from the selected branch
 - **Continue on mobile** — import an in-progress Cursor IDE/CLI chat or Pi CLI session from your Mac and steer it from the phone PWA (Cursor uses CLI `--resume`; Pi resumes in-process through the SDK)
-- **Session grid** — a desktop-first multi-session workbench at `/grid`: lay out sessions in a 1x1/2x1/2x2/3x2 preset, watch each tile stream its transcript tail with a status-coded border, steer the focused tile inline, and maximize any tile into the full session view; preset and slot bindings persist locally
+- **Session grid** — a desktop-first multi-session workbench at `/grid`: lay out sessions in a 1x1/2x1/2x2/3x2 preset, watch each tile stream its transcript tail with a status-coded border, steer the focused tile inline, and maximize any tile into the full session view; keyboard-first (`Cmd/Ctrl+1..9` focus a slot, `Cmd/Ctrl+Enter` maximize, `Esc` restore), with preset and slot bindings persisted locally
+- **Inspector dock** — the session side panel (source control + pull request, files, terminal, browser on desktop) remembers whether it was open and its last tab across visits; the source-control tab now includes opening a PR and watching its checks
 
 ## Screenshots
 

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Minimize2, MonitorSmartphone } from 'lucide-react';
 import type { ProviderRequestDecision, Session } from '../lib/api';
 import type { ModelProvider } from '../lib/model-providers';
@@ -98,6 +98,39 @@ export function GridView(props: GridViewProps) {
     for (const s of slots) if (s.sessionId) set.add(s.sessionId);
     return set;
   }, [slots]);
+
+  // Grid-surface shortcuts: Cmd/Ctrl+1..9 focus a slot, Cmd/Ctrl+Enter toggles
+  // maximize on the focused tile, Esc restores the grid. Never fires while the
+  // user is typing (composer, steer input, terminal) or when something already
+  // handled the key (e.g. a Radix dialog closing on Esc).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      if (target?.closest('input, textarea, select, [contenteditable="true"], .xterm')) return;
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.key >= '1' && e.key <= '9') {
+        const index = Number(e.key) - 1;
+        if (maximizedSlot === null && index < PRESET_SLOT_COUNT[preset]) {
+          e.preventDefault();
+          setFocusedSlot(index);
+        }
+      } else if (mod && e.key === 'Enter') {
+        if (maximizedSlot !== null) {
+          e.preventDefault();
+          setMaximizedSlot(null);
+        } else if (focusedSlot !== null && slots[focusedSlot]?.sessionId) {
+          e.preventDefault();
+          setMaximizedSlot(focusedSlot);
+        }
+      } else if (e.key === 'Escape' && maximizedSlot !== null) {
+        e.preventDefault();
+        setMaximizedSlot(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [preset, slots, focusedSlot, maximizedSlot]);
 
   // Maximize: mount ONLY the full SessionDetail; every tile unmounts (founder-locked).
   if (maximizedSlot !== null) {
