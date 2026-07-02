@@ -5,6 +5,7 @@ import {
   ChevronRight,
   FolderGit2,
   LayoutGrid,
+  ListTodo,
   MessageSquare,
   Plus,
   RotateCcw,
@@ -48,6 +49,7 @@ interface SidebarProps {
   onNew: () => void;
   /** Desktop-only multi-session workbench. */
   onGrid?: () => void;
+  onTasks?: () => void;
   onSettings?: () => void;
   onChangelog?: () => void;
   onArchive?: (id: string) => void | Promise<void>;
@@ -64,6 +66,7 @@ export function Sidebar({
   onSelect,
   onNew,
   onGrid,
+  onTasks,
   onSettings,
   onChangelog,
   onArchive,
@@ -144,6 +147,16 @@ export function Sidebar({
             >
               <LayoutGrid data-icon="inline-start" />
               <span>Grid</span>
+            </Button>
+          ) : null}
+          {onTasks ? (
+            <Button
+              variant="ghost"
+              onClick={onTasks}
+              className="w-full justify-start text-muted-foreground hover:text-sidebar-foreground"
+            >
+              <ListTodo data-icon="inline-start" />
+              <span>Tasks</span>
             </Button>
           ) : null}
         </nav>

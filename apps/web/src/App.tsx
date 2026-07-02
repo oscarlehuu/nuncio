@@ -25,6 +25,7 @@ import { useActiveRun } from './lib/use-active-run';
 import { useSessionNotifications } from './lib/use-session-notifications';
 import { HomeView } from './components/home-view';
 import { GridView } from './components/grid-view';
+import { TaskInbox } from './components/task-inbox';
 import type { ApprovalMode } from './components/approval-mode-picker';
 import { HandoffPicker } from './components/handoff-picker';
 import { ChangelogView } from './components/changelog-view';
@@ -391,6 +392,11 @@ export default function App() {
     dismissTransientSidebar();
   }, [dismissTransientSidebar, navigate]);
 
+  const handleOpenTasks = useCallback(() => {
+    navigate('/tasks');
+    dismissTransientSidebar();
+  }, [dismissTransientSidebar, navigate]);
+
   const handleOpenSettings = useCallback(() => {
     navigate('/settings');
     dismissTransientSidebar();
@@ -479,6 +485,7 @@ export default function App() {
     onSelect: handleSelect,
     onNew: handleNew,
     onGrid: handleOpenGrid,
+    onTasks: handleOpenTasks,
     onSettings: handleOpenSettings,
     onChangelog: handleOpenChangelog,
     onArchive: handleArchiveById,
@@ -605,6 +612,7 @@ export default function App() {
               />
             }
           />
+          <Route path="/tasks" element={<TaskInbox providers={providers} />} />
           <Route path="/changelog" element={<ChangelogView onBack={() => navigate('/')} />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
