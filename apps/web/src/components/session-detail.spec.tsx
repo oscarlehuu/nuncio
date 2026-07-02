@@ -540,7 +540,7 @@ describe('SessionDetail', () => {
     });
   });
 
-  it('renders the pull request panel inside the source control tab', async () => {
+  it('renders the pull request panel inside the Changes segment of the source control tab', async () => {
     await renderDetail({
       projectPath: '/Users/dev/code/nuncio',
       branch: 'nuncio/s1-fix-auth',
@@ -549,6 +549,9 @@ describe('SessionDetail', () => {
     await userEvent.click(screen.getByRole('button', { name: /toggle panel/i }));
     await screen.findByText('Source Control');
 
+    // Changes (default segment) stacks local changes and the session's PR.
+    expect(screen.getByRole('button', { name: 'Changes' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'PR' })).toBeInTheDocument(); // repo PR list segment
     expect(screen.getByText('Pull Request')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /open pull request/i })).toBeInTheDocument();
   });

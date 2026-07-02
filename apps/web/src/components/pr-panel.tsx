@@ -2,14 +2,17 @@ import { useCallback, useEffect, useState } from 'react';
 import { openPullRequest, fetchPullRequest } from '../lib/api';
 import type { Session, ForgePullRequest, ForgeCheck } from '../lib/api';
 import { Button } from './ui/button';
+import { PrDetail } from './forge/pr-detail';
 import { toast } from 'sonner';
 import { GitPullRequest, ExternalLink, Loader2 } from 'lucide-react';
 
 interface PrPanelProps {
   session: Session;
+  /** When set, an existing PR renders the full repo-scoped detail view. */
+  repoPath?: string;
 }
 
-export function PrPanel({ session }: PrPanelProps) {
+export function PrPanel({ session, repoPath }: PrPanelProps) {
   const [pr, setPr] = useState<ForgePullRequest | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -50,6 +53,11 @@ export function PrPanel({ session }: PrPanelProps) {
       setLoading(false);
     }
   };
+
+  const prNumber = pr?.number ?? session.pullRequestNumber ?? null;
+  if (prNumber != null && repoPath) {
+    return <PrDetail path={repoPath} number={prNumber} />;
+  }
 
   const getStatusColor = (conclusion: string | null) => {
     switch (conclusion) {

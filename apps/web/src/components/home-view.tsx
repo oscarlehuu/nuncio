@@ -25,6 +25,7 @@ import {
   saveModelPreference,
 } from '../lib/model-preference';
 import { projectDisplayName } from '../lib/projects';
+import { takeComposerDraft } from '../lib/composer-draft';
 import {
   loadProjectPreference,
   isNuncioSessionBranch,
@@ -67,11 +68,15 @@ export function HomeView({
   loading,
 }: HomeViewProps) {
   const initialWorkspace = resolveWorkspacePreference();
-  const [prompt, setPrompt] = useState('');
+  // One-shot prefill (e.g. "Start session from issue") wins over the sticky workspace.
+  const [draft] = useState(() => takeComposerDraft());
+  const [prompt, setPrompt] = useState(draft?.prompt ?? '');
   const [model, setModel] = useState('');
   const [provider, setProvider] = useState<string | undefined>();
   const [modelOptions, setModelOptions] = useState<ModelOptionsMap>({});
-  const [projectPath, setProjectPath] = useState<string | undefined>(initialWorkspace.projectPath);
+  const [projectPath, setProjectPath] = useState<string | undefined>(
+    draft?.projectPath ?? initialWorkspace.projectPath,
+  );
   const [baseBranch, setBaseBranch] = useState<string | undefined>(initialWorkspace.baseBranch);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('local');
 

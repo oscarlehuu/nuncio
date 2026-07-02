@@ -12,11 +12,11 @@ import {
   loadInspectorPreference,
   saveInspectorPreference,
   type InspectorTool,
+  type ScmSegment,
 } from '../lib/inspector-preference';
 import { ContextUsageButton } from './context-usage-button';
-import { PrPanel } from './pr-panel';
+import { ScmPanel } from './forge/scm-panel';
 import { Transcript } from './session-transcript';
-import { ReviewChanges } from './review-changes';
 import { PendingUserInputBanner } from './pending-user-input-banner';
 import { ApprovalModePicker, type ApprovalMode } from './approval-mode-picker';
 import { BrowserPanel, getDesktopBrowserBridge } from './browser-panel';
@@ -123,12 +123,13 @@ export function SessionDetail({
       : null;
   const [panelOpen, setPanelOpen] = useState(initialInspector.open);
   const [activeTool, setActiveTool] = useState<InspectorTool | null>(restoredTool);
+  const [scmSegment, setScmSegment] = useState<ScmSegment>(initialInspector.scmSegment ?? 'changes');
   const [terminalMounted, setTerminalMounted] = useState(restoredTool === 'terminal');
   const [fileExplorerMounted, setFileExplorerMounted] = useState(restoredTool === 'files');
 
   useEffect(() => {
-    saveInspectorPreference({ version: 1, open: panelOpen, tool: activeTool });
-  }, [panelOpen, activeTool]);
+    saveInspectorPreference({ version: 1, open: panelOpen, tool: activeTool, scmSegment });
+  }, [panelOpen, activeTool, scmSegment]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pendingScrollToBottomRef = useRef(true);
   const streaming = session.status === 'RUNNING';
@@ -617,12 +618,12 @@ export function SessionDetail({
 
           {activeTool === 'scm' && hasGitContext && (
             <div className="flex-1 min-h-0">
-              <div className="h-full overflow-y-auto">
-                <div className="border-b border-border/60 bg-card/40">
-                  <ReviewChanges sessionId={session.id} />
-                </div>
-                <PrPanel session={session} />
-              </div>
+              <ScmPanel
+                session={session}
+                workingDir={workingDir}
+                segment={scmSegment}
+                onSegmentChange={setScmSegment}
+              />
             </div>
           )}
 
