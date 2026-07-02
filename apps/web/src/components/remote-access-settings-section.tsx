@@ -30,6 +30,7 @@ async function probeNuncio(dnsName: string): Promise<boolean> {
 
 function PeerRow({ peer, autoTrust }: { peer: TailscalePeer; autoTrust: boolean }) {
   const [hasNuncio, setHasNuncio] = useState(false);
+  const desktopServers = window.nuncioDesktop?.servers;
 
   useEffect(() => {
     let cancelled = false;
@@ -64,14 +65,25 @@ function PeerRow({ peer, autoTrust }: { peer: TailscalePeer; autoTrust: boolean 
         <Badge variant={trusted ? 'default' : 'outline'} className="text-[10.5px]">
           {trusted ? 'Trusted' : 'Token required'}
         </Badge>
-        {hasNuncio && (
-          <Button asChild variant="outline" size="sm" className="h-7 px-2 text-[12px]">
-            <a href={`http://${peer.dnsName}:3000`} target="_blank" rel="noreferrer">
-              Open
-              <ExternalLink className="size-3 ml-1" />
-            </a>
-          </Button>
-        )}
+        {hasNuncio &&
+          (desktopServers ? (
+            // Desktop shell: switch the whole app to that server in place.
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-[12px]"
+              onClick={() => void desktopServers.connect(`http://${peer.dnsName}:3000`)}
+            >
+              Connect
+            </Button>
+          ) : (
+            <Button asChild variant="outline" size="sm" className="h-7 px-2 text-[12px]">
+              <a href={`http://${peer.dnsName}:3000`} target="_blank" rel="noreferrer">
+                Open
+                <ExternalLink className="size-3 ml-1" />
+              </a>
+            </Button>
+          ))}
       </div>
     </div>
   );

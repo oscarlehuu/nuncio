@@ -1,6 +1,7 @@
 const path = require('node:path');
-const { app, BrowserWindow, BrowserView, dialog, ipcMain, Notification } = require('electron');
+const { app, BrowserWindow, BrowserView, dialog, ipcMain, Menu, Notification } = require('electron');
 const { DaemonSupervisor } = require('./daemon');
+const serverProfiles = require('./server-profiles');
 
 const DEV_SERVER_URL = process.env.NUNCIO_DESKTOP_DEV_URL || 'http://localhost:5173';
 const DEV_SERVER_PROBE_TIMEOUT_MS = 600;
@@ -14,6 +15,13 @@ let quittingAfterDaemonStop = false;
 const terminalPtys = new Map();
 const embeddedBrowserViews = new Map();
 let activeEmbeddedBrowserId = null;
+
+// Server-connection state: the shell can load the local daemon or a saved
+// remote nuncio server. 'local' is always available as the fallback target.
+let serverProfilesState = { lastUsed: 'local', servers: [] };
+let serverProfilesPath = null;
+let currentServerTarget = 'local';
+let localServerUrl = null;
 
 function createWindow(url) {
   mainWindow = new BrowserWindow({
@@ -34,7 +42,111 @@ function createWindow(url) {
     mainWindow = null;
   });
 
+  // Escape hatch: a remote server that stops responding would leave the shell
+  // on an unloadable page (the UI itself comes from that server), so fall back
+  // to the local daemon. errorCode -3 (ERR_ABORTED) fires on normal in-app
+  // navigations and must be ignored.
+  mainWindow.webContents.on?.('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!isMainFrame || errorCode === -3) return;
+    if (currentServerTarget !== 'local' && localServerUrl) {
+      console.error(
+        `[desktop] failed to load ${validatedURL || currentServerTarget} (${errorDescription}); falling back to the local daemon`,
+      );
+      connectToServer('local').catch((error) => console.error(error));
+    }
+  });
+
   return mainWindow.loadURL(url);
+}
+
+function resolveServerProfilesPath() {
+  try {
+    if (typeof app.getPath === 'function') {
+      return path.join(app.getPath('userData'), 'servers.json');
+    }
+  } catch {
+    // userData unavailable (tests); profiles stay in-memory.
+  }
+  return null;
+}
+
+function rebuildServerMenu() {
+  if (!Menu?.buildFromTemplate || !Menu?.setApplicationMenu) return;
+
+  const serverItems = [
+    {
+      label: 'This Mac (local)',
+      type: 'radio',
+      checked: currentServerTarget === 'local',
+      click: () => connectToServer('local').catch((error) => console.error(error)),
+    },
+  ];
+  if (serverProfilesState.servers.length > 0) {
+    serverItems.push({ type: 'separator' });
+    for (const server of serverProfilesState.servers) {
+      serverItems.push({
+        label: `${server.name} — ${server.url}`,
+        type: 'radio',
+        checked: currentServerTarget === server.url,
+        click: () => connectToServer(server.url).catch((error) => console.error(error)),
+      });
+    }
+  }
+
+  const template = [
+    ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []),
+    { role: 'editMenu' },
+    { role: 'viewMenu' },
+    { label: 'Server', submenu: serverItems },
+    { role: 'windowMenu' },
+  ];
+
+  try {
+    Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  } catch (error) {
+    console.error('[desktop] failed to build the Server menu', error);
+  }
+}
+
+async function connectToServer(target) {
+  if (!mainWindow) {
+    return { ok: false, error: 'Nuncio window is not available' };
+  }
+
+  if (target === 'local') {
+    currentServerTarget = 'local';
+    serverProfilesState = { ...serverProfilesState, lastUsed: 'local' };
+    serverProfiles.saveProfiles(serverProfilesPath, serverProfilesState);
+    rebuildServerMenu();
+    if (!localServerUrl) {
+      return { ok: false, error: 'local daemon is not running' };
+    }
+    await mainWindow.loadURL(localServerUrl);
+    return { ok: true, target: 'local' };
+  }
+
+  const url = serverProfiles.normalizeServerUrl(target);
+  if (!url) {
+    return { ok: false, error: 'invalid server url' };
+  }
+
+  serverProfilesState = serverProfiles.upsertServer(serverProfilesState, url);
+  serverProfilesState = { ...serverProfilesState, lastUsed: url };
+  serverProfiles.saveProfiles(serverProfilesPath, serverProfilesState);
+  currentServerTarget = url;
+  rebuildServerMenu();
+  await mainWindow.loadURL(url);
+  return { ok: true, target: url };
+}
+
+function registerServerHandlers() {
+  ipcMain.handle('servers:list', () => ({
+    current: currentServerTarget,
+    localUrl: localServerUrl,
+    servers: serverProfilesState.servers,
+  }));
+
+  ipcMain.handle('servers:connect', (_event, target) => connectToServer(target));
 }
 
 async function probeDevServer(timeoutMs = DEV_SERVER_PROBE_TIMEOUT_MS) {
@@ -400,6 +512,10 @@ app.whenReady().then(async () => {
   registerNotifyHandler();
   registerBrowserHandlers();
   registerTerminalHandlers();
+  registerServerHandlers();
+
+  serverProfilesPath = resolveServerProfilesPath();
+  serverProfilesState = serverProfiles.loadProfiles(serverProfilesPath);
 
   const forcedDevMode = process.env.NUNCIO_DESKTOP_DEV === '1';
   const useDevServer = forcedDevMode
@@ -408,7 +524,9 @@ app.whenReady().then(async () => {
 
   if (useDevServer) {
     console.log('[desktop] dev mode', DEV_SERVER_URL);
+    localServerUrl = DEV_SERVER_URL;
     await createWindow(DEV_SERVER_URL);
+    rebuildServerMenu();
     mainWindow?.webContents.openDevTools({ mode: 'detach' });
   } else if (forcedDevMode) {
     const error = new Error(
@@ -423,7 +541,18 @@ app.whenReady().then(async () => {
 
     try {
       const { url } = await supervisor.start();
-      await createWindow(url);
+      localServerUrl = url;
+      // Reopen the last-used server; the did-fail-load fallback returns to the
+      // local daemon when a remembered remote is unreachable.
+      const lastUsed = serverProfilesState.lastUsed;
+      if (lastUsed !== 'local' && serverProfiles.normalizeServerUrl(lastUsed)) {
+        currentServerTarget = lastUsed;
+        await createWindow(lastUsed);
+      } else {
+        currentServerTarget = 'local';
+        await createWindow(url);
+      }
+      rebuildServerMenu();
     } catch (error) {
       console.error(error);
       await createErrorWindow(error);
@@ -432,7 +561,11 @@ app.whenReady().then(async () => {
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow(supervisor?.url || DEV_SERVER_URL);
+      const target =
+        currentServerTarget !== 'local'
+          ? currentServerTarget
+          : localServerUrl || supervisor?.url || DEV_SERVER_URL;
+      createWindow(target);
     }
   });
 });

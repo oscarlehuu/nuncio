@@ -194,6 +194,10 @@ async function runMain({ env = {}, fetchImpl, advanceTimers = false } = {}) {
       if (specifier === './daemon') {
         return { DaemonSupervisor: FakeDaemonSupervisor };
       }
+      if (specifier === './server-profiles') {
+        // Real module: pure + filesystem-defensive, safe inside the sandbox.
+        return require(path.resolve(__dirname, '../src/server-profiles.js'));
+      }
       throw new Error(`Unexpected require from main.js test: ${specifier}`);
     },
     setTimeout: sandboxSetTimeout,
@@ -308,5 +312,38 @@ describe('desktop main dev-mode loading', () => {
     expect(state.browserViews).toHaveLength(1);
     expect(state.removedBrowserViews).toEqual([state.browserViews[0]]);
     expect(state.setBrowserViews).toEqual([state.browserViews[0], state.browserViews[0]]);
+  });
+
+  test('servers:connect switches the shell to a remote server, lists it, and returns to local', async () => {
+    // Dev probe fails → daemon mode, boots on the local daemon URL.
+    const state = await runMain({ fetchImpl: async () => ({ ok: false }) });
+    expect(state.loadedUrls).toEqual(['http://daemon.test:3000']);
+
+    const connect = state.ipcHandlers['servers:connect'];
+    const list = state.ipcHandlers['servers:list'];
+    expect(typeof connect).toBe('function');
+    expect(typeof list).toBe('function');
+
+    const result = await connect({}, 'oscars-macbook-pro.tail1.ts.net:3000');
+    expect(result).toEqual({ ok: true, target: 'http://oscars-macbook-pro.tail1.ts.net:3000' });
+    expect(state.loadedUrls).toEqual([
+      'http://daemon.test:3000',
+      'http://oscars-macbook-pro.tail1.ts.net:3000',
+    ]);
+
+    const listed = list({});
+    expect(listed.current).toBe('http://oscars-macbook-pro.tail1.ts.net:3000');
+    expect(listed.localUrl).toBe('http://daemon.test:3000');
+    expect(listed.servers).toEqual([
+      { name: 'oscars-macbook-pro', url: 'http://oscars-macbook-pro.tail1.ts.net:3000' },
+    ]);
+
+    const back = await connect({}, 'local');
+    expect(back).toEqual({ ok: true, target: 'local' });
+    expect(state.loadedUrls[2]).toBe('http://daemon.test:3000');
+    expect(list({}).current).toBe('local');
+
+    const invalid = await connect({}, 'ftp://nope');
+    expect(invalid.ok).toBe(false);
   });
 });

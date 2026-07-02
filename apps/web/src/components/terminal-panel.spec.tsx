@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, waitFor } from '@testing-library/react';
-import { TerminalPanel } from './terminal-panel';
+import { TerminalPanel, shouldUseDesktopTerminal } from './terminal-panel';
 
 const xtermMocks = vi.hoisted(() => {
   const instances: Array<{ onData: ReturnType<typeof vi.fn>; loadAddon: ReturnType<typeof vi.fn>; open: ReturnType<typeof vi.fn>; write: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn>; cols: number; rows: number }> = [];
@@ -102,5 +102,21 @@ describe('TerminalPanel', () => {
     ws.onopen?.(new Event('open'));
 
     expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'start', cwd: '/workspace', cols: 80, rows: 24 }));
+  });
+});
+
+describe('shouldUseDesktopTerminal', () => {
+  it('allows the desktop node-pty backend only on loopback origins', () => {
+    expect(shouldUseDesktopTerminal('localhost')).toBe(true);
+    expect(shouldUseDesktopTerminal('127.0.0.1')).toBe(true);
+    expect(shouldUseDesktopTerminal('[::1]')).toBe(true);
+  });
+
+  it('forces the server WebSocket backend for remote origins', () => {
+    // Connected to a remote nuncio server: a local node-pty shell would open
+    // on the wrong machine — the project lives on the server.
+    expect(shouldUseDesktopTerminal('oscars-macbook-pro.tailf08532.ts.net')).toBe(false);
+    expect(shouldUseDesktopTerminal('100.111.98.6')).toBe(false);
+    expect(shouldUseDesktopTerminal('192.168.1.20')).toBe(false);
   });
 });

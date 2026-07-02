@@ -352,6 +352,36 @@ not present a streamed remote-browser viewport there.
 normal external Chrome window for the dock. The browser dock is available only
 through the desktop bridge.
 
+## Desktop server profiles (connect the shell to a remote nuncio)
+
+The Electron shell can load either its own local daemon or a saved remote nuncio server
+(`apps/desktop/src/server-profiles.js` + wiring in `main.js`). Profiles persist at
+`<userData>/servers.json` as `{ lastUsed: 'local' | url, servers: [{ name, url }] }`.
+
+- **Boot:** the local daemon ALWAYS starts (it is the permanent fallback); then the shell loads
+  `lastUsed` — the remembered remote if set, else the local URL.
+- **Escape hatch invariant:** `did-fail-load` on the main frame (ignoring `-3`/ERR_ABORTED) while a
+  remote target is active falls back to `connectToServer('local')`. This is mandatory — the web UI
+  is served BY the remote server, so a dead remote would otherwise strand the shell on an
+  unloadable page with no UI to switch back. NEVER remove the fallback.
+- **Native "Server" menu** (`rebuildServerMenu`): radio items for "This Mac (local)" + each saved
+  server; rebuilt on every switch. All Menu/`app.getPath` usage is guarded (`Menu?.`, `typeof
+  app.getPath === 'function'`) so `main.js` still boots in the bun-test vm sandbox where the
+  electron stub provides neither.
+- **IPC / preload:** `servers:list` → `{ current, localUrl, servers }`; `servers:connect(target)`
+  (`'local'` or a URL — normalized via `normalizeServerUrl`, upserted into profiles, persisted,
+  loaded). Exposed as `window.nuncioDesktop.servers = { list, connect }` (type
+  `NuncioDesktopServersApi` in `use-session-notifications.ts` — the single `declare global`).
+- **Web integration:** in the Remote access settings section, a tailnet peer running nuncio shows
+  **Connect** (switch the shell in place via `servers.connect`) when the desktop bridge exists,
+  else the plain **Open** link (new tab). Combined with Tailscale auto-trust, switching servers
+  inside the desktop app needs no token.
+- `server-profiles.js` is pure/filesystem-defensive: missing or corrupt `servers.json`, or a
+  missing `userData` path, degrade to in-memory defaults — never a boot failure.
+- **Tests:** `apps/desktop/test/server-profiles.test.js` (normalize/load/save/upsert) and the
+  `servers:connect` behavior test in `main-dev-mode.test.js` (switch → list → back to local →
+  invalid URL refused).
+
 ## Integrated terminal (dual backend)
 
 The session view hosts a real interactive terminal with **two independent backends** selected at runtime by the web panel: (A) **desktop** = `node-pty` in the Electron main process over IPC; (B) **browser** = a **Bun-native PTY** exposed over a loopback-only WebSocket. There is **ZERO** shared PTY transport between them — the panel picks one per mount and falls back desktop→browser on failure. This exists because `node-pty` FAILS under Bun (`posix_spawnp failed`), so the server cannot use it; Bun 1.3.14's native `Bun.spawn(..., { terminal })` PTY is used server-side instead, and `node-pty` runs only in Electron main (rebuilt via `@electron/rebuild`).
@@ -415,7 +445,7 @@ Independent of the server WS. Mirrors the existing `registerNotifyHandler` patte
 
 **Backend selection (state transition):**
 
-1. If `window.nuncioDesktop?.terminal` exists → subscribe `onData`/`onExit` (filtered by `payload.id === terminalId`), then `create({ id, cwd, cols, rows })`. On resolve, wire `sendInput`/`sendResize` to IPC `write`/`resize`. **On reject/throw → `cleanupBackend()` then `startWebSocketBackend()`** (desktop→browser fallback).
+1. If `window.nuncioDesktop?.terminal` exists **AND** `shouldUseDesktopTerminal(location.hostname)` (loopback hostnames only: `localhost`/`127.0.0.1`/`::1`/`[::1]`) → subscribe `onData`/`onExit` (filtered by `payload.id === terminalId`), then `create({ id, cwd, cols, rows })`. On resolve, wire `sendInput`/`sendResize` to IPC `write`/`resize`. **On reject/throw → `cleanupBackend()` then `startWebSocketBackend()`** (desktop→browser fallback). **Remote-origin invariant:** when the desktop shell is connected to a remote server (non-loopback origin), the node-pty backend would open a shell on the WRONG machine (the client, not the machine holding the project) — the WS backend MUST win. NEVER pick the IPC backend on a non-loopback origin.
 2. Otherwise (or on fallback) → `new WebSocket(location.origin.replace(/^http/, 'ws') + '/api/terminal')`; `onopen` sends `{ type: 'start', cwd, cols, rows }`; `onmessage` dispatches `data`→`term.write` and `exit`→notice; `term.onData`→`ws.send({ type: 'input' })`.
 
 **Invariants / NEVER**

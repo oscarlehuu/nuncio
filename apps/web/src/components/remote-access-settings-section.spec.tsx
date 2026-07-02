@@ -105,6 +105,25 @@ describe('RemoteAccessSettingsSection', () => {
     expect(screen.getByRole('link', { name: 'tailscale.com/download' })).toBeInTheDocument();
   });
 
+  it('switches the desktop shell to a peer via Connect when the servers bridge exists', async () => {
+    mockStatus.mockResolvedValue(RUNNING_STATUS);
+    // Probe succeeds → the peer is running nuncio.
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+    const connect = vi.fn().mockResolvedValue({ ok: true });
+    window.nuncioDesktop = { servers: { connect, list: vi.fn() } };
+    const user = userEvent.setup();
+
+    try {
+      render(<RemoteAccessSettingsSection />);
+      const connectButton = await screen.findByRole('button', { name: 'Connect' });
+      await user.click(connectButton);
+      expect(connect).toHaveBeenCalledWith('http://dev-server.tail1.ts.net:3000');
+      expect(screen.queryByRole('link', { name: /Open/ })).not.toBeInTheDocument();
+    } finally {
+      delete window.nuncioDesktop;
+    }
+  });
+
   it('reveals the access token on demand', async () => {
     mockStatus.mockResolvedValue(RUNNING_STATUS);
     const user = userEvent.setup();

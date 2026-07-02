@@ -107,7 +107,7 @@ export function TerminalPanel({ cwd, onExit }: TerminalPanelProps) {
     };
 
     const desktopTerminal = window.nuncioDesktop?.terminal;
-    if (desktopTerminal) {
+    if (desktopTerminal && shouldUseDesktopTerminal(location.hostname)) {
       const unsubscribeData = desktopTerminal.onData((payload) => {
         if (payload.id === terminalId) {
           term.write(payload.data);
@@ -161,6 +161,21 @@ export function TerminalPanel({ cwd, onExit }: TerminalPanelProps) {
       )}
       <div ref={containerRef} className="min-h-0 flex-1 overflow-hidden p-2" data-testid="terminal-panel" />
     </div>
+  );
+}
+
+/**
+ * The desktop node-pty backend opens a shell on the CLIENT machine, so it is
+ * only correct when the app is viewing its own local daemon. When the desktop
+ * shell is connected to a remote server (non-loopback origin), the WebSocket
+ * backend must win — the terminal belongs on the machine that holds the project.
+ */
+export function shouldUseDesktopTerminal(hostname: string): boolean {
+  return (
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '::1' ||
+    hostname === '[::1]'
   );
 }
 

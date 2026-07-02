@@ -38,6 +38,21 @@ export interface NuncioDesktopBrowserState {
   loading: boolean;
 }
 
+export interface NuncioDesktopServerProfile {
+  name: string;
+  url: string;
+}
+
+export interface NuncioDesktopServersApi {
+  list: () => Promise<{
+    current: string;
+    localUrl: string | null;
+    servers: NuncioDesktopServerProfile[];
+  }>;
+  /** target: 'local' or a server URL. The shell saves the profile and loads it. */
+  connect: (target: string) => Promise<{ ok: boolean; target?: string; error?: string }>;
+}
+
 export interface NuncioDesktopBrowserApi {
   show: (payload: {
     id: string;
@@ -132,6 +147,7 @@ declare global {
       electron?: string;
       notify?: (payload: { title: string; body: string; sessionId: string }) => Promise<unknown> | void;
       browser?: NuncioDesktopBrowserApi;
+      servers?: NuncioDesktopServersApi;
       terminal?: NuncioDesktopTerminalApi;
     };
   }

@@ -11,6 +11,10 @@ contextBridge.exposeInMainWorld('nuncioDesktop', {
     resize: (id, bounds) => ipcRenderer.invoke('browser:resize', id, bounds),
     hide: (id) => ipcRenderer.invoke('browser:hide', id),
   },
+  servers: {
+    list: () => ipcRenderer.invoke('servers:list'),
+    connect: (target) => ipcRenderer.invoke('servers:connect', target),
+  },
   terminal: {
     create: (payload) => ipcRenderer.invoke('terminal:create', payload),
     write: (id, data) => ipcRenderer.invoke('terminal:write', id, data),
