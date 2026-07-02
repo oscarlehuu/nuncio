@@ -82,8 +82,8 @@ describe('RemoteAccessSettingsSection', () => {
     const user = userEvent.setup();
     render(<RemoteAccessSettingsSection />);
 
-    const toggle = await screen.findByRole('button', { name: 'Trust my Tailscale devices' });
-    expect(toggle).toHaveTextContent('On');
+    const toggle = await screen.findByRole('switch', { name: 'Trust my Tailscale devices' });
+    expect(toggle).toHaveAttribute('aria-checked', 'true');
     await user.click(toggle);
 
     await waitFor(() =>

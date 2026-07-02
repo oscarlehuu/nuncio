@@ -91,12 +91,24 @@ describe('HomeView', () => {
     expect(onSubmit.mock.calls[0][0]).toBe('Build a login page');
   });
 
-  it('does not submit on Enter when the prompt is empty', async () => {
+  it('does not submit on Enter when the prompt is empty and keeps Send disabled', async () => {
     const onSubmit = vi.fn();
     render(<HomeView sessionCount={0} onSubmit={onSubmit} providers={CURSOR_AND_PI} />);
     await userEvent.keyboard('{Enter}');
     expect(onSubmit).not.toHaveBeenCalled();
-    expect(screen.queryByRole('button', { name: /send/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /send/i })).toBeDisabled();
+  });
+
+  it('enables Send once the prompt has content and submits on click', async () => {
+    const onSubmit = vi.fn();
+    render(<HomeView sessionCount={0} onSubmit={onSubmit} providers={CURSOR_AND_PI} />);
+    const send = await screen.findByRole('button', { name: /send/i });
+    expect(send).toBeDisabled();
+    await userEvent.type(screen.getByPlaceholderText(/ask nuncio/i), 'Ship it');
+    expect(send).toBeEnabled();
+    await userEvent.click(send);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toBe('Ship it');
   });
 
   it('submits on Enter (without shift) and not on Shift+Enter', async () => {
@@ -136,20 +148,46 @@ describe('HomeView', () => {
     expect(screen.queryByLabelText(/connected/i)).toBeNull();
   });
 
-  it('stacks textarea above a single-row scrolling picker toolbar', () => {
-    const { container } = render(<HomeView sessionCount={0} onSubmit={vi.fn()} />);
+  it('removes the hero heading — the composer is the centerpiece', () => {
+    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
+    expect(screen.queryByText(/what should i work on/i)).toBeNull();
+    expect(screen.queryByRole('heading')).toBeNull();
+  });
+
+  it('renders the context row (project / branch / workspace) above the composer card', () => {
+    const { container } = render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
+    const contextRow = container.querySelector('.home-composer-context-row');
+    const card = container.querySelector('.home-composer');
+    expect(contextRow).toBeTruthy();
+    expect(card).toBeTruthy();
+
+    // Context row sits BEFORE the composer card in document order.
+    expect(
+      contextRow!.compareDocumentPosition(card!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    // The three context triggers live in the context row, not the composer card.
+    expect(contextRow).toContainElement(screen.getByRole('button', { name: /no repo/i }));
+    expect(contextRow).toContainElement(screen.getByRole('button', { name: /work locally/i }));
+    expect(card).not.toContainElement(screen.getByRole('button', { name: /no repo/i }));
+  });
+
+  it('keeps the model picker inside the composer bar as a single-row scroll', async () => {
+    const { container } = render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
     const card = container.querySelector('.home-composer');
     const bar = container.querySelector('.home-composer-bar');
     const pickers = container.querySelector('.home-composer-pickers');
 
     expect(card).toHaveClass('flex', 'flex-col');
-    expect(bar).toHaveClass('border-t');
-    expect(pickers).toBeTruthy();
+    expect(bar).toBeTruthy();
     expect(pickers).toHaveClass('overflow-x-auto');
     expect(pickers).not.toHaveClass('flex-wrap');
+
+    const model = await screen.findByRole('button', { name: /haiku/i });
+    expect(bar).toContainElement(model);
   });
 
-  it('shows Codex approval mode inside the prompt frame, not the context picker row', async () => {
+  it('shows Codex approval mode inside the prompt frame, with the model in the composer bar', async () => {
     const { container } = render(
       <HomeView
         sessionCount={0}
@@ -163,8 +201,7 @@ describe('HomeView', () => {
     const approval = await screen.findByRole('button', { name: /approval mode: full access/i });
     const model = await screen.findByRole('button', { name: /gpt 5.5/i });
     expect(container.querySelector('.home-composer-prompt-frame')).toContainElement(approval);
-    expect(container.querySelector('.home-composer-context-row')).not.toContainElement(approval);
-    expect(container.querySelector('.home-composer-context-row')).toContainElement(model);
+    expect(container.querySelector('.home-composer-bar')).toContainElement(model);
     expect(container.querySelector('.home-composer-prompt-frame')).not.toContainElement(model);
   });
 

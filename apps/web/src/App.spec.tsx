@@ -192,6 +192,18 @@ describe('App URL routing', () => {
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Session not found'));
     await waitFor(() => expect(screen.getByPlaceholderText(/Ask Nuncio/i)).toBeInTheDocument());
   });
+
+  it('renders the session grid at /grid', async () => {
+    // The empty-slot composer mounts pickers that fetch projects on mount; stub
+    // fetch so the fire-and-forget request resolves cleanly and cannot leak into
+    // the next test as an unhandled rejection.
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => [] }));
+    vi.mocked(fetchSessions).mockResolvedValue([]);
+    renderApp('/grid');
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: /session grid/i })).toBeInTheDocument(),
+    );
+  });
 });
 
 describe('App navigation', () => {

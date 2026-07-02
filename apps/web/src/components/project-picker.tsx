@@ -3,6 +3,7 @@ import { ChevronDown, FolderGit2, FolderOpen } from 'lucide-react';
 import { fetchProjects, fetchRecentProjects, projectDisplayName, type Project } from '../lib/projects';
 import { loadProjectPreference, type RecentProject } from '../lib/project-preference';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import {
   Command,
   CommandEmpty,
@@ -23,9 +24,19 @@ import { FolderBrowser } from './folder-browser';
 interface ProjectPickerProps {
   value?: string;
   onChange: (path: string) => void;
+  /** 'boxed' = composer toolbar chip; 'text' = borderless Cursor context label. */
+  variant?: 'boxed' | 'text';
+  /** Origin-absolute API base to browse another hub machine's filesystem. */
+  apiBase?: string;
 }
 
-export function ProjectPicker({ value, onChange }: ProjectPickerProps) {
+export function ProjectPicker({
+  value,
+  onChange,
+  variant = 'boxed',
+  apiBase = '',
+}: ProjectPickerProps) {
+  const asText = variant === 'text';
   const [projects, setProjects] = useState<Project[]>([]);
   const [open, setOpen] = useState(false);
   const [customMode, setCustomMode] = useState(false);
@@ -34,15 +45,17 @@ export function ProjectPicker({ value, onChange }: ProjectPickerProps) {
   const [recents, setRecents] = useState<RecentProject[]>([]);
 
   useEffect(() => {
-    void fetchProjects().then(setProjects);
-  }, []);
+    setProjects([]);
+    void fetchProjects(apiBase).then(setProjects);
+  }, [apiBase]);
 
   useEffect(() => {
     if (!open) return;
-    const local = loadProjectPreference().recentProjects;
+    // Local (this-browser) recents describe THIS machine's paths only.
+    const local = apiBase ? [] : loadProjectPreference().recentProjects;
     setRecents(local);
     let cancelled = false;
-    void fetchRecentProjects().then((server) => {
+    void fetchRecentProjects(apiBase).then((server) => {
       if (cancelled || server.length === 0) return;
       const serverPaths = new Set(server.map((entry) => entry.path));
       setRecents([...server, ...local.filter((entry) => !serverPaths.has(entry.path))]);
@@ -50,7 +63,7 @@ export function ProjectPicker({ value, onChange }: ProjectPickerProps) {
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, apiBase]);
 
   const recentPaths = useMemo(() => new Set(recents.map((entry) => entry.path)), [recents]);
   const catalogProjects = projects.filter((project) => !recentPaths.has(project.path));
@@ -87,12 +100,21 @@ export function ProjectPicker({ value, onChange }: ProjectPickerProps) {
     <>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
-          <Button variant="outline" className="composer-picker-trigger h-8 gap-1.5 px-2.5 max-w-[180px]">
-            <FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className={`truncate text-[13px] ${value ? 'font-medium' : 'text-muted-foreground'}`}>
+          <Button
+            variant="outline"
+            className={cn(
+              asText
+                ? 'picker-trigger-text max-w-[180px]'
+                : 'composer-picker-trigger h-8 gap-1.5 px-2.5 max-w-[180px]',
+            )}
+          >
+            {!asText && <FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" />}
+            <span
+              className={cn('truncate text-ui-lg', asText ? '' : value ? 'font-medium' : 'text-muted-foreground')}
+            >
               {label}
             </span>
-            <ChevronDown data-icon="inline-end" />
+            <ChevronDown className="size-3 opacity-70" data-icon="inline-end" />
           </Button>
         </PopoverTrigger>
         <PopoverContent className="w-[320px] p-0" align="start">
@@ -128,10 +150,10 @@ export function ProjectPicker({ value, onChange }: ProjectPickerProps) {
                         data-checked={entry.path === value ? 'true' : undefined}
                       >
                         <div className="flex-1 min-w-0">
-                          <div className="text-[13px] font-medium truncate">
+                          <div className="text-ui-lg font-medium truncate">
                             {entry.name ?? projectDisplayName(entry.path) ?? entry.path}
                           </div>
-                          <div className="text-[11px] text-muted-foreground truncate">{entry.path}</div>
+                          <div className="text-ui-sm text-muted-foreground truncate">{entry.path}</div>
                         </div>
                       </CommandItem>
                     ))}
@@ -147,8 +169,8 @@ export function ProjectPicker({ value, onChange }: ProjectPickerProps) {
                         data-checked={project.path === value ? 'true' : undefined}
                       >
                         <div className="flex-1 min-w-0">
-                          <div className="text-[13px] font-medium truncate">{project.name}</div>
-                          <div className="text-[11px] text-muted-foreground truncate">{project.path}</div>
+                          <div className="text-ui-lg font-medium truncate">{project.name}</div>
+                          <div className="text-ui-sm text-muted-foreground truncate">{project.path}</div>
                         </div>
                       </CommandItem>
                     ))}
@@ -174,6 +196,7 @@ export function ProjectPicker({ value, onChange }: ProjectPickerProps) {
         open={browserOpen}
         onSelect={selectProject}
         onCancel={() => setBrowserOpen(false)}
+        apiBase={apiBase}
       />
     </>
   );

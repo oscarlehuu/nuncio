@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, waitFor } from '@testing-library/react';
-import { TerminalPanel, shouldUseDesktopTerminal } from './terminal-panel';
+import { TerminalPanel, readTerminalTheme, shouldUseDesktopTerminal } from './terminal-panel';
 
 const xtermMocks = vi.hoisted(() => {
-  const instances: Array<{ onData: ReturnType<typeof vi.fn>; loadAddon: ReturnType<typeof vi.fn>; open: ReturnType<typeof vi.fn>; write: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn>; cols: number; rows: number }> = [];
+  const instances: Array<{ onData: ReturnType<typeof vi.fn>; loadAddon: ReturnType<typeof vi.fn>; open: ReturnType<typeof vi.fn>; write: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn>; cols: number; rows: number; options: { theme?: { background: string; foreground: string } } }> = [];
   class Terminal {
     cols = 80;
     rows = 24;
@@ -12,7 +12,9 @@ const xtermMocks = vi.hoisted(() => {
     open = vi.fn();
     write = vi.fn();
     dispose = vi.fn();
-    constructor() {
+    options: { theme?: { background: string; foreground: string } };
+    constructor(opts: { theme?: { background: string; foreground: string } }) {
+      this.options = opts;
       instances.push(this);
     }
   }
@@ -102,6 +104,34 @@ describe('TerminalPanel', () => {
     ws.onopen?.(new Event('open'));
 
     expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'start', cwd: '/workspace', cols: 80, rows: 24 }));
+  });
+});
+
+describe('terminal theme tokens', () => {
+  it('derives the xterm theme from the --terminal-bg / --terminal-fg CSS vars', () => {
+    const el = document.createElement('div');
+    // Stub the computed style so we can assert the resolver reads the tokens,
+    // not literal hex — jsdom does not resolve real CSS custom properties.
+    vi.spyOn(window, 'getComputedStyle').mockReturnValue({
+      getPropertyValue: (name: string) =>
+        name === '--terminal-bg' ? 'oklch(0.5 0 0)' : name === '--terminal-fg' ? 'oklch(0.9 0 0)' : '',
+    } as unknown as CSSStyleDeclaration);
+
+    expect(readTerminalTheme(el)).toEqual({
+      background: 'oklch(0.5 0 0)',
+      foreground: 'oklch(0.9 0 0)',
+    });
+  });
+
+  it('passes the token-derived theme into the xterm constructor', async () => {
+    render(<TerminalPanel cwd="/tmp" />);
+    await waitFor(() => expect(xtermMocks.instances).toHaveLength(1));
+    const term = xtermMocks.instances[0];
+    // No literal hex surface colors leak through — the theme is var-resolved
+    // (falls back to the dark oklch surface when computed vars are unavailable).
+    expect(term.options.theme?.background).not.toMatch(/#[0-9a-f]{6}/i);
+    expect(term.options.theme?.foreground).not.toMatch(/#[0-9a-f]{6}/i);
+    expect(term.options.theme?.background).toMatch(/^oklch/);
   });
 });
 

@@ -149,15 +149,16 @@ export async function refreshSessionTranscript(sessionId: string): Promise<{ add
   return res.json();
 }
 
-export async function fetchSessions(): Promise<Session[]> {
-  const res = await apiFetch('/api/sessions');
+export async function fetchSessions(base = ''): Promise<Session[]> {
+  const res = await apiFetch(`${base}/api/sessions`);
   if (!res.ok) throw new Error('Failed to load sessions');
   return res.json();
 }
 
-export async function fetchSession(id: string): Promise<Session> {
-  const res = await apiFetch(`/api/sessions/${id}`);
-  if (!res.ok) throw new Error('Failed to load session');
+export async function fetchSession(id: string, base = ''): Promise<Session> {
+  const res = await apiFetch(`${base}/api/sessions/${id}`);
+  // Status in the message lets callers tell "gone" (404) from an outage.
+  if (!res.ok) throw new Error(`Failed to load session (${res.status})`);
   return res.json();
 }
 
@@ -176,6 +177,7 @@ export async function createSession(
   baseBranch?: string,
   modelOptions?: ModelOptionsMap,
   useWorktree = false,
+  base = '',
 ): Promise<Session> {
   const body: {
     prompt: string;
@@ -200,7 +202,7 @@ export async function createSession(
   }
   if (modelOptions && Object.keys(modelOptions).length > 0) body.modelOptions = modelOptions;
 
-  const res = await apiFetch('/api/sessions', {
+  const res = await apiFetch(`${base}/api/sessions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -213,11 +215,12 @@ export async function steerSession(
   id: string,
   message: string,
   forceResume?: boolean,
+  base = '',
 ): Promise<Session> {
   const body: { message: string; forceResume?: boolean } = { message };
   if (forceResume) body.forceResume = true;
 
-  const res = await apiFetch(`/api/sessions/${id}/steer`, {
+  const res = await apiFetch(`${base}/api/sessions/${id}/steer`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -316,9 +319,9 @@ export async function renameSession(id: string, title: string): Promise<Session>
   return res.json();
 }
 
-export async function fetchModels(): Promise<ModelProvider[]> {
+export async function fetchModels(base = ''): Promise<ModelProvider[]> {
   try {
-    const res = await apiFetch('/api/models');
+    const res = await apiFetch(`${base}/api/models`);
     if (!res.ok) return normalizeModelCatalog(FALLBACK_PROVIDERS);
     const data = await res.json();
     if (Array.isArray(data)) return normalizeModelCatalog(data as ModelProvider[]);
@@ -329,8 +332,12 @@ export async function fetchModels(): Promise<ModelProvider[]> {
   }
 }
 
-export async function fetchEvents(sessionId: string, since = 0): Promise<SessionEvent[]> {
-  const res = await apiFetch(`/api/sessions/${sessionId}/events?since=${since}`);
+export async function fetchEvents(
+  sessionId: string,
+  since = 0,
+  base = '',
+): Promise<SessionEvent[]> {
+  const res = await apiFetch(`${base}/api/sessions/${sessionId}/events?since=${since}`);
   if (!res.ok) throw new Error('Failed to load events');
   return res.json();
 }

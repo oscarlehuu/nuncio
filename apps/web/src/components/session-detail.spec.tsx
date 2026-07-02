@@ -1,8 +1,9 @@
 import type { ComponentProps } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SessionDetail } from './session-detail';
+import { INSPECTOR_PREFERENCE_STORAGE_KEY } from '../lib/inspector-preference';
 import { fetchGitStatus } from '../lib/api';
 import type { Session, SessionEvent } from '../lib/api';
 import type { ModelProvider } from '../lib/model-providers';
@@ -124,6 +125,8 @@ async function renderDetail(
 describe('SessionDetail', () => {
   beforeEach(() => {
     delete (window as Window & { nuncioDesktop?: unknown }).nuncioDesktop;
+    // The inspector dock persists open/tab state per device; isolate tests.
+    localStorage.clear();
   });
 
   afterEach(() => {
@@ -475,6 +478,79 @@ describe('SessionDetail', () => {
       writable: true,
       value: originalWebSocket,
     });
+  });
+
+  describe('inspector dock persistence', () => {
+    it('restores the last-open dock tab from localStorage', async () => {
+      Object.defineProperty(globalThis, 'WebSocket', {
+        configurable: true,
+        writable: true,
+        value: MockWebSocket,
+      });
+      localStorage.setItem(
+        INSPECTOR_PREFERENCE_STORAGE_KEY,
+        JSON.stringify({ version: 1, open: true, tool: 'terminal' }),
+      );
+
+      await renderDetail();
+
+      expect(await screen.findByTestId('terminal-panel')).toBeInTheDocument();
+
+      Object.defineProperty(globalThis, 'WebSocket', {
+        configurable: true,
+        writable: true,
+        value: originalWebSocket,
+      });
+    });
+
+    it('persists dock open/close and the active tab', async () => {
+      await renderDetail({
+        projectPath: '/Users/dev/code/nuncio',
+        branch: 'nuncio/s1-fix-auth',
+      });
+
+      await userEvent.click(screen.getByRole('button', { name: /toggle panel/i }));
+      await screen.findByText('Source Control');
+      await waitFor(() => {
+        const raw = JSON.parse(localStorage.getItem(INSPECTOR_PREFERENCE_STORAGE_KEY) ?? '{}');
+        expect(raw).toMatchObject({ open: true, tool: 'scm' });
+      });
+
+      await userEvent.click(screen.getByRole('button', { name: /close panel/i }));
+      await waitFor(() => {
+        const raw = JSON.parse(localStorage.getItem(INSPECTOR_PREFERENCE_STORAGE_KEY) ?? '{}');
+        expect(raw).toMatchObject({ open: false });
+      });
+    });
+
+    it('falls back to an available tab when the persisted one is unavailable here', async () => {
+      // Browser tab persisted on the desktop app, restored in the web app (no bridge).
+      localStorage.setItem(
+        INSPECTOR_PREFERENCE_STORAGE_KEY,
+        JSON.stringify({ version: 1, open: true, tool: 'browser' }),
+      );
+
+      await renderDetail({
+        projectPath: '/Users/dev/code/nuncio',
+        branch: 'nuncio/s1-fix-auth',
+      });
+
+      expect(await screen.findByText('Source Control')).toBeInTheDocument();
+      expect(screen.queryByTestId('browser-panel')).toBeNull();
+    });
+  });
+
+  it('renders the pull request panel inside the source control tab', async () => {
+    await renderDetail({
+      projectPath: '/Users/dev/code/nuncio',
+      branch: 'nuncio/s1-fix-auth',
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: /toggle panel/i }));
+    await screen.findByText('Source Control');
+
+    expect(screen.getByText('Pull Request')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /open pull request/i })).toBeInTheDocument();
   });
 
   it('shows repo and branch badges when workspace metadata is present', async () => {

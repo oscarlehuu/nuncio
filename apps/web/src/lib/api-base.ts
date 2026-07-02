@@ -10,6 +10,10 @@
 // not a machine segment — prevents a bogus prefix from shaping traffic.
 const MACHINE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9.-]*$/;
 
+export function isMachineSegment(value: string): boolean {
+  return MACHINE_SEGMENT.test(value);
+}
+
 export function resolveBasePath(pathname: string): string {
   const match = /^\/m\/([^/]+)(?:\/|$)/.exec(pathname);
   if (!match) return '';

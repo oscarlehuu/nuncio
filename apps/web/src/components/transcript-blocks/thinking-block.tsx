@@ -21,7 +21,7 @@ export function ThinkingBlock({ text, streaming }: ThinkingBlockProps) {
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        <span className="text-[length:calc(12.5px*var(--chat-font-scale))]">{streaming ? 'Thinking…' : `Thought for ${durationS}s`}</span>
+        <span className="chat-text-xs">{streaming ? 'Thinking…' : `Thought for ${durationS}s`}</span>
         {streaming && (
           <span className="inline-block size-1.5 rounded-full bg-primary animate-pulse" aria-hidden />
         )}
@@ -37,7 +37,7 @@ export function ThinkingBlock({ text, streaming }: ThinkingBlockProps) {
       </button>
       {open && (
         <div className="px-2 pb-2 pt-0.5">
-          <pre className="rounded-md bg-muted/30 border border-border/40 px-3 py-2 text-[12px] whitespace-pre-wrap break-all text-muted-foreground font-mono max-h-[40vh] overflow-y-auto">
+          <pre className="rounded-md bg-muted/30 border border-border/40 px-3 py-2 text-ui whitespace-pre-wrap break-all text-muted-foreground font-mono max-h-[40vh] overflow-y-auto">
             {displayed}
           </pre>
         </div>

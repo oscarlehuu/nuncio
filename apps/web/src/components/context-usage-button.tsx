@@ -12,7 +12,13 @@ function CircularProgress({ percentage, size = 20 }: { percentage: number; size?
   const radius = (size - stroke) / 2;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (percentage / 100) * circumference;
-  const color = percentage > 80 ? '#ef4444' : percentage > 50 ? '#f59e0b' : '#64748b';
+  // Semantic status tokens: error when nearly full, warning as it fills, neutral otherwise.
+  const color =
+    percentage > 80
+      ? 'var(--color-error)'
+      : percentage > 50
+        ? 'var(--color-warning)'
+        : 'var(--color-neutral)';
 
   return (
     <svg width={size} height={size} className="shrink-0" viewBox={`0 0 ${size} ${size}`}>
@@ -47,7 +53,7 @@ export const ContextUsageButton = memo(function ContextUsageButton({ usage }: Co
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+          className="flex items-center gap-1.5 text-ui-sm text-muted-foreground hover:text-foreground transition-colors"
           aria-label="Context usage"
           data-testid="context-usage-button"
         >
@@ -57,8 +63,8 @@ export const ContextUsageButton = memo(function ContextUsageButton({ usage }: Co
       </PopoverTrigger>
       <PopoverContent align="end" className="w-64 p-3" data-testid="context-usage-panel">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-[13px] font-medium text-foreground">Context Usage</span>
-          <span className="text-[11px] text-muted-foreground">
+          <span className="text-ui-lg font-medium text-foreground">Context Usage</span>
+          <span className="text-ui-sm text-muted-foreground">
             {formatTokens(usage.total)} / {formatTokens(usage.window)}
           </span>
         </div>
@@ -73,7 +79,7 @@ export const ContextUsageButton = memo(function ContextUsageButton({ usage }: Co
         </div>
         <div className="space-y-1.5">
           {usage.breakdown.map((item) => (
-            <div key={item.label} className="flex items-center gap-2 text-[12px]">
+            <div key={item.label} className="flex items-center gap-2 text-ui">
               <span
                 className="size-2.5 rounded-sm shrink-0"
                 style={{ backgroundColor: item.color }}

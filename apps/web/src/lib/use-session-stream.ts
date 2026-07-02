@@ -7,20 +7,29 @@ import {
   type SessionSubscription,
 } from '@nuncio/core/session-relay-client';
 
-/** ws(s):// URL of the session relay for this origin (hub base path applied). */
-export function sessionRelayUrl(): string {
-  const url = new URL(withBase('/api/sessions/ws'), window.location.origin);
+/** ws(s):// URL of the session relay (page hub base, or an explicit machine base). */
+export function sessionRelayUrl(base = ''): string {
+  const path = '/api/sessions/ws';
+  const prefixed = base ? withBase(path, base) : withBase(path);
+  const url = new URL(prefixed, window.location.origin);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   return url.toString();
 }
 
-export function useSessionStream(sessionId: string | null) {
+/**
+ * `base` targets a specific machine's API (origin-absolute, hub mode); the
+ * default empty string keeps page-relative behavior (rewritten by the page's
+ * own hub base where applicable).
+ */
+export function useSessionStream(sessionId: string | null, base = '') {
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const sinceRef = useRef(0);
   const subscriptionRef = useRef<SessionSubscription | null>(null);
   const cancelledRef = useRef(false);
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
+  const baseRef = useRef(base);
+  baseRef.current = base;
 
   const onEvent = useCallback((event: SessionEvent) => {
     sinceRef.current = Math.max(sinceRef.current, event.seq);
@@ -37,7 +46,7 @@ export function useSessionStream(sessionId: string | null) {
     if (!activeSessionId || cancelledRef.current) return;
     subscriptionRef.current?.close();
     subscriptionRef.current = subscribeSessionEvents({
-      url: sessionRelayUrl(),
+      url: sessionRelayUrl(baseRef.current),
       sessionId: activeSessionId,
       since: sinceRef.current,
       onEvent,
@@ -46,7 +55,7 @@ export function useSessionStream(sessionId: string | null) {
 
   const refetch = useCallback(async () => {
     if (!sessionId || cancelledRef.current) return;
-    const initial = await fetchEvents(sessionId, 0);
+    const initial = await fetchEvents(sessionId, 0, baseRef.current);
     if (cancelledRef.current) return;
     setEvents(initial);
     sinceRef.current = initial.reduce((max, e) => Math.max(max, e.seq), 0);
@@ -64,7 +73,7 @@ export function useSessionStream(sessionId: string | null) {
     cancelledRef.current = false;
     let cancelled = false;
 
-    fetchEvents(sessionId, 0).then((initial) => {
+    fetchEvents(sessionId, 0, baseRef.current).then((initial) => {
       if (cancelled) return;
       setEvents(initial);
       sinceRef.current = initial.reduce((max, e) => Math.max(max, e.seq), 0);
@@ -85,7 +94,7 @@ export function useSessionStream(sessionId: string | null) {
       subscriptionRef.current?.close();
       subscriptionRef.current = null;
     };
-  }, [sessionId, connect]);
+  }, [sessionId, base, connect]);
 
   return { events, refetch };
 }

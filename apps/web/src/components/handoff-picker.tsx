@@ -196,7 +196,7 @@ export function HandoffPicker({
             <ArrowRightLeft className="size-4" />
             Continue on mobile
           </SheetTitle>
-          <SheetDescription className="text-[13px] leading-snug">
+          <SheetDescription className="text-ui-lg leading-snug">
             Pick an in-progress chat from this Mac to continue on your phone.
           </SheetDescription>
         </SheetHeader>
@@ -274,7 +274,7 @@ export function HandoffPicker({
             <div className="space-y-4" role="listbox" aria-label="Chats">
               {sessionGroups.map((group) => (
                 <section key={group.dayKey} aria-label={group.label}>
-                  <h3 className="sticky top-0 z-10 bg-background/95 backdrop-blur px-1 py-1.5 mb-2 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+                  <h3 className="sticky top-0 z-10 bg-background/95 backdrop-blur px-1 py-1.5 mb-2 text-ui-sm font-semibold uppercase tracking-widest text-muted-foreground">
                     {group.label}
                   </h3>
                   <ul className="space-y-2">

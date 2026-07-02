@@ -18,6 +18,8 @@ interface FolderBrowserProps {
   initialPath?: string;
   onSelect: (path: string) => void;
   onCancel: () => void;
+  /** Origin-absolute API base to browse another hub machine's filesystem. */
+  apiBase?: string;
 }
 
 /**
@@ -26,7 +28,7 @@ interface FolderBrowserProps {
  * expose host filesystem paths. Works on every client including the iPhone
  * PWA, since browsing happens via `GET /api/fs/dirs` on the server.
  */
-export function FolderBrowser({ open, initialPath, onSelect, onCancel }: FolderBrowserProps) {
+export function FolderBrowser({ open, initialPath, onSelect, onCancel, apiBase = '' }: FolderBrowserProps) {
   const [listing, setListing] = useState<DirListing | null>(null);
   const [currentPath, setCurrentPath] = useState<string | undefined>(initialPath);
   const [loading, setLoading] = useState(false);
@@ -36,7 +38,7 @@ export function FolderBrowser({ open, initialPath, onSelect, onCancel }: FolderB
     setLoading(true);
     setError(null);
     try {
-      const result = await fetchDirectories(path);
+      const result = await fetchDirectories(path, apiBase);
       setListing(result);
       setCurrentPath(result.current);
     } catch {
@@ -44,7 +46,7 @@ export function FolderBrowser({ open, initialPath, onSelect, onCancel }: FolderB
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [apiBase]);
 
   useEffect(() => {
     if (open) void load(initialPath);
@@ -82,7 +84,7 @@ export function FolderBrowser({ open, initialPath, onSelect, onCancel }: FolderB
               <ArrowUp className="size-3.5" />
             </Button>
           )}
-          <div className="text-[12.5px] font-mono text-muted-foreground truncate min-w-0 flex-1" aria-label="Current path">
+          <div className="text-ui font-mono text-muted-foreground truncate min-w-0 flex-1" aria-label="Current path">
             {listing?.current ?? '—'}
           </div>
         </div>
@@ -118,9 +120,9 @@ export function FolderBrowser({ open, initialPath, onSelect, onCancel }: FolderB
                     className="flex items-center gap-2 w-full px-3 py-2 text-left hover:bg-accent/60 transition-colors"
                   >
                     <Folder className="size-4 shrink-0 text-muted-foreground" />
-                    <span className="text-[13px] truncate flex-1">{entry.name}</span>
+                    <span className="text-ui-lg truncate flex-1">{entry.name}</span>
                     {entry.isGit && (
-                      <Badge variant="secondary" className="text-[10px] font-mono px-1.5 py-0 h-[18px] gap-1">
+                      <Badge variant="secondary" className="text-ui-xs font-mono px-1.5 py-0 h-[18px] gap-1">
                         <GitBranch className="size-2.5" />
                         git
                       </Badge>

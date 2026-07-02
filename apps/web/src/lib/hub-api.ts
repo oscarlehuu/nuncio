@@ -1,4 +1,4 @@
-import { API_BASE } from './api-base';
+import { API_BASE, isMachineSegment } from './api-base';
 
 export interface HubMachine {
   name: string;
@@ -34,4 +34,17 @@ export function currentMachine(base: string = API_BASE): string | null {
 /** Origin-absolute URL for a machine's app under the hub. */
 export function machineHref(name: string): string {
   return `/m/${name}/`;
+}
+
+/**
+ * Origin-absolute API base for a specific machine, for per-call routing (grid
+ * tiles bound to another machine). Absolute URLs bypass the page-level fetch
+ * rewrite, so requests built on this base reach the chosen machine no matter
+ * which base path the page itself is served under. Empty string means "the
+ * machine this page is already talking to" (page-relative, rewritten as usual).
+ */
+export function machineApiBase(machineId: string | null | undefined): string {
+  if (!machineId || typeof window === 'undefined') return '';
+  if (!isMachineSegment(machineId)) return '';
+  return `${window.location.origin}/m/${machineId}`;
 }

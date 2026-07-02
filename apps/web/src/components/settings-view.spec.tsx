@@ -54,7 +54,7 @@ describe('SettingsView', () => {
       <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
     );
     expect(screen.getByText('Providers')).toBeInTheDocument();
-    expect(screen.getByText('Source Control')).toBeInTheDocument();
+    expect(screen.getByText('Source control')).toBeInTheDocument();
     expect(screen.getByText('General')).toBeInTheDocument();
   });
 
@@ -300,5 +300,29 @@ describe('SettingsView', () => {
     await userEvent.click(screen.getByRole('button', { name: /save/i }));
     await waitFor(() => expect(screen.getByText(/saving/i)).toBeInTheDocument());
     resolveUpdate();
+  });
+
+  it('renders a boolean general setting as a switch and toggles it on', async () => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const settings = [
+      makeSetting({
+        key: 'NUNCIO_TELEMETRY',
+        category: 'general',
+        providerId: undefined,
+        type: 'boolean',
+        label: 'Telemetry',
+        description: 'Send anonymous usage stats',
+        hasValue: true,
+        value: '0',
+      }),
+    ];
+    renderWithTheme(
+      <SettingsView settings={settings} onUpdate={onUpdate} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+
+    const toggle = screen.getByRole('switch', { name: 'Telemetry' });
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+    await userEvent.click(toggle);
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledWith('NUNCIO_TELEMETRY', '1'));
   });
 });
