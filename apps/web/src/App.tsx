@@ -557,6 +557,7 @@ export default function App() {
                 onCreate={handleCreateReturning}
                 steering={steering}
                 lifecycleBusy={lifecycleBusy}
+                railOverlay={!desktopSidebar.pinned}
               />
             }
           />
