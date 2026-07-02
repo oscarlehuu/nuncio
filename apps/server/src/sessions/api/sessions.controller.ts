@@ -144,6 +144,48 @@ export class SessionsController {
     return this.sessions.getEvents(id, Number.isFinite(cursor) ? cursor : 0);
   }
 
+  /**
+   * One SSE connection carrying many sessions' events (grid view). Browsers cap
+   * HTTP/1.1 connections per origin at ~6, so per-tile EventSources stall on
+   * larger grids — this multiplexes them. `sessions` is `<id>:<since>,...`;
+   * each event is the persisted row tagged with its sessionId.
+   */
+  @Get('stream/multi')
+  streamMulti(@Query('sessions') sessions: string | undefined, @Res() res: Response) {
+    const subs = (sessions ?? '')
+      .split(',')
+      .map((part) => {
+        const [id, since] = part.split(':');
+        const cursor = Number(since ?? '0');
+        return { id: id?.trim() ?? '', since: Number.isFinite(cursor) ? cursor : 0 };
+      })
+      .filter((sub) => sub.id.length > 0 && this.sessions.get(sub.id) !== null);
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    const writeTagged = (sessionId: string, event: unknown) => {
+      res.write(`data: ${JSON.stringify({ sessionId, ...(event as object) })}\n\n`);
+    };
+
+    const unsubscribes: Array<() => void> = [];
+    for (const sub of subs) {
+      for (const event of this.sessions.getEvents(sub.id, sub.since)) {
+        writeTagged(sub.id, event);
+      }
+      unsubscribes.push(this.sessions.subscribe(sub.id, (event) => writeTagged(sub.id, event)));
+    }
+
+    const heartbeat = setInterval(() => res.write(': ping\n\n'), 15000);
+    res.on('close', () => {
+      clearInterval(heartbeat);
+      for (const unsubscribe of unsubscribes) unsubscribe();
+      res.end();
+    });
+  }
+
   @Get(':id/stream')
   stream(
     @Param('id') id: string,
