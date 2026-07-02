@@ -4,6 +4,11 @@ import { GithubForgeProvider } from './providers/github-forge.provider';
 import { GitlabForgeProvider } from './providers/gitlab-forge.provider';
 import type { ForgeProvider } from './forges.types';
 
+/** Host-based provider selection: github.com → github, *gitlab* → gitlab. */
+export function providerIdForHost(host: string): string {
+  return host.includes('gitlab') ? 'gitlab' : 'github';
+}
+
 @Injectable()
 export class ForgeRegistry {
   private readonly providers: ForgeProvider[];
