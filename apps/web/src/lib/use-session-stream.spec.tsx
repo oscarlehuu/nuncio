@@ -55,7 +55,7 @@ describe('useSessionStream', () => {
     vi.mocked(fetchEvents).mockResolvedValue([ev(1), ev(2)]);
     const { getByTestId } = render(<Harness sid="s1" />);
     await waitFor(() => expect(getByTestId('count').textContent).toBe('2'));
-    expect(fetchEvents).toHaveBeenCalledWith('s1', 0);
+    expect(fetchEvents).toHaveBeenCalledWith('s1', 0, '');
   });
 
   it('appends events delivered over the EventSource stream', async () => {
@@ -109,7 +109,7 @@ describe('useSessionStream', () => {
     });
 
     await waitFor(() => expect(getByTestId('count').textContent).toBe('2'));
-    expect(fetchEvents).toHaveBeenLastCalledWith('s1', 0);
+    expect(fetchEvents).toHaveBeenLastCalledWith('s1', 0, '');
     expect(sources.length).toBeGreaterThanOrEqual(2);
   });
 

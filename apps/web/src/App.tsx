@@ -24,6 +24,7 @@ import { useSessionStream } from './lib/use-session-stream';
 import { useActiveRun } from './lib/use-active-run';
 import { useSessionNotifications } from './lib/use-session-notifications';
 import { HomeView } from './components/home-view';
+import { GridView } from './components/grid-view';
 import type { ApprovalMode } from './components/approval-mode-picker';
 import { HandoffPicker } from './components/handoff-picker';
 import { ChangelogView } from './components/changelog-view';
@@ -225,6 +226,66 @@ export default function App() {
     }
   };
 
+  // Grid steers a specific tile, not the global active route id.
+  const handleSteerSession = useCallback(async (id: string, message: string) => {
+    setSteering(true);
+    try {
+      await steerSession(id, message);
+      await refresh();
+    } catch (err) {
+      toast.error(err instanceof SteerApiError ? err.message : 'Failed to steer session');
+    } finally {
+      setSteering(false);
+    }
+  }, [refresh]);
+
+  const handlePauseSession = useCallback(async (id: string) => {
+    setLifecycleBusy(true);
+    try {
+      await pauseSession(id);
+      await refresh();
+    } finally {
+      setLifecycleBusy(false);
+    }
+  }, [refresh]);
+
+  // Grid needs the created session back to bind the slot; unlike handleCreate it
+  // does not navigate away from the grid route.
+  const handleCreateReturning = useCallback(
+    async (
+      prompt: string,
+      model?: string,
+      provider?: string,
+      projectPath?: string,
+      baseBranch?: string,
+      modelOptions?: ModelOptionsMap,
+    ): Promise<Session | null> => {
+      setCreating(true);
+      try {
+        const session = await createSession(
+          prompt,
+          model,
+          provider,
+          projectPath,
+          baseBranch,
+          modelOptions,
+          false,
+        );
+        const list = await refresh();
+        if (!list?.find((s) => s.id === session.id)) {
+          setSessions((prev) => [session, ...prev]);
+        }
+        return session;
+      } catch {
+        toast.error('Failed to create session');
+        return null;
+      } finally {
+        setCreating(false);
+      }
+    },
+    [refresh],
+  );
+
   const handleSessionStatus = useCallback((id: string, status: Session['status'], createdAt: number) => {
     setSessions((prev) => {
       let changed = false;
@@ -325,6 +386,11 @@ export default function App() {
     void refreshSettings();
   }, [refreshSettings]);
 
+  const handleOpenGrid = useCallback(() => {
+    navigate('/grid');
+    dismissTransientSidebar();
+  }, [dismissTransientSidebar, navigate]);
+
   const handleOpenSettings = useCallback(() => {
     navigate('/settings');
     dismissTransientSidebar();
@@ -412,6 +478,7 @@ export default function App() {
     activeId,
     onSelect: handleSelect,
     onNew: handleNew,
+    onGrid: handleOpenGrid,
     onSettings: handleOpenSettings,
     onChangelog: handleOpenChangelog,
     onArchive: handleArchiveById,
@@ -463,6 +530,34 @@ export default function App() {
                 approvalMode={approvalMode}
                 onApprovalModeChange={handleApprovalModeChange}
                 loading={creating}
+              />
+            }
+          />
+          <Route
+            path="/grid"
+            element={
+              <GridView
+                sessions={sessions}
+                providers={providers}
+                approvalMode={approvalMode}
+                onApprovalModeChange={handleApprovalModeChange}
+                onRespondProviderRequest={async (id, requestId, decision) => {
+                  try {
+                    await respondProviderRequest(id, requestId, decision);
+                  } catch {
+                    toast.error('Failed to respond to provider request');
+                  }
+                }}
+                onSteerSession={handleSteerSession}
+                onPauseSession={handlePauseSession}
+                onArchiveSession={handleArchiveById}
+                onRestore={handleRestore}
+                onDelete={handleDelete}
+                onRename={handleRename}
+                onCreate={handleCreateReturning}
+                steering={steering}
+                lifecycleBusy={lifecycleBusy}
+                railOverlay={!desktopSidebar.pinned}
               />
             }
           />

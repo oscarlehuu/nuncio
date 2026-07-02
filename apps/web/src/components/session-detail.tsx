@@ -8,7 +8,13 @@ import { projectDisplayName } from '../lib/projects';
 import { FALLBACK_PROVIDERS, modelById, prettyModelName, type ModelProvider } from '../lib/model-providers';
 import { isCodexApprovalEngine } from '../lib/codex-approval-engine';
 import { useContextUsage } from '../lib/use-context-usage';
+import {
+  loadInspectorPreference,
+  saveInspectorPreference,
+  type InspectorTool,
+} from '../lib/inspector-preference';
 import { ContextUsageButton } from './context-usage-button';
+import { PrPanel } from './pr-panel';
 import { Transcript } from './session-transcript';
 import { ReviewChanges } from './review-changes';
 import { PendingUserInputBanner } from './pending-user-input-banner';
@@ -67,6 +73,10 @@ interface SessionDetailProps {
   ) => void | Promise<void>;
   steering?: boolean;
   lifecycleBusy?: boolean;
+  /** Rendered in the header's right control group, before the panel toggle
+   * (e.g. the grid's restore button). In flow — the far-left column belongs
+   * to the sidebar hover rail and absolute corners collide with it. */
+  headerActions?: React.ReactNode;
 }
 
 export function SessionDetail({
@@ -86,16 +96,44 @@ export function SessionDetail({
   onRespondProviderRequest,
   steering,
   lifecycleBusy,
+  headerActions,
 }: SessionDetailProps) {
   const [steerText, setSteerText] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const [respondingRequestId, setRespondingRequestId] = useState<string | null>(null);
-  const [panelOpen, setPanelOpen] = useState(false);
-  const [activeTool, setActiveTool] = useState<'scm' | 'files' | 'terminal' | 'browser' | null>(null);
-  const [terminalMounted, setTerminalMounted] = useState(false);
-  const [fileExplorerMounted, setFileExplorerMounted] = useState(false);
+
+  const workingDir = session.worktreePath ?? session.workspace ?? session.projectPath ?? undefined;
+  const hasGitContext = !!(session.worktreePath || session.branch || session.projectPath);
+  const hasDesktopBrowser = !!getDesktopBrowserBridge();
+  const toolAvailable = (tool: InspectorTool | null): tool is InspectorTool =>
+    tool === 'terminal' ||
+    (tool === 'scm' && hasGitContext) ||
+    (tool === 'files' && !!workingDir) ||
+    (tool === 'browser' && hasDesktopBrowser);
+  const firstAvailableTool = (): InspectorTool => {
+    if (hasGitContext) return 'scm';
+    if (workingDir) return 'files';
+    return 'terminal';
+  };
+
+  // Restore the inspector dock (open + last tab) per device; a persisted tab this
+  // session cannot show (e.g. browser outside the desktop app) falls back.
+  const [initialInspector] = useState(() => loadInspectorPreference());
+  const restoredTool = toolAvailable(initialInspector.tool)
+    ? initialInspector.tool
+    : initialInspector.open
+      ? firstAvailableTool()
+      : null;
+  const [panelOpen, setPanelOpen] = useState(initialInspector.open);
+  const [activeTool, setActiveTool] = useState<InspectorTool | null>(restoredTool);
+  const [terminalMounted, setTerminalMounted] = useState(restoredTool === 'terminal');
+  const [fileExplorerMounted, setFileExplorerMounted] = useState(restoredTool === 'files');
+
+  useEffect(() => {
+    saveInspectorPreference({ version: 1, open: panelOpen, tool: activeTool });
+  }, [panelOpen, activeTool]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pendingScrollToBottomRef = useRef(true);
   const streaming = session.status === 'RUNNING';
@@ -139,8 +177,6 @@ export function SessionDetail({
   const repoName = projectDisplayName(session.projectPath) ?? projectDisplayName(session.workspace);
   const branchName = session.branch;
   const contextUsage = useContextUsage(events, entry?.contextWindow);
-  const hasDesktopBrowser = !!getDesktopBrowserBridge();
-  const workingDir = session.worktreePath ?? session.workspace ?? session.projectPath ?? undefined;
 
   useEffect(() => {
     pendingScrollToBottomRef.current = true;
@@ -195,14 +231,6 @@ export function SessionDetail({
     } finally {
       setRespondingRequestId(null);
     }
-  };
-
-  const hasGitContext = !!(session.worktreePath || session.branch || session.projectPath);
-
-  const firstAvailableTool = (): 'scm' | 'files' | 'terminal' | 'browser' => {
-    if (hasGitContext) return 'scm';
-    if (workingDir) return 'files';
-    return 'terminal';
   };
 
   return (
@@ -275,6 +303,7 @@ export function SessionDetail({
         </div>
 
         <div className="absolute right-4 md:right-5 top-1/2 -translate-y-1/2 flex items-center gap-1">
+          {headerActions}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -598,6 +627,7 @@ export function SessionDetail({
                 <div className="border-b border-border/60 bg-card/40">
                   <ReviewChanges sessionId={session.id} />
                 </div>
+                <PrPanel session={session} />
               </div>
             </div>
           )}

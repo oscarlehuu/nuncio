@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronRight,
   FolderGit2,
+  LayoutGrid,
   MessageSquare,
   Plus,
   RotateCcw,
@@ -45,6 +46,8 @@ interface SidebarProps {
   activeId: string | null;
   onSelect: (id: string | null) => void;
   onNew: () => void;
+  /** Desktop-only multi-session workbench. */
+  onGrid?: () => void;
   onSettings?: () => void;
   onChangelog?: () => void;
   onArchive?: (id: string) => void | Promise<void>;
@@ -60,6 +63,7 @@ export function Sidebar({
   activeId,
   onSelect,
   onNew,
+  onGrid,
   onSettings,
   onChangelog,
   onArchive,
@@ -130,6 +134,16 @@ export function Sidebar({
               ⌘N
             </kbd>
           </button>
+          {onGrid ? (
+            <button
+              type="button"
+              onClick={onGrid}
+              className="group hidden w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-lg text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 active:scale-[0.99] md:flex"
+            >
+              <LayoutGrid className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
+              <span className="flex-1">Grid</span>
+            </button>
+          ) : null}
         </nav>
 
         <div
