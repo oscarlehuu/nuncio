@@ -3,13 +3,12 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { AgentRunContext } from '../../../src/agents/agents.types';
+import type { AgentRunContext, EventEmitter } from '../../../src/agents/agents.types';
 import { BaseAgentProvider } from '../../../src/agents/agents.base-provider';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
-import type { SessionEvent } from '../../../src/sessions/domain/sessions.types';
 
 @Injectable()
 class StreamingProvider extends BaseAgentProvider {
@@ -68,7 +67,7 @@ describe('BaseAgentProvider emit contract', () => {
 
   it('emits the appended event with its persisted seq and createdAt', async () => {
     const created = sessions.create({ prompt: 'stream me', provider: 'streaming' });
-    const emitted: SessionEvent[] = [];
+    const emitted: Parameters<NonNullable<EventEmitter>>[0][] = [];
 
     await provider.run(created.id, created.prompt, { emit: (event) => emitted.push(event) });
 
@@ -86,11 +85,11 @@ describe('BaseAgentProvider emit contract', () => {
 
   it('emits strictly increasing seq for consecutive deltas', async () => {
     const created = sessions.create({ prompt: 'stream again', provider: 'streaming' });
-    const emitted: SessionEvent[] = [];
+    const emitted: Parameters<NonNullable<EventEmitter>>[0][] = [];
 
     await provider.run(created.id, created.prompt, { emit: (event) => emitted.push(event) });
 
-    const seqs = emitted.map((event) => event.seq);
+    const seqs = emitted.map((event) => event.seq ?? 0);
     for (let i = 1; i < seqs.length; i++) {
       expect(seqs[i]).toBeGreaterThan(seqs[i - 1]);
     }

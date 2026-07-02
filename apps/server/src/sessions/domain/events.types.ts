@@ -16,6 +16,9 @@ export type SessionEventType =
   | 'error'
   | 'status'
   | 'transcript_refreshed'
+  | 'runtime_restarted'
+  | 'verify_start'
+  | 'verify_result'
   | 'steer_message'
   | 'steer_queued'
   | 'interrupted';

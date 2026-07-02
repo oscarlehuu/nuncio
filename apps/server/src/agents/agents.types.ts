@@ -3,15 +3,20 @@ import type { ModelProviderDto } from '../models/models.types';
 import type {
   ProviderRequestInput,
   ProviderRequestResult,
-  SessionEvent,
+  SessionDto,
 } from '../sessions/domain/sessions.types';
 import type { UserInputAnswer } from '../sessions/domain/user-input.types';
 
 /**
- * Receives the persisted event row (seq/createdAt included) so subscribers can
- * forward it directly without re-reading the event log.
+ * Providers emit the event exactly as it was appended to the log: when `seq`
+ * is present the consumer can fan it out without re-reading the event table.
  */
-export type EventEmitter = (event: SessionEvent) => void;
+export type EventEmitter = (event: {
+  type: string;
+  payload: unknown;
+  seq?: number;
+  createdAt?: number;
+}) => void;
 
 export interface AgentCapabilities {
   interrupt: boolean;
@@ -81,4 +86,9 @@ export interface AgentProvider {
   ): Promise<void>;
   /** Clear any cached availability/model state so the next call re-resolves from current settings. */
   bustCache(): void;
+  /**
+   * Whether a session's provider thread can be continued after the daemon
+   * process is replaced (durable thread handle exists outside daemon memory).
+   */
+  canResumeThread?(session: SessionDto): boolean;
 }

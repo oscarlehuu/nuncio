@@ -92,6 +92,18 @@ describe('BaseAgentProvider error path', () => {
     expect((errorEvent?.payload as { message: string }).message).toBe('boom');
   });
 
+  it('emit carries the appended seq so consumers need not re-read the log', async () => {
+    const created = sessions.create({ prompt: 'seq emit', provider: 'throwing' });
+    const emitted: { type: string; payload: unknown; seq?: number; createdAt?: number }[] = [];
+
+    await provider.run(created.id, created.prompt, { emit: (e) => emitted.push(e) });
+
+    const stored = events.list(created.id).find((e) => e.type === 'user_message')!;
+    const emittedUserMessage = emitted.find((e) => e.type === 'user_message')!;
+    expect(emittedUserMessage.seq).toBe(stored.seq);
+    expect(emittedUserMessage.createdAt).toBe(stored.createdAt);
+  });
+
   it('still emits RUNNING + user_message before the failure', async () => {
     const created = sessions.create({ prompt: 'fail again', provider: 'throwing' });
     const emitted: { type: string; payload: unknown }[] = [];

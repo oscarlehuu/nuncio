@@ -116,6 +116,11 @@ export class PiAgentProvider extends BaseAgentProvider {
     this.cachedAvailable = undefined;
   }
 
+  /** The Pi session file outlives the daemon; a new handle reopens it on the next prompt. */
+  canResumeThread(session: { providerThreadId: string | null }): boolean {
+    return typeof session.providerThreadId === 'string' && session.providerThreadId.length > 0;
+  }
+
   async listModels(): Promise<ModelProviderDto[]> {
     try {
       const pi = await this.loadSdk();

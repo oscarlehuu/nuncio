@@ -9,7 +9,6 @@ import { DatabaseModule } from '../../../src/db/database.module';
 import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
-import type { SessionEvent } from '../../../src/sessions/domain/sessions.types';
 
 type Step = { type: string; payload: unknown } | { waitMs: number };
 
@@ -81,7 +80,7 @@ describe('BaseAgentProvider delta coalescing', () => {
       { type: 'assistant_message', payload: { text: 'hello world' } },
     ];
     const created = sessions.create({ prompt: 'burst', provider: 'scripted' });
-    const emitted: SessionEvent[] = [];
+    const emitted: Parameters<NonNullable<EventEmitter>>[0][] = [];
 
     await provider.run(created.id, created.prompt, { emit: (event) => emitted.push(event) });
 
@@ -142,7 +141,7 @@ describe('BaseAgentProvider delta coalescing', () => {
       { type: 'assistant_message', payload: { text: 'slow drip' } },
     ];
     const created = sessions.create({ prompt: 'slow', provider: 'scripted' });
-    const emitted: SessionEvent[] = [];
+    const emitted: Parameters<NonNullable<EventEmitter>>[0][] = [];
     const emit: EventEmitter = (event) => emitted.push(event);
 
     const runPromise = provider.run(created.id, created.prompt, { emit });

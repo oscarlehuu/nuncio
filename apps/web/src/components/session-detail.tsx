@@ -6,6 +6,8 @@ import { InteractionApiError, interactionErrorMessage, respondInteraction } from
 import { derivePendingUserInput } from '../lib/derive-pending-user-input';
 import { isComposingEvent } from '../lib/keyboard';
 import { useStickToBottom } from '../lib/use-stick-to-bottom';
+import { deriveVerifyStatus } from '../lib/derive-verify-status';
+import { VerifyChip } from './verify-chip';
 import { projectDisplayName } from '../lib/projects';
 import { FALLBACK_PROVIDERS, modelById, prettyModelName, type ModelProvider } from '../lib/model-providers';
 import { isCodexApprovalEngine } from '../lib/codex-approval-engine';
@@ -81,6 +83,10 @@ interface SessionDetailProps {
    * (e.g. the grid's restore button). In flow — the far-left column belongs
    * to the sidebar hover rail and absolute corners collide with it. */
   headerActions?: React.ReactNode;
+  /** Older events exist on the server beyond the loaded window. */
+  hasEarlier?: boolean;
+  /** Page the previous window of history into the transcript. */
+  onLoadEarlier?: () => void | Promise<void>;
 }
 
 export function SessionDetail({
@@ -102,7 +108,10 @@ export function SessionDetail({
   steering,
   lifecycleBusy,
   headerActions,
+  hasEarlier = false,
+  onLoadEarlier,
 }: SessionDetailProps) {
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [steerText, setSteerText] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -144,6 +153,7 @@ export function SessionDetail({
   const isRunning = session.status === 'RUNNING';
   const isArchived = session.status === 'ARCHIVED';
   const pendingUserInput = useMemo(() => derivePendingUserInput(events), [events]);
+  const verifyStatus = useMemo(() => deriveVerifyStatus(events), [events]);
   const pendingRequestIds = useMemo(
     () => new Set(pendingUserInput.map((item) => item.requestId)),
     [pendingUserInput],
@@ -293,6 +303,9 @@ export function SessionDetail({
               </TooltipContent>
             </Tooltip>
           )}
+          <span className="ml-2">
+            <VerifyChip status={verifyStatus} />
+          </span>
         </div>
 
         <div className="absolute right-4 md:right-5 top-1/2 -translate-y-1/2 flex items-center gap-1">
@@ -384,6 +397,27 @@ export function SessionDetail({
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 md:px-8 min-h-0">
         <div className="max-w-[760px] mx-auto">
+          {hasEarlier && onLoadEarlier && (
+            <div className="flex justify-center pt-4">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs text-muted-foreground"
+                disabled={loadingEarlier}
+                onClick={async () => {
+                  setLoadingEarlier(true);
+                  try {
+                    await onLoadEarlier();
+                  } finally {
+                    setLoadingEarlier(false);
+                  }
+                }}
+              >
+                {loadingEarlier ? 'Loading…' : 'Load earlier history'}
+              </Button>
+            </div>
+          )}
           <Transcript
             events={events}
             streaming={streaming}

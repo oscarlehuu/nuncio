@@ -38,6 +38,7 @@ function makeSession(overrides: Partial<SessionDto> = {}): SessionDto {
 describe('SessionsService interaction', () => {
   const sessionsRepo = {
     findById: jest.fn(),
+    list: jest.fn().mockReturnValue([]),
   } as unknown as SessionsRepository;
 
   const agents = {

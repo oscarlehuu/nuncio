@@ -168,6 +168,42 @@ describe('SessionDetail', () => {
     resolveSteer();
   });
 
+  it('shows a load-earlier control when older history exists and forwards clicks', async () => {
+    const onLoadEarlier = vi.fn();
+    await renderDetail({}, NO_EVENTS, undefined, { hasEarlier: true, onLoadEarlier });
+
+    const button = screen.getByRole('button', { name: /load earlier/i });
+    await userEvent.click(button);
+    expect(onLoadEarlier).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides the load-earlier control when the full history is loaded', async () => {
+    await renderDetail({}, NO_EVENTS, undefined, { hasEarlier: false, onLoadEarlier: vi.fn() });
+    expect(screen.queryByRole('button', { name: /load earlier/i })).toBeNull();
+  });
+
+  it('shows the verify chip from the latest verify events', async () => {
+    const events: SessionEvent[] = [
+      { seq: 1, type: 'status', payload: { status: 'IDLE' }, createdAt: 1 },
+      {
+        seq: 2,
+        type: 'verify_result',
+        payload: { command: '.nuncio/verify', ok: true, exitCode: 0 },
+        createdAt: 2,
+      },
+    ];
+    await renderDetail({}, events);
+    expect(screen.getByLabelText(/checks passed/i)).toBeInTheDocument();
+  });
+
+  it('shows a running verify chip while checks are in flight', async () => {
+    const events: SessionEvent[] = [
+      { seq: 1, type: 'verify_start', payload: { command: 'bun test' }, createdAt: 1 },
+    ];
+    await renderDetail({}, events);
+    expect(screen.getByLabelText(/checks running/i)).toBeInTheDocument();
+  });
+
   it('calls onPause when the pause button is clicked while IDLE', async () => {
     const { onPause } = await renderDetail({ status: 'IDLE' });
     await userEvent.click(screen.getByRole('button', { name: /session actions/i }));

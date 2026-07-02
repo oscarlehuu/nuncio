@@ -195,6 +195,32 @@ export class DatabaseService implements OnModuleDestroy {
     `);
 
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS tasks (
+        id TEXT PRIMARY KEY,
+        prompt TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'QUEUED',
+        provider TEXT,
+        model TEXT,
+        model_options TEXT,
+        project_path TEXT,
+        base_branch TEXT,
+        use_worktree INTEGER NOT NULL DEFAULT 0,
+        workspace TEXT,
+        session_id TEXT,
+        outcome_json TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        started_at INTEGER,
+        finished_at INTEGER
+      )
+    `);
+
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_tasks_status_created
+      ON tasks(status, created_at)
+    `);
+
+    this.db.exec(`
       CREATE TABLE IF NOT EXISTS push_tokens (
         token TEXT PRIMARY KEY,
         platform TEXT,
