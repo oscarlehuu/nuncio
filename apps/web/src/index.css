@@ -9,16 +9,54 @@
  * Custom additions where shadcn/nova has no built-in equivalent.
  * Nova provides semantic tokens (background, foreground, primary, card, popover,
  * secondary, muted, accent, border, input, ring, destructive, chart-*, sidebar-*).
- * It does NOT ship success/info status colors or mono/serif font tokens, so those
- * are defined here as the explicit "self-make where shadcn lacks" set.
+ * It does NOT ship status colors, terminal surface colors, a named UI type scale,
+ * or mono/serif font tokens, so those are defined here as the explicit
+ * "self-make where shadcn lacks" set.
+ *
+ * ─── Elevation convention (Cursor-style: luminance, not borders) ─────────────
+ * Panes are told apart by how light they are, not by a visible outline. In dark
+ * mode luminance climbs as you move toward the user; in light mode the base is
+ * the brightest and recessed chrome steps down. Borders are near-invisible
+ * hairlines (white/black at low alpha) that only firm up an edge, never define
+ * the block.
+ *
+ *   Layer            Token              Dark        Light
+ *   ---------------  -----------------  ----------  ----------
+ *   app chrome       --sidebar          darkest     off-white gray (recessed)
+ *   content surface  --background       near-black  pure-ish white (raised)
+ *   card / popover   --card/--popover   +2–3% L     white, shadow-lifted
+ *   inset field      --muted/--input    subtle well subtle well
+ *   hairline edge    --border           white 6–9%  black 6–9%
+ *
+ * Status + terminal tokens are theme-aware so utilities like `text-error` and
+ * the xterm surface resolve correctly in both themes.
  */
 @theme {
   --font-mono: "SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, Menlo, monospace;
   --font-serif: "New York", "Iowan Old Style", "Charter", Georgia, serif;
-  --color-success: #7fb98c;
-  --color-error: #c97474;
-  --color-info: #74a5c9;
-  --color-warning: #d6a25c;
+
+  /* Named UI type scale — dense product-chrome sizes. Use these tokens
+   * (text-ui-xs … text-title) instead of arbitrary text-[NNpx] values.
+   * --text-body (14px) is the reading baseline; the app default font-size. */
+  --text-ui-xs: 0.625rem;   /* 10px — micro labels, timestamps, badges */
+  --text-ui-sm: 0.6875rem;  /* 11px — secondary chrome, meta rows */
+  --text-ui: 0.75rem;       /* 12px — dense list / control text */
+  --text-ui-lg: 0.8125rem;  /* 13px — primary control / list item text */
+  --text-body: 0.875rem;    /* 14px — reading baseline (body copy) */
+  --text-md: 0.9375rem;     /* 15px — emphasised body / section intro */
+  --text-lg: 1rem;          /* 16px — subsection heads */
+  --text-title: 1.75rem;    /* 28px — page / hero title */
+
+  /* Status colors — theme-aware via the var()s defined per :root / .dark. */
+  --color-success: var(--status-success);
+  --color-error: var(--status-error);
+  --color-info: var(--status-info);
+  --color-warning: var(--status-warning);
+  --color-neutral: var(--status-neutral);
+
+  /* Terminal surface — theme-aware; resolved to concrete values at mount. */
+  --color-terminal-bg: var(--terminal-bg);
+  --color-terminal-fg: var(--terminal-fg);
 }
 
 @theme inline {
@@ -64,76 +102,111 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/*
+ * LIGHT — polished as a first-class theme, not a dark inversion.
+ * Base content is the brightest surface; chrome (sidebar) recedes to a faint
+ * cool gray so the two panes read apart without the border. A whisper of blue
+ * hue (~255) keeps the grays from going flat/digital. Cards are pure white and
+ * lifted by shadow rather than outline.
+ */
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --background: oklch(0.995 0.001 255);   /* near-white content, a hair off pure */
+  --foreground: oklch(0.205 0.006 265);   /* soft near-black ink, not #000 */
+  --card: oklch(1 0 0);                    /* pure white, shadow-lifted */
+  --card-foreground: oklch(0.205 0.006 265);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.205 0.006 265);
+  --primary: oklch(0.24 0.006 265);
   --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --secondary: oklch(0.965 0.002 255);
+  --secondary-foreground: oklch(0.24 0.006 265);
+  --muted: oklch(0.965 0.002 255);         /* inset well */
+  --muted-foreground: oklch(0.53 0.008 260); /* lower-contrast meta text */
+  --accent: oklch(0.955 0.003 255);        /* hover wash */
+  --accent-foreground: oklch(0.24 0.006 265);
+  --destructive: oklch(0.577 0.235 27.2);
+  --border: oklch(0.145 0.01 265 / 8%);    /* black at low alpha — hairline */
+  --input: oklch(0.145 0.01 265 / 12%);
+  --ring: oklch(0.62 0.02 260);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar: oklch(0.965 0.003 255);       /* recessed cool gray chrome */
+  --sidebar-foreground: oklch(0.205 0.006 265);
+  --sidebar-primary: oklch(0.24 0.006 265);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar-accent: oklch(0.93 0.004 255);
+  --sidebar-accent-foreground: oklch(0.24 0.006 265);
+  --sidebar-border: oklch(0.145 0.01 265 / 7%);
+  --sidebar-ring: oklch(0.62 0.02 260);
+
+  /* Status — muted, desaturated so they read premium, not alert-bright. */
+  --status-success: oklch(0.6 0.11 150);
+  --status-error: oklch(0.58 0.19 27);
+  --status-warning: oklch(0.7 0.13 70);
+  --status-info: oklch(0.6 0.11 240);
+  --status-neutral: oklch(0.6 0.01 260);
+
+  /* Terminal — matches the light content surface, dark ink. */
+  --terminal-bg: oklch(0.985 0.002 255);
+  --terminal-fg: oklch(0.28 0.006 265);
+
   --chat-font-scale: 1;
   --chat-gap: 0.375rem;
   --chat-msg-py: 0.5rem;
 }
 
+/*
+ * DARK — Cursor's near-black. Sidebar is the darkest layer; content sits one
+ * step lighter; cards/popovers climb ~2–3% L above content. A faint cool hue
+ * (~265) warms the neutrals off pure gray. Borders are white at low alpha.
+ */
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --background: oklch(0.185 0.004 265);    /* near-black content, raised over chrome */
+  --foreground: oklch(0.955 0.002 260);    /* slightly-off white ink */
+  --card: oklch(0.215 0.005 265);          /* +3% L over content */
+  --card-foreground: oklch(0.955 0.002 260);
+  --popover: oklch(0.225 0.005 265);
+  --popover-foreground: oklch(0.955 0.002 260);
+  --primary: oklch(0.92 0.003 260);
+  --primary-foreground: oklch(0.205 0.005 265);
+  --secondary: oklch(0.265 0.006 265);
+  --secondary-foreground: oklch(0.955 0.002 260);
+  --muted: oklch(0.255 0.005 265);         /* inset well */
+  --muted-foreground: oklch(0.62 0.008 260); /* noticeably lower contrast */
+  --accent: oklch(0.27 0.006 265);         /* hover wash */
+  --accent-foreground: oklch(0.955 0.002 260);
+  --destructive: oklch(0.68 0.185 25);
+  --border: oklch(1 0 0 / 8%);             /* white hairline */
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.5 0.01 260);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --sidebar: oklch(0.155 0.004 265);       /* darkest layer — chrome recedes */
+  --sidebar-foreground: oklch(0.955 0.002 260);
+  --sidebar-primary: oklch(0.92 0.003 260);
+  --sidebar-primary-foreground: oklch(0.205 0.005 265);
+  --sidebar-accent: oklch(0.25 0.006 265);
+  --sidebar-accent-foreground: oklch(0.955 0.002 260);
+  --sidebar-border: oklch(1 0 0 / 7%);
+  --sidebar-ring: oklch(0.5 0.01 260);
+
+  /* Status — lifted, still desaturated for the dark surface. */
+  --status-success: oklch(0.72 0.13 150);
+  --status-error: oklch(0.7 0.17 25);
+  --status-warning: oklch(0.78 0.13 75);
+  --status-info: oklch(0.72 0.12 240);
+  --status-neutral: oklch(0.62 0.008 260);
+
+  /* Terminal — near-black, matched to the dark content surface. */
+  --terminal-bg: oklch(0.165 0.004 265);
+  --terminal-fg: oklch(0.9 0.004 260);
 }
 
 @layer base {
@@ -147,6 +220,21 @@
     @apply font-sans;
   }
 }
+
+/*
+ * Chat font-scale utilities. Chat/markdown text is user-scalable via
+ * --chat-font-scale (0.85–1.4); rather than repeat text-[length:calc(Npx*var(...))]
+ * at every call site, each base size gets one utility. --chat-text is the 14px
+ * body baseline exposed as a var for cases that need it inline (e.g. nested
+ * markdown selectors).
+ */
+:root {
+  --chat-text: calc(14px * var(--chat-font-scale));
+}
+.chat-text-body { font-size: calc(14px * var(--chat-font-scale)); }
+.chat-text-sm { font-size: calc(13px * var(--chat-font-scale)); }
+.chat-text-xs { font-size: calc(12.5px * var(--chat-font-scale)); }
+.chat-text-2xs { font-size: calc(12px * var(--chat-font-scale)); }
 
 /*
  * Layout helpers that shadcn primitives do not own.
@@ -204,4 +292,26 @@ body {
   @apply dark:border-border dark:bg-background dark:hover:bg-background dark:aria-expanded:bg-background;
   /* outline variant adds dark:bg-input/30 — force flat match with composer */
   @apply dark:!bg-background dark:hover:!bg-background dark:aria-expanded:!bg-background;
+}
+
+/*
+ * Text-style picker trigger (Cursor context row): no box — a muted inline label
+ * with a chevron that brightens on hover/open. Separation is by weight, not a
+ * border. Forces every state flat over the outline base and neutralizes its
+ * dark:bg-input wash so the trigger reads as plain text.
+ */
+.picker-trigger-text {
+  @apply h-7 gap-1 rounded-md border-0 bg-transparent px-1.5 font-normal text-muted-foreground shadow-none;
+  @apply hover:bg-transparent hover:text-foreground;
+  @apply aria-expanded:bg-transparent aria-expanded:text-foreground;
+  @apply dark:!bg-transparent dark:hover:!bg-transparent dark:aria-expanded:!bg-transparent;
+  @apply dark:hover:text-foreground dark:aria-expanded:text-foreground;
+}
+
+/*
+ * Quiet suggestion pill (below the home composer): rounded-full hairline hint,
+ * muted text. Cursor's suggestion-chip vibe — a whisper, not a badge.
+ */
+.suggestion-pill {
+  @apply inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-transparent px-2.5 py-1 text-ui text-muted-foreground;
 }

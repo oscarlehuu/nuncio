@@ -63,8 +63,10 @@ async function fetchJson<T>(url: string, init: RequestInit | undefined, label: s
  * directly, so the server lists directories on behalf of the client — this
  * works on every client including the iPhone PWA.
  */
-export async function fetchDirectories(path?: string): Promise<DirListing> {
-  const url = path ? `/api/fs/dirs?path=${encodeURIComponent(path)}` : '/api/fs/dirs';
+export async function fetchDirectories(path?: string, base = ''): Promise<DirListing> {
+  const url = path
+    ? `${base}/api/fs/dirs?path=${encodeURIComponent(path)}`
+    : `${base}/api/fs/dirs`;
   return fetchJson<DirListing>(url, undefined, 'Failed to load directories');
 }
 

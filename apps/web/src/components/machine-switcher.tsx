@@ -30,7 +30,7 @@ export function MachineSwitcher() {
 
   return (
     <div className="mt-3">
-      <div className="flex items-center gap-1.5 px-1 mb-1 text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">
+      <div className="flex items-center gap-1.5 px-1 mb-1 text-ui-xs uppercase tracking-widest text-muted-foreground font-semibold">
         <Server className="size-3" />
         Machines
       </div>
@@ -43,14 +43,14 @@ export function MachineSwitcher() {
               href={machineHref(machine.name)}
               aria-current={isActive ? 'page' : undefined}
               className={
-                'flex items-center justify-between rounded-[5px] px-2 py-1 text-[12.5px] transition-colors ' +
+                'flex items-center justify-between rounded-[5px] px-2 py-1 text-ui transition-colors ' +
                 (isActive
                   ? 'bg-sidebar-accent text-sidebar-foreground font-medium'
                   : 'text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent/40')
               }
             >
               <span className="truncate">{machine.name}</span>
-              {machine.self ? <span className="text-[10px] opacity-60 ml-2">this hub</span> : null}
+              {machine.self ? <span className="text-ui-xs opacity-60 ml-2">this hub</span> : null}
             </a>
           );
         })}

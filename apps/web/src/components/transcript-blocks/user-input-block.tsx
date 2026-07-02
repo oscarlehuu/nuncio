@@ -38,9 +38,9 @@ export const UserInputBlock = memo(function UserInputBlock({
         onClick={() => setOpen((v) => !v)}
         data-testid="user-input-summary"
       >
-        <span className="text-[12.5px]">{label}</span>
+        <span className="text-ui">{label}</span>
         {statusLabel && (
-          <span className="text-[11px] text-muted-foreground/70">· {statusLabel}</span>
+          <span className="text-ui-sm text-muted-foreground/70">· {statusLabel}</span>
         )}
         <span className="ml-auto">
           <ChevronDown
@@ -55,25 +55,25 @@ export const UserInputBlock = memo(function UserInputBlock({
       {open && (
         <div className="pl-1 pr-0.5 pb-2 flex flex-col gap-3">
           {title && (
-            <p className="text-[13px] font-medium text-foreground/90">{title}</p>
+            <p className="text-ui-lg font-medium text-foreground/90">{title}</p>
           )}
           {questions.map((question) => (
             <div key={question.id} className="flex flex-col gap-1.5">
               {question.header && (
-                <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                <span className="text-ui-sm uppercase tracking-wide text-muted-foreground">
                   {question.header}
                 </span>
               )}
-              <p className="text-[13px] text-foreground/90">{question.prompt}</p>
+              <p className="text-ui-lg text-foreground/90">{question.prompt}</p>
               <ul className="flex flex-col gap-1.5">
                 {question.options.map((option) => (
                   <li
                     key={option.id}
                     className="rounded-md border border-border/40 bg-muted/15 px-2.5 py-2 min-h-[32px]"
                   >
-                    <span className="text-[13px] text-foreground">{option.label}</span>
+                    <span className="text-ui-lg text-foreground">{option.label}</span>
                     {option.description && (
-                      <p className="mt-0.5 text-[12px] leading-snug text-muted-foreground">
+                      <p className="mt-0.5 text-ui leading-snug text-muted-foreground">
                         {option.description}
                       </p>
                     )}

@@ -63,7 +63,7 @@ function groupConsecutiveTools(blocks: TranscriptBlock[]): RenderItem[] {
 export function WorkingIndicator({ label }: { label: string }) {
   return (
     <div
-      className="flex items-center gap-2 px-2 py-1.5 text-[length:calc(13px*var(--chat-font-scale))] text-muted-foreground"
+      className="flex items-center gap-2 px-2 py-1.5 chat-text-sm text-muted-foreground"
       data-testid="working-indicator"
     >
       <span className="size-1.5 rounded-full bg-primary animate-pulse shrink-0" />
@@ -75,7 +75,7 @@ export function WorkingIndicator({ label }: { label: string }) {
 function UserBlock({ text }: { text: string }) {
   return (
     <div className="flex flex-col items-end">
-      <div className="max-w-[90%] px-3 py-[var(--chat-msg-py)] rounded-[12px_12px_4px_12px] text-[length:calc(14px*var(--chat-font-scale))] leading-relaxed bg-muted/25 text-foreground/90">
+      <div className="max-w-[90%] px-3 py-[var(--chat-msg-py)] rounded-[12px_12px_4px_12px] chat-text-body leading-relaxed bg-muted/25 text-foreground/90">
         <UserBubble text={text} />
       </div>
     </div>
@@ -84,7 +84,7 @@ function UserBlock({ text }: { text: string }) {
 
 function AssistantBlock({ text, streaming }: { text: string; streaming?: boolean }) {
   return (
-    <div className="text-[length:calc(14px*var(--chat-font-scale))] leading-relaxed text-foreground">
+    <div className="chat-text-body leading-relaxed text-foreground">
       <AssistantBubble text={text} streaming={streaming} />
     </div>
   );
@@ -92,7 +92,7 @@ function AssistantBlock({ text, streaming }: { text: string; streaming?: boolean
 
 function ErrorRow({ message }: { message: string }) {
   return (
-    <div className="text-[length:calc(14px*var(--chat-font-scale))] text-destructive">
+    <div className="chat-text-body text-destructive">
       <ErrorBlock message={message} />
     </div>
   );

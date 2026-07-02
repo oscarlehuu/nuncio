@@ -62,6 +62,44 @@ describe('EventsRepository', () => {
     expect(events.list(b.id)).toHaveLength(1);
   });
 
+  it('list honors a limit while keeping ascending order', () => {
+    const s = sessions.create({ prompt: 'limit test' });
+    for (let i = 1; i <= 5; i += 1) events.append(s.id, 'assistant_delta', { delta: `${i}` });
+
+    expect(events.list(s.id, 0, 2).map((e) => e.seq)).toEqual([1, 2]);
+    expect(events.list(s.id, 2, 2).map((e) => e.seq)).toEqual([3, 4]);
+    expect(events.list(s.id, 0).map((e) => e.seq)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it('listTail returns the last n events in ascending order', () => {
+    const s = sessions.create({ prompt: 'tail test' });
+    for (let i = 1; i <= 5; i += 1) events.append(s.id, 'assistant_delta', { delta: `${i}` });
+
+    expect(events.listTail(s.id, 2).map((e) => e.seq)).toEqual([4, 5]);
+    expect(events.listTail(s.id, 10).map((e) => e.seq)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it('listBefore returns the page preceding a seq in ascending order', () => {
+    const s = sessions.create({ prompt: 'before test' });
+    for (let i = 1; i <= 5; i += 1) events.append(s.id, 'assistant_delta', { delta: `${i}` });
+
+    expect(events.listBefore(s.id, 4, 2).map((e) => e.seq)).toEqual([2, 3]);
+    expect(events.listBefore(s.id, 2, 5).map((e) => e.seq)).toEqual([1]);
+    expect(events.listBefore(s.id, 1, 5)).toEqual([]);
+  });
+
+  it('append truncates oversized payloads with an explicit marker', () => {
+    const s = sessions.create({ prompt: 'oversize test' });
+    const oversized = 'x'.repeat(200 * 1024);
+    const appended = events.append(s.id, 'tool_end', { tool: 'bash', output: oversized });
+
+    const stored = events.list(s.id)[0]!;
+    expect(stored.payload).toMatchObject({ truncated: true });
+    expect((stored.payload as { preview: string }).preview.length).toBeLessThan(oversized.length);
+    // The returned event mirrors what was stored, not the oversized original.
+    expect(appended.payload).toEqual(stored.payload);
+  });
+
   it('append round-trips the payload as an object', () => {
     const s = sessions.create({ prompt: 'payload test' });
     events.append(s.id, 'status', { status: 'RUNNING', extra: 42 });

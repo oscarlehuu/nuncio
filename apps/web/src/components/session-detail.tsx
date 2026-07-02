@@ -4,6 +4,8 @@ import { toast } from 'sonner';
 import type { ProviderRequestDecision, Session, SessionEvent } from '../lib/api';
 import { InteractionApiError, interactionErrorMessage, respondInteraction } from '../lib/api';
 import { derivePendingUserInput } from '../lib/derive-pending-user-input';
+import { deriveVerifyStatus } from '../lib/derive-verify-status';
+import { VerifyChip } from './verify-chip';
 import { projectDisplayName } from '../lib/projects';
 import { FALLBACK_PROVIDERS, modelById, prettyModelName, type ModelProvider } from '../lib/model-providers';
 import { isCodexApprovalEngine } from '../lib/codex-approval-engine';
@@ -73,6 +75,14 @@ interface SessionDetailProps {
   ) => void | Promise<void>;
   steering?: boolean;
   lifecycleBusy?: boolean;
+  /** Rendered in the header's right control group, before the panel toggle
+   * (e.g. the grid's restore button). In flow — the far-left column belongs
+   * to the sidebar hover rail and absolute corners collide with it. */
+  headerActions?: React.ReactNode;
+  /** Older events exist on the server beyond the loaded window. */
+  hasEarlier?: boolean;
+  /** Page the previous window of history into the transcript. */
+  onLoadEarlier?: () => void | Promise<void>;
 }
 
 export function SessionDetail({
@@ -92,7 +102,11 @@ export function SessionDetail({
   onRespondProviderRequest,
   steering,
   lifecycleBusy,
+  headerActions,
+  hasEarlier = false,
+  onLoadEarlier,
 }: SessionDetailProps) {
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [steerText, setSteerText] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -136,6 +150,7 @@ export function SessionDetail({
   const isRunning = session.status === 'RUNNING';
   const isArchived = session.status === 'ARCHIVED';
   const pendingUserInput = useMemo(() => derivePendingUserInput(events), [events]);
+  const verifyStatus = useMemo(() => deriveVerifyStatus(events), [events]);
   const pendingRequestIds = useMemo(
     () => new Set(pendingUserInput.map((item) => item.requestId)),
     [pendingUserInput],
@@ -292,13 +307,17 @@ export function SessionDetail({
               </TooltipTrigger>
               <TooltipContent className="max-w-[400px]">
                 <p className="text-xs">{session.title}</p>
-                {onRename && <p className="text-[10px] text-muted-foreground mt-0.5">Click to rename</p>}
+                {onRename && <p className="text-ui-xs text-muted-foreground mt-0.5">Click to rename</p>}
               </TooltipContent>
             </Tooltip>
           )}
+          <span className="ml-2">
+            <VerifyChip status={verifyStatus} />
+          </span>
         </div>
 
         <div className="absolute right-4 md:right-5 top-1/2 -translate-y-1/2 flex items-center gap-1">
+          {headerActions}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -386,6 +405,27 @@ export function SessionDetail({
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 md:px-8 min-h-0">
         <div className="max-w-[760px] mx-auto">
+          {hasEarlier && onLoadEarlier && (
+            <div className="flex justify-center pt-4">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs text-muted-foreground"
+                disabled={loadingEarlier}
+                onClick={async () => {
+                  setLoadingEarlier(true);
+                  try {
+                    await onLoadEarlier();
+                  } finally {
+                    setLoadingEarlier(false);
+                  }
+                }}
+              >
+                {loadingEarlier ? 'Loading…' : 'Load earlier history'}
+              </Button>
+            </div>
+          )}
           <Transcript
             events={events}
             streaming={streaming}
@@ -417,7 +457,7 @@ export function SessionDetail({
             }}
           />
         </div>
-        <div className="max-w-[760px] mx-auto rounded-xl border border-border/50 bg-muted/20 transition-colors focus-within:border-border/80">
+        <div className="max-w-[760px] mx-auto rounded-xl border border-border/70 bg-card shadow-sm transition-shadow focus-within:ring-2 focus-within:ring-ring/40">
           <Textarea
             value={steerText}
             onChange={(e) => setSteerText(e.target.value)}
@@ -439,11 +479,11 @@ export function SessionDetail({
                       ? 'Agent is running — wait for idle or stop first…'
                       : 'Steer the agent — add context, change direction, ask a question…'
             }
-            className="min-h-[44px] resize-none border-0 shadow-none bg-transparent focus-visible:ring-0 focus-visible:border-0 text-[14px]"
+            className="min-h-[44px] resize-none border-0 shadow-none bg-transparent focus-visible:ring-0 focus-visible:border-0 text-body"
           />
           <div className="flex items-center justify-between gap-2 px-3 pb-2">
             <div className="flex items-center gap-3 min-w-0 flex-wrap">
-              <span className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+              <span className="flex items-center gap-1.5 text-ui text-muted-foreground">
                 <span className="size-1.5 rounded-full bg-primary" />
                 {modelName}
               </span>
@@ -474,7 +514,7 @@ export function SessionDetail({
                 aria-label="Send"
                 onClick={() => void handleSteer()}
                 disabled={steerDisabled || !steerText.trim()}
-                className="shrink-0 rounded-full"
+                className="shrink-0 rounded-full transition-transform active:scale-95 disabled:opacity-40"
               >
                 <Send className="size-4" />
               </Button>
@@ -482,7 +522,7 @@ export function SessionDetail({
           </div>
           <div
             data-testid="session-footer"
-            className="flex items-center gap-3 px-3 py-1.5 border-t border-border/30 text-[11px] text-muted-foreground"
+            className="flex items-center gap-3 px-3 py-1.5 border-t border-border/30 text-ui-sm text-muted-foreground"
           >
             {repoName && (
               <span className="flex items-center gap-1 shrink-0">

@@ -145,7 +145,7 @@ export function ReviewChanges({ sessionId, defaultMessage = '' }: ReviewChangesP
           <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
           <span className="text-sm font-mono truncate">{branchName || 'detached'}</span>
           {(ahead > 0 || behind > 0) && (
-            <span className="flex items-center gap-1 text-[11px] text-muted-foreground shrink-0">
+            <span className="flex items-center gap-1 text-ui-sm text-muted-foreground shrink-0">
               {ahead > 0 && (
                 <span className="flex items-center gap-0.5">
                   <ArrowUp className="size-3" />
@@ -175,7 +175,7 @@ export function ReviewChanges({ sessionId, defaultMessage = '' }: ReviewChangesP
         <button
           type="button"
           onClick={() => setFilesExpanded((v) => !v)}
-          className="w-full flex items-center gap-1 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+          className="w-full flex items-center gap-1 px-3 py-2 text-ui-sm font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
         >
           {filesExpanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
           <span>
@@ -209,7 +209,7 @@ export function ReviewChanges({ sessionId, defaultMessage = '' }: ReviewChangesP
                     onClick={() => handleToggleFile(file.path)}
                     className="flex w-full items-center gap-2 px-3 py-1 text-left hover:bg-muted/40"
                   >
-                    <span className="min-w-0 flex-1 truncate text-[13px] font-mono">
+                    <span className="min-w-0 flex-1 truncate text-ui-lg font-mono">
                       <span className="text-foreground">{name}</span>
                       {dir && <span className="ml-1 text-muted-foreground text-xs truncate">{dir}</span>}
                     </span>
@@ -217,7 +217,7 @@ export function ReviewChanges({ sessionId, defaultMessage = '' }: ReviewChangesP
                       {insertions > 0 && <span className="text-success">+{insertions}</span>}
                       {deletions > 0 && <span className="text-destructive">-{deletions}</span>}
                       {info.code === 'U' ? (
-                        <span className="text-[10px] font-semibold uppercase tracking-wide text-success">
+                        <span className="text-ui-xs font-semibold uppercase tracking-wide text-success">
                           New
                         </span>
                       ) : (
@@ -247,7 +247,7 @@ export function ReviewChanges({ sessionId, defaultMessage = '' }: ReviewChangesP
 
       {!isClean && (
         <div className="flex flex-col gap-2 border-t border-border/50 px-3 py-3">
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <div className="text-ui-sm font-semibold uppercase tracking-wide text-muted-foreground">
             Commit Message
           </div>
           <Textarea

@@ -3,7 +3,7 @@ import { Minimize2, MonitorSmartphone } from 'lucide-react';
 import type { ProviderRequestDecision, Session } from '../lib/api';
 import type { ModelProvider } from '../lib/model-providers';
 import type { ModelOptionsMap } from '../lib/model-options';
-import { useSessionStream } from '../lib/use-session-stream';
+import { DETAIL_EVENT_TAIL, useSessionStream } from '../lib/use-session-stream';
 import { useActiveRun } from '../lib/use-active-run';
 import {
   fitSlots,
@@ -15,8 +15,10 @@ import {
   type GridPreset,
   type GridSlot,
 } from '../lib/grid-preference';
+import { machineHref } from '../lib/hub-api';
 import { SessionDetail } from './session-detail';
 import { SessionTile } from './session-tile';
+import { RemoteSessionTile } from './remote-session-tile';
 import { GridSlotComposer } from './grid-slot-composer';
 import type { ApprovalMode } from './approval-mode-picker';
 import { Button } from '@/components/ui/button';
@@ -49,6 +51,8 @@ interface GridViewProps {
   ) => Promise<Session | null>;
   steering?: boolean;
   lifecycleBusy?: boolean;
+  /** True when the unpinned sidebar hover rail overlays the content's left edge. */
+  railOverlay?: boolean;
 }
 
 export function GridView(props: GridViewProps) {
@@ -77,9 +81,21 @@ export function GridView(props: GridViewProps) {
   );
 
   const bindSlot = useCallback(
-    (index: number, sessionId: string) => {
+    (index: number, sessionId: string, machineId?: string) => {
       setSlots((prev) => {
-        const next = prev.map((s, i) => (i === index ? { sessionId } : s));
+        const bound: GridSlot = machineId ? { sessionId, machineId } : { sessionId };
+        const next = prev.map((s, i) => (i === index ? bound : s));
+        persist(preset, next);
+        return next;
+      });
+    },
+    [persist, preset],
+  );
+
+  const clearSlot = useCallback(
+    (index: number) => {
+      setSlots((prev) => {
+        const next = prev.map((s, i) => (i === index ? {} : s));
         persist(preset, next);
         return next;
       });
@@ -121,7 +137,13 @@ export function GridView(props: GridViewProps) {
           setMaximizedSlot(null);
         } else if (focusedSlot !== null && slots[focusedSlot]?.sessionId) {
           e.preventDefault();
-          setMaximizedSlot(focusedSlot);
+          const slot = slots[focusedSlot];
+          if (slot.machineId && slot.sessionId) {
+            // Remote sessions open full-fidelity on their machine's own base.
+            window.location.assign(`${machineHref(slot.machineId)}session/${slot.sessionId}`);
+          } else {
+            setMaximizedSlot(focusedSlot);
+          }
         }
       } else if (e.key === 'Escape' && maximizedSlot !== null) {
         e.preventDefault();
@@ -177,7 +199,13 @@ export function GridView(props: GridViewProps) {
       </div>
 
       <div className="hidden min-h-0 flex-1 flex-col md:flex">
-        <header className="flex items-center gap-3 border-b border-border px-4 py-2.5 shrink-0">
+        <header
+          className={cn(
+            'flex items-center gap-3 border-b border-border px-4 py-2.5 shrink-0',
+            // Clear the fixed hover rail; the heading was clipped under the hamburger.
+            props.railOverlay && 'pl-16',
+          )}
+        >
           <div>
             <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
               Workbench
@@ -218,6 +246,18 @@ export function GridView(props: GridViewProps) {
           }}
         >
           {slots.map((slot, index) => {
+            if (slot.sessionId && slot.machineId) {
+              return (
+                <RemoteSessionTile
+                  key={`${slot.machineId}:${slot.sessionId}`}
+                  machineId={slot.machineId}
+                  sessionId={slot.sessionId}
+                  focused={focusedSlot === index}
+                  onFocus={() => setFocusedSlot(index)}
+                  onGone={() => clearSlot(index)}
+                />
+              );
+            }
             const session = slot.sessionId ? sessionsById.get(slot.sessionId) : undefined;
             // Dead-session restore: a binding whose session is gone degrades to empty.
             if (slot.sessionId && !session) {
@@ -226,7 +266,7 @@ export function GridView(props: GridViewProps) {
                   key={index}
                   {...props}
                   boundSessionIds={boundSessionIds}
-                  onBind={(id) => bindSlot(index, id)}
+                  onBind={(id, machineId) => bindSlot(index, id, machineId)}
                 />
               );
             }
@@ -239,7 +279,7 @@ export function GridView(props: GridViewProps) {
                   focused={focused}
                   onFocus={() => setFocusedSlot(index)}
                   onMaximize={() => setMaximizedSlot(index)}
-                  onSteer={focused ? (msg) => props.onSteerSession(session.id, msg) : undefined}
+                  onSteer={(msg) => props.onSteerSession(session.id, msg)}
                   steering={props.steering}
                 />
               );
@@ -249,7 +289,7 @@ export function GridView(props: GridViewProps) {
                 key={index}
                 {...props}
                 boundSessionIds={boundSessionIds}
-                onBind={(id) => bindSlot(index, id)}
+                onBind={(id, machineId) => bindSlot(index, id, machineId)}
               />
             );
           })}
@@ -265,7 +305,10 @@ function SlotComposerCell({
   boundSessionIds,
   onCreate,
   onBind,
-}: GridViewProps & { boundSessionIds: Set<string>; onBind: (id: string) => void }) {
+}: GridViewProps & {
+  boundSessionIds: Set<string>;
+  onBind: (id: string, machineId?: string) => void;
+}) {
   return (
     <GridSlotComposer
       providers={providers}
@@ -318,27 +361,33 @@ function MaximizedSession({
   onRestoreGrid,
 }: MaximizedSessionProps) {
   // Same stream + active-run wiring SessionRoute uses; resumes via the hook's cursor.
-  const { events, refetch } = useSessionStream(session.id);
+  const { events, refetch, loadEarlier, hasEarlier } = useSessionStream(
+    session.id,
+    '',
+    DETAIL_EVENT_TAIL,
+  );
   const machineActive = useActiveRun(session, { onTranscriptRefreshed: refetch });
 
   return (
     <div className="relative flex flex-1 flex-col min-h-0">
-      <div className="absolute right-3 top-2.5 z-20">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="h-8 gap-1.5 shadow-sm"
-          onClick={onRestoreGrid}
-          aria-label="Restore grid"
-        >
-          <Minimize2 className="size-3.5" />
-          Grid
-        </Button>
-      </div>
       <SessionDetail
+        headerActions={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1.5"
+            onClick={onRestoreGrid}
+            aria-label="Restore grid"
+          >
+            <Minimize2 className="size-3.5" />
+            Grid
+          </Button>
+        }
         session={session}
         events={events}
+        hasEarlier={hasEarlier}
+        onLoadEarlier={loadEarlier}
         providers={providers}
         onSteer={onSteer}
         onPause={onPause}

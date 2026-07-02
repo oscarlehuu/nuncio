@@ -7,9 +7,17 @@ import { GitSessionController } from './api/git-session.controller';
 import { SessionsController } from './api/sessions.controller';
 import { SessionsPersistenceModule } from './sessions.persistence.module';
 import { SessionsService } from './sessions.service';
+import { SettingsModule } from '../settings/settings.module';
 
 @Module({
-  imports: [AgentsModule, CursorLocalModule, GitModule, PiLocalModule, SessionsPersistenceModule],
+  imports: [
+    AgentsModule,
+    CursorLocalModule,
+    GitModule,
+    PiLocalModule,
+    SessionsPersistenceModule,
+    SettingsModule,
+  ],
   controllers: [SessionsController, GitSessionController],
   providers: [SessionsService],
   exports: [SessionsService],

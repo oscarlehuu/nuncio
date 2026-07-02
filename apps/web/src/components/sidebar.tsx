@@ -5,6 +5,7 @@ import {
   ChevronRight,
   FolderGit2,
   LayoutGrid,
+  ListTodo,
   MessageSquare,
   Plus,
   RotateCcw,
@@ -48,6 +49,7 @@ interface SidebarProps {
   onNew: () => void;
   /** Desktop-only multi-session workbench. */
   onGrid?: () => void;
+  onTasks?: () => void;
   onSettings?: () => void;
   onChangelog?: () => void;
   onArchive?: (id: string) => void | Promise<void>;
@@ -64,6 +66,7 @@ export function Sidebar({
   onSelect,
   onNew,
   onGrid,
+  onTasks,
   onSettings,
   onChangelog,
   onArchive,
@@ -118,40 +121,48 @@ export function Sidebar({
   return (
     <div className="flex flex-col h-full bg-sidebar text-sidebar-foreground">
       <div className="p-4 pb-3 shrink-0">
-        <div className="flex items-center gap-2.5 px-1">
-          <img
-            src="/nuncio-mark.png"
-            alt="Nuncio"
-            className="size-[26px] rounded-[7px] ring-1 ring-white/10"
-          />
-          <span className="font-semibold text-[14.5px] tracking-tight">Nuncio</span>
+        <div className="flex items-center px-1.5 pt-0.5">
+          <span className="text-ui-lg font-semibold tracking-tight text-muted-foreground">Nuncio</span>
         </div>
         <MachineSwitcher />
-        <nav className="mt-3.5 flex flex-col gap-px">
-          <Button
-            variant="secondary"
+        <nav className="mt-2.5 flex flex-col gap-px">
+          <button
+            type="button"
             onClick={onNew}
-            className="w-full justify-start"
+            className="group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-lg text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 active:scale-[0.99]"
           >
-            <Plus data-icon="inline-start" />
-            <span>New Agent</span>
-          </Button>
+            <Plus className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
+            <span className="flex-1">New Agent</span>
+            <kbd className="hidden shrink-0 items-center gap-0.5 rounded border border-sidebar-border/70 px-1 font-mono text-ui-xs text-muted-foreground md:inline-flex">
+              ⌘N
+            </kbd>
+          </button>
           {onGrid ? (
-            <Button
-              variant="ghost"
+            <button
+              type="button"
               onClick={onGrid}
-              className="hidden w-full justify-start text-muted-foreground hover:text-sidebar-foreground md:flex"
+              className="group hidden w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-lg text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 active:scale-[0.99] md:flex"
             >
-              <LayoutGrid data-icon="inline-start" />
-              <span>Grid</span>
-            </Button>
+              <LayoutGrid className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
+              <span className="flex-1">Grid</span>
+            </button>
+          ) : null}
+          {onTasks ? (
+            <button
+              type="button"
+              onClick={onTasks}
+              className="group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-lg text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 active:scale-[0.99]"
+            >
+              <ListTodo className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
+              <span className="flex-1">Tasks</span>
+            </button>
           ) : null}
         </nav>
 
         <div
           role="tablist"
           aria-label="Session list view"
-          className="mt-3 grid grid-cols-2 gap-1 rounded-md bg-sidebar-accent/40 p-0.5"
+          className="mt-2.5 flex items-center gap-1 px-1"
         >
           <button
             role="tab"
@@ -159,10 +170,10 @@ export function Sidebar({
             aria-selected={view === 'recent'}
             onClick={() => setView('recent')}
             className={cn(
-              'rounded-[5px] px-2 py-1 text-[12px] font-medium transition-colors',
+              'rounded-md px-2 py-1 text-ui-lg transition-colors',
               view === 'recent'
-                ? 'bg-sidebar text-sidebar-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-sidebar-foreground',
+                ? 'bg-sidebar-accent font-medium text-sidebar-foreground'
+                : 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground',
             )}
           >
             Recent
@@ -173,16 +184,15 @@ export function Sidebar({
             aria-selected={view === 'archived'}
             onClick={() => setView('archived')}
             className={cn(
-              'rounded-[5px] px-2 py-1 text-[12px] font-medium transition-colors flex items-center justify-center gap-1',
+              'flex items-center gap-1 rounded-md px-2 py-1 text-ui-lg transition-colors',
               view === 'archived'
-                ? 'bg-sidebar text-sidebar-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-sidebar-foreground',
+                ? 'bg-sidebar-accent font-medium text-sidebar-foreground'
+                : 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground',
             )}
           >
-            <Archive className="size-3" />
             Archived
             {archivedSessions.length > 0 && (
-              <span className="ml-0.5 text-[10px] tabular-nums text-muted-foreground">
+              <span className="text-ui-xs tabular-nums text-muted-foreground/70">
                 {archivedSessions.length}
               </span>
             )}
@@ -199,15 +209,15 @@ export function Sidebar({
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search archived…"
               aria-label="Search archived sessions"
-              className="h-8 pl-7 text-[13px]"
+              className="h-8 pl-7 text-ui-lg"
             />
           </div>
         </div>
       )}
 
       <div className="flex-1 overflow-y-auto px-2 pb-2 min-h-0">
-        <div className="flex items-center justify-between px-2 py-3 sticky top-0 bg-sidebar z-10">
-          <span className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">
+        <div className="flex items-center justify-between px-2 pt-4 pb-2 sticky top-0 bg-sidebar z-10">
+          <span className="text-ui-sm text-muted-foreground">
             {view === 'recent' ? 'Recent' : 'Archived'}
           </span>
         </div>
@@ -216,10 +226,10 @@ export function Sidebar({
             <>
               {projectGroups.length > 0 && (
                 <>
-                  <div className="px-2 pt-1 pb-1">
+                  <div className="px-2 pt-2 pb-1">
                     <span
                       data-testid="recent-divider-projects"
-                      className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold"
+                      className="text-ui-sm text-muted-foreground"
                     >
                       Projects
                     </span>
@@ -242,14 +252,14 @@ export function Sidebar({
                 <>
                   <div
                     className={cn(
-                      'flex items-center gap-1 px-2 pb-1',
-                      projectGroups.length > 0 ? 'pt-3' : 'pt-1',
+                      'flex items-center gap-1.5 px-2 pb-1',
+                      projectGroups.length > 0 ? 'pt-4' : 'pt-1',
                     )}
                   >
                     <MessageSquare className="size-3 text-muted-foreground shrink-0" />
                     <span
                       data-testid="recent-divider-chat"
-                      className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold"
+                      className="text-ui-sm text-muted-foreground"
                     >
                       Chat
                     </span>
@@ -365,7 +375,7 @@ function RecentGroupSection({
         type="button"
         onClick={onToggle}
         aria-expanded={!collapsed}
-        className="flex items-center gap-1 w-full px-2 py-1.5 rounded-md text-left hover:bg-sidebar-accent/40 transition-colors"
+        className="flex items-center gap-1.5 w-full px-2 py-1.5 rounded-md text-left hover:bg-sidebar-accent/40 transition-colors"
       >
         {collapsed ? (
           <ChevronRight className="size-3.5 text-muted-foreground shrink-0" />
@@ -373,8 +383,8 @@ function RecentGroupSection({
           <ChevronDown className="size-3.5 text-muted-foreground shrink-0" />
         )}
         {icon}
-        <span className="text-[12px] font-medium text-sidebar-foreground truncate">{group.name}</span>
-        <span className="text-[11px] tabular-nums text-muted-foreground ml-auto shrink-0">
+        <span className="text-ui font-medium text-sidebar-foreground truncate">{group.name}</span>
+        <span className="text-ui-sm tabular-nums text-muted-foreground ml-auto shrink-0">
           {group.sessions.length}
         </span>
       </button>
@@ -407,38 +417,42 @@ function canArchiveRow(status: Session['status']): boolean {
   return status === 'IDLE' || status === 'PAUSED' || status === 'ERROR';
 }
 
+/** Show a status dot only when the row wants the eye: it's live or needs attention. */
+function needsStatusDot(status: Session['status']): boolean {
+  return status === 'RUNNING' || status === 'ERROR';
+}
+
 function RecentRow({ session, active, onSelect, onArchive }: RecentRowProps) {
   const showArchive = onArchive && canArchiveRow(session.status);
+  const showDot = needsStatusDot(session.status);
   return (
     <div
       className={cn(
-        'touch-target relative flex items-start gap-2 p-2 rounded-md w-full transition-colors group',
-        active
-          ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-          : 'hover:bg-sidebar-accent/60',
+        'touch-target relative flex items-start gap-2 px-2 py-1.5 rounded-md w-full transition-colors group',
+        active ? 'bg-sidebar-accent text-sidebar-accent-foreground' : 'hover:bg-sidebar-accent/60',
       )}
     >
-      {active && (
-        <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 bg-sidebar-ring rounded-sm" />
-      )}
-      <StatusDot status={session.status} className="mt-1" />
       <button
         type="button"
         onClick={() => onSelect(session.id)}
         className="min-w-0 flex-1 text-left"
         aria-label={`Open ${session.title}`}
       >
-        <div className="text-[13px] text-sidebar-foreground truncate">{session.title}</div>
-        <div className="text-[11px] text-muted-foreground truncate mt-0.5 flex items-center gap-1">
+        <div className="flex items-center gap-1.5">
+          {showDot && <StatusDot status={session.status} className="shrink-0" />}
+          <span className="text-ui-lg text-sidebar-foreground truncate">{session.title}</span>
+          <span className="ml-auto shrink-0 text-ui-sm tabular-nums text-muted-foreground">
+            {relativeTime(session.updatedAt)}
+          </span>
+        </div>
+        <div className="text-ui-sm text-muted-foreground truncate mt-0.5 flex items-center gap-1">
           <span
             aria-label={`${providerMeta(session.provider).name} provider`}
             className="shrink-0 leading-none"
           >
             <ProviderIcon providerId={session.provider} className="size-3" />
           </span>
-          <span className="truncate">
-            {session.preview ?? statusLabel(session.status)} · {relativeTime(session.updatedAt)}
-          </span>
+          <span className="truncate">{session.preview ?? statusLabel(session.status)}</span>
         </div>
       </button>
       {showArchive && (
@@ -473,24 +487,23 @@ function ArchivedRow({ session, active, onSelect, onRestore, onDelete }: Archive
   return (
     <div
       className={cn(
-        'touch-target relative flex items-start gap-2 p-2 rounded-md w-full transition-colors group',
-        active
-          ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-          : 'hover:bg-sidebar-accent/60',
+        'touch-target relative flex items-start gap-2 px-2 py-1.5 rounded-md w-full transition-colors group',
+        active ? 'bg-sidebar-accent text-sidebar-accent-foreground' : 'hover:bg-sidebar-accent/60',
       )}
     >
-      {active && (
-        <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 bg-sidebar-ring rounded-sm" />
-      )}
-      <StatusDot status={session.status} className="mt-1" />
       <button
         type="button"
         onClick={() => onSelect(session.id)}
         className="min-w-0 flex-1 text-left"
         aria-label={`Open ${session.title}`}
       >
-        <div className="text-[13px] text-sidebar-foreground truncate">{session.title}</div>
-        <div className="text-[11px] text-muted-foreground truncate mt-0.5 flex items-center gap-1">
+        <div className="flex items-center gap-1.5">
+          <span className="text-ui-lg text-sidebar-foreground truncate">{session.title}</span>
+          <span className="ml-auto shrink-0 text-ui-sm tabular-nums text-muted-foreground">
+            {relativeTime(session.updatedAt)}
+          </span>
+        </div>
+        <div className="text-ui-sm text-muted-foreground truncate mt-0.5 flex items-center gap-1">
           <span
             aria-label={`${providerMeta(session.provider).name} provider`}
             className="shrink-0 leading-none"
@@ -498,7 +511,7 @@ function ArchivedRow({ session, active, onSelect, onRestore, onDelete }: Archive
             <ProviderIcon providerId={session.provider} className="size-3" />
           </span>
           <span className="truncate">
-            {projectDisplayName(session.projectPath) ?? session.preview ?? statusLabel(session.status)} · {relativeTime(session.updatedAt)}
+            {projectDisplayName(session.projectPath) ?? session.preview ?? statusLabel(session.status)}
           </span>
         </div>
       </button>

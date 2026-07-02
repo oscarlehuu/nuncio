@@ -1,6 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import { DatabaseService } from '../../db/database.service';
+import { truncatePayload } from '../domain/events.types';
+import { notifySessionEventHooks } from '../domain/session-event-hooks';
 import type { EventRow, SessionEvent } from '../domain/sessions.types';
+
+/**
+ * Hard ceiling per stored event payload. Providers already truncate tool
+ * output at 4 KB; this guards every other append path so one oversized
+ * payload can never bloat a session's log permanently.
+ */
+export const MAX_EVENT_PAYLOAD_BYTES = 128 * 1024;
 
 function parseEvent(row: EventRow): SessionEvent {
   return {
@@ -15,17 +24,45 @@ function parseEvent(row: EventRow): SessionEvent {
 export class EventsRepository {
   constructor(private readonly database: DatabaseService) {}
 
-  list(sessionId: string, since = 0): SessionEvent[] {
+  list(sessionId: string, since = 0, limit?: number): SessionEvent[] {
+    const rows =
+      limit !== undefined
+        ? this.database.db
+            .prepare<EventRow, [string, number, number]>(
+              'SELECT * FROM events WHERE session_id = ? AND seq > ? ORDER BY seq ASC LIMIT ?',
+            )
+            .all(sessionId, since, limit)
+        : this.database.db
+            .prepare<EventRow, [string, number]>(
+              'SELECT * FROM events WHERE session_id = ? AND seq > ? ORDER BY seq ASC',
+            )
+            .all(sessionId, since);
+    return rows.map(parseEvent);
+  }
+
+  /** The last `limit` events, in ascending seq order. */
+  listTail(sessionId: string, limit: number): SessionEvent[] {
     const rows = this.database.db
       .prepare<EventRow, [string, number]>(
-        'SELECT * FROM events WHERE session_id = ? AND seq > ? ORDER BY seq ASC',
+        'SELECT * FROM events WHERE session_id = ? ORDER BY seq DESC LIMIT ?',
       )
-      .all(sessionId, since);
-    return rows.map(parseEvent);
+      .all(sessionId, limit);
+    return rows.map(parseEvent).reverse();
+  }
+
+  /** The `limit` events immediately preceding `before`, in ascending seq order. */
+  listBefore(sessionId: string, before: number, limit: number): SessionEvent[] {
+    const rows = this.database.db
+      .prepare<EventRow, [string, number, number]>(
+        'SELECT * FROM events WHERE session_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?',
+      )
+      .all(sessionId, before, limit);
+    return rows.map(parseEvent).reverse();
   }
 
   append(sessionId: string, type: string, payload: unknown): SessionEvent {
     const now = Date.now();
+    const stored = truncatePayload(payload, MAX_EVENT_PAYLOAD_BYTES).value;
     const next = this.database.db
       .prepare<{ seq: number }, [string]>('SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM events WHERE session_id = ?')
       .get(sessionId);
@@ -34,7 +71,7 @@ export class EventsRepository {
       session_id: sessionId,
       seq,
       type,
-      payload: JSON.stringify(payload),
+      payload: JSON.stringify(stored),
       created_at: now,
     };
     this.database.db
@@ -43,7 +80,9 @@ export class EventsRepository {
          VALUES (?, ?, ?, ?, ?)`,
       )
       .run(row.session_id, row.seq, row.type, row.payload, row.created_at);
-    return { seq, type, payload, createdAt: now };
+    const event: SessionEvent = { seq, type, payload: stored, createdAt: now };
+    notifySessionEventHooks(sessionId, event);
+    return event;
   }
 
   appendBatch(

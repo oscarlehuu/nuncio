@@ -62,16 +62,16 @@ export function PrPanel({ session, repoPath }: PrPanelProps) {
   const getStatusColor = (conclusion: string | null) => {
     switch (conclusion) {
       case 'success':
-        return 'text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-800';
+        return 'text-success bg-success/10 border-success/30';
       case 'failure':
       case 'action_required':
       case 'timed_out':
-        return 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800';
+        return 'text-error bg-error/10 border-error/30';
       case 'cancelled':
       case 'skipped':
         return 'text-muted-foreground bg-muted border-border';
       default:
-        return 'text-yellow-600 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-950/30 border-yellow-200 dark:border-yellow-800';
+        return 'text-warning bg-warning/10 border-warning/30';
     }
   };
 
@@ -148,7 +148,7 @@ export function PrPanel({ session, repoPath }: PrPanelProps) {
                     )}`}
                   >
                     <span className="truncate font-semibold">{check.name}</span>
-                    <span className="shrink-0 uppercase text-[10px]">
+                    <span className="shrink-0 uppercase text-ui-xs">
                       {check.conclusion || check.status}
                     </span>
                   </li>

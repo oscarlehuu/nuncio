@@ -5,6 +5,8 @@ import { statusLabel } from '../lib/api';
 import { useSessionStream } from '../lib/use-session-stream';
 import { useTranscriptBlocks } from '../lib/use-transcript-blocks';
 import { derivePendingUserInput } from '../lib/derive-pending-user-input';
+import { deriveVerifyStatus } from '../lib/derive-verify-status';
+import { VerifyChip } from './verify-chip';
 import { projectDisplayName } from '../lib/projects';
 import { prettyModelName } from '../lib/model-providers';
 import { ProviderIcon } from './provider-icon';
@@ -15,6 +17,8 @@ import { cn } from '@/lib/utils';
 
 /** Only the freshest blocks are rendered in a tile — LOD, not the full transcript. */
 const TILE_TAIL_LENGTH = 30;
+/** LOD tiles only render a block tail; cap the event window they subscribe to. */
+const TILE_EVENT_TAIL = 300;
 
 interface SessionTileProps {
   session: Session;
@@ -24,6 +28,8 @@ interface SessionTileProps {
   /** Steer callback, wired only for the focused tile's single-line composer. */
   onSteer?: (message: string) => Promise<void>;
   steering?: boolean;
+  /** Origin-absolute API base when the session lives on another hub machine. */
+  apiBase?: string;
 }
 
 /**
@@ -74,11 +80,13 @@ export function SessionTile({
   onMaximize,
   onSteer,
   steering,
+  apiBase = '',
 }: SessionTileProps) {
-  const { events } = useSessionStream(session.id);
+  const { events } = useSessionStream(session.id, apiBase, TILE_EVENT_TAIL);
   const blocks = useTranscriptBlocks(events);
   const tail = useMemo(() => blocks.slice(-TILE_TAIL_LENGTH), [blocks]);
   const pending = useMemo(() => derivePendingUserInput(events).length > 0, [events]);
+  const verifyStatus = useMemo(() => deriveVerifyStatus(events), [events]);
   const status = effectiveStatus(events, session.status);
   const [steerText, setSteerText] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -105,6 +113,9 @@ export function SessionTile({
       tabIndex={0}
       onClick={onFocus}
       onKeyDown={(e) => {
+        // Only keys aimed at the tile itself — never swallow typing that
+        // bubbles up from the steer input (Space would otherwise be eaten).
+        if (e.target !== e.currentTarget) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           onFocus();
@@ -134,7 +145,10 @@ export function SessionTile({
           <ProviderIcon providerId={session.provider} className="size-3.5" />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] font-medium leading-tight">{session.title}</div>
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-[13px] font-medium leading-tight">{session.title}</span>
+            <VerifyChip status={verifyStatus} />
+          </div>
           <div className="truncate text-[11px] text-muted-foreground leading-tight">
             {pending ? (
               <span className="text-warning">Waiting for you</span>
@@ -177,11 +191,8 @@ export function SessionTile({
         )}
       </div>
 
-      {focused && onSteer ? (
-        <div
-          className="flex items-center gap-1.5 border-t border-border/60 p-2 shrink-0"
-          onClick={(e) => e.stopPropagation()}
-        >
+      {onSteer ? (
+        <div className="flex items-center gap-1.5 border-t border-border/60 p-2 shrink-0">
           <Input
             value={steerText}
             onChange={(e) => setSteerText(e.target.value)}

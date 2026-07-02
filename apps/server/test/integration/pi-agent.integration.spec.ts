@@ -2,13 +2,16 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { AgentsModule } from '../../src/agents/agents.module';
 import { PiAgentProvider } from '../../src/agents/providers/pi-agent.provider';
+import { CursorLocalModule } from '../../src/cursor-local/cursor-local.module';
 import { DatabaseModule } from '../../src/db/database.module';
 import { GitModule } from '../../src/git/git.module';
 import { GitService } from '../../src/git/git.service';
 import { EventsRepository } from '../../src/sessions/persistence/events.repository';
 import { SessionsPersistenceModule } from '../../src/sessions/sessions.persistence.module';
 import { SessionsRepository } from '../../src/sessions/persistence/sessions.repository';
+import { SessionsService } from '../../src/sessions/sessions.service';
 import { SettingsModule } from '../../src/settings/settings.module';
 
 // Gate the suite on the same agent dir the Pi SDK resolves (PI_CODING_AGENT_DIR
@@ -235,6 +238,54 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
         rmSync(workspacesDir, { recursive: true, force: true });
         rmSync(repoDir, { recursive: true, force: true });
         delete process.env.NUNCIO_WORKSPACES_DIR;
+      }
+    },
+    120_000,
+  );
+
+  // Real LLM calls — proves the full daemon-restart story: a session left
+  // RUNNING by a dead process is reconciled to IDLE by a fresh SessionsService,
+  // and a steer through a brand-new provider instance continues the same Pi
+  // session file (no shared in-memory state with the first "daemon").
+  it(
+    'reconciles and steers a session after a simulated daemon restart',
+    async () => {
+      const firstPrompt = 'Reply with the single word: alpha';
+      const created = sessions.create({ prompt: firstPrompt, provider: 'pi', model: testModel });
+
+      await provider.run(created.id, firstPrompt, { emit: () => {}, model: testModel });
+      const threadId = sessions.findById(created.id)?.providerThreadId;
+      expect(threadId).toBeTruthy();
+
+      // Simulate the daemon dying mid-turn: status stuck RUNNING, handle gone.
+      sessions.updateStatus(created.id, 'RUNNING');
+      provider.dispose(created.id);
+
+      const restarted = await Test.createTestingModule({
+        imports: [DatabaseModule, GitModule, SessionsPersistenceModule, AgentsModule, CursorLocalModule],
+        providers: [SessionsService],
+      }).compile();
+
+      try {
+        const service = restarted.get(SessionsService);
+        const reconciled = sessions.findById(created.id);
+        expect(reconciled?.status).toBe('IDLE');
+        const restartEvent = events
+          .list(created.id)
+          .find((e) => e.type === 'runtime_restarted');
+        expect(restartEvent?.payload).toMatchObject({ resumable: true });
+
+        const secondPrompt = 'Reply with the single word: beta';
+        const after = await service.steer(created.id, secondPrompt);
+        expect(after.status).toBe('IDLE');
+        expect(sessions.findById(created.id)?.providerThreadId).toBe(threadId);
+
+        const sessionLog = readFileSync(threadId!, 'utf8');
+        expect(sessionLog).toContain(firstPrompt);
+        expect(sessionLog).toContain(secondPrompt);
+      } finally {
+        restarted.get(PiAgentProvider).dispose(created.id);
+        await restarted.close();
       }
     },
     120_000,

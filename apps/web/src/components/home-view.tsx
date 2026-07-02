@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowRightLeft } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
+import { ArrowRightLeft, ArrowUp } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -154,17 +153,35 @@ export function HomeView({
     if (projectPath) recordBranchSelection(projectPath, branch);
   }, [projectPath]);
 
+  const canSend = Boolean(prompt.trim()) && !loading && catalogLoaded && !!model && !!provider;
+
   return (
     <section className="flex-1 flex flex-col items-center justify-center p-6 pt-16 md:pt-6 overflow-y-auto">
       <div className="w-full max-w-[720px]">
-        <div className="text-center mb-8">
-          <h1 className="text-[28px] font-medium tracking-tight mb-2">What should I work on?</h1>
-          <p className="text-muted-foreground text-[15px] max-w-[480px] mx-auto">
-            Delegate a task — write code, fix bugs, open a PR. Your agents keep going while you&apos;re away.
-          </p>
+        {/* Quiet context row — Cursor's text-pickers sit above the composer. */}
+        <div className="home-composer-context-row flex flex-wrap items-center justify-center gap-x-1 gap-y-1 mb-3">
+          <ProjectPicker value={projectPath} onChange={handleProjectChange} variant="text" />
+          <span aria-hidden className="text-muted-foreground/40 select-none">
+            ·
+          </span>
+          <BranchPicker
+            projectPath={projectPath}
+            value={baseBranch}
+            onChange={handleBranchChange}
+            variant="text"
+          />
+          <span aria-hidden className="text-muted-foreground/40 select-none">
+            ·
+          </span>
+          <WorkspaceModePicker
+            value={workspaceMode}
+            onChange={setWorkspaceMode}
+            disabled={!projectPath}
+            variant="text"
+          />
         </div>
 
-        <div className="home-composer flex flex-col rounded-xl border border-border bg-background shadow-lg transition-shadow focus-within:ring-2 focus-within:ring-ring/50">
+        <div className="home-composer flex flex-col rounded-xl border border-border/70 bg-card shadow-lg transition-shadow focus-within:ring-2 focus-within:ring-ring/40">
           <div className="home-composer-prompt-frame flex flex-col">
             <Textarea
               value={prompt}
@@ -176,38 +193,26 @@ export function HomeView({
                 }
               }}
               placeholder="Ask Nuncio to build features, fix bugs, or work on your code…"
-              className="min-h-[96px] shrink-0 resize-none border-0 shadow-none bg-transparent text-[15px] px-5 pt-4 pb-2 focus-visible:ring-0 focus-visible:border-0"
+              className="min-h-[104px] shrink-0 resize-none border-0 shadow-none bg-transparent text-md px-5 pt-4 pb-2 focus-visible:ring-0 focus-visible:border-0"
             />
-            <div className="home-composer-prompt-controls flex items-center justify-between gap-2 px-3 pb-3">
-              <div className="flex min-w-0 items-center gap-2">
-                {showApprovalMode ? (
-                  <ApprovalModePicker
-                    value={approvalMode}
-                    onChange={onApprovalModeChange}
-                    surface="embedded"
-                  />
-                ) : null}
+            {showApprovalMode ? (
+              <div className="home-composer-prompt-controls flex items-center gap-2 px-4 pb-1">
+                <ApprovalModePicker
+                  value={approvalMode}
+                  onChange={onApprovalModeChange}
+                  surface="embedded"
+                />
               </div>
-            </div>
+            ) : null}
           </div>
-          <div className="home-composer-bar home-composer-context-row flex items-center gap-2 border-t border-border px-3 pt-2 pb-3">
-            <div className="home-composer-pickers flex min-w-0 flex-1 items-center gap-2 overflow-x-auto [&_button]:shrink-0">
-              <ProjectPicker value={projectPath} onChange={handleProjectChange} />
-              <WorkspaceModePicker
-                value={workspaceMode}
-                onChange={setWorkspaceMode}
-                disabled={!projectPath}
-              />
-              <BranchPicker
-                projectPath={projectPath}
-                value={baseBranch}
-                onChange={handleBranchChange}
-              />
+          <div className="home-composer-bar flex items-center gap-2 px-3 pb-3 pt-1">
+            <div className="home-composer-pickers flex min-w-0 flex-1 items-center overflow-x-auto [&_button]:shrink-0">
               <ModelPicker
                 value={model}
                 modelOptions={modelOptions}
                 onChange={handleModelChange}
                 providers={providers}
+                variant="text"
               />
             </div>
             {onContinueOnMobile ? (
@@ -216,9 +221,9 @@ export function HomeView({
                   <TooltipTrigger asChild>
                     <Button
                       type="button"
-                      variant="outline"
-                      size="icon"
-                      className="composer-picker-trigger size-8 shrink-0"
+                      variant="ghost"
+                      size="icon-sm"
+                      className="shrink-0 text-muted-foreground hover:text-foreground"
                       onClick={onContinueOnMobile}
                       aria-label="Continue on mobile"
                     >
@@ -229,25 +234,31 @@ export function HomeView({
                 </Tooltip>
               </TooltipProvider>
             ) : null}
+            <Button
+              type="button"
+              size="icon"
+              aria-label="Send"
+              onClick={() => void handleSubmit()}
+              disabled={!canSend}
+              className="shrink-0 rounded-full transition-transform active:scale-95 disabled:opacity-40"
+            >
+              <ArrowUp className="size-4" />
+            </Button>
           </div>
         </div>
 
+        {/* Quiet suggestion pills — connected providers + session count. */}
         <div className="flex flex-wrap gap-2 justify-center mt-5">
           {availableProviders.map((p) => (
-            <Badge
-              key={p.id}
-              variant="secondary"
-              className="gap-1.5 border-border/60 bg-muted/40 font-normal text-foreground"
-              aria-label={`${p.name} connected`}
-            >
+            <span key={p.id} className="suggestion-pill" aria-label={`${p.name} connected`}>
               <ProviderIcon providerId={p.id} className="size-3 shrink-0 text-muted-foreground" />
-              <span>{p.name}</span>
+              <span className="text-foreground">{p.name}</span>
               <ConnectionDot />
-            </Badge>
+            </span>
           ))}
-          <Badge variant="secondary" className="border-border/60 bg-muted/40 font-normal text-muted-foreground">
+          <span className="suggestion-pill">
             {sessionCount} session{sessionCount === 1 ? '' : 's'}
-          </Badge>
+          </span>
         </div>
       </div>
     </section>

@@ -58,11 +58,16 @@ describe('validateBranchFlow', () => {
       expect(validateBranchFlow('main', 'changeset-release/main')).toEqual({ ok: true });
     });
 
-    it('rejects direct feature branches', () => {
+    it('rejects SDK feature branches that skip their lane', () => {
       expect(validateBranchFlow('main', 'cursor/feat-handoff').ok).toBe(false);
       expect(validateBranchFlow('main', 'pi/cwd-fix').ok).toBe(false);
       expect(validateBranchFlow('main', 'codex/provider-integration').ok).toBe(false);
-      expect(validateBranchFlow('main', 'feat/foo').ok).toBe(false);
+    });
+
+    it('accepts general (non-lane) feature branches', () => {
+      expect(validateBranchFlow('main', 'feat/foo')).toEqual({ ok: true });
+      expect(validateBranchFlow('main', 'frontend')).toEqual({ ok: true });
+      expect(validateBranchFlow('main', 'docs/readme-refresh')).toEqual({ ok: true });
     });
   });
 

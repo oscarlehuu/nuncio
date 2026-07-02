@@ -30,12 +30,18 @@ export function TerminalPanel({ cwd, onExit }: TerminalPanelProps) {
       convertEol: true,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
       fontSize: 13,
-      theme: {
-        background: '#0d0f12',
-        foreground: '#e5e7eb',
-      },
+      theme: readTerminalTheme(container),
     });
     const fitAddon = new FitAddon();
+
+    // xterm needs concrete color values, not CSS vars — re-resolve them from the
+    // computed --terminal-bg/--terminal-fg whenever the theme (.dark) toggles.
+    const applyTheme = () => term.options.theme = readTerminalTheme(container);
+    const themeObserver = new MutationObserver(applyTheme);
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class'],
+    });
 
     const dimensions = () => ({ cols: term.cols || 80, rows: term.rows || 24 });
     const fitAndResize = () => {
@@ -147,6 +153,7 @@ export function TerminalPanel({ cwd, onExit }: TerminalPanelProps) {
     return () => {
       disposed = true;
       cleanupBackend();
+      themeObserver.disconnect();
       resizeObserver.disconnect();
       inputDisposable.dispose();
       term.dispose();
@@ -154,7 +161,7 @@ export function TerminalPanel({ cwd, onExit }: TerminalPanelProps) {
   }, [cwd, terminalId]);
 
   return (
-    <div className="flex h-72 min-h-0 flex-col bg-[#0d0f12] text-foreground">
+    <div className="flex h-72 min-h-0 flex-col bg-terminal-bg text-terminal-fg">
       {notice && (
         <div className="shrink-0 border-b border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground">
           {notice}
@@ -163,6 +170,22 @@ export function TerminalPanel({ cwd, onExit }: TerminalPanelProps) {
       <div ref={containerRef} className="min-h-0 flex-1 overflow-hidden p-2" data-testid="terminal-panel" />
     </div>
   );
+}
+
+/**
+ * Resolve the theme-aware terminal surface tokens (--terminal-bg / --terminal-fg)
+ * to concrete color strings for xterm, which cannot consume CSS variables.
+ * Reads from the container's computed style so it tracks the active theme, with
+ * a dark-surface fallback when computed values are unavailable (e.g. jsdom).
+ */
+export function readTerminalTheme(el: Element): { background: string; foreground: string } {
+  const styles = getComputedStyle(el);
+  const bg = styles.getPropertyValue('--terminal-bg').trim();
+  const fg = styles.getPropertyValue('--terminal-fg').trim();
+  return {
+    background: bg || 'oklch(0.165 0.004 265)',
+    foreground: fg || 'oklch(0.9 0.004 260)',
+  };
 }
 
 /**

@@ -48,7 +48,7 @@ function SectionView({ section }: { section: CursorContextSection }) {
         onClick={() => setOpen((v) => !v)}
       >
         <Icon className="size-3.5 text-muted-foreground shrink-0" />
-        <span className="text-[13px] font-medium text-foreground/80">{section.label}</span>
+        <span className="text-ui-lg font-medium text-foreground/80">{section.label}</span>
         <span className="ml-auto">
           {open ? (
             <ChevronDown className="size-3.5 text-muted-foreground transition-transform" aria-hidden />
@@ -59,7 +59,7 @@ function SectionView({ section }: { section: CursorContextSection }) {
       </button>
       {open && (
         <pre
-          className={`px-3 py-2.5 text-[11.5px] font-mono text-muted-foreground whitespace-pre-wrap break-all border-t border-border/30 max-h-[50vh] overflow-y-auto ${
+          className={`px-3 py-2.5 text-ui-sm font-mono text-muted-foreground whitespace-pre-wrap break-all border-t border-border/30 max-h-[50vh] overflow-y-auto ${
             isLog ? 'leading-[1.4]' : 'leading-relaxed'
           }`}
         >
@@ -82,7 +82,7 @@ export function CursorContextBlock({ summary, instruction, sections }: CursorCon
         data-testid="cursor-context-row"
       >
         <ClipboardList className="size-3.5 text-muted-foreground shrink-0" />
-        <span className="text-[12.5px] font-medium">{summary}</span>
+        <span className="text-ui font-medium">{summary}</span>
         <ChevronRight
           className="size-3 text-muted-foreground/50 group-hover:text-muted-foreground transition-transform"
           aria-hidden
@@ -94,15 +94,15 @@ export function CursorContextBlock({ summary, instruction, sections }: CursorCon
           <SheetHeader className="shrink-0 border-b border-border/30 pb-3">
             <div className="flex items-center gap-2">
               <ClipboardList className="size-4 text-muted-foreground" />
-              <SheetTitle className="text-[15px]">{summary}</SheetTitle>
+              <SheetTitle className="text-md">{summary}</SheetTitle>
             </div>
-            <SheetDescription className="text-[12px]">
+            <SheetDescription className="text-ui">
               Cursor-generated context message
             </SheetDescription>
           </SheetHeader>
           <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
             {instruction && (
-              <div className="text-[14px] leading-relaxed text-foreground rounded-md bg-muted/15 px-3 py-2.5 border border-border/20">
+              <div className="text-body leading-relaxed text-foreground rounded-md bg-muted/15 px-3 py-2.5 border border-border/20">
                 <MarkdownView text={instruction} />
               </div>
             )}

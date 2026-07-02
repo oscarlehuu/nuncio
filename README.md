@@ -16,7 +16,7 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 - **Per-session provider + model** — choose the agent provider (`pi` / `codex` / `cursor`) and the exact model (e.g. `codex:gpt-5.5`, `cursor:composer-2`, `anthropic:claude-sonnet-4`) per session; both are stored on the session and wired through to the provider runtime
 - **Steer mid-task** — send follow-up messages that continue the same agent conversation when the provider supports it
 - **Pause / archive / restore / delete** — suspend a running session, retire it to the Archived tab, restore it back to IDLE, or permanently delete it; a session FSM enforces valid transitions and a confirm dialog guards deletes
-- **Real-time + replay** — SSE stream for live updates, event log with cursor for replay
+- **Real-time + replay** — WebSocket relay (subscribe/steer on one duplex channel, gap-free resume via the event-log cursor — see [docs/ws-relay-contract.md](docs/ws-relay-contract.md)) plus the SSE stream and cursor replay endpoints for API consumers
 - **Mobile-first PWA** — installable on iPhone via Tailscale HTTPS; standalone dark UI, safe-area aware
 - **Interactive browser dock** — desktop uses a real embedded Electron browser view with a persistent Nuncio profile; the web/PWA surface does not expose a browser dock
 - **Self-hosted** — your machine, your SQLite, your credentials; nothing leaves your tailnet
@@ -27,6 +27,7 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 - **Workspace control** — choose a project, run in the local checkout, or create a new `nuncio/<sessionId>-<slug>` worktree forked from the selected branch
 - **Continue on mobile** — import an in-progress Cursor IDE/CLI chat or Pi CLI session from your Mac and steer it from the phone PWA (Cursor uses CLI `--resume`; Pi resumes in-process through the SDK)
 - **Session grid** — a desktop-first multi-session workbench at `/grid`: lay out sessions in a 1x1/2x1/2x2/3x2 preset, watch each tile stream its transcript tail with a status-coded border, steer the focused tile inline, and maximize any tile into the full session view; keyboard-first (`Cmd/Ctrl+1..9` focus a slot, `Cmd/Ctrl+Enter` maximize, `Esc` restore), with preset and slot bindings persisted locally
+- **Cross-machine grid (hub mode)** — grid slots can target any tailnet machine reachable through the hub: pick a machine in the slot composer to browse its projects, use its model catalog, and start or attach sessions there; remote tiles stream and steer live against that machine, show a reconnect state while it is down, and maximize into the session on the machine's own page
 - **Inspector dock** — the session side panel (source control + pull request, files, terminal, browser on desktop) remembers whether it was open and its last tab across visits; the source-control tab now includes opening a PR and watching its checks
 
 ## Screenshots
@@ -247,6 +248,8 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 | PUT | `/api/settings/:key` | Update a setting `{ "value": "..." }` (encrypts secrets, busts provider caches) |
 | DELETE | `/api/settings/:key` | Clear a setting (falls back to env/default) |
 | GET | `/api/fs/dirs?path=` | Server-side directory browser (defaults to `$HOME`); used by the folder picker |
+| POST | `/api/push/register` | Register a device Expo push token `{ "token": "...", "platform?": "ios\|android", "deviceName?": "..." }`; the server pushes on session finish / needs-input / error |
+| POST | `/api/push/unregister` | Remove a device push token `{ "token": "..." }` |
 
 ### Session FSM
 
