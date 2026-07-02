@@ -56,6 +56,7 @@ describe('ModelsService', () => {
       modelSwitch: 'none',
       effortSwitch: 'none',
       images: false,
+      steerWhileRunning: false,
     });
   });
 });

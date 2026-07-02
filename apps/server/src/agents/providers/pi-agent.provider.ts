@@ -30,6 +30,7 @@ type PiRegistryModel = {
 
 type PiLiveSession = {
   prompt: (text: string, options?: PiPromptOptions) => Promise<void>;
+  steer: (text: string, images?: PiImageContent[]) => Promise<void>;
   abort: () => Promise<void>;
   setModel: (model: PiRegistryModel) => Promise<void>;
   setThinkingLevel: (level: string) => void;
@@ -45,8 +46,22 @@ type PiSessionHandle = {
   unsubscribe: () => void;
   resetAssistantText: () => void;
   getAssistantText: () => string;
+  /** Turn-final assistant messages already emitted during the current prompt. */
+  getAssistantTurnsEmitted: () => number;
+  /** Error message of a turn that failed (stopReason 'error'), if any. */
+  getTurnError: () => string | null;
   sealOpenTools: (emit?: AgentRunContext['emit']) => void;
 };
+
+function piImagesFromAttachments(context: AgentRunContext): PiImageContent[] {
+  return (context.attachments ?? [])
+    .filter((attachment) => attachment.kind === 'image')
+    .map((attachment): PiImageContent => ({
+      type: 'image',
+      data: attachment.data,
+      mimeType: attachment.mimeType,
+    }));
+}
 
 type PiModelRegistry = {
   getAvailable: () => Array<{
@@ -71,6 +86,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     modelSwitch: 'in-session',
     effortSwitch: 'in-session',
     images: true,
+    steerWhileRunning: true,
   } as const;
   private readonly activeSessions = new Map<string, PiSessionHandle>();
   private readonly interruptedSessions = new Set<string>();
@@ -125,6 +141,24 @@ export class PiAgentProvider extends BaseAgentProvider {
     this.interruptedSessions.delete(sessionId);
   }
 
+  /**
+   * Inject a steer message into a live streaming run. The Pi SDK queues it and
+   * delivers after the current turn's tool calls, before the next LLM call —
+   * the same mechanism the pi CLI uses for mid-run steering.
+   */
+  async steerMidRun(
+    sessionId: string,
+    message: string,
+    context: AgentRunContext,
+  ): Promise<boolean> {
+    const handle = this.activeSessions.get(sessionId);
+    if (!handle || !handle.session.isStreaming) return false;
+    this.pushEvent(sessionId, 'steer_message', { text: message }, context.emit);
+    const images = piImagesFromAttachments(context);
+    await handle.session.steer(message, images.length ? images : undefined);
+    return true;
+  }
+
   async interrupt(sessionId: string): Promise<void> {
     const handle = this.activeSessions.get(sessionId);
     if (!handle) return;
@@ -167,13 +201,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       this.activeSessions.set(sessionId, handle);
     }
 
-    const images = (context.attachments ?? [])
-      .filter((attachment) => attachment.kind === 'image')
-      .map((attachment): PiImageContent => ({
-        type: 'image',
-        data: attachment.data,
-        mimeType: attachment.mimeType,
-      }));
+    const images = piImagesFromAttachments(context);
     const promptOptions: PiPromptOptions = {
       ...(images.length ? { images } : {}),
       ...(isSteer ? { streamingBehavior: 'steer' as const } : {}),
@@ -195,12 +223,20 @@ export class PiAgentProvider extends BaseAgentProvider {
     }
     if (interrupted) return;
     this.interruptedSessions.delete(sessionId);
-    this.pushEvent(
-      sessionId,
-      'assistant_message',
-      { text: handle.getAssistantText() || '(no response)' },
-      context.emit,
-    );
+    const turnError = handle.getTurnError();
+    if (turnError) {
+      // Route through the shared error path: ERROR status + error event.
+      throw new Error(turnError);
+    }
+    if (handle.getAssistantTurnsEmitted() === 0) {
+      // Fallback for runs where no message_end fired (older SDK shapes).
+      this.pushEvent(
+        sessionId,
+        'assistant_message',
+        { text: handle.getAssistantText() || '(no response)' },
+        context.emit,
+      );
+    }
   }
 
   private loadSdk(): Promise<PiSdk> {
@@ -254,6 +290,8 @@ export class PiAgentProvider extends BaseAgentProvider {
     }
 
     let assistantText = '';
+    let assistantTurnsEmitted = 0;
+    let lastTurnError: string | null = null;
     let accumulatedThinking = '';
     let thinkingOpen = false;
     let thinkingId: string | undefined;
@@ -339,6 +377,34 @@ export class PiAgentProvider extends BaseAgentProvider {
           context.emit,
         );
       }
+      if (event.type === 'message_end') {
+        const message = event.message as
+          | {
+              role?: string;
+              stopReason?: string;
+              errorMessage?: string;
+              content?: Array<{ type?: string; text?: string }>;
+            }
+          | undefined;
+        if (message?.role === 'assistant') {
+          if (message.stopReason === 'error') {
+            // Remembered here, surfaced by executePrompt through the shared
+            // error path so the session lands in ERROR with an error event.
+            lastTurnError = message.errorMessage || 'Model call failed.';
+          } else if (message.stopReason !== 'aborted') {
+            const text = (message.content ?? [])
+              .filter((block) => block?.type === 'text' && typeof block.text === 'string')
+              .map((block) => block.text)
+              .join('');
+            if (text.trim()) {
+              // Per-turn final message: mirrors the pi session file exactly, so
+              // transcript refreshes dedupe instead of duplicating steered runs.
+              this.pushEvent(sessionId, 'assistant_message', { text }, context.emit);
+              assistantTurnsEmitted += 1;
+            }
+          }
+        }
+      }
       if (event.type === 'agent_end') {
         sealOpenTools(context.emit);
       }
@@ -351,9 +417,13 @@ export class PiAgentProvider extends BaseAgentProvider {
       unsubscribe,
       resetAssistantText: () => {
         assistantText = '';
+        assistantTurnsEmitted = 0;
+        lastTurnError = null;
         resetThinking();
       },
       getAssistantText: () => assistantText,
+      getAssistantTurnsEmitted: () => assistantTurnsEmitted,
+      getTurnError: () => lastTurnError,
       sealOpenTools,
     };
   }

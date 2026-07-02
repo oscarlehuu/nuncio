@@ -1,13 +1,17 @@
-import { useState, type ReactNode } from 'react';
+import { memo, useMemo, useState, type ComponentProps, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Check, Copy } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { splitMarkdownSegments } from '@/lib/markdown-segments';
 import { MermaidDiagram } from '@/components/mermaid-diagram';
 
 interface MarkdownViewProps {
   text: string;
   className?: string;
+  /** While true, only the tail segment re-parses per tick and mermaid in the
+   * tail renders as a plain code block until its fence closes. */
+  streaming?: boolean;
 }
 
 /** Trims leading newlines and dedents a fenced code body so it renders cleanly. */
@@ -59,16 +63,69 @@ export function CodeBlock({ language, code }: { language?: string; code: string 
   );
 }
 
+function markdownComponents(deferMermaid: boolean): ComponentProps<typeof ReactMarkdown>['components'] {
+  return {
+    code({ className: cls, children, ...props }) {
+      const match = /language-(\w+)/.exec(cls ?? '');
+      const isInline = !match && !String(children).includes('\n');
+      if (isInline) {
+        return (
+          <code
+            className="font-mono text-[length:calc(12.5px*var(--chat-font-scale))] bg-muted/40 px-1.5 py-0.5 rounded text-foreground/90"
+            {...props}
+          >
+            {children}
+          </code>
+        );
+      }
+      const language = match?.[1];
+      const code = String(children);
+      if (language === 'mermaid' && !deferMermaid) {
+        return <MermaidDiagram code={code} />;
+      }
+      return <CodeBlock language={language} code={code} />;
+    },
+    // Strip the default <pre> wrapper — CodeBlock provides its own.
+    pre({ children }: { children?: ReactNode }) {
+      return <>{children}</>;
+    },
+    a({ href, children }) {
+      return (
+        <a href={href} target="_blank" rel="noreferrer noopener">
+          {children}
+        </a>
+      );
+    },
+  };
+}
+
+/** One markdown segment; memoized so completed segments never re-parse while
+ * the tail streams. ReactMarkdown emits a fragment, so no extra DOM appears. */
+const MarkdownSegment = memo(function MarkdownSegment({
+  text,
+  deferMermaid,
+}: {
+  text: string;
+  deferMermaid: boolean;
+}) {
+  return (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents(deferMermaid)}>
+      {text}
+    </ReactMarkdown>
+  );
+});
+
 /**
  * Renders assistant message text as GitHub-flavored markdown.
  *
  * - Inline `code` → mono pill with subtle bg.
  * - Fenced ```lang code blocks → CodeBlock with language header + copy button.
  * - Tables, lists, headers, blockquotes via remark-gfm.
- * - Streaming-safe: react-markdown handles partial input gracefully (unclosed
- *   fences render as plain text until the closing fence arrives).
+ * - Streaming-safe: the text is split into fence-aware segments; completed
+ *   segments are memoized and only the tail re-parses per reveal tick.
  */
-export function MarkdownView({ text, className }: MarkdownViewProps) {
+export function MarkdownView({ text, className, streaming }: MarkdownViewProps) {
+  const segments = useMemo(() => splitMarkdownSegments(text), [text]);
   return (
     <div
       className={cn(
@@ -91,49 +148,13 @@ export function MarkdownView({ text, className }: MarkdownViewProps) {
         className,
       )}
     >
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          code({ className: cls, children, ...props }) {
-            const match = /language-(\w+)/.exec(cls ?? '');
-            const isInline = !match && !String(children).includes('\n');
-            if (isInline) {
-              return (
-                <code
-                  className="font-mono text-[length:calc(12.5px*var(--chat-font-scale))] bg-muted/40 px-1.5 py-0.5 rounded text-foreground/90"
-                  {...props}
-                >
-                  {children}
-                </code>
-              );
-            }
-            const language = match?.[1];
-            const code = String(children);
-            if (language === 'mermaid') {
-              return <MermaidDiagram code={code} />;
-            }
-            return (
-              <CodeBlock
-                language={language}
-                code={code}
-              />
-            );
-          },
-          // Strip the default <pre> wrapper — CodeBlock provides its own.
-          pre({ children }: { children?: ReactNode }) {
-            return <>{children}</>;
-          },
-          a({ href, children }) {
-            return (
-              <a href={href} target="_blank" rel="noreferrer noopener">
-                {children}
-              </a>
-            );
-          },
-        }}
-      >
-        {text}
-      </ReactMarkdown>
+      {segments.map((segment, index) => (
+        <MarkdownSegment
+          key={index}
+          text={segment}
+          deferMermaid={!!streaming && index === segments.length - 1}
+        />
+      ))}
     </div>
   );
 }

@@ -26,6 +26,8 @@ function makeSession(overrides: Partial<SessionDto> = {}): SessionDto {
     cursorBackend: 'sdk',
     cursorChatId: null,
     supportsInteraction: false,
+    supportsInterrupt: false,
+    supportsSteerWhileRunning: false,
     createdAt: 1,
     updatedAt: 1,
     ...overrides,
@@ -48,6 +50,15 @@ describe('SessionsService.getEvents windows', () => {
 
   const agents = {
     supportsInteractionForSession: jest.fn().mockReturnValue(false),
+    resolveForSession: jest.fn().mockReturnValue({
+      capabilities: {
+        interrupt: false,
+        modelSwitch: 'none',
+        effortSwitch: 'none',
+        images: false,
+        steerWhileRunning: false,
+      },
+    }),
   } as unknown as AgentRegistry;
 
   const providerRequestRecords = {

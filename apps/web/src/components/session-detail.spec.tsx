@@ -218,13 +218,39 @@ describe('SessionDetail', () => {
     expect(onArchive).toHaveBeenCalledTimes(1);
   });
 
-  it('shows Stop instead of Send when RUNNING and Stop calls onPause', async () => {
+  it('shows Send alongside Stop while RUNNING; Stop falls back to onPause', async () => {
     const { onPause } = await renderDetail({ status: 'RUNNING' });
-    expect(screen.queryByRole('button', { name: /send/i })).toBeNull();
+    // The composer stays available while running — sends queue or steer live.
+    expect(screen.getByRole('button', { name: /send/i })).toBeInTheDocument();
     const stop = screen.getByRole('button', { name: /stop session/i });
     expect(stop).toBeEnabled();
     await userEvent.click(stop);
     expect(onPause).toHaveBeenCalledTimes(1);
+  });
+
+  it('Stop calls onInterrupt when the provider supports interrupt', async () => {
+    const onInterrupt = vi.fn();
+    const { onPause } = await renderDetail(
+      { status: 'RUNNING', supportsInterrupt: true },
+      NO_EVENTS,
+      undefined,
+      { onInterrupt },
+    );
+    await userEvent.click(screen.getByRole('button', { name: /stop session/i }));
+    expect(onInterrupt).toHaveBeenCalledTimes(1);
+    expect(onPause).not.toHaveBeenCalled();
+  });
+
+  it('sends a steer while RUNNING instead of blocking the input', async () => {
+    const { onSteer } = await renderDetail({
+      status: 'RUNNING',
+      supportsSteerWhileRunning: true,
+    });
+    const textarea = screen.getByPlaceholderText(/steer the live run/i);
+    expect(textarea).toBeEnabled();
+    await userEvent.type(textarea, 'change direction');
+    await userEvent.click(screen.getByRole('button', { name: /send/i }));
+    expect(onSteer).toHaveBeenCalledWith('change direction');
   });
 
   it('keeps archive button when RUNNING', async () => {
@@ -822,8 +848,8 @@ describe('SessionDetail throttled streaming', () => {
     act(() => {
       vi.advanceTimersByTime(2000);
     });
-    expect(assistantBubble.textContent?.length).toBeGreaterThan(40);
-    expect(assistantBubble.textContent?.length).toBeLessThan(longDelta.length);
+    // Adaptive catch-up fully drains the backlog well within 2s.
+    expect(assistantBubble.textContent?.length).toBe(longDelta.length);
   });
 
   it('flushes throttled text when assistant_message arrives', async () => {

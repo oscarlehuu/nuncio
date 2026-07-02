@@ -515,7 +515,8 @@ describe('CursorAgentProvider', () => {
     await provider.run(created.id, created.prompt, { emit });
 
     const deltas = events.list(created.id).filter((e) => e.type === 'assistant_delta');
-    expect(deltas.map((e) => (e.payload as { delta: string }).delta)).toEqual(['P', 'ONG']);
+    // Token deltas stream through onDelta and are coalesced into merged rows.
+    expect(deltas.map((e) => (e.payload as { delta: string }).delta).join('')).toBe('PONG');
     expect(sessions.findById(created.id)?.preview).toBe('PONG');
     // The provider must pass an onDelta handler to agent.send.
     expect((sendOptionsCalls[0] as { onDelta?: unknown }).onDelta).toBeInstanceOf(Function);
@@ -580,10 +581,12 @@ describe('CursorAgentProvider', () => {
 
     const all = events.list(created.id);
     expect(all.some((e) => e.type === 'thinking_start')).toBe(true);
-    expect(all.filter((e) => e.type === 'thinking_delta').map((e) => (e.payload as { delta: string }).delta)).toEqual([
-      'ponder',
-      'ing',
-    ]);
+    expect(
+      all
+        .filter((e) => e.type === 'thinking_delta')
+        .map((e) => (e.payload as { delta: string }).delta)
+        .join(''),
+    ).toBe('pondering');
     const thinkingMessage = all.find((e) => e.type === 'thinking_message');
     expect((thinkingMessage?.payload as { text: string }).text).toBe('pondering');
     expect(all.filter((e) => e.type === 'assistant_delta')).toHaveLength(0);

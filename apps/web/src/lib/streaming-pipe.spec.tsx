@@ -36,7 +36,7 @@ describe('streaming transcript pipe', () => {
       output: 'export {}',
     });
     expect(blocks.filter((block) => block.kind === 'tool' && block.status === 'running')).toHaveLength(0);
-    expect(blocks.filter((block) => block.kind === 'assistant')).toEqual([
+    expect(blocks.filter((block) => block.kind === 'assistant')).toMatchObject([
       { kind: 'assistant', text: 'The project looks healthy.' },
     ]);
   });

@@ -1,4 +1,4 @@
-import { Fragment, memo, useMemo } from 'react';
+import { Fragment, memo, useMemo, useRef } from 'react';
 import type { ProviderRequestDecision, SessionEvent } from '../lib/api';
 import {
   buildTranscriptBlocks,
@@ -29,31 +29,59 @@ interface TranscriptProps {
 }
 
 type RenderItem =
-  | { type: 'block'; block: TranscriptBlock }
-  | { type: 'tool-group'; tools: ToolGroupTool[] };
+  | { type: 'block'; key: string; block: TranscriptBlock }
+  | {
+      type: 'tool-group';
+      key: string;
+      tools: ToolGroupTool[];
+      /** Source blocks — used to reuse the item when nothing in the group changed. */
+      sourceBlocks: TranscriptBlock[];
+    };
 
-function groupConsecutiveTools(blocks: TranscriptBlock[]): RenderItem[] {
+function groupConsecutiveTools(
+  blocks: TranscriptBlock[],
+  previous: Map<string, RenderItem>,
+): RenderItem[] {
   const out: RenderItem[] = [];
   let i = 0;
   while (i < blocks.length) {
     const block = blocks[i];
     if (block.kind === 'tool') {
-      const tools: ToolGroupTool[] = [];
+      const sourceBlocks: Extract<TranscriptBlock, { kind: 'tool' }>[] = [];
       while (i < blocks.length && blocks[i].kind === 'tool') {
-        const t = blocks[i] as Extract<TranscriptBlock, { kind: 'tool' }>;
-        tools.push({
+        sourceBlocks.push(blocks[i] as Extract<TranscriptBlock, { kind: 'tool' }>);
+        i++;
+      }
+      const key = `group-${sourceBlocks[0].key}`;
+      const prior = previous.get(key);
+      if (
+        prior?.type === 'tool-group' &&
+        prior.sourceBlocks.length === sourceBlocks.length &&
+        prior.sourceBlocks.every((b, idx) => b === sourceBlocks[idx])
+      ) {
+        out.push(prior);
+        continue;
+      }
+      out.push({
+        type: 'tool-group',
+        key,
+        sourceBlocks,
+        tools: sourceBlocks.map((t) => ({
           callId: t.callId,
           tool: t.tool,
           status: t.status,
           summary: t.summary,
           ...(t.input !== undefined ? { input: t.input } : {}),
           ...(t.output !== undefined ? { output: t.output } : {}),
-        });
-        i++;
-      }
-      out.push({ type: 'tool-group', tools });
+        })),
+      });
     } else {
-      out.push({ type: 'block', block });
+      const prior = previous.get(block.key);
+      if (prior?.type === 'block' && prior.block === block) {
+        out.push(prior);
+      } else {
+        out.push({ type: 'block', key: block.key, block });
+      }
       i++;
     }
   }
@@ -72,11 +100,18 @@ export function WorkingIndicator({ label }: { label: string }) {
   );
 }
 
-function UserBlock({ text }: { text: string }) {
+function UserBlock({ text, queued }: { text: string; queued?: boolean }) {
   return (
     <div className="flex flex-col items-end">
-      <div className="max-w-[90%] px-3 py-[var(--chat-msg-py)] rounded-[12px_12px_4px_12px] chat-text-body leading-relaxed bg-muted/25 text-foreground/90">
+      <div
+        className={`max-w-[90%] px-3 py-[var(--chat-msg-py)] rounded-[12px_12px_4px_12px] chat-text-body leading-relaxed bg-muted/25 text-foreground/90 ${queued ? 'opacity-70 border border-dashed border-border' : ''}`}
+      >
         <UserBubble text={text} />
+        {queued && (
+          <div className="mt-1 text-[length:calc(11px*var(--chat-font-scale))] text-muted-foreground">
+            Queued — sends when the agent is ready
+          </div>
+        )}
       </div>
     </div>
   );
@@ -98,26 +133,37 @@ function ErrorRow({ message }: { message: string }) {
   );
 }
 
+interface RenderItemViewProps {
+  item: RenderItem;
+  streaming?: boolean;
+  pendingRequestIds?: ReadonlySet<string>;
+  respondingRequestId?: string | null;
+  onRespondProviderRequest?: TranscriptProps['onRespondProviderRequest'];
+}
+
+/** requestId this item cares about, when it renders interactive state. */
+function itemRequestId(item: RenderItem): string | null {
+  if (item.type !== 'block') return null;
+  if (item.block.kind === 'user_input' || item.block.kind === 'provider_request') {
+    return item.block.requestId;
+  }
+  return null;
+}
+
 function RenderItemView({
   item,
   streaming,
   pendingRequestIds,
   respondingRequestId,
   onRespondProviderRequest,
-}: {
-  item: RenderItem;
-  streaming?: boolean;
-  pendingRequestIds?: ReadonlySet<string>;
-  respondingRequestId?: string | null;
-  onRespondProviderRequest?: TranscriptProps['onRespondProviderRequest'];
-}) {
+}: RenderItemViewProps) {
   if (item.type === 'tool-group') {
     return <ToolGroup tools={item.tools} />;
   }
   const block = item.block;
   switch (block.kind) {
     case 'user':
-      return <UserBlock text={block.text} />;
+      return <UserBlock text={block.text} queued={block.queued} />;
     case 'assistant':
       return <AssistantBlock text={block.text} streaming={streaming && block.streaming} />;
     case 'tool':
@@ -163,6 +209,17 @@ function RenderItemView({
           onRespond={onRespondProviderRequest}
         />
       );
+    case 'interrupted':
+      return (
+        <div
+          className="flex items-center gap-2 text-[length:calc(12px*var(--chat-font-scale))] text-muted-foreground"
+          data-testid="interrupted-marker"
+        >
+          <span className="h-px flex-1 bg-border" />
+          <span>Interrupted</span>
+          <span className="h-px flex-1 bg-border" />
+        </div>
+      );
     case 'error':
       return <ErrorRow message={block.message} />;
     default: {
@@ -173,6 +230,28 @@ function RenderItemView({
   }
 }
 
+/**
+ * Memoized per-item renderer: unchanged blocks (stable item refs from the
+ * incremental builder's checkpoint prefix) skip re-render entirely while a
+ * sibling streams. Interactive items also compare their own pending/responding
+ * state instead of the container sets' identity.
+ */
+const MemoRenderItemView = memo(RenderItemView, (prev, next) => {
+  if (prev.item !== next.item) return false;
+  if (prev.streaming !== next.streaming) return false;
+  if (prev.onRespondProviderRequest !== next.onRespondProviderRequest) return false;
+  const requestId = itemRequestId(next.item);
+  if (requestId) {
+    const wasPending = prev.pendingRequestIds?.has(requestId) ?? false;
+    const isPending = next.pendingRequestIds?.has(requestId) ?? false;
+    if (wasPending !== isPending) return false;
+    if ((prev.respondingRequestId === requestId) !== (next.respondingRequestId === requestId)) {
+      return false;
+    }
+  }
+  return true;
+});
+
 export const Transcript = memo(function Transcript({
   events,
   streaming,
@@ -181,7 +260,12 @@ export const Transcript = memo(function Transcript({
   onRespondProviderRequest,
 }: TranscriptProps) {
   const blocks = useTranscriptBlocks(events);
-  const items = useMemo(() => groupConsecutiveTools(blocks), [blocks]);
+  const itemCacheRef = useRef(new Map<string, RenderItem>());
+  const items = useMemo(() => {
+    const next = groupConsecutiveTools(blocks, itemCacheRef.current);
+    itemCacheRef.current = new Map(next.map((item) => [item.key, item]));
+    return next;
+  }, [blocks]);
   const indicatorLabel = workingIndicatorLabel(blocks, streaming ?? false);
 
   const indicatorIndex = useMemo(() => {
@@ -189,7 +273,7 @@ export const Transcript = memo(function Transcript({
     let lastUser = -1;
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
-      if (item.type === 'block' && item.block.kind === 'user') lastUser = i;
+      if (item.type === 'block' && item.block.kind === 'user' && !item.block.queued) lastUser = i;
     }
     return lastUser === -1 ? items.length : lastUser + 1;
   }, [items, streaming]);
@@ -197,15 +281,18 @@ export const Transcript = memo(function Transcript({
   return (
     <div className="flex flex-col gap-[var(--chat-gap)] py-2">
       {items.map((item, i) => (
-        <Fragment key={`item-${i}`}>
+        <Fragment key={item.key}>
           {i === indicatorIndex && <WorkingIndicator label={indicatorLabel} />}
-          <RenderItemView
-            item={item}
-            streaming={streaming}
-            pendingRequestIds={pendingRequestIds}
-            respondingRequestId={respondingRequestId}
-            onRespondProviderRequest={onRespondProviderRequest}
-          />
+          {/* content-visibility keeps long-session offscreen blocks unrendered. */}
+          <div className="[content-visibility:auto] [contain-intrinsic-size:auto_60px]">
+            <MemoRenderItemView
+              item={item}
+              streaming={streaming}
+              pendingRequestIds={pendingRequestIds}
+              respondingRequestId={respondingRequestId}
+              onRespondProviderRequest={onRespondProviderRequest}
+            />
+          </div>
         </Fragment>
       ))}
       {streaming && indicatorIndex >= items.length && (
