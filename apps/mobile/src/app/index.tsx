@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
-import { Redirect, useRouter } from 'expo-router';
-import { apiFetch } from '@nuncio/core/http';
+import { FlatList, Pressable, RefreshControl, Text, View } from 'react-native';
+import { Redirect, useFocusEffect, useRouter } from 'expo-router';
+import {
+  fetchArchivedSessions,
+  fetchSessions,
+  type Session,
+} from '@nuncio/core/api';
 import { applyConnection } from '../lib/api-setup';
 import {
   clearConnection,
@@ -9,13 +13,17 @@ import {
   type ConnectionConfig,
 } from '../lib/connection-store';
 import { secureStore } from '../lib/secure-store-adapter';
+import { SessionRow } from '../components/session-row';
 
-type Health = 'checking' | 'ok' | 'unreachable';
+type Tab = 'active' | 'archived';
 
-export default function Home() {
+export default function SessionList() {
   const router = useRouter();
   const [connection, setConnection] = useState<ConnectionConfig | null | undefined>(undefined);
-  const [health, setHealth] = useState<Health>('checking');
+  const [tab, setTab] = useState<Tab>('active');
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     loadConnection(secureStore).then((loaded) => {
@@ -24,20 +32,25 @@ export default function Home() {
     });
   }, []);
 
-  useEffect(() => {
+  const refresh = useCallback(async () => {
     if (!connection) return;
-    let cancelled = false;
-    apiFetch('/api/health')
-      .then((res) => {
-        if (!cancelled) setHealth(res.ok ? 'ok' : 'unreachable');
-      })
-      .catch(() => {
-        if (!cancelled) setHealth('unreachable');
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [connection]);
+    setRefreshing(true);
+    try {
+      const list = tab === 'active' ? await fetchSessions() : await fetchArchivedSessions();
+      setSessions(tab === 'active' ? list.filter((s) => s.status !== 'ARCHIVED') : list);
+      setError(null);
+    } catch {
+      setError('Could not load sessions. Check the connection.');
+    } finally {
+      setRefreshing(false);
+    }
+  }, [connection, tab]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refresh();
+    }, [refresh]),
+  );
 
   const unpair = useCallback(async () => {
     await clearConnection(secureStore);
@@ -48,17 +61,55 @@ export default function Home() {
   if (connection === null) return <Redirect href="/pairing" />;
 
   return (
-    <View className="flex-1 items-center justify-center bg-background px-8">
-      <Text className="text-2xl font-semibold text-foreground">Nuncio</Text>
-      <Text className="mt-2 text-center text-muted-foreground">{connection.serverUrl}</Text>
-      <Text className="mt-4 text-sm text-muted-foreground">
-        {health === 'checking' && 'Checking server…'}
-        {health === 'ok' && 'Connected — sessions arrive in the next milestone.'}
-        {health === 'unreachable' && 'Server unreachable. Check Tailscale and the URL.'}
-      </Text>
-      <Pressable onPress={unpair} className="mt-8 rounded-lg border border-border px-4 py-2">
-        <Text className="text-foreground">Change server</Text>
-      </Pressable>
+    <View className="flex-1 bg-background pt-16">
+      <View className="flex-row items-center justify-between px-4 pb-3">
+        <View>
+          <Text className="text-2xl font-semibold text-foreground">Sessions</Text>
+          <Pressable onPress={unpair}>
+            <Text className="mt-0.5 text-xs text-muted-foreground" numberOfLines={1}>
+              {connection.serverUrl} · change
+            </Text>
+          </Pressable>
+        </View>
+        <Pressable
+          onPress={() => router.push('/new')}
+          className="h-10 w-10 items-center justify-center rounded-full bg-primary"
+        >
+          <Text className="text-xl text-primary-foreground">＋</Text>
+        </Pressable>
+      </View>
+
+      <View className="flex-row gap-2 px-4 pb-2">
+        {(['active', 'archived'] as const).map((t) => (
+          <Pressable
+            key={t}
+            onPress={() => setTab(t)}
+            className={`rounded-full px-4 py-1.5 ${tab === t ? 'bg-secondary' : ''}`}
+          >
+            <Text className={tab === t ? 'text-foreground' : 'text-muted-foreground'}>
+              {t === 'active' ? 'Active' : 'Archived'}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+
+      {error ? <Text className="px-4 py-2 text-sm text-destructive">{error}</Text> : null}
+
+      <FlatList
+        data={sessions}
+        keyExtractor={(s) => s.id}
+        renderItem={({ item }) => (
+          <SessionRow session={item} onPress={() => router.push(`/session/${item.id}`)} />
+        )}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor="#9ca3af" />}
+        ListEmptyComponent={
+          refreshing ? null : (
+            <Text className="px-4 py-8 text-center text-muted-foreground">
+              {tab === 'active' ? 'No sessions yet — create one with ＋' : 'Nothing archived.'}
+            </Text>
+          )
+        }
+      />
     </View>
   );
 }
