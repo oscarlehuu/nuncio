@@ -5,7 +5,8 @@ import type { Session, SessionEvent } from '../lib/api';
 // Feed a controlled event stream; the real transcript + pending-input derivations run.
 let streamEvents: SessionEvent[] = [];
 vi.mock('../lib/use-session-stream', () => ({
-  useSessionStream: () => ({ events: streamEvents, refetch: vi.fn() }),
+  DETAIL_EVENT_TAIL: 1000,
+  useSessionStream: () => ({ events: streamEvents, refetch: vi.fn(), loadEarlier: vi.fn(), hasEarlier: false }),
 }));
 
 import { SessionTile } from './session-tile';

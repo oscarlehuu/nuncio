@@ -77,6 +77,10 @@ interface SessionDetailProps {
    * (e.g. the grid's restore button). In flow — the far-left column belongs
    * to the sidebar hover rail and absolute corners collide with it. */
   headerActions?: React.ReactNode;
+  /** Older events exist on the server beyond the loaded window. */
+  hasEarlier?: boolean;
+  /** Page the previous window of history into the transcript. */
+  onLoadEarlier?: () => void | Promise<void>;
 }
 
 export function SessionDetail({
@@ -97,7 +101,10 @@ export function SessionDetail({
   steering,
   lifecycleBusy,
   headerActions,
+  hasEarlier = false,
+  onLoadEarlier,
 }: SessionDetailProps) {
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [steerText, setSteerText] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -391,6 +398,27 @@ export function SessionDetail({
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 md:px-8 min-h-0">
         <div className="max-w-[760px] mx-auto">
+          {hasEarlier && onLoadEarlier && (
+            <div className="flex justify-center pt-4">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs text-muted-foreground"
+                disabled={loadingEarlier}
+                onClick={async () => {
+                  setLoadingEarlier(true);
+                  try {
+                    await onLoadEarlier();
+                  } finally {
+                    setLoadingEarlier(false);
+                  }
+                }}
+              >
+                {loadingEarlier ? 'Loading…' : 'Load earlier history'}
+              </Button>
+            </div>
+          )}
           <Transcript
             events={events}
             streaming={streaming}

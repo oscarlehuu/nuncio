@@ -15,6 +15,8 @@ import { cn } from '@/lib/utils';
 
 /** Only the freshest blocks are rendered in a tile — LOD, not the full transcript. */
 const TILE_TAIL_LENGTH = 30;
+/** LOD tiles only render a block tail; cap the event window they subscribe to. */
+const TILE_EVENT_TAIL = 300;
 
 interface SessionTileProps {
   session: Session;
@@ -78,7 +80,7 @@ export function SessionTile({
   steering,
   apiBase = '',
 }: SessionTileProps) {
-  const { events } = useSessionStream(session.id, apiBase);
+  const { events } = useSessionStream(session.id, apiBase, TILE_EVENT_TAIL);
   const blocks = useTranscriptBlocks(events);
   const tail = useMemo(() => blocks.slice(-TILE_TAIL_LENGTH), [blocks]);
   const pending = useMemo(() => derivePendingUserInput(events).length > 0, [events]);

@@ -331,12 +331,26 @@ export async function fetchModels(base = ''): Promise<ModelProvider[]> {
   }
 }
 
+export interface EventWindow {
+  /** Last N events (newest window) — takes precedence over since/limit. */
+  tail?: number;
+  /** Page of events immediately preceding this seq (backfill). */
+  before?: number;
+  /** Max rows for since/before reads. */
+  limit?: number;
+}
+
 export async function fetchEvents(
   sessionId: string,
   since = 0,
   base = '',
+  window?: EventWindow,
 ): Promise<SessionEvent[]> {
-  const res = await fetch(`${base}/api/sessions/${sessionId}/events?since=${since}`);
+  const params = new URLSearchParams({ since: String(since) });
+  if (window?.tail !== undefined) params.set('tail', String(window.tail));
+  if (window?.before !== undefined) params.set('before', String(window.before));
+  if (window?.limit !== undefined) params.set('limit', String(window.limit));
+  const res = await fetch(`${base}/api/sessions/${sessionId}/events?${params.toString()}`);
   if (!res.ok) throw new Error('Failed to load events');
   return res.json();
 }

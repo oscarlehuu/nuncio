@@ -20,7 +20,7 @@ import {
   type Session,
 } from './lib/api';
 import { clearSetting, fetchSettings, updateSetting, type Setting } from './lib/settings-api';
-import { useSessionStream } from './lib/use-session-stream';
+import { DETAIL_EVENT_TAIL, useSessionStream } from './lib/use-session-stream';
 import { useActiveRun } from './lib/use-active-run';
 import { useSessionNotifications } from './lib/use-session-notifications';
 import { HomeView } from './components/home-view';
@@ -719,7 +719,11 @@ function SessionRoute({
     archivedSessions.find((s) => s.id === sessionId) ??
     null;
   const session = listedSession ?? fetchedSession;
-  const { events, refetch } = useSessionStream(session?.id ?? null);
+  const { events, refetch, loadEarlier, hasEarlier } = useSessionStream(
+    session?.id ?? null,
+    '',
+    DETAIL_EVENT_TAIL,
+  );
   const machineActive = useActiveRun(session, { onTranscriptRefreshed: refetch });
 
   useEffect(() => {
@@ -769,6 +773,8 @@ function SessionRoute({
     <SessionDetail
       session={session}
       events={events}
+      hasEarlier={hasEarlier}
+      onLoadEarlier={loadEarlier}
       providers={providers}
       onSteer={onSteer}
       onPause={onPause}

@@ -168,6 +168,20 @@ describe('SessionDetail', () => {
     resolveSteer();
   });
 
+  it('shows a load-earlier control when older history exists and forwards clicks', async () => {
+    const onLoadEarlier = vi.fn();
+    await renderDetail({}, NO_EVENTS, undefined, { hasEarlier: true, onLoadEarlier });
+
+    const button = screen.getByRole('button', { name: /load earlier/i });
+    await userEvent.click(button);
+    expect(onLoadEarlier).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides the load-earlier control when the full history is loaded', async () => {
+    await renderDetail({}, NO_EVENTS, undefined, { hasEarlier: false, onLoadEarlier: vi.fn() });
+    expect(screen.queryByRole('button', { name: /load earlier/i })).toBeNull();
+  });
+
   it('calls onPause when the pause button is clicked while IDLE', async () => {
     const { onPause } = await renderDetail({ status: 'IDLE' });
     await userEvent.click(screen.getByRole('button', { name: /session actions/i }));
