@@ -240,6 +240,57 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
     120_000,
   );
 
+  // Real LLM calls — proves the full daemon-restart story: a session left
+  // RUNNING by a dead process is reconciled to IDLE by a fresh SessionsService,
+  // and a steer through a brand-new provider instance continues the same Pi
+  // session file (no shared in-memory state with the first "daemon").
+  it(
+    'reconciles and steers a session after a simulated daemon restart',
+    async () => {
+      const firstPrompt = 'Reply with the single word: alpha';
+      const created = sessions.create({ prompt: firstPrompt, provider: 'pi', model: testModel });
+
+      await provider.run(created.id, firstPrompt, { emit: () => {}, model: testModel });
+      const threadId = sessions.findById(created.id)?.providerThreadId;
+      expect(threadId).toBeTruthy();
+
+      // Simulate the daemon dying mid-turn: status stuck RUNNING, handle gone.
+      sessions.updateStatus(created.id, 'RUNNING');
+      provider.dispose(created.id);
+
+      const { AgentsModule } = await import('../../src/agents/agents.module');
+      const { CursorLocalModule } = await import('../../src/cursor-local/cursor-local.module');
+      const { SessionsService } = await import('../../src/sessions/sessions.service');
+      const restarted = await Test.createTestingModule({
+        imports: [DatabaseModule, GitModule, SessionsPersistenceModule, AgentsModule, CursorLocalModule],
+        providers: [SessionsService],
+      }).compile();
+
+      try {
+        const service = restarted.get(SessionsService);
+        const reconciled = sessions.findById(created.id);
+        expect(reconciled?.status).toBe('IDLE');
+        const restartEvent = events
+          .list(created.id)
+          .find((e) => e.type === 'runtime_restarted');
+        expect(restartEvent?.payload).toMatchObject({ resumable: true });
+
+        const secondPrompt = 'Reply with the single word: beta';
+        const after = await service.steer(created.id, secondPrompt);
+        expect(after.status).toBe('IDLE');
+        expect(sessions.findById(created.id)?.providerThreadId).toBe(threadId);
+
+        const sessionLog = readFileSync(threadId!, 'utf8');
+        expect(sessionLog).toContain(firstPrompt);
+        expect(sessionLog).toContain(secondPrompt);
+      } finally {
+        restarted.get(PiAgentProvider).dispose(created.id);
+        await restarted.close();
+      }
+    },
+    120_000,
+  );
+
   it(
     'interrupts a live prompt and keeps the session resumable',
     async () => {
