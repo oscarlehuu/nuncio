@@ -3,6 +3,7 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ThemeProvider } from './components/theme-provider';
+import { AppearanceProvider } from './components/appearance-provider';
 
 vi.mock('sonner', () => ({
   toast: {
@@ -113,9 +114,11 @@ function renderApp(initialEntry = '/') {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
       <ThemeProvider defaultTheme="light">
-        <Routes>
-          <Route path="/*" element={<App />} />
-        </Routes>
+        <AppearanceProvider>
+          <Routes>
+            <Route path="/*" element={<App />} />
+          </Routes>
+        </AppearanceProvider>
       </ThemeProvider>
     </MemoryRouter>,
   );

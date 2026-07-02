@@ -173,6 +173,16 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     envVar: 'NUNCIO_WORKSPACES_DIR',
     default: '~/.nuncio/workspaces',
   },
+  {
+    key: 'NUNCIO_TAILSCALE_AUTO_TRUST',
+    category: 'general',
+    type: 'boolean',
+    label: 'Trust Tailscale devices',
+    description:
+      'Allow tailnet devices owned by the same Tailscale account to connect without the access token (identity verified via `tailscale whois`). On by default when Tailscale is detected.',
+    envVar: 'NUNCIO_TAILSCALE_AUTO_TRUST',
+    default: '1',
+  },
 ];
 
 const BY_KEY = new Map(SETTING_DEFINITIONS.map((def) => [def.key, def]));

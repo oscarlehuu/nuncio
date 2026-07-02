@@ -22,5 +22,5 @@
     "strictBindCallApply": true,
     "noFallthroughCasesInSwitch": true
   },
-  "exclude": ["**/repro-*.ts"]
+  "exclude": ["dist", "**/repro-*.ts"]
 }

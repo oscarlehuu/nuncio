@@ -14,7 +14,15 @@ async function runMain({ env = {}, fetchImpl, advanceTimers = false } = {}) {
     daemonStopCalls: 0,
     devToolsCalls: [],
     dialogErrors: [],
+    browserBounds: [],
+    browserLoads: [],
+    browserPartitions: [],
+    browserReloads: 0,
+    browserViews: [],
+    ipcHandlers: {},
     loadedUrls: [],
+    removedBrowserViews: [],
+    setBrowserViews: [],
     windows: [],
     logs: [],
     errors: [],
@@ -75,8 +83,47 @@ async function runMain({ env = {}, fetchImpl, advanceTimers = false } = {}) {
       return Promise.resolve();
     }
 
+    setBrowserView(view) {
+      state.setBrowserViews.push(view);
+    }
+
+    removeBrowserView(view) {
+      state.removedBrowserViews.push(view);
+    }
+
     static getAllWindows() {
       return state.windows;
+    }
+  }
+
+  class FakeBrowserView {
+    constructor(options) {
+      this.options = options;
+      this.url = '';
+      this.title = '';
+      this.webContents = {
+        loadURL: (url) => {
+          this.url = url;
+          state.browserLoads.push(url);
+          return Promise.resolve();
+        },
+        reload: () => {
+          state.browserReloads += 1;
+        },
+        getURL: () => this.url,
+        getTitle: () => this.title,
+        isLoading: () => false,
+      };
+      state.browserPartitions.push(options?.webPreferences?.partition);
+      state.browserViews.push(this);
+    }
+
+    setBounds(bounds) {
+      state.browserBounds.push(bounds);
+    }
+
+    setAutoResize(options) {
+      this.autoResize = options;
     }
   }
 
@@ -124,10 +171,23 @@ async function runMain({ env = {}, fetchImpl, advanceTimers = false } = {}) {
         return {
           app: fakeApp,
           BrowserWindow: FakeBrowserWindow,
+          BrowserView: FakeBrowserView,
           dialog: {
             showErrorBox(title, message) {
               state.dialogErrors.push({ title, message });
             },
+          },
+          ipcMain: {
+            handle(channel, handler) {
+              state.ipcHandlers[channel] = handler;
+            },
+          },
+          Notification: class {
+            static isSupported() {
+              return false;
+            }
+            on() {}
+            show() {}
           },
         };
       }
@@ -204,5 +264,49 @@ describe('desktop main dev-mode loading', () => {
     state.appHandlers.activate();
 
     expect(state.loadedUrls).toEqual(['http://localhost:5173', 'http://localhost:5173']);
+  });
+
+  test('desktop browser IPC embeds a BrowserView with a persistent Nuncio profile', async () => {
+    const state = await runMain({
+      fetchImpl: async (url) => ({ ok: url === 'http://localhost:5173' }),
+    });
+
+    await state.ipcHandlers['browser:show']({}, {
+      id: 's1',
+      url: 'example.com',
+      bounds: { x: 10, y: 52, width: 480, height: 320 },
+    });
+
+    expect(state.browserViews).toHaveLength(1);
+    expect(state.browserPartitions).toEqual(['persist:nuncio-browser']);
+    expect(state.browserLoads).toEqual(['https://example.com']);
+    expect(state.browserBounds).toEqual([{ x: 10, y: 52, width: 480, height: 320 }]);
+    expect(state.setBrowserViews).toEqual([state.browserViews[0]]);
+    expect(state.browserViews[0].options.webPreferences).toMatchObject({
+      contextIsolation: true,
+      nodeIntegration: false,
+      partition: 'persist:nuncio-browser',
+    });
+  });
+
+  test('desktop browser hide detaches the native view without destroying the profile', async () => {
+    const state = await runMain({
+      fetchImpl: async (url) => ({ ok: url === 'http://localhost:5173' }),
+    });
+
+    await state.ipcHandlers['browser:show']({}, {
+      id: 's1',
+      url: 'https://example.com',
+      bounds: { x: 0, y: 0, width: 300, height: 200 },
+    });
+    await state.ipcHandlers['browser:hide']({}, 's1');
+    await state.ipcHandlers['browser:show']({}, {
+      id: 's1',
+      bounds: { x: 0, y: 20, width: 300, height: 180 },
+    });
+
+    expect(state.browserViews).toHaveLength(1);
+    expect(state.removedBrowserViews).toEqual([state.browserViews[0]]);
+    expect(state.setBrowserViews).toEqual([state.browserViews[0], state.browserViews[0]]);
   });
 });

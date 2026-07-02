@@ -6,6 +6,7 @@ import { SettingRow } from './setting-row';
 import { ProviderIcon } from './provider-icon';
 import { fetchForgeStatus, type ForgeStatusDto } from '../lib/forge-status-api';
 import { AppearanceSettingsSection } from './appearance-settings-section';
+import { RemoteAccessSettingsSection } from './remote-access-settings-section';
 
 interface SettingsViewProps {
   settings: Setting[];
@@ -72,7 +73,10 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
       });
   }, []);
 
-  const general = settings.filter((s) => s.category === 'general');
+  // The Tailscale auto-trust toggle is owned by the Remote access section below.
+  const general = settings.filter(
+    (s) => s.category === 'general' && s.key !== 'NUNCIO_TAILSCALE_AUTO_TRUST',
+  );
   const providerSettings = settings.filter((s) => s.category === 'provider');
 
   // Group by providerId
@@ -186,6 +190,8 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
             {['github', 'gitlab'].map((id) => renderProviderRow(id))}
           </div>
         </section>
+
+        <RemoteAccessSettingsSection />
 
         {/* General Section */}
         {general.length > 0 && (

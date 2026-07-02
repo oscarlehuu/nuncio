@@ -242,9 +242,15 @@ describe('SessionsService lifecycle (phase 3)', () => {
     });
 
     it('rejects an unavailable provider', async () => {
-      await expect(
-        service.create({ prompt: 'pi without auth', provider: 'pi' }),
-      ).rejects.toThrow(BadRequestException);
+      const piProvider = registry.get('pi');
+      const availableSpy = jest.spyOn(piProvider, 'isAvailable').mockResolvedValue(false);
+      try {
+        await expect(
+          service.create({ prompt: 'pi without auth', provider: 'pi' }),
+        ).rejects.toThrow(BadRequestException);
+      } finally {
+        availableSpy.mockRestore();
+      }
     });
   });
 

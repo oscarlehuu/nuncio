@@ -40,7 +40,7 @@ function CopyButton({ getText, label }: { getText: () => string; label: string }
   );
 }
 
-function CodeBlock({ language, code }: { language?: string; code: string }) {
+export function CodeBlock({ language, code }: { language?: string; code: string }) {
   const body = cleanCodeBody(code);
   const displayLang =
     language && language.length > 0 ? language.toUpperCase() : 'TEXT';

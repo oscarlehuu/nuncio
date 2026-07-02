@@ -18,6 +18,7 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 - **Pause / archive / restore / delete** — suspend a running session, retire it to the Archived tab, restore it back to IDLE, or permanently delete it; a session FSM enforces valid transitions and a confirm dialog guards deletes
 - **Real-time + replay** — SSE stream for live updates, event log with cursor for replay
 - **Mobile-first PWA** — installable on iPhone via Tailscale HTTPS; standalone dark UI, safe-area aware
+- **Interactive browser dock** — desktop uses a real embedded Electron browser view with a persistent Nuncio profile; the web/PWA surface does not expose a browser dock
 - **Self-hosted** — your machine, your SQLite, your credentials; nothing leaves your tailnet
 - **Provider-neutral agent layer** — `AgentProvider` interface + `AgentRegistry`; Pi, Codex, Cursor, and Mock today, extensible
 - **Settings store** — runtime-configurable env vars (API keys, paths, flags) stored in SQLite and editable via the frontend; secrets encrypted at rest (AES-256-GCM), env vars still honoured as fallback
@@ -122,6 +123,17 @@ codex login status
 
 The default binary is `codex` on `PATH`. Override it with `NUNCIO_CODEX_BIN`; override Codex's home with `NUNCIO_CODEX_HOME`; override the default cwd with `NUNCIO_CODEX_CWD`. `NUNCIO_CODEX_RUNTIME_MODE=full-access` is the default for local self-hosted use. `approval-required` starts Codex in read-only/untrusted mode and surfaces pending provider approval requests in the session transcript. Pending request state is stored in SQLite; if the server restarts while Codex is waiting, Nuncio marks that stale request denied because the original app-server callback is gone.
 
+### Desktop browser profile
+
+The browser dock is a desktop-only native Electron `BrowserView` embedded in the
+session view. It uses Electron's persistent `persist:nuncio-browser` partition,
+so cookies, cache, localStorage, and session storage survive app restarts without
+touching your personal Chrome profile.
+
+The web/PWA surface does not expose a browser dock. Normal browsers cannot embed
+arbitrary sites like Google as a real child browser, and Nuncio intentionally
+avoids presenting a streamed remote-browser viewport there.
+
 ## Testing
 
 ```bash
@@ -147,6 +159,35 @@ Open `https://<your-machine>.<tailnet>.ts.net` — Tailscale terminates TLS so i
 
 **Single-port serving:** In dev, Vite still runs on :5173 and proxies `/api` to the NestJS server on :3000. After `bun run build`, the Nest/Bun daemon serves `apps/web/dist` itself: `/api/*` remains JSON API traffic and every other app route falls back to the built SPA shell.
 
+## Remote access & authentication
+
+The server trusts loopback connections unconditionally — local use (desktop app, dev) needs zero
+setup. Any non-loopback client (LAN, Tailscale, another machine) must present the server's access
+token once.
+
+- **Tailscale auto-trust:** if Tailscale runs on the server, devices signed into the **same
+  Tailscale account** connect with no token at all — identity is verified per connection via
+  `tailscale whois`. Manage it (and see your devices) in **Settings → Remote access**; other
+  tailnet members' devices still need the token.
+- The token is auto-generated on first boot, printed in the server log, shown in
+  **Settings → Remote access**, and stored at `<dataDir>/auth-token` (see
+  [Local data](#local-data-sessions--settings)). Override with `NUNCIO_AUTH_TOKEN`.
+- Opening the web UI from another machine shows a one-time token prompt; on success the token is
+  exchanged for an HttpOnly cookie (1 year), so each browser/device asks only once. The cookie
+  also authenticates the SSE stream and the in-browser terminal.
+- API clients can send `Authorization: Bearer <token>` per request instead.
+- Forge webhooks (`/api/webhooks/forge/:provider`) are exempt — they verify their own HMAC signatures.
+
+To work on a project that lives on another machine, run the server there and connect from here:
+
+```bash
+# on the project machine
+bun run build && bun run --filter @nuncio/server start:prod
+cat apps/server/data/auth-token   # or copy it from the boot log
+
+# from your machine: open http://<machine>:3000 (or the Tailscale URL) and paste the token
+```
+
 ## PWA install (iPhone)
 
 Nuncio ships as an installable PWA (`vite-plugin-pwa`: manifest, service worker, standalone display). **Add to Home Screen on iPhone requires HTTPS** — Safari will not offer a full install from plain `http://` localhost.
@@ -163,6 +204,7 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 - **Agent providers:** Pi SDK, Codex app-server, Cursor SDK, and Mock behind a common `AgentProvider` interface; `AgentRegistry` selects per session. Pi auth via the SDK's `AuthStorage` at `~/.pi/agent`; Codex auth via the local `codex` CLI login; Cursor auth via `CURSOR_API_KEY`. See [docs/system-architecture.md](docs/system-architecture.md).
 - **Backend:** NestJS (`apps/server`) on port 3000; after `bun run build`, it also serves `apps/web/dist` at `/` while keeping `/api/*` for JSON routes
 - **Frontend:** Vite + React + Tailwind + shadcn/ui (`apps/web`) on port 5173 in dev/preview (`NUNCIO_WEB_PORT` overrides dev/preview; `NUNCIO_API_ORIGIN` overrides the `/api` proxy target)
+- **Browser dock:** desktop-only Electron `BrowserView` over the React viewport with a persistent app profile; web/PWA does not expose a browser dock
 - **Persistence:** SQLite (`bun:sqlite`) in `data/nuncio.db` — sessions (with `provider`, `model`, and provider runtime state), append-only event log, and a `settings` table for runtime-configurable env overrides (secrets encrypted at rest)
 - **Auth:** Tailscale (network) + static app token (planned)
 - **Distribution:** Open source — friends/colleagues self-host on their own Linux/macOS machines
@@ -180,8 +222,8 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 | GET | `/api/sessions/:id` | Session detail (incl. `provider`, `model`, `supportsInteraction`, `cursorBackend`, `cursorChatId`) |
 | GET | `/api/sessions/:id/events?since=` | Event log (cursor) |
 | GET | `/api/sessions/:id/active-run` | `{ "active": boolean }` — whether Cursor IDE/CLI is likely still running this handoff chat on the host (transcript/store mtime < 60s) |
-| POST | `/api/sessions/:id/refresh-transcript` | Append new turns from the on-disk Cursor transcript; emits `transcript_refreshed` via SSE when rows land |
-| GET | `/api/sessions/:id/stream?since=` | SSE stream |
+| POST | `/api/sessions/:id/refresh-transcript` | Append new turns from the on-disk Cursor/Pi transcript; emits `transcript_refreshed` via SSE when rows land |
+| GET | `/api/sessions/:id/stream?since=` | SSE stream; for handoff sessions, the server watches the external transcript file and streams new rows live |
 | POST | `/api/sessions/:id/steer` | Steer agent `{ "message": "...", "forceResume?": true, "attachments?": [...] }` — `forceResume` skips the active-run guard for CLI handoff sessions |
 | POST | `/api/sessions/:id/interrupt` | Interrupt a live run when the provider advertises `capabilities.interrupt` (Pi supports this without disposing the session) |
 | PATCH | `/api/sessions/:id/model` | Persist a session model/options update `{ "model": "provider:model", "options?": { ... } }`; providers with in-session switching (Pi) apply it live |
@@ -231,7 +273,7 @@ Pick **one** in-progress Cursor chat or Pi CLI session on your Mac and continue 
 | "Chat no longer exists" (404) | The transcript folder was removed; start a new chat in Cursor. |
 | Steer hangs / no output | Run the server with `bun run --filter @nuncio/server start` (not `dev`) when testing Cursor — `--watch` reloads on DB writes and kills in-flight CLI runs. |
 
-Imported Cursor sessions use `cursor_backend=cli` and resume via the CLI subprocess. Imported Pi sessions use `provider='pi'`, store the Pi session JSONL path in `providerThreadId`, and resume the same file in-process through `SessionManager.open(path)`. Sessions you **create** in Nuncio still use the provider's normal in-process path (`cursor_backend=sdk` for Cursor).
+Imported Cursor sessions use `cursor_backend=cli` and resume via the CLI subprocess. Imported Pi sessions use `provider='pi'`, store the Pi session JSONL path in `providerThreadId`, and resume the same file in-process through `SessionManager.open(path)`. While a handoff session is open in Nuncio, server-side transcript file watchers stream new external CLI writes into the transcript without a manual refresh. Sessions you **create** in Nuncio still use the provider's normal in-process path (`cursor_backend=sdk` for Cursor).
 
 ## Project layout
 

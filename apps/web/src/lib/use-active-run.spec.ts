@@ -49,12 +49,13 @@ describe('useActiveRun', () => {
     vi.useRealTimers();
   });
 
-  it('returns false for non-CLI sessions without polling', () => {
+  it('returns false for non-CLI, non-pi sessions without polling', () => {
     const { result } = renderHook(() =>
-      useActiveRun({ ...cliSession(), provider: 'pi', cursorBackend: null }),
+      useActiveRun({ ...cliSession(), provider: 'claude', cursorBackend: null }),
     );
     expect(result.current).toBe(false);
     expect(fetchActiveRun).not.toHaveBeenCalled();
+    expect(refreshSessionTranscript).not.toHaveBeenCalled();
   });
 
   it('polls active-run and refreshes transcript for CLI handoff sessions', async () => {
@@ -90,5 +91,27 @@ describe('useActiveRun', () => {
     renderHook(() => useActiveRun(cliSession(), { pollMs: 50, onTranscriptRefreshed }));
     await waitFor(() => expect(refreshSessionTranscript).toHaveBeenCalled());
     expect(onTranscriptRefreshed).not.toHaveBeenCalled();
+  });
+
+  it('polls refreshSessionTranscript for pi sessions without fetchActiveRun and stays inactive', async () => {
+    refreshSessionTranscript
+      .mockResolvedValueOnce({ added: 3 })
+      .mockResolvedValue({ added: 0 });
+    const onTranscriptRefreshed = vi.fn();
+    const { result } = renderHook(() =>
+      useActiveRun(
+        { ...cliSession('pi-1'), provider: 'pi', cursorBackend: null, cursorChatId: null },
+        { pollMs: 50, onTranscriptRefreshed },
+      ),
+    );
+    await waitFor(() => expect(onTranscriptRefreshed).toHaveBeenCalledTimes(1));
+    expect(refreshSessionTranscript).toHaveBeenCalledWith('pi-1');
+    expect(fetchActiveRun).not.toHaveBeenCalled();
+    expect(result.current).toBe(false);
+    // Keeps polling on interval
+    await waitFor(() => expect(refreshSessionTranscript.mock.calls.length).toBeGreaterThan(1), {
+      timeout: 3000,
+    });
+    expect(fetchActiveRun).not.toHaveBeenCalled();
   });
 });

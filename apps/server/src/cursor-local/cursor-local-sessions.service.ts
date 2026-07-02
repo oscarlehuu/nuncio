@@ -70,10 +70,19 @@ export class CursorLocalSessionsService {
     return items.find((item) => item.chatId === chatId) ?? null;
   }
 
+  transcriptPath(chatId: string, workspace: string): string | null {
+    const trimmedChatId = chatId.trim();
+    const trimmedWorkspace = workspace.trim();
+    if (!trimmedChatId || !trimmedWorkspace) return null;
+    return join(
+      transcriptDirForChat(this.homeDir(), toProjectSlug(trimmedWorkspace), trimmedChatId),
+      `${trimmedChatId}.jsonl`,
+    );
+  }
+
   readTranscript(chatId: string, workspace: string): ParsedTranscriptTurn[] {
-    const slug = toProjectSlug(workspace);
-    const jsonlPath = join(transcriptDirForChat(this.homeDir(), slug, chatId), `${chatId}.jsonl`);
-    if (!existsSync(jsonlPath)) return [];
+    const jsonlPath = this.transcriptPath(chatId, workspace);
+    if (!jsonlPath || !existsSync(jsonlPath)) return [];
 
     const lines = readFileSync(jsonlPath, 'utf8').split('\n');
     const turns: ParsedTranscriptTurn[] = [];
@@ -86,17 +95,15 @@ export class CursorLocalSessionsService {
 
   /** For active-run heuristic: transcript file mtime in ms. */
   transcriptMtime(chatId: string, workspace: string): number | null {
-    const slug = toProjectSlug(workspace);
-    const jsonlPath = join(transcriptDirForChat(this.homeDir(), slug, chatId), `${chatId}.jsonl`);
-    if (!existsSync(jsonlPath)) return null;
+    const jsonlPath = this.transcriptPath(chatId, workspace);
+    if (!jsonlPath || !existsSync(jsonlPath)) return null;
     return statSync(jsonlPath).mtimeMs;
   }
 
   /** True when the last JSONL entry is `turn_ended` — agent is idle, not running. */
   isTranscriptTurnEnded(chatId: string, workspace: string): boolean {
-    const slug = toProjectSlug(workspace);
-    const jsonlPath = join(transcriptDirForChat(this.homeDir(), slug, chatId), `${chatId}.jsonl`);
-    if (!existsSync(jsonlPath)) return false;
+    const jsonlPath = this.transcriptPath(chatId, workspace);
+    if (!jsonlPath || !existsSync(jsonlPath)) return false;
     const lines = readFileSync(jsonlPath, 'utf8').split('\n').filter(Boolean);
     if (lines.length === 0) return false;
     try {
@@ -114,9 +121,8 @@ export class CursorLocalSessionsService {
 
   /** Best-effort model from the transcript JSONL. Returns null for CLI sessions (model is not stored). */
   readTranscriptModel(chatId: string, workspace: string): string | null {
-    const slug = toProjectSlug(workspace);
-    const jsonlPath = join(transcriptDirForChat(this.homeDir(), slug, chatId), `${chatId}.jsonl`);
-    if (existsSync(jsonlPath)) {
+    const jsonlPath = this.transcriptPath(chatId, workspace);
+    if (jsonlPath && existsSync(jsonlPath)) {
       const lines = readFileSync(jsonlPath, 'utf8').split('\n').filter(Boolean);
       for (let i = lines.length - 1; i >= 0; i -= 1) {
         try {

@@ -142,7 +142,9 @@ describe('SessionsService.refreshTranscriptIfNeeded', () => {
     const result = service.refreshTranscript(session.id);
     unsub();
 
-    expect(result.added).toBeGreaterThanOrEqual(2);
+    // Subscribe already caught up the transcript (safety-net refresh), so the
+    // explicit refresh finds nothing new — but the events were emitted on the bus.
+    expect(result.added).toBe(0);
     expect(received.some((e) => e.type === 'assistant_message')).toBe(true);
     expect(
       received.some(

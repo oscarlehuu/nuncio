@@ -221,6 +221,29 @@ describe('buildTranscriptBlocks', () => {
     expect(blocks.find((b) => b.kind === 'assistant')?.text).toBe('Answer');
   });
 
+  it('deduplicates a hydrated assistant_message that repeats a delta-assembled message', () => {
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'assistant_delta', { delta: 'Hello ' }),
+      ev(2, 'assistant_delta', { delta: 'world' }),
+      ev(3, 'assistant_message', { text: 'Hello world' }),
+      ev(4, 'assistant_message', { text: 'Hello world' }),
+    ]);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ kind: 'assistant', text: 'Hello world' });
+  });
+
+  it('deduplicates hydrated assistant_message even when the live full message had trailing whitespace', () => {
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'assistant_delta', { delta: 'Hello world\n' }),
+      ev(2, 'assistant_message', { text: 'Hello world\n' }),
+      ev(3, 'assistant_message', { text: 'Hello world' }),
+    ]);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ kind: 'assistant', text: 'Hello world' });
+  });
+
   it('marks streaming assistant buffer at end', () => {
     const blocks = buildTranscriptBlocks([ev(1, 'assistant_delta', { delta: 'partial' })]);
     expect(blocks).toHaveLength(1);

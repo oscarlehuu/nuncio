@@ -7,9 +7,15 @@
   "scripts": {
     "dev": "electron .",
     "test": "bun test",
-    "lint": "echo \"(desktop lint: n/a during spike)\""
+    "lint": "echo \"(desktop lint: n/a during spike)\"",
+    "postinstall": "electron-rebuild -w node-pty",
+    "rebuild": "electron-rebuild -w node-pty"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.1.0",
     "electron": "^42.5.2"
+  },
+  "dependencies": {
+    "node-pty": "^1.1.0"
   }
 }

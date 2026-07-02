@@ -132,4 +132,36 @@ describe('useSessionStream', () => {
     const reconnected = sources[sources.length - 1]!;
     expect(reconnected.url).toBe('/api/sessions/s1/stream?since=2');
   }, 10000);
+
+  it('fills the reconnect gap without duplicate seqs after an EventSource drop', async () => {
+    vi.mocked(fetchEvents).mockResolvedValue([ev(1)]);
+    let latest: ReturnType<typeof useSessionStream> | undefined;
+    render(<Harness sid="s1" onReady={(stream) => { latest = stream; }} />);
+    await waitFor(() => expect(lastSource).toBeDefined());
+
+    act(() => {
+      lastSource!.onmessage!({ data: JSON.stringify(ev(2, 'assistant_delta', { delta: 'Hel' })) });
+    });
+    await waitFor(() => expect(latest?.events.map((event) => event.seq)).toEqual([1, 2]));
+
+    const dropped = lastSource!;
+    const countBefore = sources.length;
+    act(() => {
+      dropped.onerror!();
+    });
+    expect(dropped.close).toHaveBeenCalled();
+
+    await waitFor(() => expect(sources.length).toBeGreaterThan(countBefore), { timeout: 3000 });
+    const reconnected = sources[sources.length - 1]!;
+    expect(reconnected.url).toBe('/api/sessions/s1/stream?since=2');
+
+    act(() => {
+      reconnected.onmessage!({ data: JSON.stringify(ev(3, 'assistant_delta', { delta: 'lo' })) });
+      reconnected.onmessage!({ data: JSON.stringify(ev(4, 'assistant_message', { text: 'Hello' })) });
+      reconnected.onmessage!({ data: JSON.stringify(ev(4, 'assistant_message', { text: 'Hello' })) });
+    });
+
+    await waitFor(() => expect(latest?.events.map((event) => event.seq)).toEqual([1, 2, 3, 4]));
+    expect(new Set(latest!.events.map((event) => event.seq)).size).toBe(latest!.events.length);
+  }, 10000);
 });

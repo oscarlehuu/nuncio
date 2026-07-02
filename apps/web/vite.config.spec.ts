@@ -19,13 +19,15 @@ describe('Vite port config', () => {
     vi.resetModules();
 
     const config = (await import('./vite.config')).default as {
-      server?: { port?: number; proxy?: Record<string, { target?: string }> };
-      preview?: { port?: number; proxy?: Record<string, { target?: string }> };
+      server?: { port?: number; proxy?: Record<string, { target?: string; ws?: boolean }> };
+      preview?: { port?: number; proxy?: Record<string, { target?: string; ws?: boolean }> };
     };
 
     expect(config.server?.port).toBe(5174);
     expect(config.preview?.port).toBe(5174);
     expect(config.server?.proxy?.['/api']?.target).toBe('http://localhost:3001');
     expect(config.preview?.proxy?.['/api']?.target).toBe('http://localhost:3001');
+    expect(config.server?.proxy?.['/api']?.ws).toBe(true);
+    expect(config.preview?.proxy?.['/api']?.ws).toBe(true);
   });
 });

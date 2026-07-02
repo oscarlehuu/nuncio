@@ -3,6 +3,10 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { AgentRegistry } from './agents/agents.registry';
 import { configureWebAppServing } from './web-static-assets';
+import { TerminalService } from './terminal/terminal.service';
+import { attachTerminalWebSocketServer } from './terminal/terminal.ws';
+import { AuthTokenService } from './auth/auth-token.service';
+import { TailscaleService } from './tailscale/tailscale.service';
 
 // The Cursor SDK under Bun emits stray NGHTTP2_FRAME_SIZE_ERROR / ERR_HTTP2_STREAM_ERROR
 // events from its HTTP/2 streams (model discovery, Agent.create validation) that escape the
@@ -76,5 +80,15 @@ async function bootstrap() {
   process.on('SIGINT', shutdown);
 
   await app.listen(process.env.PORT ?? 3000);
+  const authTokens = app.get(AuthTokenService);
+  attachTerminalWebSocketServer(
+    app.getHttpServer(),
+    app.get(TerminalService),
+    authTokens,
+    app.get(TailscaleService),
+  );
+  console.log(
+    `[auth] loopback clients need no token; remote clients authenticate with: ${authTokens.token} (source: ${authTokens.source})`,
+  );
 }
 bootstrap();

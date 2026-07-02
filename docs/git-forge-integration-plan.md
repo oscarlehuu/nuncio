@@ -190,7 +190,7 @@ in the session UI. Builds on Phase 1 (push) + Phase 2 (auth).
 | `apps/server/src/sessions/persistence/sessions.repository.ts` | Add `updateForgeState(id, {...})` (mirrors `updateProviderRuntimeState`, `sessions.repository.ts:160`); extend `toDto`/`insertRow`. |
 | `apps/web/src/lib/api.ts` | `openPullRequest(id)`, `fetchPullRequest(id)`. |
 | `apps/web/src/components/pr-panel.tsx` | **NEW** — "Open Pull Request" button (visible when session is `IDLE`, has a `branch`, and a forge is available); after open, shows PR link, state badge, check runs list, comments. |
-| `apps/web/src/components/session-detail.tsx` | Mount `PrPanel` alongside `ReviewChanges`. |
+| `apps/web/src/components/session-detail.tsx` | Mount `PrPanel` alongside `ReviewChanges`. **Superseded:** `PrPanel` is no longer rendered in the Source Control dock — the dock now shows only `ReviewChanges` (inline per-file accordion diffs + separate Commit Message section). `pr-panel.tsx`/`pr-panel.spec.tsx` are retained for a future dedicated PR screen. See system-architecture.md → “Source Control dock UI”. |
 
 ### New API routes
 

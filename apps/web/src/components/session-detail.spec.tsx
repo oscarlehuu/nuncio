@@ -7,6 +7,52 @@ import { fetchGitStatus } from '../lib/api';
 import type { Session, SessionEvent } from '../lib/api';
 import type { ModelProvider } from '../lib/model-providers';
 
+const xtermMocks = vi.hoisted(() => {
+  class Terminal {
+    cols = 80;
+    rows = 24;
+    onData = vi.fn(() => ({ dispose: vi.fn() }));
+    loadAddon = vi.fn();
+    open = vi.fn();
+    write = vi.fn();
+    dispose = vi.fn();
+  }
+  return { Terminal };
+});
+
+vi.mock('@xterm/xterm', () => ({ Terminal: xtermMocks.Terminal }));
+vi.mock('@xterm/addon-fit', () => ({ FitAddon: class FitAddon { fit = vi.fn(); } }));
+vi.mock('./browser-panel', () => ({
+  getDesktopBrowserBridge: () => (
+    window as Window & { nuncioDesktop?: { browser?: unknown } }
+  ).nuncioDesktop?.browser,
+  BrowserPanel: ({ sessionId }: { sessionId: string }) => (
+    <div data-testid="browser-panel">Browser {sessionId}</div>
+  ),
+}));
+
+vi.mock('./file-explorer-panel', () => ({
+  FileExplorerPanel: ({ root }: { root?: string }) => (
+    <div data-testid="file-explorer-panel">Files {root}</div>
+  ),
+}));
+
+class MockWebSocket {
+  onopen: ((event: Event) => void) | null = null;
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onerror: ((event: Event) => void) | null = null;
+  onclose: ((event: CloseEvent) => void) | null = null;
+  send = vi.fn();
+  close = vi.fn();
+  readyState = 1;
+  url: string;
+  constructor(url: string) {
+    this.url = url;
+  }
+}
+
+const originalWebSocket = globalThis.WebSocket;
+
 vi.mock('../lib/api', async () => {
   const actual = await vi.importActual<typeof import('../lib/api')>('../lib/api');
   return {
@@ -76,6 +122,14 @@ async function renderDetail(
 }
 
 describe('SessionDetail', () => {
+  beforeEach(() => {
+    delete (window as Window & { nuncioDesktop?: unknown }).nuncioDesktop;
+  });
+
+  afterEach(() => {
+    delete (window as Window & { nuncioDesktop?: unknown }).nuncioDesktop;
+  });
+
   it('calls onSteer with the message when send is clicked', async () => {
     const { onSteer } = await renderDetail();
     const textarea = screen.getByPlaceholderText(/steer the agent/i);
@@ -113,13 +167,15 @@ describe('SessionDetail', () => {
 
   it('calls onPause when the pause button is clicked while IDLE', async () => {
     const { onPause } = await renderDetail({ status: 'IDLE' });
-    await userEvent.click(screen.getByRole('button', { name: /pause session/i }));
+    await userEvent.click(screen.getByRole('button', { name: /session actions/i }));
+    await userEvent.click(screen.getByRole('menuitem', { name: /pause session/i }));
     expect(onPause).toHaveBeenCalledTimes(1);
   });
 
   it('calls onArchive when the archive button is clicked', async () => {
     const { onArchive } = await renderDetail();
-    await userEvent.click(screen.getByRole('button', { name: /archive session/i }));
+    await userEvent.click(screen.getByRole('button', { name: /session actions/i }));
+    await userEvent.click(screen.getByRole('menuitem', { name: /archive session/i }));
     expect(onArchive).toHaveBeenCalledTimes(1);
   });
 
@@ -134,12 +190,15 @@ describe('SessionDetail', () => {
 
   it('keeps archive button when RUNNING', async () => {
     await renderDetail({ status: 'RUNNING' });
-    expect(screen.getByRole('button', { name: /archive session/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /session actions/i }));
+    expect(screen.getByRole('menuitem', { name: /archive session/i })).toBeInTheDocument();
   });
 
   it('does not show a pause button when ARCHIVED', async () => {
     await renderDetail({ status: 'ARCHIVED' });
-    expect(screen.queryByRole('button', { name: /pause session/i })).toBeNull();
+    const actions = screen.queryByRole('button', { name: /session actions/i });
+    if (actions) await userEvent.click(actions);
+    expect(screen.queryByRole('menuitem', { name: /pause session/i })).toBeNull();
   });
 
   it('shows Nuncio is working indicator when RUNNING with no content', async () => {
@@ -280,11 +339,10 @@ describe('SessionDetail', () => {
     });
     expect(screen.queryByText('Source Control')).toBeNull();
 
-    const toggle = screen.getByRole('button', { name: /toggle source control/i });
-    await userEvent.click(toggle);
+    await userEvent.click(screen.getByRole('button', { name: /toggle panel/i }));
     expect(await screen.findByText('Source Control')).toBeInTheDocument();
 
-    const close = screen.getByRole('button', { name: /close source control/i });
+    const close = screen.getByRole('button', { name: /close panel/i });
     await userEvent.click(close);
     expect(screen.queryByText('Source Control')).toBeNull();
   });
@@ -306,7 +364,7 @@ describe('SessionDetail', () => {
       branch: 'nuncio/s1-fix-auth',
     });
 
-    await userEvent.click(screen.getByRole('button', { name: /toggle source control/i }));
+    await userEvent.click(screen.getByRole('button', { name: /toggle panel/i }));
     const message = await screen.findByPlaceholderText(/commit message/i);
 
     expect(message).toHaveValue('');
@@ -315,7 +373,108 @@ describe('SessionDetail', () => {
 
   it('does not show the source control toggle when there is no git context', async () => {
     await renderDetail();
+    await userEvent.click(screen.getByRole('button', { name: /toggle panel/i }));
     expect(screen.queryByRole('button', { name: /toggle source control/i })).toBeNull();
+  });
+
+  it('does not show the browser dock in the web/PWA app', async () => {
+    await renderDetail();
+    const panelToggle = screen.getByRole('button', { name: /toggle panel/i });
+    await userEvent.click(panelToggle);
+    expect(screen.queryByRole('button', { name: /toggle browser/i })).toBeNull();
+    expect(screen.queryByTestId('browser-panel')).toBeNull();
+  });
+
+  it('toggles the browser dock open and closed in the desktop app', async () => {
+    (window as Window & { nuncioDesktop?: unknown }).nuncioDesktop = {
+      browser: {
+        show: vi.fn(),
+        navigate: vi.fn(),
+        reload: vi.fn(),
+        resize: vi.fn(),
+        hide: vi.fn(),
+      },
+    };
+
+    await renderDetail();
+    expect(screen.queryByTestId('browser-panel')).toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: /toggle panel/i }));
+    await userEvent.click(screen.getByRole('button', { name: /toggle browser/i }));
+    expect(screen.getByText('Browser')).toBeInTheDocument();
+    expect(screen.getByTestId('browser-panel')).toHaveTextContent('Browser s1');
+
+    await userEvent.click(screen.getByRole('button', { name: /close panel/i }));
+    expect(screen.queryByTestId('browser-panel')).toBeNull();
+  });
+
+  it('shows the files toggle for a working directory and keeps side panels mutually exclusive', async () => {
+    (window as Window & { nuncioDesktop?: unknown }).nuncioDesktop = {
+      browser: {
+        show: vi.fn(),
+        navigate: vi.fn(),
+        reload: vi.fn(),
+        resize: vi.fn(),
+        hide: vi.fn(),
+      },
+    };
+
+    await renderDetail({
+      projectPath: '/Users/dev/code/nuncio',
+      worktreePath: '/Users/dev/code/nuncio/.worktrees/s1',
+      branch: 'nuncio/s1-fix-auth',
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: /toggle panel/i }));
+    const filesToggle = screen.getByRole('button', { name: /toggle files/i });
+    await userEvent.click(screen.getByRole('button', { name: /toggle browser/i }));
+    expect(screen.getByTestId('browser-panel')).toBeInTheDocument();
+
+    await userEvent.click(filesToggle);
+    expect(screen.getByText('Files')).toBeInTheDocument();
+    expect(screen.getByTestId('file-explorer-panel')).toHaveTextContent('Files /Users/dev/code/nuncio/.worktrees/s1');
+    expect(screen.queryByTestId('browser-panel')).toBeNull();
+    expect(filesToggle).toHaveAttribute('aria-pressed', 'true');
+
+    await userEvent.click(screen.getByRole('button', { name: /toggle source control/i }));
+    expect(await screen.findByText('Source Control')).toBeInTheDocument();
+    expect(screen.queryByTestId('file-explorer-panel')).toBeNull();
+  });
+
+  it('keeps the terminal mounted (hidden, not unmounted) after closing it', async () => {
+    Object.defineProperty(globalThis, 'WebSocket', {
+      configurable: true,
+      writable: true,
+      value: MockWebSocket,
+    });
+
+    await renderDetail();
+
+    expect(screen.queryByTestId('terminal-panel')).toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: /toggle panel/i }));
+    const toggle = screen.getByRole('button', { name: /toggle terminal/i });
+    await userEvent.click(toggle);
+
+    const panel = await screen.findByTestId('terminal-panel');
+    expect(panel).toBeInTheDocument();
+    let wrapper: HTMLElement | null = panel.parentElement;
+    while (wrapper && !wrapper.className.includes('bg-card/60')) {
+      wrapper = wrapper.parentElement;
+    }
+    expect(wrapper).not.toBeNull();
+    expect(wrapper).not.toHaveStyle({ display: 'none' });
+
+    await userEvent.click(toggle);
+
+    expect(screen.getByTestId('terminal-panel')).toBeInTheDocument();
+    expect(wrapper).toHaveStyle({ display: 'none' });
+
+    Object.defineProperty(globalThis, 'WebSocket', {
+      configurable: true,
+      writable: true,
+      value: originalWebSocket,
+    });
   });
 
   it('shows repo and branch badges when workspace metadata is present', async () => {
@@ -464,7 +623,8 @@ describe('SessionDetail', () => {
 
     it('shows a Restore button when the session is ARCHIVED', async () => {
       await renderArchived();
-      expect(screen.getByRole('button', { name: /restore session/i })).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: /session actions/i }));
+      expect(screen.getByRole('menuitem', { name: /restore session/i })).toBeInTheDocument();
     });
 
     it('hides the archive button when the session is ARCHIVED', async () => {
@@ -474,18 +634,21 @@ describe('SessionDetail', () => {
 
     it('calls onRestore with the session id when Restore is clicked', async () => {
       const { onRestore } = await renderArchived();
-      await userEvent.click(screen.getByRole('button', { name: /restore session/i }));
+      await userEvent.click(screen.getByRole('button', { name: /session actions/i }));
+      await userEvent.click(screen.getByRole('menuitem', { name: /restore session/i }));
       expect(onRestore).toHaveBeenCalledWith('s1');
     });
 
     it('shows a Delete button when the session is ARCHIVED', async () => {
       await renderArchived();
-      expect(screen.getByRole('button', { name: /delete session/i })).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: /session actions/i }));
+      expect(screen.getByRole('menuitem', { name: /delete session/i })).toBeInTheDocument();
     });
 
     it('opens a confirmation dialog and only deletes after confirming', async () => {
       const { onDelete } = await renderArchived();
-      await userEvent.click(screen.getByRole('button', { name: /delete session/i }));
+      await userEvent.click(screen.getByRole('button', { name: /session actions/i }));
+      await userEvent.click(screen.getByRole('menuitem', { name: /delete session/i }));
       expect(onDelete).not.toHaveBeenCalled();
       expect(await screen.findByRole('heading', { name: /delete session/i })).toBeInTheDocument();
       await userEvent.click(screen.getByRole('button', { name: /delete forever/i }));
@@ -494,7 +657,8 @@ describe('SessionDetail', () => {
 
     it('cancel in the confirm dialog does not delete', async () => {
       const { onDelete } = await renderArchived();
-      await userEvent.click(screen.getByRole('button', { name: /delete session/i }));
+      await userEvent.click(screen.getByRole('button', { name: /session actions/i }));
+      await userEvent.click(screen.getByRole('menuitem', { name: /delete session/i }));
       await userEvent.click(screen.getByRole('button', { name: /cancel/i }));
       expect(onDelete).not.toHaveBeenCalled();
     });
@@ -569,7 +733,8 @@ describe('SessionDetail throttled streaming', () => {
         onContinueOnMobile={onContinue}
       />,
     );
-    const btn = screen.getByRole('button', { name: /continue on mobile/i });
+    await userEvent.click(screen.getByRole('button', { name: /session actions/i }));
+    const btn = screen.getByRole('menuitem', { name: /continue on mobile/i });
     expect(btn).toBeInTheDocument();
     await userEvent.click(btn);
     expect(onContinue).toHaveBeenCalledTimes(1);

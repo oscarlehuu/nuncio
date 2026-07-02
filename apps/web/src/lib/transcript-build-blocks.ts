@@ -200,7 +200,12 @@ function flushAssistant(state: ParserState, streaming = false) {
   const { response, thinking } = shouldSplitImportedThinking
     ? splitThinking(cleaned || state.assistantBuf)
     : { response: cleaned || state.assistantBuf, thinking: null };
-  if (response || streaming) {
+  const lastBlock = state.out[state.out.length - 1];
+  const repeatsLastAssistant =
+    !streaming &&
+    lastBlock?.kind === 'assistant' &&
+    lastBlock.text.trim() === response.trim();
+  if ((response || streaming) && !repeatsLastAssistant) {
     state.out.push({
       kind: 'assistant',
       text: response,

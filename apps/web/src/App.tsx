@@ -22,6 +22,7 @@ import {
 import { clearSetting, fetchSettings, updateSetting, type Setting } from './lib/settings-api';
 import { useSessionStream } from './lib/use-session-stream';
 import { useActiveRun } from './lib/use-active-run';
+import { useSessionNotifications } from './lib/use-session-notifications';
 import { HomeView } from './components/home-view';
 import type { ApprovalMode } from './components/approval-mode-picker';
 import { HandoffPicker } from './components/handoff-picker';
@@ -151,6 +152,8 @@ export default function App() {
   useEffect(() => {
     void refreshModels();
   }, [refreshModels]);
+
+  useSessionNotifications(sessions, activeId);
 
   const dismissTransientSidebar = useCallback(() => {
     setSidebarOpen(false);
