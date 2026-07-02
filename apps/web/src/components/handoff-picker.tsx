@@ -6,7 +6,8 @@ import { Input } from '@/components/ui/input';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Badge } from '@/components/ui/badge';
 import { ProjectPicker } from './project-picker';
-import { resolveWorkspacePreference } from '../lib/project-preference';
+import { recordProjectSelection, resolveWorkspacePreference } from '../lib/project-preference';
+import { projectDisplayName } from '../lib/projects';
 import {
   fetchAllLocalSessions,
   handoffSession,
@@ -203,7 +204,13 @@ export function HandoffPicker({
         <div className="space-y-3 px-4 pb-6">
           <div className="flex items-center gap-2">
             <div className="min-w-0 flex-1">
-              <ProjectPicker value={workspace} onChange={setWorkspace} />
+              <ProjectPicker
+                value={workspace}
+                onChange={(path) => {
+                  setWorkspace(path);
+                  recordProjectSelection(path, projectDisplayName(path) ?? undefined);
+                }}
+              />
             </div>
             <Button
               variant="outline"
