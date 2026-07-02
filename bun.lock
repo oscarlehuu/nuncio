@@ -78,6 +78,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@fontsource-variable/geist": "^5.2.9",
+        "@nuncio/core": "workspace:*",
         "@xterm/addon-fit": "^0.11.0",
         "@xterm/xterm": "^6.0.0",
         "class-variance-authority": "^0.7.1",
@@ -113,6 +114,15 @@
         "typescript": "~6.0.2",
         "vite": "^8.1.0",
         "vite-plugin-pwa": "^1.3.0",
+        "vitest": "^4.1.9",
+      },
+    },
+    "packages/core": {
+      "name": "@nuncio/core",
+      "version": "0.1.0",
+      "devDependencies": {
+        "oxlint": "^1.69.0",
+        "typescript": "~6.0.2",
         "vitest": "^4.1.9",
       },
     },
@@ -625,6 +635,8 @@
     "@nodelib/fs.stat": ["@nodelib/fs.stat@2.0.5", "", {}, "sha512-RkhPPp2zrqDAQA/2jNhnztcPAlv64XdhIp7a7454A5ovI7Bukxgt7MX7udwAu3zg1DcpPU0rz3VV1SeaqvY4+A=="],
 
     "@nodelib/fs.walk": ["@nodelib/fs.walk@1.2.8", "", { "dependencies": { "@nodelib/fs.scandir": "2.1.5", "fastq": "^1.6.0" } }, "sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg=="],
+
+    "@nuncio/core": ["@nuncio/core@workspace:packages/core"],
 
     "@nuncio/desktop": ["@nuncio/desktop@workspace:apps/desktop"],
 
