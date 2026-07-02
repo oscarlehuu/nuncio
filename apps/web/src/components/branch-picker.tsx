@@ -3,6 +3,7 @@ import { ChevronDown, GitBranch } from 'lucide-react';
 import { fetchBranches, type Branch } from '../lib/projects';
 import { isNuncioSessionBranch } from '../lib/project-preference';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import {
   Command,
   CommandEmpty,
@@ -21,9 +22,12 @@ interface BranchPickerProps {
   projectPath?: string;
   value?: string;
   onChange: (branch: string) => void;
+  /** 'boxed' = composer toolbar chip; 'text' = borderless Cursor context label. */
+  variant?: 'boxed' | 'text';
 }
 
-export function BranchPicker({ projectPath, value, onChange }: BranchPickerProps) {
+export function BranchPicker({ projectPath, value, onChange, variant = 'boxed' }: BranchPickerProps) {
+  const asText = variant === 'text';
   const [branches, setBranches] = useState<Branch[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -87,14 +91,20 @@ export function BranchPicker({ projectPath, value, onChange }: BranchPickerProps
       <PopoverTrigger asChild>
         <Button
           variant="outline"
-          className="composer-picker-trigger h-8 gap-1.5 px-2.5 max-w-[160px]"
+          className={cn(
+            asText
+              ? 'picker-trigger-text max-w-[160px]'
+              : 'composer-picker-trigger h-8 gap-1.5 px-2.5 max-w-[160px]',
+          )}
           disabled={disabled}
         >
-          <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
-          <span className={`truncate text-[13px] ${safeValue ? 'font-medium' : 'text-muted-foreground'}`}>
+          {!asText && <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />}
+          <span
+            className={cn('truncate text-ui-lg', asText ? '' : safeValue ? 'font-medium' : 'text-muted-foreground')}
+          >
             {label}
           </span>
-          <ChevronDown data-icon="inline-end" />
+          <ChevronDown className="size-3 opacity-70" data-icon="inline-end" />
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-[280px] p-0" align="start">
@@ -119,7 +129,7 @@ export function BranchPicker({ projectPath, value, onChange }: BranchPickerProps
                     >
                       <span className="truncate">{branch.name}</span>
                       {branch.isDefault && (
-                        <span className="ml-auto text-[10px] text-muted-foreground">default</span>
+                        <span className="ml-auto text-ui-xs text-muted-foreground">default</span>
                       )}
                     </CommandItem>
                   ))}

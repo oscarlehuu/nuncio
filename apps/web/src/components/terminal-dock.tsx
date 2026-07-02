@@ -77,8 +77,8 @@ export function TerminalDock({ cwd }: TerminalDockProps) {
               key={tab.key}
               role="tab"
               aria-selected={isActive}
-              className={`flex shrink-0 items-center gap-1 rounded-t px-2 py-1 text-xs ${
-                isActive ? 'bg-card/80 text-foreground' : 'text-muted-foreground hover:bg-card/40'
+              className={`flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-ui ${
+                isActive ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'
               }`}
             >
               <button type="button" onClick={() => setActiveKey(tab.key)} className="whitespace-nowrap">

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Check, Copy, ExternalLink, Eye, EyeOff } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import { fetchAuthToken, type AuthTokenInfo } from '../lib/auth-api';
 import {
   fetchTailscaleStatus,
@@ -73,22 +74,22 @@ function PeerRow({ peer, autoTrust }: { peer: TailscalePeer; autoTrust: boolean 
           aria-label={peer.online ? 'online' : 'offline'}
         />
         <div className="flex flex-col min-w-0">
-          <span className="text-[13px] font-medium text-foreground truncate">{peer.hostName}</span>
-          <span className="text-[11.5px] text-muted-foreground truncate">
+          <span className="text-ui-lg font-medium text-foreground truncate">{peer.hostName}</span>
+          <span className="text-ui-sm text-muted-foreground truncate">
             {peer.os}
             {peer.loginName ? ` · ${peer.loginName}` : ''}
           </span>
         </div>
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
-        <Badge variant={trusted ? 'default' : 'outline'} className="text-[10.5px]">
+        <Badge variant={trusted ? 'default' : 'outline'} className="text-ui-xs">
           {trusted ? 'Trusted' : 'Token required'}
         </Badge>
         {hasNuncio && peer.sameUser && (
           <Button
             variant="outline"
             size="sm"
-            className="h-7 px-2 text-[12px]"
+            className="h-7 px-2 text-ui"
             onClick={() => void handleSyncConfig()}
             disabled={syncState === 'syncing'}
           >
@@ -107,13 +108,13 @@ function PeerRow({ peer, autoTrust }: { peer: TailscalePeer; autoTrust: boolean 
             <Button
               variant="outline"
               size="sm"
-              className="h-7 px-2 text-[12px]"
+              className="h-7 px-2 text-ui"
               onClick={() => void desktopServers.connect(`http://${peer.dnsName}:3000`)}
             >
               Connect
             </Button>
           ) : (
-            <Button asChild variant="outline" size="sm" className="h-7 px-2 text-[12px]">
+            <Button asChild variant="outline" size="sm" className="h-7 px-2 text-ui">
               <a href={`http://${peer.dnsName}:3000`} target="_blank" rel="noreferrer">
                 Open
                 <ExternalLink className="size-3 ml-1" />
@@ -180,24 +181,22 @@ export function RemoteAccessSettingsSection() {
 
   return (
     <section>
-      <h2 className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold mb-2">
-        Remote access
-      </h2>
-      <div className="border border-border rounded-lg overflow-hidden bg-card divide-y divide-border/60">
+      <h2 className="text-ui-lg font-medium text-muted-foreground mb-2">Remote access</h2>
+      <div className="border border-border rounded-xl overflow-hidden bg-card divide-y divide-border/60">
         {/* Access token */}
         <div className="py-3 px-4">
           <div className="flex items-center justify-between gap-3">
             <div className="flex flex-col min-w-0">
-              <span className="text-[13.5px] font-semibold text-foreground">Access token</span>
-              <span className="text-[12px] text-muted-foreground">
+              <span className="text-ui-lg font-medium text-foreground">Access token</span>
+              <span className="text-ui text-muted-foreground">
                 Paste this once on devices outside your tailnet to connect to this server.
               </span>
             </div>
             <div className="flex items-center gap-1.5 flex-shrink-0">
               <Button
-                variant="outline"
+                variant="ghost"
                 size="sm"
-                className="h-8 px-2.5 text-[12px]"
+                className="h-8 px-2.5 text-ui"
                 onClick={() => setRevealed((prev) => !prev)}
                 disabled={!tokenInfo}
                 aria-label={revealed ? 'Hide access token' : 'Reveal access token'}
@@ -205,9 +204,9 @@ export function RemoteAccessSettingsSection() {
                 {revealed ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
               </Button>
               <Button
-                variant="outline"
+                variant="ghost"
                 size="sm"
-                className="h-8 px-2.5 text-[12px]"
+                className="h-8 px-2.5 text-ui"
                 onClick={handleCopy}
                 disabled={!tokenInfo}
                 aria-label="Copy access token"
@@ -217,7 +216,7 @@ export function RemoteAccessSettingsSection() {
             </div>
           </div>
           {revealed && tokenInfo && (
-            <code className="mt-2 block text-[12px] font-mono bg-muted/40 rounded px-2 py-1.5 break-all">
+            <code className="mt-2 block text-ui font-mono bg-muted/40 rounded px-2 py-1.5 break-all">
               {tokenInfo.token}
             </code>
           )}
@@ -227,8 +226,8 @@ export function RemoteAccessSettingsSection() {
         <div className="py-3 px-4">
           <div className="flex items-center justify-between gap-3">
             <div className="flex flex-col min-w-0">
-              <span className="text-[13.5px] font-semibold text-foreground">Tailscale</span>
-              <span className="text-[12px] text-muted-foreground">
+              <span className="text-ui-lg font-medium text-foreground">Tailscale</span>
+              <span className="text-ui text-muted-foreground">
                 {statusFailed || !status
                   ? 'Checking Tailscale…'
                   : !status.installed
@@ -239,22 +238,20 @@ export function RemoteAccessSettingsSection() {
               </span>
             </div>
             {status?.installed && status.running && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 px-3 text-[12px] flex-shrink-0"
-                onClick={handleToggleTrust}
-                disabled={saving}
-                aria-pressed={status.autoTrust}
-                aria-label="Trust my Tailscale devices"
-              >
-                Trust my devices: {status.autoTrust ? 'On' : 'Off'}
-              </Button>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className="text-ui text-muted-foreground">Trust my devices</span>
+                <Switch
+                  checked={status.autoTrust}
+                  onCheckedChange={() => void handleToggleTrust()}
+                  disabled={saving}
+                  aria-label="Trust my Tailscale devices"
+                />
+              </div>
             )}
           </div>
 
           {status && !status.installed && (
-            <p className="mt-2 text-[12px] text-muted-foreground">
+            <p className="mt-2 text-ui text-muted-foreground">
               Install Tailscale on this machine and your other devices to connect without tokens,
               port-forwarding, or TLS setup:{' '}
               <a
@@ -277,7 +274,7 @@ export function RemoteAccessSettingsSection() {
           )}
 
           {status?.installed && status.running && (
-            <p className="mt-2 text-[11.5px] text-muted-foreground leading-relaxed">
+            <p className="mt-2 text-ui-sm text-muted-foreground leading-relaxed">
               Devices marked Trusted belong to your Tailscale account and connect without the
               access token — identity is verified per connection via <code>tailscale whois</code>.
               Devices of other tailnet members always need the token.

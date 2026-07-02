@@ -53,6 +53,8 @@ interface ModelPickerProps {
   modelOptions?: ModelOptionsMap;
   onChange: (modelId: string, providerId: string, modelOptions?: ModelOptionsMap) => void;
   providers?: ModelProvider[];
+  /** 'boxed' = composer toolbar chip; 'text' = borderless Cursor context label. */
+  variant?: 'boxed' | 'text';
 }
 
 function SelectionCheck({ active }: { active: boolean }) {
@@ -75,7 +77,7 @@ function ModelNameWithBadges({
       {badges.length > 0 && (
         <span className="flex shrink-0 items-center gap-1">
           {badges.map((badge) => (
-            <span key={badge.id} className="text-[11px] font-normal text-muted-foreground">
+            <span key={badge.id} className="text-ui-sm font-normal text-muted-foreground">
               {badge.label}
             </span>
           ))}
@@ -217,7 +219,7 @@ function ModelOptionsPanel({
           {(idx > 0 || sliders.length > 0 || showFast || otherBooleans.length > 0) && (
             <div className="mb-2 border-t border-border pt-2" />
           )}
-          <div className="mb-1 text-[11px] font-medium text-muted-foreground">{option.label}</div>
+          <div className="mb-1 text-ui-sm font-medium text-muted-foreground">{option.label}</div>
           {(option.options ?? []).map((choice) => {
             const choiceActive = current[option.id] === choice.id;
             return (
@@ -351,9 +353,10 @@ function ModelRows({
   );
 }
 
-export function ModelPicker({ value, modelOptions, onChange, providers }: ModelPickerProps) {
+export function ModelPicker({ value, modelOptions, onChange, providers, variant = 'boxed' }: ModelPickerProps) {
   const catalog = normalizeModelCatalog(providers ?? []);
   const [open, setOpen] = useState(false);
+  const asText = variant === 'text';
   const lookup = modelById(catalog);
   const selected = lookup[value];
 
@@ -394,7 +397,11 @@ export function ModelPicker({ value, modelOptions, onChange, providers }: ModelP
       <DropdownMenuTrigger asChild>
         <Button
           variant="outline"
-          className="composer-picker-trigger h-8 gap-1.5 px-2.5 max-w-[300px]"
+          className={cn(
+            asText
+              ? 'picker-trigger-text max-w-[300px]'
+              : 'composer-picker-trigger h-8 gap-1.5 px-2.5 max-w-[300px]',
+          )}
           aria-label={triggerLabel}
         >
           <ProviderIcon
@@ -407,9 +414,9 @@ export function ModelPicker({ value, modelOptions, onChange, providers }: ModelP
           <ModelNameWithBadges
             name={triggerName}
             badges={triggerBadges}
-            nameClassName="font-medium text-[13px]"
+            nameClassName={asText ? 'text-ui-lg' : 'font-medium text-ui-lg'}
           />
-          <ChevronDown data-icon="inline-end" />
+          <ChevronDown className="size-3 opacity-70" data-icon="inline-end" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-[260px]">

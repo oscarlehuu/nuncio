@@ -57,7 +57,7 @@ export function ToolGroup({ tools }: ToolGroupProps) {
         {hasRunning && (
           <span className="inline-block size-1.5 rounded-full bg-primary animate-pulse" aria-hidden />
         )}
-        <span className="text-[12.5px]">{summaryText}</span>
+        <span className="text-ui">{summaryText}</span>
         <span className="ml-auto">
           <ChevronDown
             className={cn(
