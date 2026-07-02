@@ -13,6 +13,7 @@ import {
   type ConnectionConfig,
 } from '../lib/connection-store';
 import { secureStore } from '../lib/secure-store-adapter';
+import { registerForPush } from '../lib/push-registration';
 import { SessionRow } from '../components/session-row';
 
 type Tab = 'active' | 'archived';
@@ -27,7 +28,10 @@ export default function SessionList() {
 
   useEffect(() => {
     loadConnection(secureStore).then((loaded) => {
-      if (loaded) applyConnection(loaded);
+      if (loaded) {
+        applyConnection(loaded);
+        void registerForPush();
+      }
       setConnection(loaded);
     });
   }, []);

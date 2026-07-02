@@ -193,5 +193,14 @@ export class DatabaseService implements OnModuleDestroy {
         last_used_at INTEGER NOT NULL
       )
     `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS push_tokens (
+        token TEXT PRIMARY KEY,
+        platform TEXT,
+        device_name TEXT,
+        created_at INTEGER NOT NULL
+      )
+    `);
   }
 }

@@ -245,6 +245,8 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 | PUT | `/api/settings/:key` | Update a setting `{ "value": "..." }` (encrypts secrets, busts provider caches) |
 | DELETE | `/api/settings/:key` | Clear a setting (falls back to env/default) |
 | GET | `/api/fs/dirs?path=` | Server-side directory browser (defaults to `$HOME`); used by the folder picker |
+| POST | `/api/push/register` | Register a device Expo push token `{ "token": "...", "platform?": "ios\|android", "deviceName?": "..." }`; the server pushes on session finish / needs-input / error |
+| POST | `/api/push/unregister` | Remove a device push token `{ "token": "..." }` |
 
 ### Session FSM
 
