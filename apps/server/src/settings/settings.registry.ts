@@ -183,6 +183,16 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     envVar: 'NUNCIO_TAILSCALE_AUTO_TRUST',
     default: '1',
   },
+  {
+    key: 'NUNCIO_HUB_MODE',
+    category: 'general',
+    type: 'boolean',
+    label: 'Hub mode',
+    description:
+      'Make this server a hub: reach your other tailnet machines running nuncio through this one URL at /m/<machine>/. Off by default.',
+    envVar: 'NUNCIO_HUB_MODE',
+    default: '0',
+  },
 ];
 
 const BY_KEY = new Map(SETTING_DEFINITIONS.map((def) => [def.key, def]));

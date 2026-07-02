@@ -7,6 +7,10 @@ import { TerminalService } from './terminal/terminal.service';
 import { attachTerminalWebSocketServer } from './terminal/terminal.ws';
 import { AuthTokenService } from './auth/auth-token.service';
 import { TailscaleService } from './tailscale/tailscale.service';
+import { HubService } from './hub/hub.service';
+import { HubRegistryService } from './hub/hub-registry.service';
+import { configureHubProxy } from './hub/hub.proxy';
+import { attachHubWebSocketProxy } from './hub/hub.ws-proxy';
 
 // The Cursor SDK under Bun emits stray NGHTTP2_FRAME_SIZE_ERROR / ERR_HTTP2_STREAM_ERROR
 // events from its HTTP/2 streams (model discovery, Agent.create validation) that escape the
@@ -52,6 +56,9 @@ async function bootstrap() {
   // directly so Nest's rawBody integration stays intact.
   app.useBodyParser('json', { limit: '25mb' });
   app.useBodyParser('urlencoded', { extended: true, limit: '25mb' });
+  // Hub proxy runs before static serving so /m/<machine>/api/* is forwarded to
+  // that machine; non-api /m/<machine>/ routes fall through to the SPA shell.
+  configureHubProxy(app, app.get(HubService), app.get(HubRegistryService));
   configureWebAppServing(app);
 
   let shuttingDown = false;
@@ -81,8 +88,12 @@ async function bootstrap() {
 
   await app.listen(process.env.PORT ?? 3000);
   const authTokens = app.get(AuthTokenService);
+  const httpServer = app.getHttpServer();
+  // Hub WS proxy first: it only claims /m/<machine>/api/terminal upgrades and
+  // ignores the rest, so the local terminal handler still owns /api/terminal.
+  attachHubWebSocketProxy(httpServer, app.get(HubService), app.get(HubRegistryService));
   attachTerminalWebSocketServer(
-    app.getHttpServer(),
+    httpServer,
     app.get(TerminalService),
     authTokens,
     app.get(TailscaleService),
