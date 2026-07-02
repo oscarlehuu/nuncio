@@ -237,7 +237,8 @@ export class PiAgentProvider extends BaseAgentProvider {
       ...(resumeManager ? { sessionManager: resumeManager } : {}),
       authStorage,
       modelRegistry,
-      tools: ['read', 'bash', 'grep', 'find', 'ls'],
+      // No `tools` allowlist: match pi CLI defaults (read/bash/edit/write active)
+      // and keep extension-registered tools (foreman, subagent, ...) enabled.
       ...(customTools ? { customTools: customTools as never } : {}),
       ...(model ? { model } : {}),
       ...(thinkingLevel ? { thinkingLevel } : {}),
@@ -426,11 +427,9 @@ export function resolveModelId<T>(
  * registered by local extensions (e.g. claude-studio binds bash/read/edit/write to
  * `process.cwd()` at load time, which would make the agent operate in the server's
  * cwd instead of the worktree). SDK customTools take precedence over extension
- * `pi.registerTool` overrides. All built-ins are rebound (not just the active
- * `tools` allowlist) so the allowlist can evolve without drift — an inactive
- * customTool is filtered out by the allowlist, but a cwd-correct instance is always
- * ready. Returns `undefined` when no worktree is set so extension overrides apply
- * as-is.
+ * `pi.registerTool` overrides. All built-ins are rebound so every tool the agent
+ * can activate has a cwd-correct instance ready. Returns `undefined` when no
+ * worktree is set so extension overrides apply as-is.
  */
 export function buildPiCustomTools(
   cwd: string | undefined,
