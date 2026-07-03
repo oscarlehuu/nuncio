@@ -48,24 +48,17 @@ export function TerminalDock({ cwd }: TerminalDockProps) {
     if (index === -1) return;
     const remaining = current.filter((tab) => tab.key !== key);
 
-    if (remaining.length === 0) {
-      lastNumberRef.current += 1;
-      const fresh: TerminalTab = { key: createTabKey(), label: `Terminal ${lastNumberRef.current}` };
-      setTabs([fresh]);
-      setActiveKey(fresh.key);
-      return;
-    }
-
     setTabs(remaining);
     setActiveKey((currentActive) => {
       if (currentActive !== key) return currentActive;
+      if (remaining.length === 0) return '';
       const fallbackIndex = index > 0 ? index - 1 : 0;
       return remaining[Math.min(fallbackIndex, remaining.length - 1)]!.key;
     });
   }, []);
 
   return (
-    <div className="flex min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <div
         role="tablist"
         className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2 py-1"
@@ -106,11 +99,21 @@ export function TerminalDock({ cwd }: TerminalDockProps) {
         </Button>
       </div>
       <div className="min-h-0 flex-1">
-        {tabs.map((tab) => (
-          <div key={tab.key} style={{ display: tab.key === activeKey ? undefined : 'none' }}>
-            <TerminalPanel cwd={cwd} onExit={() => closeTab(tab.key)} />
+        {tabs.length === 0 ? (
+          <div className="flex h-full items-center justify-center text-ui text-muted-foreground">
+            No terminals — click + to start one
           </div>
-        ))}
+        ) : (
+          tabs.map((tab) => (
+            <div
+              key={tab.key}
+              className="h-full"
+              style={{ display: tab.key === activeKey ? undefined : 'none' }}
+            >
+              <TerminalPanel cwd={cwd} onExit={() => closeTab(tab.key)} />
+            </div>
+          ))
+        )}
       </div>
     </div>
   );

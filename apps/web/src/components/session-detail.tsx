@@ -550,14 +550,16 @@ export function SessionDetail({
 
       </div>
 
-      {panelOpen && (
+      {(panelOpen || terminalMounted) && (
         <aside
           className={
             activeTool === 'browser'
               ? 'w-[520px] max-w-[48vw] shrink-0 border-l border-border bg-card/40 flex flex-col min-h-0'
               : 'w-[360px] shrink-0 border-l border-border bg-card/40 flex flex-col min-h-0'
           }
+          style={panelOpen ? undefined : { display: 'none' }}
         >
+          {panelOpen && (
           <div className="flex items-center gap-1 px-2 py-1.5 border-b border-border">
             {hasGitContext && (
               <Tooltip>
@@ -654,8 +656,9 @@ export function SessionDetail({
               <X className="size-3.5" />
             </Button>
           </div>
+          )}
 
-          {activeTool === 'scm' && hasGitContext && (
+          {panelOpen && activeTool === 'scm' && hasGitContext && (
             <div className="flex-1 min-h-0">
               <ScmPanel
                 session={session}
@@ -666,13 +669,13 @@ export function SessionDetail({
             </div>
           )}
 
-          {activeTool === 'files' && fileExplorerMounted && (
+          {panelOpen && activeTool === 'files' && fileExplorerMounted && (
             <div className="flex-1 min-h-0">
               <FileExplorerPanel root={workingDir} />
             </div>
           )}
 
-          {activeTool === 'browser' && (
+          {panelOpen && activeTool === 'browser' && (
             <div className="flex-1 min-h-0">
               <BrowserPanel sessionId={session.id} />
             </div>
@@ -681,7 +684,7 @@ export function SessionDetail({
           {terminalMounted && (
             <div
               className="flex-1 min-h-0 bg-card/60"
-              style={activeTool === 'terminal' ? undefined : { display: 'none' }}
+              style={panelOpen && activeTool === 'terminal' ? undefined : { display: 'none' }}
             >
               <TerminalDock cwd={workingDir} />
             </div>
