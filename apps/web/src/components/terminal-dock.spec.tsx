@@ -126,7 +126,8 @@ describe('TerminalDock', () => {
     const ws = MockWebSocket.instances[0]!;
     ws.onmessage?.({ data: JSON.stringify({ type: 'exit' }) } as MessageEvent);
 
-    await waitFor(() => expect(screen.getAllByTestId('terminal-panel')).toHaveLength(1));
-    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(2));
+    await waitFor(() => expect(screen.queryAllByTestId('terminal-panel')).toHaveLength(0));
+    expect(screen.queryAllByRole('tab')).toHaveLength(0);
+    expect(MockWebSocket.instances).toHaveLength(1);
   });
 });

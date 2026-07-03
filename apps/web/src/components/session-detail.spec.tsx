@@ -39,6 +39,7 @@ vi.mock('./file-explorer-panel', () => ({
 }));
 
 class MockWebSocket {
+  static instances: MockWebSocket[] = [];
   onopen: ((event: Event) => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
@@ -49,6 +50,7 @@ class MockWebSocket {
   url: string;
   constructor(url: string) {
     this.url = url;
+    MockWebSocket.instances.push(this);
   }
 }
 
@@ -127,6 +129,7 @@ describe('SessionDetail', () => {
     delete (window as Window & { nuncioDesktop?: unknown }).nuncioDesktop;
     // The inspector dock persists open/tab state per device; isolate tests.
     localStorage.clear();
+    MockWebSocket.instances.length = 0;
   });
 
   afterEach(() => {
@@ -534,6 +537,51 @@ describe('SessionDetail', () => {
 
     expect(screen.getByTestId('terminal-panel')).toBeInTheDocument();
     expect(wrapper).toHaveStyle({ display: 'none' });
+
+    Object.defineProperty(globalThis, 'WebSocket', {
+      configurable: true,
+      writable: true,
+      value: originalWebSocket,
+    });
+  });
+
+  it('keeps the terminal (and its backend socket) alive when the whole panel is closed', async () => {
+    Object.defineProperty(globalThis, 'WebSocket', {
+      configurable: true,
+      writable: true,
+      value: MockWebSocket,
+    });
+
+    await renderDetail();
+
+    await userEvent.click(screen.getByRole('button', { name: /toggle panel/i }));
+    await userEvent.click(screen.getByRole('button', { name: /toggle terminal/i }));
+
+    await screen.findByTestId('terminal-panel');
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const ws = MockWebSocket.instances[0]!;
+
+    const closePanel = screen.getByRole('button', { name: /close panel/i });
+    await userEvent.click(closePanel);
+
+    // Panel chrome (e.g. Source Control label / active-tool header) is gone…
+    expect(screen.queryByText('Terminal')).toBeNull();
+    // …but the terminal DOM and its backend socket must survive.
+    expect(screen.getByTestId('terminal-panel')).toBeInTheDocument();
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(ws.close).not.toHaveBeenCalled();
+
+    let wrapper: HTMLElement | null = screen.getByTestId('terminal-panel').parentElement;
+    while (wrapper && !wrapper.className.includes('bg-card/60')) {
+      wrapper = wrapper.parentElement;
+    }
+    expect(wrapper).not.toBeNull();
+    expect(wrapper).toHaveStyle({ display: 'none' });
+
+    // Reopening the panel shows the same live terminal without spawning a new socket.
+    await userEvent.click(screen.getByRole('button', { name: /toggle panel/i }));
+    await screen.findByTestId('terminal-panel');
+    expect(MockWebSocket.instances).toHaveLength(1);
 
     Object.defineProperty(globalThis, 'WebSocket', {
       configurable: true,

@@ -161,7 +161,7 @@ export function TerminalPanel({ cwd, onExit }: TerminalPanelProps) {
   }, [cwd, terminalId]);
 
   return (
-    <div className="flex h-72 min-h-0 flex-col bg-terminal-bg text-terminal-fg">
+    <div className="flex h-full min-h-0 flex-col bg-terminal-bg text-terminal-fg">
       {notice && (
         <div className="shrink-0 border-b border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground">
           {notice}
