@@ -11,10 +11,9 @@ import {
 import { BranchPicker } from './branch-picker';
 import { ModelPicker } from './model-picker';
 import { ProjectPicker } from './project-picker';
-import { ProviderIcon } from './provider-icon';
 import { ApprovalModePicker, type ApprovalMode } from './approval-mode-picker';
 import { WorkspaceModePicker, type WorkspaceMode } from './workspace-mode-picker';
-import { ConnectionDot } from './status-dot';
+import { cn } from '@/lib/utils';
 import { isCodexApprovalEngine } from '../lib/codex-approval-engine';
 import { defaultOptionsForModel } from '../lib/model-picker-catalog';
 import type { ModelOptionsMap } from '../lib/model-options';
@@ -40,6 +39,8 @@ import {
 } from '../lib/model-providers';
 
 interface HomeViewProps {
+  /** Embedded in the Board top bar: compact, top-aligned, no landing chrome. */
+  embedded?: boolean;
   sessionCount: number;
   providers?: ModelProvider[];
   onSubmit: (
@@ -58,7 +59,7 @@ interface HomeViewProps {
 }
 
 export function HomeView({
-  sessionCount,
+  embedded,
   providers,
   onSubmit,
   onContinueOnMobile,
@@ -80,7 +81,6 @@ export function HomeView({
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('local');
 
   const catalogLoaded = Boolean(providers && providers.length > 0);
-  const availableProviders = (providers ?? []).filter((p) => !p.unavailable);
   const catalog = useMemo(() => normalizeModelCatalog(providers ?? []), [providers]);
   const useWorktree = workspaceMode === 'worktree';
   const showApprovalMode =
@@ -156,7 +156,12 @@ export function HomeView({
   const canSend = Boolean(prompt.trim()) && !loading && catalogLoaded && !!model && !!provider;
 
   return (
-    <section className="flex-1 flex flex-col items-center justify-center p-6 pt-16 md:pt-6 overflow-y-auto">
+    <section
+      className={cn(
+        'flex flex-col items-center',
+        embedded ? 'w-full py-3' : 'flex-1 justify-center p-6 pt-16 md:pt-6 overflow-y-auto',
+      )}
+    >
       <div className="w-full max-w-[720px]">
         {/* Quiet context row — Cursor's text-pickers sit above the composer. */}
         <div className="home-composer-context-row flex flex-wrap items-center justify-center gap-x-1 gap-y-1 mb-3">
@@ -245,20 +250,6 @@ export function HomeView({
               <ArrowUp className="size-4" />
             </Button>
           </div>
-        </div>
-
-        {/* Quiet suggestion pills — connected providers + session count. */}
-        <div className="flex flex-wrap gap-2 justify-center mt-5">
-          {availableProviders.map((p) => (
-            <span key={p.id} className="suggestion-pill" aria-label={`${p.name} connected`}>
-              <ProviderIcon providerId={p.id} className="size-3 shrink-0 text-muted-foreground" />
-              <span className="text-foreground">{p.name}</span>
-              <ConnectionDot />
-            </span>
-          ))}
-          <span className="suggestion-pill">
-            {sessionCount} session{sessionCount === 1 ? '' : 's'}
-          </span>
         </div>
       </div>
     </section>

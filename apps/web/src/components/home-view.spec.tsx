@@ -123,31 +123,6 @@ describe('HomeView', () => {
     expect(onSubmit).toHaveBeenCalledTimes(1);
   });
 
-  it('shows the session count badge', () => {
-    render(<HomeView sessionCount={3} onSubmit={vi.fn()} />);
-    expect(screen.getByText(/3 sessions/i)).toBeInTheDocument();
-  });
-
-  it('shows a live-status badge per available provider', () => {
-    const providers = [
-      { id: 'pi', name: 'Pi', groups: [] },
-      { id: 'cursor', name: 'Cursor', groups: [] },
-      { id: 'anthropic-direct', name: 'Anthropic', unavailable: true, groups: [] },
-    ];
-    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={providers} />);
-    expect(screen.getByLabelText(/pi connected/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/cursor connected/i)).toBeInTheDocument();
-    expect(screen.queryByLabelText(/anthropic connected/i)).toBeNull();
-    expect(screen.getByText('Pi')).toBeInTheDocument();
-    expect(screen.getByText('Cursor')).toBeInTheDocument();
-    expect(screen.queryByText(/connected$/i)).toBeNull();
-  });
-
-  it('does not show provider badges before the live catalog loads', () => {
-    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={[]} />);
-    expect(screen.queryByLabelText(/connected/i)).toBeNull();
-  });
-
   it('removes the hero heading — the composer is the centerpiece', () => {
     render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
     expect(screen.queryByText(/what should i work on/i)).toBeNull();
