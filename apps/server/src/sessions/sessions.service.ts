@@ -21,6 +21,7 @@ import { GitService } from '../git/git.service';
 import type { ModelOptionsMap } from '../models/model-options.types';
 import { PiLocalSessionsService } from '../pi-local/pi-local-sessions.service';
 import { canTransition } from './domain/sessions.fsm';
+import { deriveHasPendingInput } from './domain/derive-pending-input';
 import type {
   CreateSessionDto,
   HandoffSessionDto,
@@ -43,6 +44,9 @@ import { SettingsService } from '../settings/settings.service';
 type StreamListener = (event: SessionEvent) => void;
 
 const DEFAULT_BACKFILL_LIMIT = 200;
+
+/** Trailing events scanned to decide whether a run is blocked on your input. */
+const PENDING_SCAN_TAIL = 200;
 
 interface PendingProviderRequest {
   sessionId: string;
@@ -789,6 +793,11 @@ export class SessionsService implements OnModuleDestroy {
       supportsInterrupt: capabilities.interrupt,
       supportsSteerWhileRunning: capabilities.steerWhileRunning,
       supportsImages: capabilities.images,
+      // Only a live run can be blocked on you; skip the tail scan otherwise.
+      pendingInput:
+        session.status === 'RUNNING'
+          ? deriveHasPendingInput(this.events.listTail(session.id, PENDING_SCAN_TAIL))
+          : false,
     };
   }
 

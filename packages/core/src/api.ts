@@ -89,6 +89,8 @@ export interface Session {
   supportsSteerWhileRunning?: boolean;
   /** Provider accepts image attachments on prompts/steers (capability-gated UI). */
   supportsImages?: boolean;
+  /** Agent is blocked on an open user-input or approval request (RUNNING only). */
+  pendingInput?: boolean;
   createdAt: number;
   updatedAt: number;
 }

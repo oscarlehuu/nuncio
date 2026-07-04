@@ -26,6 +26,7 @@ function makeSession(over: Partial<SessionDto> = {}): SessionDto {
     supportsInterrupt: false,
     supportsSteerWhileRunning: false,
     supportsImages: false,
+    pendingInput: false,
     createdAt: 0,
     updatedAt: 0,
     ...over,

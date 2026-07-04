@@ -65,11 +65,9 @@ export interface NuncioDesktopBrowserApi {
   hide: (id: string) => Promise<unknown> | void;
 }
 
-// TODO: Session (list payload) currently has no pending-input flag (e.g.
-// pendingUserInput/awaitingInput). Pending input is only derivable from a
-// session's own event stream (see derive-pending-user-input.ts), which isn't
-// available in the polled session list. Once the list payload exposes such a
-// flag, wire a 'needs-input' transition here without adding new endpoints.
+// The polled session list now carries a server-derived `pendingInput` flag, so
+// a 'needs-input' desktop notification could be fired here by watching that flag
+// flip false→true — left out for now to keep notification behavior unchanged.
 
 export function computeSessionNotifications(
   prevMap: PrevSessionMap,
