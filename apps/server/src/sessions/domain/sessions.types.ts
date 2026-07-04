@@ -120,6 +120,8 @@ export interface SessionDto {
   supportsInteraction: boolean;
   supportsInterrupt: boolean;
   supportsSteerWhileRunning: boolean;
+  /** Agent is blocked on an open user-input or approval request (RUNNING only). */
+  pendingInput: boolean;
   createdAt: number;
   updatedAt: number;
 }

@@ -1,11 +1,12 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, Minimize2, MonitorSmartphone } from 'lucide-react';
-import type { ProviderRequestDecision, Session, SessionStatus } from '../lib/api';
-import { statusLabel } from '../lib/api';
+import type { ProviderRequestDecision, Session } from '../lib/api';
 import type { ModelProvider } from '../lib/model-providers';
 import type { ModelOptionsMap } from '../lib/model-options';
 import { DETAIL_EVENT_TAIL, useSessionStream } from '../lib/use-session-stream';
 import { useActiveRun } from '../lib/use-active-run';
+import { groupSessionsIntoLanes } from '../lib/board-lanes';
+import { useSeenSessions } from '../lib/use-seen-sessions';
 import { HomeView } from './home-view';
 import { SessionDetail } from './session-detail';
 import { SessionTile } from './session-tile';
@@ -16,9 +17,6 @@ import { cn } from '@/lib/utils';
 
 /** 2×2 live tiles per page; overflow paginates (never a tiling tree). */
 const PAGE_SIZE = 4;
-
-/** List lanes group by the cheap status field; pending-input shows on the tile border. */
-const STATUS_ORDER: SessionStatus[] = ['RUNNING', 'IDLE', 'PAUSED', 'ERROR', 'CREATED'];
 
 interface BoardViewProps {
   sessions: Session[];
@@ -57,6 +55,7 @@ export function BoardView(props: BoardViewProps) {
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [maximizedId, setMaximizedId] = useState<string | null>(null);
   const [page, setPage] = useState(0);
+  const { isUnread, markSeen } = useSeenSessions();
 
   const sessionsById = useMemo(() => {
     const map = new Map<string, Session>();
@@ -64,21 +63,21 @@ export function BoardView(props: BoardViewProps) {
     return map;
   }, [sessions]);
 
+  // The session you're looking at — maximized detail, else the focused tile —
+  // counts as read: re-arm its watermark as it keeps updating so it stays "Seen"
+  // while open, and slides back to "Needs you" only once it changes after you leave.
+  const activeId = maximizedId ?? focusedId;
+  useEffect(() => {
+    if (!activeId) return;
+    const active = sessionsById.get(activeId);
+    if (active) markSeen(active);
+  }, [activeId, sessionsById, markSeen]);
+
   const pageCount = Math.max(1, Math.ceil(sessions.length / PAGE_SIZE));
   const clampedPage = Math.min(page, pageCount - 1);
   const pageSlice = sessions.slice(clampedPage * PAGE_SIZE, clampedPage * PAGE_SIZE + PAGE_SIZE);
 
-  const groups = useMemo(() => {
-    const byStatus = new Map<SessionStatus, Session[]>();
-    for (const s of sessions) {
-      const list = byStatus.get(s.status) ?? [];
-      list.push(s);
-      byStatus.set(s.status, list);
-    }
-    return STATUS_ORDER.map((status) => ({ status, items: byStatus.get(status) ?? [] })).filter(
-      (g) => g.items.length > 0,
-    );
-  }, [sessions]);
+  const groups = useMemo(() => groupSessionsIntoLanes(sessions, isUnread), [sessions, isUnread]);
 
   // Focus a session's tile, flipping to its page when it lives off-screen.
   const focusSession = (id: string) => {
@@ -150,29 +149,45 @@ export function BoardView(props: BoardViewProps) {
               <p className="px-1 py-2 text-[12px] italic text-muted-foreground">No sessions yet.</p>
             ) : (
               groups.map((group) => (
-                <div key={group.status} className="mb-3">
+                <div key={group.lane} className="mb-3">
                   <div className="mb-1.5 px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                    {statusLabel(group.status)} · {group.items.length}
+                    {group.label} · {group.items.length}
                   </div>
                   <div className="flex flex-col gap-1">
-                    {group.items.map((s) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        onClick={() => focusSession(s.id)}
-                        onDoubleClick={() => setMaximizedId(s.id)}
-                        aria-current={focusedId === s.id ? 'true' : undefined}
-                        className={cn(
-                          'flex items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors',
-                          focusedId === s.id
-                            ? 'border-ring bg-accent/40'
-                            : 'border-transparent hover:bg-muted/60',
-                        )}
-                      >
-                        <StatusDot status={s.status} className="shrink-0" />
-                        <span className="truncate text-[12.5px]">{s.title}</span>
-                      </button>
-                    ))}
+                    {group.items.map((s) => {
+                      const unread = isUnread(s);
+                      return (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => focusSession(s.id)}
+                          onDoubleClick={() => setMaximizedId(s.id)}
+                          aria-current={focusedId === s.id ? 'true' : undefined}
+                          className={cn(
+                            'flex items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors',
+                            focusedId === s.id
+                              ? 'border-ring bg-accent/40'
+                              : 'border-transparent hover:bg-muted/60',
+                          )}
+                        >
+                          <StatusDot status={s.status} className="shrink-0" />
+                          <span
+                            className={cn(
+                              'truncate text-[12.5px]',
+                              unread && 'font-medium text-foreground',
+                            )}
+                          >
+                            {s.title}
+                          </span>
+                          {unread ? (
+                            <span
+                              className="ml-auto size-1.5 shrink-0 rounded-full bg-primary"
+                              aria-label="Unread"
+                            />
+                          ) : null}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               ))

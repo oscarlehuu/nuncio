@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { deriveHasPendingInput } from '../sessions/domain/derive-pending-input';
 import { EventsRepository } from '../sessions/persistence/events.repository';
 import { SessionsService } from '../sessions/sessions.service';
 import { SettingsService } from '../settings/settings.service';
@@ -31,7 +32,7 @@ export class TasksService {
       ...task,
       pendingInput:
         task.status === 'RUNNING' && task.sessionId
-          ? this.hasPendingInput(task.sessionId)
+          ? deriveHasPendingInput(this.events.listTail(task.sessionId, PENDING_SCAN_TAIL))
           : false,
     }));
   }
@@ -138,22 +139,5 @@ export class TasksService {
       }
     }
     return null;
-  }
-
-  /** Open user-input or approval requests in the tail with no matching resolution. */
-  private hasPendingInput(sessionId: string): boolean {
-    const open = new Set<string>();
-    for (const event of this.events.listTail(sessionId, PENDING_SCAN_TAIL)) {
-      const payload = event.payload as { requestId?: string } | null;
-      const requestId = payload?.requestId;
-      if (!requestId) continue;
-      if (event.type === 'user_input_requested' || event.type === 'provider_request') {
-        open.add(requestId);
-      }
-      if (event.type === 'user_input_resolved' || event.type === 'provider_request_resolved') {
-        open.delete(requestId);
-      }
-    }
-    return open.size > 0;
   }
 }
