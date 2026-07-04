@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowRightLeft, ArrowUp } from 'lucide-react';
+import { ArrowRightLeft, ArrowUp, BookOpen, Bug, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -23,6 +23,9 @@ import {
   saveModelPreference,
 } from '../lib/model-preference';
 import { projectDisplayName } from '../lib/projects';
+import { type MessageAttachment } from '../lib/api';
+import { useComposerAttachments } from '../lib/use-composer-attachments';
+import { AttachButton, AttachmentTray } from './attachment-tray';
 import { takeComposerDraft } from '../lib/composer-draft';
 import {
   loadProjectPreference,
@@ -38,6 +41,17 @@ import {
   type ModelProvider,
 } from '../lib/model-providers';
 
+/** Quiet starter prompts for the empty landing — click prefills the composer. */
+const STARTERS = [
+  { icon: Bug, label: 'Fix a bug', prompt: 'Find and fix the bug where ' },
+  { icon: Sparkles, label: 'Add a feature', prompt: 'Add a feature that ' },
+  {
+    icon: BookOpen,
+    label: 'Explain the codebase',
+    prompt: 'Give me a tour of how this codebase is structured and where the main pieces live.',
+  },
+] as const;
+
 interface HomeViewProps {
   /** Embedded in the Board top bar: compact, top-aligned, no landing chrome. */
   embedded?: boolean;
@@ -51,6 +65,7 @@ interface HomeViewProps {
     baseBranch?: string,
     modelOptions?: ModelOptionsMap,
     useWorktree?: boolean,
+    attachments?: MessageAttachment[],
   ) => Promise<void>;
   onContinueOnMobile?: () => void;
   approvalMode?: ApprovalMode;
@@ -79,9 +94,17 @@ export function HomeView({
   );
   const [baseBranch, setBaseBranch] = useState<string | undefined>(initialWorkspace.baseBranch);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('local');
+  const [dragActive, setDragActive] = useState(false);
+  const imageAttachments = useComposerAttachments(setPrompt);
 
   const catalogLoaded = Boolean(providers && providers.length > 0);
   const catalog = useMemo(() => normalizeModelCatalog(providers ?? []), [providers]);
+  // Attach affordance follows the selected provider's declared capability, so it
+  // lights up automatically as each provider gains image support.
+  const canAttachImages = useMemo(
+    () => (provider ? (catalog.find((p) => p.id === provider)?.capabilities?.images ?? false) : false),
+    [provider, catalog],
+  );
   const useWorktree = workspaceMode === 'worktree';
   const showApprovalMode =
     !!onApprovalModeChange && isCodexApprovalEngine(provider, model);
@@ -112,15 +135,24 @@ export function HomeView({
     const hasConfigurable =
       (selected?.options?.length ?? 0) > 0 || (selected?.variants?.length ?? 0) > 0;
     const optionsPayload = hasConfigurable ? modelOptions : undefined;
-    await onSubmit(
-      text,
-      model,
-      provider,
-      projectPath,
-      baseBranch,
-      optionsPayload,
-      useWorktree,
-    );
+    const stagedItems = imageAttachments.items;
+    const attachments = imageAttachments.attachments;
+    imageAttachments.clear();
+    try {
+      await onSubmit(
+        text,
+        model,
+        provider,
+        projectPath,
+        baseBranch,
+        optionsPayload,
+        useWorktree,
+        attachments.length > 0 ? attachments : undefined,
+      );
+    } catch (error) {
+      imageAttachments.restore(stagedItems);
+      throw error;
+    }
     setPrompt('');
     setWorkspaceMode('local');
   };
@@ -186,11 +218,45 @@ export function HomeView({
           />
         </div>
 
-        <div className="home-composer flex flex-col rounded-xl border border-border/70 bg-card shadow-lg transition-shadow focus-within:ring-2 focus-within:ring-ring/40">
+        <div
+          className={cn(
+            'home-composer flex flex-col rounded-xl border bg-card shadow-e1 surface-lit transition-shadow focus-within:ring-2 focus-within:ring-ring/40',
+            dragActive ? 'border-primary ring-2 ring-primary/40' : 'border-border/70',
+          )}
+          onDragOver={
+            canAttachImages
+              ? (e) => {
+                  e.preventDefault();
+                  setDragActive(true);
+                }
+              : undefined
+          }
+          onDragLeave={canAttachImages ? () => setDragActive(false) : undefined}
+          onDrop={
+            canAttachImages
+              ? (e) => {
+                  e.preventDefault();
+                  setDragActive(false);
+                  void imageAttachments.addFromDataTransfer(e.dataTransfer);
+                }
+              : undefined
+          }
+        >
           <div className="home-composer-prompt-frame flex flex-col">
+            <AttachmentTray items={imageAttachments.items} onRemove={imageAttachments.remove} />
             <Textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
+              onPaste={
+                canAttachImages
+                  ? (e) => {
+                      if (imageAttachments.hasImages(e.clipboardData)) {
+                        e.preventDefault();
+                        void imageAttachments.addFromDataTransfer(e.clipboardData);
+                      }
+                    }
+                  : undefined
+              }
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
@@ -198,7 +264,12 @@ export function HomeView({
                 }
               }}
               placeholder="Ask Nuncio to build features, fix bugs, or work on your code…"
-              className="min-h-[104px] shrink-0 resize-none border-0 shadow-none bg-transparent text-md px-5 pt-4 pb-2 focus-visible:ring-0 focus-visible:border-0"
+              className={cn(
+                'shrink-0 resize-none border-0 shadow-none bg-transparent text-md px-5 pb-2 focus-visible:ring-0 focus-visible:border-0',
+                // Embedded (board top bar) reads as a docked task bar, not a hero:
+                // half the height so it doesn't stack a second full composer over the board.
+                embedded ? 'min-h-[60px] pt-3' : 'min-h-[104px] pt-4',
+              )}
             />
             {showApprovalMode ? (
               <div className="home-composer-prompt-controls flex items-center gap-2 px-4 pb-1">
@@ -211,6 +282,12 @@ export function HomeView({
             ) : null}
           </div>
           <div className="home-composer-bar flex items-center gap-2 px-3 pb-3 pt-1">
+            {canAttachImages && (
+              <AttachButton
+                onFiles={(files) => void imageAttachments.addFiles(files)}
+                disabled={loading}
+              />
+            )}
             <div className="home-composer-pickers flex min-w-0 flex-1 items-center overflow-x-auto [&_button]:shrink-0">
               <ModelPicker
                 value={model}
@@ -251,6 +328,24 @@ export function HomeView({
             </Button>
           </div>
         </div>
+
+        {/* Quiet starter chips below the composer — fill the empty state with
+         * useful entry points instead of a blank canvas. */}
+        {!embedded ? (
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+            {STARTERS.map((s) => (
+              <button
+                key={s.label}
+                type="button"
+                onClick={() => setPrompt(s.prompt)}
+                className="suggestion-pill transition-colors hover:border-border hover:text-foreground"
+              >
+                <s.icon className="size-3" aria-hidden />
+                {s.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
     </section>
   );

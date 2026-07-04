@@ -201,7 +201,7 @@ describe('App URL routing', () => {
     vi.mocked(fetchSessions).mockResolvedValue([]);
     renderApp('/grid');
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: /session grid/i })).toBeInTheDocument(),
+      expect(screen.getByRole('heading', { name: /workbench/i })).toBeInTheDocument(),
     );
   });
 });
@@ -308,6 +308,8 @@ describe('App create flow', () => {
       undefined,
       undefined,
       false,
+      '',
+      undefined,
     );
       expect(fetchSessions).toHaveBeenCalled();
   });
@@ -403,7 +405,7 @@ describe('App lifecycle', () => {
     await userEvent.type(textarea, 'use the cache layer');
     await userEvent.click(screen.getByRole('button', { name: /^send$/i }));
     await waitFor(() =>
-      expect(steerSession).toHaveBeenCalledWith('new1', 'use the cache layer', undefined),
+      expect(steerSession).toHaveBeenCalledWith('new1', 'use the cache layer', undefined, undefined, undefined),
     );
   });
 

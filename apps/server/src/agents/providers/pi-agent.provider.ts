@@ -14,6 +14,7 @@ import { SessionsRepository } from '../../sessions/persistence/sessions.reposito
 import { SettingsService } from '../../settings/settings.service';
 import type { AgentRunContext, InteractionResponse } from '../agents.types';
 import { BaseAgentProvider } from '../agents.base-provider';
+import { eventImagesFromAttachments } from '../agents.attachments';
 import { piThinkingDescriptors, resolvePiThinkingLevel } from './pi-thinking.helpers';
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent');
@@ -158,7 +159,13 @@ export class PiAgentProvider extends BaseAgentProvider {
   ): Promise<boolean> {
     const handle = this.activeSessions.get(sessionId);
     if (!handle || !handle.session.isStreaming) return false;
-    this.pushEvent(sessionId, 'steer_message', { text: message }, context.emit);
+    const eventImages = eventImagesFromAttachments(context.attachments);
+    this.pushEvent(
+      sessionId,
+      'steer_message',
+      { text: message, ...(eventImages ? { images: eventImages } : {}) },
+      context.emit,
+    );
     const images = piImagesFromAttachments(context);
     await handle.session.steer(message, images.length ? images : undefined);
     return true;

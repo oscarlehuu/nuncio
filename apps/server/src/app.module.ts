@@ -10,6 +10,7 @@ import { HealthModule } from './health/health.module';
 import { HubModule } from './hub/hub.module';
 import { ModelsModule } from './models/models.module';
 import { PiLocalModule } from './pi-local/pi-local.module';
+import { PreferencesModule } from './preferences/preferences.module';
 import { ProvisionModule } from './provision/provision.module';
 import { SessionsModule } from './sessions/sessions.module';
 import { SettingsModule } from './settings/settings.module';
@@ -24,6 +25,7 @@ import { PushModule } from './push/push.module';
     DatabaseModule,
     AuthModule,
     SettingsModule,
+    PreferencesModule,
     BrowserModule,
     CursorLocalModule,
     ForgesModule,

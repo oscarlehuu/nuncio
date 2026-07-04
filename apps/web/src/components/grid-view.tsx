@@ -1,17 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Minimize2, MonitorSmartphone } from 'lucide-react';
-import type { ProviderRequestDecision, Session } from '../lib/api';
+import type { MessageAttachment, ProviderRequestDecision, Session } from '../lib/api';
 import type { ModelProvider } from '../lib/model-providers';
 import type { ModelOptionsMap } from '../lib/model-options';
 import { DETAIL_EVENT_TAIL, useSessionStream } from '../lib/use-session-stream';
 import { useActiveRun } from '../lib/use-active-run';
 import {
   fitSlots,
+  GRID_PREFERENCE_VERSION,
   GRID_PRESETS,
+  hasLocalGridPreference,
   loadGridPreference,
+  loadGridPreferenceRemote,
   PRESET_COLUMNS,
   PRESET_SLOT_COUNT,
   saveGridPreference,
+  saveGridPreferenceRemote,
   type GridPreset,
   type GridSlot,
 } from '../lib/grid-preference';
@@ -35,7 +39,7 @@ interface GridViewProps {
     decision: ProviderRequestDecision,
   ) => void | Promise<void>;
   /** Steer a specific session (grid focus is not the global active route id). */
-  onSteerSession: (id: string, message: string) => Promise<void>;
+  onSteerSession: (id: string, message: string, attachments?: MessageAttachment[]) => Promise<void>;
   onPauseSession: (id: string) => Promise<void>;
   onArchiveSession: (id: string) => Promise<void>;
   onRestore: (id: string) => Promise<void>;
@@ -48,6 +52,7 @@ interface GridViewProps {
     projectPath?: string,
     baseBranch?: string,
     modelOptions?: ModelOptionsMap,
+    attachments?: MessageAttachment[],
   ) => Promise<Session | null>;
   steering?: boolean;
   lifecycleBusy?: boolean;
@@ -57,13 +62,36 @@ interface GridViewProps {
 
 export function GridView(props: GridViewProps) {
   const { sessions, providers } = props;
+  // The server preferences store is the durable source of truth (survives app
+  // updates + origin changes); localStorage is an instant-load cache. Init from the
+  // cache synchronously, then let the server override on mount if it has a layout.
   const [preset, setPreset] = useState<GridPreset>(() => loadGridPreference().preset);
   const [slots, setSlots] = useState<GridSlot[]>(() => loadGridPreference().slots);
   const [focusedSlot, setFocusedSlot] = useState<number | null>(null);
   const [maximizedSlot, setMaximizedSlot] = useState<number | null>(null);
 
+  useEffect(() => {
+    // Local cache is authoritative when present — restore from the server ONLY on a
+    // device with no saved layout yet (fresh install / cleared or update-wiped
+    // storage). Otherwise the async server value overrides the shown layout mid-load
+    // and tiles appear to "jump" in.
+    if (hasLocalGridPreference()) return;
+    let cancelled = false;
+    void loadGridPreferenceRemote().then((pref) => {
+      if (cancelled || !pref) return;
+      setPreset(pref.preset);
+      setSlots(pref.slots);
+      saveGridPreference(pref); // seed the cache so the next load is instant + jump-free
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const persist = useCallback((nextPreset: GridPreset, nextSlots: GridSlot[]) => {
-    saveGridPreference({ version: 1, preset: nextPreset, slots: nextSlots });
+    const pref = { version: GRID_PREFERENCE_VERSION, preset: nextPreset, slots: nextSlots };
+    saveGridPreference(pref); // instant local cache
+    void saveGridPreferenceRemote(pref); // durable, server-backed source of truth
   }, []);
 
   const changePreset = useCallback(
@@ -84,7 +112,15 @@ export function GridView(props: GridViewProps) {
     (index: number, sessionId: string, machineId?: string) => {
       setSlots((prev) => {
         const bound: GridSlot = machineId ? { sessionId, machineId } : { sessionId };
-        const next = prev.map((s, i) => (i === index ? bound : s));
+        // A session lives in at most one slot — evict it from any other slot so it
+        // never shows in two tiles at once.
+        const next = prev.map((s, i) => {
+          if (i === index) return bound;
+          if (s.sessionId === sessionId && (s.machineId ?? undefined) === (machineId ?? undefined)) {
+            return {};
+          }
+          return s;
+        });
         persist(preset, next);
         return next;
       });
@@ -168,7 +204,9 @@ export function GridView(props: GridViewProps) {
           onRespondProviderRequest={(requestId, decision) =>
             props.onRespondProviderRequest(session.id, requestId, decision)
           }
-          onSteer={(message) => props.onSteerSession(session.id, message)}
+          onSteer={(message, attachments) =>
+            props.onSteerSession(session.id, message, attachments)
+          }
           onPause={() => props.onPauseSession(session.id)}
           onArchive={() => props.onArchiveSession(session.id)}
           onRestore={props.onRestore}
@@ -207,10 +245,7 @@ export function GridView(props: GridViewProps) {
           )}
         >
           <div>
-            <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-              Workbench
-            </span>
-            <h1 className="text-[15px] font-medium leading-tight">Session grid</h1>
+            <h1 className="text-[15px] font-medium leading-tight">Workbench</h1>
           </div>
           <div
             role="tablist"
@@ -279,6 +314,7 @@ export function GridView(props: GridViewProps) {
                   focused={focused}
                   onFocus={() => setFocusedSlot(index)}
                   onMaximize={() => setMaximizedSlot(index)}
+                  onClose={() => clearSlot(index)}
                   onSteer={(msg) => props.onSteerSession(session.id, msg)}
                   steering={props.steering}
                 />
@@ -314,8 +350,16 @@ function SlotComposerCell({
       providers={providers}
       sessions={sessions}
       boundSessionIds={boundSessionIds}
-      onCreate={async (prompt, model, provider, projectPath, baseBranch, modelOptions) => {
-        const created = await onCreate(prompt, model, provider, projectPath, baseBranch, modelOptions);
+      onCreate={async (prompt, model, provider, projectPath, baseBranch, modelOptions, attachments) => {
+        const created = await onCreate(
+          prompt,
+          model,
+          provider,
+          projectPath,
+          baseBranch,
+          modelOptions,
+          attachments,
+        );
         if (created) onBind(created.id);
         return created;
       }}
@@ -333,7 +377,7 @@ interface MaximizedSessionProps {
     requestId: string,
     decision: ProviderRequestDecision,
   ) => void | Promise<void>;
-  onSteer: (message: string) => Promise<void>;
+  onSteer: (message: string, attachments?: MessageAttachment[]) => Promise<void>;
   onPause: () => Promise<void>;
   onArchive: () => Promise<void>;
   onRestore: (id: string) => Promise<void>;

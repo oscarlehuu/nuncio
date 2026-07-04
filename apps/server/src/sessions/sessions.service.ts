@@ -13,6 +13,7 @@ import { homedir } from 'node:os';
 import { v4 as uuidv4 } from 'uuid';
 import { AgentRegistry } from '../agents/agents.registry';
 import type { AgentAttachment, AgentRunContext } from '../agents/agents.types';
+import { MediaStore } from './media.store';
 import { CursorLocalSessionsService } from '../cursor-local/cursor-local-sessions.service';
 import { turnsToSessionEvents } from '../cursor-local/cursor-transcript-hydrate';
 import { readCursorChatMetadata } from '../cursor-local/cursor-chat-store';
@@ -72,6 +73,8 @@ export class SessionsService implements OnModuleDestroy {
     private readonly agents: AgentRegistry,
     private readonly git: GitService,
     private readonly cursorLocal: CursorLocalSessionsService,
+    // Optional so lean test modules can omit it; images then persist inline.
+    @Optional() private readonly media?: MediaStore,
     @Optional() private readonly piLocal?: PiLocalSessionsService,
     @Optional() private readonly settings?: SettingsService,
   ) {
@@ -264,15 +267,17 @@ export class SessionsService implements OnModuleDestroy {
     attachments?: AgentAttachment[],
   ): Promise<SessionDto> {
     this.requireSession(id);
-    const trimmed = message?.trim();
-    if (!trimmed) {
+    const trimmed = message?.trim() ?? '';
+    // Allow an image-only steer (screenshot with no words); otherwise text is required.
+    if (!trimmed && !(attachments && attachments.length > 0)) {
       throw new BadRequestException('message is required');
     }
+    const persisted = this.persistImageAttachments(id, attachments);
 
     const current = this.requireSession(id);
     if (current.status === 'RUNNING') {
-      const handled = await this.steerRunning(current, trimmed, attachments);
-      if (!handled) this.enqueueSteer(id, trimmed, attachments);
+      const handled = await this.steerRunning(current, trimmed, persisted);
+      if (!handled) this.enqueueSteer(id, trimmed, persisted);
       return this.requireSession(id);
     }
     if (!canTransition(current.status, 'RUNNING')) {
@@ -287,7 +292,7 @@ export class SessionsService implements OnModuleDestroy {
     try {
       await provider.steer(id, trimmed, {
         ...this.buildAgentRunContext(current),
-        attachments,
+        attachments: persisted,
         forceResume: forceResume === true,
       });
     } finally {
@@ -295,6 +300,29 @@ export class SessionsService implements OnModuleDestroy {
     }
     void this.maybeVerify(id);
     return this.requireSession(id);
+  }
+
+  /**
+   * Write image attachments to disk and stamp each with its `id`, so the
+   * transcript event persists only a reference instead of base64. The base64
+   * `data` is kept on the returned attachment because the provider still needs
+   * it to send the image to the model. A write failure falls back to inline
+   * persistence — the image still works, just heavier in the event log.
+   */
+  private persistImageAttachments(
+    sessionId: string,
+    attachments?: AgentAttachment[],
+  ): AgentAttachment[] | undefined {
+    if (!this.media || !attachments || attachments.length === 0) return attachments;
+    const media = this.media;
+    return attachments.map((attachment) => {
+      if (attachment.kind !== 'image' || attachment.id) return attachment;
+      try {
+        return { ...attachment, id: media.write(sessionId, attachment.data) };
+      } catch {
+        return attachment;
+      }
+    });
   }
 
   /** Inject into the live run when the provider supports it; false → caller queues. */
@@ -465,7 +493,13 @@ export class SessionsService implements OnModuleDestroy {
     this.cancelProviderRequests(id);
     this.streams.delete(id);
     this.steerQueue.deleteForSession(id);
+    this.media?.deleteSession(id);
     this.sessions.delete(id);
+  }
+
+  /** Raw bytes of a stored chat image, or null if the id is unknown/malformed. */
+  readMedia(sessionId: string, mediaId: string): Buffer | null {
+    return this.media?.read(sessionId, mediaId) ?? null;
   }
 
   subscribe(id: string, listener: StreamListener): () => void {
@@ -754,6 +788,7 @@ export class SessionsService implements OnModuleDestroy {
       supportsInteraction: this.agents.supportsInteractionForSession(session),
       supportsInterrupt: capabilities.interrupt,
       supportsSteerWhileRunning: capabilities.steerWhileRunning,
+      supportsImages: capabilities.images,
     };
   }
 
@@ -845,6 +880,7 @@ export class SessionsService implements OnModuleDestroy {
 
   private startRun(session: SessionDto, attachments?: AgentAttachment[]): void {
     if (session.cursorBackend === 'cli') return;
+    const persisted = this.persistImageAttachments(session.id, attachments);
     this.locallyProducing.add(session.id);
     const run = (async () => {
       try {
@@ -855,7 +891,7 @@ export class SessionsService implements OnModuleDestroy {
             this.requestProviderApproval(session.id, request),
           model: session.model,
           modelOptions: session.modelOptions,
-          attachments,
+          attachments: persisted,
           workspace: session.worktreePath ?? session.workspace ?? undefined,
           cwd: session.worktreePath ?? undefined,
           cursorChatId: session.cursorChatId,

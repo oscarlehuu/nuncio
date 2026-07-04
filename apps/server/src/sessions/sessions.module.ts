@@ -7,6 +7,7 @@ import { GitSessionController } from './api/git-session.controller';
 import { SessionsController } from './api/sessions.controller';
 import { SessionsPersistenceModule } from './sessions.persistence.module';
 import { SessionsService } from './sessions.service';
+import { MediaStore } from './media.store';
 import { SettingsModule } from '../settings/settings.module';
 
 @Module({
@@ -19,7 +20,7 @@ import { SettingsModule } from '../settings/settings.module';
     SettingsModule,
   ],
   controllers: [SessionsController, GitSessionController],
-  providers: [SessionsService],
+  providers: [SessionsService, MediaStore],
   exports: [SessionsService],
 })
 export class SessionsModule {}

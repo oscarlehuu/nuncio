@@ -120,6 +120,7 @@ export interface SessionDto {
   supportsInteraction: boolean;
   supportsInterrupt: boolean;
   supportsSteerWhileRunning: boolean;
+  supportsImages: boolean;
   createdAt: number;
   updatedAt: number;
 }

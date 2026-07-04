@@ -69,7 +69,7 @@ export function DesktopSidebarHoverRail({
       className={cn(
         'hidden md:flex fixed left-0 top-0 bottom-0 z-[100] flex-col pointer-events-auto transition-[width] duration-200 ease-out',
         hovered
-          ? 'w-[260px] border-r border-sidebar-border bg-sidebar shadow-xl'
+          ? 'w-[260px] border-r border-sidebar-border bg-sidebar shadow-e3'
           : 'w-14',
       )}
       onMouseLeave={onScheduleCloseHover}

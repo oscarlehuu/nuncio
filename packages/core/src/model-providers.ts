@@ -25,6 +25,12 @@ export interface ModelGroup {
   models: ModelInfo[];
 }
 
+/** Provider capability flags surfaced from the server's AgentCapabilities.
+ * The web only declares what it gates UI on; extra server flags are ignored. */
+export interface ModelProviderCapabilities {
+  images?: boolean;
+}
+
 export interface ModelProvider {
   id: string;
   name: string;
@@ -32,6 +38,7 @@ export interface ModelProvider {
   icon?: string;
   unavailable?: boolean;
   groups?: ModelGroup[];
+  capabilities?: ModelProviderCapabilities;
 }
 
 /** Static fallback — mirrors mockup.html PROVIDERS */

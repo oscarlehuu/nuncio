@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Archive, ArrowRightLeft, Check, Ellipsis, FolderGit2, FolderTree, GitBranch, Globe2, PanelRightClose, PanelRightOpen, Pause, Pencil, RotateCcw, Send, Square, SquareTerminal, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
-import type { ProviderRequestDecision, Session, SessionEvent } from '../lib/api';
+import type { MessageAttachment, ProviderRequestDecision, Session, SessionEvent } from '../lib/api';
 import { InteractionApiError, interactionErrorMessage, respondInteraction } from '../lib/api';
+import { useComposerAttachments } from '../lib/use-composer-attachments';
+import { AttachButton, AttachmentTray } from './attachment-tray';
 import { derivePendingUserInput } from '../lib/derive-pending-user-input';
 import { isComposingEvent } from '../lib/keyboard';
 import { useStickToBottom } from '../lib/use-stick-to-bottom';
@@ -56,7 +58,7 @@ interface SessionDetailProps {
   session: Session;
   events: SessionEvent[];
   providers?: ModelProvider[];
-  onSteer: (message: string) => Promise<void>;
+  onSteer: (message: string, attachments?: MessageAttachment[]) => Promise<void>;
   onPause: () => Promise<void>;
   /** Abort the live run (providers with interrupt support); falls back to pause. */
   onInterrupt?: () => Promise<void>;
@@ -113,6 +115,8 @@ export function SessionDetail({
 }: SessionDetailProps) {
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [steerText, setSteerText] = useState('');
+  const [dragActive, setDragActive] = useState(false);
+  const imageAttachments = useComposerAttachments(setSteerText);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
@@ -165,6 +169,7 @@ export function SessionDetail({
   const showApprovalMode =
     !!onApprovalModeChange && isCodexApprovalEngine(session.provider, session.model);
   const steerWhileRunning = session.supportsSteerWhileRunning ?? false;
+  const canAttachImages = (session.supportsImages ?? false) && !isArchived;
   const steerDisabled =
     session.status === 'ARCHIVED' ||
     steering ||
@@ -197,12 +202,17 @@ export function SessionDetail({
 
   const handleSteer = async () => {
     const text = steerText.trim();
-    if (!text || steerDisabled) return;
+    const stagedItems = imageAttachments.items;
+    const attachments = imageAttachments.attachments;
+    if ((!text && attachments.length === 0) || steerDisabled) return;
     setSteerText('');
+    imageAttachments.clear();
     try {
-      await onSteer(text);
+      await onSteer(text, attachments.length > 0 ? attachments : undefined);
     } catch (error) {
+      // Restore the composer so a failed send loses nothing.
       setSteerText((current) => (current.trim() ? current : text));
+      imageAttachments.restore(stagedItems);
       throw error;
     }
     const el = scrollRef.current;
@@ -421,6 +431,7 @@ export function SessionDetail({
           )}
           <Transcript
             events={events}
+            sessionId={session.id}
             streaming={streaming}
             pendingRequestIds={pendingRequestIds}
             respondingRequestId={respondingRequestId}
@@ -450,10 +461,41 @@ export function SessionDetail({
             }}
           />
         </div>
-        <div className="max-w-[760px] mx-auto rounded-xl border border-border/70 bg-card shadow-sm transition-shadow focus-within:ring-2 focus-within:ring-ring/40">
+        <div
+          className={`max-w-[760px] mx-auto rounded-xl border bg-card shadow-e1 surface-lit transition-shadow focus-within:ring-2 focus-within:ring-ring/40 ${dragActive ? 'border-primary ring-2 ring-primary/40' : 'border-border/70'}`}
+          onDragOver={
+            canAttachImages
+              ? (e) => {
+                  e.preventDefault();
+                  setDragActive(true);
+                }
+              : undefined
+          }
+          onDragLeave={canAttachImages ? () => setDragActive(false) : undefined}
+          onDrop={
+            canAttachImages
+              ? (e) => {
+                  e.preventDefault();
+                  setDragActive(false);
+                  void imageAttachments.addFromDataTransfer(e.dataTransfer);
+                }
+              : undefined
+          }
+        >
+          <AttachmentTray items={imageAttachments.items} onRemove={imageAttachments.remove} />
           <Textarea
             value={steerText}
             onChange={(e) => setSteerText(e.target.value)}
+            onPaste={
+              canAttachImages
+                ? (e) => {
+                    if (imageAttachments.hasImages(e.clipboardData)) {
+                      e.preventDefault();
+                      void imageAttachments.addFromDataTransfer(e.clipboardData);
+                    }
+                  }
+                : undefined
+            }
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey && !isComposingEvent(e)) {
                 e.preventDefault();
@@ -478,6 +520,13 @@ export function SessionDetail({
           />
           <div className="flex items-center justify-between gap-2 px-3 pb-2">
             <div className="flex items-center gap-3 min-w-0 flex-wrap">
+              {canAttachImages && (
+                <AttachButton
+                  onFiles={(files) => void imageAttachments.addFiles(files)}
+                  disabled={steerDisabled}
+                  className="-ml-1"
+                />
+              )}
               <span className="flex items-center gap-1.5 text-ui text-muted-foreground">
                 <span className="size-1.5 rounded-full bg-primary" />
                 {modelName}
@@ -512,7 +561,7 @@ export function SessionDetail({
                 size="icon"
                 aria-label="Send"
                 onClick={() => void handleSteer()}
-                disabled={steerDisabled || !steerText.trim()}
+                disabled={steerDisabled || (!steerText.trim() && imageAttachments.items.length === 0)}
                 className="shrink-0 rounded-full transition-transform active:scale-95 disabled:opacity-40"
               >
                 <Send className="size-4" />

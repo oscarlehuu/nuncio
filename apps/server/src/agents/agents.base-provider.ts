@@ -8,6 +8,7 @@ import type {
   AgentRunContext,
   EventEmitter,
 } from './agents.types';
+import { eventImagesFromAttachments } from './agents.attachments';
 
 export class AgentRunCancelledError extends Error {
   constructor(message = 'Agent run cancelled.') {
@@ -161,7 +162,13 @@ export abstract class BaseAgentProvider implements AgentProvider {
     try {
       this.sessions.updateStatus(sessionId, 'RUNNING');
       this.pushEvent(sessionId, 'status', { status: 'RUNNING' }, context.emit);
-      this.pushEvent(sessionId, isSteer ? 'steer_message' : 'user_message', { text }, context.emit);
+      const images = eventImagesFromAttachments(context.attachments);
+      this.pushEvent(
+        sessionId,
+        isSteer ? 'steer_message' : 'user_message',
+        { text, ...(images ? { images } : {}) },
+        context.emit,
+      );
 
       await this.executePrompt(sessionId, text, isSteer, context);
 

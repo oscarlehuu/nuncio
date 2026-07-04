@@ -29,6 +29,7 @@ function makeSession(overrides: Partial<SessionDto> = {}): SessionDto {
     supportsInteraction: false,
     supportsInterrupt: false,
     supportsSteerWhileRunning: false,
+    supportsImages: false,
     createdAt: 1,
     updatedAt: 1,
     ...overrides,
@@ -78,6 +79,7 @@ describe('SessionsService.getEvents windows', () => {
     agents,
     {} as never,
     {} as never,
+    { deleteSession: () => {}, read: () => null, write: () => '' } as never,
   );
 
   beforeEach(() => {

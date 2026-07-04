@@ -5,7 +5,6 @@ import {
   ChevronRight,
   FolderGit2,
   LayoutGrid,
-  PanelsTopLeft,
   MessageSquare,
   Plus,
   RotateCcw,
@@ -26,6 +25,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import type { Session } from '../lib/api';
 import { relativeTime, statusLabel } from '../lib/api';
@@ -33,9 +38,13 @@ import { projectDisplayName } from '../lib/projects';
 import { providerMeta } from '../lib/model-providers';
 import {
   groupSessionsByProject,
+  groupSessionsByStatus,
   loadCollapsedGroups,
+  loadSidebarGroupBy,
   saveCollapsedGroups,
+  saveSidebarGroupBy,
   type SessionGroup,
+  type SidebarGroupBy,
 } from '../lib/group-sessions';
 import { ProviderIcon } from './provider-icon';
 import { StatusDot } from './status-dot';
@@ -47,9 +56,7 @@ interface SidebarProps {
   activeId: string | null;
   onSelect: (id: string | null) => void;
   onNew: () => void;
-  /** Desktop board: list + session grid, the delegation surface. */
-  onBoard?: () => void;
-  /** Desktop-only multi-session workbench. */
+  /** Desktop multi-session workbench (the unified grid). */
   onGrid?: () => void;
   onSettings?: () => void;
   onChangelog?: () => void;
@@ -66,7 +73,6 @@ export function Sidebar({
   activeId,
   onSelect,
   onNew,
-  onBoard,
   onGrid,
   onSettings,
   onChangelog,
@@ -88,6 +94,12 @@ export function Sidebar({
     () => recentGroups.find((g) => g.projectPath === null) ?? null,
     [recentGroups],
   );
+  const [groupBy, setGroupBy] = useState<SidebarGroupBy>(() => loadSidebarGroupBy());
+  const statusGroups = useMemo(() => groupSessionsByStatus(sessions), [sessions]);
+  const changeGroupBy = (next: SidebarGroupBy) => {
+    setGroupBy(next);
+    saveSidebarGroupBy(next);
+  };
 
   const toggleGroup = (key: string) => {
     setCollapsedGroups((prev) => {
@@ -138,16 +150,6 @@ export function Sidebar({
               ⌘N
             </kbd>
           </button>
-          {onBoard ? (
-            <button
-              type="button"
-              onClick={onBoard}
-              className="group hidden w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-lg text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 active:scale-[0.99] md:flex"
-            >
-              <PanelsTopLeft className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
-              <span className="flex-1">Board</span>
-            </button>
-          ) : null}
           {onGrid ? (
             <button
               type="button"
@@ -155,7 +157,7 @@ export function Sidebar({
               className="group hidden w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-lg text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 active:scale-[0.99] md:flex"
             >
               <LayoutGrid className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
-              <span className="flex-1">Grid</span>
+              <span className="flex-1">Workbench</span>
             </button>
           ) : null}
         </nav>
@@ -221,9 +223,43 @@ export function Sidebar({
           <span className="text-ui-sm text-muted-foreground">
             {view === 'recent' ? 'Recent' : 'Archived'}
           </span>
+          {view === 'recent' ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Group sessions by"
+                  className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-ui-sm text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+                >
+                  {groupBy === 'status' ? 'Status' : 'Repository'}
+                  <ChevronDown className="size-3" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => changeGroupBy('repository')}>
+                  Repository
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => changeGroupBy('status')}>Status</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
         </div>
         <div className="flex flex-col gap-0.5">
           {view === 'recent' ? (
+            groupBy === 'status' ? (
+              statusGroups.map((group) => (
+                <RecentGroupSection
+                  key={group.key}
+                  group={group}
+                  collapsed={collapsedGroups.has(group.key)}
+                  onToggle={() => toggleGroup(group.key)}
+                  activeId={activeId}
+                  onSelect={onSelect}
+                  onArchive={onArchive}
+                  icon={<StatusDot status={group.sessions[0].status} className="shrink-0" />}
+                />
+              ))
+            ) : (
             <>
               {projectGroups.length > 0 && (
                 <>
@@ -279,6 +315,7 @@ export function Sidebar({
                 </>
               )}
             </>
+            )
           ) : (
             filteredArchived.map((s) => (
               <ArchivedRow

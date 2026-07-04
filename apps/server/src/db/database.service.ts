@@ -244,5 +244,13 @@ export class DatabaseService implements OnModuleDestroy {
       CREATE INDEX IF NOT EXISTS idx_steer_queue_session
       ON steer_queue(session_id, id)
     `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS preferences (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
   }
 }

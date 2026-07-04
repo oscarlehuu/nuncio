@@ -142,7 +142,7 @@ describe('GridView', () => {
 
   it('renders the grid header with the preset switcher', () => {
     renderGrid([]);
-    expect(screen.getByRole('heading', { name: /session grid/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /workbench/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: '2x2' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: '3x2' })).toBeInTheDocument();
   });
@@ -217,6 +217,7 @@ describe('GridView', () => {
 
     expect(onCreate).toHaveBeenCalledWith(
       'hello from slot',
+      undefined,
       undefined,
       undefined,
       undefined,

@@ -5,6 +5,7 @@ import { Check, Copy } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { splitMarkdownSegments } from '@/lib/markdown-segments';
 import { MermaidDiagram } from '@/components/mermaid-diagram';
+import { ChatImage } from '@/components/chat-image';
 
 interface MarkdownViewProps {
   text: string;
@@ -94,6 +95,15 @@ function markdownComponents(deferMermaid: boolean): ComponentProps<typeof ReactM
         <a href={href} target="_blank" rel="noreferrer noopener">
           {children}
         </a>
+      );
+    },
+    img({ src, alt }) {
+      return (
+        <ChatImage
+          src={typeof src === 'string' ? src : undefined}
+          alt={typeof alt === 'string' ? alt : undefined}
+          className="my-2"
+        />
       );
     },
   };
