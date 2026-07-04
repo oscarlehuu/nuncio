@@ -29,6 +29,7 @@ function makeSession(overrides: Partial<SessionDto> = {}): SessionDto {
     supportsInteraction: false,
     supportsInterrupt: false,
     supportsSteerWhileRunning: false,
+    pendingInput: false,
     createdAt: 1,
     updatedAt: 1,
     ...overrides,

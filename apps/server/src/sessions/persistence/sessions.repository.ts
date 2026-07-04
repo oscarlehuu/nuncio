@@ -59,6 +59,7 @@ function toDto(row: SessionRow): SessionDto {
     supportsInteraction: false,
     supportsInterrupt: false,
     supportsSteerWhileRunning: false,
+    pendingInput: false,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
