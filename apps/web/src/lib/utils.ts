@@ -11,6 +11,10 @@ const twMerge = extendTailwindMerge({
       'font-size': [
         { text: ['ui-xs', 'ui-sm', 'ui', 'ui-lg', 'body', 'md', 'lg', 'title'] },
       ],
+      // Named elevation shadows (index.css @theme --shadow-e*). Register them as
+      // box-shadow members so `shadow-e1` and `shadow-e2` on one element merge
+      // (last wins) instead of being misread as shadow-color and both kept.
+      shadow: [{ shadow: ['e0', 'e1', 'e2', 'e3'] }],
     },
   },
 });

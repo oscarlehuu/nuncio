@@ -1,5 +1,7 @@
 import { Fragment, memo, useMemo, useRef } from 'react';
-import type { ProviderRequestDecision, SessionEvent } from '../lib/api';
+import type { TranscriptImage, ProviderRequestDecision, SessionEvent } from '../lib/api';
+import { transcriptImageSrc } from '../lib/api';
+import { ChatImage } from './chat-image';
 import {
   buildTranscriptBlocks,
   workingIndicatorLabel,
@@ -19,6 +21,8 @@ import {
 
 interface TranscriptProps {
   events: SessionEvent[];
+  /** Owning session — used to resolve media-store image URLs in user messages. */
+  sessionId: string;
   streaming?: boolean;
   pendingRequestIds?: ReadonlySet<string>;
   respondingRequestId?: string | null;
@@ -100,19 +104,44 @@ export function WorkingIndicator({ label }: { label: string }) {
   );
 }
 
-function UserBlock({ text, queued }: { text: string; queued?: boolean }) {
+function UserBlock({
+  text,
+  queued,
+  images,
+  sessionId,
+}: {
+  text: string;
+  queued?: boolean;
+  images?: TranscriptImage[];
+  sessionId: string;
+}) {
+  const hasImages = !!images && images.length > 0;
   return (
-    <div className="flex flex-col items-end">
-      <div
-        className={`max-w-[90%] px-3 py-[var(--chat-msg-py)] rounded-[12px_12px_4px_12px] chat-text-body leading-relaxed bg-muted/25 text-foreground/90 ${queued ? 'opacity-70 border border-dashed border-border' : ''}`}
-      >
-        <UserBubble text={text} />
-        {queued && (
-          <div className="mt-1 text-[length:calc(11px*var(--chat-font-scale))] text-muted-foreground">
-            Queued — sends when the agent is ready
-          </div>
-        )}
-      </div>
+    <div className="flex flex-col items-end gap-1.5">
+      {hasImages && (
+        <div className="flex max-w-[90%] flex-wrap justify-end gap-1.5">
+          {images.map((image, i) => (
+            <ChatImage
+              key={i}
+              src={transcriptImageSrc(image, sessionId)}
+              alt="Attached image"
+              className="max-h-40"
+            />
+          ))}
+        </div>
+      )}
+      {(text.length > 0 || !hasImages) && (
+        <div
+          className={`max-w-[90%] px-3 py-[var(--chat-msg-py)] rounded-[12px_12px_4px_12px] chat-text-body leading-relaxed bg-muted/25 text-foreground/90 ${queued ? 'opacity-70 border border-dashed border-border' : ''}`}
+        >
+          <UserBubble text={text} />
+          {queued && (
+            <div className="mt-1 text-[length:calc(11px*var(--chat-font-scale))] text-muted-foreground">
+              Queued — sends when the agent is ready
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -135,6 +164,7 @@ function ErrorRow({ message }: { message: string }) {
 
 interface RenderItemViewProps {
   item: RenderItem;
+  sessionId: string;
   streaming?: boolean;
   pendingRequestIds?: ReadonlySet<string>;
   respondingRequestId?: string | null;
@@ -152,6 +182,7 @@ function itemRequestId(item: RenderItem): string | null {
 
 function RenderItemView({
   item,
+  sessionId,
   streaming,
   pendingRequestIds,
   respondingRequestId,
@@ -163,7 +194,14 @@ function RenderItemView({
   const block = item.block;
   switch (block.kind) {
     case 'user':
-      return <UserBlock text={block.text} queued={block.queued} />;
+      return (
+        <UserBlock
+          text={block.text}
+          queued={block.queued}
+          images={block.images}
+          sessionId={sessionId}
+        />
+      );
     case 'assistant':
       return <AssistantBlock text={block.text} streaming={streaming && block.streaming} />;
     case 'tool':
@@ -238,6 +276,7 @@ function RenderItemView({
  */
 const MemoRenderItemView = memo(RenderItemView, (prev, next) => {
   if (prev.item !== next.item) return false;
+  if (prev.sessionId !== next.sessionId) return false;
   if (prev.streaming !== next.streaming) return false;
   if (prev.onRespondProviderRequest !== next.onRespondProviderRequest) return false;
   const requestId = itemRequestId(next.item);
@@ -254,6 +293,7 @@ const MemoRenderItemView = memo(RenderItemView, (prev, next) => {
 
 export const Transcript = memo(function Transcript({
   events,
+  sessionId,
   streaming,
   pendingRequestIds,
   respondingRequestId,
@@ -287,6 +327,7 @@ export const Transcript = memo(function Transcript({
           <div className="[content-visibility:auto] [contain-intrinsic-size:auto_60px]">
             <MemoRenderItemView
               item={item}
+              sessionId={sessionId}
               streaming={streaming}
               pendingRequestIds={pendingRequestIds}
               respondingRequestId={respondingRequestId}

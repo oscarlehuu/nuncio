@@ -30,7 +30,7 @@ export function ProviderRequestCard({
 
   return (
     <div className="flex items-start justify-start">
-      <div className="max-w-[92%] rounded-[10px] border border-border bg-card px-3.5 py-3 text-sm shadow-sm">
+      <div className="max-w-[92%] rounded-[10px] border border-border bg-card px-3.5 py-3 text-sm shadow-e1 surface-lit">
         <div className="mb-2 flex items-center gap-2">
           <ShieldQuestion className="size-4 text-primary" />
           <span className="font-medium">{label}</span>

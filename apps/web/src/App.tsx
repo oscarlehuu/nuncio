@@ -17,6 +17,7 @@ import {
   restoreSession,
   steerSession,
   SteerApiError,
+  type MessageAttachment,
   type ProviderRequestDecision,
   type Session,
 } from './lib/api';
@@ -26,7 +27,6 @@ import { useActiveRun } from './lib/use-active-run';
 import { useSessionNotifications } from './lib/use-session-notifications';
 import { HomeView } from './components/home-view';
 import { GridView } from './components/grid-view';
-import { BoardView } from './components/board-view';
 import type { ApprovalMode } from './components/approval-mode-picker';
 import { HandoffPicker } from './components/handoff-picker';
 import { ChangelogView } from './components/changelog-view';
@@ -156,6 +156,19 @@ export default function App() {
     void refreshModels();
   }, [refreshModels]);
 
+  // Land in the work, not a blank canvas: on first load (desktop, with sessions)
+  // open straight to the Workbench instead of the empty composer home. One-shot —
+  // it never yanks the user later, and "New Agent" (→ '/') still reaches the composer.
+  const initialLandingDone = useRef(false);
+  useEffect(() => {
+    if (initialLandingDone.current || !listsReady) return;
+    initialLandingDone.current = true;
+    const isDesktop = window.matchMedia('(min-width: 768px)').matches;
+    if (isDesktop && sessions.length > 0 && location.pathname === '/') {
+      navigate('/grid', { replace: true });
+    }
+  }, [listsReady, sessions.length, location.pathname, navigate]);
+
   useSessionNotifications(sessions, activeId);
 
   const dismissTransientSidebar = useCallback(() => {
@@ -184,6 +197,7 @@ export default function App() {
     baseBranch?: string,
     modelOptions?: ModelOptionsMap,
     useWorktree = false,
+    attachments?: MessageAttachment[],
   ) => {
     setCreating(true);
     try {
@@ -195,6 +209,8 @@ export default function App() {
         baseBranch,
         modelOptions,
         useWorktree,
+        '',
+        attachments,
       );
       const list = await refresh();
       navigate(`/session/${session.id}`);
@@ -207,11 +223,15 @@ export default function App() {
     }
   };
 
-  const handleSteer = async (message: string, options?: { forceResume?: boolean }) => {
+  const handleSteer = async (
+    message: string,
+    attachments?: MessageAttachment[],
+    options?: { forceResume?: boolean },
+  ) => {
     if (!activeId) return;
     setSteering(true);
     try {
-      await steerSession(activeId, message, options?.forceResume);
+      await steerSession(activeId, message, options?.forceResume, undefined, attachments);
       setForceSteerMessage(null);
       await refresh();
     } catch (err) {
@@ -229,10 +249,14 @@ export default function App() {
   };
 
   // Grid steers a specific tile, not the global active route id.
-  const handleSteerSession = useCallback(async (id: string, message: string) => {
+  const handleSteerSession = useCallback(async (
+    id: string,
+    message: string,
+    attachments?: MessageAttachment[],
+  ) => {
     setSteering(true);
     try {
-      await steerSession(id, message);
+      await steerSession(id, message, undefined, undefined, attachments);
       await refresh();
     } catch (err) {
       toast.error(err instanceof SteerApiError ? err.message : 'Failed to steer session');
@@ -261,6 +285,7 @@ export default function App() {
       projectPath?: string,
       baseBranch?: string,
       modelOptions?: ModelOptionsMap,
+      attachments?: MessageAttachment[],
     ): Promise<Session | null> => {
       setCreating(true);
       try {
@@ -272,6 +297,8 @@ export default function App() {
           baseBranch,
           modelOptions,
           false,
+          '',
+          attachments,
         );
         const list = await refresh();
         if (!list?.find((s) => s.id === session.id)) {
@@ -406,11 +433,6 @@ export default function App() {
     dismissTransientSidebar();
   }, [dismissTransientSidebar, navigate]);
 
-  const handleOpenBoard = useCallback(() => {
-    navigate('/board');
-    dismissTransientSidebar();
-  }, [dismissTransientSidebar, navigate]);
-
   const handleOpenSettings = useCallback(() => {
     navigate('/settings');
     dismissTransientSidebar();
@@ -499,7 +521,6 @@ export default function App() {
     onSelect: handleSelect,
     onNew: handleNew,
     onGrid: handleOpenGrid,
-    onBoard: handleOpenBoard,
     onSettings: handleOpenSettings,
     onChangelog: handleOpenChangelog,
     onArchive: handleArchiveById,
@@ -582,35 +603,8 @@ export default function App() {
               />
             }
           />
-          <Route
-            path="/board"
-            element={
-              <BoardView
-                sessions={sessions}
-                providers={providers}
-                approvalMode={approvalMode}
-                onApprovalModeChange={handleApprovalModeChange}
-                onRespondProviderRequest={async (id, requestId, decision) => {
-                  try {
-                    await respondProviderRequest(id, requestId, decision);
-                  } catch {
-                    toast.error('Failed to respond to provider request');
-                  }
-                }}
-                onSteerSession={handleSteerSession}
-                onPauseSession={handlePauseSession}
-                onArchiveSession={handleArchiveById}
-                onRestore={handleRestore}
-                onDelete={handleDelete}
-                onRename={handleRename}
-                onSubmit={handleCreate}
-                steering={steering}
-                lifecycleBusy={lifecycleBusy}
-                creating={creating}
-                railOverlay={!desktopSidebar.pinned}
-              />
-            }
-          />
+          {/* Legacy /board → the unified Workbench (grid). */}
+          <Route path="/board" element={<Navigate to="/grid" replace />} />
           <Route
             path="/session/:sessionId"
             element={
@@ -691,7 +685,7 @@ export default function App() {
               onClick={() => {
                 const msg = forceSteerMessage;
                 setForceSteerMessage(null);
-                if (msg) void handleSteer(msg, { forceResume: true });
+                if (msg) void handleSteer(msg, undefined, { forceResume: true });
               }}
             >
               Force steer anyway
@@ -727,7 +721,7 @@ interface SessionRouteProps {
     requestId: string,
     decision: ProviderRequestDecision,
   ) => void | Promise<void>;
-  onSteer: (message: string, options?: { forceResume?: boolean }) => Promise<void>;
+  onSteer: (message: string, attachments?: MessageAttachment[]) => Promise<void>;
   onPause: () => Promise<void>;
   onInterrupt: () => Promise<void>;
   onArchive: () => Promise<void>;

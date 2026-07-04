@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { Maximize2, Send } from 'lucide-react';
+import { Maximize2, Send, X } from 'lucide-react';
 import type { Session, SessionStatus } from '../lib/api';
 import { statusLabel } from '../lib/api';
 import { isComposingEvent } from '../lib/keyboard';
@@ -15,6 +15,7 @@ import { ProviderIcon } from './provider-icon';
 import { StatusDot } from './status-dot';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { summarizeToolGroup } from '@/lib/tool-summary';
 import { cn } from '@/lib/utils';
 
 /** Only the freshest blocks are rendered in a tile — LOD, not the full transcript. */
@@ -27,6 +28,9 @@ interface SessionTileProps {
   focused: boolean;
   onFocus: () => void;
   onMaximize: () => void;
+  /** Unbind this tile from its Workbench slot — frees the slot back to a "new
+   *  agent" composer. Non-destructive: the session stays in the sidebar. Grid only. */
+  onClose?: () => void;
   /** Steer callback, wired only for the focused tile's single-line composer. */
   onSteer?: (message: string) => Promise<void>;
   steering?: boolean;
@@ -43,7 +47,7 @@ function borderClasses(status: SessionStatus, pending: boolean, focused: boolean
   if (pending) {
     return cn(
       'border-warning ring-1 ring-warning/50 animate-pulse',
-      focused && 'ring-2 ring-warning',
+      focused && 'ring-2 ring-warning shadow-e2',
     );
   }
   const stateColor: Record<SessionStatus, string> = {
@@ -54,10 +58,12 @@ function borderClasses(status: SessionStatus, pending: boolean, focused: boolean
     PAUSED: 'border-border',
     ARCHIVED: 'border-border',
   };
+  // Resting elevation (shadow-e1) comes from the base className; focus lifts it
+  // to shadow-e2 while the ring still encodes the focus state.
   return cn(
     stateColor[status],
     focused
-      ? 'ring-2 ring-ring border-ring shadow-lg shadow-ring/10'
+      ? 'ring-2 ring-ring border-ring shadow-e2'
       : status === 'RUNNING'
         ? 'ring-1 ring-success/25'
         : '',
@@ -80,6 +86,7 @@ export function SessionTile({
   focused,
   onFocus,
   onMaximize,
+  onClose,
   onSteer,
   steering,
   apiBase = '',
@@ -87,6 +94,7 @@ export function SessionTile({
   const { events } = useSessionStream(session.id, apiBase, TILE_EVENT_TAIL);
   const blocks = useTranscriptBlocks(events);
   const tail = useMemo(() => blocks.slice(-TILE_TAIL_LENGTH), [blocks]);
+  const items = useMemo(() => groupTileItems(tail), [tail]);
   const pending = useMemo(() => derivePendingUserInput(events).length > 0, [events]);
   const verifyStatus = useMemo(() => deriveVerifyStatus(events), [events]);
   const status = effectiveStatus(events, session.status);
@@ -130,7 +138,8 @@ export function SessionTile({
       aria-current={focused ? 'true' : undefined}
       className={cn(
         'group flex flex-col min-h-0 min-w-0 overflow-hidden rounded-xl border bg-card text-card-foreground',
-        'transition-[box-shadow,border-color] outline-none active:scale-[0.995]',
+        'shadow-e1 surface-lit hover:shadow-e2 hover:-translate-y-px',
+        'transition-[box-shadow,border-color,translate] outline-none active:scale-[0.995]',
         'focus-visible:ring-2 focus-visible:ring-ring',
         borderClasses(status, pending, focused),
       )}
@@ -179,6 +188,21 @@ export function SessionTile({
         >
           <Maximize2 className="size-3.5" />
         </Button>
+        {onClose ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="size-7 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+            aria-label={`Remove ${session.title} from the workbench slot`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+          >
+            <X className="size-3.5" />
+          </Button>
+        ) : null}
       </header>
 
       <div
@@ -188,10 +212,18 @@ export function SessionTile({
         {tail.length === 0 ? (
           <p className="text-muted-foreground italic">No output yet.</p>
         ) : (
-          <div className="flex flex-col gap-1.5">
-            {tail.map((block, i) => (
-              <TileBlock key={i} block={block} />
-            ))}
+          // min-h-full + justify-end: a short tail hugs the steer input at the
+          // bottom (chat-style) instead of stranding a gap in the middle.
+          <div className="flex min-h-full flex-col justify-end gap-1.5">
+            {items.map((item, i) =>
+              item.kind === 'tool-group' ? (
+                <p key={i} className="truncate text-[11px] text-muted-foreground/90">
+                  {item.summary}
+                </p>
+              ) : (
+                <TileBlock key={i} block={item.block} />
+              ),
+            )}
           </div>
         )}
       </div>
@@ -228,20 +260,56 @@ export function SessionTile({
   );
 }
 
+type TileBlockItem = ReturnType<typeof useTranscriptBlocks>[number];
+type TileItem =
+  | { kind: 'block'; block: TileBlockItem }
+  | { kind: 'tool-group'; summary: string };
+
+/**
+ * Collapse consecutive tool calls into one summary line. A tile is a glanceable
+ * preview, so a run of tools reads as "Ran 2 commands" (matching the detail
+ * view) instead of N raw command lines flooding the tail. Single, isolated
+ * tools keep their verb+subject line.
+ */
+function groupTileItems(blocks: TileBlockItem[]): TileItem[] {
+  const out: TileItem[] = [];
+  let i = 0;
+  while (i < blocks.length) {
+    const block = blocks[i];
+    if (block.kind === 'tool') {
+      const group: Array<{ tool: string; input?: unknown }> = [];
+      while (i < blocks.length) {
+        const b = blocks[i];
+        if (b.kind !== 'tool') break;
+        group.push({ tool: b.tool, input: b.input });
+        i += 1;
+      }
+      if (group.length === 1) out.push({ kind: 'block', block });
+      else out.push({ kind: 'tool-group', summary: summarizeToolGroup(group) });
+    } else {
+      out.push({ kind: 'block', block });
+      i += 1;
+    }
+  }
+  return out;
+}
+
 /** Compact single-line-ish rendering of a transcript block for the tail. */
-function TileBlock({ block }: { block: ReturnType<typeof useTranscriptBlocks>[number] }) {
+function TileBlock({ block }: { block: TileBlockItem }) {
   switch (block.kind) {
     case 'user':
       return (
-        <p className="text-muted-foreground">
+        <p className="text-muted-foreground line-clamp-2 break-words">
           <span className="text-foreground/70">›</span> {block.text}
           {block.queued ? <span className="text-muted-foreground/70"> (queued)</span> : null}
         </p>
       );
     case 'interrupted':
       return <p className="text-muted-foreground/70 italic">— interrupted —</p>;
+    // Collapse whitespace + clamp: a tile is a level-of-detail PREVIEW, so no
+    // single block (e.g. a pasted log or long reply) may grow into a wall.
     case 'assistant':
-      return <p className="text-foreground/90 whitespace-pre-wrap break-words">{block.text}</p>;
+      return <p className="text-foreground/90 break-words line-clamp-3">{block.text}</p>;
     case 'thinking':
       return <p className="text-muted-foreground/70 italic truncate">thinking…</p>;
     case 'tool':
@@ -256,7 +324,7 @@ function TileBlock({ block }: { block: ReturnType<typeof useTranscriptBlocks>[nu
     case 'provider_request':
       return <p className="text-info">Permission request ({block.method})</p>;
     case 'error':
-      return <p className="text-destructive break-words">{block.message}</p>;
+      return <p className="text-destructive break-words line-clamp-2">{block.message}</p>;
     case 'cursor-context':
       return <p className="text-muted-foreground/70 italic truncate">{block.summary}</p>;
     default:

@@ -5,6 +5,9 @@ import { FALLBACK_PROVIDERS, normalizeModelCatalog } from './model-providers';
 
 export type { UserInputAnswer, InteractionResponse, PendingUserInput, UserInputQuestion, UserInputOption, UserInputResolvedBy } from './user-input.types';
 import type { InteractionResponse } from './user-input.types';
+export type { ImageAttachment, MessageAttachment, TranscriptImage } from './attachments';
+export { isImageAttachment, attachmentDataUrl, transcriptImageSrc } from './attachments';
+import type { MessageAttachment } from './attachments';
 
 export type SessionStatus =
   | 'CREATED'
@@ -84,6 +87,8 @@ export interface Session {
   supportsInteraction: boolean;
   supportsInterrupt?: boolean;
   supportsSteerWhileRunning?: boolean;
+  /** Provider accepts image attachments on prompts/steers (capability-gated UI). */
+  supportsImages?: boolean;
   /** Agent is blocked on an open user-input or approval request (RUNNING only). */
   pendingInput?: boolean;
   createdAt: number;
@@ -182,6 +187,7 @@ export async function createSession(
   modelOptions?: ModelOptionsMap,
   useWorktree = false,
   base = '',
+  attachments?: MessageAttachment[],
 ): Promise<Session> {
   const body: {
     prompt: string;
@@ -192,6 +198,7 @@ export async function createSession(
     baseBranch?: string;
     modelOptions?: ModelOptionsMap;
     useWorktree?: boolean;
+    attachments?: MessageAttachment[];
   } = { prompt };
   if (model) body.model = model;
   if (provider) body.provider = provider;
@@ -205,6 +212,7 @@ export async function createSession(
     }
   }
   if (modelOptions && Object.keys(modelOptions).length > 0) body.modelOptions = modelOptions;
+  if (attachments && attachments.length > 0) body.attachments = attachments;
 
   const res = await apiFetch(`${base}/api/sessions`, {
     method: 'POST',
@@ -220,9 +228,13 @@ export async function steerSession(
   message: string,
   forceResume?: boolean,
   base = '',
+  attachments?: MessageAttachment[],
 ): Promise<Session> {
-  const body: { message: string; forceResume?: boolean } = { message };
+  const body: { message: string; forceResume?: boolean; attachments?: MessageAttachment[] } = {
+    message,
+  };
   if (forceResume) body.forceResume = true;
+  if (attachments && attachments.length > 0) body.attachments = attachments;
 
   const res = await apiFetch(`${base}/api/sessions/${id}/steer`, {
     method: 'POST',

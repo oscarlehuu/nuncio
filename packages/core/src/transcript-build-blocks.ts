@@ -1,5 +1,6 @@
 import type { SessionEvent } from './api';
 import type { ProviderRequestDecision } from './api';
+import type { TranscriptImage } from './attachments';
 import type { UserInputQuestion, UserInputResolvedBy } from './user-input.types';
 import { summarizeToolCall, type ToolSummary } from './tool-summary';
 import {
@@ -13,7 +14,7 @@ import {
 } from './interactive-tool-input';
 
 export type TranscriptBlock =
-  | { kind: 'user'; key: string; text: string; queued?: boolean }
+  | { kind: 'user'; key: string; text: string; queued?: boolean; images?: TranscriptImage[] }
   | { kind: 'assistant'; key: string; text: string; streaming?: boolean }
   | {
       kind: 'tool';
@@ -288,6 +289,25 @@ function pushOpenToolBlock(state: ParserState, entry: OpenTool) {
  * per-event transcript logic — both the batch `buildTranscriptBlocks` and
  * the incremental builder in `use-transcript-blocks.ts` call this.
  */
+/** Parse the untyped `images` array off a message payload into image attachments. */
+function parsePayloadImages(payload: Record<string, unknown>): TranscriptImage[] | undefined {
+  const raw = payload.images;
+  if (!Array.isArray(raw)) return undefined;
+  const images: TranscriptImage[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const { mimeType, id, data } = item as { mimeType?: unknown; id?: unknown; data?: unknown };
+    if (typeof mimeType !== 'string') continue;
+    // A disk-store reference or inline base64 — need at least one to render.
+    if (typeof id === 'string') {
+      images.push({ mimeType, id });
+    } else if (typeof data === 'string') {
+      images.push({ mimeType, data });
+    }
+  }
+  return images.length > 0 ? images : undefined;
+}
+
 export function stepEvent(state: ParserState, event: SessionEvent): void {
   const payload = event.payload ?? {};
   state.lastSeq = event.seq;
@@ -296,6 +316,7 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
     flushAssistant(state);
     flushThinking(state);
     const rawText = String(payload.text ?? '');
+    const images = parsePayloadImages(payload);
     if (isCursorContextMessage(rawText)) {
       const parsed = parseCursorContextMessage(rawText);
       state.out.push({
@@ -314,7 +335,12 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
           break;
         }
       }
-      state.out.push({ kind: 'user', key: `user-${event.seq}`, text: rawText });
+      state.out.push({
+        kind: 'user',
+        key: `user-${event.seq}`,
+        text: rawText,
+        ...(images ? { images } : {}),
+      });
     }
     state.currentTurnHasThinking = false;
     state.assistantBufFromDelta = false;

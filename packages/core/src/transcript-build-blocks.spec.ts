@@ -199,6 +199,34 @@ describe('buildTranscriptBlocks', () => {
     expect(blocks[0]).toMatchObject({ kind: 'user', text: 'Actually, do this instead' });
   });
 
+  it('surfaces disk-referenced and inline images on the user block', () => {
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'user_message', {
+        text: 'look at this',
+        images: [
+          { mimeType: 'image/png', id: 'abc123' },
+          { mimeType: 'image/jpeg', data: 'AAAA' },
+        ],
+      }),
+    ]);
+    expect(blocks[0]).toMatchObject({
+      kind: 'user',
+      text: 'look at this',
+      images: [
+        { mimeType: 'image/png', id: 'abc123' },
+        { mimeType: 'image/jpeg', data: 'AAAA' },
+      ],
+    });
+  });
+
+  it('drops malformed image entries and omits images when none are valid', () => {
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'user_message', { text: 'hi', images: [{ mimeType: 'image/png' }, 'nope', null] }),
+    ]);
+    expect(blocks[0]).toMatchObject({ kind: 'user', text: 'hi' });
+    expect((blocks[0] as { images?: unknown }).images).toBeUndefined();
+  });
+
   it('interleaves user, tool, and assistant content in order', () => {
     const blocks = buildTranscriptBlocks([
       ev(1, 'user_message', { text: 'hi' }),

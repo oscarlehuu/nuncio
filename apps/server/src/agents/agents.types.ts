@@ -30,7 +30,11 @@ export interface AgentCapabilities {
 export interface AgentAttachment {
   kind: 'image';
   mimeType: string;
+  /** Base64 bytes — sent to the model, and used to persist to the media store. */
   data: string;
+  /** Media-store id once persisted; the transcript event references this so the
+   * event log holds a pointer, not base64. Absent on inbound (pre-persist) ones. */
+  id?: string;
 }
 
 export interface InteractionResponse {

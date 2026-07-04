@@ -141,7 +141,30 @@ describe('SessionDetail', () => {
     const textarea = screen.getByPlaceholderText(/steer the agent/i);
     await userEvent.type(textarea, 'Use the cache layer');
     await userEvent.click(screen.getByRole('button', { name: /send/i }));
-    expect(onSteer).toHaveBeenCalledWith('Use the cache layer');
+    expect(onSteer).toHaveBeenCalledWith('Use the cache layer', undefined);
+  });
+
+  it('shows the attach-image control only when the provider supports images', async () => {
+    const withImages = await renderDetail({ supportsImages: true });
+    expect(withImages.queryByRole('button', { name: /attach image/i })).toBeInTheDocument();
+    withImages.unmount();
+    const withoutImages = await renderDetail({ supportsImages: false });
+    expect(withoutImages.queryByRole('button', { name: /attach image/i })).toBeNull();
+  });
+
+  it('renders images the user attached to a prior message in the transcript', async () => {
+    const events: SessionEvent[] = [
+      {
+        seq: 1,
+        type: 'user_message',
+        payload: { text: 'see this', images: [{ mimeType: 'image/png', id: 'abc123' }] },
+        createdAt: 0,
+      },
+    ];
+    // makeSession() uses id 's1'; the disk-referenced image resolves to its media URL.
+    await renderDetail({ supportsImages: true }, events);
+    const img = screen.getByRole('img', { name: /attached image/i });
+    expect(img).toHaveAttribute('src', '/api/sessions/s1/media/abc123');
   });
 
   it('clears the composer immediately after sending while steer is still settling', async () => {
@@ -166,7 +189,7 @@ describe('SessionDetail', () => {
     await userEvent.type(textarea, 'Use the cache layer');
     await userEvent.click(screen.getByRole('button', { name: /send/i }));
 
-    expect(onSteer).toHaveBeenCalledWith('Use the cache layer');
+    expect(onSteer).toHaveBeenCalledWith('Use the cache layer', undefined);
     expect(textarea).toHaveValue('');
     resolveSteer();
   });
@@ -253,7 +276,7 @@ describe('SessionDetail', () => {
     expect(textarea).toBeEnabled();
     await userEvent.type(textarea, 'change direction');
     await userEvent.click(screen.getByRole('button', { name: /send/i }));
-    expect(onSteer).toHaveBeenCalledWith('change direction');
+    expect(onSteer).toHaveBeenCalledWith('change direction', undefined);
   });
 
   it('keeps archive button when RUNNING', async () => {
@@ -973,6 +996,6 @@ describe('SessionDetail throttled streaming', () => {
     expect(textarea).toBeEnabled();
     await userEvent.type(textarea, 'try from phone');
     await userEvent.click(screen.getByRole('button', { name: /send/i }));
-    expect(onSteer).toHaveBeenCalledWith('try from phone');
+    expect(onSteer).toHaveBeenCalledWith('try from phone', undefined);
   });
 });

@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CornerDownLeft, Plus, Link2, Server, Check } from 'lucide-react';
 import { toast } from 'sonner';
-import type { Session } from '../lib/api';
+import type { MessageAttachment, Session } from '../lib/api';
 import { createSession, fetchModels, fetchSessions, relativeTime, statusLabel } from '../lib/api';
+import { useComposerAttachments } from '../lib/use-composer-attachments';
+import { AttachButton, AttachmentTray } from './attachment-tray';
 import { currentMachine, fetchHubMachines, machineApiBase, type HubMachine } from '../lib/hub-api';
 import {
   modelById,
@@ -45,6 +47,7 @@ interface GridSlotComposerProps {
     projectPath?: string,
     baseBranch?: string,
     modelOptions?: ModelOptionsMap,
+    attachments?: MessageAttachment[],
   ) => Promise<Session | null>;
   /** Bind the slot; machineId is set when the session lives on another hub machine. */
   onBind: (sessionId: string, machineId?: string) => void;
@@ -59,6 +62,8 @@ export function GridSlotComposer({
 }: GridSlotComposerProps) {
   const [mode, setMode] = useState<Mode>('new');
   const [prompt, setPrompt] = useState('');
+  const [dragActive, setDragActive] = useState(false);
+  const imageAttachments = useComposerAttachments(setPrompt);
   const [model, setModel] = useState('');
   const [provider, setProvider] = useState<string | undefined>();
   const [modelOptions, setModelOptions] = useState<ModelOptionsMap>({});
@@ -135,6 +140,11 @@ export function GridSlotComposer({
   const activeProviders = machine ? (remoteProviders ?? []) : providers;
 
   const catalog = useMemo(() => normalizeModelCatalog(activeProviders), [activeProviders]);
+  const canAttachImages = useMemo(
+    () =>
+      provider ? (activeProviders.find((p) => p.id === provider)?.capabilities?.images ?? false) : false,
+    [provider, activeProviders],
+  );
   const catalogLoaded = activeProviders.length > 0;
 
   useEffect(() => {
@@ -165,6 +175,8 @@ export function GridSlotComposer({
     const text = prompt.trim();
     if (!text || submitting) return;
     setSubmitting(true);
+    const attachments = imageAttachments.attachments;
+    const attachmentsArg = attachments.length > 0 ? attachments : undefined;
     try {
       const selected = modelById(catalog)[model];
       const hasConfigurable =
@@ -180,9 +192,11 @@ export function GridSlotComposer({
             hasConfigurable ? modelOptions : undefined,
             false,
             remoteBase,
+            attachmentsArg,
           );
           onBind(created.id, machine);
           setPrompt('');
+          imageAttachments.clear();
         } catch {
           toast.error(`Failed to create session on ${machine}`);
         }
@@ -194,8 +208,12 @@ export function GridSlotComposer({
           projectPath,
           undefined,
           hasConfigurable ? modelOptions : undefined,
+          attachmentsArg,
         );
-        if (created) setPrompt('');
+        if (created) {
+          setPrompt('');
+          imageAttachments.clear();
+        }
       }
     } finally {
       setSubmitting(false);
@@ -203,7 +221,7 @@ export function GridSlotComposer({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-dashed border-border bg-card/40 text-card-foreground">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card/40 text-card-foreground">
       <div
         role="tablist"
         aria-label="New or attach session"
@@ -256,10 +274,40 @@ export function GridSlotComposer({
       ) : null}
 
       {mode === 'new' ? (
-        <div className="flex min-h-0 flex-1 flex-col p-2.5">
+        <div
+          className={`flex min-h-0 flex-1 flex-col p-2.5 ${dragActive ? 'rounded-lg ring-2 ring-primary/40' : ''}`}
+          onDragOver={
+            canAttachImages
+              ? (e) => {
+                  e.preventDefault();
+                  setDragActive(true);
+                }
+              : undefined
+          }
+          onDragLeave={canAttachImages ? () => setDragActive(false) : undefined}
+          onDrop={
+            canAttachImages
+              ? (e) => {
+                  e.preventDefault();
+                  setDragActive(false);
+                  void imageAttachments.addFromDataTransfer(e.dataTransfer);
+                }
+              : undefined
+          }
+        >
           <Textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
+            onPaste={
+              canAttachImages
+                ? (e) => {
+                    if (imageAttachments.hasImages(e.clipboardData)) {
+                      e.preventDefault();
+                      void imageAttachments.addFromDataTransfer(e.clipboardData);
+                    }
+                  }
+                : undefined
+            }
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
@@ -270,7 +318,18 @@ export function GridSlotComposer({
             aria-label="New session prompt"
             className="min-h-0 flex-1 resize-none text-[13px]"
           />
+          <AttachmentTray
+            items={imageAttachments.items}
+            onRemove={imageAttachments.remove}
+            className="px-0 pt-2"
+          />
           <div className="mt-2 flex items-center gap-2 overflow-x-auto [&_button]:shrink-0">
+            {canAttachImages && (
+              <AttachButton
+                onFiles={(files) => void imageAttachments.addFiles(files)}
+                disabled={submitting}
+              />
+            )}
             <ProjectPicker value={projectPath} onChange={setProjectPath} apiBase={remoteBase} />
             <ModelPicker
               value={model}

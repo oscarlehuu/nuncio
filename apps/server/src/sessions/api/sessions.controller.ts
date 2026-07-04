@@ -20,6 +20,7 @@ import type {
   SteerSessionDto,
 } from '../domain/sessions.types';
 import { SessionsService } from '../sessions.service';
+import { sniffImageMime } from '../media.store';
 
 function parsePositiveInt(value: string | undefined): number | undefined {
   if (!value) return undefined;
@@ -71,6 +72,20 @@ export class SessionsController {
     const session = this.sessions.get(id);
     if (!session) throw new NotFoundException('Session not found');
     return this.sessions.refreshTranscript(id);
+  }
+
+  @Get(':id/media/:mediaId')
+  media(
+    @Param('id') id: string,
+    @Param('mediaId') mediaId: string,
+    @Res() res: Response,
+  ) {
+    const bytes = this.sessions.readMedia(id, mediaId);
+    if (!bytes) throw new NotFoundException('Image not found');
+    res.setHeader('Content-Type', sniffImageMime(bytes));
+    // Content is immutable (id addresses fixed bytes); cache hard but keep it private.
+    res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+    res.send(bytes);
   }
 
   @Get(':id')
