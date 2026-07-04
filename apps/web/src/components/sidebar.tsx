@@ -5,7 +5,7 @@ import {
   ChevronRight,
   FolderGit2,
   LayoutGrid,
-  ListTodo,
+  PanelsTopLeft,
   MessageSquare,
   Plus,
   RotateCcw,
@@ -47,9 +47,10 @@ interface SidebarProps {
   activeId: string | null;
   onSelect: (id: string | null) => void;
   onNew: () => void;
+  /** Desktop board: list + session grid, the delegation surface. */
+  onBoard?: () => void;
   /** Desktop-only multi-session workbench. */
   onGrid?: () => void;
-  onTasks?: () => void;
   onSettings?: () => void;
   onChangelog?: () => void;
   onArchive?: (id: string) => void | Promise<void>;
@@ -65,8 +66,8 @@ export function Sidebar({
   activeId,
   onSelect,
   onNew,
+  onBoard,
   onGrid,
-  onTasks,
   onSettings,
   onChangelog,
   onArchive,
@@ -137,6 +138,16 @@ export function Sidebar({
               ⌘N
             </kbd>
           </button>
+          {onBoard ? (
+            <button
+              type="button"
+              onClick={onBoard}
+              className="group hidden w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-lg text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 active:scale-[0.99] md:flex"
+            >
+              <PanelsTopLeft className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
+              <span className="flex-1">Board</span>
+            </button>
+          ) : null}
           {onGrid ? (
             <button
               type="button"
@@ -145,16 +156,6 @@ export function Sidebar({
             >
               <LayoutGrid className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
               <span className="flex-1">Grid</span>
-            </button>
-          ) : null}
-          {onTasks ? (
-            <button
-              type="button"
-              onClick={onTasks}
-              className="group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-lg text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 active:scale-[0.99]"
-            >
-              <ListTodo className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
-              <span className="flex-1">Tasks</span>
             </button>
           ) : null}
         </nav>

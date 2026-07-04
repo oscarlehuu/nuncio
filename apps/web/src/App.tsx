@@ -26,7 +26,7 @@ import { useActiveRun } from './lib/use-active-run';
 import { useSessionNotifications } from './lib/use-session-notifications';
 import { HomeView } from './components/home-view';
 import { GridView } from './components/grid-view';
-import { TaskInbox } from './components/task-inbox';
+import { BoardView } from './components/board-view';
 import type { ApprovalMode } from './components/approval-mode-picker';
 import { HandoffPicker } from './components/handoff-picker';
 import { ChangelogView } from './components/changelog-view';
@@ -401,13 +401,13 @@ export default function App() {
     void refreshSettings();
   }, [refreshSettings]);
 
-  const handleOpenTasks = useCallback(() => {
-    navigate('/tasks');
+  const handleOpenGrid = useCallback(() => {
+    navigate('/grid');
     dismissTransientSidebar();
   }, [dismissTransientSidebar, navigate]);
 
-  const handleOpenGrid = useCallback(() => {
-    navigate('/grid');
+  const handleOpenBoard = useCallback(() => {
+    navigate('/board');
     dismissTransientSidebar();
   }, [dismissTransientSidebar, navigate]);
 
@@ -499,7 +499,7 @@ export default function App() {
     onSelect: handleSelect,
     onNew: handleNew,
     onGrid: handleOpenGrid,
-    onTasks: handleOpenTasks,
+    onBoard: handleOpenBoard,
     onSettings: handleOpenSettings,
     onChangelog: handleOpenChangelog,
     onArchive: handleArchiveById,
@@ -583,6 +583,35 @@ export default function App() {
             }
           />
           <Route
+            path="/board"
+            element={
+              <BoardView
+                sessions={sessions}
+                providers={providers}
+                approvalMode={approvalMode}
+                onApprovalModeChange={handleApprovalModeChange}
+                onRespondProviderRequest={async (id, requestId, decision) => {
+                  try {
+                    await respondProviderRequest(id, requestId, decision);
+                  } catch {
+                    toast.error('Failed to respond to provider request');
+                  }
+                }}
+                onSteerSession={handleSteerSession}
+                onPauseSession={handlePauseSession}
+                onArchiveSession={handleArchiveById}
+                onRestore={handleRestore}
+                onDelete={handleDelete}
+                onRename={handleRename}
+                onSubmit={handleCreate}
+                steering={steering}
+                lifecycleBusy={lifecycleBusy}
+                creating={creating}
+                railOverlay={!desktopSidebar.pinned}
+              />
+            }
+          />
+          <Route
             path="/session/:sessionId"
             element={
               <SessionRoute
@@ -628,7 +657,6 @@ export default function App() {
               />
             }
           />
-          <Route path="/tasks" element={<TaskInbox providers={providers} />} />
           <Route path="/changelog" element={<ChangelogView onBack={() => navigate('/')} />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
