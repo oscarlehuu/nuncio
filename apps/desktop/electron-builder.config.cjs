@@ -52,9 +52,10 @@ module.exports = {
     channel: isDev ? 'dev' : 'latest',
     releaseType: isDev ? 'prerelease' : 'release',
   },
-  // Sign the bundled server binary (afterPack) before the app is sealed + notarized;
-  // notarize the .app (afterSign) then the .dmg wrapper (afterAllArtifactBuild).
+  // Sign the bundled server binary (afterPack) before the app is sealed, then
+  // notarize + staple the .app (afterSign). Auto-update ships the stapled .app
+  // inside the .zip, so the .dmg wrapper itself is left un-stapled (the app it
+  // installs is still notarized, so it opens cleanly).
   afterPack: './scripts/after-pack.cjs',
   afterSign: './scripts/notarize.cjs',
-  afterAllArtifactBuild: './scripts/notarize-dmg.cjs',
 };
