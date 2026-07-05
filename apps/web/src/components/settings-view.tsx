@@ -7,6 +7,7 @@ import { ProviderIcon } from './provider-icon';
 import { fetchForgeStatus, type ForgeStatusDto } from '../lib/forge-status-api';
 import { AppearanceSettingsSection } from './appearance-settings-section';
 import { RemoteAccessSettingsSection } from './remote-access-settings-section';
+import { ProviderUpdateSettingsSection } from './provider-update-settings-section';
 
 interface SettingsViewProps {
   settings: Setting[];
@@ -176,6 +177,7 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
           <h2 className="text-ui-lg font-medium text-muted-foreground mb-2">Providers</h2>
           <div className="border border-border rounded-xl overflow-hidden bg-card">
             {['cursor', 'pi', 'codex'].map((id) => renderProviderRow(id))}
+            <ProviderUpdateSettingsSection />
           </div>
         </section>
 

@@ -179,7 +179,7 @@ this.cachedAvailable = registry.getAvailable().length > 0;   // models with conf
 
 The Codex provider runs the local Codex CLI app server over stdio. `CodexAppServerClient` owns the JSON-RPC line protocol: request/response correlation, notifications, server-initiated requests, and pending-request cleanup on process exit.
 
-- Availability checks `codex --version` and `codex login status`; it does not make an LLM call.
+- Availability resolves the CLI before launch: explicit `NUNCIO_CODEX_BIN` wins; otherwise Nuncio scans common install paths and `PATH`, probes `--version` and `login status`, auto-selects one logged-in install, and rejects multiple logged-in installs until the setting is made explicit. It does not make an LLM call.
 - Model discovery uses `model/list` after `initialize`, with GPT-5.5/GPT-5.4 fallback rows if discovery is unavailable.
 - New sessions call `thread/start`; follow-ups reuse `sessions.provider_thread_id` through `thread/resume`.
 - Turns use `turn/start`; dispose/archive sends `turn/interrupt` when a turn is active.
@@ -859,6 +859,28 @@ GitHub and GitLab forge providers authenticate via a **two-tier resolver**: a st
 - NEVER spawn the CLI through a shell or with string interpolation — array args only, short timeout, fail closed (`null`) on missing binary / nonzero exit / timeout.
 - NEVER let a slow/missing CLI hang a response — CLI calls are timeout-guarded in both `runCli` and `ForgesService.listStatus()`.
 
+## Provider CLI update checks
+
+`apps/server/src/provider-updates/` exposes optional update metadata for local provider CLIs. It is separate from `AgentProvider` execution so version checks and update commands do not affect session availability or agent runs.
+
+- `GET /api/provider-updates` returns `ProviderUpdatesDto { enabled, providers }` for Pi and Codex.
+- `POST /api/provider-updates/:provider/update` runs an allowlisted update only after explicit user action.
+- `NUNCIO_PROVIDER_UPDATE_CHECKS=0` disables both checks and notifications; the endpoint returns `{ enabled: false, providers: [] }`.
+- Pi uses `NUNCIO_PI_BIN` (default `pi`) and updates via `pi update`.
+- Codex uses `NUNCIO_CODEX_BIN` (default `codex`) for version checks. If the resolved binary path looks package-manager installed, the update action is `npm install -g @openai/codex@latest`, `bun i -g @openai/codex@latest`, `pnpm add -g @openai/codex@latest`, or `brew upgrade --cask codex`. Standalone installs return the official installer command as manual-only.
+- Latest versions come from the public npm registry entries for `@earendil-works/pi-coding-agent` and `@openai/codex`; failures degrade to `status: "unknown"` instead of blocking the Settings page.
+
+**Invariants**
+
+- NEVER auto-run update commands from a version check. Updates only run from `POST /api/provider-updates/:provider/update` after a user clicks Update.
+- NEVER execute user-supplied command strings. The backend constructs the executable and args from a fixed provider definition and detected install source.
+- NEVER treat update status as provider availability. A stale CLI can still be usable; the advisory is informational.
+
+**Frontend**
+
+- `useProviderUpdateNotifications()` performs a delayed startup check and hourly refresh, deduped by provider/latest version, then links users to Settings.
+- `ProviderUpdateSettingsSection` renders under Settings -> Providers -> Tool updates. It shows current/latest versions, the command Nuncio will run, and manual-only commands when one-click update is not safe.
+
 ## Forge connection status & Settings UI
 
 The forge layer (`apps/server/src/forges/`) exposes a lightweight connection-status read used by the Settings page to show whether each Source Control provider (GitHub, GitLab) is connected and **which auth method** is in effect.
@@ -886,7 +908,7 @@ The forge layer (`apps/server/src/forges/`) exposes a lightweight connection-sta
 
 `apps/web/src/components/settings-view.tsx` (props unchanged: `{ settings, onUpdate, onClear, onBack }`) renders the catalog-driven `provider`-category settings as per-provider rows grouped into three sections:
 
-- **Providers** → AI agents `cursor`, `pi`, `codex`.
+- **Providers** → AI agents `cursor`, `pi`, `codex`, plus the Provider CLI update section.
 - **Source Control** → `github`, `gitlab`.
 - **General** → non-provider keys (e.g. `NUNCIO_PROJECT_ROOTS`, `NUNCIO_WORKSPACES_DIR`) via the existing `SettingRow`.
 

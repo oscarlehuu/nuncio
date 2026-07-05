@@ -4,9 +4,24 @@ import userEvent from '@testing-library/user-event';
 import type { Session, SessionEvent } from '../lib/api';
 
 // Feed a controlled event stream; the real transcript + pending-input derivations run.
-let streamEvents: SessionEvent[] = [];
+const streamState = vi.hoisted(() => ({
+  events: [] as SessionEvent[],
+  hasEarlier: false,
+  loadEarlier: vi.fn(),
+  calls: [] as Array<[string | null, string, number | undefined]>,
+}));
+
 vi.mock('../lib/use-session-stream', () => ({
-  useSessionStream: () => ({ events: streamEvents, refetch: vi.fn() }),
+  DETAIL_EVENT_TAIL: 1000,
+  useSessionStream: (sessionId: string | null, base = '', tail?: number) => {
+    streamState.calls.push([sessionId, base, tail]);
+    return {
+      events: streamState.events,
+      refetch: vi.fn(),
+      loadEarlier: streamState.loadEarlier,
+      hasEarlier: streamState.hasEarlier,
+    };
+  },
 }));
 
 import { SessionTile } from './session-tile';
@@ -47,22 +62,35 @@ const noop = () => {};
 
 describe('SessionTile', () => {
   beforeEach(() => {
-    streamEvents = [];
+    streamState.events = [];
+    streamState.hasEarlier = false;
+    streamState.loadEarlier.mockReset();
+    streamState.calls = [];
   });
 
-  it('renders at most 30 tail blocks for a long event log', () => {
-    streamEvents = Array.from({ length: 40 }, (_, i) => assistantEvent(i + 1, `line ${i + 1}`));
+  it('renders the full loaded transcript window instead of dropping early chat blocks', () => {
+    streamState.events = Array.from({ length: 40 }, (_, i) => assistantEvent(i + 1, `line ${i + 1}`));
     render(
       <SessionTile session={fakeSession()} focused={false} onFocus={noop} onMaximize={noop} />,
     );
-    // First 10 lines are dropped by the .slice(-30) tail; last 30 are present.
-    expect(screen.queryByText('line 10')).not.toBeInTheDocument();
-    expect(screen.getByText('line 11')).toBeInTheDocument();
+    expect(screen.getByText('line 1')).toBeInTheDocument();
     expect(screen.getByText('line 40')).toBeInTheDocument();
+    expect(streamState.calls[0]).toEqual(['s1', '', 1000]);
+  });
+
+  it('can page older history inside the workbench tile', async () => {
+    streamState.events = [assistantEvent(40, 'latest line')];
+    streamState.hasEarlier = true;
+    render(
+      <SessionTile session={fakeSession()} focused={false} onFocus={noop} onMaximize={noop} />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /load earlier history/i }));
+    expect(streamState.loadEarlier).toHaveBeenCalledTimes(1);
   });
 
   it('shows the success border when RUNNING', () => {
-    streamEvents = [statusEvent(1, 'RUNNING')];
+    streamState.events = [statusEvent(1, 'RUNNING')];
     render(
       <SessionTile
         session={fakeSession({ status: 'RUNNING' })}
@@ -75,7 +103,7 @@ describe('SessionTile', () => {
   });
 
   it('shows the destructive border when ERROR', () => {
-    streamEvents = [statusEvent(1, 'ERROR')];
+    streamState.events = [statusEvent(1, 'ERROR')];
     const { container } = render(
       <SessionTile
         session={fakeSession({ status: 'ERROR' })}
@@ -88,7 +116,7 @@ describe('SessionTile', () => {
   });
 
   it('shows the muted border when IDLE', () => {
-    streamEvents = [statusEvent(1, 'IDLE')];
+    streamState.events = [statusEvent(1, 'IDLE')];
     render(
       <SessionTile session={fakeSession()} focused={false} onFocus={noop} onMaximize={noop} />,
     );
@@ -96,7 +124,7 @@ describe('SessionTile', () => {
   });
 
   it('shows the warning pulse border when an input request is open, overriding run state', () => {
-    streamEvents = [
+    streamState.events = [
       statusEvent(1, 'RUNNING'),
       {
         seq: 2,
@@ -123,7 +151,7 @@ describe('SessionTile', () => {
   });
 
   it('shows a verify chip when the last verify run failed', () => {
-    streamEvents = [
+    streamState.events = [
       statusEvent(1, 'IDLE'),
       { seq: 2, type: 'verify_result', payload: { command: 'bun test', ok: false, exitCode: 1 }, createdAt: 2 },
     ];
@@ -134,7 +162,7 @@ describe('SessionTile', () => {
   });
 
   it('shows no verify chip without verify events', () => {
-    streamEvents = [statusEvent(1, 'IDLE')];
+    streamState.events = [statusEvent(1, 'IDLE')];
     render(
       <SessionTile session={fakeSession()} focused={false} onFocus={noop} onMaximize={noop} />,
     );
@@ -142,7 +170,7 @@ describe('SessionTile', () => {
   });
 
   it('shows the steer input on every tile — each cell is a chat box', () => {
-    streamEvents = [statusEvent(1, 'IDLE')];
+    streamState.events = [statusEvent(1, 'IDLE')];
     render(
       <SessionTile
         session={fakeSession()}
@@ -156,7 +184,7 @@ describe('SessionTile', () => {
   });
 
   it('typing spaces in the steer input is not swallowed by the tile focus handler', async () => {
-    streamEvents = [statusEvent(1, 'IDLE')];
+    streamState.events = [statusEvent(1, 'IDLE')];
     render(
       <SessionTile
         session={fakeSession()}
@@ -170,5 +198,36 @@ describe('SessionTile', () => {
     const input = screen.getByLabelText(/steer refactor the parser/i);
     await userEvent.type(input, 'hello world');
     expect(input).toHaveValue('hello world');
+  });
+
+  it('selecting a tile lands focus in its composer so you can type at once', async () => {
+    streamState.events = [statusEvent(1, 'IDLE')];
+    render(
+      <SessionTile
+        session={fakeSession()}
+        focused={false}
+        onFocus={noop}
+        onMaximize={noop}
+        onSteer={vi.fn()}
+      />,
+    );
+    const input = screen.getByLabelText(/steer refactor the parser/i);
+    expect(input).not.toHaveFocus();
+    // Click the tile surface (its title), not the input itself.
+    await userEvent.click(screen.getByText('Refactor the parser'));
+    expect(input).toHaveFocus();
+  });
+
+  it('maximize hands up the tile rect so the full view can grow from this slot', async () => {
+    streamState.events = [statusEvent(1, 'IDLE')];
+    const onMaximize = vi.fn();
+    render(
+      <SessionTile session={fakeSession()} focused={false} onFocus={noop} onMaximize={onMaximize} />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: /maximize refactor the parser/i }));
+    expect(onMaximize).toHaveBeenCalledTimes(1);
+    expect(onMaximize).toHaveBeenCalledWith(
+      expect.objectContaining({ width: expect.any(Number), height: expect.any(Number) }),
+    );
   });
 });

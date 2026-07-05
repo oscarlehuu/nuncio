@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Minimize2, MonitorSmartphone } from 'lucide-react';
-import type { MessageAttachment, ProviderRequestDecision, Session } from '../lib/api';
+import type { MessageAttachment, ProviderRequestDecision, Session, SessionStatus } from '../lib/api';
 import type { ModelProvider } from '../lib/model-providers';
 import type { ModelOptionsMap } from '../lib/model-options';
 import { DETAIL_EVENT_TAIL, useSessionStream } from '../lib/use-session-stream';
@@ -22,6 +22,7 @@ import {
 import { machineHref } from '../lib/hub-api';
 import { SessionDetail } from './session-detail';
 import { SessionTile } from './session-tile';
+import { MaximizeTransition } from './maximize-transition';
 import { RemoteSessionTile } from './remote-session-tile';
 import { GridSlotComposer } from './grid-slot-composer';
 import type { ApprovalMode } from './approval-mode-picker';
@@ -45,6 +46,7 @@ interface GridViewProps {
   onRestore: (id: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
   onRename: (id: string, title: string) => Promise<void>;
+  onSessionStatus?: (id: string, status: SessionStatus, createdAt: number) => void;
   onCreate: (
     prompt: string,
     model?: string,
@@ -70,6 +72,35 @@ export function GridView(props: GridViewProps) {
   const [slots, setSlots] = useState<GridSlot[]>(() => loadGridPreference().slots);
   const [focusedSlot, setFocusedSlot] = useState<number | null>(null);
   const [maximizedSlot, setMaximizedSlot] = useState<number | null>(null);
+  // Tile rect captured at maximize time so the full view can grow from / shrink
+  // back to that exact slot; `closing` drives the shrink-back animation.
+  const [originRect, setOriginRect] = useState<DOMRect | null>(null);
+  const [closing, setClosing] = useState(false);
+
+  const requestMaximize = useCallback((index: number, rect: DOMRect | null) => {
+    setOriginRect(rect);
+    setClosing(false);
+    setMaximizedSlot(index);
+  }, []);
+
+  // Restore plays the shrink-back animation first; MaximizeTransition calls
+  // handleMaximizeExited when it finishes, which is what actually unmounts.
+  const requestRestore = useCallback(() => setClosing(true), []);
+
+  const handleMaximizeExited = useCallback(() => {
+    const slot = maximizedSlot;
+    setMaximizedSlot(null);
+    setClosing(false);
+    setOriginRect(null);
+    if (slot !== null) {
+      setFocusedSlot(slot);
+      // Land focus back in the restored tile's composer once the grid remounts.
+      requestAnimationFrame(() => {
+        const el = document.querySelector(`[data-grid-slot="${slot}"] [data-steer-input]`);
+        if (el instanceof HTMLElement) el.focus({ preventScroll: true });
+      });
+    }
+  }, [maximizedSlot]);
 
   useEffect(() => {
     // Local cache is authoritative when present — restore from the server ONLY on a
@@ -171,7 +202,7 @@ export function GridView(props: GridViewProps) {
       } else if (mod && e.key === 'Enter') {
         if (maximizedSlot !== null) {
           e.preventDefault();
-          setMaximizedSlot(null);
+          requestRestore();
         } else if (focusedSlot !== null && slots[focusedSlot]?.sessionId) {
           e.preventDefault();
           const slot = slots[focusedSlot];
@@ -179,44 +210,52 @@ export function GridView(props: GridViewProps) {
             // Remote sessions open full-fidelity on their machine's own base.
             window.location.assign(`${machineHref(slot.machineId)}session/${slot.sessionId}`);
           } else {
-            setMaximizedSlot(focusedSlot);
+            const el = document.querySelector(`[data-grid-slot="${focusedSlot}"]`);
+            const rect = el instanceof HTMLElement ? el.getBoundingClientRect() : null;
+            requestMaximize(focusedSlot, rect);
           }
         }
       } else if (e.key === 'Escape' && maximizedSlot !== null) {
         e.preventDefault();
-        setMaximizedSlot(null);
+        requestRestore();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [preset, slots, focusedSlot, maximizedSlot]);
+  }, [preset, slots, focusedSlot, maximizedSlot, requestRestore, requestMaximize]);
 
   // Maximize: mount ONLY the full SessionDetail; every tile unmounts (founder-locked).
+  // The transition wrapper grows it from — and shrinks it back to — the origin slot.
   if (maximizedSlot !== null) {
     const bound = slots[maximizedSlot]?.sessionId;
     const session = bound ? sessionsById.get(bound) : undefined;
     if (session) {
       return (
-        <MaximizedSession
-          session={session}
-          providers={providers}
-          approvalMode={props.approvalMode}
-          onApprovalModeChange={props.onApprovalModeChange}
-          onRespondProviderRequest={(requestId, decision) =>
-            props.onRespondProviderRequest(session.id, requestId, decision)
-          }
-          onSteer={(message, attachments) =>
-            props.onSteerSession(session.id, message, attachments)
-          }
-          onPause={() => props.onPauseSession(session.id)}
-          onArchive={() => props.onArchiveSession(session.id)}
-          onRestore={props.onRestore}
-          onDelete={props.onDelete}
-          onRename={props.onRename}
-          steering={props.steering}
-          lifecycleBusy={props.lifecycleBusy}
-          onRestoreGrid={() => setMaximizedSlot(null)}
-        />
+        <section className="relative flex flex-1 flex-col min-h-0 min-w-0">
+          <MaximizeTransition originRect={originRect} closing={closing} onExited={handleMaximizeExited}>
+            <MaximizedSession
+              session={session}
+              providers={providers}
+              approvalMode={props.approvalMode}
+              onApprovalModeChange={props.onApprovalModeChange}
+              onRespondProviderRequest={(requestId, decision) =>
+                props.onRespondProviderRequest(session.id, requestId, decision)
+              }
+              onSteer={(message, attachments) =>
+                props.onSteerSession(session.id, message, attachments)
+              }
+              onPause={() => props.onPauseSession(session.id)}
+              onArchive={() => props.onArchiveSession(session.id)}
+              onRestore={props.onRestore}
+              onDelete={props.onDelete}
+              onRename={props.onRename}
+              onSessionStatus={props.onSessionStatus}
+              steering={props.steering}
+              lifecycleBusy={props.lifecycleBusy}
+              onRestoreGrid={requestRestore}
+            />
+          </MaximizeTransition>
+        </section>
       );
     }
     // Bound session vanished while maximized — fall back to the grid.
@@ -314,10 +353,12 @@ export function GridView(props: GridViewProps) {
                   session={session}
                   focused={focused}
                   onFocus={() => setFocusedSlot(index)}
-                  onMaximize={() => setMaximizedSlot(index)}
+                  onMaximize={(rect) => requestMaximize(index, rect)}
+                  slotIndex={index}
                   onClose={() => clearSlot(index)}
                   onSteer={(msg) => props.onSteerSession(session.id, msg)}
                   steering={props.steering}
+                  onSessionStatus={props.onSessionStatus}
                 />
               );
             }
@@ -394,6 +435,7 @@ interface MaximizedSessionProps {
   onRestore: (id: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
   onRename: (id: string, title: string) => Promise<void>;
+  onSessionStatus?: (id: string, status: SessionStatus, createdAt: number) => void;
   steering?: boolean;
   lifecycleBusy?: boolean;
   onRestoreGrid: () => void;
@@ -411,6 +453,7 @@ function MaximizedSession({
   onRestore,
   onDelete,
   onRename,
+  onSessionStatus,
   steering,
   lifecycleBusy,
   onRestoreGrid,
@@ -422,6 +465,14 @@ function MaximizedSession({
     DETAIL_EVENT_TAIL,
   );
   const machineActive = useActiveRun(session, { onTranscriptRefreshed: refetch });
+  const latestStatus = latestStatusEvent(events);
+  const latestStatusValue = latestStatus?.status;
+  const latestStatusCreatedAt = latestStatus?.createdAt;
+
+  useEffect(() => {
+    if (!latestStatusValue || latestStatusCreatedAt === undefined || !onSessionStatus) return;
+    onSessionStatus(session.id, latestStatusValue, latestStatusCreatedAt);
+  }, [latestStatusCreatedAt, latestStatusValue, onSessionStatus, session.id]);
 
   return (
     <div className="relative flex flex-1 flex-col min-h-0">
@@ -456,7 +507,34 @@ function MaximizedSession({
         steering={steering}
         lifecycleBusy={lifecycleBusy}
         machineActive={machineActive}
+        autoFocusComposer
       />
     </div>
   );
+}
+
+const SESSION_STATUSES: readonly SessionStatus[] = [
+  'CREATED',
+  'RUNNING',
+  'IDLE',
+  'PAUSED',
+  'ARCHIVED',
+  'ERROR',
+];
+
+function asSessionStatus(value: unknown): SessionStatus | null {
+  if (typeof value !== 'string') return null;
+  return (SESSION_STATUSES as readonly string[]).includes(value) ? (value as SessionStatus) : null;
+}
+
+function latestStatusEvent(
+  events: ReturnType<typeof useSessionStream>['events'],
+): { status: SessionStatus; createdAt: number } | null {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (event?.type !== 'status') continue;
+    const status = asSessionStatus(event.payload.status);
+    if (status) return { status, createdAt: event.createdAt };
+  }
+  return null;
 }

@@ -15,14 +15,14 @@ import {
   type CodexServerNotification,
   type CodexServerRequest,
 } from './codex-app-server.client';
+import {
+  expandHome,
+  resolveCodexCli,
+  type CodexCliCommandRunner,
+  type CodexCliResolution,
+} from './codex-cli-resolver';
 
 type CodexRuntimeMode = 'approval-required' | 'full-access';
-
-type CommandRunner = (
-  command: string,
-  args: string[],
-  options: { env: NodeJS.ProcessEnv },
-) => Promise<{ status: number | null; stdout: string; stderr: string }>;
 
 interface CodexThreadOpenResponse {
   thread?: { id?: string };
@@ -74,6 +74,9 @@ interface ActiveCodexSession {
   requestProviderApproval?: AgentRunContext['requestProviderApproval'];
   activeTurnId?: string;
   accumulatedText: string;
+  /** itemId of the agentMessage item currently streaming — a change marks a new
+   * section that must be separated from the previous one. */
+  currentAgentItemId?: string;
   completions: Map<
     string,
     {
@@ -126,12 +129,16 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
   private readonly activeSessions = new Map<string, ActiveCodexSession>();
   private cachedAvailable?: boolean;
   private cachedModels?: ModelProviderDto[];
+  private cachedCli?: CodexCliResolution;
 
   /** Test hook: inject a fake app-server client. */
   clientFactory?: (input: { binaryPath: string; cwd: string; env: NodeJS.ProcessEnv }) => CodexAppServerClientLike;
 
+  /** Test hook: inject discovered Codex CLI candidates without scanning the host. */
+  cliCandidatePaths?: string[];
+
   /** Test hook: replace process execution for availability probes. */
-  commandRunner: CommandRunner = async (command, args, options) => {
+  commandRunner: CodexCliCommandRunner = async (command, args, options) => {
     const result = spawnSync(command, args, {
       env: options.env,
       encoding: 'utf8',
@@ -153,28 +160,15 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
 
   async isAvailable(): Promise<boolean> {
     if (this.cachedAvailable !== undefined) return this.cachedAvailable;
-    const binaryPath = this.resolveBinaryPath();
-    const env = this.buildCodexEnv();
-
-    try {
-      const version = await this.commandRunner(binaryPath, ['--version'], { env });
-      if (version.status !== 0) {
-        this.cachedAvailable = false;
-        return false;
-      }
-
-      const login = await this.commandRunner(binaryPath, ['login', 'status'], { env });
-      this.cachedAvailable = login.status === 0;
-      return this.cachedAvailable;
-    } catch {
-      this.cachedAvailable = false;
-      return false;
-    }
+    const resolution = await this.resolveCli();
+    this.cachedAvailable = resolution.status === 'ready';
+    return this.cachedAvailable;
   }
 
   bustCache(): void {
     this.cachedAvailable = undefined;
     this.cachedModels = undefined;
+    this.cachedCli = undefined;
   }
 
   /** Codex app-server thread ids survive Nuncio daemon restarts and can be resumed. */
@@ -187,7 +181,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
     if (!(await this.isAvailable())) return [];
 
     const cwd = this.settings.resolve('NUNCIO_CODEX_CWD')?.trim() || process.cwd();
-    const client = this.createClient(cwd);
+    const client = this.createClient(cwd, await this.resolveBinaryPathForRun());
     try {
       await client.initialize();
       const response = await client.request<CodexModelListResponse>('model/list', {});
@@ -245,6 +239,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
     active.currentEmit = context.emit;
     active.requestProviderApproval = context.requestProviderApproval;
     active.accumulatedText = '';
+    active.currentAgentItemId = undefined;
 
     const model = this.resolveModel(context.model);
     const effort = this.resolveReasoningEffort(context.modelOptions);
@@ -282,7 +277,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
     if (existing) return existing;
 
     const cwd = this.resolveCwd(context);
-    const client = this.createClient(cwd);
+    const client = this.createClient(cwd, await this.resolveBinaryPathForRun());
     const active: ActiveCodexSession = {
       client,
       codexThreadId: '',
@@ -347,9 +342,9 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
     }
   }
 
-  private createClient(cwd: string): CodexAppServerClientLike {
+  private createClient(cwd: string, binaryPath: string): CodexAppServerClientLike {
     const input = {
-      binaryPath: this.resolveBinaryPath(),
+      binaryPath,
       cwd,
       env: this.buildCodexEnv(),
     };
@@ -387,8 +382,22 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
     if (notification.method === 'item/agentMessage/delta') {
       const delta = asString(params?.delta);
       if (!delta) return;
-      active.accumulatedText += delta;
-      this.pushEvent(sessionId, 'assistant_delta', { delta }, active.currentEmit);
+      // A turn's message can arrive as a sequence of agentMessage items; each
+      // item's text is internally well-formed, but Codex sends no separator
+      // between items, so appending deltas verbatim runs consecutive sections
+      // together. Insert a paragraph break at each item boundary so the shared
+      // markdown renderer shows them as distinct paragraphs.
+      const itemId = asString(params?.itemId);
+      const isNewItem =
+        itemId !== undefined &&
+        active.currentAgentItemId !== undefined &&
+        itemId !== active.currentAgentItemId;
+      const piece = isNewItem
+        ? `${this.paragraphBoundary(active.accumulatedText)}${delta}`
+        : delta;
+      if (itemId !== undefined) active.currentAgentItemId = itemId;
+      active.accumulatedText += piece;
+      this.pushEvent(sessionId, 'assistant_delta', { delta: piece }, active.currentEmit);
       this.sessions.touchPreview(sessionId, active.accumulatedText);
       return;
     }
@@ -550,8 +559,21 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
     }
   }
 
-  private resolveBinaryPath(): string {
-    return this.settings.resolve('NUNCIO_CODEX_BIN')?.trim() || 'codex';
+  private async resolveBinaryPathForRun(): Promise<string> {
+    const resolution = await this.resolveCli();
+    if (resolution.status === 'ready' && resolution.binaryPath) return resolution.binaryPath;
+    throw new Error(resolution.reason);
+  }
+
+  private async resolveCli(): Promise<CodexCliResolution> {
+    if (this.cachedCli) return this.cachedCli;
+    this.cachedCli = await resolveCodexCli({
+      configuredPath: this.settings.resolve('NUNCIO_CODEX_BIN')?.trim(),
+      candidatePaths: this.cliCandidatePaths,
+      env: this.buildCodexEnv(),
+      commandRunner: this.commandRunner,
+    });
+    return this.cachedCli;
   }
 
   private resolveCwd(context: AgentRunContext): string {
@@ -566,7 +588,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
   private buildCodexEnv(): NodeJS.ProcessEnv {
     const env = { ...process.env };
     const codexHome = this.settings.resolve('NUNCIO_CODEX_HOME')?.trim();
-    if (codexHome) env.CODEX_HOME = codexHome;
+    if (codexHome) env.CODEX_HOME = expandHome(codexHome, env);
     return env;
   }
 

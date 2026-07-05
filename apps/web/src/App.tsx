@@ -25,6 +25,7 @@ import { clearSetting, fetchSettings, updateSetting, type Setting } from './lib/
 import { DETAIL_EVENT_TAIL, useSessionStream } from './lib/use-session-stream';
 import { useActiveRun } from './lib/use-active-run';
 import { useSessionNotifications } from './lib/use-session-notifications';
+import { useProviderUpdateNotifications } from './lib/use-provider-update-notifications';
 import { HomeView } from './components/home-view';
 import { GridView } from './components/grid-view';
 import type { ApprovalMode } from './components/approval-mode-picker';
@@ -94,6 +95,8 @@ export default function App() {
   const [listsReady, setListsReady] = useState(false);
   const sessionsErrorShown = useRef(false);
   const archivedErrorShown = useRef(false);
+  const steeringSessionIdRef = useRef<string | null>(null);
+  const steeringTokenRef = useRef(0);
   const approvalMode: ApprovalMode =
     settings.find((setting) => setting.key === 'NUNCIO_CODEX_RUNTIME_MODE')?.value ===
     'approval-required'
@@ -169,7 +172,10 @@ export default function App() {
     }
   }, [listsReady, sessions.length, location.pathname, navigate]);
 
+  const reviewProviderUpdates = useCallback(() => navigate('/settings'), [navigate]);
+
   useSessionNotifications(sessions, activeId);
+  useProviderUpdateNotifications(reviewProviderUpdates);
 
   const dismissTransientSidebar = useCallback(() => {
     setSidebarOpen(false);
@@ -229,6 +235,9 @@ export default function App() {
     options?: { forceResume?: boolean },
   ) => {
     if (!activeId) return;
+    const token = steeringTokenRef.current + 1;
+    steeringTokenRef.current = token;
+    steeringSessionIdRef.current = activeId;
     setSteering(true);
     try {
       await steerSession(activeId, message, options?.forceResume, undefined, attachments);
@@ -244,7 +253,10 @@ export default function App() {
         );
       }
     } finally {
-      setSteering(false);
+      if (steeringTokenRef.current === token) {
+        steeringSessionIdRef.current = null;
+        setSteering(false);
+      }
     }
   };
 
@@ -254,6 +266,9 @@ export default function App() {
     message: string,
     attachments?: MessageAttachment[],
   ) => {
+    const token = steeringTokenRef.current + 1;
+    steeringTokenRef.current = token;
+    steeringSessionIdRef.current = id;
     setSteering(true);
     try {
       await steerSession(id, message, undefined, undefined, attachments);
@@ -261,7 +276,10 @@ export default function App() {
     } catch (err) {
       toast.error(err instanceof SteerApiError ? err.message : 'Failed to steer session');
     } finally {
-      setSteering(false);
+      if (steeringTokenRef.current === token) {
+        steeringSessionIdRef.current = null;
+        setSteering(false);
+      }
     }
   }, [refresh]);
 
@@ -329,7 +347,10 @@ export default function App() {
       return changed ? next : prev;
     });
 
-    if (id === activeId && status !== 'RUNNING') setSteering(false);
+    if (status !== 'RUNNING' && (id === activeId || id === steeringSessionIdRef.current)) {
+      steeringSessionIdRef.current = null;
+      setSteering(false);
+    }
   }, [activeId]);
 
   const handlePause = async () => {
@@ -597,6 +618,7 @@ export default function App() {
                 onRestore={handleRestore}
                 onDelete={handleDelete}
                 onRename={handleRename}
+                onSessionStatus={handleSessionStatus}
                 onCreate={handleCreateReturning}
                 steering={steering}
                 lifecycleBusy={lifecycleBusy}
@@ -841,6 +863,7 @@ function SessionRoute({
       steering={steering}
       lifecycleBusy={lifecycleBusy}
       machineActive={machineActive}
+      autoFocusComposer
     />
   );
 }

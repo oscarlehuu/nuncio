@@ -1,6 +1,10 @@
 import { useCallback, type Dispatch, type SetStateAction } from 'react';
+import { toast } from 'sonner';
 import { useMessageAttachments } from './use-message-attachments';
 import { appendImageTokens, stripImageToken } from './image-reference-token';
+
+const UNSUPPORTED_IMAGE_MESSAGE =
+  'This provider does not accept images yet. Switch to Pi or another image-capable model to paste screenshots.';
 
 /**
  * Image staging for a composer, wired to its prompt text: adding an image
@@ -11,8 +15,13 @@ import { appendImageTokens, stripImageToken } from './image-reference-token';
  */
 export function useComposerAttachments(setText: Dispatch<SetStateAction<string>>) {
   const base = useMessageAttachments();
-  const { addFiles: baseAddFiles, addFromDataTransfer: baseAddFromDataTransfer, remove: baseRemove } =
-    base;
+  const {
+    addFiles: baseAddFiles,
+    addFromDataTransfer: baseAddFromDataTransfer,
+    hasImages: baseHasImages,
+    remove: baseRemove,
+    items,
+  } = base;
 
   const addFiles = useCallback(
     async (files: Parameters<typeof baseAddFiles>[0]) => {
@@ -34,12 +43,30 @@ export function useComposerAttachments(setText: Dispatch<SetStateAction<string>>
 
   const remove = useCallback(
     (id: string) => {
-      const item = base.items.find((i) => i.id === id);
+      const item = items.find((i) => i.id === id);
       baseRemove(id);
       if (item) setText((t) => stripImageToken(t, item.label));
     },
-    [base.items, baseRemove, setText],
+    [items, baseRemove, setText],
   );
 
-  return { ...base, addFiles, addFromDataTransfer, remove };
+  const handlePaste = useCallback(
+    (
+      event: { clipboardData: DataTransfer | null; preventDefault: () => void },
+      canAttachImages: boolean,
+    ) => {
+      const clipboardData = event.clipboardData;
+      if (!clipboardData || !baseHasImages(clipboardData)) return false;
+      event.preventDefault();
+      if (!canAttachImages) {
+        toast.error(UNSUPPORTED_IMAGE_MESSAGE);
+        return true;
+      }
+      void addFromDataTransfer(clipboardData);
+      return true;
+    },
+    [addFromDataTransfer, baseHasImages],
+  );
+
+  return { ...base, addFiles, addFromDataTransfer, handlePaste, remove };
 }

@@ -93,13 +93,24 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     altEnvVar: 'PI_AGENT_DIR',
   },
   {
+    key: 'NUNCIO_PI_BIN',
+    category: 'provider',
+    providerId: 'pi',
+    type: 'path',
+    label: 'Pi CLI binary',
+    description:
+      'Path to the `pi` CLI binary used for version checks and user-triggered updates. Defaults to PATH.',
+    envVar: 'NUNCIO_PI_BIN',
+    default: 'pi',
+  },
+  {
     key: 'NUNCIO_CODEX_BIN',
     category: 'provider',
     providerId: 'codex',
     type: 'path',
     label: 'Codex CLI binary',
     description:
-      'Path to the `codex` CLI binary used to launch `codex app-server`. Defaults to PATH.',
+      'Path to the `codex` CLI binary used to launch `codex app-server`. Leave as `codex` to auto-discover one logged-in install; set an absolute path when multiple installs exist.',
     envVar: 'NUNCIO_CODEX_BIN',
     default: 'codex',
   },
@@ -163,6 +174,16 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     label: 'Project roots',
     description: 'Comma-separated directories scanned one level deep for git repos (project picker).',
     envVar: 'NUNCIO_PROJECT_ROOTS',
+  },
+  {
+    key: 'NUNCIO_PROVIDER_UPDATE_CHECKS',
+    category: 'general',
+    type: 'boolean',
+    label: 'Provider update checks',
+    description:
+      'Check Pi and Codex CLI versions against their public package registry and show optional update actions.',
+    envVar: 'NUNCIO_PROVIDER_UPDATE_CHECKS',
+    default: '1',
   },
   {
     key: 'NUNCIO_WORKSPACES_DIR',

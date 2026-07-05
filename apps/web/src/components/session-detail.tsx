@@ -89,6 +89,9 @@ interface SessionDetailProps {
   hasEarlier?: boolean;
   /** Page the previous window of history into the transcript. */
   onLoadEarlier?: () => void | Promise<void>;
+  /** Focus the composer when the view opens / the session changes (desktop only),
+   *  so the user can type straight away. */
+  autoFocusComposer?: boolean;
 }
 
 export function SessionDetail({
@@ -112,6 +115,7 @@ export function SessionDetail({
   headerActions,
   hasEarlier = false,
   onLoadEarlier,
+  autoFocusComposer = false,
 }: SessionDetailProps) {
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [steerText, setSteerText] = useState('');
@@ -154,6 +158,7 @@ export function SessionDetail({
     saveInspectorPreference({ version: 1, open: panelOpen, tool: activeTool, scmSegment });
   }, [panelOpen, activeTool, scmSegment]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const streaming = session.status === 'RUNNING';
   const isRunning = session.status === 'RUNNING';
   const isArchived = session.status === 'ARCHIVED';
@@ -199,6 +204,16 @@ export function SessionDetail({
   const contextUsage = useContextUsage(events, entry?.contextWindow);
 
   useStickToBottom(scrollRef, events.length, { resetKey: session.id });
+
+  // Land the caret in the composer when the view opens (maximize) or the user
+  // switches sessions, so they can type without a click. Desktop only — never
+  // pop the mobile keyboard just from opening a chat.
+  useEffect(() => {
+    if (!autoFocusComposer) return;
+    if (!window.matchMedia?.('(pointer: fine)').matches) return;
+    const el = composerRef.current;
+    if (el && !el.disabled) el.focus({ preventScroll: true });
+  }, [autoFocusComposer, session.id]);
 
   const handleSteer = async () => {
     const text = steerText.trim();
@@ -484,18 +499,10 @@ export function SessionDetail({
         >
           <AttachmentTray items={imageAttachments.items} onRemove={imageAttachments.remove} />
           <Textarea
+            ref={composerRef}
             value={steerText}
             onChange={(e) => setSteerText(e.target.value)}
-            onPaste={
-              canAttachImages
-                ? (e) => {
-                    if (imageAttachments.hasImages(e.clipboardData)) {
-                      e.preventDefault();
-                      void imageAttachments.addFromDataTransfer(e.clipboardData);
-                    }
-                  }
-                : undefined
-            }
+            onPaste={(e) => imageAttachments.handlePaste(e, canAttachImages)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey && !isComposingEvent(e)) {
                 e.preventDefault();

@@ -1,11 +1,10 @@
-import { useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Maximize2, Send, X } from 'lucide-react';
 import type { Session, SessionStatus } from '../lib/api';
-import { statusLabel, transcriptImageSrc } from '../lib/api';
+import { statusLabel } from '../lib/api';
 import { isComposingEvent } from '../lib/keyboard';
-import { useSessionStream } from '../lib/use-session-stream';
+import { DETAIL_EVENT_TAIL, useSessionStream } from '../lib/use-session-stream';
 import { useStickToBottom } from '../lib/use-stick-to-bottom';
-import { useTranscriptBlocks } from '../lib/use-transcript-blocks';
 import { derivePendingUserInput } from '../lib/derive-pending-user-input';
 import { deriveVerifyStatus } from '../lib/derive-verify-status';
 import { VerifyChip } from './verify-chip';
@@ -13,28 +12,28 @@ import { projectDisplayName } from '../lib/projects';
 import { prettyModelName } from '../lib/model-providers';
 import { ProviderIcon } from './provider-icon';
 import { StatusDot } from './status-dot';
-import { ChatImage } from './chat-image';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { summarizeToolGroup } from '@/lib/tool-summary';
 import { cn } from '@/lib/utils';
-
-/** Only the freshest blocks are rendered in a tile — LOD, not the full transcript. */
-const TILE_TAIL_LENGTH = 30;
-/** LOD tiles only render a block tail; cap the event window they subscribe to. */
-const TILE_EVENT_TAIL = 300;
+import { Transcript } from './session-transcript';
 
 interface SessionTileProps {
   session: Session;
   focused: boolean;
   onFocus: () => void;
-  onMaximize: () => void;
+  /** Maximize this tile. Receives the tile's on-screen rect so the full view can
+   *  grow from (and shrink back to) exactly this slot. */
+  onMaximize: (rect: DOMRect) => void;
+  /** Grid slot index — exposed as data-slot for keyboard-maximize and
+   *  restore-focus lookups from the grid. */
+  slotIndex?: number;
   /** Unbind this tile from its Workbench slot — frees the slot back to a "new
    *  agent" composer. Non-destructive: the session stays in the sidebar. Grid only. */
   onClose?: () => void;
   /** Steer callback, wired only for the focused tile's single-line composer. */
   onSteer?: (message: string) => Promise<void>;
   steering?: boolean;
+  onSessionStatus?: (id: string, status: SessionStatus, createdAt: number) => void;
   /** Origin-absolute API base when the session lives on another hub machine. */
   apiBase?: string;
 }
@@ -71,14 +70,16 @@ function glowStyle(status: SessionStatus, pending: boolean): CSSProperties | und
 }
 
 /** Latest status reported by the stream wins over the (possibly stale) list row. */
-function effectiveStatus(events: ReturnType<typeof useSessionStream>['events'], fallback: SessionStatus): SessionStatus {
+function latestStatusEvent(
+  events: ReturnType<typeof useSessionStream>['events'],
+): { status: SessionStatus; createdAt: number } | null {
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const event = events[i];
     if (event?.type !== 'status') continue;
     const value = event.payload.status;
-    if (typeof value === 'string') return value as SessionStatus;
+    if (typeof value === 'string') return { status: value as SessionStatus, createdAt: event.createdAt };
   }
-  return fallback;
+  return null;
 }
 
 export function SessionTile({
@@ -86,23 +87,37 @@ export function SessionTile({
   focused,
   onFocus,
   onMaximize,
+  slotIndex,
   onClose,
   onSteer,
   steering,
+  onSessionStatus,
   apiBase = '',
 }: SessionTileProps) {
-  const { events } = useSessionStream(session.id, apiBase, TILE_EVENT_TAIL);
-  const blocks = useTranscriptBlocks(events);
-  const tail = useMemo(() => blocks.slice(-TILE_TAIL_LENGTH), [blocks]);
-  const items = useMemo(() => groupTileItems(tail), [tail]);
+  const { events, loadEarlier, hasEarlier } = useSessionStream(session.id, apiBase, DETAIL_EVENT_TAIL);
   const pending = useMemo(() => derivePendingUserInput(events).length > 0, [events]);
   const verifyStatus = useMemo(() => deriveVerifyStatus(events), [events]);
-  const status = effectiveStatus(events, session.status);
+  const latestStatus = latestStatusEvent(events);
+  const latestStatusValue = latestStatus?.status;
+  const latestStatusCreatedAt = latestStatus?.createdAt;
+  const status = latestStatus?.status ?? session.status;
   const [steerText, setSteerText] = useState('');
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const steerRef = useRef<HTMLInputElement>(null);
+  const maximize = () => {
+    const rect = rootRef.current?.getBoundingClientRect();
+    if (rect) onMaximize(rect);
+  };
 
-  // Keep the tail pinned to the newest block as the stream grows.
-  useStickToBottom(scrollRef, tail, { always: true });
+  // Start each tile at the latest message, then respect manual scrollback.
+  useStickToBottom(scrollRef, events, { resetKey: session.id });
+
+  useEffect(() => {
+    if (!latestStatusValue || latestStatusCreatedAt === undefined || !onSessionStatus) return;
+    onSessionStatus(session.id, latestStatusValue, latestStatusCreatedAt);
+  }, [latestStatusCreatedAt, latestStatusValue, onSessionStatus, session.id]);
 
   const projectName = projectDisplayName(session.projectPath);
   const modelName = session.model ? prettyModelName(session.model) : null;
@@ -122,9 +137,16 @@ export function SessionTile({
 
   return (
     <div
+      ref={rootRef}
+      data-grid-slot={slotIndex}
       role="button"
       tabIndex={0}
-      onClick={onFocus}
+      onClick={() => {
+        // Selecting a tile in the workbench lands the caret in its composer so
+        // the user can type straight away.
+        onFocus();
+        steerRef.current?.focus({ preventScroll: true });
+      }}
       onKeyDown={(e) => {
         // Only keys aimed at the tile itself — never swallow typing that
         // bubbles up from the steer input (Space would otherwise be eaten).
@@ -148,7 +170,7 @@ export function SessionTile({
       <header
         onDoubleClick={(e) => {
           e.stopPropagation();
-          onMaximize();
+          maximize();
         }}
         className="flex items-center gap-2 border-b border-border/60 px-3 py-2 shrink-0"
       >
@@ -184,7 +206,7 @@ export function SessionTile({
           aria-label={`Maximize ${session.title}`}
           onClick={(e) => {
             e.stopPropagation();
-            onMaximize();
+            maximize();
           }}
         >
           <Maximize2 className="size-3.5" />
@@ -208,23 +230,42 @@ export function SessionTile({
 
       <div
         ref={scrollRef}
-        className="min-h-0 flex-1 overflow-y-auto px-3 py-2 text-[12px] leading-relaxed"
+        className="min-h-0 flex-1 overflow-y-auto px-3 py-2"
       >
-        {tail.length === 0 ? (
+        {events.length === 0 ? (
           <p className="text-muted-foreground italic">No output yet.</p>
         ) : (
-          // min-h-full + justify-end: a short tail hugs the steer input at the
-          // bottom (chat-style) instead of stranding a gap in the middle.
-          <div className="flex min-h-full flex-col justify-end gap-1.5">
-            {items.map((item, i) =>
-              item.kind === 'tool-group' ? (
-                <p key={i} className="truncate text-[11px] text-muted-foreground/90">
-                  {item.summary}
-                </p>
-              ) : (
-                <TileBlock key={i} block={item.block} sessionId={session.id} apiBase={apiBase} />
-              ),
-            )}
+          <div
+            className="flex min-h-full flex-col justify-end [--chat-font-scale:0.88] [--chat-gap:0.3rem] [--chat-msg-py:0.35rem]"
+          >
+            {hasEarlier ? (
+              <div className="flex justify-center pb-1 pt-0.5">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  className="h-6 text-[11px] text-muted-foreground"
+                  disabled={loadingEarlier}
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    setLoadingEarlier(true);
+                    try {
+                      await loadEarlier();
+                    } finally {
+                      setLoadingEarlier(false);
+                    }
+                  }}
+                >
+                  {loadingEarlier ? 'Loading...' : 'Load earlier history'}
+                </Button>
+              </div>
+            ) : null}
+            <Transcript
+              events={events}
+              sessionId={session.id}
+              apiBase={apiBase}
+              streaming={status === 'RUNNING'}
+            />
           </div>
         )}
       </div>
@@ -232,6 +273,8 @@ export function SessionTile({
       {onSteer ? (
         <div className="flex items-center gap-1.5 border-t border-border/60 p-2 shrink-0">
           <Input
+            ref={steerRef}
+            data-steer-input=""
             value={steerText}
             onChange={(e) => setSteerText(e.target.value)}
             onKeyDown={(e) => {
@@ -259,100 +302,4 @@ export function SessionTile({
       ) : null}
     </div>
   );
-}
-
-type TileBlockItem = ReturnType<typeof useTranscriptBlocks>[number];
-type TileItem =
-  | { kind: 'block'; block: TileBlockItem }
-  | { kind: 'tool-group'; summary: string };
-
-/**
- * Collapse consecutive tool calls into one summary line. A tile is a glanceable
- * preview, so a run of tools reads as "Ran 2 commands" (matching the detail
- * view) instead of N raw command lines flooding the tail. Single, isolated
- * tools keep their verb+subject line.
- */
-function groupTileItems(blocks: TileBlockItem[]): TileItem[] {
-  const out: TileItem[] = [];
-  let i = 0;
-  while (i < blocks.length) {
-    const block = blocks[i];
-    if (block.kind === 'tool') {
-      const group: Array<{ tool: string; input?: unknown }> = [];
-      while (i < blocks.length) {
-        const b = blocks[i];
-        if (b.kind !== 'tool') break;
-        group.push({ tool: b.tool, input: b.input });
-        i += 1;
-      }
-      if (group.length === 1) out.push({ kind: 'block', block });
-      else out.push({ kind: 'tool-group', summary: summarizeToolGroup(group) });
-    } else {
-      out.push({ kind: 'block', block });
-      i += 1;
-    }
-  }
-  return out;
-}
-
-/** Compact single-line-ish rendering of a transcript block for the tail. */
-function TileBlock({
-  block,
-  sessionId,
-  apiBase,
-}: {
-  block: TileBlockItem;
-  sessionId: string;
-  apiBase: string;
-}) {
-  switch (block.kind) {
-    case 'user':
-      return (
-        <div className="flex flex-col gap-1">
-          {block.images && block.images.length > 0 ? (
-            <div className="flex flex-wrap gap-1">
-              {block.images.map((image, i) => (
-                <ChatImage
-                  key={i}
-                  src={transcriptImageSrc(image, sessionId, apiBase)}
-                  alt="Attached image"
-                  className="max-h-16"
-                />
-              ))}
-            </div>
-          ) : null}
-          {block.text ? (
-            <p className="text-muted-foreground line-clamp-2 break-words">
-              <span className="text-foreground/70">›</span> {block.text}
-              {block.queued ? <span className="text-muted-foreground/70"> (queued)</span> : null}
-            </p>
-          ) : null}
-        </div>
-      );
-    case 'interrupted':
-      return <p className="text-muted-foreground/70 italic">— interrupted —</p>;
-    // Collapse whitespace + clamp: a tile is a level-of-detail PREVIEW, so no
-    // single block (e.g. a pasted log or long reply) may grow into a wall.
-    case 'assistant':
-      return <p className="text-foreground/90 break-words line-clamp-3">{block.text}</p>;
-    case 'thinking':
-      return <p className="text-muted-foreground/70 italic truncate">thinking…</p>;
-    case 'tool':
-      return (
-        <p className="text-muted-foreground font-mono text-[11px] truncate">
-          <span className="text-foreground/60">{block.summary.verb || block.tool}</span>
-          {block.summary.subject ? ` ${block.summary.subject}` : ''}
-        </p>
-      );
-    case 'user_input':
-      return <p className="text-warning">Needs your input: {block.title ?? 'question'}</p>;
-    case 'provider_request':
-      return <p className="text-info">Permission request ({block.method})</p>;
-    case 'error':
-      return <p className="text-destructive break-words line-clamp-2">{block.message}</p>;
-    case 'cursor-context':
-      return <p className="text-muted-foreground/70 italic truncate">{block.summary}</p>;
-    default:
-      return null;
-  }
 }

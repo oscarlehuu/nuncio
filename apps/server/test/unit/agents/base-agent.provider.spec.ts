@@ -35,6 +35,11 @@ class ThrowingProvider extends BaseAgentProvider {
   ): Promise<void> {
     throw new Error('boom');
   }
+
+  /** Test seam: exposes the protected segment-join helper. */
+  exposeParagraphBoundary(accumulated: string): string {
+    return this.paragraphBoundary(accumulated);
+  }
 }
 
 describe('BaseAgentProvider error path', () => {
@@ -63,6 +68,14 @@ describe('BaseAgentProvider error path', () => {
     await module.close();
     rmSync(dataDir, { recursive: true, force: true });
     delete process.env.NUNCIO_DATA_DIR;
+  });
+
+  it('paragraphBoundary returns the newlines needed for a blank-line break', () => {
+    expect(provider.exposeParagraphBoundary('')).toBe('');
+    expect(provider.exposeParagraphBoundary('ends with a sentence.')).toBe('\n\n');
+    expect(provider.exposeParagraphBoundary('ends with one newline\n')).toBe('\n');
+    expect(provider.exposeParagraphBoundary('already a blank line\n\n')).toBe('');
+    expect(provider.exposeParagraphBoundary('extra blank lines\n\n\n')).toBe('');
   });
 
   it('defaults capabilities to all-off for non-overriding providers', () => {
