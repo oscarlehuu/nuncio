@@ -50,19 +50,26 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
   const eventsRef = useRef<SessionEvent[]>([]);
   const loadingEarlierRef = useRef(false);
 
-  useEffect(() => {
-    eventsRef.current = events;
-  }, [events]);
+  const replaceEvents = useCallback((next: SessionEvent[]) => {
+    eventsRef.current = next;
+    setEvents(next);
+  }, []);
+
+  const updateEvents = useCallback((updater: (prev: SessionEvent[]) => SessionEvent[]) => {
+    const next = updater(eventsRef.current);
+    eventsRef.current = next;
+    setEvents(next);
+  }, []);
 
   const onEvent = useCallback((event: SessionEvent) => {
     sinceRef.current = Math.max(sinceRef.current, event.seq);
-    setEvents((prev) => {
+    updateEvents((prev) => {
       const last = prev[prev.length - 1];
       if (last && event.seq > last.seq) return [...prev, event];
       if (prev.some((e) => e.seq === event.seq)) return prev;
       return [...prev, event].sort((a, b) => a.seq - b.seq);
     });
-  }, []);
+  }, [updateEvents]);
 
   const fetchInitial = useCallback((id: string) => {
     const depth = tailRef.current;
@@ -87,10 +94,10 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
     if (!sessionId || cancelledRef.current) return;
     const initial = await fetchInitial(sessionId);
     if (cancelledRef.current) return;
-    setEvents(initial);
+    replaceEvents(initial);
     sinceRef.current = initial.reduce((max, e) => Math.max(max, e.seq), 0);
     connect();
-  }, [sessionId, connect, fetchInitial]);
+  }, [sessionId, connect, fetchInitial, replaceEvents]);
 
   /** Page one window of history in before the oldest loaded event. */
   const loadEarlier = useCallback(async () => {
@@ -102,15 +109,15 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
     try {
       const earlier = await fetchEvents(id, 0, baseRef.current, { before: oldestSeq });
       if (cancelledRef.current || sessionIdRef.current !== id) return;
-      setEvents((prev) => mergeEvents(prev, earlier));
+      updateEvents((prev) => mergeEvents(prev, earlier));
     } finally {
       loadingEarlierRef.current = false;
     }
-  }, []);
+  }, [updateEvents]);
 
   useEffect(() => {
     if (!sessionId) {
-      setEvents([]);
+      replaceEvents([]);
       sinceRef.current = 0;
       cancelledRef.current = false;
       return;
@@ -121,7 +128,7 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
 
     fetchInitial(sessionId).then((initial) => {
       if (cancelled) return;
-      setEvents(initial);
+      replaceEvents(initial);
       sinceRef.current = initial.reduce((max, e) => Math.max(max, e.seq), 0);
       connect();
     });
@@ -140,7 +147,7 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
       subscriptionRef.current?.close();
       subscriptionRef.current = null;
     };
-  }, [sessionId, base, connect, fetchInitial]);
+  }, [sessionId, base, connect, fetchInitial, replaceEvents]);
 
   const hasEarlier = (events[0]?.seq ?? 0) > 1;
 

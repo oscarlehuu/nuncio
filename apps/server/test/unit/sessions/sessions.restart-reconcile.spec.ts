@@ -121,6 +121,19 @@ describe('SessionsService restart reconciliation', () => {
     await restarted.close();
   });
 
+  it('treats Codex sessions with a persisted thread id as resumable', async () => {
+    const codexId = seedRunning({ provider: 'codex', providerThreadId: 'codex-thread-123' });
+
+    const restarted = await buildModule();
+    restarted.get(SessionsService);
+
+    expect(sessions.findById(codexId)!.status).toBe('IDLE');
+    const restartEvent = events.list(codexId, 0).find((e) => e.type === 'runtime_restarted');
+    expect(restartEvent!.payload).toMatchObject({ resumable: true });
+
+    await restarted.close();
+  });
+
   it('steer works on a reconciled session', async () => {
     const id = seedRunning({ provider: 'cursor', cursorBackend: 'sdk' });
 

@@ -22,6 +22,7 @@ class FakeCodexClient extends EventEmitter implements CodexAppServerClientLike {
   readonly responses: Array<{ id: string | number; result: unknown }> = [];
   closed = false;
   autoCompleteTurn = true;
+  emitApprovalRequests = true;
   modelListResponse: unknown = {
     data: [
       {
@@ -75,11 +76,13 @@ class FakeCodexClient extends EventEmitter implements CodexAppServerClientLike {
           method: 'turn/started',
           params: { turn: { id: 'turn-1' } },
         });
-        this.emitServerRequest({
-          id: 'approval-1',
-          method: 'exec/approval',
-          params: { command: 'git status' },
-        });
+        if (this.emitApprovalRequests) {
+          this.emitServerRequest({
+            id: 'approval-1',
+            method: 'exec/approval',
+            params: { command: 'git status' },
+          });
+        }
         this.emitNotification({
           method: 'item/agentMessage/delta',
           params: { threadId: 'codex-thread-1', turnId: 'turn-1', delta: 'Hello' },
@@ -215,6 +218,49 @@ describe('CodexAgentProvider', () => {
         sandboxPolicy: { type: 'dangerFullAccess' },
       },
     });
+  });
+
+  it('flushes slow Codex deltas while the turn is still running', async () => {
+    fakeClient.autoCompleteTurn = false;
+    fakeClient.emitApprovalRequests = false;
+    const created = sessions.create({
+      id: 'session-slow-stream',
+      prompt: 'Stream slowly',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+    });
+    const emitted: Array<{ type: string; payload: unknown }> = [];
+
+    const run = provider.run(created.id, created.prompt, {
+      emit: (event) => emitted.push(event),
+      cwd: '/tmp/project',
+      model: created.model,
+    });
+
+    await waitUntil(() => sessions.findById(created.id)?.providerActiveTurnId === 'turn-1');
+    await waitUntil(() => emitted.some((event) => event.type === 'assistant_delta'));
+    expect(await settledWithin(run, 10)).toBe('timeout');
+    expect(events.list(created.id).filter((event) => event.type === 'assistant_delta')).toEqual([
+      expect.objectContaining({ payload: { delta: 'Hello' } }),
+    ]);
+
+    fakeClient.emitNotification({
+      method: 'item/agentMessage/delta',
+      params: { threadId: 'codex-thread-1', turnId: 'turn-1', delta: ' world' },
+    });
+    fakeClient.completeTurn();
+    await run;
+
+    const all = events.list(created.id);
+    expect(all.filter((event) => event.type === 'assistant_delta')).toEqual([
+      expect.objectContaining({ payload: { delta: 'Hello' } }),
+      expect.objectContaining({ payload: { delta: ' world' } }),
+    ]);
+    expect(all.at(-2)).toMatchObject({
+      type: 'assistant_message',
+      payload: { text: 'Hello world' },
+    });
+    expect(all.at(-1)).toMatchObject({ type: 'status', payload: { status: 'IDLE' } });
   });
 
   it('lists Codex reasoning effort and fast priority options', async () => {
@@ -442,6 +488,141 @@ describe('CodexAgentProvider', () => {
     expect(events.list(created.id).some((event) => event.type === 'error')).toBe(false);
   });
 
+  it('flushes buffered deltas before closing active Codex sessions on module destroy', async () => {
+    fakeClient.autoCompleteTurn = false;
+    fakeClient.emitApprovalRequests = false;
+    const created = sessions.create({
+      id: 'session-destroy-flush',
+      prompt: 'Stream before shutdown',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+    });
+
+    const run = provider.run(created.id, created.prompt, {
+      model: created.model,
+      cwd: '/tmp/project',
+    });
+
+    await waitUntil(() => sessions.findById(created.id)?.preview === 'Hello');
+    expect(events.list(created.id).some((event) => event.type === 'assistant_delta')).toBe(false);
+
+    destroyProvider(provider);
+
+    expect(fakeClient.closed).toBe(true);
+    expect(events.list(created.id).filter((event) => event.type === 'assistant_delta')).toEqual([
+      expect.objectContaining({ payload: { delta: 'Hello' } }),
+    ]);
+    await expect(settledWithin(run)).resolves.toBe('settled');
+  });
+
+  it('closes every reusable Codex app-server client on module destroy', async () => {
+    const clients: FakeCodexClient[] = [];
+    provider.clientFactory = () => {
+      const client = new FakeCodexClient();
+      client.emitApprovalRequests = false;
+      clients.push(client);
+      return client;
+    };
+    const first = sessions.create({
+      id: 'session-destroy-one',
+      prompt: 'First',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+    });
+    const second = sessions.create({
+      id: 'session-destroy-two',
+      prompt: 'Second',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+    });
+
+    await provider.run(first.id, first.prompt, { model: first.model, cwd: '/tmp/project' });
+    await provider.run(second.id, second.prompt, { model: second.model, cwd: '/tmp/project' });
+
+    expect(clients).toHaveLength(2);
+    destroyProvider(provider);
+
+    expect(clients.every((client) => client.closed)).toBe(true);
+  });
+
+  it('uses DB-backed Codex binary and home settings for daemon probes and clients', async () => {
+    const settings = module.get(SettingsService);
+    settings.set('NUNCIO_CODEX_BIN', '/opt/nuncio/bin/codex');
+    settings.set('NUNCIO_CODEX_HOME', '/tmp/nuncio-codex-home');
+    const probes: Array<{ command: string; args: string[]; codexHome?: string }> = [];
+    provider.commandRunner = async (command, args, options) => {
+      probes.push({ command, args, codexHome: options.env.CODEX_HOME });
+      return { status: 0, stdout: 'Logged in using ChatGPT', stderr: '' };
+    };
+
+    expect(await provider.isAvailable()).toBe(true);
+    expect(probes).toEqual([
+      { command: '/opt/nuncio/bin/codex', args: ['--version'], codexHome: '/tmp/nuncio-codex-home' },
+      { command: '/opt/nuncio/bin/codex', args: ['login', 'status'], codexHome: '/tmp/nuncio-codex-home' },
+    ]);
+
+    let clientInput: Parameters<NonNullable<CodexAgentProvider['clientFactory']>>[0] | undefined;
+    provider.clientFactory = (input) => {
+      clientInput = input;
+      return fakeClient;
+    };
+    const created = sessions.create({
+      id: 'session-daemon-config',
+      prompt: 'Use configured daemon',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+    });
+
+    await provider.run(created.id, created.prompt, {
+      model: created.model,
+      cwd: '/tmp/project',
+    });
+
+    expect(clientInput).toMatchObject({
+      binaryPath: '/opt/nuncio/bin/codex',
+      cwd: '/tmp/project',
+    });
+    expect(clientInput?.env.CODEX_HOME).toBe('/tmp/nuncio-codex-home');
+  });
+
+  it('uses approval-required runtime settings for Codex daemon thread and turn startup', async () => {
+    const settings = module.get(SettingsService);
+    settings.set('NUNCIO_CODEX_RUNTIME_MODE', 'approval-required');
+    fakeClient.emitApprovalRequests = false;
+    const created = sessions.create({
+      id: 'session-approval-runtime-mode',
+      prompt: 'Use approvals',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+    });
+
+    await provider.run(created.id, created.prompt, {
+      model: created.model,
+      cwd: '/tmp/project',
+    });
+
+    expect(fakeClient.requests).toContainEqual({
+      method: 'thread/start',
+      params: {
+        model: 'gpt-5.5',
+        cwd: '/tmp/project',
+        approvalPolicy: 'untrusted',
+        sandbox: 'read-only',
+        experimentalRawEvents: false,
+      },
+    });
+    expect(fakeClient.requests).toContainEqual({
+      method: 'turn/start',
+      params: {
+        threadId: 'codex-thread-1',
+        input: [{ type: 'text', text: 'Use approvals', text_elements: [] }],
+        model: 'gpt-5.5',
+        approvalPolicy: 'untrusted',
+        sandboxPolicy: { type: 'readOnly' },
+      },
+    });
+  });
+
   it('reports availability from codex login status', async () => {
     const settings = module.get(SettingsService);
     settings.resolve = ((key: string) => {
@@ -473,4 +654,10 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
     }
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
+}
+
+function destroyProvider(provider: CodexAgentProvider): void {
+  const destroyable = provider as CodexAgentProvider & { onModuleDestroy?: () => void };
+  expect(typeof destroyable.onModuleDestroy).toBe('function');
+  destroyable.onModuleDestroy!();
 }

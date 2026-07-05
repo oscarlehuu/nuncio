@@ -4,12 +4,13 @@
   "private": true,
   "scripts": {
     "build": "nest build",
-    "dev": "bun --env-file=../../.env --watch src/main.ts",
-    "start": "bun --env-file=../../.env src/main.ts",
+    "dev": "bun ../../scripts/run-server.mjs --watch",
+    "start": "bun ../../scripts/run-server.mjs",
     "start:prod": "bun run dist/main.js",
     "test": "bun test test/unit/",
     "test:e2e": "bun test ./test/e2e/app.e2e-spec.ts",
     "test:integration": "bun test test/integration/",
+    "test:integration:codex": "NUNCIO_CODEX_INTEGRATION=1 bun test test/integration/codex-agent.integration.spec.ts",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
