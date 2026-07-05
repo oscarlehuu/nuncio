@@ -42,6 +42,16 @@ describe('buildTranscriptBlocks', () => {
     expect(blocks.filter((b) => b.kind === 'tool')).toHaveLength(1);
   });
 
+  it('drops a callId tool_end whose tool_start is outside the windowed event tail', () => {
+    // Grid tiles subscribe to a bounded event window; a tool_end whose start
+    // scrolled off must not render an orphan tool block that buries the chat.
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'assistant_message', { text: 'working' }),
+      ev(2, 'tool_end', { callId: 'started-earlier', tool: 'bash', output: 'x' }),
+    ]);
+    expect(blocks.filter((b) => b.kind === 'tool')).toHaveLength(0);
+  });
+
   it('does not render a duplicate user bubble when a refresh re-hydrates the prompt', () => {
     const blocks = buildTranscriptBlocks([
       ev(1, 'user_message', { text: '[image 1] fix it', images: [{ mimeType: 'image/png', id: 'img-1' }] }),

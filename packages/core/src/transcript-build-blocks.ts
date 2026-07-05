@@ -532,14 +532,13 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
       const stackIdx = state.legacyStack.indexOf(entry.callId);
       if (stackIdx >= 0) state.legacyStack.splice(stackIdx, 1);
     } else {
-      // A tool_end whose call was already closed (e.g. re-appended by a transcript
-      // refresh) has no open tool to update; pushing it would render a duplicate
-      // orphan tool block — the noise that fills a resumed grid tile. Skip it, but
-      // keep genuine window-edge orphans whose start simply scrolled out of view.
-      const explicitCallId = typeof payload.callId === 'string' ? payload.callId : undefined;
-      if (explicitCallId && state.out.some((b) => b.kind === 'tool' && b.callId === explicitCallId)) {
-        return;
-      }
+      // A tool_end carrying an explicit callId but with no open tool is a stale or
+      // duplicate result: re-appended by a transcript refresh, or its tool_start
+      // scrolled out of a bounded event window (grid tiles subscribe to a tail).
+      // Rendering an orphan tool block just floods the tile with tool rows and
+      // buries the conversation, so drop it. Legacy callId-less ends (which can't
+      // be correlated at all) keep their best-effort orphan block.
+      if (typeof payload.callId === 'string' && payload.callId) return;
       const orphanCallId = resolveCallId(state, payload, tool);
       state.out.push({
         kind: 'tool',
