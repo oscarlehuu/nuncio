@@ -1,7 +1,37 @@
+import { homedir } from 'node:os';
+import { delimiter } from 'node:path';
+
 export interface CliAuthResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+}
+
+// Directories where `gh`/`glab` are commonly installed. A desktop app launched
+// from Finder/Dock inherits a minimal PATH (often just /usr/bin:/bin), so a bare
+// `gh`/`glab` spawn fails with ENOENT even when the CLI is installed and
+// authenticated — which surfaces as "Forge provider github is not available".
+// Appending these fallbacks keeps CLI auth working outside a login shell while
+// still honoring a `gh`/`glab` that the user's own PATH already resolves.
+const CLI_FALLBACK_PATH_DIRS = [
+  '/opt/homebrew/bin',
+  '/usr/local/bin',
+  `${homedir()}/.local/bin`,
+  '/usr/bin',
+  '/bin',
+];
+
+export function cliAuthPath(currentPath: string | undefined = process.env.PATH): string {
+  const existing = currentPath ? currentPath.split(delimiter).filter(Boolean) : [];
+  const seen = new Set(existing);
+  const merged = [...existing];
+  for (const dir of CLI_FALLBACK_PATH_DIRS) {
+    if (!seen.has(dir)) {
+      merged.push(dir);
+      seen.add(dir);
+    }
+  }
+  return merged.join(delimiter);
 }
 
 export type CliAuthRunner = (
@@ -39,6 +69,7 @@ async function runCli(command: string, args: string[], timeoutMs: number): Promi
   const proc = Bun.spawn([command, ...args], {
     stdout: 'pipe',
     stderr: 'pipe',
+    env: { ...process.env, PATH: cliAuthPath() },
   });
 
   let timeout: ReturnType<typeof setTimeout> | undefined;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import {
+  cliAuthPath,
   githubCliToken,
   gitlabCliToken,
   type CliAuthRunner,
@@ -35,6 +36,32 @@ describe('forge CLI auth helpers', () => {
     it('returns null when stdout is empty or contains whitespace inside the token', async () => {
       await expect(githubCliToken(runner({ exitCode: 0, stdout: '  \n', stderr: '' }))).resolves.toBeNull();
       await expect(githubCliToken(runner({ exitCode: 0, stdout: 'ghp abc\n', stderr: '' }))).resolves.toBeNull();
+    });
+  });
+
+  describe('cliAuthPath', () => {
+    it('appends common CLI install dirs so Finder-launched apps can find gh/glab', () => {
+      const path = cliAuthPath('/usr/bin:/bin');
+      const dirs = path.split(':');
+      expect(dirs).toContain('/usr/bin');
+      expect(dirs).toContain('/opt/homebrew/bin');
+      expect(dirs).toContain('/usr/local/bin');
+    });
+
+    it('keeps the existing PATH ahead of the fallbacks', () => {
+      const path = cliAuthPath('/custom/bin:/usr/bin');
+      expect(path.startsWith('/custom/bin:/usr/bin')).toBe(true);
+    });
+
+    it('does not duplicate a fallback dir already on PATH', () => {
+      const path = cliAuthPath('/opt/homebrew/bin:/usr/bin');
+      const occurrences = path.split(':').filter((dir) => dir === '/opt/homebrew/bin');
+      expect(occurrences).toHaveLength(1);
+    });
+
+    it('handles an empty or undefined PATH', () => {
+      expect(cliAuthPath('').split(':')).toContain('/opt/homebrew/bin');
+      expect(cliAuthPath(undefined).split(':')).toContain('/opt/homebrew/bin');
     });
   });
 
