@@ -18,6 +18,24 @@ vi.mock('./model-picker', () => ({
   ModelPicker: () => <div>model-picker</div>,
 }));
 
+// BranchPicker fetches base branches over the network — stub it so create/attach
+// paths stay offline and deterministic.
+vi.mock('./branch-picker', () => ({
+  BranchPicker: ({
+    projectPath,
+    value,
+    onChange,
+  }: {
+    projectPath?: string;
+    value?: string;
+    onChange: (branch: string) => void;
+  }) => (
+    <button type="button" disabled={!projectPath} onClick={() => onChange('main')}>
+      {value ?? 'Branch'}
+    </button>
+  ),
+}));
+
 // Hub discovery + the remote-machine API surface, controllable per test.
 const hubMocks = vi.hoisted(() => ({
   fetchHubMachines: vi.fn<() => Promise<import('../lib/hub-api').HubMachines>>(async () => ({
@@ -121,9 +139,38 @@ describe('GridSlotComposer', () => {
     expect(call[1]).toBe('pi:default');
     expect(call[2]).toBe('pi');
     expect(call[3]).toBe('/code/nuncio');
+    // Workspace mode defaults to local: no worktree unless the user picks it.
+    expect(call[6]).toBe(false);
     // The caller (grid-view) is responsible for binding via onCreate's return —
     // this component simply resolves. Verify onCreate carried the new session.
     await expect(onCreate.mock.results[0]!.value).resolves.toEqual(created);
+  });
+
+  it('creates in a new worktree when the workspace mode is switched', async () => {
+    const created = fakeSession({ id: 'new-wt' });
+    const onCreate = vi.fn().mockResolvedValue(created);
+
+    render(
+      <GridSlotComposer
+        providers={PROVIDERS}
+        sessions={[]}
+        boundSessionIds={new Set()}
+        onCreate={onCreate}
+        onBind={vi.fn()}
+      />,
+    );
+
+    // A project must be selected before the worktree mode can be chosen.
+    await userEvent.click(screen.getByRole('button', { name: /pick-project/i }));
+    await userEvent.click(screen.getByRole('button', { name: /workspace mode/i }));
+    await userEvent.click(screen.getByRole('menuitemradio', { name: /new worktree/i }));
+    await userEvent.type(screen.getByLabelText(/new session prompt/i), 'fork it');
+    await userEvent.click(screen.getByRole('button', { name: /start/i }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    const call = onCreate.mock.calls[0];
+    expect(call[3]).toBe('/code/nuncio');
+    expect(call[6]).toBe(true);
   });
 
   it('lists non-archived sessions under Attach and binds on pick', async () => {

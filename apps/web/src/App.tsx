@@ -285,6 +285,7 @@ export default function App() {
       projectPath?: string,
       baseBranch?: string,
       modelOptions?: ModelOptionsMap,
+      useWorktree?: boolean,
       attachments?: MessageAttachment[],
     ): Promise<Session | null> => {
       setCreating(true);
@@ -296,7 +297,7 @@ export default function App() {
           projectPath,
           baseBranch,
           modelOptions,
-          false,
+          useWorktree ?? false,
           '',
           attachments,
         );

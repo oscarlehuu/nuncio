@@ -52,6 +52,7 @@ interface GridViewProps {
     projectPath?: string,
     baseBranch?: string,
     modelOptions?: ModelOptionsMap,
+    useWorktree?: boolean,
     attachments?: MessageAttachment[],
   ) => Promise<Session | null>;
   steering?: boolean;
@@ -350,7 +351,16 @@ function SlotComposerCell({
       providers={providers}
       sessions={sessions}
       boundSessionIds={boundSessionIds}
-      onCreate={async (prompt, model, provider, projectPath, baseBranch, modelOptions, attachments) => {
+      onCreate={async (
+        prompt,
+        model,
+        provider,
+        projectPath,
+        baseBranch,
+        modelOptions,
+        useWorktree,
+        attachments,
+      ) => {
         const created = await onCreate(
           prompt,
           model,
@@ -358,6 +368,7 @@ function SlotComposerCell({
           projectPath,
           baseBranch,
           modelOptions,
+          useWorktree,
           attachments,
         );
         if (created) onBind(created.id);

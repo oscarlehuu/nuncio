@@ -223,6 +223,7 @@ describe('GridView', () => {
       undefined,
       undefined,
       undefined,
+      undefined,
     );
     // The slot binding is the seam under test: the created id must be persisted.
     await waitFor(() => {

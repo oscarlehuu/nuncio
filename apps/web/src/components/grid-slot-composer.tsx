@@ -15,10 +15,18 @@ import {
 } from '../lib/model-providers';
 import { defaultOptionsForModel } from '../lib/model-picker-catalog';
 import { loadModelPreference, resolveModelSelection } from '../lib/model-preference';
-import { resolveWorkspacePreference } from '../lib/project-preference';
+import {
+  isNuncioSessionBranch,
+  loadProjectPreference,
+  recordBranchSelection,
+  recordProjectSelection,
+  resolveWorkspacePreference,
+} from '../lib/project-preference';
 import { projectDisplayName } from '../lib/projects';
 import type { ModelOptionsMap } from '../lib/model-options';
 import { ProjectPicker } from './project-picker';
+import { BranchPicker } from './branch-picker';
+import { WorkspaceModePicker, type WorkspaceMode } from './workspace-mode-picker';
 import { ModelPicker } from './model-picker';
 import { ProviderIcon } from './provider-icon';
 import { StatusDot } from './status-dot';
@@ -47,6 +55,7 @@ interface GridSlotComposerProps {
     projectPath?: string,
     baseBranch?: string,
     modelOptions?: ModelOptionsMap,
+    useWorktree?: boolean,
     attachments?: MessageAttachment[],
   ) => Promise<Session | null>;
   /** Bind the slot; machineId is set when the session lives on another hub machine. */
@@ -70,6 +79,11 @@ export function GridSlotComposer({
   const [projectPath, setProjectPath] = useState<string | undefined>(
     () => resolveWorkspacePreference().projectPath,
   );
+  const [baseBranch, setBaseBranch] = useState<string | undefined>(
+    () => resolveWorkspacePreference().baseBranch,
+  );
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('local');
+  const useWorktree = workspaceMode === 'worktree';
   const [submitting, setSubmitting] = useState(false);
 
   // Hub mode: a slot can target any tailnet machine. null = the machine this
@@ -100,6 +114,8 @@ export function GridSlotComposer({
     setMachine(next);
     // Machine-scoped inputs reset: paths and model catalogs are per-machine.
     setProjectPath(next ? undefined : resolveWorkspacePreference().projectPath);
+    setBaseBranch(next ? undefined : resolveWorkspacePreference().baseBranch);
+    setWorkspaceMode('local');
     setModel('');
     setProvider(undefined);
     setModelOptions({});
@@ -171,6 +187,19 @@ export function GridSlotComposer({
     return source.filter((s) => s.status !== 'ARCHIVED');
   }, [machine, remoteSessions, sessions]);
 
+  const handleProjectChange = (path: string) => {
+    setProjectPath(path);
+    const savedBranch = loadProjectPreference().lastBranchByProject?.[path];
+    setBaseBranch(isNuncioSessionBranch(savedBranch) ? undefined : savedBranch);
+    // Preferences are local-machine only; remote projects manage their own branch.
+    if (!machine) recordProjectSelection(path, projectDisplayName(path) ?? undefined);
+  };
+
+  const handleBranchChange = (branch: string) => {
+    setBaseBranch(branch);
+    if (!machine && projectPath) recordBranchSelection(projectPath, branch);
+  };
+
   const submit = async () => {
     const text = prompt.trim();
     if (!text || submitting) return;
@@ -188,14 +217,15 @@ export function GridSlotComposer({
             model || undefined,
             provider,
             projectPath,
-            undefined,
+            baseBranch,
             hasConfigurable ? modelOptions : undefined,
-            false,
+            useWorktree,
             remoteBase,
             attachmentsArg,
           );
           onBind(created.id, machine);
           setPrompt('');
+          setWorkspaceMode('local');
           imageAttachments.clear();
         } catch {
           toast.error(`Failed to create session on ${machine}`);
@@ -206,12 +236,14 @@ export function GridSlotComposer({
           model || undefined,
           provider,
           projectPath,
-          undefined,
+          baseBranch,
           hasConfigurable ? modelOptions : undefined,
+          useWorktree,
           attachmentsArg,
         );
         if (created) {
           setPrompt('');
+          setWorkspaceMode('local');
           imageAttachments.clear();
         }
       }
@@ -330,7 +362,17 @@ export function GridSlotComposer({
                 disabled={submitting}
               />
             )}
-            <ProjectPicker value={projectPath} onChange={setProjectPath} apiBase={remoteBase} />
+            <ProjectPicker value={projectPath} onChange={handleProjectChange} apiBase={remoteBase} />
+            <BranchPicker
+              projectPath={projectPath}
+              value={baseBranch}
+              onChange={handleBranchChange}
+            />
+            <WorkspaceModePicker
+              value={workspaceMode}
+              onChange={setWorkspaceMode}
+              disabled={!projectPath}
+            />
             <ModelPicker
               value={model}
               modelOptions={modelOptions}
