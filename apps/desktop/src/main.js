@@ -3,6 +3,26 @@ const { app, BrowserWindow, BrowserView, dialog, ipcMain, Menu, Notification } =
 const { DaemonSupervisor } = require('./daemon');
 const serverProfiles = require('./server-profiles');
 
+// Dev and stable ship as distinct apps and must not share userData (SQLite data
+// dir, server profiles) — name them apart before anything reads
+// app.getPath('userData'). Channel is taken from the build's app-update.yml.
+function detectChannel() {
+  try {
+    const manifest = require('node:fs').readFileSync(
+      path.join(process.resourcesPath, 'app-update.yml'),
+      'utf8',
+    );
+    if (/^channel:\s*dev\b/m.test(manifest)) return 'dev';
+  } catch {
+    // Not packaged or no manifest — fall through to the version heuristic.
+  }
+  return app.getVersion().includes('-dev') ? 'dev' : 'stable';
+}
+
+if (app.isPackaged) {
+  app.setName(detectChannel() === 'dev' ? 'Nuncio Dev' : 'Nuncio');
+}
+
 const DEV_SERVER_URL = process.env.NUNCIO_DESKTOP_DEV_URL || 'http://localhost:5173';
 const DEV_SERVER_PROBE_TIMEOUT_MS = 600;
 const DEV_SERVER_RETRY_INTERVAL_MS = 300;
@@ -517,10 +537,16 @@ app.whenReady().then(async () => {
   serverProfilesPath = resolveServerProfilesPath();
   serverProfilesState = serverProfiles.loadProfiles(serverProfilesPath);
 
-  const forcedDevMode = process.env.NUNCIO_DESKTOP_DEV === '1';
-  const useDevServer = forcedDevMode
-    ? await waitForDevServer(FORCED_DEV_SERVER_TIMEOUT_MS)
-    : await shouldUseDevServer();
+  // A packaged .app has no dev server and must never probe for one — it runs the
+  // compiled server binary shipped in Resources. The dev-server path stays for
+  // `bun run dev` and for running `electron .` against a source checkout.
+  const packaged = app.isPackaged;
+  const forcedDevMode = !packaged && process.env.NUNCIO_DESKTOP_DEV === '1';
+  const useDevServer = packaged
+    ? false
+    : forcedDevMode
+      ? await waitForDevServer(FORCED_DEV_SERVER_TIMEOUT_MS)
+      : await shouldUseDevServer();
 
   if (useDevServer) {
     console.log('[desktop] dev mode', DEV_SERVER_URL);
@@ -535,9 +561,20 @@ app.whenReady().then(async () => {
     console.error(error);
     await createErrorWindow(error);
   } else {
-    supervisor = new DaemonSupervisor({
-      log: (message) => console.log(message),
-    });
+    const supervisorOptions = { log: (message) => console.log(message) };
+    if (packaged) {
+      // Launch the self-contained server binary from the app bundle, writing its
+      // SQLite data under userData and serving the web bundle shipped alongside.
+      const resourcesPath = process.resourcesPath;
+      supervisorOptions.serverBinaryPath = path.join(resourcesPath, 'nuncio-server');
+      supervisorOptions.cwd = resourcesPath;
+      supervisorOptions.env = {
+        ...process.env,
+        NUNCIO_DATA_DIR: path.join(app.getPath('userData'), 'data'),
+        NUNCIO_WEB_DIST: path.join(resourcesPath, 'web', 'dist'),
+      };
+    }
+    supervisor = new DaemonSupervisor(supervisorOptions);
 
     try {
       const { url } = await supervisor.start();
@@ -556,6 +593,14 @@ app.whenReady().then(async () => {
     } catch (error) {
       console.error(error);
       await createErrorWindow(error);
+    }
+  }
+
+  if (packaged) {
+    try {
+      require('./updater').initAutoUpdater({ log: (message) => console.log(message) });
+    } catch (error) {
+      console.error('[updater] initialization failed', error);
     }
   }
 

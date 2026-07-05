@@ -6,6 +6,12 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 const API_PREFIX = '/api';
 
 export function resolveWebDistPath(): string {
+  // Packaged desktop builds ship the web bundle as an app resource, not next to
+  // the compiled server binary, so let the shell point us at it explicitly.
+  const override = process.env.NUNCIO_WEB_DIST;
+  if (override) {
+    return resolve(override);
+  }
   return resolve(__dirname, '../../web/dist');
 }
 

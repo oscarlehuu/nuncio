@@ -120,6 +120,10 @@ class DaemonSupervisor {
     this.bunPath = options.bunPath ?? resolveBunPath();
     this.serverDir = options.serverDir ?? path.join(repoRoot, 'apps', 'server');
     this.entryPath = options.entryPath ?? path.join(this.serverDir, 'src', 'main.ts');
+    // Packaged builds pass a self-contained server binary (Bun runtime embedded);
+    // dev/source runs leave it null and launch `bun <entryPath>` instead.
+    this.serverBinaryPath = options.serverBinaryPath ?? null;
+    this.cwd = options.cwd ?? this.serverDir;
     this.env = options.env ?? process.env;
     this.log = options.log ?? ((message) => console.log(message));
     this.maxRestarts = options.maxRestarts ?? DEFAULT_MAX_RESTARTS;
@@ -157,8 +161,11 @@ class DaemonSupervisor {
   }
 
   spawnDaemon() {
-    const child = spawn(this.bunPath, [this.entryPath], {
-      cwd: this.serverDir,
+    const [command, args] = this.serverBinaryPath
+      ? [this.serverBinaryPath, []]
+      : [this.bunPath, [this.entryPath]];
+    const child = spawn(command, args, {
+      cwd: this.cwd,
       env: {
         ...this.env,
         PORT: String(this.port),
