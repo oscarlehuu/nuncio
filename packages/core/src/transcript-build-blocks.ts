@@ -335,12 +335,21 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
           break;
         }
       }
-      state.out.push({
-        kind: 'user',
-        key: `user-${event.seq}`,
-        text: rawText,
-        ...(images ? { images } : {}),
-      });
+      // Skip a user message that exactly repeats an already-shown one: a transcript
+      // refresh re-hydrates the original prompt (image-stripped) after a run, which
+      // would otherwise render as a duplicate bubble. An intentional resend of the
+      // same text collapses to one — an acceptable trade for killing the duplicate.
+      const alreadyShown = state.out.some(
+        (block) => block.kind === 'user' && !block.queued && block.text === rawText,
+      );
+      if (!alreadyShown) {
+        state.out.push({
+          kind: 'user',
+          key: `user-${event.seq}`,
+          text: rawText,
+          ...(images ? { images } : {}),
+        });
+      }
     }
     state.currentTurnHasThinking = false;
     state.assistantBufFromDelta = false;
@@ -523,6 +532,14 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
       const stackIdx = state.legacyStack.indexOf(entry.callId);
       if (stackIdx >= 0) state.legacyStack.splice(stackIdx, 1);
     } else {
+      // A tool_end whose call was already closed (e.g. re-appended by a transcript
+      // refresh) has no open tool to update; pushing it would render a duplicate
+      // orphan tool block — the noise that fills a resumed grid tile. Skip it, but
+      // keep genuine window-edge orphans whose start simply scrolled out of view.
+      const explicitCallId = typeof payload.callId === 'string' ? payload.callId : undefined;
+      if (explicitCallId && state.out.some((b) => b.kind === 'tool' && b.callId === explicitCallId)) {
+        return;
+      }
       const orphanCallId = resolveCallId(state, payload, tool);
       state.out.push({
         kind: 'tool',

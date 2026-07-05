@@ -31,6 +31,30 @@ describe('buildTranscriptBlocks', () => {
     });
   });
 
+  it('drops a tool_end whose call was already closed (transcript-refresh re-append)', () => {
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'user_message', { text: 'go' }),
+      ev(2, 'tool_start', { callId: 'c1', tool: 'bash', input: { command: 'ls' } }),
+      ev(3, 'tool_end', { callId: 'c1', tool: 'bash', output: 'a\nb' }),
+      // A transcript refresh re-appends the same tool result with a plainer payload.
+      ev(4, 'tool_end', { callId: 'c1', tool: 'bash', output: 'a\nb\n(more)' }),
+    ]);
+    expect(blocks.filter((b) => b.kind === 'tool')).toHaveLength(1);
+  });
+
+  it('does not render a duplicate user bubble when a refresh re-hydrates the prompt', () => {
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'user_message', { text: '[image 1] fix it', images: [{ mimeType: 'image/png', id: 'img-1' }] }),
+      ev(2, 'assistant_message', { text: 'done' }),
+      // Refresh re-appends the original prompt image-stripped.
+      ev(3, 'user_message', { text: '[image 1] fix it' }),
+    ]);
+    const userBlocks = blocks.filter((b) => b.kind === 'user');
+    expect(userBlocks).toHaveLength(1);
+    // The first (richer) bubble is kept — with its image.
+    expect(userBlocks[0].kind === 'user' && userBlocks[0].images).toHaveLength(1);
+  });
+
   it('attaches a Cursor-style summary to each tool block', () => {
     const blocks = buildTranscriptBlocks([
       ev(1, 'tool_start', { callId: 'c1', tool: 'read', input: { path: '/Users/me/x.ts' } }),

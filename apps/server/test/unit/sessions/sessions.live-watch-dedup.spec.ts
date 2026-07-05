@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { Injectable } from '@nestjs/common';
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AgentsModule } from '../../../src/agents/agents.module';
@@ -133,6 +133,43 @@ describe('SessionsService live Pi transcript watcher reconciliation', () => {
       .map((event) => (event.payload as { text: string }).text);
 
     expect(assistantMessages).toEqual(['Hello world\n']);
+  });
+
+  it('does not re-append a user prompt or tool result whose live-stream payload differs from the hydrated Pi transcript', () => {
+    const events = module.get(EventsRepository);
+    writeFileSync(piPath, '');
+    const session = sessions.createHandoff({
+      provider: 'pi',
+      title: 'Pi',
+      workspace,
+      providerThreadId: piPath,
+      prompt: 'x',
+    });
+    // What a live run already streamed into the DB: the prompt carries an image,
+    // and the tool result is the richer streamed form. Neither matches what pi
+    // writes to its transcript file byte-for-byte.
+    events.appendBatch(session.id, [
+      { type: 'user_message', payload: { text: 'do the thing', images: [{ mimeType: 'image/png', id: 'img-1' }] } },
+      { type: 'tool_start', payload: { callId: 'call-1', tool: 'bash', input: { command: 'ls' } } },
+      { type: 'tool_end', payload: { callId: 'call-1', tool: 'bash', isError: false, output: { truncated: true, preview: 'a\nb' } } },
+    ]);
+    // The pi transcript on disk: image-less prompt, plainer tool output.
+    writeFileSync(
+      piPath,
+      `${JSON.stringify(piMessage('user', [{ type: 'text', text: 'do the thing' }]))}\n` +
+        `${JSON.stringify(piMessage('assistant', [{ type: 'toolCall', id: 'call-1', name: 'bash', arguments: { command: 'ls' } }]))}\n` +
+        `${JSON.stringify(piMessage('toolResult', [{ type: 'text', text: 'a\nb\n(truncated tail)' }]))}\n`,
+    );
+    // Force a fresh mtime so refreshTranscriptIfNeeded actually runs the diff.
+    const future = new Date(Date.now() + 10_000);
+    utimesSync(piPath, future, future);
+
+    const { added } = service.refreshTranscript(session.id);
+
+    expect(added).toBe(0);
+    const types = service.getEvents(session.id).map((event) => event.type);
+    expect(types.filter((type) => type === 'user_message')).toHaveLength(1);
+    expect(types.filter((type) => type === 'tool_end')).toHaveLength(1);
   });
 
   it('still streams watcher-hydrated events for external Pi handoff sessions', async () => {

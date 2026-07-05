@@ -755,10 +755,27 @@ export class SessionsService implements OnModuleDestroy {
     sessionId: string,
     hydrated: Array<{ type: string; payload: unknown }>,
   ): Array<{ type: string; payload: unknown }> {
-    // Session files record every user input as user_message, while live steers
-    // persist as steer_message — same message, so dedupe them as one family.
-    const dedupeKey = (type: string, payload: unknown) =>
-      `${type === 'steer_message' ? 'user_message' : type}:${JSON.stringify(payload)}`;
+    // Dedupe the SAME logical event across its live-stream form (already in the
+    // DB) and its hydrated-from-disk form, whose payloads differ: the stream
+    // carries images on user messages and richer tool output that the pi
+    // transcript on disk drops. Keying on the whole payload therefore treats the
+    // same message/tool as new and re-appends it — a duplicate user prompt plus
+    // orphan tool_end rows. Key on stable identity only: message text, tool callId.
+    // (Session files record user input as user_message, live steers as
+    // steer_message — same message, so collapse them to one family.)
+    const dedupeKey = (type: string, payload: unknown): string => {
+      const family = type === 'steer_message' ? 'user_message' : type;
+      const p = (payload ?? {}) as Record<string, unknown>;
+      if (family === 'user_message' || family === 'assistant_message') {
+        return typeof p.text === 'string' ? `${family}:${p.text}` : `${family}:${JSON.stringify(payload)}`;
+      }
+      if (family === 'tool_start' || family === 'tool_end') {
+        return typeof p.callId === 'string' && p.callId
+          ? `${family}:${p.callId}`
+          : `${family}:${JSON.stringify(payload)}`;
+      }
+      return `${family}:${JSON.stringify(payload)}`;
+    };
     const existing = this.events.list(sessionId, 0);
     const existingCounts = new Map<string, number>();
     for (const e of existing) {
