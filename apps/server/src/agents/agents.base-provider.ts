@@ -153,6 +153,21 @@ export abstract class BaseAgentProvider implements AgentProvider {
     buffered.emit?.(event);
   }
 
+  /**
+   * Separator to prefix onto a new assistant-message segment so it starts a
+   * fresh paragraph. Providers whose stream splits one turn into discrete
+   * segments — e.g. Codex `agentMessage` items — call this at each boundary;
+   * appending the next segment verbatim would otherwise run sentences together
+   * (`…end.Start…`). Token-delta providers (Pi, Cursor) stream one continuous
+   * message and never need it. Returns '' at the very start, or when the text
+   * already ends in a blank line.
+   */
+  protected paragraphBoundary(accumulated: string): string {
+    if (accumulated.length === 0) return '';
+    const trailing = /\n*$/.exec(accumulated)?.[0].length ?? 0;
+    return trailing >= 2 ? '' : '\n'.repeat(2 - trailing);
+  }
+
   private async runOrSteer(
     sessionId: string,
     text: string,

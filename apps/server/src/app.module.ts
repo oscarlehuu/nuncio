@@ -11,6 +11,7 @@ import { HubModule } from './hub/hub.module';
 import { ModelsModule } from './models/models.module';
 import { PiLocalModule } from './pi-local/pi-local.module';
 import { PreferencesModule } from './preferences/preferences.module';
+import { ProviderUpdatesModule } from './provider-updates/provider-updates.module';
 import { ProvisionModule } from './provision/provision.module';
 import { SessionsModule } from './sessions/sessions.module';
 import { SettingsModule } from './settings/settings.module';
@@ -26,6 +27,7 @@ import { PushModule } from './push/push.module';
     AuthModule,
     SettingsModule,
     PreferencesModule,
+    ProviderUpdatesModule,
     BrowserModule,
     CursorLocalModule,
     ForgesModule,

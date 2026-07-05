@@ -302,6 +302,7 @@ apps/
         models.types.ts        ModelProviderDto/ModelGroupDto/ModelItemDto
         models.static.ts       STATIC_MODEL_PROVIDERS (Pi fallback when no auth)
         models.service.ts      aggregates from AgentRegistry
+      provider-updates/  optional Pi/Codex CLI version advisories + user-triggered updates
       settings/          DB-backed env config (settings store)
         settings.types.ts        SettingDefinition, SettingDto, UpdateSettingDto
         settings.registry.ts     SETTING_DEFINITIONS (declarative catalog) + getSettingDefinition/isSecretSetting
@@ -442,6 +443,8 @@ The event contract is **shared** across providers (emitted via `BaseAgentProvide
 | POST | `/api/sessions/:id/restore` | un-archive → IDLE (no-op on the agent loop; the next steer rebuilds it from the event log) |
 | DELETE | `/api/sessions/:id` | permanent; rejects unless the session is `ARCHIVED` (archive first). Disposes the agent handle, drops the in-memory SSE bus, and cascades the event log in one transaction |
 | GET | `/api/models` | aggregates `listModels()` across `AgentRegistry.available()` (Pi `ModelRegistry` when authed, Codex `model/list` when logged in, Cursor `Cursor.models.list()` when `CURSOR_API_KEY` set, else static Pi fallback) |
+| GET | `/api/provider-updates` | best-effort Pi/Codex CLI version advisory; disabled by `NUNCIO_PROVIDER_UPDATE_CHECKS=0` |
+| POST | `/api/provider-updates/:provider/update` | user-triggered allowlisted update for `pi` or `codex` only; never runs arbitrary command strings |
 | GET | `/api/settings` | list all settings (catalog metadata + `hasValue` + `source` + masked/raw `value`; secrets masked, never raw) |
 | GET | `/api/settings/:key` | single setting DTO (404 for unknown key) |
 | PUT | `/api/settings/:key` | `{ value }` — persists (encrypts secrets), busts provider caches, returns the masked DTO |
@@ -486,11 +489,13 @@ Env vars are the **fallback** for the settings store. Every var below (except th
 | `CURSOR_API_KEY` | — | Cursor SDK auth; required for `cursor` provider availability (mint at cursor.com/dashboard/cloud-agents). Stored encrypted at rest. | ✅ (secret) |
 | `NUNCIO_CURSOR_CWD` | `process.cwd()` | Default cwd for Cursor local agents when session has no `workspace` | ✅ |
 | `NUNCIO_CURSOR_AGENT_BIN` | `~/.local/bin/agent` | Path to Cursor CLI for imported handoff sessions (`cursor_backend=cli`) | ✅ |
-| `NUNCIO_CODEX_BIN` | `codex` | Path to the Codex CLI binary used to launch `codex app-server`. | ✅ |
+| `NUNCIO_CODEX_BIN` | `codex` | Codex CLI used to launch `codex app-server`; `codex` auto-discovers one logged-in install, absolute path is required when multiple installs exist. | ✅ |
 | `NUNCIO_CODEX_HOME` | (Codex default) | Optional Codex home directory passed as `CODEX_HOME`. | ✅ |
 | `NUNCIO_CODEX_CWD` | `process.cwd()` | Default cwd for Codex app-server sessions when no session workspace/worktree is set. | ✅ |
 | `NUNCIO_CODEX_RUNTIME_MODE` | `full-access` | `full-access` runs local self-hosted Codex with no approval prompts; `approval-required` uses read-only/untrusted mode and surfaces provider approval requests in the transcript. | ✅ |
 | `PI_AGENT_DIR` / `PI_CODING_AGENT_DIR` | `~/.pi/agent` | Pi auth/config root (`auth.json`, models). The directory path is configurable; the `auth.json` *contents* are read-only (managed by the `pi` CLI). | ✅ |
+| `NUNCIO_PI_BIN` | `pi` | Pi CLI used for update/version checks; set an absolute path when not on `PATH`. | ✅ |
+| `NUNCIO_PROVIDER_UPDATE_CHECKS` | `1` | Enables best-effort Pi/Codex CLI version advisories and optional user-triggered update actions. | ✅ |
 
 Pi auth is reused as-is from `~/.pi/agent/auth.json` (single source of truth shared with the `pi` CLI).
 Codex auth is reused from the local Codex CLI login; check it with `codex login status`.
@@ -539,7 +544,9 @@ When a phase is large it is split into lanes working on isolated branches, then 
 
 **Cursor provider (shipped):** `CursorAgentProvider` implements `AgentProvider` via `@cursor/sdk` local runtime. Uses `await Agent.create({ local: { cwd, useHttp1ForAgent: true, store: new JsonlLocalAgentStore(dir) } })` — both escape hatches required for Bun compat (HTTP/1.1 avoids `NGHTTP2_FRAME_SIZE_ERROR`; JSONL store avoids `node:sqlite`). `isAvailable()` checks `CURSOR_API_KEY` env only (no network); invalid keys surface at first `Agent.create` (hits `GET /v1/models` immediately) → session ERROR. `dispose()` calls sync `agent.close()`. Final assistant text from `result.result` (authoritative per SDK docs). `listModels()` caches `Cursor.models.list()` once per process, omitting the SDK's `default` model entry. `defaultId()` prefers cursor when `CURSOR_API_KEY` is set.
 
-**Codex provider (shipped):** `CodexAgentProvider` launches `codex app-server` over stdio, initializes the experimental API, discovers models via `model/list`, starts or resumes Codex threads, maps `item/agentMessage/delta` to the shared `assistant_delta`, emits final `assistant_message` on `turn/completed`, persists `provider_thread_id` / `provider_active_turn_id`, persists provider approval request state in SQLite, waits for Nuncio approval decisions when the app-server sends provider requests, interrupts active turns on dispose, and closes reusable app-server clients on Nest shutdown after flushing buffered deltas. Availability checks `codex --version` plus `codex login status`; daemon launches should prefer an absolute `NUNCIO_CODEX_BIN` when PATH is not guaranteed.
+**Codex provider (shipped):** `CodexAgentProvider` launches `codex app-server` over stdio, initializes the experimental API, discovers models via `model/list`, starts or resumes Codex threads, maps `item/agentMessage/delta` to the shared `assistant_delta`, emits final `assistant_message` on `turn/completed`, persists `provider_thread_id` / `provider_active_turn_id`, persists provider approval request state in SQLite, waits for Nuncio approval decisions when the app-server sends provider requests, interrupts active turns on dispose, and closes reusable app-server clients on Nest shutdown after flushing buffered deltas. Availability resolves the Codex CLI first: explicit `NUNCIO_CODEX_BIN` wins; otherwise Nuncio scans common install paths and `PATH`, probes `--version` plus `login status`, auto-selects one logged-in CLI, and rejects multiple logged-in CLIs until `NUNCIO_CODEX_BIN` is set to an absolute path.
+
+**Provider CLI updates (shipped):** `provider-updates/` checks Pi (`@earendil-works/pi-coding-agent`) and Codex (`@openai/codex`) CLI versions against public npm metadata and surfaces optional Settings/toast advisories. It must never affect provider availability and must never auto-update. Updates run only from `POST /api/provider-updates/:provider/update` after a user action, and only through backend-constructed allowlisted commands (`pi update`, detected package-manager Codex update, or manual-only standalone Codex installer command).
 
 **Remaining gaps:** Pi uses `SessionManager.inMemory()`, so active Pi sessions are lost on server restart and a `steer` on a revived session creates a fresh Pi session (conversation history is replayed from the event log, not restored into Pi) — the lazy-revive design (`SessionManager.create(cwd)` / `open(path)`) from the brainstorm is not yet implemented. Pi's `tools: ['read','bash','grep','find','ls']` are hardcoded (not configurable per session or via env). Cursor agent handles lost on server restart (same as Pi in-memory), though `JsonlLocalAgentStore` persists state for future `Agent.resume()`. Codex persists thread ids and approval request state, but a request waiting inside the app-server cannot continue across a server/app-server restart; stale pending requests are auto-denied with `server_restarted`. Cloud runtime (GitHub repo + PR) not yet supported. Real-provider integration tests are gated by local credentials.
 

@@ -15,6 +15,11 @@ vi.mock('../lib/forge-status-api', () => ({
   ]),
 }));
 
+vi.mock('../lib/provider-updates-api', () => ({
+  fetchProviderUpdates: vi.fn().mockResolvedValue({ enabled: true, providers: [] }),
+  updateProviderTool: vi.fn(),
+}));
+
 function renderWithTheme(ui: ReactElement) {
   return render(
     <ThemeProvider defaultTheme="light">

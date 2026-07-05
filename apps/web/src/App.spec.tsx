@@ -47,9 +47,14 @@ vi.mock('./lib/settings-api', () => ({
   clearSetting: vi.fn(),
 }));
 
+vi.mock('./lib/use-provider-update-notifications', () => ({
+  useProviderUpdateNotifications: vi.fn(),
+}));
+
 import { toast } from 'sonner';
 
 import App from './App';
+import { GRID_PREFERENCE_STORAGE_KEY } from './lib/grid-preference';
 import {
   archiveSession,
   createSession,
@@ -435,6 +440,41 @@ describe('App lifecycle', () => {
     );
 
     await openSession();
+    await waitFor(() => expect(eventSources.length).toBeGreaterThan(0));
+
+    const textarea = screen.getByPlaceholderText(/steer the agent/i);
+    await userEvent.type(textarea, 'use the cache layer');
+    await userEvent.click(screen.getByRole('button', { name: /^send$/i }));
+    expect(textarea).toBeDisabled();
+
+    const stream = eventSources[eventSources.length - 1]!;
+    act(() => {
+      stream.emit({ seq: 1, type: 'status', payload: { status: 'RUNNING' }, createdAt: Date.now() });
+      stream.emit({ seq: 2, type: 'assistant_message', payload: { text: 'Done' }, createdAt: Date.now() });
+      stream.emit({ seq: 3, type: 'status', payload: { status: 'IDLE' }, createdAt: Date.now() });
+    });
+
+    await waitFor(() => expect(screen.getByPlaceholderText(/steer the agent/i)).toBeEnabled());
+    resolveSteer(fakeSession({ id: 'new1', status: 'IDLE' }));
+  });
+
+  it('unlocks the maximized grid composer when the stream reports IDLE before steer refresh settles', async () => {
+    let resolveSteer!: (session: Session) => void;
+    vi.mocked(steerSession).mockImplementation(
+      () =>
+        new Promise<Session>((resolve) => {
+          resolveSteer = resolve;
+        }),
+    );
+    localStorage.setItem(
+      GRID_PREFERENCE_STORAGE_KEY,
+      JSON.stringify({ version: 1, preset: '1x1', slots: [{ sessionId: 'new1' }] }),
+    );
+
+    renderApp('/grid');
+    await waitFor(() => expect(screen.getByRole('button', { name: /maximize build the thing/i })).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: /maximize build the thing/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /restore grid/i })).toBeInTheDocument());
     await waitFor(() => expect(eventSources.length).toBeGreaterThan(0));
 
     const textarea = screen.getByPlaceholderText(/steer the agent/i);

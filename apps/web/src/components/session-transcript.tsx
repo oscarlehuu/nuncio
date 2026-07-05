@@ -23,6 +23,8 @@ interface TranscriptProps {
   events: SessionEvent[];
   /** Owning session — used to resolve media-store image URLs in user messages. */
   sessionId: string;
+  /** Origin-absolute API base when the transcript belongs to another hub machine. */
+  apiBase?: string;
   streaming?: boolean;
   pendingRequestIds?: ReadonlySet<string>;
   respondingRequestId?: string | null;
@@ -109,11 +111,13 @@ function UserBlock({
   queued,
   images,
   sessionId,
+  apiBase = '',
 }: {
   text: string;
   queued?: boolean;
   images?: TranscriptImage[];
   sessionId: string;
+  apiBase?: string;
 }) {
   const hasImages = !!images && images.length > 0;
   return (
@@ -123,7 +127,7 @@ function UserBlock({
           {images.map((image, i) => (
             <ChatImage
               key={i}
-              src={transcriptImageSrc(image, sessionId)}
+              src={transcriptImageSrc(image, sessionId, apiBase)}
               alt="Attached image"
               className="max-h-40"
             />
@@ -165,6 +169,7 @@ function ErrorRow({ message }: { message: string }) {
 interface RenderItemViewProps {
   item: RenderItem;
   sessionId: string;
+  apiBase?: string;
   streaming?: boolean;
   pendingRequestIds?: ReadonlySet<string>;
   respondingRequestId?: string | null;
@@ -183,6 +188,7 @@ function itemRequestId(item: RenderItem): string | null {
 function RenderItemView({
   item,
   sessionId,
+  apiBase = '',
   streaming,
   pendingRequestIds,
   respondingRequestId,
@@ -200,6 +206,7 @@ function RenderItemView({
           queued={block.queued}
           images={block.images}
           sessionId={sessionId}
+          apiBase={apiBase}
         />
       );
     case 'assistant':
@@ -277,6 +284,7 @@ function RenderItemView({
 const MemoRenderItemView = memo(RenderItemView, (prev, next) => {
   if (prev.item !== next.item) return false;
   if (prev.sessionId !== next.sessionId) return false;
+  if (prev.apiBase !== next.apiBase) return false;
   if (prev.streaming !== next.streaming) return false;
   if (prev.onRespondProviderRequest !== next.onRespondProviderRequest) return false;
   const requestId = itemRequestId(next.item);
@@ -294,6 +302,7 @@ const MemoRenderItemView = memo(RenderItemView, (prev, next) => {
 export const Transcript = memo(function Transcript({
   events,
   sessionId,
+  apiBase = '',
   streaming,
   pendingRequestIds,
   respondingRequestId,
@@ -328,6 +337,7 @@ export const Transcript = memo(function Transcript({
             <MemoRenderItemView
               item={item}
               sessionId={sessionId}
+              apiBase={apiBase}
               streaming={streaming}
               pendingRequestIds={pendingRequestIds}
               respondingRequestId={respondingRequestId}

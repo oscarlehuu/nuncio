@@ -23,6 +23,7 @@ class FakeCodexClient extends EventEmitter implements CodexAppServerClientLike {
   closed = false;
   autoCompleteTurn = true;
   emitApprovalRequests = true;
+  suppressAutoDelta = false;
   modelListResponse: unknown = {
     data: [
       {
@@ -83,10 +84,12 @@ class FakeCodexClient extends EventEmitter implements CodexAppServerClientLike {
             params: { command: 'git status' },
           });
         }
-        this.emitNotification({
-          method: 'item/agentMessage/delta',
-          params: { threadId: 'codex-thread-1', turnId: 'turn-1', delta: 'Hello' },
-        });
+        if (!this.suppressAutoDelta) {
+          this.emitNotification({
+            method: 'item/agentMessage/delta',
+            params: { threadId: 'codex-thread-1', turnId: 'turn-1', delta: 'Hello' },
+          });
+        }
         if (this.autoCompleteTurn) {
           this.completeTurn();
         }
@@ -166,6 +169,12 @@ describe('CodexAgentProvider', () => {
     provider = module.get(CodexAgentProvider);
     fakeClient = new FakeCodexClient();
     provider.clientFactory = () => fakeClient;
+    provider.cliCandidatePaths = ['/opt/nuncio/bin/codex'];
+    provider.commandRunner = async () => ({
+      status: 0,
+      stdout: 'codex-cli 0.142.5',
+      stderr: '',
+    });
   });
 
   afterEach(async () => {
@@ -261,6 +270,56 @@ describe('CodexAgentProvider', () => {
       payload: { text: 'Hello world' },
     });
     expect(all.at(-1)).toMatchObject({ type: 'status', payload: { status: 'IDLE' } });
+  });
+
+  it('separates consecutive Codex agentMessage items with a paragraph break', async () => {
+    fakeClient.autoCompleteTurn = false;
+    fakeClient.emitApprovalRequests = false;
+    fakeClient.suppressAutoDelta = true;
+    const created = sessions.create({
+      id: 'session-multi-item',
+      prompt: 'Plan the work',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+    });
+    const emitted: Array<{ type: string; payload: unknown }> = [];
+
+    const run = provider.run(created.id, created.prompt, {
+      emit: (event) => emitted.push(event),
+      cwd: '/tmp/project',
+      model: created.model,
+    });
+
+    await waitUntil(() => sessions.findById(created.id)?.providerActiveTurnId === 'turn-1');
+
+    // Two deltas share one item; the third begins a new item. Codex emits no
+    // separator between items, so the provider must break at the item boundary.
+    for (const [itemId, delta] of [
+      ['msg-a', 'First section.'],
+      ['msg-a', ' Same section.'],
+      ['msg-b', 'Second section.'],
+    ] as const) {
+      fakeClient.emitNotification({
+        method: 'item/agentMessage/delta',
+        params: { threadId: 'codex-thread-1', turnId: 'turn-1', itemId, delta },
+      });
+    }
+    fakeClient.completeTurn();
+    await run;
+
+    const all = events.list(created.id);
+    const message = all.find((event) => event.type === 'assistant_message');
+    expect(message?.payload).toEqual({
+      text: 'First section. Same section.\n\nSecond section.',
+    });
+
+    // The boundary is streamed live too: the joined delta stream (which the web
+    // client concatenates) carries the break, independent of delta coalescing.
+    const streamed = all
+      .filter((event) => event.type === 'assistant_delta')
+      .map((event) => (event.payload as { delta: string }).delta)
+      .join('');
+    expect(streamed).toBe('First section. Same section.\n\nSecond section.');
   });
 
   it('lists Codex reasoning effort and fast priority options', async () => {
@@ -585,6 +644,53 @@ describe('CodexAgentProvider', () => {
     expect(clientInput?.env.CODEX_HOME).toBe('/tmp/nuncio-codex-home');
   });
 
+  it('auto-discovers one logged-in Codex CLI candidate for daemon clients', async () => {
+    const settings = module.get(SettingsService);
+    settings.clear('NUNCIO_CODEX_BIN');
+    provider.cliCandidatePaths = ['/opt/nuncio/current/bin/codex'];
+    const probes: Array<{ command: string; args: string[] }> = [];
+    provider.commandRunner = async (command, args) => {
+      probes.push({ command, args });
+      return { status: 0, stdout: 'codex-cli 0.142.5', stderr: '' };
+    };
+
+    expect(await provider.isAvailable()).toBe(true);
+    expect(probes).toEqual([
+      { command: '/opt/nuncio/current/bin/codex', args: ['--version'] },
+      { command: '/opt/nuncio/current/bin/codex', args: ['login', 'status'] },
+    ]);
+
+    let clientInput: Parameters<NonNullable<CodexAgentProvider['clientFactory']>>[0] | undefined;
+    provider.clientFactory = (input) => {
+      clientInput = input;
+      return fakeClient;
+    };
+    const created = sessions.create({
+      id: 'session-auto-discovered-cli',
+      prompt: 'Use auto-discovered daemon',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+    });
+
+    await provider.run(created.id, created.prompt, {
+      model: created.model,
+      cwd: '/tmp/project',
+    });
+
+    expect(clientInput).toMatchObject({
+      binaryPath: '/opt/nuncio/current/bin/codex',
+      cwd: '/tmp/project',
+    });
+  });
+
+  it('does not report Codex available when multiple logged-in CLIs need selection', async () => {
+    settingsClear(module.get(SettingsService), 'NUNCIO_CODEX_BIN');
+    provider.cliCandidatePaths = ['/opt/codex-stable/bin/codex', '/opt/codex-nightly/bin/codex'];
+    provider.commandRunner = async () => ({ status: 0, stdout: 'codex-cli 0.142.5', stderr: '' });
+
+    expect(await provider.isAvailable()).toBe(false);
+  });
+
   it('uses approval-required runtime settings for Codex daemon thread and turn startup', async () => {
     const settings = module.get(SettingsService);
     settings.set('NUNCIO_CODEX_RUNTIME_MODE', 'approval-required');
@@ -629,6 +735,7 @@ describe('CodexAgentProvider', () => {
       if (key === 'NUNCIO_CODEX_BIN') return 'codex';
       return undefined;
     }) as SettingsService['resolve'];
+    provider.cliCandidatePaths = ['/opt/nuncio/bin/codex'];
     provider.commandRunner = async (_command, args) => ({
       status: args[0] === 'login' ? 0 : 0,
       stdout: 'Logged in using ChatGPT',
@@ -638,6 +745,14 @@ describe('CodexAgentProvider', () => {
     expect(await provider.isAvailable()).toBe(true);
   });
 });
+
+function settingsClear(settings: SettingsService, key: string): void {
+  try {
+    settings.clear(key);
+  } catch {
+    // Test helper for mocked/overridden settings objects.
+  }
+}
 
 async function settledWithin(promise: Promise<unknown>, timeoutMs = 100): Promise<'settled' | 'timeout'> {
   return Promise.race([

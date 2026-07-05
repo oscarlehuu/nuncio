@@ -247,16 +247,7 @@ export function HomeView({
             <Textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              onPaste={
-                canAttachImages
-                  ? (e) => {
-                      if (imageAttachments.hasImages(e.clipboardData)) {
-                        e.preventDefault();
-                        void imageAttachments.addFromDataTransfer(e.clipboardData);
-                      }
-                    }
-                  : undefined
-              }
+              onPaste={(e) => imageAttachments.handlePaste(e, canAttachImages)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();

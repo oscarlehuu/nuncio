@@ -1,7 +1,8 @@
 import type { ComponentProps } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, act, waitFor } from '@testing-library/react';
+import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
 import { SessionDetail } from './session-detail';
 import { INSPECTOR_PREFERENCE_STORAGE_KEY } from '../lib/inspector-preference';
 import { fetchGitStatus } from '../lib/api';
@@ -30,6 +31,12 @@ vi.mock('./browser-panel', () => ({
   BrowserPanel: ({ sessionId }: { sessionId: string }) => (
     <div data-testid="browser-panel">Browser {sessionId}</div>
   ),
+}));
+
+vi.mock('sonner', () => ({
+  toast: {
+    error: vi.fn(),
+  },
 }));
 
 vi.mock('./file-explorer-panel', () => ({
@@ -101,6 +108,11 @@ function makeSession(overrides: Partial<Session> = {}): Session {
 
 const NO_EVENTS: SessionEvent[] = [];
 
+function clipboardWithImage(): DataTransfer {
+  const image = new File(['png'], 'screenshot.png', { type: 'image/png' });
+  return { files: [image], items: [] } as unknown as DataTransfer;
+}
+
 async function renderDetail(
   overrides: Partial<Session> = {},
   events: SessionEvent[] = NO_EVENTS,
@@ -129,6 +141,7 @@ describe('SessionDetail', () => {
     delete (window as Window & { nuncioDesktop?: unknown }).nuncioDesktop;
     // The inspector dock persists open/tab state per device; isolate tests.
     localStorage.clear();
+    vi.clearAllMocks();
     MockWebSocket.instances.length = 0;
   });
 
@@ -142,6 +155,30 @@ describe('SessionDetail', () => {
     await userEvent.type(textarea, 'Use the cache layer');
     await userEvent.click(screen.getByRole('button', { name: /send/i }));
     expect(onSteer).toHaveBeenCalledWith('Use the cache layer', undefined);
+  });
+
+  it('lands focus in the composer on open when autoFocusComposer is set (desktop pointer)', async () => {
+    const original = window.matchMedia;
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: query.includes('pointer: fine'),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    })) as typeof window.matchMedia;
+    try {
+      await renderDetail({}, NO_EVENTS, undefined, { autoFocusComposer: true });
+      const textarea = screen.getByPlaceholderText(/steer the agent/i);
+      await waitFor(() => expect(textarea).toHaveFocus());
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+
+  it('does not auto-focus the composer on a coarse (touch) pointer', async () => {
+    // The default test matchMedia reports every query as non-matching → no fine pointer.
+    await renderDetail({}, NO_EVENTS, undefined, { autoFocusComposer: true });
+    expect(screen.getByPlaceholderText(/steer the agent/i)).not.toHaveFocus();
   });
 
   it('shows the attach-image control only when the provider supports images', async () => {
@@ -997,5 +1034,19 @@ describe('SessionDetail throttled streaming', () => {
     await userEvent.type(textarea, 'try from phone');
     await userEvent.click(screen.getByRole('button', { name: /send/i }));
     expect(onSteer).toHaveBeenCalledWith('try from phone', undefined);
+  });
+
+  it('warns instead of silently ignoring pasted images when the session provider lacks image support', async () => {
+    await renderDetail({
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+      supportsImages: false,
+    });
+
+    fireEvent.paste(screen.getByPlaceholderText(/steer the agent/i), {
+      clipboardData: clipboardWithImage(),
+    });
+
+    expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/does not accept images/i));
   });
 });
