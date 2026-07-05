@@ -3,9 +3,10 @@ const { app, BrowserWindow, BrowserView, dialog, ipcMain, Menu, Notification } =
 const { DaemonSupervisor } = require('./daemon');
 const serverProfiles = require('./server-profiles');
 
-// Dev and stable ship as distinct apps and must not share userData (SQLite data
-// dir, server profiles) — name them apart before anything reads
-// app.getPath('userData'). Channel is taken from the build's app-update.yml.
+// Dev and stable ship as distinct apps — name them apart (separate window state,
+// server profiles, updater cache) before anything reads app.getPath('userData').
+// The sessions DB is shared across all surfaces via NUNCIO_DATA_DIR below, not
+// userData. Channel is taken from the build's app-update.yml.
 function detectChannel() {
   try {
     const manifest = require('node:fs').readFileSync(
@@ -570,7 +571,9 @@ app.whenReady().then(async () => {
       supervisorOptions.cwd = resourcesPath;
       supervisorOptions.env = {
         ...process.env,
-        NUNCIO_DATA_DIR: path.join(app.getPath('userData'), 'data'),
+        // Share the SQLite backend with `bun run dev` and worktrees so every
+        // surface sees the same sessions (the shared-backend convention).
+        NUNCIO_DATA_DIR: path.join(require('node:os').homedir(), '.nuncio', 'data'),
         NUNCIO_WEB_DIST: path.join(resourcesPath, 'web', 'dist'),
       };
     }
