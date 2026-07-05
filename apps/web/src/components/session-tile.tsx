@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Maximize2, Send, X } from 'lucide-react';
 import type { Session, SessionStatus } from '../lib/api';
-import { statusLabel } from '../lib/api';
+import { statusLabel, transcriptImageSrc } from '../lib/api';
 import { isComposingEvent } from '../lib/keyboard';
 import { useSessionStream } from '../lib/use-session-stream';
 import { useStickToBottom } from '../lib/use-stick-to-bottom';
@@ -13,6 +13,7 @@ import { projectDisplayName } from '../lib/projects';
 import { prettyModelName } from '../lib/model-providers';
 import { ProviderIcon } from './provider-icon';
 import { StatusDot } from './status-dot';
+import { ChatImage } from './chat-image';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { summarizeToolGroup } from '@/lib/tool-summary';
@@ -221,7 +222,7 @@ export function SessionTile({
                   {item.summary}
                 </p>
               ) : (
-                <TileBlock key={i} block={item.block} />
+                <TileBlock key={i} block={item.block} sessionId={session.id} apiBase={apiBase} />
               ),
             )}
           </div>
@@ -295,14 +296,38 @@ function groupTileItems(blocks: TileBlockItem[]): TileItem[] {
 }
 
 /** Compact single-line-ish rendering of a transcript block for the tail. */
-function TileBlock({ block }: { block: TileBlockItem }) {
+function TileBlock({
+  block,
+  sessionId,
+  apiBase,
+}: {
+  block: TileBlockItem;
+  sessionId: string;
+  apiBase: string;
+}) {
   switch (block.kind) {
     case 'user':
       return (
-        <p className="text-muted-foreground line-clamp-2 break-words">
-          <span className="text-foreground/70">›</span> {block.text}
-          {block.queued ? <span className="text-muted-foreground/70"> (queued)</span> : null}
-        </p>
+        <div className="flex flex-col gap-1">
+          {block.images && block.images.length > 0 ? (
+            <div className="flex flex-wrap gap-1">
+              {block.images.map((image, i) => (
+                <ChatImage
+                  key={i}
+                  src={transcriptImageSrc(image, sessionId, apiBase)}
+                  alt="Attached image"
+                  className="max-h-16"
+                />
+              ))}
+            </div>
+          ) : null}
+          {block.text ? (
+            <p className="text-muted-foreground line-clamp-2 break-words">
+              <span className="text-foreground/70">›</span> {block.text}
+              {block.queued ? <span className="text-muted-foreground/70"> (queued)</span> : null}
+            </p>
+          ) : null}
+        </div>
       );
     case 'interrupted':
       return <p className="text-muted-foreground/70 italic">— interrupted —</p>;

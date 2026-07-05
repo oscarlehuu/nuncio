@@ -199,7 +199,7 @@ describe('SessionsService live Pi transcript watcher reconciliation', () => {
   });
 });
 
-function piMessage(role: 'user' | 'assistant', content: unknown[]) {
+function piMessage(role: 'user' | 'assistant' | 'toolResult', content: unknown[]) {
   return {
     type: 'message',
     message: { role, content },
