@@ -25,19 +25,21 @@ export function ConnectionDot({ className }: { className?: string }) {
 
 export function StatusDot({
   status,
+  pending = false,
   className,
 }: {
   status: SessionStatus;
+  /** Blocked awaiting user input — overrides the run-state color with amber. */
+  pending?: boolean;
   className?: string;
 }) {
+  const dotClass = pending
+    ? 'bg-warning animate-pulse shadow-[0_0_6px_var(--color-warning)]'
+    : STATUS_CLASS[status];
   return (
     <span
-      className={cn(
-        'inline-block size-[7px] rounded-full shrink-0',
-        STATUS_CLASS[status],
-        className,
-      )}
-      title={statusLabel(status)}
+      className={cn('inline-block size-[7px] rounded-full shrink-0', dotClass, className)}
+      title={pending ? 'Waiting for you' : statusLabel(status)}
     />
   );
 }

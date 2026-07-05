@@ -387,3 +387,31 @@ body {
 .surface-lit {
   background-image: var(--surface-gradient);
 }
+
+/*
+ * Breathing activity glow for grid tiles. A soft inner halo that slowly pulses,
+ * layered as an ::after overlay so it never fights the tile's own elevation
+ * shadow, and inset so it survives the tile's overflow-hidden. Color, size and
+ * speed are set per state via the --glow-* custom properties on the tile.
+ */
+.tile-glow {
+  position: relative;
+}
+.tile-glow::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow:
+    inset 0 0 0 1px var(--glow-color),
+    inset 0 0 var(--glow-size, 16px) -4px var(--glow-color);
+  animation: tile-breathe var(--glow-speed, 2.8s) ease-in-out infinite;
+}
+@keyframes tile-breathe {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.85; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tile-glow::after { animation: none; opacity: 0.6; }
+}

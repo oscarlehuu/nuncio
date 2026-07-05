@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Maximize2, Send, X } from 'lucide-react';
 import type { Session, SessionStatus } from '../lib/api';
 import { statusLabel } from '../lib/api';
@@ -39,35 +39,34 @@ interface SessionTileProps {
 }
 
 /**
- * Border encodes tile state, with a fixed precedence (founder-locked):
- *   focused ring > pending-input amber pulse > run-state color.
- * Non-focused tiles carry the state color at a lower intensity.
+ * Tile state maps to three independent visual channels so they never mask each
+ * other:
+ *   - border color + a breathing glow (.tile-glow) = activity
+ *       waiting-for-input → amber, a larger + quicker breath (pulls the eye)
+ *       running           → green, a calm slow breath
+ *       error             → red, no breath
+ *       idle/paused/…      → dim hairline
+ *   - a blue ring + lift = focus (which tile the keyboard drives), layered on top
+ * The --glow-* custom properties (see glowStyle) drive the breath color/size/speed.
  */
-function borderClasses(status: SessionStatus, pending: boolean, focused: boolean): string {
+function tileStateClasses(status: SessionStatus, pending: boolean, focused: boolean): string {
+  let activity: string;
+  if (pending) activity = 'border-warning tile-glow';
+  else if (status === 'RUNNING') activity = 'border-success/80 tile-glow';
+  else if (status === 'ERROR') activity = 'border-destructive';
+  else activity = 'border-border/60';
+  return cn(activity, focused && 'ring-2 ring-info shadow-e2');
+}
+
+/** Breath color/intensity for the active tile states; undefined = no breath. */
+function glowStyle(status: SessionStatus, pending: boolean): CSSProperties | undefined {
   if (pending) {
-    return cn(
-      'border-warning ring-1 ring-warning/50 animate-pulse',
-      focused && 'ring-2 ring-warning shadow-e2',
-    );
+    return { '--glow-color': 'var(--color-warning)', '--glow-size': '22px', '--glow-speed': '1.9s' } as CSSProperties;
   }
-  const stateColor: Record<SessionStatus, string> = {
-    RUNNING: 'border-success/70',
-    ERROR: 'border-destructive',
-    IDLE: 'border-border',
-    CREATED: 'border-border',
-    PAUSED: 'border-border',
-    ARCHIVED: 'border-border',
-  };
-  // Resting elevation (shadow-e1) comes from the base className; focus lifts it
-  // to shadow-e2 while the ring still encodes the focus state.
-  return cn(
-    stateColor[status],
-    focused
-      ? 'ring-2 ring-ring border-ring shadow-e2'
-      : status === 'RUNNING'
-        ? 'ring-1 ring-success/25'
-        : '',
-  );
+  if (status === 'RUNNING') {
+    return { '--glow-color': 'var(--color-success)' } as CSSProperties;
+  }
+  return undefined;
 }
 
 /** Latest status reported by the stream wins over the (possibly stale) list row. */
@@ -136,12 +135,13 @@ export function SessionTile({
       }}
       aria-label={`Session ${session.title}${focused ? ' (focused)' : ''}`}
       aria-current={focused ? 'true' : undefined}
+      style={glowStyle(status, pending)}
       className={cn(
         'group flex flex-col min-h-0 min-w-0 overflow-hidden rounded-xl border bg-card text-card-foreground',
         'shadow-e1 surface-lit hover:shadow-e2 hover:-translate-y-px',
         'transition-[box-shadow,border-color,translate] outline-none active:scale-[0.995]',
         'focus-visible:ring-2 focus-visible:ring-ring',
-        borderClasses(status, pending, focused),
+        tileStateClasses(status, pending, focused),
       )}
     >
       <header
@@ -151,7 +151,7 @@ export function SessionTile({
         }}
         className="flex items-center gap-2 border-b border-border/60 px-3 py-2 shrink-0"
       >
-        <StatusDot status={status} className="shrink-0" />
+        <StatusDot status={status} pending={pending} className="shrink-0" />
         <span
           className="shrink-0 leading-none text-muted-foreground"
           aria-label={`${session.provider} provider`}
