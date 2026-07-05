@@ -43,6 +43,9 @@ let serverProfilesState = { lastUsed: 'local', servers: [] };
 let serverProfilesPath = null;
 let currentServerTarget = 'local';
 let localServerUrl = null;
+// Auto-updater module (packaged builds only). Held so the application menu can
+// render its live "Check for Updates…" indicator; null in dev/tests.
+let updater = null;
 
 function createWindow(url) {
   mainWindow = new BrowserWindow({
@@ -91,6 +94,27 @@ function resolveServerProfilesPath() {
   return null;
 }
 
+// The app menu (darwin) hosts "Check for Updates…" right under About — the
+// conventional macOS spot. Its label is the updater's live indicator
+// ("Checking…" / "Downloading Update… 42%" / "Restart to Install …").
+function buildAppMenuItems() {
+  const items = [{ role: 'about' }];
+  if (updater) {
+    items.push({ type: 'separator' }, updater.updaterMenuItem());
+  }
+  items.push(
+    { type: 'separator' },
+    { role: 'services' },
+    { type: 'separator' },
+    { role: 'hide' },
+    { role: 'hideOthers' },
+    { role: 'unhide' },
+    { type: 'separator' },
+    { role: 'quit' },
+  );
+  return items;
+}
+
 function rebuildServerMenu() {
   if (!Menu?.buildFromTemplate || !Menu?.setApplicationMenu) return;
 
@@ -115,11 +139,15 @@ function rebuildServerMenu() {
   }
 
   const template = [
-    ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []),
+    ...(process.platform === 'darwin' ? [{ label: app.name, submenu: buildAppMenuItems() }] : []),
     { role: 'editMenu' },
     { role: 'viewMenu' },
     { label: 'Server', submenu: serverItems },
     { role: 'windowMenu' },
+    // Non-darwin has no app menu, so the updater indicator lives under Help.
+    ...(process.platform !== 'darwin' && updater
+      ? [{ role: 'help', submenu: [updater.updaterMenuItem()] }]
+      : []),
   ];
 
   try {
@@ -601,7 +629,15 @@ app.whenReady().then(async () => {
 
   if (packaged) {
     try {
-      require('./updater').initAutoUpdater({ log: (message) => console.log(message) });
+      updater = require('./updater');
+      updater.initAutoUpdater({
+        log: (message) => console.log(message),
+        // Re-render the menu on every state change so the "Check for Updates…"
+        // item reflects checking/downloading/ready live.
+        onStateChange: () => rebuildServerMenu(),
+      });
+      // Render the idle "Check for Updates…" item immediately.
+      rebuildServerMenu();
     } catch (error) {
       console.error('[updater] initialization failed', error);
     }
