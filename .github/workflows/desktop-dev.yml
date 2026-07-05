@@ -1,0 +1,23 @@
+name: Desktop Dev
+
+# Every push to `dev` (the integration branch) ships a signed, notarized dev build
+# to the GitHub `dev` prerelease channel — the installed "Nuncio Dev" app auto-updates.
+# Public repo → macOS runners are free, so per-push builds cost nothing.
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-dev
+  cancel-in-progress: true
+
+jobs:
+  dev:
+    uses: ./.github/workflows/desktop-build.yml
+    with:
+      channel: dev
+    secrets: inherit

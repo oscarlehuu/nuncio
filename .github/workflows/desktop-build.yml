@@ -1,0 +1,85 @@
+name: Desktop Build
+
+# Reusable build: compiles the server, packages the Electron app, signs with the
+# Developer ID cert, notarizes with the App Store Connect API key, and publishes
+# the .dmg/.zip + updater manifest to a GitHub Release. Called by desktop-dev
+# (dev channel → prerelease) and desktop-stable (stable channel → the release).
+on:
+  workflow_call:
+    inputs:
+      channel:
+        description: dev | stable
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build-sign-notarize-publish
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ inputs.channel }}" = "dev" ]; then
+            BASE=$(node -p "require('./package.json').version.split('-')[0]")
+            echo "version=${BASE}-dev.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          else
+            TAG="${{ github.event.release.tag_name }}"
+            echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Stamp apps/desktop version
+        working-directory: apps/desktop
+        run: |
+          node -e "const f='package.json',p=require('./'+f);p.version='${{ steps.ver.outputs.version }}';require('fs').writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
+          echo "Building Nuncio (${{ inputs.channel }}) ${{ steps.ver.outputs.version }}"
+
+      - name: Import Developer ID certificate into a temporary keychain
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          KC="$RUNNER_TEMP/signing.keychain-db"
+          KCPW=$(openssl rand -hex 20)
+          printf '%s' "$CSC_LINK" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPW" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | sed 's/"//g')
+          HASH=$(security find-identity -v -p codesigning | awk '/Developer ID Application/{print $2; exit}')
+          echo "SIGN_HASH=$HASH" >> "$GITHUB_ENV"
+          echo "SIGN_KEYCHAIN=$KC" >> "$GITHUB_ENV"
+
+      - name: Write App Store Connect API key
+        run: printf '%s' "${{ secrets.APPLE_API_KEY_P8 }}" > "$RUNNER_TEMP/authkey.p8"
+
+      - name: Build, sign, notarize, publish
+        working-directory: apps/desktop
+        env:
+          NUNCIO_CHANNEL: ${{ inputs.channel }}
+          CSC_KEYCHAIN: ${{ env.SIGN_KEYCHAIN }}
+          CSC_NAME: ${{ env.SIGN_HASH }}
+          APPLE_API_KEY: ${{ runner.temp }}/authkey.p8
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bun run build:resources
+          bunx electron-builder --config electron-builder.config.cjs --publish always
