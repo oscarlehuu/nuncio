@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { spawnSync } from 'node:child_process';
 import { EventsRepository } from '../../sessions/persistence/events.repository';
 import { SessionsRepository } from '../../sessions/persistence/sessions.repository';
@@ -119,7 +119,7 @@ const FALLBACK_CODEX_MODELS: ModelProviderDto[] = [
 ];
 
 @Injectable()
-export class CodexAgentProvider extends BaseAgentProvider {
+export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDestroy {
   readonly id = 'codex';
   readonly name = 'Codex';
 
@@ -177,6 +177,11 @@ export class CodexAgentProvider extends BaseAgentProvider {
     this.cachedModels = undefined;
   }
 
+  /** Codex app-server thread ids survive Nuncio daemon restarts and can be resumed. */
+  canResumeThread(session: { providerThreadId: string | null }): boolean {
+    return typeof session.providerThreadId === 'string' && session.providerThreadId.length > 0;
+  }
+
   async listModels(): Promise<ModelProviderDto[]> {
     if (this.cachedModels) return this.cachedModels;
     if (!(await this.isAvailable())) return [];
@@ -195,6 +200,12 @@ export class CodexAgentProvider extends BaseAgentProvider {
     }
   }
 
+  onModuleDestroy(): void {
+    for (const sessionId of [...this.activeSessions.keys()]) {
+      this.dispose(sessionId);
+    }
+  }
+
   dispose(sessionId: string): void {
     const active = this.activeSessions.get(sessionId);
     if (!active) return;
@@ -209,6 +220,7 @@ export class CodexAgentProvider extends BaseAgentProvider {
         .catch(() => undefined);
     }
 
+    this.flushDeltas(sessionId);
     this.settleActiveSession(
       sessionId,
       active,

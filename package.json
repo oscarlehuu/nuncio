@@ -17,6 +17,8 @@
     "build": "bun run --filter @nuncio/server build && bun run --filter @nuncio/web build",
     "build:landing": "bun run --filter @nuncio/landing build",
     "test": "bun run --filter @nuncio/server test && bun run --filter @nuncio/core test && bun run --filter @nuncio/mobile test",
+    "test:daily-driver": "bun run --filter @nuncio/server test && bun run --filter @nuncio/server test:e2e && bun run --filter @nuncio/core test && bun run --filter @nuncio/web test",
+    "test:daily-driver:codex": "bun run test:daily-driver && bun run --filter @nuncio/server test:integration:codex",
     "lint": "bun run --filter @nuncio/server lint && bun run --filter @nuncio/web lint && bun run --filter @nuncio/core lint && bun run --filter @nuncio/core typecheck && bun run --filter @nuncio/mobile lint && bun run --filter @nuncio/mobile typecheck",
     "changeset": "changeset",
     "add-changeset": "bun run scripts/add-changeset.mjs",

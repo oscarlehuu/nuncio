@@ -63,7 +63,7 @@ describe('SessionTile', () => {
 
   it('shows the success border when RUNNING', () => {
     streamEvents = [statusEvent(1, 'RUNNING')];
-    const { container } = render(
+    render(
       <SessionTile
         session={fakeSession({ status: 'RUNNING' })}
         focused={false}
@@ -71,7 +71,7 @@ describe('SessionTile', () => {
         onMaximize={noop}
       />,
     );
-    expect(container.querySelector('.border-success\\/70')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /session refactor the parser/i })).toHaveClass('border-success/80');
   });
 
   it('shows the destructive border when ERROR', () => {
@@ -89,10 +89,10 @@ describe('SessionTile', () => {
 
   it('shows the muted border when IDLE', () => {
     streamEvents = [statusEvent(1, 'IDLE')];
-    const { container } = render(
+    render(
       <SessionTile session={fakeSession()} focused={false} onFocus={noop} onMaximize={noop} />,
     );
-    expect(container.querySelector('.border-border')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /session refactor the parser/i })).toHaveClass('border-border/60');
   });
 
   it('shows the warning pulse border when an input request is open, overriding run state', () => {
@@ -119,7 +119,7 @@ describe('SessionTile', () => {
     expect(container.querySelector('.border-warning')).toBeTruthy();
     expect(container.querySelector('.animate-pulse')).toBeTruthy();
     // Pending input takes precedence: no run-state success border applied.
-    expect(container.querySelector('.border-success\\/70')).toBeNull();
+    expect(screen.getByRole('button', { name: /session refactor the parser/i })).not.toHaveClass('border-success/80');
   });
 
   it('shows a verify chip when the last verify run failed', () => {

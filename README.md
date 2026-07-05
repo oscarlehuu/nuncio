@@ -76,7 +76,7 @@ Requires [Bun](https://bun.sh) ≥ 1.3 (the server uses `bun:sqlite`, a Bun buil
 
 ```bash
 bun install
-cp .env.example .env   # optional but recommended — shared SQLite across worktrees
+cp .env.example .env   # optional but recommended in the main checkout
 bun run dev
 ```
 
@@ -87,12 +87,14 @@ bun run dev
 
 SQLite lives under `NUNCIO_DATA_DIR` (default: `./data` relative to the **server process cwd**, which is usually `apps/server/data/` when you run `bun run dev` from the repo root). Each git checkout or worktree without a shared path gets its **own empty database** — that is why a feature worktree can show an empty sidebar while your main clone has sessions.
 
-**Recommended:** point every checkout at one directory:
+**Recommended:** keep the shared runtime env in the main checkout and point it at one data directory:
 
 ```bash
 cp .env.example .env
 # edit if needed — default is $HOME/.nuncio/data
 ```
+
+When you run `bun run dev` from a git worktree, the backend `dev`/`start` scripts auto-discover the main/primary checkout's `.env` first, so sessions/settings still come from the shared SQLite directory. Set `NUNCIO_ENV_FILE=/absolute/path/to/.env` when you intentionally want a different env file for one run.
 
 Migrate existing data once (example if your sessions were under `apps/server/data/`):
 
@@ -124,7 +126,7 @@ codex login
 codex login status
 ```
 
-The default binary is `codex` on `PATH`. Override it with `NUNCIO_CODEX_BIN`; override Codex's home with `NUNCIO_CODEX_HOME`; override the default cwd with `NUNCIO_CODEX_CWD`. `NUNCIO_CODEX_RUNTIME_MODE=full-access` is the default for local self-hosted use. `approval-required` starts Codex in read-only/untrusted mode and surfaces pending provider approval requests in the session transcript. Pending request state is stored in SQLite; if the server restarts while Codex is waiting, Nuncio marks that stale request denied because the original app-server callback is gone.
+The default binary is `codex` on `PATH`. For launchd, desktop, or other daemon starts where `PATH` can be sparse, set `NUNCIO_CODEX_BIN` to the absolute CLI path (for example `~/.local/bin/codex`). Override Codex's home with `NUNCIO_CODEX_HOME`; override the default cwd with `NUNCIO_CODEX_CWD`. `NUNCIO_CODEX_RUNTIME_MODE=full-access` is the default for local self-hosted use. `approval-required` starts Codex in read-only/untrusted mode and surfaces pending provider approval requests in the session transcript. Pending request state is stored in SQLite; if the server restarts while Codex is waiting, Nuncio marks that stale request denied because the original app-server callback is gone. On graceful shutdown, Nuncio flushes buffered Codex deltas and closes reusable app-server clients.
 
 ### Desktop browser profile
 
@@ -143,10 +145,13 @@ avoids presenting a streamed remote-browser viewport there.
 bun run test                                       # server unit tests (simulated providers)
 bun run --filter @nuncio/server test:e2e           # HTTP e2e (simulated provider)
 bun run --filter @nuncio/server test:integration   # real Pi auth — skips when ~/.pi/agent absent
+bun run --filter @nuncio/server test:integration:codex # real Codex app-server — opt-in
 bun run --filter @nuncio/web test                  # web component tests (vitest)
+bun run test:daily-driver                          # server unit + e2e, core, web
+bun run test:daily-driver:codex                    # daily-driver + real Codex smoke
 ```
 
-All server tests run on `bun test` (no jest). The integration suite is gated on `~/.pi/agent/auth.json` and self-skips when absent, so it is CI-safe.
+All server tests run on `bun test` (no jest). The Pi integration suite is gated on `~/.pi/agent/auth.json` and self-skips when absent, so it is CI-safe. The Codex integration suite is explicitly opt-in via `NUNCIO_CODEX_INTEGRATION=1` (the script sets it), requires `codex login status`, and makes a real app-server model discovery call plus a short run/resume check.
 
 ## Production deploy (Tailscale)
 
@@ -300,7 +305,7 @@ apps/
     test/
       unit/          *.spec.ts (bun test)
       e2e/           HTTP e2e (simulated cursor provider)
-      integration/   real Pi auth (skips when ~/.pi/agent absent; opt-in)
+      integration/   real Pi/Codex auth (skips unless matching local credentials are present; opt-in)
   web/      Vite + React + Tailwind v4 + shadcn/ui (installable PWA)
 mockup.html UI blueprint (reference)
 data/       SQLite (gitignored)
