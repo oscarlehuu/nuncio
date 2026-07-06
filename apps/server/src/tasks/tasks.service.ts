@@ -217,6 +217,9 @@ export class TasksService {
         ? { parentSessionId: task.parentSessionId, payload: buildOutcomeDigest({ ...task, status: 'CANCELLED' }, null, [], null) }
         : null;
 
+    // Flush the parent buffer before the transaction (see finishWithDigest).
+    if (built) this.sessions.flushParentBuffer(built.parentSessionId);
+
     const result = this.database.transaction<{ row: TaskDto | null; event: SessionEvent | null }>(() => {
       const row = this.tasks.cancel(id);
       if (!row || !built) return { row, event: null };
@@ -361,6 +364,11 @@ export class TasksService {
       this.tasks.finish(task.id, status, outcome);
       return;
     }
+
+    // Flush the parent's buffered deltas BEFORE the transaction: the flush
+    // appends+emits its own delta independently, so a later rollback of the
+    // finish+digest transaction can never erase an already-broadcast delta.
+    this.sessions.flushParentBuffer(built.parentSessionId);
 
     const persisted = this.database.transaction<SessionEvent | null>(() => {
       this.tasks.finish(task.id, status, outcome);

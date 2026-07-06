@@ -447,24 +447,29 @@ export class SessionsService implements OnModuleDestroy {
   }
 
   /**
-   * Flush any provider-buffered deltas for a RUNNING session so they land at an
-   * earlier seq than an about-to-be-appended orchestration event. Engine-neutral
-   * (goes through the provider's optional flushPendingEvents). No-op otherwise.
+   * Flush a RUNNING parent's provider-buffered deltas as their own independent,
+   * committed write, so they land at an earlier seq than a later orchestration
+   * event. MUST be called BEFORE opening any transaction that appends such an
+   * event — the flush appends AND emits its delta synchronously, and a delta is
+   * a legitimate event regardless of whether that later transaction commits.
+   * No-op for non-RUNNING sessions or a missing/unavailable provider.
    */
-  private flushProviderBufferIfRunning(session: SessionDto): void {
-    if (session.status !== 'RUNNING') return;
+  flushParentBuffer(sessionId: string): void {
+    const session = this.sessions.findById(sessionId);
+    if (!session || session.status !== 'RUNNING') return;
     try {
-      this.agents.resolveForSession(session).flushPendingEvents?.(session.id);
+      this.agents.resolveForSession(session).flushPendingEvents?.(sessionId);
     } catch {
       // A missing/unavailable provider must never block a digest append.
     }
   }
 
   /**
-   * Persist an orchestration-authored event WITHOUT fanning out to subscribers,
-   * so a caller can wrap it in a transaction alongside other writes and emit
-   * only after the commit. Flushes the parent provider's coalescing buffer first
-   * (RUNNING only) so a buffered delta can never overtake this event's seq.
+   * Persist an orchestration-authored event WITHOUT flushing or fanning out, so
+   * a caller can wrap it in a transaction alongside other writes and emit only
+   * after the commit. The caller is responsible for calling flushParentBuffer
+   * BEFORE the transaction — flushing here would append+emit a delta that a
+   * transaction rollback could then erase from persistence but not from clients.
    * Returns null when the session no longer exists.
    */
   persistOrchestrationEvent(
@@ -472,9 +477,7 @@ export class SessionsService implements OnModuleDestroy {
     type: SessionEventType,
     payload: unknown,
   ): SessionEvent | null {
-    const session = this.sessions.findById(sessionId);
-    if (!session) return null;
-    this.flushProviderBufferIfRunning(session);
+    if (!this.sessions.findById(sessionId)) return null;
     return this.events.append(sessionId, type, payload);
   }
 
@@ -486,15 +489,17 @@ export class SessionsService implements OnModuleDestroy {
   /**
    * Append an orchestration-authored event (e.g. a subagent digest) to a
    * session's log through the same persist+fanout path run events take, so live
-   * subscribers update without a reload. Annotate-don't-block: the session FSM
-   * is untouched. Returns null when the session no longer exists; never throws —
-   * digest delivery must never destabilize the task that produced it.
+   * subscribers update without a reload. Flushes the parent's provider buffer
+   * first so a buffered delta cannot overtake this event. Annotate-don't-block:
+   * the session FSM is untouched. Returns null when the session no longer
+   * exists; never throws — digest delivery must never destabilize its producer.
    */
   appendOrchestrationEvent(
     sessionId: string,
     type: SessionEventType,
     payload: unknown,
   ): SessionEvent | null {
+    this.flushParentBuffer(sessionId);
     const event = this.persistOrchestrationEvent(sessionId, type, payload);
     if (event) this.emit(sessionId, event);
     return event;

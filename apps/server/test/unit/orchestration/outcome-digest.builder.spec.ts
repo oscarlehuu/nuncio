@@ -155,4 +155,23 @@ describe('buildOutcomeDigest', () => {
     buildOutcomeDigest(task({ status: 'DONE' }), 'c', [assistantMessage('y'.repeat(4000), 1)], ws);
     expect(JSON.stringify(ws)).toBe(before);
   });
+
+  it('drops the whole workspace (backstop) when an unbounded scalar still overflows', () => {
+    // An absurd branch name survives the dirtyFiles/diffStat/summary ladder, so
+    // the final backstop must null the workspace to hold the 4KB bound.
+    const absurdWorkspace = {
+      branch: 'b'.repeat(5000),
+      headSha: 'abc1234',
+      baseBranch: 'main',
+      dirtyFiles: [],
+      diffStat: null,
+    };
+    const digest = buildOutcomeDigest(task({ status: 'DONE' }), 'child-1', [], absurdWorkspace);
+    expect(new TextEncoder().encode(JSON.stringify(digest)).byteLength).toBeLessThanOrEqual(4096);
+    expect(digest.workspace).toBeNull();
+    expect(digest.childBranch).toBeNull();
+    // Protected fields remain.
+    expect(digest.taskId).toBe('task-1');
+    expect(digest.status).toBe('DONE');
+  });
 });

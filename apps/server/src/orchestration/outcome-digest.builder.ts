@@ -38,8 +38,10 @@ function lastVerify(events: SessionEvent[]): TaskCompletedPayload['verify'] {
 /**
  * Keep the serialized digest within the events-log payload budget. Trims in a
  * fixed order — dirtyFiles entries (preserving overflow-marker semantics), then
- * diffStat, then outcomeSummary down to a floor — and never touches taskId,
- * status, or verify.passed.
+ * diffStat, then outcomeSummary down to a floor. If it still overflows (a
+ * pathological scalar such as a giant branch name), the whole workspace and
+ * childBranch are dropped as a final backstop — the bound then holds
+ * unconditionally. Never touches taskId, status, or verify.passed.
  */
 function fitToBudget(payload: TaskCompletedPayload): TaskCompletedPayload {
   const over = () => byteLength(JSON.stringify(payload)) > PAYLOAD_MAX_BYTES;
@@ -74,6 +76,13 @@ function fitToBudget(payload: TaskCompletedPayload): TaskCompletedPayload {
       payload.outcomeSummary = truncateTailBytes(payload.outcomeSummary, budget);
     }
   }
+  if (!over()) return payload;
+
+  // 4. Backstop: an unbounded scalar (e.g. a giant branch name) can still
+  // overflow after the ladder. Drop the whole workspace + childBranch so the
+  // budget holds no matter what — the protected fields and floored summary stay.
+  payload.workspace = null;
+  payload.childBranch = null;
   return payload;
 }
 

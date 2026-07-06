@@ -111,4 +111,17 @@ describe('buildWorkspaceSnapshot', () => {
     expect(snap!.branch).toBe('main');
     expect(snap!.diffStat).toBeNull();
   });
+
+  it('byte-caps a pathologically long branch name to 256 bytes', async () => {
+    await initRepo();
+    // Git ref path components are FS-limited (~255B each), so build a long name
+    // from many short segments to exceed the 256B scalar cap (~308B here).
+    const longName = `feat/${'ab/'.repeat(100)}end`;
+    expect(new TextEncoder().encode(longName).byteLength).toBeGreaterThan(256);
+    await git(dir, 'checkout', '-q', '-b', longName);
+    const snap = await buildWorkspaceSnapshot(dir);
+    expect(snap).not.toBeNull();
+    expect(new TextEncoder().encode(snap!.branch ?? '').byteLength).toBeLessThanOrEqual(256);
+    expect(snap!.branch?.startsWith('feat/ab/ab/')).toBe(true);
+  });
 });

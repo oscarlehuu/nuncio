@@ -670,6 +670,49 @@ describe('TasksService', () => {
       // reconciles into a FAILED task + FAILED digest (covered by the boot test).
     });
 
+    it('a flushed parent delta survives even when the digest transaction rolls back', async () => {
+      writeVerifyScript('exit 0\n');
+      const parent = await sessions.create({ prompt: 'flush-durable parent', provider: 'cursor', workspace });
+
+      // The parent buffer flush happens BEFORE the transaction and commits its own
+      // delta independently. Simulate that by having flushParentBuffer append a
+      // real delta to the parent log; the digest transaction then fails.
+      const flushSpy = jest.spyOn(sessions, 'flushParentBuffer').mockImplementation((id: string) => {
+        events.append(id, 'assistant_delta', { delta: 'buffered work' });
+      });
+      const persistSpy = jest
+        .spyOn(sessions, 'persistOrchestrationEvent')
+        .mockImplementation(() => {
+          throw new Error('persist boom');
+        });
+      const emitted: string[] = [];
+      const unsubscribe = sessions.subscribe(parent.id, (e) => emitted.push(e.type));
+      try {
+        const child = service.enqueue({
+          prompt: 'work',
+          provider: 'cursor',
+          workspace,
+          role: 'subagent',
+          parentSessionId: parent.id,
+        });
+        await waitForStatus(child.id, ['RUNNING']);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
+        // The independently-flushed delta persisted (its write committed outside
+        // the rolled-back transaction).
+        expect(events.list(parent.id).some((e) => e.type === 'assistant_delta')).toBe(true);
+        // The digest did NOT persist, and subscribers never saw a task_completed.
+        expect(events.list(parent.id).some((e) => e.type === 'task_completed')).toBe(false);
+        expect(emitted).not.toContain('task_completed');
+        expect(repo.findById(child.id)?.status).toBe('RUNNING');
+        repo.finish(child.id, 'FAILED', { reason: 'test_cleanup' });
+      } finally {
+        unsubscribe();
+        persistSpy.mockRestore();
+        flushSpy.mockRestore();
+      }
+    });
+
     it('does not disturb a RUNNING parent FSM when appending a digest', async () => {
       writeVerifyScript('exit 0\n');
       const parent = await sessions.create({ prompt: 'busy parent', provider: 'cursor', workspace });

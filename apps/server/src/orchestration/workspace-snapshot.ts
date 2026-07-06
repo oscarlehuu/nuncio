@@ -15,6 +15,13 @@ export interface WorkspaceSnapshot {
 const GIT_TIMEOUT_MS = 3000;
 const DIRTY_FILE_CAP = 20;
 const DIFF_STAT_MAX_BYTES = 1024;
+/** Byte-cap the scalar ref fields so a pathological branch/sha can't blow a downstream payload budget. */
+const REF_NAME_MAX_BYTES = 256;
+const SHA_MAX_BYTES = 64;
+
+function capRef(value: string | null, maxBytes: number): string | null {
+  return value ? truncateHeadBytes(value, maxBytes) : value;
+}
 
 /**
  * Run a git subcommand with a hard timeout. Returns trimmed stdout on success,
@@ -84,14 +91,14 @@ export async function buildWorkspaceSnapshot(
   const branchRaw = await git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']);
   if (branchRaw === null) return null; // Not a git repo (or git unavailable).
 
-  const branch = branchRaw.trim() || null;
+  const branch = capRef(branchRaw.trim() || null, REF_NAME_MAX_BYTES);
   const headShaRaw = await git(cwd, ['rev-parse', '--short', 'HEAD']);
-  const headSha = headShaRaw?.trim() || null;
+  const headSha = capRef(headShaRaw?.trim() || null, SHA_MAX_BYTES);
   const porcelain = await git(cwd, ['status', '--porcelain']);
   const dirtyFiles = porcelain ? capDirtyFiles(porcelain) : [];
 
   let diffStat: string | null = null;
-  const base = baseBranch?.trim() || null;
+  const base = capRef(baseBranch?.trim() || null, REF_NAME_MAX_BYTES);
   if (base) {
     const raw = await git(cwd, ['diff', '--stat', `${base}...HEAD`]);
     diffStat = raw ? capDiffStat(raw) : null;
