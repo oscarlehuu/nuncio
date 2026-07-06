@@ -88,6 +88,22 @@ describe('buildWorkspaceSnapshot', () => {
     expect(snap!.diffStat).toBeNull();
   });
 
+  it('never splits a multi-byte character when truncating a long diffStat', async () => {
+    await initRepo();
+    await git(dir, 'checkout', '-q', '-b', 'feature');
+    // Many multi-byte-named files so the --stat output exceeds the 1024B cap and
+    // the truncation edge is very likely to land on a multi-byte boundary.
+    for (let i = 0; i < 60; i += 1) {
+      writeFileSync(join(dir, `フ${i}.txt`), 'x\n'); // 'フ' = 3 UTF-8 bytes
+    }
+    await git(dir, 'add', '.');
+    await git(dir, 'commit', '-q', '-m', 'multi-byte files');
+    const snap = await buildWorkspaceSnapshot(dir, 'main');
+    expect(snap!.diffStat).not.toBeNull();
+    expect(new TextEncoder().encode(snap!.diffStat!).byteLength).toBeLessThanOrEqual(1024);
+    expect(snap!.diffStat).not.toContain('�');
+  });
+
   it('returns a snapshot (not null) even when the base branch does not exist', async () => {
     await initRepo();
     const snap = await buildWorkspaceSnapshot(dir, 'no-such-base');

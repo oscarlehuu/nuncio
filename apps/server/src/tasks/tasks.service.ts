@@ -5,8 +5,9 @@ import { buildOutcomeDigest } from '../orchestration/outcome-digest.builder';
 import { renderHandoffBrief } from '../orchestration/handoff-brief.renderer';
 import type { HandoffBrief } from '../orchestration/handoff-brief.types';
 import { buildWorkspaceSnapshot } from '../orchestration/workspace-snapshot';
+import type { TaskCompletedPayload } from '../sessions/domain/events.types';
 import { deriveHasPendingInput } from '../sessions/domain/derive-pending-input';
-import type { SessionDto } from '../sessions/domain/sessions.types';
+import type { SessionDto, SessionEvent } from '../sessions/domain/sessions.types';
 import { EventsRepository } from '../sessions/persistence/events.repository';
 import { resolveVerifyCommand } from '../sessions/session-verifier';
 import { SessionsService } from '../sessions/sessions.service';
@@ -31,6 +32,13 @@ const GOAL_MAX_CHARS = 200;
  * own prompt as the goal. Returns undefined when there is no assembled base
  * (an explicit DTO brief is in play), leaving the caller's override untouched.
  */
+/** Collapse a task status into the digest's terminal vocabulary. */
+function digestStatus(status: TaskDto['status']): 'DONE' | 'FAILED' | 'CANCELLED' {
+  if (status === 'DONE') return 'DONE';
+  if (status === 'CANCELLED') return 'CANCELLED';
+  return 'FAILED';
+}
+
 function briefForPrompt(base: HandoffBrief | null, prompt: string): HandoffBrief | undefined {
   if (!base) return undefined;
   return { ...base, goal: prompt.slice(0, GOAL_MAX_CHARS) };
@@ -200,15 +208,26 @@ export class TasksService {
   }
 
   cancel(id: string): TaskDto {
-    this.requireTask(id);
-    const cancelled = this.tasks.cancel(id);
-    if (!cancelled) {
+    const task = this.requireTask(id);
+    // A cancelled task is QUEUED and never ran, so it has no child session and
+    // needs no async snapshot — build the digest synchronously so the cancel and
+    // the parent-log append commit as one atomic unit.
+    const built =
+      task.parentSessionId && this.sessions.get(task.parentSessionId)
+        ? { parentSessionId: task.parentSessionId, payload: buildOutcomeDigest({ ...task, status: 'CANCELLED' }, null, [], null) }
+        : null;
+
+    const result = this.database.transaction<{ row: TaskDto | null; event: SessionEvent | null }>(() => {
+      const row = this.tasks.cancel(id);
+      if (!row || !built) return { row, event: null };
+      const event = this.sessions.persistOrchestrationEvent(built.parentSessionId, 'task_completed', built.payload);
+      return { row, event };
+    });
+    if (!result.row) {
       throw new BadRequestException('Only queued tasks can be cancelled');
     }
-    // A cancelled subagent never ran, so it has no child session; the parent
-    // still gets a digest so the delegation loop is closed.
-    void this.emitTaskDigest(cancelled, cancelled.sessionId);
-    return cancelled;
+    if (result.event && built) this.sessions.emitPersistedEvent(built.parentSessionId, result.event);
+    return result.row;
   }
 
   /** Explicit retry: clone a terminal task into a fresh queued run. */
@@ -275,6 +294,9 @@ export class TasksService {
 
   private async execute(task: TaskDto): Promise<void> {
     let childSessionId: string | null = null;
+    // Determine the terminal outcome from the run; a run failure sets FAILED.
+    let status: 'DONE' | 'FAILED' = 'FAILED';
+    let outcome: Record<string, unknown> = {};
     try {
       // The brief is prepended to the session prompt only; task.prompt stays
       // pure in the DB so retry/clone semantics are unaffected.
@@ -299,28 +321,68 @@ export class TasksService {
 
       const final = this.sessions.get(session.id);
       const verify = this.lastVerifyResult(session.id);
-      this.tasks.finish(task.id, final?.status === 'IDLE' ? 'DONE' : 'FAILED', {
-        sessionStatus: final?.status ?? 'UNKNOWN',
-        ...(verify ? { verify } : {}),
-      });
+      status = final?.status === 'IDLE' ? 'DONE' : 'FAILED';
+      outcome = { sessionStatus: final?.status ?? 'UNKNOWN', ...(verify ? { verify } : {}) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.tasks.finish(task.id, 'FAILED', { error: message });
-    } finally {
-      const finished = this.tasks.findById(task.id);
-      if (finished) await this.emitTaskDigest(finished, childSessionId);
+      status = 'FAILED';
+      outcome = { error: message };
+    }
+
+    // Finalize OUTSIDE the run try/catch: finish + digest commit atomically. A
+    // transaction failure here must NOT re-enter the run's failure path (that
+    // would double-finish); the transaction rolled back, so the task stays
+    // RUNNING and boot reconciliation will fail it — consistent with a crash
+    // before the commit. Log and leave it; do not re-finish.
+    try {
+      await this.finishWithDigest(task, status, childSessionId, outcome);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[tasks] finish+digest transaction failed for ${task.id}; left for boot recovery: ${message}`);
     }
   }
 
   /**
-   * Append a compact digest of a finished subagent task to its parent session's
-   * log. Best-effort and non-fatal: a failure here must never turn a DONE task
-   * into a FAILED one, so it is caught and swallowed with a log line. No-ops for
-   * standalone tasks (no parent) and vanished parents.
+   * Mark a task terminal AND append its parent digest as one atomic unit, so a
+   * crash can never leave a finished task without its digest (or vice versa).
+   * The digest payload (including the async workspace snapshot) is built while
+   * the task is still RUNNING; a build failure degrades to finishing without a
+   * digest (annotate-don't-block). The parent-log fanout happens only after the
+   * transaction commits.
    */
-  private async emitTaskDigest(task: TaskDto, childSessionId: string | null): Promise<void> {
-    if (!task.parentSessionId) return;
-    if (!this.sessions.get(task.parentSessionId)) return;
+  private async finishWithDigest(
+    task: TaskDto,
+    status: 'DONE' | 'FAILED',
+    childSessionId: string | null,
+    outcome: Record<string, unknown>,
+  ): Promise<void> {
+    const built = await this.buildTaskDigest(task, status, childSessionId);
+    if (!built) {
+      this.tasks.finish(task.id, status, outcome);
+      return;
+    }
+
+    const persisted = this.database.transaction<SessionEvent | null>(() => {
+      this.tasks.finish(task.id, status, outcome);
+      return this.sessions.persistOrchestrationEvent(built.parentSessionId, 'task_completed', built.payload);
+    });
+    // Fan out to live subscribers only after the commit — never inside the txn.
+    if (persisted) this.sessions.emitPersistedEvent(built.parentSessionId, persisted);
+  }
+
+  /**
+   * Build the digest payload for a terminal task (best-effort, non-fatal). The
+   * async workspace snapshot is taken here, BEFORE the task is marked terminal,
+   * so the finish+append transaction stays synchronous. Returns null when there
+   * is no parent to notify, the parent vanished, or the build throws.
+   */
+  private async buildTaskDigest(
+    task: TaskDto,
+    status: 'DONE' | 'FAILED' | 'CANCELLED',
+    childSessionId: string | null,
+  ): Promise<{ parentSessionId: string; payload: TaskCompletedPayload } | null> {
+    if (!task.parentSessionId) return null;
+    if (!this.sessions.get(task.parentSessionId)) return null;
     try {
       const child = childSessionId ? this.sessions.get(childSessionId) : null;
       const cwd = child
@@ -330,8 +392,27 @@ export class TasksService {
         ? await buildWorkspaceSnapshot(cwd, child?.baseBranch ?? child?.branch)
         : null;
       const events = childSessionId ? this.events.listTail(childSessionId, PENDING_SCAN_TAIL) : [];
-      const digest = buildOutcomeDigest(task, childSessionId, events, workspace);
-      this.sessions.appendOrchestrationEvent(task.parentSessionId, 'task_completed', digest);
+      // The DB row is still RUNNING at build time; digest reflects the pending
+      // terminal status.
+      const payload = buildOutcomeDigest({ ...task, status }, childSessionId, events, workspace);
+      return { parentSessionId: task.parentSessionId, payload };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[tasks] failed to build task_completed digest for ${task.id}: ${message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Emit a digest for an already-terminal task (cancel / boot-recovery paths,
+   * where the task row is not transitioning RUNNING→terminal in this call).
+   * Best-effort; append failure never destabilizes the caller.
+   */
+  private async emitTaskDigest(task: TaskDto, childSessionId: string | null): Promise<void> {
+    const built = await this.buildTaskDigest(task, digestStatus(task.status), childSessionId);
+    if (!built) return;
+    try {
+      this.sessions.appendOrchestrationEvent(built.parentSessionId, 'task_completed', built.payload);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[tasks] failed to append task_completed digest for ${task.id}: ${message}`);

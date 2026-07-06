@@ -447,6 +447,43 @@ export class SessionsService implements OnModuleDestroy {
   }
 
   /**
+   * Flush any provider-buffered deltas for a RUNNING session so they land at an
+   * earlier seq than an about-to-be-appended orchestration event. Engine-neutral
+   * (goes through the provider's optional flushPendingEvents). No-op otherwise.
+   */
+  private flushProviderBufferIfRunning(session: SessionDto): void {
+    if (session.status !== 'RUNNING') return;
+    try {
+      this.agents.resolveForSession(session).flushPendingEvents?.(session.id);
+    } catch {
+      // A missing/unavailable provider must never block a digest append.
+    }
+  }
+
+  /**
+   * Persist an orchestration-authored event WITHOUT fanning out to subscribers,
+   * so a caller can wrap it in a transaction alongside other writes and emit
+   * only after the commit. Flushes the parent provider's coalescing buffer first
+   * (RUNNING only) so a buffered delta can never overtake this event's seq.
+   * Returns null when the session no longer exists.
+   */
+  persistOrchestrationEvent(
+    sessionId: string,
+    type: SessionEventType,
+    payload: unknown,
+  ): SessionEvent | null {
+    const session = this.sessions.findById(sessionId);
+    if (!session) return null;
+    this.flushProviderBufferIfRunning(session);
+    return this.events.append(sessionId, type, payload);
+  }
+
+  /** Fan a previously-persisted event out to live subscribers. */
+  emitPersistedEvent(sessionId: string, event: SessionEvent): void {
+    this.emit(sessionId, event);
+  }
+
+  /**
    * Append an orchestration-authored event (e.g. a subagent digest) to a
    * session's log through the same persist+fanout path run events take, so live
    * subscribers update without a reload. Annotate-don't-block: the session FSM
@@ -458,8 +495,9 @@ export class SessionsService implements OnModuleDestroy {
     type: SessionEventType,
     payload: unknown,
   ): SessionEvent | null {
-    if (!this.sessions.findById(sessionId)) return null;
-    return this.appendAndEmit(sessionId, type, payload);
+    const event = this.persistOrchestrationEvent(sessionId, type, payload);
+    if (event) this.emit(sessionId, event);
+    return event;
   }
 
   /**

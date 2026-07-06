@@ -116,4 +116,43 @@ describe('buildOutcomeDigest', () => {
     expect(digest.childSessionId).toBeNull();
     expect(digest.outcomeSummary).toBeNull();
   });
+
+  it('keeps the worst-case payload within the 4KB events budget', () => {
+    const worstWorkspace = {
+      branch: 'feature/really-long-branch-name',
+      headSha: 'abcdef1',
+      baseBranch: 'main',
+      dirtyFiles: Array.from({ length: 20 }, (_, i) => `src/${'p'.repeat(200)}-${i}.ts`),
+      diffStat: 'd'.repeat(1024),
+    };
+    const digest = buildOutcomeDigest(
+      task({ status: 'DONE' }),
+      'child-1',
+      [
+        assistantMessage('s'.repeat(4000), 1),
+        { seq: 2, type: 'verify_result', payload: { ok: false, outputTail: 'v'.repeat(4000) }, createdAt: 2 },
+      ],
+      worstWorkspace,
+    );
+    expect(new TextEncoder().encode(JSON.stringify(digest)).byteLength).toBeLessThanOrEqual(4096);
+    // Protected fields survive the trim.
+    expect(digest.taskId).toBe('task-1');
+    expect(digest.status).toBe('DONE');
+    expect(digest.verify?.passed).toBe(false);
+    // Summary is never trimmed below its floor.
+    expect(new TextEncoder().encode(digest.outcomeSummary ?? '').byteLength).toBeGreaterThanOrEqual(256);
+  });
+
+  it('does not mutate the caller-supplied workspace snapshot while trimming', () => {
+    const ws = {
+      branch: 'main',
+      headSha: 'abc1234',
+      baseBranch: 'main',
+      dirtyFiles: Array.from({ length: 20 }, (_, i) => `${'x'.repeat(200)}-${i}`),
+      diffStat: 'd'.repeat(1024),
+    };
+    const before = JSON.stringify(ws);
+    buildOutcomeDigest(task({ status: 'DONE' }), 'c', [assistantMessage('y'.repeat(4000), 1)], ws);
+    expect(JSON.stringify(ws)).toBe(before);
+  });
 });

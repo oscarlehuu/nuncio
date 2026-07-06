@@ -1,3 +1,5 @@
+import { truncateHeadBytes } from './byte-truncate';
+
 /** Cheap, precise git refs for a handoff — never file contents. */
 export interface WorkspaceSnapshot {
   branch: string | null;
@@ -65,9 +67,8 @@ function capDirtyFiles(porcelain: string): string[] {
 function capDiffStat(stat: string): string | null {
   const trimmed = stat.trimEnd();
   if (!trimmed) return null;
-  const bytes = new TextEncoder().encode(trimmed);
-  if (bytes.byteLength <= DIFF_STAT_MAX_BYTES) return trimmed;
-  return new TextDecoder().decode(bytes.slice(0, DIFF_STAT_MAX_BYTES));
+  // UTF-8-aware: never emit a diffStat ending in a split multi-byte character.
+  return truncateHeadBytes(trimmed, DIFF_STAT_MAX_BYTES);
 }
 
 /**

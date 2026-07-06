@@ -1,12 +1,9 @@
+import { byteLength, truncateHeadBytes } from './byte-truncate';
 import type { HandoffBrief } from './handoff-brief.types';
 import type { WorkspaceSnapshot } from './workspace-snapshot';
 
 const BRIEF_MAX_BYTES = 2048;
 const TRUNCATION_MARKER = '_(brief truncated)_';
-
-function byteLength(text: string): number {
-  return new TextEncoder().encode(text).byteLength;
-}
 
 function bulletList(items: string[]): string {
   return items.map((item) => `- ${item}`).join('\n');
@@ -80,10 +77,8 @@ export function renderHandoffBrief(brief: HandoffBrief): string {
 function clampToBudget(rendered: string): string {
   if (byteLength(rendered) <= BRIEF_MAX_BYTES) return rendered;
   const suffix = `\n${TRUNCATION_MARKER}`;
-  const bodyBudget = BRIEF_MAX_BYTES - byteLength(suffix);
-  const bytes = new TextEncoder().encode(rendered).slice(0, Math.max(0, bodyBudget));
-  // Drop a trailing partial multi-byte sequence so decoding stays clean.
-  const body = new TextDecoder('utf-8', { fatal: false }).decode(bytes).replace(/�+$/, '');
+  // Head-truncate the body on a clean UTF-8 boundary, leaving room for the marker.
+  const body = truncateHeadBytes(rendered, BRIEF_MAX_BYTES - byteLength(suffix));
   return `${body}${suffix}`;
 }
 

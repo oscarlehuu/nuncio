@@ -1,27 +1,14 @@
 import type { TaskCompletedPayload } from '../sessions/domain/events.types';
 import type { SessionEvent } from '../sessions/domain/sessions.types';
 import type { TaskDto } from '../tasks/tasks.types';
+import { byteLength, truncateHeadBytes, truncateTailBytes } from './byte-truncate';
 import type { WorkspaceSnapshot } from './workspace-snapshot';
 
 const SUMMARY_MAX_BYTES = 1024;
+const SUMMARY_FLOOR_BYTES = 256;
 const VERIFY_OUTPUT_MAX_BYTES = 512;
-
-/** Keep the trailing `maxBytes` bytes of `text`, dropping any partial multi-byte lead. */
-function tailBytes(text: string, maxBytes: number): string {
-  const bytes = new TextEncoder().encode(text);
-  if (bytes.byteLength <= maxBytes) return text;
-  const tail = bytes.slice(bytes.byteLength - maxBytes);
-  // A tail slice can start mid-character; fatal:false yields U+FFFD for the
-  // broken lead, which we strip so no mojibake reaches the reader.
-  return new TextDecoder('utf-8', { fatal: false }).decode(tail).replace(/^�+/, '');
-}
-
-/** Keep the leading `maxBytes` bytes, dropping a trailing partial multi-byte sequence. */
-function headBytes(text: string, maxBytes: number): string {
-  const bytes = new TextEncoder().encode(text);
-  if (bytes.byteLength <= maxBytes) return text;
-  return new TextDecoder('utf-8', { fatal: false }).decode(bytes.slice(0, maxBytes)).replace(/�+$/, '');
-}
+/** Matches the events-log per-payload contract; the digest self-enforces it. */
+const PAYLOAD_MAX_BYTES = 4096;
 
 function lastAssistantText(events: SessionEvent[]): string | null {
   for (let i = events.length - 1; i >= 0; i -= 1) {
@@ -41,7 +28,7 @@ function lastVerify(events: SessionEvent[]): TaskCompletedPayload['verify'] {
     if (!payload || typeof payload.ok !== 'boolean') return null;
     const output =
       typeof payload.outputTail === 'string' && payload.outputTail.length > 0
-        ? headBytes(payload.outputTail, VERIFY_OUTPUT_MAX_BYTES)
+        ? truncateHeadBytes(payload.outputTail, VERIFY_OUTPUT_MAX_BYTES)
         : undefined;
     return { passed: payload.ok, ...(output !== undefined ? { output } : {}) };
   }
@@ -49,9 +36,52 @@ function lastVerify(events: SessionEvent[]): TaskCompletedPayload['verify'] {
 }
 
 /**
+ * Keep the serialized digest within the events-log payload budget. Trims in a
+ * fixed order — dirtyFiles entries (preserving overflow-marker semantics), then
+ * diffStat, then outcomeSummary down to a floor — and never touches taskId,
+ * status, or verify.passed.
+ */
+function fitToBudget(payload: TaskCompletedPayload): TaskCompletedPayload {
+  const over = () => byteLength(JSON.stringify(payload)) > PAYLOAD_MAX_BYTES;
+  if (!over()) return payload;
+
+  // 1. Shed dirty files from the tail, keeping/extending the "…and N more" marker.
+  if (payload.workspace && payload.workspace.dirtyFiles.length > 0) {
+    const ws = payload.workspace;
+    const files = [...ws.dirtyFiles];
+    const markerAt = files.findIndex((f) => /^…and \d+ more$/.test(f));
+    let listed = markerAt >= 0 ? files.slice(0, markerAt) : files;
+    let hidden = markerAt >= 0 ? Number(files[markerAt]!.match(/\d+/)?.[0] ?? 0) : 0;
+    while (over() && listed.length > 0) {
+      listed.pop();
+      hidden += 1;
+      ws.dirtyFiles = hidden > 0 ? [...listed, `…and ${hidden} more`] : listed;
+    }
+  }
+  if (!over()) return payload;
+
+  // 2. Drop the diffStat entirely.
+  if (payload.workspace?.diffStat) {
+    payload.workspace.diffStat = null;
+  }
+  if (!over()) return payload;
+
+  // 3. Shrink the summary toward its floor.
+  if (payload.outcomeSummary) {
+    let budget = SUMMARY_MAX_BYTES;
+    while (over() && budget > SUMMARY_FLOOR_BYTES) {
+      budget = Math.max(SUMMARY_FLOOR_BYTES, Math.floor(budget / 2));
+      payload.outcomeSummary = truncateTailBytes(payload.outcomeSummary, budget);
+    }
+  }
+  return payload;
+}
+
+/**
  * Build the compact, deterministic digest a parent session receives when one of
  * its subagent tasks reaches a terminal state. No LLM: the summary is the tail
  * of the child's last assistant message. A CANCELLED task carries no summary.
+ * The result is guaranteed to serialize within the events-log payload budget.
  */
 export function buildOutcomeDigest(
   task: TaskDto,
@@ -61,13 +91,16 @@ export function buildOutcomeDigest(
 ): TaskCompletedPayload {
   const status = task.status === 'DONE' || task.status === 'CANCELLED' ? task.status : 'FAILED';
   const summaryText = status === 'CANCELLED' ? null : lastAssistantText(events);
-  return {
+  // Clone the workspace so budget trimming never mutates the caller's snapshot.
+  const workspaceCopy = workspace ? { ...workspace, dirtyFiles: [...workspace.dirtyFiles] } : null;
+  const payload: TaskCompletedPayload = {
     taskId: task.id,
     childSessionId,
     status,
-    outcomeSummary: summaryText ? tailBytes(summaryText, SUMMARY_MAX_BYTES) : null,
+    outcomeSummary: summaryText ? truncateTailBytes(summaryText, SUMMARY_MAX_BYTES) : null,
     verify: lastVerify(events),
-    workspace,
-    childBranch: workspace?.branch ?? null,
+    workspace: workspaceCopy,
+    childBranch: workspaceCopy?.branch ?? null,
   };
+  return fitToBudget(payload);
 }

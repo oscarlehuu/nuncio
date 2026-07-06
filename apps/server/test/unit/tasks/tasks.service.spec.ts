@@ -612,14 +612,13 @@ describe('TasksService', () => {
       expect(['DONE', 'FAILED']).toContain(done.status);
     });
 
-    it('a digest append failure never flips a DONE task to FAILED', async () => {
+    it('a digest BUILD failure finishes the task DONE with no digest and no throw', async () => {
       writeVerifyScript('exit 0\n');
       const parent = await sessions.create({ prompt: 'parent', provider: 'cursor', workspace });
-      const appendSpy = jest
-        .spyOn(sessions, 'appendOrchestrationEvent')
-        .mockImplementation(() => {
-          throw new Error('append boom');
-        });
+      // Fail only the digest build step; the task must still finish DONE.
+      const buildSpy = jest
+        .spyOn(service as unknown as { buildTaskDigest: () => Promise<null> }, 'buildTaskDigest')
+        .mockResolvedValue(null);
       try {
         const child = service.enqueue({
           prompt: 'work',
@@ -631,8 +630,44 @@ describe('TasksService', () => {
         const done = await waitForStatus(child.id, ['DONE', 'FAILED']);
         expect(done.status).toBe('DONE');
       } finally {
-        appendSpy.mockRestore();
+        buildSpy.mockRestore();
       }
+      // No digest reached the parent, but the loop stayed healthy.
+      expect(events.list(parent.id).some((e) => e.type === 'task_completed')).toBe(false);
+    });
+
+    it('a finish+digest transaction failure leaves the task unfinished (both-or-neither)', async () => {
+      writeVerifyScript('exit 0\n');
+      const parent = await sessions.create({ prompt: 'txn parent', provider: 'cursor', workspace });
+      // Force the digest persist (inside the finish transaction) to throw, so the
+      // transaction rolls back and the task's finish is undone.
+      const persistSpy = jest
+        .spyOn(sessions, 'persistOrchestrationEvent')
+        .mockImplementation(() => {
+          throw new Error('persist boom');
+        });
+      try {
+        const child = service.enqueue({
+          prompt: 'atomic work',
+          provider: 'cursor',
+          workspace,
+          role: 'subagent',
+          parentSessionId: parent.id,
+        });
+        await waitForStatus(child.id, ['RUNNING']);
+        // Give execute time to reach (and roll back) the finalize transaction.
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        // Both-or-neither: finish rolled back → task NOT terminal, and no digest.
+        expect(repo.findById(child.id)?.status).toBe('RUNNING');
+        expect(events.list(parent.id).some((e) => e.type === 'task_completed')).toBe(false);
+        // Clean up the deliberately-stuck RUNNING task so it does not occupy the
+        // single concurrency slot for later tests (mirrors boot reconciliation).
+        repo.finish(child.id, 'FAILED', { reason: 'test_cleanup' });
+      } finally {
+        persistSpy.mockRestore();
+      }
+      // The stuck task is exactly the RUNNING-at-boot case that failInterrupted
+      // reconciles into a FAILED task + FAILED digest (covered by the boot test).
     });
 
     it('does not disturb a RUNNING parent FSM when appending a digest', async () => {
