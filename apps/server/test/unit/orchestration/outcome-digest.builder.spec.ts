@@ -139,7 +139,8 @@ describe('buildOutcomeDigest', () => {
     expect(digest.taskId).toBe('task-1');
     expect(digest.status).toBe('DONE');
     expect(digest.verify?.passed).toBe(false);
-    // Summary is never trimmed below its floor.
+    // With plain text (no escape inflation), the summary is preferred over
+    // verify.output, so a substantial summary survives.
     expect(new TextEncoder().encode(digest.outcomeSummary ?? '').byteLength).toBeGreaterThanOrEqual(256);
   });
 
@@ -173,5 +174,61 @@ describe('buildOutcomeDigest', () => {
     // Protected fields remain.
     expect(digest.taskId).toBe('task-1');
     expect(digest.status).toBe('DONE');
+  });
+
+  describe('serialized-payload budget invariant (never > 4096 bytes)', () => {
+    const NUL = String.fromCharCode(1); // a C0 control char ()
+    const serializedBytes = (value: unknown) =>
+      new TextEncoder().encode(JSON.stringify(value)).byteLength;
+
+    // Each row: [name, summary, verifyOutput]. JSON escaping inflates these
+    // (~6x for control chars, 2x for quotes/backslashes), so RAW-byte floors are
+    // not enough — the invariant is measured on the SERIALIZED payload.
+    const cases: Array<[string, string, string]> = [
+      ['NUL-filled summary + control verify output', NUL.repeat(4000), NUL.repeat(4000)],
+      ['all-quotes summary + all-quotes verify', '"'.repeat(4000), '"'.repeat(4000)],
+      ['all-backslash summary + verify', '\\'.repeat(4000), '\\'.repeat(4000)],
+      ['mixed emoji + control chars', '😀'.repeat(2000) + NUL.repeat(2000), '€'.repeat(2000)],
+      // The exact review repro: 256 raw control-byte summary tail + 512 raw
+      // control-byte verify output previously serialized to 4767 bytes.
+      ['review 4767B regression repro', NUL.repeat(1024), NUL.repeat(4000)],
+    ];
+
+    for (const [name, summary, verifyOutput] of cases) {
+      it(`stays ≤ 4096 serialized: ${name}`, () => {
+        const events: SessionEvent[] = [
+          assistantMessage(summary, 1),
+          { seq: 2, type: 'verify_result', payload: { ok: false, outputTail: verifyOutput }, createdAt: 2 },
+        ];
+        const digest = buildOutcomeDigest(task({ status: 'DONE' }), 'child-1', events, {
+          branch: 'main',
+          headSha: 'abc1234',
+          baseBranch: 'main',
+          dirtyFiles: Array.from({ length: 20 }, (_, i) => `src/${'p'.repeat(200)}-${i}.ts`),
+          diffStat: 'd'.repeat(1024),
+        });
+        expect(serializedBytes(digest)).toBeLessThanOrEqual(4096);
+        // Protected fields are never trimmed.
+        expect(digest.taskId).toBe('task-1');
+        expect(digest.status).toBe('DONE');
+        expect(digest.verify?.passed).toBe(false);
+      });
+    }
+
+    it('strips C0 control characters from summary and verify output', () => {
+      const events: SessionEvent[] = [
+        assistantMessage(`clean${NUL}text`, 1),
+        { seq: 2, type: 'verify_result', payload: { ok: true, outputTail: `ok${NUL}here` }, createdAt: 2 },
+      ];
+      const digest = buildOutcomeDigest(task({ status: 'DONE' }), 'child-1', events, null);
+      expect(digest.outcomeSummary).toBe('cleantext');
+      expect(digest.verify?.output).toBe('okhere');
+    });
+
+    it('preserves tab and newline (not stripped as control chars)', () => {
+      const events: SessionEvent[] = [assistantMessage('line1\nline2\tindented', 1)];
+      const digest = buildOutcomeDigest(task({ status: 'DONE' }), 'child-1', events, null);
+      expect(digest.outcomeSummary).toBe('line1\nline2\tindented');
+    });
   });
 });
