@@ -34,15 +34,15 @@ The 2026-07-02 scaling direction froze new providers (Pi stability + dogfood). O
 | SDK bundles per-platform CLI binaries (`optionalDependencies`); `pathToClaudeCodeExecutable` overrides; the bundled binary itself can run `auth status`, so a system `claude` install is **not required** | npm metadata; `sdk.d.ts:1684–1686` |
 | `env` option passes environment to the CLI subprocess | `sdk.d.ts:1407` |
 
-## Capabilities matrix (provisional — Phase 0 finalizes)
+## Capabilities matrix (finalized by Phase 0 spike — `spike-findings.md`, 2026-07-06)
 
 | Capability | Value | Basis |
 |-----------|-------|-------|
-| `interrupt` | `true` | `query.interrupt()` verified in typings |
-| `modelSwitch` | `'in-session'` | `query.setModel()` verified |
-| `effortSwitch` | TBD (`'in-session'` likely) | CLI has `--effort low…max`; SDK path unverified → spike |
-| `images` | `true` expected | MessageParam image blocks; needs one live send → spike |
-| `steerWhileRunning` | TBD | `priority: 'now'` semantics unverified → spike gate |
+| `interrupt` | `true` | `query.interrupt()` — live: `result.terminal_reason:'aborted_tools'`, process survived, follow-up worked (S3) |
+| `modelSwitch` | `'in-session'` | `query.setModel()`; catalog from `initializationResult().models` (S1) |
+| `effortSwitch` | `'in-session'` | `Options.effort` + `query.applyFlagSettings({ effortLevel })` mid-session, no throw — live (S6). Model-gated: Haiku has no effort |
+| `images` | `true` | live: base64 PNG image block → model answered "Red." for a 2×2 red PNG (S5) |
+| `steerWhileRunning` | `true` | `priority:'now'` truncated the in-flight turn (2/5 tool calls) and redirected — live (S2); redirect surfaces as a new assistant turn |
 
 ## Event mapping (SDK → nuncio shared contract)
 
@@ -54,7 +54,7 @@ The 2026-07-02 scaling direction froze new providers (Pi stability + dogfood). O
 | `assistant` message `tool_use` block | `tool_start { callId: tool_use.id, tool: name, input }` |
 | tool result (user message with `tool_use_result` / `tool_result` block) | `tool_end { callId: tool_use_id, isError, output }` |
 | `result` (`subtype: 'success'`) | `assistant_message { text: result.result }` — authoritative terminal text (conformance requires match) |
-| `result` (error subtypes: `error_max_turns`, `error_max_budget_usd`, …) | throw → BaseAgentProvider lands ERROR + error event |
+| `result` (error subtypes) | **discriminate first** (spike S3/S4): `error_during_execution` + `terminal_reason:'aborted_tools'` = interrupt (→ `interrupted`, not ERROR); `errors[]` "No conversation found…" = cannot-resume (clean user-facing error); steer-`'now'` early-terminal = redirect, session stays alive. Only genuinely unexplained subtypes throw → ERROR |
 | `system/api_retry`, rate-limit events | log only (no user-facing event) in v1 |
 | Task/subagent messages (`SDKTaskNotification…`) | ignore in v1 (see Non-goals) |
 
