@@ -227,6 +227,18 @@ Session FSM: `CREATED → RUNNING → IDLE | ERROR | PAUSED`; `IDLE/PAUSED → R
 - **Attachments** are threaded through `POST /api/sessions` (create) and `POST /api/sessions/:id/steer` as `attachments?: AgentAttachment[]`, passed into `run`/`steer` via `AgentRunContext.attachments`.
 - **Body limit:** `main.ts` sets the Nest `json`/`urlencoded` body limit to `25mb` via `app.useBodyParser(...)` so base64 image attachments fit. Native Nest body-parser config is used (not `import 'express'`) because `express` is only a transitive dep and is not resolvable as a bare specifier under Bun's isolated module store.
 
+### Post-turn verifier and auto-fix loop
+
+After a local run or steer settles `IDLE`, `SessionsService.maybeVerify(sessionId)` (`sessions.service.ts:1073`) runs the session's check command — a `.nuncio/verify` script in the workspace, or the `NUNCIO_VERIFY_COMMAND` setting — inside the session's cwd and appends `verify_start` then `verify_result` (`{ command, ok, exitCode, durationMs, outputTail, timedOut }`). Verification annotates the transcript; it never blocks the FSM.
+
+When `NUNCIO_VERIFY_AUTO_STEER` is enabled, a failing `verify_result` drives an auto-fix loop off the tail of `maybeVerify`. The loop's whole state is **derived from the event log** (`verify-feedback.ts` — `foldLoopState` / `decideNextStep`), never a schema column, so it rebuilds exactly after a restart:
+
+- On a failing verify, `foldLoopState` folds the event tail since the last loop boundary (a green `verify_result`, a human — untagged — `steer_message`, or a prior `verify_needs_attention`) into a round count and the failing output tails. `decideNextStep` then either **retries** or **stops**.
+- A retry appends a `verify_retry` marker (`{ round, reason, command, outputTail, retryId }`), then auto-steers the same session with the failure output. That steer is tagged `{ origin: 'verify_retry', retryId }` on its `steer_message` so it is classified by explicit origin, not adjacency, and a boot rescan can idempotently re-send a `verify_retry` whose steer never followed. Because `steer` ends by calling `maybeVerify` again, the loop is self-driving through the existing machinery — no new scheduler, no new FSM state.
+- The loop **stops** and appends `verify_needs_attention` (`{ rounds, reason: 'max_rounds' | 'repeated_failure', lastOutputTail }`) after `NUNCIO_VERIFY_MAX_ROUNDS` rounds (default 3) or when the two most recent failures are byte-identical (no progress). It is emitted once and cleared implicitly by a later green `verify_result`. The web transcript renders `verify_retry` and `verify_needs_attention` as first-class rows.
+- **Boot resume:** `resumeVerifyLoops()` / `resumeOneVerifyLoop()` (`sessions.service.ts:1255`) re-fold each session on startup and re-send a dangling auto-steer that crashed between marker and delivery.
+- **Task settlement:** a task's outcome must reflect the loop's *terminal* verify, not the first failing one, so `TasksService` waits for the loop to settle and reads `lastVerifyResult` / the needs-attention payload (`tasks.service.ts:180`) before recording Done vs needs-you.
+
 ## Task queue and multitasking subagents
 
 `apps/server/src/tasks/` owns the durable task queue. Standalone tasks and child
