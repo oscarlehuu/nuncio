@@ -12,13 +12,27 @@ function bulletList(items: string[]): string {
   return items.map((item) => `- ${item}`).join('\n');
 }
 
+/**
+ * Render workspace lines defensively — persisted data may be structurally
+ * malformed (older rows, hand-edited JSON), and rendering must never throw at
+ * task-execution time. Any non-conforming field is simply skipped.
+ */
 function workspaceLines(ws: WorkspaceSnapshot): string[] {
+  if (typeof ws !== 'object' || ws === null) return [];
   const lines: string[] = [];
-  if (ws.branch) lines.push(`- branch: ${ws.branch}`);
-  if (ws.headSha) lines.push(`- head: ${ws.headSha}`);
-  if (ws.baseBranch) lines.push(`- base: ${ws.baseBranch}`);
-  if (ws.dirtyFiles.length) lines.push(`- dirty: ${ws.dirtyFiles.join(', ')}`);
-  if (ws.diffStat) lines.push('```', ws.diffStat, '```');
+  const str = (value: unknown): string | null => (typeof value === 'string' && value ? value : null);
+  const branch = str(ws.branch);
+  const headSha = str(ws.headSha);
+  const baseBranch = str(ws.baseBranch);
+  const diffStat = str(ws.diffStat);
+  if (branch) lines.push(`- branch: ${branch}`);
+  if (headSha) lines.push(`- head: ${headSha}`);
+  if (baseBranch) lines.push(`- base: ${baseBranch}`);
+  if (Array.isArray(ws.dirtyFiles)) {
+    const dirty = ws.dirtyFiles.filter((f): f is string => typeof f === 'string');
+    if (dirty.length) lines.push(`- dirty: ${dirty.join(', ')}`);
+  }
+  if (diffStat) lines.push('```', diffStat, '```');
   return lines;
 }
 
@@ -48,11 +62,29 @@ export function renderHandoffBrief(brief: HandoffBrief): string {
     const overBudgetAtFloor = atFloor && byteLength(compose(brief, omit, false)) > BRIEF_MAX_BYTES;
     const rendered = compose(brief, omit, droppedSomething || overBudgetAtFloor);
     if (byteLength(rendered) <= BRIEF_MAX_BYTES || atFloor) {
-      return rendered;
+      return clampToBudget(rendered);
     }
   }
   // Unreachable: the loop always returns on its last iteration.
-  return compose(brief, new Set(shedOrder), true);
+  return clampToBudget(compose(brief, new Set(shedOrder), true));
+}
+
+/**
+ * Final backstop: the shed ladder only drops droppable sections, so protected
+ * fields (goal, doneCriteria, verifyCommand) can still push a fully-shed brief
+ * over budget. Under the API's per-field caps this is unreachable, but a brief
+ * assembled internally or persisted before those caps existed could overflow —
+ * hard-truncate on a byte boundary and append the marker so the ceiling holds
+ * unconditionally.
+ */
+function clampToBudget(rendered: string): string {
+  if (byteLength(rendered) <= BRIEF_MAX_BYTES) return rendered;
+  const suffix = `\n${TRUNCATION_MARKER}`;
+  const bodyBudget = BRIEF_MAX_BYTES - byteLength(suffix);
+  const bytes = new TextEncoder().encode(rendered).slice(0, Math.max(0, bodyBudget));
+  // Drop a trailing partial multi-byte sequence so decoding stays clean.
+  const body = new TextDecoder('utf-8', { fatal: false }).decode(bytes).replace(/�+$/, '');
+  return `${body}${suffix}`;
 }
 
 function compose(

@@ -88,11 +88,40 @@ describe('renderHandoffBrief', () => {
     expect(out.includes('file-item-0')).toBe(false);
   });
 
-  it('keeps the goal even when the goal alone exceeds the budget', () => {
-    const goal = 'g'.repeat(4000);
+  it('keeps a within-budget goal whole without a truncation marker', () => {
+    const goal = 'g'.repeat(1900);
     const out = renderHandoffBrief({ goal });
     expect(out).toContain('## Handoff brief');
     expect(out).toContain(goal);
-    expect(out).toContain('_(brief truncated)_');
+    // Nothing was dropped and the render fits, so no marker.
+    expect(out).not.toContain('_(brief truncated)_');
+    expect(new TextEncoder().encode(out).byteLength).toBeLessThanOrEqual(2048);
+  });
+
+  it('hard-truncates to the 2KB budget when protected fields overflow (backstop)', () => {
+    // Synthetic oversized input that the per-field API caps would normally
+    // block, proving the renderer backstop holds unconditionally.
+    const out = renderHandoffBrief({
+      goal: 'g'.repeat(4000),
+      doneCriteria: ['d'.repeat(4000)],
+      verifyCommand: 'v'.repeat(4000),
+    });
+    expect(new TextEncoder().encode(out).byteLength).toBeLessThanOrEqual(2048);
+    expect(out.endsWith('_(brief truncated)_')).toBe(true);
+    expect(out.startsWith('## Handoff brief')).toBe(true);
+  });
+
+  it('never throws on a structurally malformed workspace and skips the section', () => {
+    const brief = {
+      goal: 'g',
+      // dirtyFiles is not an array; branch is a number — persisted-corrupt shape.
+      workspace: { branch: 42, headSha: null, baseBranch: null, dirtyFiles: 'oops', diffStat: null },
+    } as never;
+    let out = '';
+    expect(() => {
+      out = renderHandoffBrief(brief);
+    }).not.toThrow();
+    expect(out).toContain('## Handoff brief');
+    expect(out).not.toContain('Workspace:');
   });
 });
