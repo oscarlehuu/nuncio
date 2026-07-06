@@ -474,6 +474,30 @@ returns in < 8s. The `ControllableAgentProvider` gained an abortable delayed tur
 override so the shutdown abort resolves the hang gracefully (mirroring a real provider cancelling its
 stream). Red before the fixes (timed out at 30s); green after (~0.5s).
 
+## Implementation review responses — round 7 (Codex — one P2: bounded-drain leaves a write window)
+
+Verified real: when a provider takes longer than the 3s drain timeout to honor abort (or ignores it),
+`onModuleDestroy` returns while the run/resume chain is still executing; that chain later continues
+through `BaseAgentProvider.runOrSteer` and touches the DB (`findById`/`updateStatus`/`touchPreview`/
+event append) **after** `DatabaseService` closed SQLite — a narrower write-after-close leak
+(SQLITE_MISUSE/IOERR), swallowed by the resume chain's `.catch` but still attempted.
+
+Fix — **guard the DB-touch funnel instead of individual chain steps.** `DatabaseService` exposes a
+`closed` flag (set at the top of its `onModuleDestroy`, before `db.close()`); the repository funnel
+methods a late continuation reaches consult it and no-op:
+- `SessionsRepository.findById` → returns `null` when closed (so `runOrSteer`'s continuation treats
+  the session as gone and bails **before** any write),
+- `SessionsRepository.updateStatus` / `touchPreview` → no-op when closed,
+- `EventsRepository.append` → returns a synthetic unpersisted event (seq 0) when closed.
+
+This makes the entire write-after-close class impossible regardless of how slow/uncooperative a
+provider is; the 3s bounded drain stays exactly as-is (it's now a best-effort courtesy, not a
+correctness dependency). `settleVerify` still resolves on every path, so nothing awaiting can hang.
+Regression (`sessions.verify-feedback-restart.spec.ts`): a provider that IGNORES abort and finishes
+~5s (> the 3s drain) after `close()` returned — asserts close is bounded (< 8s) and that **no DB write
+throws or is attempted after close** (spies the repo funnel for a post-close SQLITE throw). Red with
+the guard removed, green with it.
+
 ## Notes for the implementer (fold of Codex's implementer notes)
 
 - **origin/retryId live in shared steer metadata** emitted by `BaseAgentProvider` for auto-steers

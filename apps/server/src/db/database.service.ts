@@ -72,6 +72,16 @@ export class DatabaseService implements OnModuleDestroy {
   readonly db: Database;
   /** Resolved data directory (exposed so other services can colocate files, e.g. the settings key). */
   readonly dataDir: string;
+  /**
+   * True once the connection is being/has been torn down. Repositories consult
+   * this to no-op instead of touching a closed handle: an in-flight agent turn
+   * can outlive shutdown (a provider that ignores abort past the bounded drain)
+   * and its continuation would otherwise write after close (SQLITE_MISUSE/IOERR).
+   */
+  private _closed = false;
+  get closed(): boolean {
+    return this._closed;
+  }
 
   constructor() {
     const dataDir = process.env.NUNCIO_DATA_DIR ?? join(process.cwd(), 'data');
@@ -84,6 +94,7 @@ export class DatabaseService implements OnModuleDestroy {
   }
 
   onModuleDestroy() {
+    this._closed = true;
     this.db.close();
   }
 

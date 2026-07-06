@@ -84,6 +84,11 @@ export class SessionsRepository {
   }
 
   findById(id: string): SessionDto | null {
+    // Once the DB is closing, an in-flight agent turn that outlived shutdown must
+    // not touch the handle. Returning null makes the provider's runOrSteer
+    // continuation bail cleanly (it treats "session gone" as a no-op) instead of
+    // hitting SQLITE_MISUSE on a closed connection.
+    if (this.database.closed) return null;
     const row = this.database.db
       .prepare<SessionRow, [string]>('SELECT * FROM sessions WHERE id = ?')
       .get(id);
@@ -202,6 +207,7 @@ export class SessionsRepository {
   }
 
   updateStatus(id: string, status: SessionStatus): SessionDto {
+    if (this.database.closed) return { id, status } as SessionDto;
     const current = this.database.db
       .prepare<{ status: SessionStatus }, [string]>('SELECT status FROM sessions WHERE id = ?')
       .get(id);
@@ -231,6 +237,7 @@ export class SessionsRepository {
   }
 
   touchPreview(id: string, preview: string): void {
+    if (this.database.closed) return;
     const now = Date.now();
     this.database.db
       .prepare('UPDATE sessions SET preview = ?, updated_at = ? WHERE id = ?')

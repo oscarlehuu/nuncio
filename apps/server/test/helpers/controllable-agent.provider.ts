@@ -36,11 +36,17 @@ export class ControllableAgentProvider extends BaseAgentProvider {
   private failNextSteers = 0;
   private availabilityDelayMs = 0;
   private turnDelayMs = 30;
+  private ignoreAbort = false;
   /** Per-session resolvers to abort an in-flight delayed turn on dispose(). */
   private readonly disposers = new Map<string, () => void>();
 
   constructor(sessions: SessionsRepository, events: EventsRepository) {
     super(sessions, events);
+  }
+
+  /** Make dispose()/abort a no-op — the turn runs to its full delay regardless. */
+  setIgnoreAbort(value: boolean): void {
+    this.ignoreAbort = value;
   }
 
   /** Delay isAvailable() to widen the resolve-availability window for race tests. */
@@ -129,6 +135,7 @@ export class ControllableAgentProvider extends BaseAgentProvider {
 
   /** Abort an in-flight delayed turn (the service's shutdown drain calls this). */
   override dispose(sessionId: string): void {
+    if (this.ignoreAbort) return; // simulate a provider that ignores abort
     this.disposers.get(sessionId)?.();
     this.disposers.delete(sessionId);
   }

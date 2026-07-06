@@ -12,6 +12,7 @@ import { DatabaseModule } from '../../../src/db/database.module';
 import { GitModule } from '../../../src/git/git.module';
 import { SettingsModule } from '../../../src/settings/settings.module';
 import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
+import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
 import { SteerQueueRepository } from '../../../src/sessions/persistence/steer-queue.repository';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
 import { SessionsService } from '../../../src/sessions/sessions.service';
@@ -367,6 +368,87 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
     await booted.close();
     const elapsed = Date.now() - start;
     expect(elapsed).toBeLessThan(8000);
+  }, TEST_TIMEOUT_MS);
+
+  it('no post-close DB write when a provider ignores abort and finishes after shutdown returns', async () => {
+    // The narrow window the bounded drain leaves open: a provider that IGNORES
+    // abort (dispose/interrupt no-op) and whose turn completes AFTER the 3s drain
+    // timeout has already returned from onModuleDestroy — its BaseAgentProvider
+    // continuation would then updateStatus/appendEvent on a CLOSED SQLite handle
+    // (SQLITE_MISUSE/IOERR). The DB-touch funnel must no-op once destroyed so the
+    // late write is impossible regardless of provider slowness.
+    process.env[MAX_ROUNDS] = '3';
+    process.env[AUTO_STEER] = '0';
+
+    const seed = await buildControllableModule();
+    const seedSessions = seed.get(SessionsService);
+    const seedEvents = seed.get(EventsRepository);
+    const session = await seedSessions.create({ prompt: 'ignore-abort', provider: 'cursor', workspace });
+    await seedSessions.awaitRun(session.id);
+    seedFailingVerifyResult(seedEvents, session.id, 'RED: ignore abort');
+    await seed.close();
+
+    mkdirSync(join(workspace, '.nuncio'), { recursive: true });
+    writeFileSync(join(workspace, '.nuncio', 'verify'), 'echo RED >&2\nexit 1\n');
+
+    process.env[AUTO_STEER] = '1';
+    const booted = await buildControllableModule();
+    booted.get(SessionsService);
+    const events = booted.get(EventsRepository);
+    const sessionsRepo = booted.get(SessionsRepository);
+    const provider = booted.get(CursorAgentProvider) as unknown as ControllableAgentProvider;
+    provider.setIgnoreAbort(true);   // abort is ignored — the turn runs to completion
+    provider.setTurnDelay(5000);     // finishes ~5s > the 3s drain timeout
+
+    await waitFor(
+      () => eventsOfType(events.list(session.id), 'verify_retry').length >= 1,
+      15000,
+    );
+
+    // Spy the DB write funnel the late continuation reaches (runOrSteer calls
+    // updateStatus + touchPreview when the turn finally completes). Record any
+    // write ATTEMPTED after close returns — the guard must make these no-op.
+    let closed = false;
+    const writesAfterClose: string[] = [];
+    // Wrap the DB funnel the late runOrSteer continuation reaches and record any
+    // SQLITE error THROWN post-close. Unguarded: updateStatus/findById hit the
+    // closed handle and throw (SQLITE_MISUSE), swallowed silently by the resume
+    // chain's .catch — a latent write-after-close. Guarded: they no-op / return
+    // null and never throw.
+    const spy = <A extends unknown[], R>(name: string, fn: (...a: A) => R) => (...a: A): R => {
+      try {
+        return fn(...a);
+      } catch (e) {
+        if (closed) writesAfterClose.push(`${name}:${String((e as Error)?.message ?? e)}`);
+        throw e;
+      }
+    };
+    const repo = sessionsRepo as unknown as Record<string, (...a: unknown[]) => unknown>;
+    repo.findById = spy('findById', sessionsRepo.findById.bind(sessionsRepo));
+    repo.updateStatus = spy('updateStatus', sessionsRepo.updateStatus.bind(sessionsRepo));
+    repo.touchPreview = spy('touchPreview', sessionsRepo.touchPreview.bind(sessionsRepo));
+
+    // Track unhandled rejections too (a post-close SQLITE error escaping).
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown) => unhandled.push(e);
+    process.on('unhandledRejection', onUnhandled);
+
+    // Close: bounded (drain times out at 3s since abort is ignored).
+    const start = Date.now();
+    await booted.close();
+    closed = true;
+    expect(Date.now() - start).toBeLessThan(8000);
+
+    // Wait past the turn's 5s completion so its late continuation fires.
+    await new Promise((r) => setTimeout(r, 4000));
+    process.off('unhandledRejection', onUnhandled);
+
+    // No DB write was ATTEMPTED after close, and no SQLITE error surfaced.
+    expect(writesAfterClose).toHaveLength(0);
+    const sqliteErrors = unhandled.filter((e) =>
+      String((e as Error)?.message ?? e).match(/SQLITE|disk I\/O|misuse|closed/i),
+    );
+    expect(sqliteErrors).toHaveLength(0);
   }, TEST_TIMEOUT_MS);
 
   it('re-sends the dangling auto-steer after a restart between the retry marker and the steer', async () => {
