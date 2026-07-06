@@ -484,6 +484,13 @@
 .chat-text-xs { font-size: calc(12.5px * var(--chat-font-scale)); }
 .chat-text-2xs { font-size: calc(12px * var(--chat-font-scale)); }
 
+/* Code font size — user-configurable px for mono surfaces (markdown code blocks,
+ * unified diffs). Default kept off the base :root token block so the design-token
+ * parity check (packages/core) stays byte-exact. */
+.code-text {
+  font-size: var(--code-font-size, 12px);
+}
+
 /*
  * Layout helpers that shadcn primitives do not own.
  * Full-height app shell, base font sizing, global scrollbar, and iOS safe-area
@@ -502,7 +509,7 @@ body,
 
 body {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--ui-font-size, 14px);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
@@ -599,6 +606,41 @@ body {
   0%, 100% { opacity: 0.3; }
   50% { opacity: 0.85; }
 }
+/* Reduce motion — three modes via data-motion on <html> (appearance-provider):
+ *   system → honor the OS prefers-reduced-motion query (unless forced On)
+ *   off    → force-disable app animations & transitions
+ *   on     → keep motion even when the OS asks to reduce
+ * The tile breath is the app's one ambient loop; the blanket rule also stills
+ * transitions/animations so a full-stop reads consistent. */
 @media (prefers-reduced-motion: reduce) {
-  .tile-glow::after { animation: none; opacity: 0.6; }
+  :root:not([data-motion='on']) .tile-glow::after {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
+:root[data-motion='off'] .tile-glow::after {
+  animation: none;
+  opacity: 0.6;
+}
+
+:root[data-motion='off'] *,
+:root[data-motion='off'] *::before,
+:root[data-motion='off'] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}
+
+/* Opt-in pointer cursors on interactive chrome (default off, macOS convention). */
+:root[data-pointer-cursors] button:not(:disabled),
+:root[data-pointer-cursors] a[href],
+:root[data-pointer-cursors] [role='button']:not([aria-disabled='true']),
+:root[data-pointer-cursors] [role='radio'],
+:root[data-pointer-cursors] [role='tab'],
+:root[data-pointer-cursors] summary,
+:root[data-pointer-cursors] label[for],
+:root[data-pointer-cursors] select {
+  cursor: pointer;
 }

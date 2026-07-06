@@ -381,9 +381,24 @@ describe('SettingsView', () => {
       <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
     );
     expect(screen.getByRole('heading', { name: 'Appearance' })).toBeInTheDocument();
-    expect(screen.getByRole('group', { name: 'Theme' })).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: 'Theme' })).toBeInTheDocument();
     expect(screen.getByLabelText('Chat font size')).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Density' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Interface font size')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Reduce motion' })).toBeInTheDocument();
+  });
+
+  it('"Reduce motion: On" force-stills motion (label contract, not raw axis)', async () => {
+    renderWithTheme(
+      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    const reduce = screen.getByRole('group', { name: 'Reduce motion' });
+    // Selecting the option that reduces motion must reach the force-still state.
+    await userEvent.click(within(reduce).getByRole('button', { name: 'On' }));
+    expect(document.documentElement.getAttribute('data-motion')).toBe('off');
+    // And "Off" (do not reduce) keeps motion running.
+    await userEvent.click(within(reduce).getByRole('button', { name: 'Off' }));
+    expect(document.documentElement.getAttribute('data-motion')).toBe('on');
   });
 
   it('renders the accent color picker defaulting to cobalt', () => {
@@ -436,13 +451,14 @@ describe('SettingsView', () => {
     expect(compactBtn).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it('clicking a theme option calls setTheme (reflected as pressed)', async () => {
+  it('selecting a theme card calls setTheme (reflected as checked)', async () => {
     renderWithTheme(
       <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
     );
-    const darkBtn = screen.getByRole('button', { name: 'Dark' });
-    await userEvent.click(darkBtn);
-    expect(darkBtn).toHaveAttribute('aria-pressed', 'true');
+    const themeGroup = screen.getByRole('radiogroup', { name: 'Theme' });
+    const darkCard = within(themeGroup).getByRole('radio', { name: 'Dark' });
+    await userEvent.click(darkCard);
+    expect(darkCard).toHaveAttribute('aria-checked', 'true');
     expect(document.documentElement.classList.contains('dark')).toBe(true);
   });
 

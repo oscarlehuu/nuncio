@@ -64,7 +64,7 @@ export function CodeBlock({ language, code }: { language?: string; code: string 
         </span>
         <CopyButton getText={() => body} label="Copy code" />
       </div>
-      <pre className="px-3 py-2.5 overflow-x-auto text-ui leading-relaxed font-mono text-foreground/90">
+      <pre className="code-text px-3 py-2.5 overflow-x-auto leading-relaxed font-mono text-foreground/90">
         <code>{body}</code>
       </pre>
     </div>

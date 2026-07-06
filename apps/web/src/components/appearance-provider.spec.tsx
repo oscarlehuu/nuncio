@@ -10,9 +10,12 @@ function wrapper({ children }: { children: ReactNode }) {
 
 beforeEach(() => {
   localStorage.clear();
-  document.documentElement.style.removeProperty('--chat-font-scale');
-  document.documentElement.style.removeProperty('--chat-gap');
-  document.documentElement.style.removeProperty('--chat-msg-py');
+  const root = document.documentElement;
+  for (const v of ['--chat-font-scale', '--chat-gap', '--chat-msg-py', '--ui-font-size', '--code-font-size', '--font-sans', '--font-mono']) {
+    root.style.removeProperty(v);
+  }
+  root.removeAttribute('data-motion');
+  root.removeAttribute('data-pointer-cursors');
 });
 
 describe('AppearanceProvider', () => {
@@ -53,5 +56,52 @@ describe('AppearanceProvider', () => {
     const { result: result2 } = renderHook(() => useAppearance(), { wrapper });
     expect(result2.current.fontScale).toBe(1.3);
     expect(result2.current.density).toBe('compact');
+  });
+
+  it('applies UI + code font size vars and clamps them', () => {
+    const { result } = renderHook(() => useAppearance(), { wrapper });
+    const root = document.documentElement;
+    expect(root.style.getPropertyValue('--ui-font-size')).toBe('14px');
+    expect(root.style.getPropertyValue('--code-font-size')).toBe('12px');
+    act(() => {
+      result.current.setUiFontSize(17);
+      result.current.setCodeFontSize(40);
+    });
+    expect(root.style.getPropertyValue('--ui-font-size')).toBe('17px');
+    expect(result.current.codeFontSize).toBe(18);
+  });
+
+  it('reflects motion and pointer-cursors as html attributes', () => {
+    const { result } = renderHook(() => useAppearance(), { wrapper });
+    const root = document.documentElement;
+    expect(root.getAttribute('data-motion')).toBe('system');
+    expect(root.hasAttribute('data-pointer-cursors')).toBe(false);
+    act(() => {
+      result.current.setMotion('off');
+      result.current.setPointerCursors(true);
+    });
+    expect(root.getAttribute('data-motion')).toBe('off');
+    expect(root.hasAttribute('data-pointer-cursors')).toBe(true);
+  });
+
+  it('drives --font-sans / --font-mono from the font choice', () => {
+    const { result } = renderHook(() => useAppearance(), { wrapper });
+    act(() => result.current.setCodeFont('jetbrains'));
+    expect(document.documentElement.style.getPropertyValue('--font-mono')).toContain('JetBrains');
+  });
+
+  it('reset returns every field to its default', () => {
+    const { result } = renderHook(() => useAppearance(), { wrapper });
+    act(() => {
+      result.current.setUiFontSize(18);
+      result.current.setMotion('off');
+      result.current.setPointerCursors(true);
+      result.current.setDiffMarkers('symbol');
+    });
+    act(() => result.current.reset());
+    expect(result.current.uiFontSize).toBe(14);
+    expect(result.current.motion).toBe('system');
+    expect(result.current.pointerCursors).toBe(false);
+    expect(result.current.diffMarkers).toBe('color');
   });
 });
