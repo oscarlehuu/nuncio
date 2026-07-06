@@ -230,5 +230,18 @@ describe('buildOutcomeDigest', () => {
       const digest = buildOutcomeDigest(task({ status: 'DONE' }), 'child-1', events, null);
       expect(digest.outcomeSummary).toBe('line1\nline2\tindented');
     });
+
+    it('terminates (does not hang) when only an oversized id keeps it over budget', () => {
+      // Corrupted internal state: a pathological taskId with no summary/verify to
+      // shed. Ids are identity and never trimmed, so the payload stays over
+      // budget BY DESIGN — the progress guard must break the loop, not spin.
+      // (No API path can inject ids; the events repo's 128KiB cap bounds damage.)
+      const digest = buildOutcomeDigest(task({ id: 'x'.repeat(6000), status: 'DONE' }), 'child-1', [], null);
+      // The call completed (a hang would time this test out) and the guard let
+      // the over-budget payload through with its identity fields intact.
+      expect(digest.taskId).toHaveLength(6000);
+      expect(digest.status).toBe('DONE');
+      expect(serializedBytes(digest)).toBeGreaterThan(4096);
+    });
   });
 });

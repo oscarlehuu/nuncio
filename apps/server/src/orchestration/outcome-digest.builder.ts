@@ -95,12 +95,16 @@ function fitToBudget(payload: TaskCompletedPayload): TaskCompletedPayload {
   if (!over()) return payload;
 
   // 4. Convergent final loop on the two large free-text fields. Halve the raw
-  // byte budget each pass (UTF-8-boundary-safe) so the SERIALIZED size strictly
-  // shrinks; shed verify.output before outcomeSummary, and null a field once it
-  // reaches zero. Guaranteed to terminate: both can reach null.
+  // byte budget each pass (UTF-8-boundary-safe) so the SERIALIZED size shrinks;
+  // shed verify.output before outcomeSummary, and null a field once it reaches
+  // zero. A progress guard breaks the loop if a pass fails to shrink the
+  // payload — the only way that happens is corrupted/oversized internal ids
+  // (taskId/childSessionId), which are never trimmed (identity) and are not
+  // API-injectable; the events repo's 128KiB cap is the outer safety net.
   let verifyBudget = payload.verify?.output ? byteLength(payload.verify.output) : 0;
   let summaryBudget = payload.outcomeSummary ? byteLength(payload.outcomeSummary) : 0;
   while (over() && (verifyBudget > 0 || summaryBudget > 0)) {
+    const before = byteLength(JSON.stringify(payload));
     if (verifyBudget > 0 && payload.verify?.output) {
       verifyBudget = Math.floor(verifyBudget / 2);
       if (verifyBudget <= 0) {
@@ -108,13 +112,14 @@ function fitToBudget(payload: TaskCompletedPayload): TaskCompletedPayload {
       } else {
         payload.verify.output = truncateTailBytes(payload.verify.output, verifyBudget);
       }
-      continue;
-    }
-    if (summaryBudget > 0 && payload.outcomeSummary) {
+    } else if (summaryBudget > 0 && payload.outcomeSummary) {
       summaryBudget = Math.floor(summaryBudget / 2);
       payload.outcomeSummary =
         summaryBudget <= 0 ? null : truncateTailBytes(payload.outcomeSummary, summaryBudget);
     }
+    // No forward progress this pass → nothing left to trim but the ids. Stop
+    // rather than spin (accepts an over-budget payload; see comment above).
+    if (byteLength(JSON.stringify(payload)) >= before) break;
   }
   return payload;
 }
