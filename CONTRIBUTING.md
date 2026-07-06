@@ -2,14 +2,14 @@
 
 Thanks for considering a contribution! Nuncio is a self-hosted, mobile-first web app for delegating tasks to AI coding agents. This guide covers setup, the workflow we use, and how to get a change merged.
 
-> **TL;DR:** Work TDD-first (red → green → refactor), add a Changeset for any user-facing change, keep the suite green, and sync docs. Open a PR against `main`.
+> **TL;DR:** Work TDD-first (red → green → refactor), add a Changeset for any user-facing change, keep the suite green, and sync docs. Open a PR against `dev`.
 
 ## Prerequisites
 
 - **[Bun](https://bun.sh) ≥ 1.3** — Nuncio runs on Bun for the server, build, and tests. The server uses `bun:sqlite` (a Bun builtin), so Node will not work for the server.
 - **Git**
 - **[Tailscale](https://tailscale.com)** (optional) — only needed if you want to test the production PWA install path from a phone.
-- **Pi credentials** (optional) — only needed to run the real-Pi integration tests. Without `~/.pi/agent/auth.json`, the integration suite self-skips and the app falls back to the Mock provider.
+- **Pi credentials** (optional) — only needed to run the real-Pi integration tests. Without `~/.pi/agent/auth.json`, the integration suite self-skips. (For credential-free testing, the `NUNCIO_FORCE_MOCK=1` Mock provider covers the session lifecycle — see `bun run test:smoke-ui`.)
 
 ## Setup
 
@@ -117,14 +117,11 @@ Full spec: [AGENTS.md → Branch & worktree naming](AGENTS.md#branch--worktree-n
 2. **TDD-first** — see above. The suite must be green before you open a PR.
 3. **Add a changeset** if the change is user-facing.
 4. **Sync docs** — update `README.md` (commands, API, architecture, status) and `AGENTS.md` (if architecture or conventions shifted). A merged change with stale docs isn't done.
-5. **Run the full gate locally:**
+5. **Run the gate locally:**
    ```bash
-   bun run lint
-   bun run test
-   bun run --filter @nuncio/web test
-   bun run build
-   bun run check-branch-flow   # BASE_REF=… HEAD_REF=… — see AGENTS.md
+   bun run gate                # build + lint + unit tests + test:scripts (pre-promotion: bun run gate:full)
    bun run check-changeset
+   bun run check-branch-flow   # BASE_REF=… HEAD_REF=… — see AGENTS.md
    ```
 6. **Open the PR** against **`dev`** (feature work). Only `dev` and the release bot merge to `main`.
 7. **Code review** — every PR is reviewed before merge. Fix blockers; document warnings inline. Tests green alone is not done — review is part of the shipping gate.

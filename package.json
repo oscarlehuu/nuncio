@@ -28,7 +28,9 @@
     "sync-versions": "bun run scripts/sync-versions.mjs",
     "release": "bun run scripts/release.mjs",
     "test:scripts": "bun test scripts/",
-    "test:smoke-ui": "bun scripts/smoke-ui.mjs"
+    "test:smoke-ui": "bun scripts/smoke-ui.mjs",
+    "gate": "bun run build && bun run lint && bun run test && bun run test:scripts",
+    "gate:full": "bun run gate && bun run --filter @nuncio/server test:e2e && bun run --filter @nuncio/web test && bun run test:smoke-ui"
   },
   "devDependencies": {
     "@changesets/changelog-github": "^0.7.0",

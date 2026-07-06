@@ -23,7 +23,7 @@ Nuncio is a **self-hosted, Devin-style web app for delegating tasks to AI agents
 1. **Red — write the test first.** Add a `*.spec.ts` under `apps/server/test/unit/<domain>/` (grouped by domain, not co-located) that captures the desired behavior. Run it (`bun test test/unit/<domain>/…`) and confirm it fails for the *right* reason (a real assertion failure, not a compile/import error).
 2. **Green — implement the minimum** to make the test pass. No more, no less.
 3. **Refactor** under the safety of the passing test.
-4. **Gate:** the change is not done until the suite is green. Don't move on, don't commit, don't open a PR on a red suite. **Never silence, skip, or weaken a failing test just to pass the build.**
+4. **Gate:** the change is not done until the suite is green. Run **`bun run gate`** (build + lint + unit tests + `test:scripts`) as the minimum bar before you commit, and **`bun run gate:full`** (adds server e2e, web unit, and the real-browser smoke) before a promotion PR (dev→main). Don't move on, don't commit, don't open a PR on a red suite. **Never silence, skip, or weaken a failing test just to pass the build.**
 5. **Docs sync:** update `README.md` to match the shipped code — commands, API, architecture, status. If architecture or conventions shifted, update `AGENTS.md` too. A merged change with stale docs isn't done.
 6. **Changeset (release note) — mandatory for user-facing changes.** If the PR changes anything a user would notice (new feature, behavior shift, bug fix, UI change), add a changeset fragment before opening the PR:
    ```bash
@@ -164,6 +164,8 @@ bun run dev          # server (3000) + web (5173) concurrently
 bun run build        # build server + web
 bun run test         # server unit (bun test test/unit/)
 bun run lint         # server tsc --noEmit + web oxlint
+bun run gate         # pre-commit gate: build + lint + unit tests + test:scripts (minimum bar before commit)
+bun run gate:full    # pre-promotion gate (dev→main): gate + server e2e + web unit + real-browser smoke
 bun run add-changeset patch "…"   # create a changeset fragment (preferred for agents)
 bun run check-changeset           # verify PR will pass CI changeset gate
 bun run changeset                 # interactive alternative for humans

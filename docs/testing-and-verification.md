@@ -24,6 +24,12 @@ reach without user help**, plus the levels below it.
 Plus always: `bun run build` and `bun run lint` — a change that doesn't compile is not at level 0,
 it is nowhere.
 
+**Single-command gates.** `bun run gate` bundles the pre-commit bar — build + lint + level 1 (server
+unit) + `test:scripts` — and is the minimum every change must pass before commit. `bun run gate:full`
+is the pre-promotion (dev→main) bar: everything in `gate` plus levels 2 (web unit), 3 (server e2e),
+and 5 (real-browser smoke via `test:smoke-ui`). CI keeps these as separate steps for readable failure
+output — the gates are for local runs, not a CI replacement.
+
 ## Self-verify playbook (no user in the loop)
 
 Pick by change type. The **Mock provider** needs zero credentials — it is registered only when

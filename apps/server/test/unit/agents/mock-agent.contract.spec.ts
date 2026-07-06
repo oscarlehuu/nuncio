@@ -13,10 +13,16 @@ import { describeAgentProviderContract } from './provider-contract.suite';
 
 /**
  * Reference provider used to prove the shared contract itself. It exercises the
- * BaseAgentProvider orchestration directly with a scripted stream — the always-
- * available zero-credential engine the docs call the "Mock provider". It streams
- * deltas via the coalescing `pushEvent` pipe and emits a terminal
- * `assistant_message`, exactly as a real adapter does.
+ * BaseAgentProvider orchestration directly with a scripted stream — deltas via
+ * the coalescing `pushEvent` pipe, then a terminal `assistant_message`, exactly
+ * as a real adapter does.
+ *
+ * Deliberately NOT the real `providers/mock-agent.provider.ts`: the real Mock is
+ * a real-time streaming demo engine (paced 8-char deltas slower than the 100ms
+ * coalesce window, and no failure branch), so it structurally cannot satisfy the
+ * scripted error/coalescing legs of this contract. The real Mock is covered by
+ * `mock-agent.flag.spec.ts` (flag gating + streaming) and the level-5 smoke
+ * (`bun run test:smoke-ui`) instead.
  */
 class MockAgentProvider extends BaseAgentProvider {
   readonly id = 'mock';
