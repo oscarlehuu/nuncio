@@ -1034,8 +1034,13 @@ export class SessionsService implements OnModuleDestroy {
     // Subscribe a guard so a rejection without an awaitRun caller can't
     // surface as an unhandled rejection; awaiters still see the rejection.
     run
-      .catch(() => this.settleVerify(session.id))
+      .catch(() => undefined)
       .finally(() => {
+        // The whole loop chain (run + maybeVerify + recursive auto-steers) has
+        // unwound here — settle unconditionally so awaitVerifySettled can never
+        // hang, even when a run errors (ERROR status skips the IDLE verify path)
+        // or the session vanished mid-flight. settleVerify is idempotent.
+        this.settleVerify(session.id);
         if (this.runPromises.get(session.id) === run) this.runPromises.delete(session.id);
       });
   }
@@ -1150,9 +1155,12 @@ export class SessionsService implements OnModuleDestroy {
 
   /**
    * Deliver an auto-steer through the normal steer machinery, tagged with its
-   * origin/retryId so consumers classify it explicitly. A provider failure is
-   * surfaced (BaseAgentProvider maps the throw to a status:ERROR + error event);
-   * the loop then settles rather than spinning.
+   * origin/retryId so consumers classify it explicitly. The session must be
+   * CLAIMED synchronously (provider.steer's IDLE→RUNNING transition runs before
+   * its first await) so a human steer entering concurrently sees RUNNING and
+   * queues instead of racing a second turn. A provider failure is surfaced
+   * (BaseAgentProvider maps the throw to status:ERROR + error event); the loop
+   * then settles rather than spinning.
    */
   private async autoSteer(sessionId: string, message: string, retryId: string): Promise<void> {
     const session = this.sessions.findById(sessionId);
@@ -1162,7 +1170,10 @@ export class SessionsService implements OnModuleDestroy {
     }
     let provider;
     try {
-      provider = await this.agents.resolveAvailableForSession(session);
+      // Sync resolve — no availability await before the claim, so the RUNNING
+      // transition inside provider.steer lands in this tick and closes the race
+      // window. Availability is enforced by the provider's own run path.
+      provider = this.agents.resolveForSession(session);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       this.appendAndEmit(sessionId, 'error', { message: `Auto-steer could not start: ${reason}` });
@@ -1171,11 +1182,14 @@ export class SessionsService implements OnModuleDestroy {
     }
 
     this.locallyProducing.add(sessionId);
+    // Kick the steer WITHOUT awaiting yet: provider.steer synchronously claims
+    // RUNNING before returning its promise, so any concurrent human steer queues.
+    const steering = provider.steer(sessionId, message, {
+      ...this.buildAgentRunContext(session),
+      steerMeta: { origin: 'verify_retry', retryId },
+    });
     try {
-      await provider.steer(sessionId, message, {
-        ...this.buildAgentRunContext(session),
-        steerMeta: { origin: 'verify_retry', retryId },
-      });
+      await steering;
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       if (this.sessions.findById(sessionId)) {
@@ -1199,6 +1213,11 @@ export class SessionsService implements OnModuleDestroy {
     if (!parseAutoSteerEnabled(this.settings?.resolve('NUNCIO_VERIFY_AUTO_STEER'))) return;
     for (const session of this.sessions.list(false)) {
       if (session.status !== 'IDLE') continue;
+      // A durable queued human steer takes precedence (human wins, resets the
+      // loop): defer to the steer-queue drain rather than racing an auto-retry
+      // ahead of the human steer. The drained steer runs, then its own verify
+      // re-evaluates the loop from a fresh boundary.
+      if (this.steerQueue.count(session.id) > 0) continue;
       const events = this.events.list(session.id, 0);
       if (events.length === 0) continue;
       const state = foldLoopState(events);

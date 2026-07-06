@@ -4,7 +4,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AgentsModule } from '../../../src/agents/agents.module';
+import { CursorAgentProvider } from '../../../src/agents/providers/cursor-agent.provider';
 import { CursorLocalModule } from '../../../src/cursor-local/cursor-local.module';
+import { ControllableAgentProvider } from '../../helpers/controllable-agent.provider';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { GitModule } from '../../../src/git/git.module';
 import { SettingsModule } from '../../../src/settings/settings.module';
@@ -167,6 +169,89 @@ describe('TasksService — verify-feedback settlement', () => {
     // The recorded verify outcome is a failing one (the loop gave up).
     expect(extractVerify(finished)?.ok).toBe(false);
   }, 30000);
+});
+
+/**
+ * Liveness: a task whose provider errors mid-run must still FINISH — the verify
+ * settlement (awaitVerifySettled) must resolve on every terminal path, including a
+ * session that ends in ERROR, or the task hangs forever (finding #1).
+ */
+describe('TasksService — verify-feedback settlement liveness', () => {
+  let module: TestingModule;
+  let service: TasksService;
+  let repo: TasksRepository;
+  let provider: ControllableAgentProvider;
+  let dataDir: string;
+  let workspace: string;
+  const prior: Record<string, string | undefined> = {};
+
+  beforeAll(async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-tasks-vf-live-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
+    configureSimulatedCursorEnv();
+    module = await Test.createTestingModule({
+      imports: [
+        DatabaseModule,
+        SettingsModule,
+        SessionsPersistenceModule,
+        AgentsModule,
+        GitModule,
+        CursorLocalModule,
+      ],
+      providers: [SessionsService, TasksRepository, TasksService],
+    })
+      .overrideProvider(CursorAgentProvider)
+      .useClass(ControllableAgentProvider)
+      .compile();
+    service = module.get(TasksService);
+    repo = module.get(TasksRepository);
+    provider = module.get(CursorAgentProvider) as unknown as ControllableAgentProvider;
+  });
+
+  beforeEach(() => {
+    workspace = mkdtempSync(join(tmpdir(), 'nuncio-tasks-vf-live-ws-'));
+    prior[AUTO_STEER] = process.env[AUTO_STEER];
+    process.env[AUTO_STEER] = '1';
+  });
+
+  afterEach(() => {
+    rmSync(workspace, { recursive: true, force: true });
+    for (const [key, value] of Object.entries(prior)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  afterAll(async () => {
+    await module.close();
+    rmSync(dataDir, { recursive: true, force: true });
+    delete process.env.NUNCIO_DATA_DIR;
+    delete process.env.CURSOR_API_KEY;
+  });
+
+  it('a task whose provider errors mid-run still finishes and does not hang', async () => {
+    // A verify command exists, so settlement is armed; the initial run() errors,
+    // which drives the session to ERROR. awaitVerifySettled must still resolve.
+    mkdirSync(join(workspace, '.nuncio'), { recursive: true });
+    writeFileSync(join(workspace, '.nuncio', 'verify'), 'echo RED >&2\nexit 1\n');
+    provider.failNext(1); // the initial run() rejects → session ERROR
+
+    const task = service.enqueue({ prompt: 'provider errors', provider: 'cursor', workspace });
+
+    const start = Date.now();
+    let finished: TaskDto | undefined;
+    while (Date.now() - start < 12000) {
+      const t = repo.findById(task.id);
+      if (t && (t.status === 'DONE' || t.status === 'FAILED')) {
+        finished = t;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(finished).toBeDefined();
+    // A run that errored settles the session on ERROR → task FAILED, not hung.
+    expect(finished!.status).toBe('FAILED');
+  }, 20000);
 });
 
 /** The verify outcome is stored in the task's outcome object under `verify`. */

@@ -12,6 +12,7 @@ import { DatabaseModule } from '../../../src/db/database.module';
 import { GitModule } from '../../../src/git/git.module';
 import { SettingsModule } from '../../../src/settings/settings.module';
 import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
+import { SteerQueueRepository } from '../../../src/sessions/persistence/steer-queue.repository';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
 import { SessionsService } from '../../../src/sessions/sessions.service';
 import type { SessionEvent } from '../../../src/sessions/domain/sessions.types';
@@ -371,6 +372,61 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
     await booted.close();
   }, TEST_TIMEOUT_MS);
 
+  it('on boot a persisted queued human steer wins over verify resume (no verify_retry precedes it)', async () => {
+    // Both boot tasks fire on independent timers: the steer-queue drain and the
+    // verify-loop resume. With a failed-verify tail AND a durable queued human
+    // steer, the resume must DEFER to the pending queue — no verify_retry may
+    // precede the human steer_message (finding #3). The human steer's turn is
+    // slowed (availability delay) so, absent the fix, the resume interleaves and
+    // emits a verify_retry before the drained steer lands.
+    process.env[MAX_ROUNDS] = '3';
+    process.env[AUTO_STEER] = '0';
+    // No verify script at boot is needed — resume folds the SEEDED failed verify.
+
+    const seed = await buildControllableModule();
+    const seedSessions = seed.get(SessionsService);
+    const seedEvents = seed.get(EventsRepository);
+    const seedQueue = seed.get(SteerQueueRepository);
+    const session = await seedSessions.create({
+      prompt: 'boot precedence',
+      provider: 'cursor',
+      workspace,
+    });
+    await seedSessions.awaitRun(session.id);
+    // Tail = a failing verify (loop-resume candidate) AND a durable queued steer.
+    seedFailingVerifyResult(seedEvents, session.id, 'RED: boot precedence');
+    seedQueue.enqueue(session.id, 'human queued across restart');
+    await seed.close();
+
+    process.env[AUTO_STEER] = '1';
+    // A verify script so the resumed loop COULD auto-steer (and its verify passes
+    // after the human turn, so the loop settles cleanly).
+    mkdirSync(join(workspace, '.nuncio'), { recursive: true });
+    writeFileSync(join(workspace, '.nuncio', 'verify'), 'exit 0\n');
+
+    const booted = await buildControllableModule();
+    booted.get(SessionsService);
+    const events = booted.get(EventsRepository);
+    const provider = booted.get(CursorAgentProvider) as unknown as ControllableAgentProvider;
+    provider.setAvailabilityDelay(80); // slow the human turn so resume can interleave
+
+    await waitFor(
+      () =>
+        events.list(session.id).some((e) => e.type === 'steer_message' &&
+          String((e.payload as { text?: string }).text ?? '').includes('human queued across restart')),
+      15000,
+    );
+    const all = events.list(session.id);
+    const humanSteerSeq = all.find((e) => e.type === 'steer_message' &&
+      String((e.payload as { text?: string }).text ?? '').includes('human queued across restart'))!.seq;
+    // No auto-retry marker precedes the human steer — the resume deferred.
+    const retriesBeforeHuman = all.filter(
+      (e) => e.type === 'verify_retry' && e.seq < humanSteerSeq,
+    );
+    expect(retriesBeforeHuman).toHaveLength(0);
+    await booted.close();
+  }, TEST_TIMEOUT_MS);
+
   it('does not re-emit needs-attention on boot once it has already surfaced (idempotent)', async () => {
     process.env[MAX_ROUNDS] = '1';
     writeUniqueFailScript(workspace, 'idempotent surface');
@@ -532,6 +588,43 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
     expect(provider.steerRuns).toBeGreaterThanOrEqual(1);
     // No crash: the service is still responsive.
     expect(service.get(session.id)).toBeTruthy();
+    await module.close();
+  }, TEST_TIMEOUT_MS);
+
+  it('a human steer racing the auto-steer window does not produce two interleaved turns', async () => {
+    // The race: driveVerifyFeedback appends verify_retry, then awaits provider
+    // availability while the session is still IDLE — a human steer entering there
+    // could start a concurrent turn. We widen that window with an availability
+    // delay and fire the human steer the instant the marker appears; the provider
+    // must never see two overlapping turns (finding #2).
+    process.env[MAX_ROUNDS] = '3';
+    writeUniqueFailScript(workspace, 'race window');
+
+    const module = await buildControllableModule();
+    const service = module.get(SessionsService);
+    const events = module.get(EventsRepository);
+    const provider = module.get(CursorAgentProvider) as unknown as ControllableAgentProvider;
+    provider.setAvailabilityDelay(120); // widen the resolve-availability window
+    const session = await service.create({ prompt: 'race', provider: 'cursor', workspace });
+
+    // The instant the first verify_retry marker lands, the auto-steer is awaiting
+    // availability — fire a human steer into that exact window.
+    await waitFor(() => eventsOfType(events.list(session.id), 'verify_retry').length >= 1, 15000);
+    await service.steer(session.id, 'human races the auto-steer');
+
+    // Let the loop run to completion.
+    await waitFor(
+      () => eventsOfType(events.list(session.id), 'verify_needs_attention').length >= 1,
+      20000,
+    );
+    // No two turns ever overlapped for this provider.
+    expect(provider.sawOverlap).toBe(false);
+    // The human steer was recorded exactly once (queued, then delivered).
+    const humanSteers = events.list(session.id).filter(
+      (e) => e.type === 'steer_message' &&
+        String((e.payload as { text?: string }).text ?? '').includes('human races the auto-steer'),
+    );
+    expect(humanSteers).toHaveLength(1);
     await module.close();
   }, TEST_TIMEOUT_MS);
 

@@ -22,7 +22,11 @@ export function parseAutoSteerEnabled(raw: string | undefined): boolean {
  */
 export function parseMaxRounds(raw: string | undefined): number {
   if (raw === undefined) return DEFAULT_MAX_ROUNDS;
-  const n = Number(raw.trim());
+  const trimmed = raw.trim();
+  // Number('') === 0, so an empty/whitespace setting would silently become
+  // max-rounds-0 (loop disabled). Treat blank as invalid → default.
+  if (trimmed === '') return DEFAULT_MAX_ROUNDS;
+  const n = Number(trimmed);
   return Number.isInteger(n) && n >= 0 ? n : DEFAULT_MAX_ROUNDS;
 }
 

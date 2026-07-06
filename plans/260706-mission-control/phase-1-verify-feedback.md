@@ -384,6 +384,41 @@ All 3 verified against the tests (all correct, none refuted):
 Post-green cleanup noted (not blocking): once `awaitVerifySettled` and settlement helpers exist, the
 disabled-path test can assert "no loop was scheduled" deterministically instead of a fixed sleep.
 
+## Implementation review responses — round 4 (Codex — REVISE, 3 concurrency/liveness defects)
+
+All 3 verified against the shipped code (all real, none refuted); each got a deterministic regression
+test (red → fixed → green) before the fix:
+
+1. **Settlement liveness hole → tasks hang.** Verified: `maybeVerify` early-returns without
+   `settleVerify` when the session is missing / not IDLE, and a provider error maps to status:ERROR
+   *without rethrow*, so `maybeVerify`'s IDLE guard skips and `awaitVerifySettled` never resolves.
+   Fix: settle **unconditionally in `startRun`'s run-promise `finally`** — the whole loop chain (run +
+   maybeVerify + recursive auto-steers) has unwound there, and `settleVerify` is idempotent, so a
+   waiter can never hang regardless of terminal path. Regression: a task whose provider errors mid-run
+   finishes FAILED, not hung (`tasks.verify-feedback.spec.ts`).
+2. **Steer race window.** Verified: `verify_retry` was appended, then `autoSteer` *awaited* provider
+   availability while the session was still IDLE, so a concurrent human `steer()` could start a second
+   turn (reproduced as an `assertTransition` clash). Fix: `autoSteer` resolves the provider
+   **synchronously** (`resolveForSession`, no availability await) and kicks `provider.steer` in the
+   same tick — its IDLE→RUNNING transition lands before any await, so a concurrent human steer sees
+   RUNNING and queues. Availability is still enforced by the provider's own run path. Regression: a
+   human steer fired the instant the marker lands (window widened via an availability delay) produces
+   **no overlapping turns** and the human steer is delivered exactly once.
+3. **Boot double-fire.** Verified: the steer-queue drain and the verify-loop resume are scheduled on
+   independent constructor timers; with a failed-verify tail AND a persisted queued human steer, the
+   resume could emit an auto-retry before the human steer landed. Precedence (per this doc: human steer
+   wins and resets the loop) enforced by `resumeVerifyLoops` **skipping any session with a pending
+   persisted steer queue** (`steerQueue.count > 0`) — the drain handles it, then that steer's own
+   verify re-evaluates the loop. Regression: seeded failed-verify tail + queued steer (human turn
+   slowed to force interleave) → **no `verify_retry` precedes the human steer_message**.
+
+Suggestion applied: `parseMaxRounds` now treats empty/whitespace as invalid → default (`Number('')`
+was `0`, silently disabling the loop for a blank setting); covered by the new pure `verify-feedback.spec.ts`.
+
+Future cleanup (noted, not done here — the finding-1 fix lives in `sessions.service.ts`, not
+`tasks.service.ts`): `tasks.service.ts` is ~224 lines, over the ~200 guideline; extract task-outcome
+folding when a change next touches that file.
+
 ## Notes for the implementer (fold of Codex's implementer notes)
 
 - **origin/retryId live in shared steer metadata** emitted by `BaseAgentProvider` for auto-steers

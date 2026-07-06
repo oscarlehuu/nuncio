@@ -26,13 +26,23 @@ export class ControllableAgentProvider extends BaseAgentProvider {
   promptRuns = 0;
   /** Count of steer-driven executePrompt calls only. */
   steerRuns = 0;
+  /** How many executePrompt calls are executing concurrently right now. */
+  activePrompts = 0;
+  /** Set true if two turns for the same session ever overlap (a race). */
+  sawOverlap = false;
 
   private available = true;
   private failNextTurns = 0;
   private failNextSteers = 0;
+  private availabilityDelayMs = 0;
 
   constructor(sessions: SessionsRepository, events: EventsRepository) {
     super(sessions, events);
+  }
+
+  /** Delay isAvailable() to widen the resolve-availability window for race tests. */
+  setAvailabilityDelay(ms: number): void {
+    this.availabilityDelayMs = ms;
   }
 
   /** Reject the next `n` executePrompt calls of any kind (default 1). */
@@ -51,6 +61,9 @@ export class ControllableAgentProvider extends BaseAgentProvider {
   }
 
   async isAvailable(): Promise<boolean> {
+    if (this.availabilityDelayMs > 0) {
+      await new Promise((r) => setTimeout(r, this.availabilityDelayMs));
+    }
     return this.available;
   }
 
@@ -80,9 +93,18 @@ export class ControllableAgentProvider extends BaseAgentProvider {
       this.failNextTurns -= 1;
       throw new Error('controllable provider: forced turn failure');
     }
-    const reply = isSteer
-      ? `ack steer: ${userText.slice(0, 40)}`
-      : 'ack run: controllable provider reply';
-    this.pushEvent(sessionId, 'assistant_message', { text: reply }, context.emit);
+    // Overlap detection: if a turn is already executing for this provider when
+    // another enters, two turns are running concurrently — a race.
+    if (this.activePrompts > 0) this.sawOverlap = true;
+    this.activePrompts += 1;
+    try {
+      await new Promise((r) => setTimeout(r, 30));
+      const reply = isSteer
+        ? `ack steer: ${userText.slice(0, 40)}`
+        : 'ack run: controllable provider reply';
+      this.pushEvent(sessionId, 'assistant_message', { text: reply }, context.emit);
+    } finally {
+      this.activePrompts -= 1;
+    }
   }
 }
