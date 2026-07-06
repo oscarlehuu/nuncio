@@ -101,6 +101,39 @@ describe('assembleSubagentBrief', () => {
     expect(brief.files).toEqual(['src/keep.ts']);
   });
 
+  it('drops paths that escape the project root via traversal', () => {
+    const events: SessionEvent[] = [
+      { seq: 1, type: 'tool_start', payload: { tool: 'Read', input: { path: '/repo/src/keep.ts' } }, createdAt: 1 },
+      { seq: 2, type: 'tool_start', payload: { tool: 'Read', input: { path: '../secrets/token.txt' } }, createdAt: 2 },
+      { seq: 3, type: 'tool_start', payload: { tool: 'Read', input: { path: '/repo/../secrets/x' } }, createdAt: 3 },
+      { seq: 4, type: 'tool_start', payload: { tool: 'Read', input: { path: './src/kept.ts' } }, createdAt: 4 },
+    ];
+    const brief = assembleSubagentBrief({
+      parent: parent({ projectPath: '/repo' }),
+      subagentPrompt: 'go',
+      parentTailEvents: events,
+      workspace: null,
+      verifyCommand: null,
+    });
+    expect(brief.files).toEqual(['src/keep.ts', 'src/kept.ts']);
+  });
+
+  it('drops upward-traversing relative paths even without an absolute project root', () => {
+    const events: SessionEvent[] = [
+      { seq: 1, type: 'tool_start', payload: { tool: 'Read', input: { path: '../secrets/token.txt' } }, createdAt: 1 },
+      { seq: 2, type: 'tool_start', payload: { tool: 'Read', input: { path: './src/ok.ts' } }, createdAt: 2 },
+      { seq: 3, type: 'tool_start', payload: { tool: 'Read', input: { path: 'src/nested/../also-ok.ts' } }, createdAt: 3 },
+    ];
+    const brief = assembleSubagentBrief({
+      parent: parent({ projectPath: null }),
+      subagentPrompt: 'go',
+      parentTailEvents: events,
+      workspace: null,
+      verifyCommand: null,
+    });
+    expect(brief.files).toEqual(['src/ok.ts', 'src/also-ok.ts']);
+  });
+
   it('omits files when the parent touched no tool events', () => {
     const brief = assembleSubagentBrief({
       parent: parent(),

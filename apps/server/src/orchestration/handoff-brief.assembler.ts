@@ -1,3 +1,4 @@
+import { isAbsolute, relative, resolve } from 'node:path';
 import { isToolStartEvent } from '../sessions/domain/events.types';
 import type { SessionDto, SessionEvent } from '../sessions/domain/sessions.types';
 import type { HandoffBrief } from './handoff-brief.types';
@@ -74,22 +75,30 @@ function pathFromInput(input: unknown): string | null {
 }
 
 /**
- * Normalize a tool path to a repo-relative form, or null if it clearly lives
- * outside the project root. Already-relative paths are kept as-is; absolute
- * paths are only kept when they sit under the (absolute) project root.
+ * Normalize a tool path to a repo-relative form, or null if it escapes the
+ * project root. Paths are resolved against the root and checked for
+ * containment, so `../secrets`, `/proj/../secrets`, and `./src/x` are all
+ * handled correctly. Without an absolute root, a relative path is kept only
+ * when it doesn't traverse upward; an absolute path can't be proven in-scope
+ * and is dropped rather than leaking a machine path.
  */
 function toRepoRelative(raw: string, projectRoot: string | null): string | null {
-  if (!raw.startsWith('/')) {
-    // Relative path — trust it as project-relative.
-    return raw.replace(/^\.\//, '');
+  const hasRoot = Boolean(projectRoot && isAbsolute(projectRoot));
+
+  if (!hasRoot) {
+    // No root to resolve against. Drop absolute paths outright; for relative
+    // paths, normalize against a synthetic root and reject any that escape it.
+    if (isAbsolute(raw)) return null;
+    const synthetic = '/__root__';
+    const normalized = relative(synthetic, resolve(synthetic, raw));
+    if (normalized.startsWith('..') || isAbsolute(normalized)) return null;
+    return normalized || '.';
   }
-  if (!projectRoot || !projectRoot.startsWith('/')) {
-    // No absolute root to compare against — an absolute path can't be proven
-    // in-scope, so drop it rather than leak a machine path.
-    return null;
-  }
-  const root = projectRoot.replace(/\/+$/, '');
-  if (raw === root) return '.';
-  if (raw.startsWith(`${root}/`)) return raw.slice(root.length + 1);
-  return null;
+
+  const root = resolve(projectRoot as string);
+  const abs = isAbsolute(raw) ? resolve(raw) : resolve(root, raw);
+  const rel = relative(root, abs);
+  // Outside the root → `relative` yields a `..`-prefixed or absolute path.
+  if (rel.startsWith('..') || isAbsolute(rel)) return null;
+  return rel === '' ? '.' : rel;
 }
