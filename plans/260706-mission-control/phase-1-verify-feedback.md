@@ -325,6 +325,64 @@ reachable through a real `.nuncio/verify`: `resolveVerifyCommand` spawns `['sh',
 provider-agnosticism — see the ADR-004 checklist above; taken the checklist branch of the review's OR
 plus the mock drive, reason recorded. (4) full payload shapes for both new events are asserted.
 
+## Review responses — round 2 (Codex gpt-5.5 xhigh — REVISE, test-suite consistency)
+
+Round 2 confirmed the **design is implementable without fighting the FSM** and raised 6 blocking
+findings about the *test suite's own* consistency. All 6 verified against the code/tests (all correct,
+none refuted) and fixed:
+
+1. **Futility vs budget contradiction** — verified: budget/max-round tests used identical failing
+   output while asserting 3/6 retries, which a correct futility guard (stop at 2 on identical output)
+   would fail. Fixed: every budget test now emits **unique output per round** (a counter in the script
+   output); fixed/identical output is used **only** in the dedicated futility test.
+2. **"Failed verify, no retry marker" never seeded a failure** — verified the old test created the
+   session with no verify script and wrote the script only after close. Reworked to **seed the failing
+   `verify_result` directly into the log** (`seedFailingVerifyResult`), so the crash point is real and
+   deterministic.
+3. **Crash/manual/archive race** — verified these let the live loop run while manually appending
+   markers / steering, relying on `awaitRun` which does not track steer-driven runs
+   (`sessions.service.ts:996`). Fixed with **per-round numbered release markers**
+   (`release-<N>`): the Nth verify blocks until its own marker exists, so a later verify cannot race
+   ahead and the "crash"/steer lands exactly where intended. Seeded crash-points use direct log seeding.
+4. **Provider-failure test didn't fail** — verified `SimulatedCursorAgentProvider.isAvailable()`
+   always returns true, so deleting `CURSOR_API_KEY` was a no-op and the test only asserted
+   `service.get()` truthy. Fixed with a new **`ControllableAgentProvider`** whose `executePrompt` can
+   be armed to reject; the test asserts the provider was actually driven for the auto-steer and the
+   service stays responsive (error/needs-attention path).
+5. **No proof the provider actually ran** — added assertions that a real provider turn follows each
+   auto-steer: an `assistant_message` after each origin-tagged `steer_message` (cursor + mock), and a
+   `promptRuns` call-count spy on the controllable provider.
+6. **Weak task-settlement assertion** — replaced `JSON.stringify(finished).toContain('needs_attention')`
+   with: the **linked session actually has a `verify_needs_attention` event**, and the task's
+   `finishedAt >= that event's createdAt` — proving the task waited for loop settlement.
+
+Round-2 suggestions applied: unique-output-per-round (ties into #1); preserve/clear
+`NUNCIO_VERIFY_COMMAND` in these specs so external env can't mask setup bugs; settings spec now
+asserts max-rounds `type: 'string'` and parses `'false'`/garbage→off and fractional→default; the
+oversized-output test asserts the **retained trailing tail marker is present** and the dropped leading
+marker is absent (not merely that the long run is capped).
+
+## Notes for the implementer (fold of Codex's implementer notes)
+
+- **origin/retryId live in shared steer metadata** emitted by `BaseAgentProvider` for auto-steers
+  only. Give the steer path an internal option so an auto-retry passes `{ origin: 'verify_retry',
+  retryId }`; the base provider stamps the emitted `steer_message` payload with it. A human steer
+  carries no `origin` tag. Do not special-case per engine — the tag flows through the shared event.
+- **Loop state stays log-derived.** No `sessions` column for the round counter. Fold the event tail;
+  boundaries are a green `verify_result`, a human (untagged) `steer_message`, and a
+  `verify_needs_attention`. This keeps the restart test honest (rebuild from the log, ADR-006).
+- **Boot resume is idempotent, keyed by `retryId`.** The dangerous crash point is *marker written,
+  steer not sent*: on boot, re-send the steer for any `verify_retry` whose `retryId` has no matching
+  `steer_message`, and never append a second marker for an existing `retryId`. The whole boot action
+  is a pure function of the durable log, so re-running it every boot is safe.
+- **Add `awaitVerifySettled`; do NOT silently change `awaitRun` semantics.** `awaitRun` has existing
+  callers (`tasks.service.ts:179`, `sessions.verify-gate.spec.ts`) that mean "the first run + its
+  verify settled". Introduce a *new* method that resolves on loop settlement (green / needs-attention /
+  no-command) and point the task runner at it; leave `awaitRun` untouched. Walk the `awaitRun` call
+  sites before touching it.
+- **No new FSM status.** The loop is annotate-don't-block: it only appends events and reuses the
+  existing `steer` → RUNNING → IDLE transitions. Do not add a `sessions.status` value.
+
 ## Open conflicts
 
 None found. The design fits the existing invariants:

@@ -43,11 +43,12 @@ describe('verify-feedback settings — registry contract', () => {
     expect(def!.envVar).toBe(AUTO_STEER);
   });
 
-  it('registers the max-rounds setting with a default of 3', () => {
+  it('registers the max-rounds setting as a string with a default of 3', () => {
     const def = getSettingDefinition(MAX_ROUNDS);
     expect(def).toBeDefined();
     expect(def!.category).toBe('agents');
     expect(def!.providerId).toBeUndefined();
+    expect(def!.type).toBe('string');
     expect(def!.envVar).toBe(MAX_ROUNDS);
     expect(def!.default).toBe('3');
   });
@@ -90,6 +91,9 @@ describe('verify-feedback settings — loop reads via SettingsService (DB beats 
     workspace = mkdtempSync(join(tmpdir(), 'nuncio-vf-settings-ws-'));
     prior[AUTO_STEER] = process.env[AUTO_STEER];
     prior[MAX_ROUNDS] = process.env[MAX_ROUNDS];
+    // Clear an external verify-command env so it can't mask a workspace setup bug.
+    prior.NUNCIO_VERIFY_COMMAND = process.env.NUNCIO_VERIFY_COMMAND;
+    delete process.env.NUNCIO_VERIFY_COMMAND;
   });
 
   afterEach(() => {
@@ -113,9 +117,22 @@ describe('verify-feedback settings — loop reads via SettingsService (DB beats 
     delete process.env.CURSOR_API_KEY;
   });
 
-  function writeAlwaysFailScript(): void {
+  /** Fails every run with UNIQUE output so the futility guard never trips a budget test. */
+  function writeUniqueFailScript(): void {
     mkdirSync(join(workspace, '.nuncio'), { recursive: true });
-    writeFileSync(join(workspace, '.nuncio', 'verify'), 'echo "RED" >&2\nexit 1\n');
+    const counterFile = join(workspace, '.nuncio', 'run-count');
+    writeFileSync(
+      join(workspace, '.nuncio', 'verify'),
+      [
+        '#!/bin/sh',
+        `N=$(cat "${counterFile}" 2>/dev/null || echo 0)`,
+        'N=$((N + 1))',
+        `echo "$N" > "${counterFile}"`,
+        'echo "RED settings #$N" >&2',
+        'exit 1',
+        '',
+      ].join('\n'),
+    );
   }
 
   async function waitForSettled(sessionId: string, timeoutMs = 10000): Promise<SessionEvent[]> {
@@ -138,7 +155,7 @@ describe('verify-feedback settings — loop reads via SettingsService (DB beats 
     process.env[AUTO_STEER] = '0'; // env says off
     settings.set(AUTO_STEER, '1'); // DB says on — must win
     settings.set(MAX_ROUNDS, '2');
-    writeAlwaysFailScript();
+    writeUniqueFailScript();
 
     const session = await service.create({ prompt: 'db over env', provider: 'cursor', workspace });
     const all = await waitForSettled(session.id);
@@ -146,20 +163,52 @@ describe('verify-feedback settings — loop reads via SettingsService (DB beats 
     expect(eventsOfType(all, 'verify_retry').length).toBeGreaterThan(0);
   }, 20000);
 
+  it('a DB auto-steer=0 overrides an env auto-steer=1 (DB wins, loop off)', async () => {
+    process.env[AUTO_STEER] = '1'; // env says on
+    settings.set(AUTO_STEER, '0'); // DB says off — must win
+    writeUniqueFailScript();
+
+    const session = await service.create({ prompt: 'db off over env on', provider: 'cursor', workspace });
+    // Wait for a verify_result, then confirm no loop machinery fired.
+    const start = Date.now();
+    while (Date.now() - start < 3000) {
+      if (events.list(session.id).some((e) => e.type === 'verify_result')) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    await new Promise((r) => setTimeout(r, 400));
+    const all = events.list(session.id);
+    expect(eventsOfType(all, 'verify_retry')).toHaveLength(0);
+    expect(eventsOfType(all, 'verify_needs_attention')).toHaveLength(0);
+  }, 20000);
+
   it('accepts the boolean spelling "true" for the auto-steer switch', async () => {
     settings.set(AUTO_STEER, 'true');
     settings.set(MAX_ROUNDS, '1');
-    writeAlwaysFailScript();
+    writeUniqueFailScript();
 
     const session = await service.create({ prompt: 'bool true', provider: 'cursor', workspace });
     const all = await waitForSettled(session.id);
     expect(eventsOfType(all, 'verify_needs_attention').length).toBe(1);
   }, 20000);
 
+  it('treats a garbage auto-steer value as off (only "1"/"true" enable)', async () => {
+    settings.set(AUTO_STEER, 'yesplease');
+    writeUniqueFailScript();
+
+    const session = await service.create({ prompt: 'bool garbage', provider: 'cursor', workspace });
+    const start = Date.now();
+    while (Date.now() - start < 3000) {
+      if (events.list(session.id).some((e) => e.type === 'verify_result')) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    await new Promise((r) => setTimeout(r, 400));
+    expect(eventsOfType(events.list(session.id), 'verify_retry')).toHaveLength(0);
+  }, 20000);
+
   it('clamps a negative max-rounds to the default of 3', async () => {
     settings.set(AUTO_STEER, '1');
     settings.set(MAX_ROUNDS, '-5');
-    writeAlwaysFailScript();
+    writeUniqueFailScript();
 
     const session = await service.create({ prompt: 'negative rounds', provider: 'cursor', workspace });
     const all = await waitForSettled(session.id, 15000);
@@ -171,10 +220,21 @@ describe('verify-feedback settings — loop reads via SettingsService (DB beats 
   it('clamps a non-numeric max-rounds to the default of 3', async () => {
     settings.set(AUTO_STEER, '1');
     settings.set(MAX_ROUNDS, 'lots');
-    writeAlwaysFailScript();
+    writeUniqueFailScript();
 
     const session = await service.create({ prompt: 'garbage rounds', provider: 'cursor', workspace });
     const all = await waitForSettled(session.id, 15000);
+    expect(eventsOfType(all, 'verify_retry').length).toBe(3);
+  }, 25000);
+
+  it('clamps a fractional max-rounds to the default of 3 (no float rounds)', async () => {
+    settings.set(AUTO_STEER, '1');
+    settings.set(MAX_ROUNDS, '2.7');
+    writeUniqueFailScript();
+
+    const session = await service.create({ prompt: 'float rounds', provider: 'cursor', workspace });
+    const all = await waitForSettled(session.id, 15000);
+    // A non-integer is not a valid round budget; clamp to the default 3.
     expect(eventsOfType(all, 'verify_retry').length).toBe(3);
   }, 25000);
 });

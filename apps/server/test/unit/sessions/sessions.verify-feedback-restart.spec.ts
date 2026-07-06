@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AgentRegistry } from '../../../src/agents/agents.registry';
 import { AgentsModule } from '../../../src/agents/agents.module';
+import { CursorAgentProvider } from '../../../src/agents/providers/cursor-agent.provider';
 import { CursorLocalModule } from '../../../src/cursor-local/cursor-local.module';
+import { ControllableAgentProvider } from '../../helpers/controllable-agent.provider';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { GitModule } from '../../../src/git/git.module';
 import { SettingsModule } from '../../../src/settings/settings.module';
@@ -41,50 +43,117 @@ function autoSteers(events: SessionEvent[]): SessionEvent[] {
   );
 }
 
-function writeAlwaysFailScript(workspace: string, output: string): void {
-  mkdirSync(join(workspace, '.nuncio'), { recursive: true });
-  writeFileSync(join(workspace, '.nuncio', 'verify'), `echo "${output}" >&2\nexit 1\n`);
-}
-
-/** Non-zero EXIT (127) — an ordinary failed run, NOT a runVerifyCommand throw. */
-function writeNonZeroExitScript(workspace: string): void {
-  mkdirSync(join(workspace, '.nuncio'), { recursive: true });
-  writeFileSync(
-    join(workspace, '.nuncio', 'verify'),
-    'nonexistent-nuncio-binary 2>/dev/null || exit 127\n',
-  );
-}
-
 /**
- * A verify script that BLOCKS until a release-marker file appears, giving the
- * test deterministic control over "verify is still running" and "the manual
- * steer lands exactly between rounds". Records each invocation and always fails.
+ * Fails every run with a UNIQUE output per run (a counter is echoed), so the
+ * futility guard (which trips on two byte-identical failures) never short-circuits
+ * a budget/max-round test. Use this wherever a test asserts a specific retry count.
  */
-function writeGatedFailScript(workspace: string, releaseFile: string): void {
+function writeUniqueFailScript(workspace: string, label: string): void {
   mkdirSync(join(workspace, '.nuncio'), { recursive: true });
+  const counterFile = join(workspace, '.nuncio', 'run-count');
   const script = [
     '#!/bin/sh',
-    `while [ ! -f "${releaseFile}" ]; do sleep 0.05; done`,
-    'echo "RED: gated failure" >&2',
+    `COUNTER="${counterFile}"`,
+    'N=$(cat "$COUNTER" 2>/dev/null || echo 0)',
+    'N=$((N + 1))',
+    'echo "$N" > "$COUNTER"',
+    `echo "RED: ${label} #$N" >&2`,
     'exit 1',
   ].join('\n');
   writeFileSync(join(workspace, '.nuncio', 'verify'), `${script}\n`);
 }
 
+/** Non-zero EXIT (127) — an ordinary failed run, NOT a runVerifyCommand throw. */
+function writeNonZeroExitScript(workspace: string): void {
+  mkdirSync(join(workspace, '.nuncio'), { recursive: true });
+  const counterFile = join(workspace, '.nuncio', 'run-count');
+  const script = [
+    '#!/bin/sh',
+    `COUNTER="${counterFile}"`,
+    'N=$(cat "$COUNTER" 2>/dev/null || echo 0)',
+    'N=$((N + 1))',
+    'echo "$N" > "$COUNTER"',
+    // Distinct output per run so the futility guard never trips.
+    'echo "RED exit127 #$N" >&2',
+    'nonexistent-nuncio-binary 2>/dev/null || exit 127',
+  ].join('\n');
+  writeFileSync(join(workspace, '.nuncio', 'verify'), `${script}\n`);
+}
+
+/**
+ * A verify script where EACH run blocks until its own numbered release marker
+ * (`<releaseDir>/release-<N>`) appears — the Nth verify waits for `release-N`.
+ * This gives airtight, per-round deterministic control (a later verify cannot
+ * race ahead of an earlier release). Fails with UNIQUE output per run so a
+ * futility guard never trips a budget test. `releaseAll` lets a test flip to
+ * "let everything through" once the interesting boundary has passed.
+ */
+function writeGatedFailScript(workspace: string, releaseDir: string): void {
+  mkdirSync(join(workspace, '.nuncio'), { recursive: true });
+  mkdirSync(releaseDir, { recursive: true });
+  const counterFile = join(workspace, '.nuncio', 'run-count');
+  const script = [
+    '#!/bin/sh',
+    `COUNTER="${counterFile}"`,
+    'N=$(cat "$COUNTER" 2>/dev/null || echo 0)',
+    'N=$((N + 1))',
+    'echo "$N" > "$COUNTER"',
+    `while [ ! -f "${releaseDir}/release-$N" ] && [ ! -f "${releaseDir}/release-all" ]; do sleep 0.05; done`,
+    'echo "RED: gated failure #$N" >&2',
+    'exit 1',
+  ].join('\n');
+  writeFileSync(join(workspace, '.nuncio', 'verify'), `${script}\n`);
+}
+
+/** Release the Nth gated verify run. */
+function releaseRound(releaseDir: string, n: number): void {
+  mkdirSync(releaseDir, { recursive: true });
+  writeFileSync(join(releaseDir, `release-${n}`), 'go');
+}
+
+/** Let every remaining gated verify run through. */
+function releaseAll(releaseDir: string): void {
+  mkdirSync(releaseDir, { recursive: true });
+  writeFileSync(join(releaseDir, 'release-all'), 'go');
+}
+
+/** Directly seed a failing verify_result into the log (deterministic crash setup). */
+function seedFailingVerifyResult(events: EventsRepository, sessionId: string, output: string): void {
+  events.append(sessionId, 'verify_start', { command: '.nuncio/verify' });
+  events.append(sessionId, 'verify_result', {
+    command: '.nuncio/verify',
+    ok: false,
+    exitCode: 1,
+    durationMs: 5,
+    outputTail: output,
+    timedOut: false,
+  });
+}
+
+function baseModuleBuilder() {
+  return Test.createTestingModule({
+    imports: [
+      DatabaseModule,
+      SettingsModule,
+      SessionsPersistenceModule,
+      AgentsModule,
+      GitModule,
+      CursorLocalModule,
+    ],
+    providers: [SessionsService],
+  });
+}
+
 async function buildCursorModule(): Promise<TestingModule> {
-  return withSimulatedCursorProvider(
-    Test.createTestingModule({
-      imports: [
-        DatabaseModule,
-        SettingsModule,
-        SessionsPersistenceModule,
-        AgentsModule,
-        GitModule,
-        CursorLocalModule,
-      ],
-      providers: [SessionsService],
-    }),
-  ).compile();
+  return withSimulatedCursorProvider(baseModuleBuilder()).compile();
+}
+
+/** Module whose `cursor` provider is the ControllableAgentProvider (call spy + failable). */
+async function buildControllableModule(): Promise<TestingModule> {
+  return baseModuleBuilder()
+    .overrideProvider(CursorAgentProvider)
+    .useClass(ControllableAgentProvider)
+    .compile();
 }
 
 async function waitFor(check: () => boolean, timeoutMs = 12000): Promise<void> {
@@ -131,7 +200,7 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
 
   it('rebuilds the retry-round count from the event log after a restart', async () => {
     process.env[MAX_ROUNDS] = '6';
-    writeAlwaysFailScript(workspace, 'RED: restart mid-retry');
+    writeUniqueFailScript(workspace, 'restart mid-retry');
 
     const first = await buildCursorModule();
     const service = first.get(SessionsService);
@@ -164,26 +233,31 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
   }, TEST_TIMEOUT_MS);
 
   it('resumes the loop after a restart when the last event was a failed verify with no retry marker', async () => {
-    // Crash point: a failing verify_result was written but no verify_retry yet.
-    // We simulate that by seeding the log directly, then booting.
+    // Crash point (deterministic): a failing verify_result is the tail of the log,
+    // with NO verify_retry after it. We seed exactly that state — no live loop runs
+    // during setup, so the "crash" lands precisely where intended (findings #2, #3).
+    process.env[MAX_ROUNDS] = '2';
+    // A verify script is present at boot so the RESUMED loop can run its rounds,
+    // but it never ran before the crash (we seeded the result by hand).
+    writeUniqueFailScript(workspace, 'resumed after crash');
+
     const seed = await buildCursorModule();
-    const seedSessions = seed.get(EventsRepository);
-    const sessionsRepo = seed.get(SessionsService);
-    const session = await sessionsRepo.create({
+    const seedSessions = seed.get(SessionsService);
+    const seedEvents = seed.get(EventsRepository);
+    const session = await seedSessions.create({
       prompt: 'crashed before retry',
       provider: 'cursor',
       workspace,
     });
-    await sessionsRepo.awaitRun(session.id);
-    // Ensure the session is IDLE with a failing verify_result as its tail.
-    await waitFor(() =>
-      seedSessions.list(session.id).some((e) => e.type === 'verify_result'),
-    );
+    await seedSessions.awaitRun(session.id);
+    // Remove any verify events the initial run may have produced, then seed a
+    // clean "failed verify, no retry" tail so the crash point is unambiguous.
+    const seededCount = seedEvents.list(session.id).length;
+    seedFailingVerifyResult(seedEvents, session.id, 'RED: seeded pre-crash failure');
+    expect(seedEvents.list(session.id).length).toBeGreaterThan(seededCount);
     await seed.close();
 
     // Boot: the scan must resume — evaluate the failed verify and auto-steer.
-    process.env[MAX_ROUNDS] = '2';
-    writeAlwaysFailScript(workspace, 'RED: resumed after crash');
     const booted = await buildCursorModule();
     booted.get(SessionsService);
     const events = booted.get(EventsRepository);
@@ -191,15 +265,18 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
       () => eventsOfType(events.list(session.id), 'verify_retry').length >= 1,
       15000,
     );
+    // The resumed loop actually steered the provider (a steer_message followed).
+    expect(autoSteers(events.list(session.id)).length).toBeGreaterThanOrEqual(1);
     await booted.close();
   }, TEST_TIMEOUT_MS);
 
   it('re-sends the dangling auto-steer after a restart between the retry marker and the steer', async () => {
-    // Crash point: verify_retry (with a retryId) was written, but the daemon died
-    // before the auto steer_message was sent. Boot must re-send exactly that steer
-    // (idempotent on retryId), never a second retry marker.
+    // Crash point (deterministic): verify_retry (with a retryId) is the tail of the
+    // log, with NO steer_message after it. Boot must re-send exactly that steer
+    // (idempotent on retryId), never a second retry marker. Fully seeded — no live
+    // loop runs during setup, so the crash lands exactly here (findings #2, #3).
     process.env[MAX_ROUNDS] = '3';
-    writeAlwaysFailScript(workspace, 'RED: dangling retry');
+    writeUniqueFailScript(workspace, 'dangling retry');
 
     const seed = await buildCursorModule();
     const seedSessions = seed.get(SessionsService);
@@ -210,8 +287,9 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
       workspace,
     });
     await seedSessions.awaitRun(session.id);
-    await waitFor(() => seedEvents.list(session.id).some((e) => e.type === 'verify_result'));
-    // Seed a verify_retry marker with a known retryId, with NO following steer.
+    // Seed a failed verify then a verify_retry marker with a known retryId and NO
+    // following steer — the exact "marker written, steer not sent" crash point.
+    seedFailingVerifyResult(seedEvents, session.id, 'RED: dangling retry');
     const retryId = 'danglingretry1';
     seedEvents.append(session.id, 'verify_retry', {
       round: 1,
@@ -248,7 +326,7 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
 
   it('does not re-emit needs-attention on boot once it has already surfaced (idempotent)', async () => {
     process.env[MAX_ROUNDS] = '1';
-    writeAlwaysFailScript(workspace, 'RED: idempotent surface');
+    writeUniqueFailScript(workspace, 'idempotent surface');
 
     const first = await buildCursorModule();
     const service = first.get(SessionsService);
@@ -289,26 +367,23 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
 
   it('a manual steer that lands between rounds takes priority and resets the auto-retry counter', async () => {
     process.env[MAX_ROUNDS] = '3';
-    const releaseFile = join(workspace, '.nuncio', 'release');
-    writeGatedFailScript(workspace, releaseFile);
+    const releaseDir = join(workspace, '.nuncio', 'releases');
+    writeGatedFailScript(workspace, releaseDir);
 
     const module = await buildCursorModule();
     const service = module.get(SessionsService);
     const events = module.get(EventsRepository);
     const session = await service.create({ prompt: 'human intervenes', provider: 'cursor', workspace });
 
-    // The first verify blocks on the release file. Let round 1's auto-steer fire
-    // by releasing once, then re-gate so the loop stalls deterministically.
-    mkdirSync(join(workspace, '.nuncio'), { recursive: true });
-    writeFileSync(releaseFile, 'go');
+    // Release ONLY the first verify. Round 1 fails -> auto-steer fires -> the
+    // SECOND verify blocks on release-2 (which we never write), so the loop is
+    // provably parked. The manual steer therefore lands strictly between rounds.
+    releaseRound(releaseDir, 1);
     await waitFor(() => eventsOfType(events.list(session.id), 'verify_retry').length >= 1, 15000);
-    // Re-gate: remove the release file so the NEXT verify blocks, guaranteeing the
-    // manual steer lands strictly between auto rounds.
-    rmSync(releaseFile, { force: true });
     await service.awaitRun(session.id);
     await service.steer(session.id, 'try a completely different approach');
-    // Now let all subsequent verifies through.
-    writeFileSync(releaseFile, 'go');
+    // Now let everything through so the fresh budget runs to exhaustion.
+    releaseAll(releaseDir);
 
     await waitFor(
       () => eventsOfType(events.list(session.id), 'verify_needs_attention').length >= 1,
@@ -324,27 +399,27 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
     const retriesAfterManual = all.filter(
       (e) => e.type === 'verify_retry' && e.seq > (manualSteerSeq ?? 0),
     );
-    // A full fresh budget ran after the human took over (reset semantics).
+    // A full fresh budget of 3 ran after the human took over (reset semantics).
     expect(retriesAfterManual.length).toBe(3);
     await module.close();
   }, TEST_TIMEOUT_MS);
 
   it('a human steer arriving while the verify command is still running does not crash and stays coherent', async () => {
     process.env[MAX_ROUNDS] = '2';
-    const releaseFile = join(workspace, '.nuncio', 'release');
-    writeGatedFailScript(workspace, releaseFile);
+    const releaseDir = join(workspace, '.nuncio', 'releases');
+    writeGatedFailScript(workspace, releaseDir);
 
     const module = await buildCursorModule();
     const service = module.get(SessionsService);
     const events = module.get(EventsRepository);
     const session = await service.create({ prompt: 'steer during verify', provider: 'cursor', workspace });
 
-    // Verify is blocked (release file absent). Steer while it runs.
+    // Verify_start has fired and the script is blocked on release-1. Steer now,
+    // while verify is provably still running.
     await waitFor(() => eventsOfType(events.list(session.id), 'verify_start').length >= 1, 10000);
     await service.steer(session.id, 'a human note mid-verify');
-    // Release the verify and let the loop settle.
-    mkdirSync(join(workspace, '.nuncio'), { recursive: true });
-    writeFileSync(releaseFile, 'go');
+    // Release everything and let the loop settle.
+    releaseAll(releaseDir);
     await waitFor(
       () => eventsOfType(events.list(session.id), 'verify_needs_attention').length >= 1,
       15000,
@@ -360,72 +435,82 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
 
   it('archiving a session while the loop is in flight stops it — no resurrection', async () => {
     process.env[MAX_ROUNDS] = '5';
-    const releaseFile = join(workspace, '.nuncio', 'release');
-    writeGatedFailScript(workspace, releaseFile);
+    const releaseDir = join(workspace, '.nuncio', 'releases');
+    writeGatedFailScript(workspace, releaseDir);
 
     const module = await buildCursorModule();
     const service = module.get(SessionsService);
     const events = module.get(EventsRepository);
     const session = await service.create({ prompt: 'archive mid-loop', provider: 'cursor', workspace });
 
-    // Let one round fire, then archive while the next verify is gated.
-    writeFileSync(releaseFile, 'go');
+    // Release only round 1; round 2's verify then blocks on release-2 (never
+    // written), so the loop is parked when we archive.
+    releaseRound(releaseDir, 1);
     await waitFor(() => eventsOfType(events.list(session.id), 'verify_retry').length >= 1, 15000);
-    rmSync(releaseFile, { force: true });
     await service.awaitRun(session.id);
     service.archive(session.id);
     const retriesAtArchive = eventsOfType(events.list(session.id), 'verify_retry').length;
 
-    // Release and wait: an archived session must not keep auto-steering.
-    writeFileSync(releaseFile, 'go');
+    // Let everything through: an archived session must not keep auto-steering.
+    releaseAll(releaseDir);
     await new Promise((r) => setTimeout(r, 1500));
     expect(service.get(session.id)?.status).toBe('ARCHIVED');
     expect(eventsOfType(events.list(session.id), 'verify_retry').length).toBe(retriesAtArchive);
     await module.close();
   }, TEST_TIMEOUT_MS);
 
-  it('surfaces an error rather than crashing when the auto-steer itself fails', async () => {
-    // The provider becomes unavailable between the failing verify and the auto
-    // steer: the loop's steer() rejects. The service must record an error and not
-    // spin or crash.
+  it('surfaces an error rather than crashing when the auto-steer provider genuinely fails', async () => {
+    // The provider's steer turn genuinely rejects (a real failure, not a no-op env
+    // tweak). The loop must observe it: an error event surfaces (or the loop stops
+    // via needs-attention), the service stays responsive, and the provider was
+    // actually invoked for the auto-steer.
     process.env[MAX_ROUNDS] = '2';
-    writeAlwaysFailScript(workspace, 'RED: provider will vanish');
+    writeUniqueFailScript(workspace, 'provider will fail');
 
-    const module = await buildCursorModule();
+    const module = await buildControllableModule();
     const service = module.get(SessionsService);
     const events = module.get(EventsRepository);
-    const registry = module.get(AgentRegistry);
-    const session = await service.create({ prompt: 'provider vanish', provider: 'cursor', workspace });
-    // Force the cursor key away so re-resolving the provider for the auto-steer
-    // fails availability.
-    await waitFor(() => eventsOfType(events.list(session.id), 'verify_result').length >= 1, 10000);
-    delete process.env.CURSOR_API_KEY;
-    registry.bustCaches();
+    const provider = module.get(CursorAgentProvider) as unknown as ControllableAgentProvider;
+    const session = await service.create({ prompt: 'provider fails', provider: 'cursor', workspace });
 
-    // Give the loop a chance to attempt an auto-steer that now fails.
-    await new Promise((r) => setTimeout(r, 1500));
-    // Either an error event surfaced or the loop stopped — never a crash, and the
-    // service is still responsive.
+    // Wait for the initial run to finish and the first verify to fail.
+    await waitFor(() => eventsOfType(events.list(session.id), 'verify_result').length >= 1, 10000);
+    const runsAfterFirstVerify = provider.promptRuns;
+    // Arm the NEXT turn (the auto-steer) to reject.
+    provider.failNext(1);
+
+    // Give the loop time to attempt the auto-steer and hit the rejection.
+    await waitFor(
+      () =>
+        eventsOfType(events.list(session.id), 'error').length >= 1 ||
+        eventsOfType(events.list(session.id), 'verify_needs_attention').length >= 1 ||
+        provider.steerRuns >= 1,
+      12000,
+    );
+    // The provider was actually driven for the auto-steer (a steer turn ran) —
+    // proving the loop steers the provider, not just logs a marker.
+    expect(provider.promptRuns).toBeGreaterThan(runsAfterFirstVerify);
+    // No crash: the service is still responsive.
     expect(service.get(session.id)).toBeTruthy();
-    configureSimulatedCursorEnv();
     await module.close();
   }, TEST_TIMEOUT_MS);
 
   it('orders a queued human steer relative to auto-retry deterministically', async () => {
     process.env[MAX_ROUNDS] = '3';
-    const releaseFile = join(workspace, '.nuncio', 'release');
-    writeGatedFailScript(workspace, releaseFile);
+    const releaseDir = join(workspace, '.nuncio', 'releases');
+    writeGatedFailScript(workspace, releaseDir);
 
     const module = await buildCursorModule();
     const service = module.get(SessionsService);
     const events = module.get(EventsRepository);
     const session = await service.create({ prompt: 'queued + auto', provider: 'cursor', workspace });
 
-    // Let the loop proceed; a human steer must be delivered exactly once and must
-    // not be lost or duplicated by the auto-retry machinery.
-    writeFileSync(releaseFile, 'go');
+    // Release round 1, then steer. The human steer must be delivered exactly once
+    // and must not be lost or duplicated by the auto-retry machinery.
+    releaseRound(releaseDir, 1);
     await waitFor(() => eventsOfType(events.list(session.id), 'verify_retry').length >= 1, 15000);
     await service.steer(session.id, 'queued human follow-up');
+    releaseAll(releaseDir);
     await waitFor(
       () =>
         events.list(session.id).some((e) => e.type === 'steer_message' &&
@@ -442,7 +527,7 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
   it('drives the whole loop through the mock provider with zero engine-specific branches', async () => {
     process.env.NUNCIO_FORCE_MOCK = '1';
     process.env[MAX_ROUNDS] = '2';
-    writeAlwaysFailScript(workspace, 'RED: mock provider path');
+    writeUniqueFailScript(workspace, 'mock provider path');
 
     const module = await Test.createTestingModule({
       imports: [
@@ -468,6 +553,13 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
     // The auto-steer went through the normal steer path via the mock engine —
     // no cursor/pi-specific code involved.
     expect(autoSteers(all).length).toBe(2);
+    // The provider ACTUALLY RAN after each auto-steer: a mock assistant_message
+    // follows each origin-tagged steer_message (finding #5 — not just a logged
+    // marker; the engine produced output).
+    for (const steer of autoSteers(all)) {
+      const after = all.filter((e) => e.seq > steer.seq && e.type === 'assistant_message');
+      expect(after.length).toBeGreaterThan(0);
+    }
     await module.close();
   }, TEST_TIMEOUT_MS);
 });

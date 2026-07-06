@@ -8,6 +8,7 @@ import { CursorLocalModule } from '../../../src/cursor-local/cursor-local.module
 import { DatabaseModule } from '../../../src/db/database.module';
 import { GitModule } from '../../../src/git/git.module';
 import { SettingsModule } from '../../../src/settings/settings.module';
+import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
 import { SessionsService } from '../../../src/sessions/sessions.service';
 import { TasksRepository } from '../../../src/tasks/tasks.repository';
@@ -32,6 +33,7 @@ describe('TasksService — verify-feedback settlement', () => {
   let module: TestingModule;
   let service: TasksService;
   let repo: TasksRepository;
+  let events: EventsRepository;
   let dataDir: string;
   let workspace: string;
   const prior: Record<string, string | undefined> = {};
@@ -59,6 +61,7 @@ describe('TasksService — verify-feedback settlement', () => {
     module = await buildModule();
     service = module.get(TasksService);
     repo = module.get(TasksRepository);
+    events = module.get(EventsRepository);
   });
 
   beforeEach(() => {
@@ -102,9 +105,22 @@ describe('TasksService — verify-feedback settlement', () => {
     );
   }
 
-  function writeAlwaysFailScript(): void {
+  /** Fails every run with UNIQUE output so the futility guard never trips early. */
+  function writeUniqueFailScript(): void {
     mkdirSync(join(workspace, '.nuncio'), { recursive: true });
-    writeFileSync(join(workspace, '.nuncio', 'verify'), 'echo "RED forever" >&2\nexit 1\n');
+    const counterFile = join(workspace, '.nuncio', 'run-count');
+    writeFileSync(
+      join(workspace, '.nuncio', 'verify'),
+      [
+        '#!/bin/sh',
+        `N=$(cat "${counterFile}" 2>/dev/null || echo 0)`,
+        'N=$((N + 1))',
+        `echo "$N" > "${counterFile}"`,
+        'echo "RED forever #$N" >&2',
+        'exit 1',
+        '',
+      ].join('\n'),
+    );
   }
 
   async function waitForStatus(
@@ -133,18 +149,23 @@ describe('TasksService — verify-feedback settlement', () => {
     expect(extractVerify(finished)?.ok).toBe(true);
   }, 30000);
 
-  it('a task that exhausts all rounds finishes recording the needs-attention outcome', async () => {
+  it('a task that exhausts all rounds finishes at/after the session surfaces needs-attention', async () => {
     process.env[MAX_ROUNDS] = '2';
-    writeAlwaysFailScript();
+    writeUniqueFailScript();
     const task = service.enqueue({ prompt: 'unfixable task', provider: 'cursor', workspace });
 
     const finished = await waitForStatus(task.id, ['DONE', 'FAILED']);
-    // However the terminal status is mapped, the outcome must reflect that the
-    // loop surfaced needs-attention (exhausted rounds) — not a bare first red.
-    const verify = extractVerify(finished);
-    expect(verify?.ok).toBe(false);
-    const outcomeStr = JSON.stringify(finished);
-    expect(outcomeStr).toContain('needs_attention');
+    expect(finished.sessionId).toBeTruthy();
+    // The linked session actually surfaced needs-attention...
+    const needs = events
+      .list(finished.sessionId as string)
+      .find((e) => e.type === 'verify_needs_attention');
+    expect(needs).toBeDefined();
+    // ...and the task did not finish BEFORE that event — proving it waited for the
+    // loop to settle rather than recording the first red verify (finding #6).
+    expect(finished.finishedAt).toBeGreaterThanOrEqual(needs!.createdAt);
+    // The recorded verify outcome is a failing one (the loop gave up).
+    expect(extractVerify(finished)?.ok).toBe(false);
   }, 30000);
 });
 

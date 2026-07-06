@@ -199,6 +199,13 @@ describe('SessionsService verify-feedback loop', () => {
     expect(retryId).toBeTruthy();
     expect((auto[0]!.payload as { retryId?: string }).retryId).toBe(retryId);
 
+    // The provider ACTUALLY RAN after the auto-steer: an assistant_message follows
+    // the origin-tagged steer_message (finding #5 — not just a logged marker).
+    const assistantAfter = all.filter(
+      (e) => e.seq > auto[0]!.seq && e.type === 'assistant_message',
+    );
+    expect(assistantAfter.length).toBeGreaterThan(0);
+
     expect(eventsOfType(all, 'verify_result').at(-1)!.payload).toMatchObject({ ok: true });
     expect(eventsOfType(all, 'verify_needs_attention')).toHaveLength(0);
   }, TEST_TIMEOUT_MS);
@@ -318,7 +325,11 @@ describe('SessionsService verify-feedback loop', () => {
         'N=$((N + 1))',
         `echo "$N" > "${counterFile}"`,
         'if [ "$N" -le 1 ]; then',
+        // Leading marker (dropped by the tail) then a huge block then a trailing
+        // marker (retained by the tail).
+        '  echo "LEADING-MARKER-DROPPED" >&2',
         '  i=0; while [ "$i" -lt 20000 ]; do printf X; i=$((i+1)); done >&2',
+        '  echo "" >&2; echo "TRAILING-MARKER-KEPT" >&2',
         '  exit 1',
         'fi',
         'exit 0',
@@ -334,6 +345,9 @@ describe('SessionsService verify-feedback loop', () => {
     // The full 20k stream is never carried; the tail is capped near 4000 chars.
     const xRun = /X{100,}/.exec(text)?.[0].length ?? 0;
     expect(xRun).toBeLessThanOrEqual(4000);
+    // The RETAINED tail (end of output) is present; the dropped leading marker is not.
+    expect(text).toContain('TRAILING-MARKER-KEPT');
+    expect(text).not.toContain('LEADING-MARKER-DROPPED');
   }, TEST_TIMEOUT_MS);
 
   it('a manual steer after needs-attention starts a fresh loop', async () => {
