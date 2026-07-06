@@ -10,7 +10,12 @@
  */
 
 import { normalizeMcpToolName } from '../tools/claude-runtime-tools.adapter';
-import type { ClaudeResultMessage, ClaudeStreamEventMessage } from './claude-agent.sdk';
+import type {
+  ClaudeResultMessage,
+  ClaudeStreamEventMessage,
+  ClaudeToolResultBlock,
+  ClaudeUserResultMessage,
+} from './claude-agent.sdk';
 
 /** One nuncio event the provider should append + emit. */
 export interface MappedEvent {
@@ -131,4 +136,45 @@ export function classifyResult(
 
   const detail = (message.errors ?? []).join('; ') || message.subtype || 'Claude run failed.';
   return { kind: 'error', message: detail };
+}
+
+/** A `tool_end` event derived from a tool_result block, pairing back by callId. */
+export interface MappedToolEnd {
+  callId: string;
+  isError: boolean;
+  output?: string;
+}
+
+/** Flatten a tool_result block's `content` (string OR blocks array) to text. */
+function toolResultOutput(content: ClaudeToolResultBlock['content']): string | undefined {
+  if (typeof content === 'string') return content.length > 0 ? content : undefined;
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .map((block) => (typeof block?.text === 'string' ? block.text : ''))
+    .join('');
+  return text.length > 0 ? text : undefined;
+}
+
+/**
+ * Extract `tool_end`s from a `user`-typed SDK message. Tool results arrive on a
+ * user frame whose `message.content` is an array of blocks; each `tool_result`
+ * block pairs back to a `tool_use.id` (the `callId` a `tool_start` already
+ * emitted). Every other content shape — a bare-string user message, a steer
+ * echo, an assistant frame replayed as user — yields no ends. The output
+ * ceiling is enforced at the event layer, so the raw text passes through here.
+ */
+export function mapToolResults(message: ClaudeUserResultMessage): MappedToolEnd[] {
+  const content = message.message?.content;
+  if (!Array.isArray(content)) return [];
+  const ends: MappedToolEnd[] = [];
+  for (const block of content as ClaudeToolResultBlock[]) {
+    if (block?.type !== 'tool_result' || typeof block.tool_use_id !== 'string') continue;
+    const output = toolResultOutput(block.content);
+    ends.push({
+      callId: block.tool_use_id,
+      isError: block.is_error === true,
+      ...(output !== undefined ? { output } : {}),
+    });
+  }
+  return ends;
 }

@@ -9,6 +9,7 @@ import type {
   ClaudeQueryOptions,
   ClaudeSdkMessage,
 } from '../../../src/agents/providers/claude-agent.sdk';
+// ClaudeQuery is used to type the image-capture fake query below.
 import { DatabaseModule } from '../../../src/db/database.module';
 import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
@@ -453,5 +454,233 @@ describe('ClaudeAgentProvider', () => {
     it('supportsInteraction is true', () => {
       expect(provider.supportsInteraction()).toBe(true);
     });
+  });
+
+  describe('tool_start / tool_end pairing', () => {
+    function toolStart(uuid: string, id: string, name: string): ClaudeSdkMessage {
+      return {
+        type: 'stream_event',
+        uuid,
+        event: {
+          type: 'content_block_start',
+          content_block: { type: 'tool_use', id, name, input: { command: 'ls' } },
+        },
+      } as ClaudeSdkMessage;
+    }
+    function toolResult(id: string, over: Record<string, unknown> = {}): ClaudeSdkMessage {
+      return {
+        type: 'user',
+        message: { content: [{ type: 'tool_result', tool_use_id: id, ...over }] },
+      } as ClaudeSdkMessage;
+    }
+
+    it('pairs a happy tool_start with a tool_end carrying the same callId and name', async () => {
+      provider.queryFactory = () => ({
+        async interrupt() {},
+        async setModel() {},
+        async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+          yield { type: 'system', subtype: 'init', session_id: 't1' };
+          yield toolStart('m1', 'toolu_1', 'Bash');
+          yield toolResult('toolu_1', { content: 'output', is_error: false });
+          yield { type: 'result', subtype: 'success', result: 'done' };
+        },
+      });
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await provider.run(created.id, 'run ls', { cwd: '/tmp/ws', model: 'claude:haiku' });
+      const list = events.list(created.id);
+      const start = list.find((e) => e.type === 'tool_start');
+      const end = list.find((e) => e.type === 'tool_end');
+      expect((start?.payload as { callId: string }).callId).toBe('toolu_1');
+      expect(end?.payload).toEqual({ callId: 'toolu_1', tool: 'Bash', isError: false, output: 'output' });
+    });
+
+    it('maps an error tool_result to tool_end isError:true', async () => {
+      provider.queryFactory = () => ({
+        async interrupt() {},
+        async setModel() {},
+        async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+          yield { type: 'system', subtype: 'init', session_id: 't1' };
+          yield toolStart('m1', 'toolu_e', 'Bash');
+          yield toolResult('toolu_e', { content: 'denied', is_error: true });
+          yield { type: 'result', subtype: 'success', result: 'done' };
+        },
+      });
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await provider.run(created.id, 'x', { cwd: '/tmp/ws', model: 'claude:haiku' });
+      const end = events.list(created.id).find((e) => e.type === 'tool_end');
+      expect(end?.payload).toEqual({ callId: 'toolu_e', tool: 'Bash', isError: true, output: 'denied' });
+    });
+
+    it('tool_end echoes the MCP-normalized name from tool_start', async () => {
+      provider.queryFactory = () => ({
+        async interrupt() {},
+        async setModel() {},
+        async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+          yield { type: 'system', subtype: 'init', session_id: 't1' };
+          yield toolStart('m1', 'toolu_m', 'mcp__nuncio-runtime__verify');
+          yield toolResult('toolu_m', { content: 'ok' });
+          yield { type: 'result', subtype: 'success', result: 'done' };
+        },
+      });
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await provider.run(created.id, 'x', { cwd: '/tmp/ws', model: 'claude:haiku' });
+      const start = events.list(created.id).find((e) => e.type === 'tool_start');
+      const end = events.list(created.id).find((e) => e.type === 'tool_end');
+      expect((start?.payload as { tool: string }).tool).toBe('verify');
+      expect((end?.payload as { tool: string }).tool).toBe('verify');
+    });
+
+    it('seals a tool_start with no result when the turn terminates (no dangling start)', async () => {
+      provider.queryFactory = () => ({
+        async interrupt() {},
+        async setModel() {},
+        async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+          yield { type: 'system', subtype: 'init', session_id: 't1' };
+          yield toolStart('m1', 'toolu_orphan', 'Bash');
+          yield { type: 'result', subtype: 'success', result: 'done' };
+        },
+      });
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await provider.run(created.id, 'x', { cwd: '/tmp/ws', model: 'claude:haiku' });
+      const ends = events.list(created.id).filter((e) => e.type === 'tool_end');
+      expect(ends).toHaveLength(1);
+      expect(ends[0].payload).toEqual({ callId: 'toolu_orphan', tool: 'Bash', isError: false });
+    });
+
+    it('a tool_result with no prior tool_start falls back to a bare tool name', async () => {
+      provider.queryFactory = () => ({
+        async interrupt() {},
+        async setModel() {},
+        async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+          yield { type: 'system', subtype: 'init', session_id: 't1' };
+          yield toolResult('toolu_lost', { content: 'result' });
+          yield { type: 'result', subtype: 'success', result: 'done' };
+        },
+      });
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await provider.run(created.id, 'x', { cwd: '/tmp/ws', model: 'claude:haiku' });
+      const end = events.list(created.id).find((e) => e.type === 'tool_end');
+      expect((end?.payload as { tool: string }).tool).toBe('tool');
+    });
+  });
+
+  describe('image attachments → user MessageParam content blocks', () => {
+    let capturedContent: unknown;
+    function capturingContentQuery(): ClaudeQuery {
+      return {
+        async interrupt() {},
+        async setModel() {},
+        async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+          yield { type: 'system', subtype: 'init', session_id: 't1' };
+          yield { type: 'result', subtype: 'success', result: 'ok' };
+        },
+      } as ClaudeQuery;
+    }
+
+    beforeEach(() => {
+      capturedContent = undefined;
+      provider.queryFactory = ({ prompt }) => {
+        void (async () => {
+          const iterator = prompt[Symbol.asyncIterator]();
+          const first = await iterator.next();
+          capturedContent = (first.value as { message?: { content?: unknown } })?.message?.content;
+        })();
+        return capturingContentQuery();
+      };
+    });
+
+    it('keeps content a plain string when there are no attachments', async () => {
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await provider.run(created.id, 'describe this', { cwd: '/tmp/ws', model: 'claude:haiku' });
+      await new Promise((r) => setTimeout(r, 10));
+      expect(typeof capturedContent).toBe('string');
+    });
+
+    it('builds a text block + one image block per image attachment', async () => {
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await provider.run(created.id, 'what colors?', {
+        cwd: '/tmp/ws',
+        model: 'claude:haiku',
+        attachments: [
+          { kind: 'image', mimeType: 'image/png', data: 'AAAA' },
+          { kind: 'image', mimeType: 'image/jpeg', data: 'BBBB' },
+        ],
+      });
+      await new Promise((r) => setTimeout(r, 10));
+      const content = capturedContent as Array<Record<string, unknown>>;
+      expect(Array.isArray(content)).toBe(true);
+      expect(content[0]).toEqual({ type: 'text', text: 'what colors?' });
+      expect(content[1]).toEqual({
+        type: 'image',
+        source: { type: 'base64', media_type: 'image/png', data: 'AAAA' },
+      });
+      expect(content[2]).toEqual({
+        type: 'image',
+        source: { type: 'base64', media_type: 'image/jpeg', data: 'BBBB' },
+      });
+    });
+
+    it('ignores non-image attachment kinds and keeps content a plain string', async () => {
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await provider.run(created.id, 'hi', {
+        cwd: '/tmp/ws',
+        model: 'claude:haiku',
+        attachments: [{ kind: 'file', mimeType: 'text/plain', data: 'ZZ' } as never],
+      });
+      await new Promise((r) => setTimeout(r, 10));
+      expect(typeof capturedContent).toBe('string');
+    });
+  });
+
+  describe('in-session effort change', () => {
+    it('pushes a changed effort level via applyFlagSettings on setModel', async () => {
+      const applied: Array<{ effortLevel?: string }> = [];
+      provider.queryFactory = () => ({
+        async interrupt() {},
+        async setModel() {},
+        async applyFlagSettings(settings: { effortLevel?: string }) {
+          applied.push(settings);
+        },
+        async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+          yield { type: 'system', subtype: 'init', session_id: 't1' };
+          yield { type: 'result', subtype: 'success', result: 'ok' };
+        },
+      });
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:sonnet' });
+      await provider.run(created.id, 'hi', { cwd: '/tmp/ws', model: 'claude:sonnet' });
+      await provider.setModel(created.id, 'claude:sonnet', { effort: 'high' });
+      expect(applied).toEqual([{ effortLevel: 'high' }]);
+    });
+
+    it("clamps 'max' to 'xhigh' for the mid-session settings channel", async () => {
+      const applied: Array<{ effortLevel?: string }> = [];
+      provider.queryFactory = () => ({
+        async interrupt() {},
+        async setModel() {},
+        async applyFlagSettings(settings: { effortLevel?: string }) {
+          applied.push(settings);
+        },
+        async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+          yield { type: 'system', subtype: 'init', session_id: 't1' };
+          yield { type: 'result', subtype: 'success', result: 'ok' };
+        },
+      });
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:opus[1m]' });
+      await provider.run(created.id, 'hi', { cwd: '/tmp/ws', model: 'claude:opus[1m]' });
+      await provider.setModel(created.id, 'claude:opus[1m]', { effort: 'max' });
+      expect(applied).toEqual([{ effortLevel: 'xhigh' }]);
+    });
+
+    it('does not throw on setModel when the query has no applyFlagSettings', async () => {
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await provider.run(created.id, 'hi', { cwd: '/tmp/ws', model: 'claude:haiku' });
+      await expect(
+        provider.setModel(created.id, 'claude:sonnet', { effort: 'high' }),
+      ).resolves.toBeUndefined();
+    });
+  });
+
+  it('declares images capability true', () => {
+    expect(provider.capabilities.images).toBe(true);
   });
 });

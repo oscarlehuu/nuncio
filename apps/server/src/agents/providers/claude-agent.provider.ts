@@ -17,6 +17,7 @@ import {
   classifyResult,
   createDeltaMappingState,
   mapStreamEvent,
+  mapToolResults,
   type DeltaMappingState,
 } from './claude-agent.helpers';
 import {
@@ -43,8 +44,11 @@ import {
   type ClaudeQueryFactory,
   type ClaudeResultMessage,
   type ClaudeSdkMessage,
+  type ClaudeUserContent,
   type ClaudeUserMessage,
+  type ClaudeUserResultMessage,
 } from './claude-agent.sdk';
+import type { AgentAttachment } from '../agents.types';
 import { CLAUDE_STATIC_MODELS } from './claude-agent.models';
 import { InputQueue } from './claude-agent.input-queue';
 
@@ -78,6 +82,13 @@ interface ActiveClaudeSession {
   delta: DeltaMappingState;
   /** Approval callbacks parked awaiting a user decision, keyed by the SDK requestId (dedupe + resolve). */
   pendingApprovals: Map<string, PendingApproval>;
+  /**
+   * Tools whose `tool_start` fired but whose `tool_result` has not yet arrived,
+   * keyed by callId → the (MCP-normalized) tool name emitted at start. Lets
+   * `tool_end` echo the same name, and lets a terminal seal any still-open tool
+   * so every `tool_start` pairs with a `tool_end`.
+   */
+  openTools: Map<string, string>;
   /** The approval hook from the run context, captured per session for canUseTool. */
   requestProviderApproval?: AgentRunContext['requestProviderApproval'];
   /**
@@ -98,10 +109,9 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     interrupt: true,
     modelSwitch: 'in-session',
     effortSwitch: 'in-session',
-    // Flips to true in a later phase once attachments are wired; message
-    // construction already routes through a single builder so that is a small
-    // change, not a rewrite.
-    images: false,
+    // Base64 image blocks ride on the user MessageParam content; consumed from
+    // context.attachments through the single buildUserMessage builder.
+    images: true,
     steerWhileRunning: true,
   } as const;
 
@@ -185,10 +195,30 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     }
   }
 
-  async setModel(sessionId: string, model: string): Promise<void> {
+  async setModel(
+    sessionId: string,
+    model: string,
+    options?: ModelOptionsMap | null,
+  ): Promise<void> {
     const active = this.activeSessions.get(sessionId);
     if (!active) return;
     await active.query.setModel(this.stripPrefix(model));
+    // Effort rides the same in-session switch: push a changed effort level to the
+    // live query so the next turn honors it without a restart. Model-gated models
+    // (Haiku) simply carry no effort option, so nothing is pushed.
+    const effort = this.resolveEffort(options);
+    if (effort) await this.applyEffort(active, effort);
+  }
+
+  /**
+   * Push an effort change into a live query. `Settings.effortLevel` does not
+   * include `'max'` (only `Options.effort` at query start does), so clamp it to
+   * the highest mid-session level rather than sending a value the SDK rejects.
+   */
+  private async applyEffort(active: ActiveClaudeSession, effort: string): Promise<void> {
+    if (!active.query.applyFlagSettings) return;
+    const effortLevel = effort === 'max' ? 'xhigh' : effort;
+    await active.query.applyFlagSettings({ effortLevel });
   }
 
   dispose(sessionId: string): void {
@@ -372,6 +402,7 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
       delta: createDeltaMappingState(),
       pendingRedirects: 0,
       pendingApprovals: new Map(),
+      openTools: new Map(),
       requestProviderApproval: context.requestProviderApproval,
     };
 
@@ -455,9 +486,20 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
         this.paragraphBoundary(accumulated),
       );
       if (mapped) {
+        // Remember every started tool by callId so its result can pair a
+        // tool_end under the same (normalized) name a later block references.
+        if (mapped.type === 'tool_start') {
+          const callId = mapped.payload.callId as string;
+          active.openTools.set(callId, mapped.payload.tool as string);
+        }
         this.pushEvent(sessionId, mapped.type, mapped.payload, context.emit);
         if (mapped.type === 'assistant_delta') this.touchPreview(sessionId, active.delta.accumulatedText);
       }
+      return false;
+    }
+
+    if (message.type === 'user') {
+      this.emitToolEnds(sessionId, active, message, context);
       return false;
     }
 
@@ -465,9 +507,51 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
       return this.handleResult(sessionId, active, message, context);
     }
 
-    // assistant/user frames, task notifications, api_retry, status, … carry no
+    // assistant frames, task notifications, api_retry, status, … carry no
     // additional user-facing event beyond the deltas + terminal result.
     return false;
+  }
+
+  /**
+   * Emit a `tool_end` for each `tool_result` block on a user message. Each block
+   * pairs back to a `tool_start` by callId; the name is read from openTools so it
+   * matches the normalized name shown at start (falling back to a bare 'tool'
+   * for a result we never saw a start for). A non-tool-result user frame yields
+   * nothing.
+   */
+  private emitToolEnds(
+    sessionId: string,
+    active: ActiveClaudeSession,
+    message: ClaudeUserResultMessage,
+    context: AgentRunContext,
+  ): void {
+    for (const end of mapToolResults(message)) {
+      const tool = active.openTools.get(end.callId) ?? 'tool';
+      active.openTools.delete(end.callId);
+      this.pushEvent(
+        sessionId,
+        'tool_end',
+        {
+          callId: end.callId,
+          tool,
+          isError: end.isError,
+          ...(end.output !== undefined ? { output: end.output } : {}),
+        },
+        context.emit,
+      );
+    }
+  }
+
+  /**
+   * Close any tool whose start fired but whose result never arrived (a turn that
+   * ended — success, interrupt, or error — with a tool still open). Sealing keeps
+   * the transcript invariant that every tool_start pairs with a tool_end.
+   */
+  private sealOpenTools(sessionId: string, active: ActiveClaudeSession, context: AgentRunContext): void {
+    for (const [callId, tool] of active.openTools) {
+      this.pushEvent(sessionId, 'tool_end', { callId, tool, isError: false }, context.emit);
+    }
+    active.openTools.clear();
   }
 
   private handleResult(
@@ -484,6 +568,7 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
       // lands IDLE via the base lifecycle, not ERROR. An explicit interrupt
       // wins over a pending redirect (the user asked to stop).
       active.pendingRedirects = 0;
+      this.sealOpenTools(sessionId, active, context);
       this.pushEvent(sessionId, 'interrupted', {}, context.emit);
       return true;
     }
@@ -491,21 +576,27 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     if (active.pendingRedirects > 0) {
       // This is the truncated turn a live steer cut short: consume it silently
       // (the fresh redirected turn still follows and carries the real terminal).
+      // Any tool the redirect aborted mid-flight never gets a result, so seal it
+      // now rather than leaving a dangling tool_start.
       active.pendingRedirects -= 1;
+      this.sealOpenTools(sessionId, active, context);
       return false;
     }
 
     if (classified.kind === 'cannot-resume') {
       // The stored thread cannot be resumed (workspace moved / session evicted);
       // drop the handle so a fresh run starts clean, then surface a clear error.
+      this.sealOpenTools(sessionId, active, context);
       this.dropHandle(sessionId, active);
       throw new Error(`Cannot resume Claude session: ${classified.message}`);
     }
 
     if (classified.kind === 'error') {
+      this.sealOpenTools(sessionId, active, context);
       throw new Error(classified.message);
     }
 
+    this.sealOpenTools(sessionId, active, context);
     this.pushEvent(
       sessionId,
       'assistant_message',
@@ -551,13 +642,31 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     isSteer: boolean,
   ): ClaudeUserMessage {
     // Steers into a live turn redirect immediately; a plain prompt runs normally.
-    // Attachments (images) hang off this single builder in a later phase.
+    const prompt = appendRuntimeToolInstructions(text, context.tools);
     return {
       type: 'user',
       parent_tool_use_id: null,
-      message: { role: 'user', content: appendRuntimeToolInstructions(text, context.tools) },
+      message: { role: 'user', content: this.buildContent(prompt, context.attachments) },
       ...(isSteer ? { priority: 'now' as const } : {}),
     };
+  }
+
+  /**
+   * Build the user MessageParam content. With no image attachments the content
+   * is the bare prompt string (the simple, common path). With images it becomes
+   * a blocks array: the text prompt followed by one base64 image block per image
+   * attachment. Non-image attachment kinds are ignored gracefully.
+   */
+  private buildContent(text: string, attachments?: AgentAttachment[]): ClaudeUserContent {
+    const images = (attachments ?? []).filter((attachment) => attachment.kind === 'image');
+    if (images.length === 0) return text;
+    return [
+      { type: 'text', text },
+      ...images.map((image) => ({
+        type: 'image' as const,
+        source: { type: 'base64' as const, media_type: image.mimeType, data: image.data },
+      })),
+    ];
   }
 
   private async resolveCli(): Promise<ClaudeCliResolution> {

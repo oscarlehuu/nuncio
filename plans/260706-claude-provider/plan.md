@@ -121,6 +121,8 @@ P0 ──► P1 ──► P2 ──► P4
 
 ## Fast-follows (not this plan)
 
+- **"Always allow" button on the approval card** — the provider already implements the `updatedPermissions` round-trip (reachable via `submitInteraction` with an `always` option id); the binary approve/deny card needs the third affordance. UI-only change, `ProviderRequestDecision` widening touches ~15 files so it was deliberately deferred out of Phase 2.
+
 - **Handoff: continue a terminal Claude Code session in nuncio** — same shape as the Cursor handoff plan; `~/.claude/projects/<encoded-cwd>/*.jsonl` + `resume` makes this cheap once the provider exists.
 - Effort switching UI parity with Codex once spike confirms the SDK path.
 - Cost surfacing (`result.total_cost_usd`, `usage`) into session metadata.

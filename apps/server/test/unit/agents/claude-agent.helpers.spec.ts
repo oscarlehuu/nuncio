@@ -3,10 +3,12 @@ import {
   classifyResult,
   createDeltaMappingState,
   mapStreamEvent,
+  mapToolResults,
 } from '../../../src/agents/providers/claude-agent.helpers';
 import type {
   ClaudeResultMessage,
   ClaudeStreamEventMessage,
+  ClaudeUserResultMessage,
 } from '../../../src/agents/providers/claude-agent.sdk';
 
 /** Mirror of BaseAgentProvider.paragraphBoundary for pure-helper testing. */
@@ -179,5 +181,66 @@ describe('classifyResult', () => {
     const classified = classifyResult(result({ subtype: 'error_max_budget_usd', errors: [] }), '');
     expect(classified.kind).toBe('error');
     expect((classified as { message: string }).message).toBe('error_max_budget_usd');
+  });
+});
+
+describe('mapToolResults', () => {
+  function userMessage(content: unknown): ClaudeUserResultMessage {
+    return { type: 'user', message: { content } };
+  }
+
+  it('maps a string-content tool_result to a tool_end with output', () => {
+    const ends = mapToolResults(
+      userMessage([{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'file listing' }]),
+    );
+    expect(ends).toEqual([{ callId: 'toolu_1', isError: false, output: 'file listing' }]);
+  });
+
+  it('marks an error tool_result as isError:true', () => {
+    const ends = mapToolResults(
+      userMessage([{ type: 'tool_result', tool_use_id: 'toolu_2', is_error: true, content: 'denied' }]),
+    );
+    expect(ends).toEqual([{ callId: 'toolu_2', isError: true, output: 'denied' }]);
+  });
+
+  it('flattens a blocks-array content to a single text output', () => {
+    const ends = mapToolResults(
+      userMessage([
+        {
+          type: 'tool_result',
+          tool_use_id: 'toolu_3',
+          content: [
+            { type: 'text', text: 'line 1\n' },
+            { type: 'text', text: 'line 2' },
+          ],
+        },
+      ]),
+    );
+    expect(ends[0]).toEqual({ callId: 'toolu_3', isError: false, output: 'line 1\nline 2' });
+  });
+
+  it('emits one tool_end per tool_result block in a single message', () => {
+    const ends = mapToolResults(
+      userMessage([
+        { type: 'tool_result', tool_use_id: 'a', content: 'x' },
+        { type: 'tool_result', tool_use_id: 'b', content: 'y' },
+      ]),
+    );
+    expect(ends.map((e) => e.callId)).toEqual(['a', 'b']);
+  });
+
+  it('omits output when content is empty or undefined but still pairs the callId', () => {
+    expect(mapToolResults(userMessage([{ type: 'tool_result', tool_use_id: 'c1', content: '' }]))).toEqual([
+      { callId: 'c1', isError: false },
+    ]);
+    expect(mapToolResults(userMessage([{ type: 'tool_result', tool_use_id: 'c2' }]))).toEqual([
+      { callId: 'c2', isError: false },
+    ]);
+  });
+
+  it('ignores non-tool_result blocks and non-array content (plain user frame)', () => {
+    expect(mapToolResults(userMessage('just a steer'))).toEqual([]);
+    expect(mapToolResults(userMessage([{ type: 'text', text: 'hi' }]))).toEqual([]);
+    expect(mapToolResults({ type: 'user' })).toEqual([]);
   });
 });

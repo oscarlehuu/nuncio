@@ -5,11 +5,29 @@
  * module import time.
  */
 
+/**
+ * A base64 image content block, exactly the Anthropic `ImageBlockParam` shape the
+ * model reads. Built from a MediaStore attachment ({ mimeType, data }).
+ */
+export interface ClaudeImageBlock {
+  type: 'image';
+  source: { type: 'base64'; media_type: string; data: string };
+}
+
+/** A plain text content block. */
+export interface ClaudeTextBlock {
+  type: 'text';
+  text: string;
+}
+
+/** What we send as message content: a bare string, or a blocks array (text + images). */
+export type ClaudeUserContent = string | Array<ClaudeTextBlock | ClaudeImageBlock>;
+
 /** A user message in the SDK's streaming-input shape (narrowed to what we send). */
 export interface ClaudeUserMessage {
   type: 'user';
   parent_tool_use_id: null;
-  message: { role: 'user'; content: unknown };
+  message: { role: 'user'; content: ClaudeUserContent };
   priority?: 'now' | 'next' | 'later';
 }
 
@@ -38,26 +56,54 @@ export interface ClaudeResultMessage {
   terminal_reason?: string;
 }
 
+/**
+ * A single `tool_result` content block the SDK delivers on a `user` message when
+ * a tool finishes. `content` is the Anthropic union: a bare string, or an array
+ * of blocks; the mapping flattens either to a text output.
+ */
+export interface ClaudeToolResultBlock {
+  type: 'tool_result';
+  tool_use_id: string;
+  is_error?: boolean;
+  content?: string | Array<{ type?: string; text?: string }>;
+}
+
+/**
+ * A `user`-typed SDK message. Tool results arrive here: `message.content` is an
+ * array carrying `tool_result` blocks (each pairing back to a `tool_use.id`).
+ * Non-tool-result user frames (replays, steer echoes) carry no such block.
+ */
+export interface ClaudeUserResultMessage {
+  type: 'user';
+  message?: { content?: unknown };
+}
+
 /** Message types the provider does not act on beyond deltas + terminal result. */
 export interface ClaudeOtherMessage {
-  type: 'assistant' | 'user' | 'stream' | 'other';
+  type: 'assistant' | 'stream' | 'other';
 }
 
 /**
  * SDK messages the provider inspects — a structural subset of the full SDK
  * union. The factory casts the real (wider) SDK message to this narrowed union;
- * message types outside the three the provider maps arrive typed as
+ * message types outside the ones the provider maps arrive typed as
  * ClaudeOtherMessage and fall through the handler untouched.
  */
 export type ClaudeSdkMessage =
   | ClaudeSystemMessage
   | ClaudeStreamEventMessage
   | ClaudeResultMessage
+  | ClaudeUserResultMessage
   | ClaudeOtherMessage;
 
 export interface ClaudeQuery extends AsyncIterable<ClaudeSdkMessage> {
   interrupt(): Promise<void>;
   setModel(model?: string): Promise<void>;
+  /**
+   * Mid-session flag change (streaming-input mode). Effort is the only flag we
+   * push through today; optional because a fake/older query may not implement it.
+   */
+  applyFlagSettings?(settings: { effortLevel?: string }): Promise<void>;
 }
 
 /** Permission modes the founder setting exposes; mirrors the SDK's PermissionMode subset we use. */
@@ -153,6 +199,12 @@ export function buildClaudeQueryFactory(): ClaudeQueryFactory {
       },
       async setModel(model?: string): Promise<void> {
         return (await load()).setModel(model);
+      },
+      async applyFlagSettings(settings: { effortLevel?: string }): Promise<void> {
+        const query = (await load()) as ClaudeQuery & {
+          applyFlagSettings?: (s: { effortLevel?: string }) => Promise<void>;
+        };
+        await query.applyFlagSettings?.(settings);
       },
     };
   };
