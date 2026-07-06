@@ -8,6 +8,7 @@ import { CodeBlock, MarkdownView } from './markdown-view';
 
 interface FileExplorerPanelProps {
   root?: string;
+  openPath?: string | null;
 }
 
 type EntryMap = Record<string, FileEntry[]>;
@@ -25,6 +26,26 @@ type TreeNodeProps = {
 function parentPath(path: string): string {
   const idx = path.lastIndexOf('/');
   return idx === -1 ? '' : path.slice(0, idx);
+}
+
+function basename(path: string): string {
+  const idx = path.lastIndexOf('/');
+  return idx === -1 ? path : path.slice(idx + 1);
+}
+
+function normalizeOpenPath(path: string | null | undefined): string {
+  return (path ?? '').trim().replace(/^\.\/+/, '').replace(/^\/+/, '').replace(/\/+$/, '');
+}
+
+function ancestorDirs(path: string): string[] {
+  const dirs: string[] = [''];
+  let parent = parentPath(path);
+  const stack: string[] = [];
+  while (parent) {
+    stack.unshift(parent);
+    parent = parentPath(parent);
+  }
+  return dirs.concat(stack);
 }
 
 function joinPath(base: string, name: string): string {
@@ -123,7 +144,7 @@ function TreeNode({ entry, depth, entriesByPath, expanded, selectedPath, onToggl
   );
 }
 
-export function FileExplorerPanel({ root }: FileExplorerPanelProps) {
+export function FileExplorerPanel({ root, openPath }: FileExplorerPanelProps) {
   const [entriesByPath, setEntriesByPath] = useState<EntryMap>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<FileEntry | null>(null);
@@ -173,7 +194,7 @@ export function FileExplorerPanel({ root }: FileExplorerPanelProps) {
     if (!entriesByPath[entry.path]) void loadDir(entry.path);
   }, [entriesByPath, loadDir]);
 
-  const handleSelect = useCallback(async (entry: FileEntry) => {
+  const openEntry = useCallback(async (entry: FileEntry) => {
     if (!root || entry.kind !== 'file') return;
     setSelected(entry);
     setFile(null);
@@ -195,6 +216,69 @@ export function FileExplorerPanel({ root }: FileExplorerPanelProps) {
       setLoadingPath(null);
     }
   }, [root]);
+
+  const handleSelect = useCallback((entry: FileEntry) => {
+    void openEntry(entry);
+  }, [openEntry]);
+
+  useEffect(() => {
+    const targetPath = normalizeOpenPath(openPath);
+    if (!root || !targetPath) return;
+    let cancelled = false;
+
+    const openTarget = async () => {
+      setLoadingPath(targetPath);
+      setError(null);
+      try {
+        const parents = ancestorDirs(targetPath);
+        const loaded: EntryMap = {};
+        let target: FileEntry | null = null;
+        for (const parent of parents) {
+          const listing = await listEntries(root, parent);
+          if (cancelled) return;
+          loaded[parent] = listing.entries;
+          if (parent === parentPath(targetPath)) {
+            target = listing.entries.find((entry) => entry.path === targetPath) ?? null;
+          }
+        }
+
+        setEntriesByPath((current) => ({ ...current, ...loaded }));
+        setExpanded((current) => {
+          const next = new Set(current);
+          for (const parent of parents) {
+            if (parent) next.add(parent);
+          }
+          if (target?.kind === 'dir') next.add(target.path);
+          return next;
+        });
+
+        if (target?.kind === 'dir') {
+          setSelected(target);
+          setFile(null);
+          setDraft('');
+          setSaved('');
+          setPreview(false);
+          if (!loaded[target.path]) {
+            const listing = await listEntries(root, target.path);
+            if (cancelled) return;
+            setEntriesByPath((current) => ({ ...current, [target!.path]: listing.entries }));
+          }
+          return;
+        }
+
+        await openEntry(target ?? { name: basename(targetPath), path: targetPath, kind: 'file' });
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!cancelled) setLoadingPath(null);
+      }
+    };
+
+    void openTarget();
+    return () => {
+      cancelled = true;
+    };
+  }, [openEntry, openPath, root]);
 
   const refreshSelectedParent = useCallback(async () => {
     await loadDir(selected ? parentPath(selected.path) : '');

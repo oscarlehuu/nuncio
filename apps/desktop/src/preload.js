@@ -4,6 +4,9 @@ contextBridge.exposeInMainWorld('nuncioDesktop', {
   marker: 'desktop',
   electron: process.versions.electron,
   notify: (payload) => ipcRenderer.invoke('nuncio:notify', payload),
+  external: {
+    open: (url) => ipcRenderer.invoke('external:open', url),
+  },
   browser: {
     show: (payload) => ipcRenderer.invoke('browser:show', payload),
     navigate: (id, url) => ipcRenderer.invoke('browser:navigate', id, url),

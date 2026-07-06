@@ -66,6 +66,22 @@ describe('FileExplorerPanel', () => {
     expect(listEntries).toHaveBeenCalledWith('/workspace', 'src');
   });
 
+  it('opens a requested source path by expanding its parent folder', async () => {
+    vi.mocked(readFile).mockResolvedValue({
+      path: 'src/app.ts',
+      content: 'export const app = true;',
+      encoding: 'utf8',
+      truncated: false,
+      size: 24,
+    });
+
+    render(<FileExplorerPanel root="/workspace" openPath="src/app.ts" />);
+
+    expect(await screen.findByRole('button', { name: /app\.ts/i })).toBeInTheDocument();
+    expect(readFile).toHaveBeenCalledWith('/workspace', 'src/app.ts');
+    expect(await screen.findByLabelText(/file editor/i)).toHaveValue('export const app = true;');
+  });
+
   it('opens markdown files in preview mode by default with an Edit toggle', async () => {
     render(<FileExplorerPanel root="/workspace" />);
 

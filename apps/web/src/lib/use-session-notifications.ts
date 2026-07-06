@@ -145,6 +145,9 @@ declare global {
       electron?: string;
       notify?: (payload: { title: string; body: string; sessionId: string }) => Promise<unknown> | void;
       browser?: NuncioDesktopBrowserApi;
+      external?: {
+        open: (url: string) => Promise<unknown> | void;
+      };
       servers?: NuncioDesktopServersApi;
       terminal?: NuncioDesktopTerminalApi;
     };

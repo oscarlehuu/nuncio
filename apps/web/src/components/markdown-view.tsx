@@ -4,8 +4,14 @@ import remarkGfm from 'remark-gfm';
 import { Check, Copy } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { splitMarkdownSegments } from '@/lib/markdown-segments';
+import { remarkCodePathLinks } from '@/lib/remark-code-path-links';
+import { resolveTranscriptLinkTarget } from '@/lib/transcript-link-target';
 import { MermaidDiagram } from '@/components/mermaid-diagram';
 import { ChatImage } from '@/components/chat-image';
+
+export type MarkdownLinkClickHandler = (
+  href: string,
+) => boolean | void | Promise<boolean | void>;
 
 interface MarkdownViewProps {
   text: string;
@@ -13,6 +19,7 @@ interface MarkdownViewProps {
   /** While true, only the tail segment re-parses per tick and mermaid in the
    * tail renders as a plain code block until its fence closes. */
   streaming?: boolean;
+  onLinkClick?: MarkdownLinkClickHandler;
 }
 
 /** Trims leading newlines and dedents a fenced code body so it renders cleanly. */
@@ -50,8 +57,8 @@ export function CodeBlock({ language, code }: { language?: string; code: string 
   const displayLang =
     language && language.length > 0 ? language.toUpperCase() : 'TEXT';
   return (
-    <div className="my-2 rounded-md border border-border/40 bg-muted/25 overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/40 bg-muted/30">
+    <div className="my-2.5 rounded-lg border border-border/50 bg-muted/20 shadow-e0 surface-lit overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/40 bg-muted/40">
         <span className="text-ui-sm font-mono text-muted-foreground tracking-wide">
           {displayLang}
         </span>
@@ -64,7 +71,10 @@ export function CodeBlock({ language, code }: { language?: string; code: string 
   );
 }
 
-function markdownComponents(deferMermaid: boolean): ComponentProps<typeof ReactMarkdown>['components'] {
+function markdownComponents(
+  deferMermaid: boolean,
+  onLinkClick?: MarkdownLinkClickHandler,
+): ComponentProps<typeof ReactMarkdown>['components'] {
   return {
     code({ className: cls, children, ...props }) {
       const match = /language-(\w+)/.exec(cls ?? '');
@@ -91,8 +101,30 @@ function markdownComponents(deferMermaid: boolean): ComponentProps<typeof ReactM
       return <>{children}</>;
     },
     a({ href, children }) {
+      const linkHref = typeof href === 'string' ? href : '';
+      const target = resolveTranscriptLinkTarget(linkHref);
+      const isFileLink = target.kind === 'file';
       return (
-        <a href={href} target="_blank" rel="noreferrer noopener">
+        <a
+          href={linkHref}
+          target={isFileLink ? undefined : '_blank'}
+          rel={isFileLink ? undefined : 'noreferrer noopener'}
+          onClick={(event) => {
+            if (!linkHref) return;
+            if (onLinkClick) {
+              const handled = onLinkClick(linkHref);
+              if (handled !== false) {
+                event.preventDefault();
+                event.stopPropagation();
+              }
+              return;
+            }
+            if (isFileLink) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+          }}
+        >
           {children}
         </a>
       );
@@ -114,12 +146,17 @@ function markdownComponents(deferMermaid: boolean): ComponentProps<typeof ReactM
 const MarkdownSegment = memo(function MarkdownSegment({
   text,
   deferMermaid,
+  onLinkClick,
 }: {
   text: string;
   deferMermaid: boolean;
+  onLinkClick?: MarkdownLinkClickHandler;
 }) {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents(deferMermaid)}>
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkCodePathLinks]}
+      components={markdownComponents(deferMermaid, onLinkClick)}
+    >
       {text}
     </ReactMarkdown>
   );
@@ -134,7 +171,7 @@ const MarkdownSegment = memo(function MarkdownSegment({
  * - Streaming-safe: the text is split into fence-aware segments; completed
  *   segments are memoized and only the tail re-parses per reveal tick.
  */
-export function MarkdownView({ text, className, streaming }: MarkdownViewProps) {
+export function MarkdownView({ text, className, streaming, onLinkClick }: MarkdownViewProps) {
   const segments = useMemo(() => splitMarkdownSegments(text), [text]);
   return (
     <div
@@ -163,6 +200,7 @@ export function MarkdownView({ text, className, streaming }: MarkdownViewProps) 
           key={index}
           text={segment}
           deferMermaid={!!streaming && index === segments.length - 1}
+          onLinkClick={onLinkClick}
         />
       ))}
     </div>

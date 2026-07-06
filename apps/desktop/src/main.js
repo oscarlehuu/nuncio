@@ -1,5 +1,5 @@
 const path = require('node:path');
-const { app, BrowserWindow, BrowserView, dialog, ipcMain, Menu, Notification } = require('electron');
+const { app, BrowserWindow, BrowserView, dialog, ipcMain, Menu, Notification, shell } = require('electron');
 const { DaemonSupervisor } = require('./daemon');
 const serverProfiles = require('./server-profiles');
 
@@ -292,6 +292,27 @@ function registerNotifyHandler() {
   });
 }
 
+function normalizeExternalUrl(url) {
+  const value = typeof url === 'string' ? url.trim() : '';
+  if (!/^https?:\/\//i.test(value)) return '';
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+    return parsed.toString();
+  } catch {
+    return '';
+  }
+}
+
+function registerExternalHandlers() {
+  ipcMain.handle('external:open', async (_event, url) => {
+    const normalized = normalizeExternalUrl(url);
+    if (!normalized) throw new Error('External URL must use http or https');
+    await shell.openExternal(normalized);
+    return { ok: true, url: normalized };
+  });
+}
+
 function normalizeBrowserUrl(url) {
   const value = typeof url === 'string' ? url.trim() : '';
   if (!value) return '';
@@ -559,6 +580,7 @@ function registerTerminalHandlers() {
 
 app.whenReady().then(async () => {
   registerNotifyHandler();
+  registerExternalHandlers();
   registerBrowserHandlers();
   registerTerminalHandlers();
   registerServerHandlers();

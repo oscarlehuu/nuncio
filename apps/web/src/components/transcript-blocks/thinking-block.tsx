@@ -1,4 +1,4 @@
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, Sparkles } from 'lucide-react';
 import { useState } from 'react';
 import { useThrottledStreamText } from '@/lib/use-throttled-stream-text';
 import { cn } from '@/lib/utils';
@@ -17,14 +17,20 @@ export function ThinkingBlock({ text, streaming }: ThinkingBlockProps) {
     <div data-testid="thinking-row">
       <button
         type="button"
-        className="group flex w-full items-center gap-1.5 px-1 py-0.5 min-h-[20px] text-left text-muted-foreground"
+        className="group flex w-full items-center gap-1.5 rounded-md px-1.5 py-0.5 min-h-[22px] text-left text-muted-foreground transition-colors hover:bg-muted/40"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        <span className="chat-text-xs">{streaming ? 'Thinking…' : `Thought for ${durationS}s`}</span>
-        {streaming && (
-          <span className="inline-block size-1.5 rounded-full bg-primary animate-pulse" aria-hidden />
-        )}
+        <Sparkles
+          className={cn(
+            'size-3.5 shrink-0',
+            streaming ? 'text-primary animate-pulse' : 'text-muted-foreground/70',
+          )}
+          aria-hidden
+        />
+        <span className="chat-text-xs text-foreground/80">
+          {streaming ? 'Thinking…' : `Thought for ${durationS}s`}
+        </span>
         <span className="ml-auto">
           <ChevronDown
             className={cn(

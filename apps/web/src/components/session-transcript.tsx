@@ -1,7 +1,10 @@
 import { Fragment, memo, useMemo, useRef } from 'react';
+import { Sparkles } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import type { TranscriptImage, ProviderRequestDecision, SessionEvent } from '../lib/api';
 import { transcriptImageSrc } from '../lib/api';
 import { ChatImage } from './chat-image';
+import { ProviderIcon } from './provider-icon';
 import {
   buildTranscriptBlocks,
   workingIndicatorLabel,
@@ -18,6 +21,7 @@ import {
   ErrorBlock,
   UserBubble,
 } from './transcript-blocks/transcript-bubbles';
+import type { MarkdownLinkClickHandler } from './markdown-view';
 
 interface TranscriptProps {
   events: SessionEvent[];
@@ -32,6 +36,27 @@ interface TranscriptProps {
     requestId: string,
     decision: ProviderRequestDecision,
   ) => void | Promise<void>;
+  onLinkClick?: MarkdownLinkClickHandler;
+  /** Provider id (pi/codex/cursor…) — branded glyph shown as the assistant avatar. */
+  provider?: string;
+  /** Opt into the roomy focused-chat layout: assistant avatar gutter + turn rhythm.
+   * Left off for compact previews (grid tiles) so they stay dense. */
+  showAvatar?: boolean;
+}
+
+/** Branded provider glyph as the assistant's avatar — a small lifted chip that
+ * anchors the start of each assistant turn. Falls back to a spark when the
+ * provider is unknown. */
+function AssistantAvatar({ provider }: { provider?: string }) {
+  return (
+    <div className="flex size-[22px] items-center justify-center rounded-lg border border-border/70 bg-card text-foreground/70 shadow-e0 surface-lit">
+      {provider ? (
+        <ProviderIcon providerId={provider} className="size-3" />
+      ) : (
+        <Sparkles className="size-3" aria-hidden />
+      )}
+    </div>
+  );
 }
 
 type RenderItem =
@@ -112,12 +137,14 @@ function UserBlock({
   images,
   sessionId,
   apiBase = '',
+  onLinkClick,
 }: {
   text: string;
   queued?: boolean;
   images?: TranscriptImage[];
   sessionId: string;
   apiBase?: string;
+  onLinkClick?: MarkdownLinkClickHandler;
 }) {
   const hasImages = !!images && images.length > 0;
   return (
@@ -136,9 +163,13 @@ function UserBlock({
       )}
       {(text.length > 0 || !hasImages) && (
         <div
-          className={`max-w-[90%] px-3 py-[var(--chat-msg-py)] rounded-[12px_12px_4px_12px] chat-text-body leading-relaxed bg-muted/25 text-foreground/90 ${queued ? 'opacity-70 border border-dashed border-border' : ''}`}
+          className={cn(
+            'max-w-[88%] px-3.5 py-[var(--chat-msg-py)] rounded-[14px_14px_5px_14px] chat-text-body leading-relaxed',
+            'border border-border/60 bg-card text-foreground shadow-e0 surface-lit',
+            queued && 'opacity-70 border-dashed',
+          )}
         >
-          <UserBubble text={text} />
+          <UserBubble text={text} onLinkClick={onLinkClick} />
           {queued && (
             <div className="mt-1 text-[length:calc(11px*var(--chat-font-scale))] text-muted-foreground">
               Queued — sends when the agent is ready
@@ -150,10 +181,18 @@ function UserBlock({
   );
 }
 
-function AssistantBlock({ text, streaming }: { text: string; streaming?: boolean }) {
+function AssistantBlock({
+  text,
+  streaming,
+  onLinkClick,
+}: {
+  text: string;
+  streaming?: boolean;
+  onLinkClick?: MarkdownLinkClickHandler;
+}) {
   return (
     <div className="chat-text-body leading-relaxed text-foreground">
-      <AssistantBubble text={text} streaming={streaming} />
+      <AssistantBubble text={text} streaming={streaming} onLinkClick={onLinkClick} />
     </div>
   );
 }
@@ -174,6 +213,7 @@ interface RenderItemViewProps {
   pendingRequestIds?: ReadonlySet<string>;
   respondingRequestId?: string | null;
   onRespondProviderRequest?: TranscriptProps['onRespondProviderRequest'];
+  onLinkClick?: MarkdownLinkClickHandler;
 }
 
 /** requestId this item cares about, when it renders interactive state. */
@@ -193,6 +233,7 @@ function RenderItemView({
   pendingRequestIds,
   respondingRequestId,
   onRespondProviderRequest,
+  onLinkClick,
 }: RenderItemViewProps) {
   if (item.type === 'tool-group') {
     return <ToolGroup tools={item.tools} />;
@@ -207,10 +248,17 @@ function RenderItemView({
           images={block.images}
           sessionId={sessionId}
           apiBase={apiBase}
+          onLinkClick={onLinkClick}
         />
       );
     case 'assistant':
-      return <AssistantBlock text={block.text} streaming={streaming && block.streaming} />;
+      return (
+        <AssistantBlock
+          text={block.text}
+          streaming={streaming && block.streaming}
+          onLinkClick={onLinkClick}
+        />
+      );
     case 'tool':
       return (
         <ToolGroup
@@ -287,6 +335,7 @@ const MemoRenderItemView = memo(RenderItemView, (prev, next) => {
   if (prev.apiBase !== next.apiBase) return false;
   if (prev.streaming !== next.streaming) return false;
   if (prev.onRespondProviderRequest !== next.onRespondProviderRequest) return false;
+  if (prev.onLinkClick !== next.onLinkClick) return false;
   const requestId = itemRequestId(next.item);
   if (requestId) {
     const wasPending = prev.pendingRequestIds?.has(requestId) ?? false;
@@ -307,11 +356,16 @@ export const Transcript = memo(function Transcript({
   pendingRequestIds,
   respondingRequestId,
   onRespondProviderRequest,
+  onLinkClick,
+  provider,
+  showAvatar = false,
 }: TranscriptProps) {
   const blocks = useTranscriptBlocks(events);
   const itemCacheRef = useRef(new Map<string, RenderItem>());
   const items = useMemo(() => {
-    const next = groupConsecutiveTools(blocks, itemCacheRef.current);
+    // Queued steers live in the composer's queue panel, not inline — drop them here.
+    const visible = blocks.filter((block) => !(block.kind === 'user' && block.queued));
+    const next = groupConsecutiveTools(visible, itemCacheRef.current);
     itemCacheRef.current = new Map(next.map((item) => [item.key, item]));
     return next;
   }, [blocks]);
@@ -327,31 +381,100 @@ export const Transcript = memo(function Transcript({
     return lastUser === -1 ? items.length : lastUser + 1;
   }, [items, streaming]);
 
+  const isUserItem = (item: RenderItem) =>
+    item.type === 'block' && item.block.kind === 'user';
+
   return (
-    <div className="flex flex-col gap-[var(--chat-gap)] py-2">
-      {items.map((item, i) => (
-        <Fragment key={item.key}>
-          {i === indicatorIndex && <WorkingIndicator label={indicatorLabel} />}
-          {/* content-visibility keeps long-session offscreen blocks unrendered. */}
-          <div className="[content-visibility:auto] [contain-intrinsic-size:auto_60px]">
-            <MemoRenderItemView
-              item={item}
-              sessionId={sessionId}
-              apiBase={apiBase}
-              streaming={streaming}
-              pendingRequestIds={pendingRequestIds}
-              respondingRequestId={respondingRequestId}
-              onRespondProviderRequest={onRespondProviderRequest}
-            />
-          </div>
-        </Fragment>
-      ))}
+    <div className={cn('flex flex-col py-2', !showAvatar && 'gap-[var(--chat-gap)]')}>
+      {items.map((item, i) => {
+        const view = (
+          <MemoRenderItemView
+            item={item}
+            sessionId={sessionId}
+            apiBase={apiBase}
+            streaming={streaming}
+            pendingRequestIds={pendingRequestIds}
+            respondingRequestId={respondingRequestId}
+            onRespondProviderRequest={onRespondProviderRequest}
+            onLinkClick={onLinkClick}
+          />
+        );
+        const isUser = isUserItem(item);
+        // First agent-side row after a user message (or the very first row)
+        // begins a new assistant turn and earns the avatar.
+        const turnStart = !isUser && (i === 0 || isUserItem(items[i - 1]));
+        // Extra breathing room separates exchanges without loosening tight
+        // in-turn rows (thinking → tools → answer stay grouped).
+        const rowMargin = !showAvatar
+          ? undefined
+          : isUser
+            ? 'mt-4 first:mt-0'
+            : turnStart
+              ? 'mt-3 first:mt-0'
+              : 'mt-[var(--chat-gap)]';
+        return (
+          <Fragment key={item.key}>
+            {i === indicatorIndex && (
+              <IndicatorRow label={indicatorLabel} withGutter={showAvatar} />
+            )}
+            {/* content-visibility keeps long-session offscreen blocks unrendered. */}
+            <div
+              className={cn(
+                '[content-visibility:auto] [contain-intrinsic-size:auto_60px]',
+                rowMargin,
+              )}
+            >
+              {showAvatar && !isUser ? (
+                <div className="flex gap-2.5">
+                  <div className="w-[22px] shrink-0 pt-0.5">
+                    {turnStart && <AssistantAvatar provider={provider} />}
+                  </div>
+                  <div className="min-w-0 flex-1">{view}</div>
+                </div>
+              ) : (
+                view
+              )}
+            </div>
+          </Fragment>
+        );
+      })}
       {streaming && indicatorIndex >= items.length && (
-        <WorkingIndicator label={indicatorLabel} />
+        <IndicatorRow
+          label={indicatorLabel}
+          withGutter={showAvatar}
+          avatar={showAvatar}
+          provider={provider}
+        />
       )}
     </div>
   );
 });
+
+/** Working indicator, optionally slotted into the assistant avatar column so it
+ * lines up with the agent's other rows (and shows the avatar on a fresh turn). */
+function IndicatorRow({
+  label,
+  withGutter,
+  avatar,
+  provider,
+}: {
+  label: string;
+  withGutter?: boolean;
+  avatar?: boolean;
+  provider?: string;
+}) {
+  if (!withGutter) return <WorkingIndicator label={label} />;
+  return (
+    <div className="flex gap-2.5">
+      <div className="w-[22px] shrink-0 pt-0.5">
+        {avatar && <AssistantAvatar provider={provider} />}
+      </div>
+      <div className="min-w-0 flex-1">
+        <WorkingIndicator label={label} />
+      </div>
+    </div>
+  );
+}
 
 /** @deprecated Use buildTranscriptBlocks — kept for test back-compat. */
 export function buildMessages(events: SessionEvent[]) {
