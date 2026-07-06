@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'bun:test';
 import { isAuthorizedTerminalUpgrade } from '../../../src/terminal/terminal.ws';
 import type { TokenValidator } from '../../../src/auth/auth-request';
+import type { DeviceValidator } from '../../../src/auth/device-token';
 
 const tokens: TokenValidator = {
   isValidToken: (candidate) => candidate === 'secret',
+};
+
+const devices: DeviceValidator = {
+  verifyDevice: (id, secret) => id === 'dev1' && secret === 'good',
 };
 
 describe('isAuthorizedTerminalUpgrade', () => {
@@ -63,5 +68,29 @@ describe('isAuthorizedTerminalUpgrade', () => {
       headers: { cookie: 'nuncio_token=secret' },
     };
     expect(await isAuthorizedTerminalUpgrade(req)).toBe(false);
+  });
+
+  it('accepts a remote upgrade carrying a valid nd1 device bearer', async () => {
+    const req = {
+      socket: { remoteAddress: '192.168.1.20' },
+      headers: { authorization: 'Bearer nd1.dev1.good' },
+    };
+    expect(await isAuthorizedTerminalUpgrade(req, tokens, undefined, devices)).toBe(true);
+  });
+
+  it('refuses an nd1 device bearer whose secret no longer verifies (revoked/rotated-out)', async () => {
+    const req = {
+      socket: { remoteAddress: '192.168.1.20' },
+      headers: { authorization: 'Bearer nd1.dev1.stale' },
+    };
+    expect(await isAuthorizedTerminalUpgrade(req, tokens, undefined, devices)).toBe(false);
+  });
+
+  it('ignores the device branch entirely when no device validator is wired', async () => {
+    const req = {
+      socket: { remoteAddress: '192.168.1.20' },
+      headers: { authorization: 'Bearer nd1.dev1.good' },
+    };
+    expect(await isAuthorizedTerminalUpgrade(req, tokens)).toBe(false);
   });
 });

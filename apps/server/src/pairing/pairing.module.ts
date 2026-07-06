@@ -1,0 +1,12 @@
+import { Module } from '@nestjs/common';
+import { DevicesModule } from '../devices/devices.module';
+import { CandidateUrlsService } from './candidate-urls.service';
+import { PairingController } from './pairing.controller';
+import { PairingService } from './pairing.service';
+
+@Module({
+  imports: [DevicesModule],
+  controllers: [PairingController],
+  providers: [PairingService, CandidateUrlsService],
+})
+export class PairingModule {}

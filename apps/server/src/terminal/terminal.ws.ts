@@ -3,7 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { TerminalService } from './terminal.service';
 import type { AuthRequestLike, TokenValidator } from '../auth/auth-request';
-import { isAuthorizedUpgrade, type RemoteTrust } from '../auth/upgrade-auth';
+import type { DeviceValidator, RevocableDeviceValidator } from '../auth/device-token';
+import { DeviceSocketRegistry } from '../auth/device-socket-registry';
+import { authorizeUpgrade, isAuthorizedUpgrade, type RemoteTrust } from '../auth/upgrade-auth';
 
 interface TerminalClientMessage {
   type?: unknown;
@@ -20,8 +22,9 @@ export function isAuthorizedTerminalUpgrade(
   req: AuthRequestLike,
   authTokens?: TokenValidator,
   trust?: RemoteTrust,
+  devices?: DeviceValidator,
 ): Promise<boolean> {
-  return isAuthorizedUpgrade(req, authTokens, trust);
+  return isAuthorizedUpgrade(req, authTokens, trust, devices);
 }
 
 export function attachTerminalWebSocketServer(
@@ -29,8 +32,18 @@ export function attachTerminalWebSocketServer(
   terminalService: TerminalService,
   authTokens?: TokenValidator,
   trust?: RemoteTrust,
+  devices?: RevocableDeviceValidator,
 ): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
+
+  // Revocation must sever the live sockets a device opened, not just block future
+  // upgrades; the registry maps each device to its open sockets for that purpose.
+  const deviceSockets = new DeviceSocketRegistry();
+  const unsubscribeRevoke = devices?.onRevoke((deviceId) => deviceSockets.closeForDevice(deviceId));
+  if (unsubscribeRevoke) {
+    wss.on('close', unsubscribeRevoke);
+  }
+  const pendingDeviceId = new WeakMap<WebSocket, string>();
 
   httpServer.on('upgrade', (req, socket, head) => {
     const path = new URL(req.url ?? '/', 'http://localhost').pathname;
@@ -39,13 +52,16 @@ export function attachTerminalWebSocketServer(
     }
 
     const remoteAddress = (socket as unknown as { remoteAddress?: string }).remoteAddress;
-    void isAuthorizedTerminalUpgrade({ headers: req.headers, socket: { remoteAddress } }, authTokens, trust)
-      .then((authorized) => {
-        if (!authorized) {
+    void authorizeUpgrade({ headers: req.headers, socket: { remoteAddress } }, authTokens, trust, devices)
+      .then((authz) => {
+        if (!authz.authorized) {
           socket.destroy();
           return;
         }
         wss.handleUpgrade(req, socket, head, (ws) => {
+          if (authz.deviceId) {
+            pendingDeviceId.set(ws, authz.deviceId);
+          }
           wss.emit('connection', ws, req);
         });
       })
@@ -55,10 +71,24 @@ export function attachTerminalWebSocketServer(
   wss.on('connection', (ws) => {
     let terminalId: string | null = null;
 
+    const deviceId = pendingDeviceId.get(ws);
+    if (deviceId) {
+      pendingDeviceId.delete(ws);
+      deviceSockets.add(deviceId, ws);
+    }
+
     const killTerminal = () => {
       if (!terminalId) return;
       terminalService.kill(terminalId);
       terminalId = null;
+    };
+
+    // Socket-level teardown: kill the pty AND untag the socket so a later revoke
+    // of this device never touches an already-gone connection. Distinct from
+    // killTerminal(), which also fires mid-session on a `start` restart.
+    const onSocketClosed = () => {
+      if (deviceId) deviceSockets.remove(deviceId, ws);
+      killTerminal();
     };
 
     ws.on('message', (raw) => {
@@ -107,8 +137,8 @@ export function attachTerminalWebSocketServer(
       }
     });
 
-    ws.on('close', killTerminal);
-    ws.on('error', killTerminal);
+    ws.on('close', onSocketClosed);
+    ws.on('error', onSocketClosed);
   });
 
   return wss;

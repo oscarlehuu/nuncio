@@ -94,7 +94,7 @@ let server: Server | null = null;
 
 function startServer(fake: SessionRelayService, options?: SessionsWsOptions): Promise<number> {
   server = createServer();
-  attachSessionsWebSocketServer(server, fake, undefined, undefined, options);
+  attachSessionsWebSocketServer(server, fake, undefined, undefined, undefined, options);
   return new Promise((resolve) => {
     server!.listen(0, '127.0.0.1', () => {
       resolve((server!.address() as AddressInfo).port);

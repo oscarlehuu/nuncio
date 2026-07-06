@@ -64,6 +64,17 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS devices (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  platform TEXT,
+  secret_hash TEXT NOT NULL,
+  prev_secret_hash TEXT,
+  created_at INTEGER NOT NULL,
+  last_seen_at INTEGER,
+  revoked_at INTEGER
+);
 `;
 
 @Global()

@@ -4,9 +4,10 @@ import { AuthController } from './auth.controller';
 import { AuthGuard } from './auth.guard';
 import { AuthTokenService } from './auth-token.service';
 import { TailscaleModule } from '../tailscale/tailscale.module';
+import { DevicesModule } from '../devices/devices.module';
 
 @Module({
-  imports: [TailscaleModule],
+  imports: [TailscaleModule, DevicesModule],
   controllers: [AuthController],
   providers: [AuthTokenService, { provide: APP_GUARD, useClass: AuthGuard }],
   exports: [AuthTokenService],
