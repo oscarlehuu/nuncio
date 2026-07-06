@@ -15,8 +15,9 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 - **Delegate tasks** — create a session with a prompt; the agent runs in-process and streams output as events
 - **Per-session provider + model** — choose the agent provider (`pi` / `codex` / `cursor`) and the exact model (e.g. `codex:gpt-5.5`, `cursor:composer-2`, `anthropic:claude-sonnet-4`) per session; both are stored on the session and wired through to the provider runtime
 - **Steer mid-task** — send follow-up messages that continue the same agent conversation when the provider supports it
+- **Multitasking subagents** — fan out prompts from an existing session into provider-neutral child tasks; each child becomes its own session, inherits the parent provider/model/workspace unless overridden, and waits for review when finished
 - **Pause / archive / restore / delete** — suspend a running session, retire it to the Archived tab, restore it back to IDLE, or permanently delete it; a session FSM enforces valid transitions and a confirm dialog guards deletes
-- **Real-time + replay** — WebSocket relay (subscribe/steer on one duplex channel, gap-free resume via the event-log cursor — see [docs/ws-relay-contract.md](docs/ws-relay-contract.md)) plus the SSE stream and cursor replay endpoints for API consumers
+- **Real-time + replay** — WebSocket relay (subscribe/steer on one duplex channel, gap-free resume via the event-log cursor — see [docs/ws-relay-contract.md](docs/ws-relay-contract.md)) plus the SSE stream and cursor replay endpoints for API consumers; live bursts are batched client-side so long answers stay smooth
 - **Mobile-first PWA** — installable on iPhone via Tailscale HTTPS; standalone dark UI, safe-area aware
 - **Interactive browser dock** — desktop uses a real embedded Electron browser view with a persistent Nuncio profile; the web/PWA surface does not expose a browser dock
 - **Self-hosted** — your machine, your SQLite, your credentials; nothing leaves your tailnet
@@ -95,6 +96,8 @@ cp .env.example .env
 
 When you run `bun run dev` from a git worktree, the backend `dev`/`start` scripts auto-discover the main/primary checkout's `.env` first, so sessions/settings still come from the shared SQLite directory. Set `NUNCIO_ENV_FILE=/absolute/path/to/.env` when you intentionally want a different env file for one run.
 
+Long-running sessions have a stall watchdog: if a provider stays `RUNNING` without emitting any session event for 30 minutes, Nuncio disposes that runtime, records `runtime_stalled`, moves the session back to `IDLE`, and drains any queued steer so you can resume from the durable event log. Override with `NUNCIO_STALLED_RUN_FORCE_IDLE_MS=<milliseconds>`; set it to `0` to disable.
+
 Migrate existing data once (example if your sessions were under `apps/server/data/`):
 
 ```bash
@@ -136,6 +139,16 @@ Nuncio checks the installed Pi and Codex CLI versions against their public npm p
 - Set `NUNCIO_PROVIDER_UPDATE_CHECKS=0` to disable checks and notifications. Set `NUNCIO_PI_BIN` or `NUNCIO_CODEX_BIN` when the CLI is not on `PATH` or multiple installs exist.
 
 ### Desktop browser profile
+
+Agents and API clients use one stable browser contract with `target` set to
+`auto`, `in_app`, or `external`. The default target is configurable in
+**Settings -> MCP & Tools -> Default browser** via
+`NUNCIO_BROWSER_DEFAULT_TARGET`; the shipped default is `auto`, which prefers
+the desktop in-app browser when the Electron shell is connected, then falls back
+to the Nuncio-owned Chrome CDP browser. Provider-specific adapters (Pi custom
+tools, Cursor local custom tools, and Codex dynamic tools) receive it through the
+shared `AgentRuntimeTools` registry instead of implementing their own browser
+behavior.
 
 The browser dock is a desktop-only native Electron `BrowserView` embedded in the
 session view. It uses Electron's persistent `persist:nuncio-browser` partition,
@@ -224,11 +237,14 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 ## Architecture
 
 - **Agent providers:** Pi SDK, Codex app-server, and Cursor SDK (plus a `NUNCIO_FORCE_MOCK=1`-gated Mock for testing) behind a common `AgentProvider` interface; `AgentRegistry` selects per session. Pi auth via the SDK's `AuthStorage` at `~/.pi/agent`; Codex auth via the local `codex` CLI login; Cursor auth via `CURSOR_API_KEY`. See [docs/system-architecture.md](docs/system-architecture.md).
+- **Agent runtime tools:** `AgentToolRegistry` binds per-session tools such as browser control into `AgentRunContext.tools`; providers adapt that once into Pi `customTools`, Cursor `local.customTools`, or Codex `dynamicTools`.
 - **Provider CLI updates:** Pi and Codex version checks run best-effort against public package metadata, surface optional notifications, and only run update commands after a user clicks Update.
 - **Backend:** NestJS (`apps/server`) on port 3000; after `bun run build`, it also serves `apps/web/dist` at `/` while keeping `/api/*` for JSON routes
 - **Frontend:** Vite + React + Tailwind + shadcn/ui (`apps/web`) on port 5173 in dev/preview (`NUNCIO_WEB_PORT` overrides dev/preview; `NUNCIO_API_ORIGIN` overrides the `/api` proxy target)
 - **Browser dock:** desktop-only Electron `BrowserView` over the React viewport with a persistent app profile; web/PWA does not expose a browser dock
 - **Persistence:** SQLite (`bun:sqlite`) in `data/nuncio.db` — sessions (with `provider`, `model`, and provider runtime state), append-only event log, and a `settings` table for runtime-configurable env overrides (secrets encrypted at rest)
+- **Settings UI:** Cursor-style sectioned settings page with search, provider/source-control connection rows, MCP/tool defaults, local agent defaults, workspace paths, remote access, and advanced controls
+- **Task queue + subagents:** durable `/api/tasks` queue with `parentSessionId` links for multitasking child agents; the session composer can fan out via its multitask button or `/multitask <prompt>`, and `NUNCIO_TASK_CONCURRENCY` caps how many queued tasks/subagents run at once
 - **Auth:** Tailscale (network) + static app token (planned)
 - **Distribution:** Open source — friends/colleagues self-host on their own Linux/macOS machines
 
@@ -256,13 +272,24 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 | POST | `/api/sessions/:id/archive` | Archive session (recoverable via `restore`) |
 | POST | `/api/sessions/:id/restore` | Restore an archived session → IDLE |
 | DELETE | `/api/sessions/:id` | Permanently delete an archived session + its event log |
+| GET | `/api/tasks?parentSessionId=` | List durable queued/running/finished tasks, optionally filtered to child subagents of a parent session |
+| POST | `/api/tasks` | Queue a standalone task `{ "prompt": "...", "provider?": "pi\|codex\|cursor", "model?": "...", "projectPath?": "/abs/repo", "useWorktree?": true }` |
+| POST | `/api/tasks/multitask` | Fan out child subagent tasks from a parent session `{ "parentSessionId": "...", "prompts": ["..."], "provider?": "...", "model?": "...", "cleanupPolicy?": "after-review\|manual\|never" }`; omitted provider/model/workspace inherit from the parent session or subagent defaults |
+| POST | `/api/tasks/:id/reviewed` | Mark a finished child subagent task as reviewed so cleanup policy can act on it |
+| POST | `/api/tasks/:id/cancel` | Cancel a queued task before it starts |
+| POST | `/api/tasks/:id/retry` | Clone a finished task back into the queue |
+| DELETE | `/api/tasks/:id` | Delete a terminal task row |
 | GET | `/api/models` | Model catalog (aggregated from available providers, including per-provider `capabilities`) |
 | GET | `/api/provider-updates` | Check Pi/Codex CLI versions and return optional update metadata |
 | POST | `/api/provider-updates/:provider/update` | Run an allowlisted user-triggered update for `pi` or `codex` when supported |
-| GET | `/api/settings` | List all settings (secrets masked, never raw) |
+| GET | `/api/settings` | List all settings with section categories (secrets masked, never raw) |
 | PUT | `/api/settings/:key` | Update a setting `{ "value": "..." }` (encrypts secrets, busts provider caches) |
 | DELETE | `/api/settings/:key` | Clear a setting (falls back to env/default) |
 | GET | `/api/fs/dirs?path=` | Server-side directory browser (defaults to `$HOME`); used by the folder picker |
+| POST | `/api/sessions/:id/browser/open` | Open the session browser `{ "url?": "https://example.com", "target?": "auto\|in_app\|external" }`; `auto` prefers the desktop in-app browser when connected and falls back to the Nuncio-owned CDP browser |
+| GET | `/api/sessions/:id/browser/state?target=auto\|in_app\|external` | Return current browser URL/title/loading state plus the resolved target |
+| GET | `/api/sessions/:id/browser/screenshot?target=auto\|in_app\|external` | Return a PNG screenshot from the selected session browser |
+| POST | `/api/sessions/:id/browser/input` | Send browser input `{ "type": "click\|text\|key\|scroll", ..., "target?": "auto\|in_app\|external" }` |
 | POST | `/api/push/register` | Register a device Expo push token `{ "token": "...", "platform?": "ios\|android", "deviceName?": "..." }`; the server pushes on session finish / needs-input / error |
 | POST | `/api/push/unregister` | Remove a device push token `{ "token": "..." }` |
 

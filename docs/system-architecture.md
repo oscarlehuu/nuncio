@@ -12,6 +12,9 @@ apps/server/src/agents/
   agents.base-provider.ts    BaseAgentProvider — template-method run/steer + shared event/error handling
   agents.registry.ts         AgentRegistry — resolves providers, availability, default
   agents.module.ts           Nest wiring
+  tools/
+    agent-tool-registry.ts   Per-session runtime tools exposed to providers
+    *-runtime-tools.adapter.ts Provider adapters for Pi/Cursor/Codex tool formats
   providers/
     pi-agent.provider.ts     Pi SDK (createAgentSession, AuthStorage, ModelRegistry)
     codex-app-server.client.ts  JSON-RPC client for `codex app-server`
@@ -69,6 +72,20 @@ interface AgentProvider {
 `AgentRunContext.attachments?: AgentAttachment[]` carries `{ kind: 'image', mimeType, data }` (base64) into a run/steer for providers that declare `images`.
 
 `BaseAgentProvider` (`agents.base-provider.ts`) implements the shared `run`/`steer` orchestration (status RUNNING → user/steer_message → `executePrompt()` → status IDLE, plus error → ERROR) via a template method. Concrete providers implement only `executePrompt()`, `isAvailable()`, `listModels()`, and (optionally) `dispose()`/`interrupt()`/`setModel()`.
+
+### Runtime tools
+
+`AgentRunContext.tools?: AgentRuntimeTools` is the provider-neutral tool lane. `SessionsService` asks `AgentToolRegistry.forSession(session.id)` for a session-bound toolset before every run/steer. The registry binds private session state (for example the browser `sessionId`) before tools reach the model, so provider adapters expose only safe input schemas.
+
+Current tool wiring:
+
+| Provider | Engine surface | Adapter |
+|----------|----------------|---------|
+| Pi | `createAgentSession({ customTools })` | `buildPiCustomTools(..., context.tools)` |
+| Cursor | SDK `local.customTools` on `Agent.create` and `agent.send` | `buildCursorCustomTools(context.tools)` |
+| Codex | app-server `dynamicTools` on new `thread/start` plus `item/tool/call` responses | `buildCodexDynamicTools` / `executeCodexRuntimeTool` |
+
+The browser tool contract is the first runtime tool family. When a tool call omits `target`, `BrowserToolService` reads `NUNCIO_BROWSER_DEFAULT_TARGET` from Settings; the shipped default is `auto`, which chooses desktop in-app browser first, then the Nuncio-owned external CDP browser. Future MCP/tool families should add one registry factory, one provider adapter mapping, and any user-facing defaults under Settings -> MCP & Tools, not provider-specific branches in `SessionsService`.
 
 ### Capabilities (invariants)
 
@@ -209,6 +226,40 @@ Session FSM: `CREATED → RUNNING → IDLE | ERROR | PAUSED`; `IDLE/PAUSED → R
 - **`PATCH /api/sessions/:id/model`** (body `{ model, options? }`) → `SessionsService.setSessionModel(id, model, options)`. **Order invariant:** when `capabilities.modelSwitch === 'in-session' && provider.setModel`, the live switch (`provider.setModel`) runs **BEFORE** persisting the row via `sessions.updateModel(...)`. NEVER persist the model row before the live switch — a failed live switch must not leave the DB pointing at a model the running session never adopted.
 - **Attachments** are threaded through `POST /api/sessions` (create) and `POST /api/sessions/:id/steer` as `attachments?: AgentAttachment[]`, passed into `run`/`steer` via `AgentRunContext.attachments`.
 - **Body limit:** `main.ts` sets the Nest `json`/`urlencoded` body limit to `25mb` via `app.useBodyParser(...)` so base64 image attachments fit. Native Nest body-parser config is used (not `import 'express'`) because `express` is only a transitive dep and is not resolvable as a bare specifier under Bun's isolated module store.
+
+## Task queue and multitasking subagents
+
+`apps/server/src/tasks/` owns the durable task queue. Standalone tasks and child
+subagents share one `tasks` table and one FIFO pump; `NUNCIO_TASK_CONCURRENCY`
+caps how many queued rows can be `RUNNING` at once. A child subagent is just a
+task row with:
+
+- `role = 'subagent'`
+- `parent_session_id = <session id that started multitasking>`
+- optional `cleanup_policy` (`after-review`, `manual`, `never`)
+- `review_state = 'awaiting_review'` once the child finishes as `DONE` or `FAILED`
+
+`POST /api/tasks/multitask` is the Cursor-style fan-out entrypoint. It accepts a
+`parentSessionId` plus one or more prompts, creates provider-neutral child tasks,
+and returns those task rows. The current parent session is not counted as a task
+queue slot, so starting multitasking can launch child work even while the parent
+session is already `RUNNING`. Child tasks inherit provider/model/model options,
+workspace, project path, and branch from the parent session unless the request
+or `NUNCIO_SUBAGENT_PROVIDER` / `NUNCIO_SUBAGENT_MODEL` overrides them. If a
+project path is available, children default to `useWorktree: true` so each child
+gets an isolated generated worktree.
+
+The web composer triggers the same endpoint explicitly: toggling the multitask
+button makes the next text prompt a child task, and `/multitask <prompt>` does
+the same without changing the default queue/steer behavior. This is independent
+of a provider's live-steer capability; Pi can live-steer and still spawn child
+tasks on demand.
+
+Review and cleanup are intentionally separated. `POST /api/tasks/:id/reviewed`
+marks a terminal child task reviewed; automatic destructive cleanup is not run
+from this state yet. Future cleanup workers should key off `role`,
+`review_state`, and `cleanup_policy` rather than inferring intent from `DONE`
+alone.
 
 ## App bootstrap (`main.ts`)
 
@@ -384,7 +435,21 @@ apps/server/src/hub/
 
 **Tests.** `apps/server/test/unit/web-static-assets.spec.ts` (bun test) uses a temp fixture dist to prove: (a) app route → `index.html`/`text/html`, (b) static asset served, (c) `/api` route stays on the Nest handler even when a matching static file exists, (d) missing `/api` route → JSON 404 (not HTML), (e) dist absent → app still boots and `/api` works.
 
-## Persistent browser profile dock
+## Browser target routing and dock
+
+The server owns a provider-neutral browser tool contract in
+`apps/server/src/browser/browser-tool.service.ts`. Agents should call stable tool
+names (`browser_open`, `browser_get_state`, `browser_screenshot`,
+`browser_click`, `browser_type`, `browser_key`, `browser_scroll`) and pass
+`target: "auto" | "in_app" | "external"` only when they need to override the
+default. `auto` resolves per session: keep using the previously selected backend
+when one exists, otherwise prefer `in_app` when the desktop backend is connected
+and fall back to `external`.
+
+`external` wraps the existing Chrome/CDP `BrowserService` and uses a
+Nuncio-owned profile, never the user's daily Chrome profile. `in_app` is an
+adapter boundary for the Electron-hosted browser; it can be connected by the
+desktop shell without changing provider-specific MCP/custom-tool adapters.
 
 `BrowserPanel` (`apps/web/src/components/browser-panel.tsx`) is desktop-only. If
 `window.nuncioDesktop?.browser` exists, the panel asks the Electron main process
@@ -906,16 +971,24 @@ The forge layer (`apps/server/src/forges/`) exposes a lightweight connection-sta
 
 ### Settings UI grouping
 
-`apps/web/src/components/settings-view.tsx` (props unchanged: `{ settings, onUpdate, onClear, onBack }`) renders the catalog-driven `provider`-category settings as per-provider rows grouped into three sections:
+`apps/web/src/components/settings-view.tsx` (props unchanged: `{ settings, onUpdate, onClear, onBack }`) renders a Cursor-style settings shell: a left `SettingsSectionNav`, a search box, and a single active content pane. The section list is:
 
+- **General** → legacy catch-all keys that do not have a narrower category.
+- **Appearance** → local-only UI preferences (`AppearanceSettingsSection`, not server settings).
 - **Providers** → AI agents `cursor`, `pi`, `codex`, plus the Provider CLI update section.
 - **Source Control** → `github`, `gitlab`.
-- **General** → non-provider keys (e.g. `NUNCIO_PROJECT_ROOTS`, `NUNCIO_WORKSPACES_DIR`) via the existing `SettingRow`.
+- **MCP & Tools** → provider-neutral tool defaults such as `NUNCIO_BROWSER_DEFAULT_TARGET`.
+- **Agents** → provider-neutral local task/subagent defaults such as `NUNCIO_TASK_CONCURRENCY`, `NUNCIO_SUBAGENT_PROVIDER`, `NUNCIO_SUBAGENT_MODEL`, and `NUNCIO_SUBAGENT_CLEANUP_POLICY`.
+- **Workspaces** → local project/worktree paths such as `NUNCIO_PROJECT_ROOTS` and `NUNCIO_WORKSPACES_DIR`.
+- **Remote access** → access token, Tailscale status/trust controls, and network settings such as `NUNCIO_HUB_MODE`.
+- **Advanced** → lower-frequency machine controls such as provider update checks.
 
-Each provider row is a single line (monochrome brand glyph + name + status subtitle + right-aligned pill button). Rows are **collapsed by default**; clicking Manage/Connect toggles `aria-expanded` and reveals that provider's underlying setting keys using the unchanged `SettingRow` component (`apps/web/src/components/setting-row.tsx`), preserving all edit/save/clear/mask/source-badge behavior.
+Each provider row is a single line (monochrome brand glyph + name + status subtitle + right-aligned pill button). Rows are **collapsed by default**; clicking Manage/Connect toggles `aria-expanded` and reveals that provider's underlying setting keys using the unchanged `SettingRow` component (`apps/web/src/components/setting-row.tsx`), preserving all edit/save/clear/mask/source-badge behavior. `SettingRow` also renders `SettingDto.options` as finite option buttons for defaults like the browser target.
+
+Search spans provider names, provider setting labels/descriptions, categorized server settings, and Remote access terms such as Tailscale/trust. Selecting a section clears the search so navigation returns to a normal single-pane view.
 
 - **Source Control** subtitle/button derive from `GET /api/forges`: `connected && login` → "Connected as <login>" + "Manage"; `connected && !login` → "Connected" + "Manage"; not connected → provider description + "Connect". The button is "Manage" when connected by **either** method, "Connect" otherwise.
-- When connected, the subtitle appends the active auth method via `sourceControlAuthMethodSuffix(providerId, method)` (`apps/web/src/components/settings-view.tsx:56`): `method==='token'` → ` · via token`; `method==='cli'` → ` · via gh CLI` (github) or ` · via glab CLI` (gitlab). E.g. a CLI-authed row reads "Connected as oscarlehuu · via gh CLI". `method` is added to the `ForgeStatusDto` type in `apps/web/src/lib/forge-status-api.ts`.
+- When connected, the subtitle appends the active auth method via `sourceControlAuthMethodSuffix(providerId, method)`: `method==='token'` → ` · via token`; `method==='cli'` → ` · via gh CLI` (github) or ` · via glab CLI` (gitlab). E.g. a CLI-authed row reads "Connected as oscarlehuu · via gh CLI". `method` is added to the `ForgeStatusDto` type in `apps/web/src/lib/forge-status-api.ts`.
 - **AI providers** derive connected from the primary credential setting's `hasValue` (cursor→`CURSOR_API_KEY`, pi→`PI_AGENT_DIR`, codex→`NUNCIO_CODEX_BIN`); button is always "Manage".
 - Status is fetched internally on mount (`fetchForgeStatus()` in `apps/web/src/lib/forge-status-api.ts`, `GET /api/forges`) and **defaults to `[]` on error** so the view renders without a server (important for tests). Initial render does not block on the fetch.
 - Brand glyphs come from `ProviderIcon` (`apps/web/src/components/provider-icon.tsx`); `GitHubIcon`/`GitLabIcon` use simple-icons paths with `fill="currentColor"` so they adapt to light/dark, registered in `SVG_BY_PROVIDER`.
@@ -1058,6 +1131,12 @@ So the committed prefix is NOT frozen just because more events arrive. NEVER cac
 - NEVER change `buildTranscriptBlocks`' signature or output; the incremental path must, at every prefix length `k`, deep-equal `buildTranscriptBlocks(events.slice(0, k))`.
 
 **Tests.** `apps/web/src/lib/use-transcript-blocks.spec.ts` proves equivalence: for a battery of sequences (delta streaming, interleaved thinking, concurrent tool reach-back, user_input request/resolve, interactive tool, provider_request with and without a prior request, steer_message, a mixed multi-turn session ending in a streaming tail, and a session-switch RESET) it appends events one at a time and asserts each prefix equals `buildTranscriptBlocks(events.slice(0, k))`. Existing `transcript-build-blocks.spec.ts` cases remain green.
+
+### Streaming smoothness + stalled-run recovery
+
+- **Client event bursts are frame-batched.** `apps/web/src/lib/use-session-stream.ts` and `apps/mobile/src/lib/use-session-transcript.ts` update `sinceRef` immediately for every pushed event, but buffer React state writes until the next animation frame. This keeps gap-free resume semantics while avoiding a render per token burst.
+- **Provider previews are throttled.** Providers call `BaseAgentProvider.touchPreview()` instead of writing `sessions.touchPreview()` directly. The first preview persists immediately, rapid token updates coalesce, and the final preview flushes when the run ends.
+- **Silent stalled runs become resumable.** `SessionsService` resets a per-session watchdog on every live event while status is `RUNNING`. If no event arrives for `NUNCIO_STALLED_RUN_FORCE_IDLE_MS` (default 30 minutes), it disposes the provider runtime, appends `runtime_stalled`, transitions to `IDLE`, and drains queued steers. `0` disables the watchdog. Sessions with pending input are not force-idled; their watchdog is rescheduled instead.
 
 ## Client-side appearance preferences
 
