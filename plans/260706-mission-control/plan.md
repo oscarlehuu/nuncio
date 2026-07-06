@@ -9,6 +9,10 @@ founder attention, not agent capacity. A true ADE is an **attention router**: ev
 either raises decisions-per-minute-of-attention or feeds a rung that does. The cockpit metaphor
 is literal — autopilot (loops), heartbeat, radar (attention queue), fuel gauges (budgets),
 flight recorder (timeline), chief-of-staff (dispatcher).
+**Detail:** this file stays thin on purpose (sequencing + decisions). The full design material
+per rung — loop anatomy and families, heartbeat layers, attention-queue ranking, fleet health,
+dispatcher v1→v2 — lives in [cockpit-map.md](./cockpit-map.md); each rung's phase doc distills
+from there when the rung starts (first: [phase-1-verify-feedback.md](./phase-1-verify-feedback.md)).
 
 ## The primitive ladder
 
