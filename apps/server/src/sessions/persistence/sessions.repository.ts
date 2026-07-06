@@ -61,6 +61,9 @@ function toDto(row: SessionRow): SessionDto {
     supportsSteerWhileRunning: false,
     supportsImages: false,
     pendingInput: false,
+    parentSessionId: row.parent_session_id ?? null,
+    originTaskId: row.origin_task_id ?? null,
+    priorSessionId: row.prior_session_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -108,6 +111,16 @@ export class SessionsRepository {
     return row ? toDto(row) : null;
   }
 
+  /** Direct tree children of a session, oldest first (insertion order on a created_at tie). */
+  childrenOf(parentSessionId: string): SessionDto[] {
+    const rows = this.database.db
+      .prepare<SessionRow, [string]>(
+        'SELECT * FROM sessions WHERE parent_session_id = ? ORDER BY created_at ASC, rowid ASC',
+      )
+      .all(parentSessionId);
+    return rows.map(toDto);
+  }
+
   create(input: CreateSessionDto): SessionDto {
     const now = Date.now();
     const id = input.id ?? uuidv4().slice(0, 8);
@@ -135,6 +148,9 @@ export class SessionsRepository {
       pull_request_number: null,
       pull_request_state: null,
       forge_status: 'none',
+      parent_session_id: input.parentSessionId ?? null,
+      origin_task_id: input.originTaskId ?? null,
+      prior_session_id: null,
       created_at: now,
       updated_at: now,
     };
@@ -154,6 +170,7 @@ export class SessionsRepository {
         modelOptions?: ModelOptionsMap | null;
         projectPath?: string | null;
         branch?: string | null;
+        priorSessionId?: string | null;
       }
     | {
         id?: string;
@@ -166,6 +183,7 @@ export class SessionsRepository {
         modelOptions?: ModelOptionsMap | null;
         projectPath?: string | null;
         branch?: string | null;
+        priorSessionId?: string | null;
       }): SessionDto {
     const now = Date.now();
     const id = input.id ?? uuidv4().slice(0, 8);
@@ -194,6 +212,9 @@ export class SessionsRepository {
       pull_request_number: null,
       pull_request_state: null,
       forge_status: 'none',
+      parent_session_id: null,
+      origin_task_id: null,
+      prior_session_id: input.priorSessionId ?? null,
       created_at: now,
       updated_at: now,
     };
@@ -337,8 +358,9 @@ export class SessionsRepository {
           provider_thread_id, provider_active_turn_id, provider_state_json,
           cursor_backend, cursor_chat_id,
           forge_provider, pull_request_url, pull_request_number, pull_request_state, forge_status,
+          parent_session_id, origin_task_id, prior_session_id,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -364,6 +386,9 @@ export class SessionsRepository {
         row.pull_request_number,
         row.pull_request_state,
         row.forge_status,
+        row.parent_session_id,
+        row.origin_task_id,
+        row.prior_session_id,
         row.created_at,
         row.updated_at,
       );

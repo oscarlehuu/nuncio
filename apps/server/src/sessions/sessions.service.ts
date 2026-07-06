@@ -33,6 +33,8 @@ import type {
   RespondInteractionDto,
   SessionDto,
   SessionEvent,
+  SessionLineageDto,
+  SessionRefDto,
   SessionStatus,
 } from './domain/sessions.types';
 import { isCursorCliRecentlyActive } from '../agents/providers/cursor-cli.active-run';
@@ -50,6 +52,13 @@ const DEFAULT_BACKFILL_LIMIT = 200;
 /** Trailing events scanned to decide whether a run is blocked on your input. */
 const PENDING_SCAN_TAIL = 200;
 const DEFAULT_STALLED_RUN_FORCE_IDLE_MS = 30 * 60 * 1000;
+
+/** Ancestor walk depth cap — bounds cost and survives a manufactured cycle. */
+const ANCESTOR_WALK_CAP = 10;
+
+function toSessionRef(session: SessionDto): SessionRefDto {
+  return { id: session.id, title: session.title, status: session.status, provider: session.provider };
+}
 
 function resolveStalledRunForceIdleMs(): number {
   const raw = process.env.NUNCIO_STALLED_RUN_FORCE_IDLE_MS;
@@ -213,8 +222,15 @@ export class SessionsService implements OnModuleDestroy {
     const workspace = input.workspace?.trim();
     if (!workspace) throw new BadRequestException('workspace is required');
 
+    // A prior session links the successor into a linear handoff chain, but only
+    // when that predecessor actually exists (a stale/foreign id is ignored).
+    const priorSessionId =
+      input.priorSessionId && this.sessions.findById(input.priorSessionId)
+        ? input.priorSessionId
+        : undefined;
+
     if ('piSessionPath' in input) {
-      return this.handoffPi(input.piSessionPath, workspace, input.title);
+      return this.handoffPi(input.piSessionPath, workspace, input.title, priorSessionId);
     }
 
     const chatId = input.cursorChatId?.trim();
@@ -239,6 +255,7 @@ export class SessionsService implements OnModuleDestroy {
       model,
       projectPath: cursorMeta.repoPath ?? workspace,
       branch: cursorMeta.branch ?? null,
+      priorSessionId,
     });
     this.hydrateIfNeeded(session);
     const refreshed = this.sessions.findById(session.id)!;
@@ -249,6 +266,7 @@ export class SessionsService implements OnModuleDestroy {
     piSessionPath: string | undefined,
     workspace: string,
     requestedTitle?: string,
+    priorSessionId?: string,
   ): Promise<SessionDto> {
     const path = piSessionPath?.trim();
     if (!path) throw new BadRequestException('piSessionPath is required');
@@ -275,6 +293,7 @@ export class SessionsService implements OnModuleDestroy {
       modelOptions: meta.thinkingLevel ? { thinkingLevel: meta.thinkingLevel } : null,
       projectPath: workspace,
       branch,
+      priorSessionId,
     });
     this.hydrateIfNeeded(session);
     const refreshed = this.sessions.findById(session.id)!;
@@ -401,6 +420,30 @@ export class SessionsService implements OnModuleDestroy {
   /** Direct handle to the steer-queue repository for a caller-owned transaction. */
   get steerQueueRepository(): SteerQueueRepository {
     return this.steerQueue;
+  }
+
+  /**
+   * Walk a session's lineage: ancestors up the `parentSessionId` chain (capped
+   * at 10, cycle-safe via a visited set) and its direct tree children (oldest
+   * first). Throws NotFound when the session itself does not exist.
+   */
+  lineage(id: string): SessionLineageDto {
+    const session = this.sessions.findById(id);
+    if (!session) throw new NotFoundException('Session not found');
+
+    const ancestors: SessionRefDto[] = [];
+    const visited = new Set<string>([id]);
+    let cursor = session.parentSessionId;
+    while (cursor && ancestors.length < ANCESTOR_WALK_CAP && !visited.has(cursor)) {
+      visited.add(cursor);
+      const parent = this.sessions.findById(cursor);
+      if (!parent) break;
+      ancestors.push(toSessionRef(parent));
+      cursor = parent.parentSessionId;
+    }
+
+    const children = this.sessions.childrenOf(id).map(toSessionRef);
+    return { ancestors, children };
   }
 
   /**

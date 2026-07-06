@@ -27,6 +27,9 @@ function makeSession(over: Partial<SessionDto> = {}): SessionDto {
     supportsSteerWhileRunning: false,
     supportsImages: false,
     pendingInput: false,
+    parentSessionId: null,
+    originTaskId: null,
+    priorSessionId: null,
     createdAt: 0,
     updatedAt: 0,
     ...over,
@@ -55,6 +58,25 @@ function makeRes() {
 }
 
 describe('SessionsController', () => {
+  it('lineage delegates to the service and returns ancestors and children', () => {
+    const result = {
+      ancestors: [{ id: 'p1', title: 'parent', status: 'IDLE' as const, provider: 'cursor' }],
+      children: [{ id: 'c1', title: 'child', status: 'DONE' as never, provider: 'cursor' }],
+    };
+    const lineage = jest.fn(() => result);
+    const controller = new SessionsController({ lineage } as never);
+    expect(controller.lineage('s1')).toEqual(result);
+    expect(lineage).toHaveBeenCalledWith('s1');
+  });
+
+  it('lineage propagates NotFound from the service', () => {
+    const lineage = jest.fn(() => {
+      throw new NotFoundException('Session not found');
+    });
+    const controller = new SessionsController({ lineage } as never);
+    expect(() => controller.lineage('missing')).toThrow(NotFoundException);
+  });
+
   it('stream sets SSE headers, writes existing events as data: lines, and subscribes', () => {
     const subscribe = jest.fn(() => jest.fn());
     const getEvents = jest.fn(() => SAMPLE_EVENTS);

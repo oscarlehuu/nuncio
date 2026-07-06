@@ -290,6 +290,8 @@ export class TasksService {
         ...(task.baseBranch ? { baseBranch: task.baseBranch } : {}),
         ...(task.useWorktree ? { useWorktree: true } : {}),
         ...(task.workspace ? { workspace: task.workspace } : {}),
+        ...(task.parentSessionId ? { parentSessionId: task.parentSessionId } : {}),
+        originTaskId: task.id,
       });
       childSessionId = session.id;
       this.tasks.attachSession(task.id, session.id);

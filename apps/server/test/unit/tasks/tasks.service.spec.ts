@@ -569,6 +569,22 @@ describe('TasksService', () => {
       expect(all[all.length - 1]!.type).toBe('task_completed');
     });
 
+    it('stamps the child session with its parent and originating task', async () => {
+      writeVerifyScript('exit 0\n');
+      const parent = await sessions.create({ prompt: 'lineage parent', provider: 'cursor', workspace });
+      const child = service.enqueue({
+        prompt: 'lineage child',
+        provider: 'cursor',
+        workspace,
+        role: 'subagent',
+        parentSessionId: parent.id,
+      });
+      const done = await waitForStatus(child.id, ['DONE', 'FAILED']);
+      const childSession = sessions.get(done.sessionId!);
+      expect(childSession?.parentSessionId).toBe(parent.id);
+      expect(childSession?.originTaskId).toBe(child.id);
+    });
+
     it('does not append a digest for a standalone task with no parent', async () => {
       writeVerifyScript('exit 0\n');
       const task = service.enqueue({ prompt: 'standalone', provider: 'cursor', workspace });

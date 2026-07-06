@@ -146,6 +146,16 @@ export class DatabaseService implements OnModuleDestroy {
       }
     }
 
+    // Session lineage: tree parentage (parent_session_id / origin_task_id) and
+    // linear handoff chains (prior_session_id, e.g. a mobile-continued session).
+    const lineageColumns = ['parent_session_id', 'origin_task_id', 'prior_session_id'] as const;
+    for (const column of lineageColumns) {
+      if (!sessionColumns.some((entry) => entry.name === column)) {
+        this.db.exec(`ALTER TABLE sessions ADD COLUMN ${column} TEXT`);
+      }
+    }
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id)');
+
     const forgeColumns = [
       ['forge_provider', 'TEXT'],
       ['pull_request_url', 'TEXT'],

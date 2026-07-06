@@ -67,6 +67,11 @@ export class SessionsController {
     return { active: this.sessions.isCursorCliActive(id) };
   }
 
+  @Get(':id/lineage')
+  lineage(@Param('id') id: string) {
+    return this.sessions.lineage(id);
+  }
+
   @Post(':id/refresh-transcript')
   refreshTranscript(@Param('id') id: string) {
     const session = this.sessions.get(id);
