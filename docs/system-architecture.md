@@ -17,7 +17,7 @@ apps/server/src/agents/
     codex-app-server.client.ts  JSON-RPC client for `codex app-server`
     codex-agent.provider.ts  Codex CLI app-server provider
     cursor-agent.provider.ts Cursor SDK local runtime provider
-    mock-agent.provider.ts   Local fallback, always available
+    mock-agent.provider.ts   Deterministic zero-credential test provider — registered only when NUNCIO_FORCE_MOCK=1, never on a normal boot
 ```
 
 ```mermaid
@@ -87,7 +87,7 @@ interface AgentProvider {
 
 
 
-`AgentRegistry` holds all providers, exposes `all()`, `available()` (async, filters by `isAvailable`), `get(id)` (sync), `getAvailable(id)` (async, throws `BadRequestException` if unavailable), and `defaultId()` (Cursor if configured, then Codex, then Pi, else Mock).
+`AgentRegistry` holds all providers, exposes `all()`, `available()` (async, filters by `isAvailable`), `get(id)` (sync), `getAvailable(id)` (async, throws `BadRequestException` if unavailable), and `defaultId()` (Cursor if configured, then Codex, then Pi; throws `503` when none is configured — Mock is never a default and must be requested explicitly as `provider: "mock"` under `NUNCIO_FORCE_MOCK=1`).
 
 ### Per-session selection flow
 
@@ -115,7 +115,7 @@ this.cachedAvailable = registry.getAvailable().length > 0;   // models with conf
 
 - `getAvailable()` returns models that have auth configured — the accurate "Pi can actually run a model" gate.
 - Env override is `PI_CODING_AGENT_DIR` (the SDK's own variable, not a nuncio-invented one).
-- The SDK is lazy-loaded (cached promise) so startup stays light; `isAvailable` short-circuits on `NUNCIO_FORCE_MOCK=1` without loading the SDK.
+- The SDK is lazy-loaded (cached promise) so startup stays light. Availability is cached for the process lifetime.
 - `createAgentSession` is passed `agentDir`, `authStorage`, `modelRegistry`, and the resolved `model` (see below). Availability is cached for the process lifetime.
 
 ## Model wiring

@@ -101,8 +101,9 @@ Priority order when adding test depth (highest leverage first):
 1. Conformance suite rows for any session-layer behavior that currently only one provider tests.
 2. Pure projections + their table tests for every event-derived UI state (row 2 above).
 3. Restart/reconnect specs (rows 3–4) for any new durable state.
-4. A scripted level-5 browser smoke (create → stream → steer → archive on Mock) runnable as one
-   command — extend it when a UI flow becomes load-bearing.
+4. The scripted level-5 browser smoke — **`bun run test:smoke-ui`** (`scripts/smoke-ui.mjs`:
+   hermetic ephemeral-port stack, `NUNCIO_FORCE_MOCK=1`, create → stream → steer → archive in
+   real Chrome) — extend it when a UI flow becomes load-bearing.
 5. Real-provider integration only for adapter seams that stubs cannot prove (auth discovery,
    cwd/tool binding, resume).
 

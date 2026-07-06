@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, type Provider } from '@nestjs/common';
 import { SessionsPersistenceModule } from '../sessions/sessions.persistence.module';
 import { SettingsModule } from '../settings/settings.module';
 import { AgentRegistry } from './agents.registry';
@@ -6,10 +6,35 @@ import { CursorAgentProvider } from './providers/cursor-agent.provider';
 import { CursorCliProvider } from './providers/cursor-cli.provider';
 import { CodexAgentProvider } from './providers/codex-agent.provider';
 import { PiAgentProvider } from './providers/pi-agent.provider';
+import { MockAgentProvider } from './providers/mock-agent.provider';
+import { MOCK_AGENT_PROVIDER } from './mock-agent.token';
+
+// The zero-credential Mock provider is opt-in: `MockAgentProvider` is always in
+// the DI container, but it is bound under `MOCK_AGENT_PROVIDER` — the token the
+// registry actually reads — only when the operator sets `NUNCIO_FORCE_MOCK=1`.
+// So a normal boot never registers it and it can never be selected or leak into
+// the model picker. The env check runs at module-init (factory) time rather than
+// at import time so it honors the flag regardless of import order (unit tests set
+// it per-case). Only the exact value "1" enables it. The scripted level-5 UI
+// smoke sets the flag to drive create/stream/steer/archive offline.
+const mockProviderBinding: Provider = {
+  provide: MOCK_AGENT_PROVIDER,
+  inject: [MockAgentProvider],
+  useFactory: (mock: MockAgentProvider) =>
+    process.env.NUNCIO_FORCE_MOCK === '1' ? mock : null,
+};
 
 @Module({
   imports: [SessionsPersistenceModule, SettingsModule],
-  providers: [PiAgentProvider, CursorAgentProvider, CodexAgentProvider, CursorCliProvider, AgentRegistry],
+  providers: [
+    PiAgentProvider,
+    CursorAgentProvider,
+    CodexAgentProvider,
+    CursorCliProvider,
+    MockAgentProvider,
+    mockProviderBinding,
+    AgentRegistry,
+  ],
   exports: [AgentRegistry],
 })
 export class AgentsModule {}

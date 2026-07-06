@@ -1,9 +1,16 @@
-import { BadRequestException, Injectable, ServiceUnavailableException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Optional,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import type { AgentProvider } from './agents.types';
 import { CodexAgentProvider } from './providers/codex-agent.provider';
 import { CursorAgentProvider } from './providers/cursor-agent.provider';
 import { CursorCliProvider } from './providers/cursor-cli.provider';
 import { PiAgentProvider } from './providers/pi-agent.provider';
+import { MOCK_AGENT_PROVIDER } from './mock-agent.token';
 import { SettingsService } from '../settings/settings.service';
 import type { SessionDto } from '../sessions/domain/sessions.types';
 
@@ -18,9 +25,14 @@ export class AgentRegistry {
     private readonly codex: CodexAgentProvider,
     cli: CursorCliProvider,
     settings: SettingsService,
+    // Bound only when `NUNCIO_FORCE_MOCK=1` opts the zero-credential engine in
+    // (see AgentsModule). Resolves to undefined — and is thus never selectable —
+    // on a normal boot.
+    @Optional() @Inject(MOCK_AGENT_PROVIDER) mock?: AgentProvider,
   ) {
     this.cliProvider = cli;
     this.providers = [this.pi, this.cursor, this.codex];
+    if (mock) this.providers.push(mock);
     settings.onChange(() => this.bustCaches());
   }
 
