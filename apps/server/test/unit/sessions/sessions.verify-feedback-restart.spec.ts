@@ -117,10 +117,17 @@ function releaseAll(releaseDir: string): void {
   writeFileSync(join(releaseDir, 'release-all'), 'go');
 }
 
-/** Directly seed a failing verify_result into the log (deterministic crash setup). */
-function seedFailingVerifyResult(events: EventsRepository, sessionId: string, output: string): void {
+/**
+ * Directly seed a failing verify_result into the log (deterministic crash setup);
+ * returns the appended verify_result event so tests can count only post-seed work.
+ */
+function seedFailingVerifyResult(
+  events: EventsRepository,
+  sessionId: string,
+  output: string,
+): SessionEvent {
   events.append(sessionId, 'verify_start', { command: '.nuncio/verify' });
-  events.append(sessionId, 'verify_result', {
+  return events.append(sessionId, 'verify_result', {
     command: '.nuncio/verify',
     ok: false,
     exitCode: 1,
@@ -162,6 +169,31 @@ async function waitFor(check: () => boolean, timeoutMs = 12000): Promise<void> {
     if (Date.now() - start > timeoutMs) throw new Error('condition not met within timeout');
     await new Promise((r) => setTimeout(r, 40));
   }
+}
+
+/**
+ * Wait until the loop is provably PARKED just before round `nextRound`'s verify:
+ * `round` auto-steers have fired AND `nextRound` verify_start events exist (the
+ * next verify has begun and — with a gated script — is blocked on its release
+ * marker). Only then is it safe to inject a manual steer / archive "between
+ * rounds" without racing the loop (finding #3).
+ */
+async function waitForParkedBeforeRound(
+  events: EventsRepository,
+  sessionId: string,
+  nextRound: number,
+  timeoutMs = 15000,
+): Promise<void> {
+  const priorRounds = nextRound - 1;
+  await waitFor(() => {
+    const all = events.list(sessionId);
+    const steers = all.filter(
+      (e) => e.type === 'steer_message' &&
+        (e.payload as { origin?: string }).origin === 'verify_retry',
+    ).length;
+    const verifyStarts = all.filter((e) => e.type === 'verify_start').length;
+    return steers >= priorRounds && verifyStarts >= nextRound;
+  }, timeoutMs);
 }
 
 describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic', () => {
@@ -250,23 +282,33 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
       workspace,
     });
     await seedSessions.awaitRun(session.id);
-    // Remove any verify events the initial run may have produced, then seed a
-    // clean "failed verify, no retry" tail so the crash point is unambiguous.
-    const seededCount = seedEvents.list(session.id).length;
-    seedFailingVerifyResult(seedEvents, session.id, 'RED: seeded pre-crash failure');
-    expect(seedEvents.list(session.id).length).toBeGreaterThan(seededCount);
+    // Seed a "failed verify, no retry" tail and record its seq. Only events after
+    // this seed count as boot-scan work — so a no-boot-scan impl can't pass on
+    // pre-seed events (finding #1).
+    const seeded = seedFailingVerifyResult(seedEvents, session.id, 'RED: seeded pre-crash failure');
     await seed.close();
 
-    // Boot: the scan must resume — evaluate the failed verify and auto-steer.
+    // Boot: the scan must resume — evaluate the seeded failed verify and auto-steer.
     const booted = await buildCursorModule();
     booted.get(SessionsService);
     const events = booted.get(EventsRepository);
     await waitFor(
-      () => eventsOfType(events.list(session.id), 'verify_retry').length >= 1,
+      () =>
+        events
+          .list(session.id)
+          .some((e) => e.type === 'verify_retry' && e.seq > seeded.seq),
       15000,
     );
-    // The resumed loop actually steered the provider (a steer_message followed).
-    expect(autoSteers(events.list(session.id)).length).toBeGreaterThanOrEqual(1);
+    // The retry (and its auto-steer) landed strictly AFTER the seeded crash point.
+    const all = events.list(session.id);
+    const retry = all.find((e) => e.type === 'verify_retry' && e.seq > seeded.seq);
+    expect(retry).toBeDefined();
+    const steerAfterRetry = all.find(
+      (e) => e.type === 'steer_message' &&
+        (e.payload as { origin?: string }).origin === 'verify_retry' &&
+        e.seq > retry!.seq,
+    );
+    expect(steerAfterRetry).toBeDefined();
     await booted.close();
   }, TEST_TIMEOUT_MS);
 
@@ -376,11 +418,11 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
     const session = await service.create({ prompt: 'human intervenes', provider: 'cursor', workspace });
 
     // Release ONLY the first verify. Round 1 fails -> auto-steer fires -> the
-    // SECOND verify blocks on release-2 (which we never write), so the loop is
-    // provably parked. The manual steer therefore lands strictly between rounds.
+    // SECOND verify begins and blocks on release-2 (never written). Wait until the
+    // loop is provably parked there (auto-steer done + round-2 verify_start) so the
+    // manual steer lands strictly between rounds.
     releaseRound(releaseDir, 1);
-    await waitFor(() => eventsOfType(events.list(session.id), 'verify_retry').length >= 1, 15000);
-    await service.awaitRun(session.id);
+    await waitForParkedBeforeRound(events, session.id, 2);
     await service.steer(session.id, 'try a completely different approach');
     // Now let everything through so the fresh budget runs to exhaustion.
     releaseAll(releaseDir);
@@ -443,11 +485,10 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
     const events = module.get(EventsRepository);
     const session = await service.create({ prompt: 'archive mid-loop', provider: 'cursor', workspace });
 
-    // Release only round 1; round 2's verify then blocks on release-2 (never
-    // written), so the loop is parked when we archive.
+    // Release only round 1; wait until the loop is provably parked before round 2's
+    // verify (blocked on release-2, never written), then archive.
     releaseRound(releaseDir, 1);
-    await waitFor(() => eventsOfType(events.list(session.id), 'verify_retry').length >= 1, 15000);
-    await service.awaitRun(session.id);
+    await waitForParkedBeforeRound(events, session.id, 2);
     service.archive(session.id);
     const retriesAtArchive = eventsOfType(events.list(session.id), 'verify_retry').length;
 
@@ -459,11 +500,11 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
     await module.close();
   }, TEST_TIMEOUT_MS);
 
-  it('surfaces an error rather than crashing when the auto-steer provider genuinely fails', async () => {
-    // The provider's steer turn genuinely rejects (a real failure, not a no-op env
-    // tweak). The loop must observe it: an error event surfaces (or the loop stops
-    // via needs-attention), the service stays responsive, and the provider was
-    // actually invoked for the auto-steer.
+  it('surfaces an error VISIBLY rather than crashing when the auto-steer provider rejects', async () => {
+    // The auto-steer turn genuinely rejects. Arm the failure BEFORE any steer can
+    // run (steer-only arm), so the FIRST auto-steer is the one that fails — no race
+    // (finding #2). The loop must settle visibly: an error event appears (the
+    // rejection is surfaced, not swallowed), and the service stays responsive.
     process.env[MAX_ROUNDS] = '2';
     writeUniqueFailScript(workspace, 'provider will fail');
 
@@ -471,25 +512,19 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
     const service = module.get(SessionsService);
     const events = module.get(EventsRepository);
     const provider = module.get(CursorAgentProvider) as unknown as ControllableAgentProvider;
+    // Arm the steer-failure up front — the initial run() is not a steer, so it
+    // succeeds; the first auto-steer() rejects.
+    provider.failNextSteer(1);
     const session = await service.create({ prompt: 'provider fails', provider: 'cursor', workspace });
 
-    // Wait for the initial run to finish and the first verify to fail.
-    await waitFor(() => eventsOfType(events.list(session.id), 'verify_result').length >= 1, 10000);
-    const runsAfterFirstVerify = provider.promptRuns;
-    // Arm the NEXT turn (the auto-steer) to reject.
-    provider.failNext(1);
-
-    // Give the loop time to attempt the auto-steer and hit the rejection.
+    // The rejection must surface as an observable error event (BaseAgentProvider
+    // maps a non-cancel executePrompt throw to a status:ERROR + error event).
     await waitFor(
-      () =>
-        eventsOfType(events.list(session.id), 'error').length >= 1 ||
-        eventsOfType(events.list(session.id), 'verify_needs_attention').length >= 1 ||
-        provider.steerRuns >= 1,
-      12000,
+      () => eventsOfType(events.list(session.id), 'error').length >= 1,
+      15000,
     );
-    // The provider was actually driven for the auto-steer (a steer turn ran) —
-    // proving the loop steers the provider, not just logs a marker.
-    expect(provider.promptRuns).toBeGreaterThan(runsAfterFirstVerify);
+    // The provider was actually driven for the auto-steer (a steer turn ran).
+    expect(provider.steerRuns).toBeGreaterThanOrEqual(1);
     // No crash: the service is still responsive.
     expect(service.get(session.id)).toBeTruthy();
     await module.close();
@@ -508,7 +543,7 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
     // Release round 1, then steer. The human steer must be delivered exactly once
     // and must not be lost or duplicated by the auto-retry machinery.
     releaseRound(releaseDir, 1);
-    await waitFor(() => eventsOfType(events.list(session.id), 'verify_retry').length >= 1, 15000);
+    await waitForParkedBeforeRound(events, session.id, 2);
     await service.steer(session.id, 'queued human follow-up');
     releaseAll(releaseDir);
     await waitFor(

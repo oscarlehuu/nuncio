@@ -198,10 +198,13 @@ override has to beat an env var (that is the documented resolution chain), and t
 asserts exactly this so a `process.env`-only shortcut fails the tests.
 
 Boolean parsing for `NUNCIO_VERIFY_AUTO_STEER`: `'1'`/`'true'` (case-insensitive) → on; everything
-else (`'0'`, `''`, unset, garbage) → off. `NUNCIO_VERIFY_MAX_ROUNDS` parse: `Number.parseInt`; a
-finite integer `>= 0` is honoured, anything else (`NaN`, negative, non-numeric, float) clamps to the
-default `3`. `0` is a legal value meaning "surface `verify_needs_attention` immediately on the first
-failure, never auto-steer" — the disable-equivalent lower bound. An unbounded loop is impossible.
+else (`'0'`, `''`, unset, garbage) → off. `NUNCIO_VERIFY_MAX_ROUNDS` parse: **strict integer only** —
+`Number(raw)` and require `Number.isInteger(n) && n >= 0`; anything else (`NaN`, negative, non-numeric,
+or a fraction like `'2.7'`) clamps to the default `3`. **Do NOT use `parseInt`**: `parseInt('2.7')`
+returns `2`, which would silently accept a fractional setting and contradict the "fractional →
+default" spec the settings suite asserts. `0` is a legal value meaning "surface
+`verify_needs_attention` immediately on the first failure, never auto-steer" — the disable-equivalent
+lower bound. An unbounded loop is impossible.
 
 ## User steer priority (decision, documented + reversible)
 
@@ -226,8 +229,10 @@ RESET because "founder nudges, agent keeps trying" matches the attention-router 
 
 ## Futility guard (early stop) — exact semantics
 
-Two **consecutive auto-retry rounds** produce the **byte-identical** failing `outputTail` ⇒ the agent
-is not making progress; stop early with `verify_needs_attention` `reason: 'repeated_failure'`.
+**After two auto-retry rounds** have produced the **byte-identical** failing `outputTail`, the agent
+is not making progress; stop early with `verify_needs_attention` `reason: 'repeated_failure'`. In
+other words the guard is evaluated once at least two failing `verify_result`s exist in the current
+loop and the two most recent are identical — never on the first failure.
 
 Pinned semantics (asserted, not prose):
 - "Consecutive" is measured over the **`verify_result` events of the current loop** (fold-scoped), in
@@ -361,6 +366,23 @@ Round-2 suggestions applied: unique-output-per-round (ties into #1); preserve/cl
 asserts max-rounds `type: 'string'` and parses `'false'`/garbage→off and fractional→default; the
 oversized-output test asserts the **retained trailing tail marker is present** and the dropped leading
 marker is absent (not merely that the long run is capped).
+
+## Review responses — round 3 (Codex — REVISE, 3 determinism fixes, then green)
+
+All 3 verified against the tests (all correct, none refuted):
+1. **Seed test could pass on pre-seed events** — `seedFailingVerifyResult` now returns the seeded
+   `verify_result` and the test asserts the resumed `verify_retry.seq > seededResult.seq` (and its
+   auto-steer follows), so only post-crash events count.
+2. **Provider-failure race** — `failNext(1)` armed after the first verify could miss the auto-steer.
+   Added `failNextSteer(n)` to `ControllableAgentProvider`, armed **up front** so the first auto-steer
+   is the one that rejects, and the test now requires a **visible `error` event** (the rejection is
+   surfaced, not merely "process still alive").
+3. **Waits didn't confirm the loop parked** — a new `waitForParkedBeforeRound` helper waits for the
+   auto-steer(s) AND the next `verify_start` (round-N verify begun, blocked on `release-N`) before the
+   manual steer / archive / queued steer, removing the race.
+
+Post-green cleanup noted (not blocking): once `awaitVerifySettled` and settlement helpers exist, the
+disabled-path test can assert "no loop was scheduled" deterministically instead of a fixed sleep.
 
 ## Notes for the implementer (fold of Codex's implementer notes)
 

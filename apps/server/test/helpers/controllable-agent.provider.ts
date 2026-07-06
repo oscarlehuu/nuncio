@@ -29,14 +29,20 @@ export class ControllableAgentProvider extends BaseAgentProvider {
 
   private available = true;
   private failNextTurns = 0;
+  private failNextSteers = 0;
 
   constructor(sessions: SessionsRepository, events: EventsRepository) {
     super(sessions, events);
   }
 
-  /** Reject the next `n` executePrompt calls (default 1). */
+  /** Reject the next `n` executePrompt calls of any kind (default 1). */
   failNext(n = 1): void {
     this.failNextTurns = n;
+  }
+
+  /** Reject the next `n` STEER executePrompt calls only (auto-steers included). */
+  failNextSteer(n = 1): void {
+    this.failNextSteers = n;
   }
 
   /** Flip availability so AgentRegistry.resolveAvailableForSession throws. */
@@ -66,6 +72,10 @@ export class ControllableAgentProvider extends BaseAgentProvider {
   ): Promise<void> {
     this.promptRuns += 1;
     if (isSteer) this.steerRuns += 1;
+    if (isSteer && this.failNextSteers > 0) {
+      this.failNextSteers -= 1;
+      throw new Error('controllable provider: forced steer failure');
+    }
     if (this.failNextTurns > 0) {
       this.failNextTurns -= 1;
       throw new Error('controllable provider: forced turn failure');
