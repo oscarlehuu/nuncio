@@ -124,6 +124,26 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
       'Optional CODEX_HOME override for Codex app-server. Leave unset to use the same Codex login as the CLI/app.',
     envVar: 'NUNCIO_CODEX_HOME',
   },
+  {
+    key: 'ANTHROPIC_API_KEY',
+    category: 'provider',
+    providerId: 'claude',
+    type: 'secret',
+    label: 'Anthropic API key',
+    description:
+      'API key for the `claude` provider (distribution path). Optional when the SDK-bundled Claude CLI is already logged in via subscription; set it to run without that login.',
+    envVar: 'ANTHROPIC_API_KEY',
+  },
+  {
+    key: 'NUNCIO_CLAUDE_BIN',
+    category: 'provider',
+    providerId: 'claude',
+    type: 'path',
+    label: 'Claude CLI binary',
+    description:
+      'Path to a `claude` CLI binary used for the auth probe and by the SDK. Leave unset to use the binary bundled with the Claude Agent SDK.',
+    envVar: 'NUNCIO_CLAUDE_BIN',
+  },
   // ── Provider behavioral ──────────────────────────────────────────────────
   {
     key: 'NUNCIO_CURSOR_CWD',
