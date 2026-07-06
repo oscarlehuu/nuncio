@@ -201,15 +201,25 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
   let dataDir: string;
   let workspace: string;
   const prior: Record<string, string | undefined> = {};
+  // Per-test dirs are cleaned only in afterAll — NEVER mid-run. These tests build
+  // several modules and deliberately leave loops in flight at close (a restart /
+  // race simulation); module.close() does not await an in-flight provider.run, so
+  // deleting the SQLite file in afterEach crashes that lingering write with a
+  // SQLITE_IOERR ("disk I/O error") that Bun attributes to the NEXT test. Keeping
+  // each test's DB on its own path (isolation) and deferring deletion removes both
+  // the I/O crash and any cross-test event contamination.
+  const dirsToClean: string[] = [];
 
   beforeAll(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-verify-feedback-restart-'));
-    process.env.NUNCIO_DATA_DIR = dataDir;
     configureSimulatedCursorEnv();
   });
 
   beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-verify-feedback-restart-'));
+    dirsToClean.push(dataDir);
+    process.env.NUNCIO_DATA_DIR = dataDir;
     workspace = mkdtempSync(join(tmpdir(), 'nuncio-vfr-ws-'));
+    dirsToClean.push(workspace);
     prior[AUTO_STEER] = process.env[AUTO_STEER];
     prior[MAX_ROUNDS] = process.env[MAX_ROUNDS];
     prior.NUNCIO_FORCE_MOCK = process.env.NUNCIO_FORCE_MOCK;
@@ -218,7 +228,7 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
   });
 
   afterEach(() => {
-    rmSync(workspace, { recursive: true, force: true });
+    delete process.env.NUNCIO_DATA_DIR;
     for (const [key, value] of Object.entries(prior)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -226,8 +236,7 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
   });
 
   afterAll(() => {
-    rmSync(dataDir, { recursive: true, force: true });
-    delete process.env.NUNCIO_DATA_DIR;
+    for (const dir of dirsToClean) rmSync(dir, { recursive: true, force: true });
     delete process.env.CURSOR_API_KEY;
   });
 
@@ -428,25 +437,49 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
   }, TEST_TIMEOUT_MS);
 
   it('does not re-emit needs-attention on boot once it has already surfaced (idempotent)', async () => {
+    // Deterministic seed: a session whose durable tail is already a
+    // verify_needs_attention (the loop surfaced and stopped before the crash). No
+    // live loop runs during setup, so the state is unambiguous and load-immune.
     process.env[MAX_ROUNDS] = '1';
-    writeUniqueFailScript(workspace, 'idempotent surface');
+    process.env[AUTO_STEER] = '0';
 
-    const first = await buildCursorModule();
-    const service = first.get(SessionsService);
-    const events = first.get(EventsRepository);
-    const session = await service.create({ prompt: 'idempotent', provider: 'cursor', workspace });
-    await waitFor(
-      () => eventsOfType(events.list(session.id), 'verify_needs_attention').length === 1,
-    );
-    await first.close();
+    const seed = await buildCursorModule();
+    const seedSessions = seed.get(SessionsService);
+    const seedEvents = seed.get(EventsRepository);
+    const session = await seedSessions.create({ prompt: 'idempotent', provider: 'cursor', workspace });
+    await seedSessions.awaitRun(session.id);
+    seedFailingVerifyResult(seedEvents, session.id, 'RED: already surfaced');
+    seedEvents.append(session.id, 'verify_retry', {
+      round: 1,
+      reason: 'verify_failed',
+      command: '.nuncio/verify',
+      outputTail: 'RED: already surfaced',
+      retryId: 'surfaced-retry-1',
+    });
+    // Its matching steer (so there is no dangling retry to resume), then the
+    // surfaced needs-attention that stops the loop.
+    seedEvents.append(session.id, 'steer_message', {
+      text: 'fix it',
+      origin: 'verify_retry',
+      retryId: 'surfaced-retry-1',
+    });
+    seedEvents.append(session.id, 'verify_needs_attention', {
+      rounds: 1,
+      reason: 'max_rounds',
+      lastOutputTail: 'RED: already surfaced',
+    });
+    expect(eventsOfType(seedEvents.list(session.id), 'verify_needs_attention')).toHaveLength(1);
+    await seed.close();
 
-    // Reboot: the scan must NOT append a second needs-attention for the same loop.
-    const second = await buildCursorModule();
-    second.get(SessionsService);
-    const events2 = second.get(EventsRepository);
+    // Reboot with the loop ENABLED: the scan must NOT append a second
+    // needs-attention (the tail is already a surfaced boundary — idempotent).
+    process.env[AUTO_STEER] = '1';
+    const booted = await buildCursorModule();
+    booted.get(SessionsService);
+    const events2 = booted.get(EventsRepository);
     await new Promise((r) => setTimeout(r, 800));
     expect(eventsOfType(events2.list(session.id), 'verify_needs_attention')).toHaveLength(1);
-    await second.close();
+    await booted.close();
   }, TEST_TIMEOUT_MS);
 
   it('a non-zero exit code counts as a failed round and still auto-steers, no crash', async () => {
@@ -604,27 +637,41 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
     const service = module.get(SessionsService);
     const events = module.get(EventsRepository);
     const provider = module.get(CursorAgentProvider) as unknown as ControllableAgentProvider;
-    provider.setAvailabilityDelay(120); // widen the resolve-availability window
+    // Slow every provider turn a little so the auto-steer's RUNNING claim is
+    // genuinely in flight when the human steer arrives — the race, not a delay on
+    // a code path autoSteer no longer takes (autoSteer resolves the provider
+    // synchronously, so an isAvailable delay would never widen its window).
+    provider.setTurnDelay(60);
     const session = await service.create({ prompt: 'race', provider: 'cursor', workspace });
 
-    // The instant the first verify_retry marker lands, the auto-steer is awaiting
-    // availability — fire a human steer into that exact window.
+    // The instant the first verify_retry marker lands, the auto-steer has claimed
+    // the session — fire a human steer into that window; it must queue, not race a
+    // second concurrent turn.
     await waitFor(() => eventsOfType(events.list(session.id), 'verify_retry').length >= 1, 15000);
     await service.steer(session.id, 'human races the auto-steer');
 
-    // Let the loop run to completion.
+    const humanText = 'human races the auto-steer';
+    const humanSteerMessages = () =>
+      events.list(session.id).filter(
+        (e) => e.type === 'steer_message' &&
+          String((e.payload as { text?: string }).text ?? '').includes(humanText),
+      );
+
+    // Wait for the loop to settle AND the queued human steer to be delivered — the
+    // steer is queued while RUNNING and drained to a steer_message on the next
+    // IDLE, which under load lands after verify_needs_attention. Waiting on the
+    // drained steer (not just needs_attention) is what makes this deterministic
+    // under arbitrary machine load.
     await waitFor(
-      () => eventsOfType(events.list(session.id), 'verify_needs_attention').length >= 1,
+      () =>
+        eventsOfType(events.list(session.id), 'verify_needs_attention').length >= 1 &&
+        humanSteerMessages().length >= 1,
       20000,
     );
-    // No two turns ever overlapped for this provider.
+    // No two turns ever overlapped for this provider (serialized, not raced).
     expect(provider.sawOverlap).toBe(false);
     // The human steer was recorded exactly once (queued, then delivered).
-    const humanSteers = events.list(session.id).filter(
-      (e) => e.type === 'steer_message' &&
-        String((e.payload as { text?: string }).text ?? '').includes('human races the auto-steer'),
-    );
-    expect(humanSteers).toHaveLength(1);
+    expect(humanSteerMessages()).toHaveLength(1);
     await module.close();
   }, TEST_TIMEOUT_MS);
 

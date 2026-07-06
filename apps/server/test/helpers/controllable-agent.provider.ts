@@ -35,6 +35,7 @@ export class ControllableAgentProvider extends BaseAgentProvider {
   private failNextTurns = 0;
   private failNextSteers = 0;
   private availabilityDelayMs = 0;
+  private turnDelayMs = 30;
 
   constructor(sessions: SessionsRepository, events: EventsRepository) {
     super(sessions, events);
@@ -43,6 +44,11 @@ export class ControllableAgentProvider extends BaseAgentProvider {
   /** Delay isAvailable() to widen the resolve-availability window for race tests. */
   setAvailabilityDelay(ms: number): void {
     this.availabilityDelayMs = ms;
+  }
+
+  /** How long each executePrompt holds the turn (keeps a turn in flight for race tests). */
+  setTurnDelay(ms: number): void {
+    this.turnDelayMs = ms;
   }
 
   /** Reject the next `n` executePrompt calls of any kind (default 1). */
@@ -98,7 +104,7 @@ export class ControllableAgentProvider extends BaseAgentProvider {
     if (this.activePrompts > 0) this.sawOverlap = true;
     this.activePrompts += 1;
     try {
-      await new Promise((r) => setTimeout(r, 30));
+      if (this.turnDelayMs > 0) await new Promise((r) => setTimeout(r, this.turnDelayMs));
       const reply = isSteer
         ? `ack steer: ${userText.slice(0, 40)}`
         : 'ack run: controllable provider reply';

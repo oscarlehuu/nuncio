@@ -85,6 +85,9 @@ export class SessionsService implements OnModuleDestroy {
   // state (green verify / needs-attention / no-command). Task-lane consumers
   // await this instead of a bare awaitRun so they wait for the whole loop.
   private readonly verifySettled = new Map<string, { promise: Promise<void>; resolve: () => void }>();
+  // Fire-and-forget async work (drained queued steers) tracked so shutdown can
+  // await it before the DB handle is torn down.
+  private readonly pendingWork = new Set<Promise<unknown>>();
   private readonly stalledRunTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly transcriptWatchers = new Map<
     string,
@@ -400,7 +403,7 @@ export class SessionsService implements OnModuleDestroy {
     if (this.destroyed) return;
     const next = this.steerQueue.dequeue(id);
     if (!next) return;
-    void this.steer(id, next.message, undefined, next.attachments).catch((error) => {
+    const work = this.steer(id, next.message, undefined, next.attachments).catch((error) => {
       const reason = error instanceof Error ? error.message : String(error);
       try {
         this.appendAndEmit(id, 'error', { message: `Queued message failed to send: ${reason}` });
@@ -408,6 +411,10 @@ export class SessionsService implements OnModuleDestroy {
         // Session gone (deleted/archived mid-drain) — nothing left to notify.
       }
     });
+    // Track so shutdown awaits it — a fire-and-forget drained steer must not write
+    // to a closed DB handle after the module is destroyed.
+    this.pendingWork.add(work);
+    void work.finally(() => this.pendingWork.delete(work));
   }
 
   /** Grace period before a non-unwinding interrupted run is forced idle. */
@@ -561,7 +568,7 @@ export class SessionsService implements OnModuleDestroy {
 
   private destroyed = false;
 
-  onModuleDestroy(): void {
+  async onModuleDestroy(): Promise<void> {
     this.destroyed = true;
     for (const timer of this.stalledRunTimers.values()) clearTimeout(timer);
     this.stalledRunTimers.clear();
@@ -574,6 +581,19 @@ export class SessionsService implements OnModuleDestroy {
       }
     }
     this.transcriptWatchers.clear();
+    // Await in-flight local runs (and the verify-feedback loop chained inside
+    // them) before the module — and its DB handle — is torn down. `destroyed` is
+    // set above, so the loop's destroyed-guards make each chain wind down at its
+    // next step; awaiting here prevents a leaked write to a closed DB handle
+    // (SQLITE_IOERR/MISUSE) from surfacing after shutdown.
+    // Drain in-flight runs AND any fire-and-forget drained-steer work. Loop
+    // (settle at destroyed-guards) then re-check, since awaiting a run can spawn
+    // a drained steer that spawns another; bounded by the destroyed guards.
+    for (let i = 0; i < 5; i += 1) {
+      const inFlight = [...this.runPromises.values(), ...this.pendingWork];
+      if (inFlight.length === 0) break;
+      await Promise.allSettled(inFlight);
+    }
   }
 
   requestProviderApproval(
@@ -1051,9 +1071,18 @@ export class SessionsService implements OnModuleDestroy {
    * event log; the FSM is untouched so a red suite can't wedge the session.
    */
   private async maybeVerify(sessionId: string): Promise<void> {
+    // A shutting-down service must not keep the loop writing events (the DB may be
+    // closing/replaced). Settle any waiter and stop.
+    if (this.destroyed) {
+      this.settleVerify(sessionId);
+      return;
+    }
     if (this.verifying.has(sessionId)) return;
     const session = this.sessions.findById(sessionId);
-    if (!session || session.status !== 'IDLE') return;
+    if (!session || session.status !== 'IDLE') {
+      this.settleVerify(sessionId);
+      return;
+    }
     const cwd = session.worktreePath ?? session.workspace ?? session.projectPath;
     if (!cwd) {
       this.settleVerify(sessionId);
@@ -1070,11 +1099,13 @@ export class SessionsService implements OnModuleDestroy {
     try {
       this.appendAndEmit(sessionId, 'verify_start', { command: command.display });
       const run = await runVerifyCommand(command, cwd);
-      if (!this.sessions.findById(sessionId)) return;
+      // The verify command is a spawned shell that can outlive a shutdown; after
+      // it resolves the DB handle may be closed. Bail before touching it.
+      if (this.destroyed || !this.sessions.findById(sessionId)) return;
       result = { command: command.display, ...run };
       this.appendAndEmit(sessionId, 'verify_result', result);
     } catch (error) {
-      if (!this.sessions.findById(sessionId)) return;
+      if (this.destroyed || !this.sessions.findById(sessionId)) return;
       const message = error instanceof Error ? error.message : String(error);
       result = {
         command: command.display,
@@ -1089,6 +1120,10 @@ export class SessionsService implements OnModuleDestroy {
       this.verifying.delete(sessionId);
     }
 
+    if (this.destroyed) {
+      this.settleVerify(sessionId);
+      return;
+    }
     if (result && !result.ok) {
       await this.driveVerifyFeedback(sessionId);
     } else {
@@ -1112,6 +1147,10 @@ export class SessionsService implements OnModuleDestroy {
    * it is identical live and on boot.
    */
   private async driveVerifyFeedback(sessionId: string): Promise<void> {
+    if (this.destroyed) {
+      this.settleVerify(sessionId);
+      return;
+    }
     const { enabled, maxRounds } = this.verifyFeedbackConfig();
     if (!enabled) {
       this.settleVerify(sessionId);
@@ -1163,6 +1202,10 @@ export class SessionsService implements OnModuleDestroy {
    * then settles rather than spinning.
    */
   private async autoSteer(sessionId: string, message: string, retryId: string): Promise<void> {
+    if (this.destroyed) {
+      this.settleVerify(sessionId);
+      return;
+    }
     const session = this.sessions.findById(sessionId);
     if (!session || session.status !== 'IDLE') {
       this.settleVerify(sessionId);

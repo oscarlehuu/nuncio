@@ -419,6 +419,36 @@ Future cleanup (noted, not done here — the finding-1 fix lives in `sessions.se
 `tasks.service.ts`): `tasks.service.ts` is ~224 lines, over the ~200 guideline; extract task-outcome
 folding when a change next touches that file.
 
+## Implementation review responses — round 5 (flaky test under machine load → real product fix)
+
+A restart-spec test went flaky under heavy machine load (dev stack + Electron + a codex process).
+Root cause was **a real product robustness bug**, not just a test-timing one: `maybeVerify` accessed
+the DB (`findById`, `appendAndEmit`) *after* awaiting `runVerifyCommand` (a spawned shell that, under
+load, can outlive a shutdown) **without checking whether the service was destroyed** — so a verify
+that finished after `onModuleDestroy` closed the DB handle crashed with `SQLITE_IOERR`, surfacing as an
+"Unhandled error between tests" that failed whichever test was running.
+
+Product fixes (`sessions.service.ts`):
+- `maybeVerify` now checks `this.destroyed` **after** the `runVerifyCommand` await (both the
+  success and catch branches, and before driving the loop) and bails cleanly — the verify command
+  outliving shutdown no longer touches a closed DB.
+- `destroyed` guards added at the top of `maybeVerify` / `driveVerifyFeedback` / `autoSteer`, and the
+  not-IDLE / missing-session early returns now `settleVerify` (reinforces the round-4 liveness fix).
+- `onModuleDestroy` is now **async**: it sets `destroyed`, then awaits in-flight `runPromises` and
+  fire-and-forget drained-steer `pendingWork` (a bounded settle loop) so shutdown doesn't leave the
+  loop writing to a torn-down DB.
+
+Test-isolation hardening (`sessions.verify-feedback-restart.spec.ts`):
+- **Per-test `dataDir`** (was one shared dir) so no module's boot `resumeVerifyLoops()` scan can pick
+  up another test's sessions; temp dirs are cleaned in `afterAll`, **never mid-run** (deleting a
+  SQLite file an in-flight run still holds crashes it).
+- The idempotent test is now **fully seeded** (needs-attention tail written by hand, loop disabled
+  during seed) instead of racing a live loop — load-immune.
+- The steer-race test waits on the drained human `steer_message` (not just `verify_needs_attention`),
+  since the queued steer drains after the surface event under load; it uses a configurable
+  `setTurnDelay` on the controllable provider (the old `setAvailabilityDelay` no longer widened
+  autoSteer's window after the round-4 sync-claim fix).
+
 ## Notes for the implementer (fold of Codex's implementer notes)
 
 - **origin/retryId live in shared steer metadata** emitted by `BaseAgentProvider` for auto-steers
