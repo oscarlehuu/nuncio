@@ -90,6 +90,23 @@ describe('mapStreamEvent', () => {
     });
   });
 
+  it('strips the in-process MCP prefix so tool_start shows the bare tool name', () => {
+    const state = createDeltaMappingState();
+    const mapped = mapStreamEvent(
+      {
+        type: 'stream_event',
+        uuid: 'm1',
+        event: {
+          type: 'content_block_start',
+          content_block: { type: 'tool_use', id: 'toolu_2', name: 'mcp__nuncio-runtime__verify', input: {} },
+        },
+      },
+      state,
+      paragraphBoundary,
+    );
+    expect((mapped?.payload as { tool: string }).tool).toBe('verify');
+  });
+
   it('ignores non-mapped stream events (message_start, stop, unknown deltas)', () => {
     const state = createDeltaMappingState();
     expect(

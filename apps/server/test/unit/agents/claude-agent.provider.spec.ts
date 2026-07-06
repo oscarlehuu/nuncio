@@ -61,6 +61,7 @@ describe('ClaudeAgentProvider', () => {
     delete process.env.NUNCIO_DATA_DIR;
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.NUNCIO_CLAUDE_BIN;
+    delete process.env.NUNCIO_CLAUDE_PERMISSION_MODE;
   });
 
   it('is available when ANTHROPIC_API_KEY is set (no CLI probe)', async () => {
@@ -204,5 +205,253 @@ describe('ClaudeAgentProvider', () => {
     });
     await provider.run(created.id, 'hi', { cwd: '/tmp/ws', model: 'claude:haiku' });
     expect(sessions.findById(created.id)?.status).toBe('ERROR');
+  });
+
+  describe('permission mode setting', () => {
+    it('defaults to acceptEdits when unset', async () => {
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await provider.run(created.id, 'hi', { cwd: '/tmp/ws', model: 'claude:haiku' });
+      expect(capturedOptions?.permissionMode).toBe('acceptEdits');
+    });
+
+    it('honours a configured mode and busts on setting change', async () => {
+      settings.set('NUNCIO_CLAUDE_PERMISSION_MODE', 'plan');
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await provider.run(created.id, 'hi', { cwd: '/tmp/ws', model: 'claude:haiku' });
+      expect(capturedOptions?.permissionMode).toBe('plan');
+    });
+
+    it('falls back to acceptEdits for an unknown value (e.g. stale env override)', async () => {
+      // The settings service validates the enum on write, so an out-of-band value
+      // only reaches the resolver via env; guard against it there.
+      process.env.NUNCIO_CLAUDE_PERMISSION_MODE = 'garbage';
+      provider.bustCache();
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await provider.run(created.id, 'hi', { cwd: '/tmp/ws', model: 'claude:haiku' });
+      expect(capturedOptions?.permissionMode).toBe('acceptEdits');
+    });
+  });
+
+  describe('runtime tools → in-process MCP server', () => {
+    it('registers an mcpServers entry and appendSystemPrompt from context.tools', async () => {
+      const create = (opts: { name: string }) => ({ type: 'sdk' as const, name: opts.name, instance: {} });
+      provider.createSdkMcpServer = create as never;
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await provider.run(created.id, 'call the tool', {
+        cwd: '/tmp/ws',
+        model: 'claude:haiku',
+        tools: {
+          systemPromptAppend: 'You have a verify tool.',
+          tools: [{ name: 'verify', inputSchema: {}, execute: () => 'ok' }],
+        },
+      });
+      expect(capturedOptions?.mcpServers?.['nuncio-runtime']).toBeDefined();
+      expect(capturedOptions?.appendSystemPrompt).toBe('You have a verify tool.');
+    });
+
+    it('omits mcpServers when the session has no runtime tools', async () => {
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await provider.run(created.id, 'hi', { cwd: '/tmp/ws', model: 'claude:haiku' });
+      expect(capturedOptions?.mcpServers).toBeUndefined();
+      expect(capturedOptions?.appendSystemPrompt).toBeUndefined();
+    });
+  });
+
+  describe('canUseTool → approval bridge', () => {
+    /**
+     * A query that invokes canUseTool during iteration and records the resolved
+     * PermissionResult so the test can assert allow/deny mapping.
+     */
+    function approvalQuery(
+      results: Array<{ toolName: string; requestId: string; input?: Record<string, unknown> }>,
+      captured: { last?: unknown; all: unknown[] },
+    ) {
+      return ({ options }: { options: ClaudeQueryOptions }) => ({
+        async interrupt() {},
+        async setModel() {},
+        async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+          yield { type: 'system', subtype: 'init', session_id: 't1' };
+          for (const r of results) {
+            const decision = await options.canUseTool(
+              r.toolName,
+              r.input ?? { command: 'curl x' },
+              { requestId: r.requestId, displayName: r.toolName, description: 'a path' },
+            );
+            captured.last = decision;
+            captured.all.push(decision);
+          }
+          yield { type: 'result', subtype: 'success', result: 'done' };
+        },
+      });
+    }
+
+    it('approve → allow echoing the input', async () => {
+      const captured: { last?: unknown; all: unknown[] } = { all: [] };
+      provider.queryFactory = approvalQuery([{ toolName: 'Bash', requestId: 'sdk-1' }], captured) as never;
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      const approve = async (request: unknown) => {
+        // Resolve the card immediately with approve.
+        void request;
+        return { requestId: 'nuncio-1', decision: 'approve' as const };
+      };
+      await provider.run(created.id, 'run curl', {
+        cwd: '/tmp/ws',
+        model: 'claude:haiku',
+        requestProviderApproval: approve,
+      });
+      expect(captured.last).toEqual({ behavior: 'allow', updatedInput: { command: 'curl x' } });
+    });
+
+    it('deny → deny with a message', async () => {
+      const captured: { last?: unknown; all: unknown[] } = { all: [] };
+      provider.queryFactory = approvalQuery([{ toolName: 'Bash', requestId: 'sdk-2' }], captured) as never;
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await provider.run(created.id, 'run curl', {
+        cwd: '/tmp/ws',
+        model: 'claude:haiku',
+        requestProviderApproval: async () => ({ requestId: 'n', decision: 'deny' as const }),
+      });
+      expect((captured.last as { behavior: string }).behavior).toBe('deny');
+    });
+
+    it('dedupes a redelivered requestId to one approval card', async () => {
+      let calls = 0;
+      let releaseHook!: () => void;
+      const hookGate = new Promise<void>((resolve) => (releaseHook = resolve));
+      const decisions: Array<{ behavior: string }> = [];
+      // The SDK redelivers the same control_request BEFORE the first resolves:
+      // fire both canUseTool invocations concurrently with one shared requestId.
+      provider.queryFactory = ({ options }: { options: ClaudeQueryOptions }) => ({
+        async interrupt() {},
+        async setModel() {},
+        async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+          yield { type: 'system', subtype: 'init', session_id: 't1' };
+          const both = await Promise.all([
+            options.canUseTool('Bash', { command: 'x' }, { requestId: 'dup' }),
+            options.canUseTool('Bash', { command: 'x' }, { requestId: 'dup' }),
+          ]);
+          decisions.push(...(both as Array<{ behavior: string }>));
+          yield { type: 'result', subtype: 'success', result: 'done' };
+        },
+      }) as never;
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      const run = provider.run(created.id, 'run curl', {
+        cwd: '/tmp/ws',
+        model: 'claude:haiku',
+        requestProviderApproval: async () => {
+          calls += 1;
+          await hookGate;
+          return { requestId: 'n', decision: 'approve' as const };
+        },
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      releaseHook();
+      await run;
+      expect(calls).toBe(1);
+      expect(decisions).toHaveLength(2);
+      expect(decisions[0]).toEqual(decisions[1]);
+    });
+
+    it('fails closed (deny) when the run has no approval hook', async () => {
+      const captured: { last?: unknown; all: unknown[] } = { all: [] };
+      provider.queryFactory = approvalQuery([{ toolName: 'Bash', requestId: 'sdk-3' }], captured) as never;
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await provider.run(created.id, 'run curl', { cwd: '/tmp/ws', model: 'claude:haiku' });
+      expect((captured.last as { behavior: string }).behavior).toBe('deny');
+    });
+
+    it('aborting the session denies a parked callback (fail-closed lifecycle)', async () => {
+      let resolved: { behavior: string } | undefined;
+      // Never-resolving approval hook so the callback parks until dispose aborts.
+      provider.queryFactory = ({ options }: { options: ClaudeQueryOptions }) => ({
+        async interrupt() {},
+        async setModel() {},
+        async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+          yield { type: 'system', subtype: 'init', session_id: 't1' };
+          const decision = await options.canUseTool('Bash', { command: 'x' }, { requestId: 'park' });
+          resolved = decision;
+          yield { type: 'result', subtype: 'success', result: 'done' };
+        },
+      }) as never;
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      const run = provider.run(created.id, 'run curl', {
+        cwd: '/tmp/ws',
+        model: 'claude:haiku',
+        requestProviderApproval: () => new Promise(() => {}),
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      provider.dispose(created.id);
+      await run.catch(() => {});
+      expect(resolved?.behavior).toBe('deny');
+    });
+
+    it('submitInteraction resolves a parked callback with an always-allow round-trip', async () => {
+      let resolved: { behavior: string; updatedPermissions?: unknown[] } | undefined;
+      provider.queryFactory = ({ options }: { options: ClaudeQueryOptions }) => ({
+        async interrupt() {},
+        async setModel() {},
+        async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+          yield { type: 'system', subtype: 'init', session_id: 't1' };
+          const decision = await options.canUseTool(
+            'Bash',
+            { command: 'x' },
+            { requestId: 'park2', suggestions: [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }] },
+          );
+          resolved = decision as never;
+          yield { type: 'result', subtype: 'success', result: 'done' };
+        },
+      }) as never;
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      const run = provider.run(created.id, 'run curl', {
+        cwd: '/tmp/ws',
+        model: 'claude:haiku',
+        // Never resolves via the card; submitInteraction settles it.
+        requestProviderApproval: () => new Promise(() => {}),
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      await provider.submitInteraction(created.id, 'park2', {
+        answers: [{ questionId: 'q', selectedOptionIds: ['always'] }],
+        resolvedBy: 'user',
+      });
+      await run;
+      expect(resolved?.behavior).toBe('allow');
+      expect(resolved?.updatedPermissions).toHaveLength(1);
+    });
+
+    it('submitInteraction throws for an unknown requestId', async () => {
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await provider.run(created.id, 'hi', { cwd: '/tmp/ws', model: 'claude:haiku' });
+      await expect(
+        provider.submitInteraction(created.id, 'nope', { answers: [], resolvedBy: 'skip' }),
+      ).rejects.toThrow();
+    });
+
+    it('interrupt denies a parked callback (the tool will not run)', async () => {
+      let resolved: { behavior: string } | undefined;
+      provider.queryFactory = ({ options }: { options: ClaudeQueryOptions }) => ({
+        async interrupt() {},
+        async setModel() {},
+        async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+          yield { type: 'system', subtype: 'init', session_id: 't1' };
+          const decision = await options.canUseTool('Bash', { command: 'x' }, { requestId: 'park3' });
+          resolved = decision;
+          yield { type: 'result', subtype: 'success', result: 'done' };
+        },
+      }) as never;
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      const run = provider.run(created.id, 'run curl', {
+        cwd: '/tmp/ws',
+        model: 'claude:haiku',
+        requestProviderApproval: () => new Promise(() => {}),
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      await provider.interrupt(created.id);
+      await run;
+      expect(resolved?.behavior).toBe('deny');
+    });
+
+    it('supportsInteraction is true', () => {
+      expect(provider.supportsInteraction()).toBe(true);
+    });
   });
 });

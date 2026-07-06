@@ -9,6 +9,7 @@
  * generated type tree, which churns between releases.
  */
 
+import { normalizeMcpToolName } from '../tools/claude-runtime-tools.adapter';
 import type { ClaudeResultMessage, ClaudeStreamEventMessage } from './claude-agent.sdk';
 
 /** One nuncio event the provider should append + emit. */
@@ -51,7 +52,9 @@ export function mapStreamEvent(
         type: 'tool_start',
         payload: {
           callId: block.id,
-          tool: block.name ?? 'tool',
+          // In-process runtime tools surface as `mcp__<server>__<tool>`; strip the
+          // prefix so the transcript shows the bare tool name.
+          tool: normalizeMcpToolName(block.name ?? 'tool'),
           ...(block.input !== undefined ? { input: block.input } : {}),
         },
       };

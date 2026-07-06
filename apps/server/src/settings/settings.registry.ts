@@ -144,6 +144,23 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
       'Path to a `claude` CLI binary used for the auth probe and by the SDK. Leave unset to use the binary bundled with the Claude Agent SDK.',
     envVar: 'NUNCIO_CLAUDE_BIN',
   },
+  {
+    key: 'NUNCIO_CLAUDE_PERMISSION_MODE',
+    category: 'provider',
+    providerId: 'claude',
+    type: 'string',
+    label: 'Claude permission mode',
+    description:
+      'How the `claude` provider gates tool use. acceptEdits (default) auto-approves file edits and routes Bash/web/etc. through nuncio approval cards; default asks for everything; plan is read-only planning; bypassPermissions runs every tool without asking.',
+    envVar: 'NUNCIO_CLAUDE_PERMISSION_MODE',
+    default: 'acceptEdits',
+    options: [
+      { value: 'acceptEdits', label: 'Accept edits', description: 'Auto-approve file edits; ask for the rest.' },
+      { value: 'default', label: 'Ask every time', description: 'Route every privileged tool through an approval card.' },
+      { value: 'plan', label: 'Plan only', description: 'Read-only planning; no edits or commands.' },
+      { value: 'bypassPermissions', label: 'Bypass', description: 'Run every tool without asking (trusted workspaces only).' },
+    ],
+  },
   // ── Provider behavioral ──────────────────────────────────────────────────
   {
     key: 'NUNCIO_CURSOR_CWD',

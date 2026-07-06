@@ -60,11 +60,21 @@ export interface ClaudeQuery extends AsyncIterable<ClaudeSdkMessage> {
   setModel(model?: string): Promise<void>;
 }
 
+/** Permission modes the founder setting exposes; mirrors the SDK's PermissionMode subset we use. */
+export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
+
+/** An in-process SDK MCP server config, passed straight through to the SDK. */
+export interface ClaudeMcpServer {
+  type: 'sdk';
+  name: string;
+  instance: unknown;
+}
+
 export interface ClaudeQueryOptions {
   cwd: string;
   includePartialMessages: true;
   settingSources: [];
-  permissionMode: 'acceptEdits';
+  permissionMode: ClaudePermissionMode;
   canUseTool: ClaudeCanUseTool;
   abortController: AbortController;
   model?: string;
@@ -72,29 +82,51 @@ export interface ClaudeQueryOptions {
   effort?: string;
   env?: Record<string, string | undefined>;
   pathToClaudeCodeExecutable?: string;
+  mcpServers?: Record<string, ClaudeMcpServer>;
+  appendSystemPrompt?: string;
 }
+
+/** The callback options payload the SDK hands to `canUseTool` (structural subset we read). */
+export interface ClaudeCanUseToolOptions {
+  signal?: AbortSignal;
+  suggestions?: unknown[];
+  blockedPath?: string;
+  decisionReason?: string;
+  title?: string;
+  displayName?: string;
+  description?: string;
+  toolUseID?: string;
+  requestId: string;
+}
+
+export type ClaudeCanUseToolResult =
+  | { behavior: 'allow'; updatedInput: Record<string, unknown>; updatedPermissions?: unknown[] }
+  | { behavior: 'deny'; message: string };
 
 export type ClaudeCanUseTool = (
   toolName: string,
   input: Record<string, unknown>,
-  options: unknown,
-) => Promise<{ behavior: 'allow'; updatedInput: Record<string, unknown> } | { behavior: 'deny'; message: string }>;
+  options: ClaudeCanUseToolOptions,
+) => Promise<ClaudeCanUseToolResult>;
 
 export type ClaudeQueryFactory = (params: {
   prompt: AsyncIterable<ClaudeUserMessage>;
   options: ClaudeQueryOptions;
 }) => ClaudeQuery;
 
+import type { CreateSdkMcpServer } from '../tools/claude-runtime-tools.adapter';
+
 /**
- * Permissive tool gate — a clearly-isolated Phase-2 seam. Tools are gated via
- * this callback (never via bare `allowedTools`, which would shadow it), so the
- * approval flow swaps in here without touching the query construction. Until
- * then everything is allowed with the model's own input unchanged.
+ * Lazy accessor for the SDK's `createSdkMcpServer`. The provider builds the
+ * in-process runtime-tools server at query construction; importing it lazily
+ * keeps the SDK (and its bundled CLI) out of module-import time. The first call
+ * imports synchronously-cached; callers that need the server before the first
+ * turn await `loadCreateSdkMcpServer()` once.
  */
-export const permissiveCanUseTool: ClaudeCanUseTool = async (_toolName, input) => ({
-  behavior: 'allow',
-  updatedInput: input,
-});
+export async function loadCreateSdkMcpServer(): Promise<CreateSdkMcpServer> {
+  const sdk = await import('@anthropic-ai/claude-agent-sdk');
+  return sdk.createSdkMcpServer as unknown as CreateSdkMcpServer;
+}
 
 /**
  * Real factory: lazy-imports the SDK's `query` so importing the provider never

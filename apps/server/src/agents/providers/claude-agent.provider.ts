@@ -6,14 +6,26 @@ import { SettingsService } from '../../settings/settings.service';
 import type { ModelOptionsMap } from '../../models/model-options.types';
 import type { ModelProviderDto } from '../../models/models.types';
 import { AgentRunCancelledError, BaseAgentProvider } from '../agents.base-provider';
-import type { AgentRunContext } from '../agents.types';
+import type { AgentRunContext, InteractionResponse } from '../agents.types';
 import { appendRuntimeToolInstructions } from '../tools/agent-runtime-tools.types';
+import {
+  buildClaudeMcpServers,
+  type ClaudeMcpServerConfig,
+  type CreateSdkMcpServer,
+} from '../tools/claude-runtime-tools.adapter';
 import {
   classifyResult,
   createDeltaMappingState,
   mapStreamEvent,
   type DeltaMappingState,
 } from './claude-agent.helpers';
+import {
+  buildApprovalRequest,
+  decisionToPermissionResult,
+  denyResult,
+  interactionToDecision,
+  type ClaudePermissionResult,
+} from './claude-agent.permissions';
 import {
   expandHome,
   findBundledClaudeBinary,
@@ -23,7 +35,10 @@ import {
 } from './claude-cli-resolver';
 import {
   buildClaudeQueryFactory,
-  permissiveCanUseTool,
+  loadCreateSdkMcpServer,
+  type ClaudeCanUseToolOptions,
+  type ClaudeMcpServer,
+  type ClaudePermissionMode,
   type ClaudeQuery,
   type ClaudeQueryFactory,
   type ClaudeResultMessage,
@@ -34,12 +49,37 @@ import { CLAUDE_STATIC_MODELS } from './claude-agent.models';
 import { InputQueue } from './claude-agent.input-queue';
 
 const CLAUDE_MODEL_PREFIX = 'claude:';
+const DEFAULT_PERMISSION_MODE: ClaudePermissionMode = 'acceptEdits';
+const VALID_PERMISSION_MODES: ReadonlySet<ClaudePermissionMode> = new Set([
+  'default',
+  'acceptEdits',
+  'plan',
+  'bypassPermissions',
+]);
+
+/** A tool-approval callback parked while the user decides, keyed by the SDK's requestId. */
+interface PendingApproval {
+  /** The promise the SDK callback awaits — reused when the same requestId is redelivered. */
+  promise: Promise<ClaudePermissionResult>;
+  /** Resolve the SDK callback with an allow/deny PermissionResult. */
+  settle: (result: ClaudePermissionResult) => void;
+  /** The nuncio approval requestId (once the card exists), so submitInteraction can match it. */
+  nuncioRequestId?: string;
+  /** The SDK callback options — carries `suggestions` for the always-allow round-trip. */
+  options: ClaudeCanUseToolOptions;
+  /** The tool's (possibly updated) input, echoed back on allow. */
+  input: Record<string, unknown>;
+}
 
 interface ActiveClaudeSession {
   query: ClaudeQuery;
   input: InputQueue;
   abort: AbortController;
   delta: DeltaMappingState;
+  /** Approval callbacks parked awaiting a user decision, keyed by the SDK requestId (dedupe + resolve). */
+  pendingApprovals: Map<string, PendingApproval>;
+  /** The approval hook from the run context, captured per session for canUseTool. */
+  requestProviderApproval?: AgentRunContext['requestProviderApproval'];
   /**
    * Number of live `priority:'now'` steers awaiting their truncated terminal.
    * Each such steer cuts the in-flight turn short with its own `result`; that
@@ -73,6 +113,9 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
 
   /** Test hook: inject a fake `query` factory (constructor-injected, no module mock). */
   queryFactory: ClaudeQueryFactory = buildClaudeQueryFactory();
+
+  /** Test hook: build the in-process MCP server without importing the real SDK. */
+  createSdkMcpServer?: CreateSdkMcpServer;
 
   /** Test hook: replace process execution for the availability probe. */
   commandRunner: ClaudeCliCommandRunner = (command, args, options) =>
@@ -131,6 +174,9 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     const active = this.activeSessions.get(sessionId);
     if (!active) return;
     this.interruptedSessions.add(sessionId);
+    // An interrupt ends the current turn; any tool it parked for approval will
+    // not run, so deny those prompts rather than leaving stale approval cards.
+    this.denyAllPending(active);
     try {
       await active.query.interrupt();
     } catch (error) {
@@ -174,6 +220,7 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
       // the handle persists). This is a normal next turn, NOT a mid-flight
       // redirect — the live-redirect path is steerMidRun with priority 'now'.
       existing.delta = createDeltaMappingState();
+      existing.requestProviderApproval = context.requestProviderApproval;
       this.interruptedSessions.delete(sessionId);
       existing.input.push(this.buildUserMessage(text, context, false));
       await this.consume(sessionId, existing, context);
@@ -181,7 +228,7 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     }
 
     // A fresh run always starts a normal turn; resume threads through options.
-    const active = this.startSession(sessionId, text, context);
+    const active = await this.startSession(sessionId, text, context);
     this.activeSessions.set(sessionId, active);
     await this.consume(sessionId, active, context);
   }
@@ -206,11 +253,107 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     return true;
   }
 
-  private startSession(
+  supportsInteraction(): boolean {
+    return true;
+  }
+
+  /**
+   * Resolve a parked tool-approval prompt by requestId. The binary approval card
+   * (respondProviderRequest) already resolves canUseTool through
+   * `requestProviderApproval`; this path handles the richer respond flow (e.g.
+   * an "always allow" option). Idempotent: a redelivered or already-resolved id
+   * is a no-op rather than a throw once the pending entry is gone.
+   */
+  async submitInteraction(
+    sessionId: string,
+    requestId: string,
+    response: InteractionResponse,
+  ): Promise<void> {
+    const active = this.activeSessions.get(sessionId);
+    const pending = active ? this.findPendingByRequestId(active, requestId) : undefined;
+    if (!active || !pending) {
+      throw new Error(`No pending Claude approval ${requestId}`);
+    }
+    const { decision, alwaysAllow } = interactionToDecision(response);
+    this.settlePending(active, pending.key, decisionToPermissionResult(decision, pending.entry.input, pending.entry.options, alwaysAllow));
+  }
+
+  /**
+   * The SDK permission callback. Routes through the session's approval hook so
+   * the existing pending-approval card renders, maps the decision back to a
+   * PermissionResult, and fails closed on abort or a missing hook. Deduped by the
+   * SDK requestId so a redelivered control_request reuses the in-flight promise.
+   */
+  private approveTool(
+    active: ActiveClaudeSession,
+    toolName: string,
+    input: Record<string, unknown>,
+    options: ClaudeCanUseToolOptions,
+  ): Promise<ClaudePermissionResult> {
+    if (active.abort.signal.aborted) return Promise.resolve(denyResult());
+
+    const existing = active.pendingApprovals.get(options.requestId);
+    if (existing) return existing.promise;
+
+    const hook = active.requestProviderApproval;
+    if (!hook) {
+      // Fail closed: no channel to ask the user means we must not silently allow.
+      return Promise.resolve(denyResult('No approval channel available.'));
+    }
+
+    let settle!: (result: ClaudePermissionResult) => void;
+    const promise = new Promise<ClaudePermissionResult>((resolve) => {
+      settle = resolve;
+    });
+    const pending: PendingApproval = { promise, settle, options, input };
+    active.pendingApprovals.set(options.requestId, pending);
+
+    void hook(buildApprovalRequest(this.id, toolName, input, options))
+      .then((result) => {
+        pending.nuncioRequestId = result.requestId;
+        // If submitInteraction already settled this (always-allow), the entry is
+        // gone; only the binary card decision reaches here for a still-pending one.
+        if (active.pendingApprovals.has(options.requestId)) {
+          this.settlePending(active, options.requestId, decisionToPermissionResult(result.decision, input, options));
+        }
+      })
+      .catch(() => this.settlePending(active, options.requestId, denyResult('Approval request failed.')));
+
+    return promise;
+  }
+
+  private settlePending(
+    active: ActiveClaudeSession,
+    requestId: string,
+    result: ClaudePermissionResult,
+  ): void {
+    const pending = active.pendingApprovals.get(requestId);
+    if (!pending) return;
+    active.pendingApprovals.delete(requestId);
+    pending.settle(result);
+  }
+
+  private denyAllPending(active: ActiveClaudeSession): void {
+    for (const requestId of [...active.pendingApprovals.keys()]) {
+      this.settlePending(active, requestId, denyResult('Session disposed.'));
+    }
+  }
+
+  private findPendingByRequestId(
+    active: ActiveClaudeSession,
+    requestId: string,
+  ): { key: string; entry: PendingApproval } | undefined {
+    for (const [key, entry] of active.pendingApprovals) {
+      if (key === requestId || entry.nuncioRequestId === requestId) return { key, entry };
+    }
+    return undefined;
+  }
+
+  private async startSession(
     sessionId: string,
     text: string,
     context: AgentRunContext,
-  ): ActiveClaudeSession {
+  ): Promise<ActiveClaudeSession> {
     const input = new InputQueue();
     const abort = new AbortController();
     const session = this.sessions.findById(sessionId);
@@ -218,10 +361,25 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     const model = this.stripPrefix(context.model);
     const apiKey = this.resolveApiKey();
     const effort = this.resolveEffort(context.modelOptions);
+    const appendSystemPrompt = context.tools?.systemPromptAppend?.trim() || undefined;
+
+    const active: ActiveClaudeSession = {
+      // query is assigned below; declared first so the canUseTool closure can
+      // capture the handle and reject its parked callbacks on abort.
+      query: undefined as unknown as ClaudeQuery,
+      input,
+      abort,
+      delta: createDeltaMappingState(),
+      pendingRedirects: 0,
+      pendingApprovals: new Map(),
+      requestProviderApproval: context.requestProviderApproval,
+    };
+
+    const mcpServers = await this.buildMcpServers(context);
 
     input.push(this.buildUserMessage(text, context, false));
 
-    const query = this.queryFactory({
+    active.query = this.queryFactory({
       prompt: input,
       options: {
         cwd: context.cwd ?? context.workspace ?? process.cwd(),
@@ -229,12 +387,15 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
         // Session behavior is fully determined by nuncio: no ~/.claude plugins,
         // hooks, or CLAUDE.md leak into a nuncio-run session.
         settingSources: [],
-        permissionMode: 'acceptEdits',
-        canUseTool: permissiveCanUseTool,
+        permissionMode: this.resolvePermissionMode(),
+        canUseTool: (toolName, toolInput, options) =>
+          this.approveTool(active, toolName, toolInput, options),
         abortController: abort,
         ...(model ? { model } : {}),
         ...(resume ? { resume } : {}),
         ...(effort ? { effort } : {}),
+        ...(mcpServers ? { mcpServers } : {}),
+        ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
         // The subscription keychain ride needs no env; only pass the API key
         // when one is explicitly configured (the distribution path).
         ...(apiKey ? { env: { ...process.env, ANTHROPIC_API_KEY: apiKey } } : {}),
@@ -242,7 +403,20 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
       },
     });
 
-    return { query, input, abort, delta: createDeltaMappingState(), pendingRedirects: 0 };
+    // Fail-closed: an abort (dispose/interrupt) denies every parked callback so a
+    // killed session never leaves a tool prompt hanging.
+    abort.signal.addEventListener('abort', () => this.denyAllPending(active), { once: true });
+
+    return active;
+  }
+
+  private async buildMcpServers(
+    context: AgentRunContext,
+  ): Promise<Record<string, ClaudeMcpServer> | undefined> {
+    if (!context.tools?.tools?.length) return undefined;
+    const create = this.createSdkMcpServer ?? (await loadCreateSdkMcpServer());
+    const servers = buildClaudeMcpServers(create, context.tools);
+    return servers as Record<string, ClaudeMcpServer> | undefined;
   }
 
   /** Drain the SDK message stream for one turn, mapping each message to nuncio events. */
@@ -411,6 +585,14 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
 
   private resolveApiKey(): string | undefined {
     return this.settings.resolve('ANTHROPIC_API_KEY')?.trim() || undefined;
+  }
+
+  /** Read the founder permission-mode setting fresh each run; an unknown value falls back to the default. */
+  private resolvePermissionMode(): ClaudePermissionMode {
+    const value = this.settings.resolve('NUNCIO_CLAUDE_PERMISSION_MODE')?.trim();
+    return value && VALID_PERMISSION_MODES.has(value as ClaudePermissionMode)
+      ? (value as ClaudePermissionMode)
+      : DEFAULT_PERMISSION_MODE;
   }
 
   private resolveEffort(options: ModelOptionsMap | null | undefined): string | undefined {
