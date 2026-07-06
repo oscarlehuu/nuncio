@@ -15,6 +15,10 @@ import { ThinkingBlock } from './transcript-blocks/thinking-block';
 import { ToolGroup, type ToolGroupTool } from './transcript-blocks/tool-group';
 import { CursorContextBlock } from './transcript-blocks/cursor-context-block';
 import { UserInputBlock } from './transcript-blocks/user-input-block';
+import {
+  VerifyNeedsAttentionRow,
+  VerifyRetryRow,
+} from './transcript-blocks/verify-rows';
 import { ProviderRequestCard } from './provider-request-card';
 import {
   AssistantBubble,
@@ -312,6 +316,21 @@ function RenderItemView({
           <span>Interrupted</span>
           <span className="h-px flex-1 bg-border" />
         </div>
+      );
+    case 'verify_retry':
+      return (
+        <VerifyRetryRow
+          round={block.round}
+          {...(block.command ? { command: block.command } : {})}
+        />
+      );
+    case 'verify_needs_attention':
+      return (
+        <VerifyNeedsAttentionRow
+          rounds={block.rounds}
+          reason={block.reason}
+          {...(block.lastOutputTail ? { lastOutputTail: block.lastOutputTail } : {})}
+        />
       );
     case 'error':
       return <ErrorRow message={block.message} />;

@@ -60,6 +60,19 @@ export type TranscriptBlock =
       decision?: ProviderRequestDecision;
     }
   | { kind: 'interrupted'; key: string }
+  | {
+      kind: 'verify_retry';
+      key: string;
+      round: number;
+      command?: string;
+    }
+  | {
+      kind: 'verify_needs_attention';
+      key: string;
+      rounds: number;
+      reason: 'max_rounds' | 'repeated_failure';
+      lastOutputTail?: string;
+    }
   | { kind: 'error'; key: string; message: string };
 
 interface OpenTool {
@@ -602,6 +615,40 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
         decision,
       });
     }
+    return;
+  }
+
+  if (event.type === 'verify_retry') {
+    // The durable marker that an auto-retry fired. Renders a compact row that
+    // sits right before the auto steer_message carrying the failure output.
+    flushAssistant(state);
+    flushThinking(state);
+    const round = Number(payload.round);
+    state.out.push({
+      kind: 'verify_retry',
+      key: `verify-retry-${event.seq}`,
+      round: Number.isFinite(round) ? round : 1,
+      ...(typeof payload.command === 'string' ? { command: payload.command } : {}),
+    });
+    return;
+  }
+
+  if (event.type === 'verify_needs_attention') {
+    // The "needs you" signal — the loop stopped without a green verify.
+    flushAssistant(state);
+    flushThinking(state);
+    const rounds = Number(payload.rounds);
+    const reason =
+      payload.reason === 'repeated_failure' ? 'repeated_failure' : 'max_rounds';
+    state.out.push({
+      kind: 'verify_needs_attention',
+      key: `verify-attention-${event.seq}`,
+      rounds: Number.isFinite(rounds) ? rounds : 0,
+      reason,
+      ...(typeof payload.lastOutputTail === 'string'
+        ? { lastOutputTail: payload.lastOutputTail }
+        : {}),
+    });
     return;
   }
 
