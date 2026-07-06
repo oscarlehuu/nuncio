@@ -581,18 +581,58 @@ export class SessionsService implements OnModuleDestroy {
       }
     }
     this.transcriptWatchers.clear();
-    // Await in-flight local runs (and the verify-feedback loop chained inside
-    // them) before the module — and its DB handle — is torn down. `destroyed` is
-    // set above, so the loop's destroyed-guards make each chain wind down at its
-    // next step; awaiting here prevents a leaked write to a closed DB handle
-    // (SQLITE_IOERR/MISUSE) from surfacing after shutdown.
-    // Drain in-flight runs AND any fire-and-forget drained-steer work. Loop
-    // (settle at destroyed-guards) then re-check, since awaiting a run can spawn
-    // a drained steer that spawns another; bounded by the destroyed guards.
-    for (let i = 0; i < 5; i += 1) {
+    await this.drainInFlightForShutdown();
+  }
+
+  /** Hard ceiling on how long shutdown waits for in-flight turns to unwind. */
+  private shutdownDrainTimeoutMs = 3000;
+
+  /**
+   * Bounded shutdown drain. `destroyed` is already set, so the loop's
+   * destroyed-guards make each chain wind down at its next step. But a provider
+   * turn mid-stream (real Cursor/Pi) ignores `destroyed`, so we first ask each
+   * active turn to abort — interrupt() where the provider supports it, else
+   * dispose() (both provider-agnostic, capability-driven) — then await the
+   * in-flight promises against a HARD timeout and proceed with teardown
+   * regardless. A hung provider must never hold the daemon's shutdown hostage.
+   */
+  private async drainInFlightForShutdown(): Promise<void> {
+    this.abortActiveTurns();
+    const deadline = Date.now() + this.shutdownDrainTimeoutMs;
+    while (Date.now() < deadline) {
       const inFlight = [...this.runPromises.values(), ...this.pendingWork];
-      if (inFlight.length === 0) break;
-      await Promise.allSettled(inFlight);
+      if (inFlight.length === 0) return;
+      const remaining = deadline - Date.now();
+      const timedOut = Symbol('timeout');
+      const outcome = await Promise.race([
+        Promise.allSettled(inFlight).then(() => 'settled'),
+        new Promise((resolve) => setTimeout(() => resolve(timedOut), remaining)),
+      ]);
+      if (outcome === timedOut) return; // proceed with teardown regardless
+      // else loop: awaiting a run may have spawned a drained steer — re-check.
+    }
+  }
+
+  /** Ask every locally-producing session's provider to abort its active turn. */
+  private abortActiveTurns(): void {
+    for (const id of [...this.locallyProducing]) {
+      const session = this.sessions.findById(id);
+      if (!session) continue;
+      let provider;
+      try {
+        provider = this.agents.resolveForSession(session);
+      } catch {
+        continue;
+      }
+      try {
+        if (provider.capabilities.interrupt && provider.interrupt) {
+          void provider.interrupt(id).catch(() => undefined);
+        } else {
+          provider.dispose(id);
+        }
+      } catch {
+        // Best-effort abort — shutdown proceeds regardless.
+      }
     }
   }
 
@@ -1234,11 +1274,17 @@ export class SessionsService implements OnModuleDestroy {
     try {
       await steering;
     } catch (error) {
+      this.locallyProducing.delete(sessionId);
+      // Mirror the success path: a shutdown (or deleted session) during the steer
+      // means the DB handle may be gone — never touch it after the await.
+      if (this.destroyed) {
+        this.settleVerify(sessionId);
+        return;
+      }
       const reason = error instanceof Error ? error.message : String(error);
       if (this.sessions.findById(sessionId)) {
         this.appendAndEmit(sessionId, 'error', { message: `Auto-steer failed: ${reason}` });
       }
-      this.locallyProducing.delete(sessionId);
       this.settleVerify(sessionId);
       return;
     }
@@ -1268,8 +1314,15 @@ export class SessionsService implements OnModuleDestroy {
       if (!state.lastFail) continue;
       const last = events[events.length - 1]!;
       if (last.type === 'verify_needs_attention' || last.type === 'steer_message') continue;
+      const id = session.id;
       setTimeout(() => {
-        void this.resumeOneVerifyLoop(session.id).catch(() => undefined);
+        if (this.destroyed) return;
+        // Track the resume chain in pendingWork so the bounded shutdown drain
+        // covers it — an untracked boot-resumed auto-steer could otherwise write
+        // to a torn-down DB.
+        const work = this.resumeOneVerifyLoop(id).catch(() => undefined);
+        this.pendingWork.add(work);
+        void work.finally(() => this.pendingWork.delete(work));
       }, 0);
     }
   }

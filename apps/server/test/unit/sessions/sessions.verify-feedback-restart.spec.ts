@@ -325,6 +325,50 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
     await booted.close();
   }, TEST_TIMEOUT_MS);
 
+  it('shuts down within a bounded time while a boot-resumed retry hangs in the provider', async () => {
+    // Seed a failed-verify tail (loop disabled), then boot with a provider whose
+    // turn hangs (a stand-in for a real Cursor/Pi stream that ignores shutdown).
+    // The boot scan resumes the loop and fires an auto-steer that never returns.
+    // Closing the module MUST return within a bounded time — a hung provider must
+    // never hold the daemon's shutdown hostage (finding #1) — and the resume chain
+    // must be tracked so the bounded drain covers it (finding #2).
+    process.env[MAX_ROUNDS] = '3';
+    process.env[AUTO_STEER] = '0';
+
+    const seed = await buildControllableModule();
+    const seedSessions = seed.get(SessionsService);
+    const seedEvents = seed.get(EventsRepository);
+    const session = await seedSessions.create({ prompt: 'shutdown mid-resume', provider: 'cursor', workspace });
+    await seedSessions.awaitRun(session.id);
+    seedFailingVerifyResult(seedEvents, session.id, 'RED: shutdown mid-resume');
+    await seed.close();
+
+    // A verify command must exist so the resume evaluates and auto-steers.
+    mkdirSync(join(workspace, '.nuncio'), { recursive: true });
+    writeFileSync(join(workspace, '.nuncio', 'verify'), 'echo RED >&2\nexit 1\n');
+
+    process.env[AUTO_STEER] = '1';
+    const booted = await buildControllableModule();
+    booted.get(SessionsService);
+    const events = booted.get(EventsRepository);
+    const provider = booted.get(CursorAgentProvider) as unknown as ControllableAgentProvider;
+    // The auto-steer turn hangs effectively forever.
+    provider.setTurnDelay(60000);
+
+    // Wait for the resume to fire the auto-steer marker (loop genuinely in flight,
+    // the provider turn now hanging).
+    await waitFor(
+      () => eventsOfType(events.list(session.id), 'verify_retry').length >= 1,
+      15000,
+    );
+
+    // Close while the provider turn hangs: must return bounded, not wait 60s.
+    const start = Date.now();
+    await booted.close();
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeLessThan(8000);
+  }, TEST_TIMEOUT_MS);
+
   it('re-sends the dangling auto-steer after a restart between the retry marker and the steer', async () => {
     // Crash point (deterministic): verify_retry (with a retryId) is the tail of the
     // log, with NO steer_message after it. Boot must re-send exactly that steer

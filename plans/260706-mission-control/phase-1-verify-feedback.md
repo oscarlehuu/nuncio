@@ -449,6 +449,31 @@ Test-isolation hardening (`sessions.verify-feedback-restart.spec.ts`):
   `setTurnDelay` on the controllable provider (the old `setAvailabilityDelay` no longer widened
   autoSteer's window after the round-4 sync-claim fix).
 
+## Implementation review responses — round 6 (Codex — REVISE, shutdown-hardening holes)
+
+All 3 verified against `254472b` (all real, none refuted):
+
+1. **`onModuleDestroy` could hang forever.** It awaited `runPromises` with no timeout and no abort —
+   `destroyed` is only observed after those awaits return, so a real Cursor/Pi turn mid-stream (which
+   ignores `destroyed`) blocked shutdown indefinitely. Fix: `drainInFlightForShutdown()` first
+   **aborts active turns provider-agnostically** — `interrupt()` where `capabilities.interrupt`, else
+   `dispose()` — then awaits in-flight promises against a **hard 3s timeout** and proceeds with
+   teardown regardless. A hung provider never holds shutdown hostage.
+2. **Boot-resumed chains were untracked.** `resumeVerifyLoops` fired `resumeOneVerifyLoop` as
+   `void ...` — shutdown drained only `runPromises`+`pendingWork`, so a boot-resumed auto-steer could
+   write after DB close. Fix: track each resume chain in `pendingWork` (and skip scheduling when
+   already `destroyed`), so the bounded drain covers it.
+3. **`autoSteer` catch lacked a destroyed re-check.** On a steer rejection it called
+   `findById`/`appendAndEmit` even after shutdown. Fix: re-check `this.destroyed` after `await
+   steering` in the catch, mirroring the success path.
+
+Regression (`sessions.verify-feedback-restart.spec.ts`): "shuts down within a bounded time while a
+boot-resumed retry hangs in the provider" — seeds a failed-verify tail, boots with the loop enabled
+and a provider whose turn hangs 60s, waits for the resumed auto-steer, then asserts `module.close()`
+returns in < 8s. The `ControllableAgentProvider` gained an abortable delayed turn + a `dispose()`
+override so the shutdown abort resolves the hang gracefully (mirroring a real provider cancelling its
+stream). Red before the fixes (timed out at 30s); green after (~0.5s).
+
 ## Notes for the implementer (fold of Codex's implementer notes)
 
 - **origin/retryId live in shared steer metadata** emitted by `BaseAgentProvider` for auto-steers

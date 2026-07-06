@@ -36,6 +36,8 @@ export class ControllableAgentProvider extends BaseAgentProvider {
   private failNextSteers = 0;
   private availabilityDelayMs = 0;
   private turnDelayMs = 30;
+  /** Per-session resolvers to abort an in-flight delayed turn on dispose(). */
+  private readonly disposers = new Map<string, () => void>();
 
   constructor(sessions: SessionsRepository, events: EventsRepository) {
     super(sessions, events);
@@ -104,7 +106,18 @@ export class ControllableAgentProvider extends BaseAgentProvider {
     if (this.activePrompts > 0) this.sawOverlap = true;
     this.activePrompts += 1;
     try {
-      if (this.turnDelayMs > 0) await new Promise((r) => setTimeout(r, this.turnDelayMs));
+      if (this.turnDelayMs > 0) {
+        // Abortable delay: dispose() (called by the service's shutdown abort)
+        // resolves this early, mirroring a real provider cancelling its stream.
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, this.turnDelayMs);
+          this.disposers.set(sessionId, () => {
+            clearTimeout(timer);
+            resolve();
+          });
+        });
+        this.disposers.delete(sessionId);
+      }
       const reply = isSteer
         ? `ack steer: ${userText.slice(0, 40)}`
         : 'ack run: controllable provider reply';
@@ -112,5 +125,11 @@ export class ControllableAgentProvider extends BaseAgentProvider {
     } finally {
       this.activePrompts -= 1;
     }
+  }
+
+  /** Abort an in-flight delayed turn (the service's shutdown drain calls this). */
+  override dispose(sessionId: string): void {
+    this.disposers.get(sessionId)?.();
+    this.disposers.delete(sessionId);
   }
 }
