@@ -4,6 +4,7 @@ Context file for AI coding agents working on Nuncio. Read this before touching t
 
 > **Work TDD-first.** Always start from a failing test. Implement only what makes it pass. A change is not done while the suite is red. See [Working practice: TDD-first](#working-practice-tdd-first).
 > **Need a decision from the user? Answer TL;DR.** One-line recommendation first, then the trade-off in a sentence (what you gain vs. lose), then the options. No long preamble — the user decides fast.
+> **North-star docs — read in this order before your first change:** [`docs/product-vision.md`](docs/product-vision.md) (why Nuncio exists: your-machine-as-cloud, pillars, direction tests) → [`docs/architecture-decisions.md`](docs/architecture-decisions.md) (locked decisions — never reverse one without the user) → [`docs/testing-and-verification.md`](docs/testing-and-verification.md) (self-verify playbook + edge-case heuristics).
 
 ## What is Nuncio
 
@@ -38,6 +39,8 @@ Grounding in what exists today:
 - **Frontend (`apps/web`):** Vitest (jsdom + Testing Library) is wired — `bun run --filter @nuncio/web test` runs `vitest run`, specs co-located as `*.spec.tsx`. For frontend changes, keep `bun run --filter @nuncio/web build` + `bun run --filter @nuncio/web lint` + `bun run --filter @nuncio/web test` green and verify visual changes against `mockup.html` (and the light/dark toggle). TDD applies end-to-end — write the failing spec first, watch it fail, then implement.
 
 Bugs: write a test that reproduces the bug (red), then fix (green). No bug fix without a regression test. Refactors: keep existing tests green throughout — if a refactor requires changing tests, it isn't a refactor, it's a behavior change; split it.
+
+**Edge cases are your job, not the user's.** For any change touching session lifecycle, streaming, or provider state, walk the edge-case heuristics table (state×event matrix, projection races, restart/reconnect, boundaries, failure paths, concurrency, idempotency) in [`docs/testing-and-verification.md`](docs/testing-and-verification.md) and add a spec per applicable row. Every bug fix also checks the same heuristic row for sibling bugs in the same PR. Verify at the highest pyramid level reachable without the user (real-browser level 5 for anything visual).
 
 ## Agent workflow (multi-agent sessions)
 
@@ -389,6 +392,13 @@ ERROR   → RUNNING | IDLE | ARCHIVED
 ### Agent providers
 
 The harness is provider-agnostic: an `AgentProvider` runs/steers/disposes a session and knows its own model catalog. **Pi is the inaugural provider**, with Codex and Cursor registered alongside it; future SDKs should implement the same contract.
+
+**Generic-first checklist — run it before writing ANY provider/engine code:**
+
+1. **Does it already exist?** Grep before you write: `agents.types.ts` (contract + capability flags), `agents.base-provider.ts` (shared run/steer orchestration), `agents.registry.ts` (resolution/availability), `settings.registry.ts` (declarative config catalog — a new provider's credentials = one entry), `sessions/domain/events.types.ts` (shared event schema). Inherit or extend the shared shape; do not re-implement it inside a provider.
+2. **Is it truly engine-specific?** If a second engine could ever need the behavior, implement it in the shared layer first (contract / base / registry / event schema / settings catalog / UI) and keep only SDK adapter details (auth, client setup, model translation, delta mapping, runtime quirks) in `providers/<sdk>-agent.provider.ts`.
+3. **Engine differences = capability flags + optional methods** (base all-off, additive) — never `if (id === 'pi')` branches in `SessionsService` or the UI. A new per-provider event type is a contract bug, not a feature.
+4. **A new engine must pass the provider conformance suite** ([`docs/testing-and-verification.md`](docs/testing-and-verification.md#provider-conformance-suite)) before merge; new session-layer behavior goes into the suite, not into one provider's specs.
 
 **Today (Pi + Codex + Cursor, abstracted):** the `apps/server/src/agents/` module defines the `AgentProvider` interface (`agents.types.ts`), a `BaseAgentProvider` abstract class (`agents.base-provider.ts`) using the template-method pattern, and an `AgentRegistry` (`agents.registry.ts`). `BaseAgentProvider.run()`/`steer()` own the shared orchestration (set RUNNING → push user/steer message → `executePrompt()` → set IDLE, with unified error handling); concrete providers implement only `executePrompt()`. `PiAgentProvider` runs the Pi SDK in-process and keeps a `Map<sessionId, PiSessionHandle>` alive after the first run so `steer()` reuses the same Pi session; it token-streams via `session.subscribe()` `text_delta` → `assistant_delta`. `CodexAgentProvider` runs the local `codex app-server` over stdio, persists `provider_thread_id`/`provider_active_turn_id`, maps `item/agentMessage/delta` → `assistant_delta`, and resumes stored Codex threads on follow-up. `CursorAgentProvider` runs `@cursor/sdk` local runtime in-process (`await Agent.create` + `send({ onDelta })` + `wait`), token-streams via `onDelta` `text-delta` → `assistant_delta` (and `tool-call-started`/`completed` → `tool_start`/`tool_end`), and reuses the same agent handle per session for steer. The `EventEmitter` type lives in `agents.types.ts`. See [Token streaming](#token-streaming-per-provider-delta-sources) for the per-provider delta sources behind the shared event contract.
 
