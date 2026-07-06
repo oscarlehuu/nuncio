@@ -9,6 +9,24 @@ import {
 import { activeConnection } from './api-setup';
 import { relayUrlFor } from './connection-store';
 
+type ScheduledFlush = {
+  id: number;
+  cancel: (id: number) => void;
+};
+
+function mergeEvents(prev: SessionEvent[], incoming: SessionEvent[]): SessionEvent[] {
+  if (incoming.length === 0) return prev;
+  const seen = new Set(prev.map((event) => event.seq));
+  const fresh: SessionEvent[] = [];
+  for (const event of incoming) {
+    if (seen.has(event.seq)) continue;
+    seen.add(event.seq);
+    fresh.push(event);
+  }
+  if (fresh.length === 0) return prev;
+  return [...prev, ...fresh].sort((a, b) => a.seq - b.seq);
+}
+
 /**
  * React Native cousin of the web's useSessionStream: REST replay first, then
  * the core relay client over a Bearer-authenticated WebSocket. Foregrounding
@@ -19,16 +37,42 @@ export function useSessionTranscript(sessionId: string | null) {
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const sinceRef = useRef(0);
   const subscriptionRef = useRef<SessionSubscription | null>(null);
+  const pendingEventsRef = useRef<SessionEvent[]>([]);
+  const scheduledFlushRef = useRef<ScheduledFlush | null>(null);
+
+  const flushPendingEvents = useCallback(() => {
+    scheduledFlushRef.current = null;
+    const pending = pendingEventsRef.current;
+    if (pending.length === 0) return;
+    pendingEventsRef.current = [];
+    setEvents((prev) => mergeEvents(prev, pending));
+  }, []);
+
+  const scheduleEventFlush = useCallback(() => {
+    if (scheduledFlushRef.current) return;
+    if (typeof requestAnimationFrame === 'function') {
+      const id = requestAnimationFrame(flushPendingEvents);
+      scheduledFlushRef.current = { id, cancel: cancelAnimationFrame };
+      return;
+    }
+    const id = setTimeout(flushPendingEvents, 16) as unknown as number;
+    scheduledFlushRef.current = { id, cancel: (handle) => clearTimeout(handle) };
+  }, [flushPendingEvents]);
+
+  const cancelPendingEventFlush = useCallback(() => {
+    const scheduled = scheduledFlushRef.current;
+    if (scheduled) {
+      scheduled.cancel(scheduled.id);
+      scheduledFlushRef.current = null;
+    }
+    pendingEventsRef.current = [];
+  }, []);
 
   const onEvent = useCallback((event: SessionEvent) => {
     sinceRef.current = Math.max(sinceRef.current, event.seq);
-    setEvents((prev) => {
-      const last = prev[prev.length - 1];
-      if (last && event.seq > last.seq) return [...prev, event];
-      if (prev.some((e) => e.seq === event.seq)) return prev;
-      return [...prev, event].sort((a, b) => a.seq - b.seq);
-    });
-  }, []);
+    pendingEventsRef.current.push(event);
+    scheduleEventFlush();
+  }, [scheduleEventFlush]);
 
   useEffect(() => {
     if (!sessionId) {
@@ -42,6 +86,7 @@ export function useSessionTranscript(sessionId: string | null) {
     let cancelled = false;
     fetchEvents(sessionId, 0).then((initial) => {
       if (cancelled) return;
+      cancelPendingEventFlush();
       setEvents(initial);
       sinceRef.current = initial.reduce((max, e) => Math.max(max, e.seq), 0);
       subscriptionRef.current = subscribeSessionEvents({
@@ -76,8 +121,9 @@ export function useSessionTranscript(sessionId: string | null) {
       appState.remove();
       subscriptionRef.current?.close();
       subscriptionRef.current = null;
+      cancelPendingEventFlush();
     };
-  }, [sessionId, onEvent]);
+  }, [sessionId, onEvent, cancelPendingEventFlush]);
 
   const steer = useCallback(
     async (message: string): Promise<Session> => {

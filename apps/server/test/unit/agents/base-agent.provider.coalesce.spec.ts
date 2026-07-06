@@ -36,10 +36,15 @@ class ScriptedProvider extends BaseAgentProvider {
     _isSteer: boolean,
     context: AgentRunContext,
   ): Promise<void> {
+    let preview = '';
     for (const step of this.script) {
       if ('waitMs' in step) {
         await new Promise((resolve) => setTimeout(resolve, step.waitMs));
       } else {
+        if (step.type === 'assistant_delta') {
+          preview += String((step.payload as { delta?: unknown }).delta ?? '');
+          this.touchPreview(sessionId, preview);
+        }
         this.pushEvent(sessionId, step.type, step.payload, context.emit);
       }
     }
@@ -158,5 +163,32 @@ describe('BaseAgentProvider delta coalescing', () => {
       'slow',
       ' drip',
     ]);
+  });
+
+  it('throttles preview writes for a rapid delta burst and flushes the final text', async () => {
+    provider.script = [
+      ...Array.from({ length: 12 }, (_, i) => ({
+        type: 'assistant_delta',
+        payload: { delta: String(i % 10) },
+      })),
+      { type: 'assistant_message', payload: { text: '012345678901' } },
+    ];
+    const created = sessions.create({ prompt: 'preview burst', provider: 'scripted' });
+    const originalTouchPreview = sessions.touchPreview.bind(sessions);
+    const previews: string[] = [];
+    sessions.touchPreview = ((id: string, preview: string) => {
+      previews.push(preview);
+      originalTouchPreview(id, preview);
+    }) as SessionsRepository['touchPreview'];
+
+    try {
+      await provider.run(created.id, created.prompt, { emit: () => {} });
+    } finally {
+      sessions.touchPreview = originalTouchPreview as SessionsRepository['touchPreview'];
+    }
+
+    expect(previews.length).toBeLessThanOrEqual(2);
+    expect(previews.at(-1)).toBe('012345678901');
+    expect(sessions.findById(created.id)?.preview).toBe('012345678901');
   });
 });

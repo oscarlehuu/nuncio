@@ -57,6 +57,21 @@ export class SteerQueueRepository {
     return { message: row.message, ...(attachments ? { attachments } : {}) };
   }
 
+  /** Pop every queued steer for the session in FIFO order, emptying the queue. */
+  drainAll(sessionId: string): QueuedSteer[] {
+    const rows = this.database.db
+      .prepare<SteerQueueRow, [string]>(
+        'SELECT * FROM steer_queue WHERE session_id = ? ORDER BY id ASC',
+      )
+      .all(sessionId);
+    if (rows.length === 0) return [];
+    this.database.db.prepare('DELETE FROM steer_queue WHERE session_id = ?').run(sessionId);
+    return rows.map((row) => {
+      const attachments = parseAttachments(row.attachments_json);
+      return { message: row.message, ...(attachments ? { attachments } : {}) };
+    });
+  }
+
   count(sessionId: string): number {
     const row = this.database.db
       .prepare<{ total: number }, [string]>(

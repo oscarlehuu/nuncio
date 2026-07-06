@@ -17,10 +17,12 @@ export type SessionEventType =
   | 'status'
   | 'transcript_refreshed'
   | 'runtime_restarted'
+  | 'runtime_stalled'
   | 'verify_start'
   | 'verify_result'
   | 'steer_message'
   | 'steer_queued'
+  | 'steer_queue_cleared'
   | 'interrupted';
 
 export type UserInputResolvedBy = 'user' | 'timeout' | 'skip' | 'provider';
