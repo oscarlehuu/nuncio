@@ -65,7 +65,8 @@ function glowStyle(status: SessionStatus, pending: boolean): CSSProperties | und
     return { '--glow-color': 'var(--color-warning)', '--glow-size': '22px', '--glow-speed': '1.9s' } as CSSProperties;
   }
   if (status === 'RUNNING') {
-    return { '--glow-color': 'var(--color-success)' } as CSSProperties;
+    // Signature hue on colored accent presets; falls back to success-green on mono.
+    return { '--glow-color': 'var(--glow-brand, var(--color-success))' } as CSSProperties;
   }
   return undefined;
 }

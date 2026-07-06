@@ -2,7 +2,9 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useTheme, type Theme } from './theme-provider';
 import { useAppearance } from './appearance-provider';
+import { useAccent } from './accent-provider';
 import type { Density } from '@/lib/appearance-preference';
+import { ACCENTS, ACCENT_META, DEFAULT_ACCENT } from '@/lib/accent-preference';
 
 const THEME_OPTIONS: ReadonlyArray<{ value: Theme; label: string }> = [
   { value: 'light', label: 'Light' },
@@ -22,11 +24,13 @@ const FONT_SCALE_STEP = 0.05;
 export function AppearanceSettingsSection() {
   const { theme, setTheme } = useTheme();
   const { fontScale, setFontScale, density, setDensity } = useAppearance();
+  const { accent, setAccent } = useAccent();
 
   const resetToDefaults = () => {
     setTheme('system');
     setFontScale(1);
     setDensity('comfortable');
+    setAccent(DEFAULT_ACCENT);
   };
 
   return (
@@ -65,6 +69,43 @@ export function AppearanceSettingsSection() {
                 {opt.label}
               </button>
             ))}
+          </div>
+        </div>
+
+        {/* Accent color */}
+        <div className="flex items-center justify-between py-3 gap-3">
+          <div className="flex flex-col">
+            <span className="text-ui-lg font-medium text-foreground">Accent color</span>
+            <span className="text-ui text-muted-foreground">
+              Signature hue for buttons, focus, and active state
+            </span>
+          </div>
+          <div role="radiogroup" aria-label="Accent color" className="flex items-center gap-1.5">
+            {ACCENTS.map((value) => {
+              const selected = accent === value;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  aria-label={ACCENT_META[value].label}
+                  title={ACCENT_META[value].label}
+                  onClick={() => setAccent(value)}
+                  className={cn(
+                    'grid size-6 place-items-center rounded-full transition-transform',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card',
+                    'hover:scale-110 active:scale-95',
+                    selected && 'ring-2 ring-ring ring-offset-2 ring-offset-card',
+                  )}
+                >
+                  <span
+                    className="size-4 rounded-full border border-black/10 dark:border-white/15"
+                    style={{ background: ACCENT_META[value].swatch }}
+                  />
+                </button>
+              );
+            })}
           </div>
         </div>
 

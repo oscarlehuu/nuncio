@@ -270,6 +270,193 @@
   --terminal-fg: oklch(0.9 0.004 260);
 }
 
+/*
+ * ─── Accent presets ──────────────────────────────────────────────────────────
+ * A configurable signature hue, keyed off `data-accent` on <html> (see
+ * accent-provider.tsx). Each colored preset repoints the brand-driven tokens —
+ * --primary (buttons/send), --ring/--sidebar-ring (focus), --sidebar-primary —
+ * and gives the neutrals a temperature: same lightness as the base tokens, but
+ * shifted to the preset hue with a raised chroma so dark mode reads as a deep
+ * tinted night rather than printer gray. Light surfaces muddy fast, so their
+ * chroma is scaled way down (bg ~0.15x, sidebar ~0.35x of the dark chroma).
+ *
+ * `mono` intentionally has no block: it falls through to the base achromatic
+ * tokens above, so it is pixel-identical to the app's original theme.
+ *
+ * The active/hover washes (--accent, --sidebar-accent) get only a whisper of the
+ * hue at their existing lightness — a subtle tint, never loud color. --destructive
+ * and the status colors are left untouched across every preset.
+ *
+ * --glow-brand feeds the running-tile breath (session-tile.tsx) so an active
+ * agent pulses in the signature hue on colored presets, success-green on mono.
+ *
+ * --primary is also the link + title text color (markdown links, PR/issue/run
+ * titles), not just a button fill. On white light surfaces the vivid accent L
+ * fails WCAG AA (4.5:1 for body text), so light-mode --primary /
+ * --sidebar-primary are darkened to a text-safe L (all four presets clear
+ * ≥4.5:1 on white); --ring / --sidebar-ring keep the vivid accent since rings
+ * are UI affordances, not held to text contrast. Dark mode keeps the vivid
+ * accent everywhere — it already clears AA on the near-black surfaces.
+ *
+ * Per-preset comment lists the accent hue then the neutral hue (they differ on
+ * some presets) and the dark neutral chroma.
+ */
+
+/* IRIS — accent hue 285, neutral hue 285, dark neutral chroma 0.014 */
+:root[data-accent='iris'] {
+  /* --primary/--sidebar-primary darkened to L 0.57 for a comfortable ≥4.5:1 as
+   * link/title text on white; --ring keeps the vivid accent (UI, not text). */
+  --primary: oklch(0.57 0.19 285);
+  --primary-foreground: oklch(0.98 0.01 285);
+  --ring: oklch(0.63 0.19 285);
+  --sidebar-primary: oklch(0.57 0.19 285);
+  --sidebar-primary-foreground: oklch(0.98 0.01 285);
+  --sidebar-ring: oklch(0.63 0.19 285);
+  --glow-brand: oklch(0.63 0.19 285);
+  --background: oklch(0.995 0.0021 285);
+  --card: oklch(1 0 0);
+  --popover: oklch(1 0 0);
+  --secondary: oklch(0.965 0.005 285);
+  --muted: oklch(0.965 0.005 285);
+  --accent: oklch(0.955 0.01 285);
+  --sidebar: oklch(0.965 0.005 285);
+  --sidebar-accent: oklch(0.93 0.012 285);
+}
+.dark[data-accent='iris'] {
+  --primary: oklch(0.63 0.19 285);
+  --primary-foreground: oklch(0.98 0.01 285);
+  --ring: oklch(0.63 0.19 285);
+  --sidebar-primary: oklch(0.63 0.19 285);
+  --sidebar-primary-foreground: oklch(0.98 0.01 285);
+  --sidebar-ring: oklch(0.63 0.19 285);
+  --glow-brand: oklch(0.63 0.19 285);
+  --background: oklch(0.185 0.014 285);
+  --card: oklch(0.215 0.014 285);
+  --popover: oklch(0.225 0.014 285);
+  --secondary: oklch(0.265 0.014 285);
+  --muted: oklch(0.255 0.014 285);
+  --accent: oklch(0.27 0.018 285);
+  --sidebar: oklch(0.155 0.014 285);
+  --sidebar-accent: oklch(0.25 0.018 285);
+}
+
+/* COBALT — accent hue 255, neutral hue 258, dark neutral chroma 0.014 · DEFAULT */
+:root[data-accent='cobalt'] {
+  /* --primary/--sidebar-primary darkened to L 0.56 for a comfortable ≥4.5:1 as
+   * link/title text on white; --ring keeps the vivid accent (UI, not text). */
+  --primary: oklch(0.56 0.17 255);
+  --primary-foreground: oklch(0.98 0.01 255);
+  --ring: oklch(0.6 0.17 255);
+  --sidebar-primary: oklch(0.56 0.17 255);
+  --sidebar-primary-foreground: oklch(0.98 0.01 255);
+  --sidebar-ring: oklch(0.6 0.17 255);
+  --glow-brand: oklch(0.6 0.17 255);
+  --background: oklch(0.995 0.0021 258);
+  --card: oklch(1 0 0);
+  --popover: oklch(1 0 0);
+  --secondary: oklch(0.965 0.005 258);
+  --muted: oklch(0.965 0.005 258);
+  --accent: oklch(0.955 0.01 258);
+  --sidebar: oklch(0.965 0.005 258);
+  --sidebar-accent: oklch(0.93 0.012 258);
+}
+.dark[data-accent='cobalt'] {
+  /* L 0.62 (a hair above the 0.6 accent) so link/title text clears AA 4.5:1 on
+   * the dark card; cobalt is the default, so its text path must pass cleanly. */
+  --primary: oklch(0.62 0.17 255);
+  --primary-foreground: oklch(0.98 0.01 255);
+  --ring: oklch(0.6 0.17 255);
+  --sidebar-primary: oklch(0.62 0.17 255);
+  --sidebar-primary-foreground: oklch(0.98 0.01 255);
+  --sidebar-ring: oklch(0.6 0.17 255);
+  --glow-brand: oklch(0.6 0.17 255);
+  --background: oklch(0.185 0.014 258);
+  --card: oklch(0.215 0.014 258);
+  --popover: oklch(0.225 0.014 258);
+  --secondary: oklch(0.265 0.014 258);
+  --muted: oklch(0.255 0.014 258);
+  --accent: oklch(0.27 0.018 258);
+  --sidebar: oklch(0.155 0.014 258);
+  --sidebar-accent: oklch(0.25 0.018 258);
+}
+
+/* EMBER — accent hue 45, neutral hue 50, dark neutral chroma 0.008, dark ink on the dark-mode accent */
+:root[data-accent='ember'] {
+  /* --primary/--sidebar-primary darkened to L 0.57 for a comfortable ≥4.5:1 as
+   * link/title text on white; --ring keeps the vivid accent (UI, not text). */
+  --primary: oklch(0.57 0.16 45);
+  --primary-foreground: oklch(0.98 0.01 45);
+  --ring: oklch(0.68 0.16 45);
+  --sidebar-primary: oklch(0.57 0.16 45);
+  --sidebar-primary-foreground: oklch(0.98 0.01 45);
+  --sidebar-ring: oklch(0.68 0.16 45);
+  --glow-brand: oklch(0.68 0.16 45);
+  --background: oklch(0.995 0.0012 50);
+  --card: oklch(1 0 0);
+  --popover: oklch(1 0 0);
+  --secondary: oklch(0.965 0.004 50);
+  --muted: oklch(0.965 0.004 50);
+  --accent: oklch(0.955 0.008 50);
+  --sidebar: oklch(0.965 0.004 50);
+  --sidebar-accent: oklch(0.93 0.01 50);
+}
+.dark[data-accent='ember'] {
+  --primary: oklch(0.68 0.16 45);
+  --primary-foreground: oklch(0.15 0.02 45);
+  --ring: oklch(0.68 0.16 45);
+  --sidebar-primary: oklch(0.68 0.16 45);
+  --sidebar-primary-foreground: oklch(0.15 0.02 45);
+  --sidebar-ring: oklch(0.68 0.16 45);
+  --glow-brand: oklch(0.68 0.16 45);
+  --background: oklch(0.185 0.008 50);
+  --card: oklch(0.215 0.008 50);
+  --popover: oklch(0.225 0.008 50);
+  --secondary: oklch(0.265 0.008 50);
+  --muted: oklch(0.255 0.008 50);
+  --accent: oklch(0.27 0.012 50);
+  --sidebar: oklch(0.155 0.008 50);
+  --sidebar-accent: oklch(0.25 0.012 50);
+}
+
+/* JADE — accent hue 165, neutral hue 190, dark neutral chroma 0.010, dark ink on the dark-mode accent */
+:root[data-accent='jade'] {
+  /* light --primary darkened to L 0.54 for ≥4.5:1 as text on white; its light
+   * --primary-foreground is near-white (unlike dark mode's ink) so the button
+   * label clears ≥3:1 on the darker fill. --ring keeps the vivid accent. */
+  --primary: oklch(0.54 0.13 165);
+  --primary-foreground: oklch(0.98 0.01 165);
+  --ring: oklch(0.67 0.13 165);
+  --sidebar-primary: oklch(0.54 0.13 165);
+  --sidebar-primary-foreground: oklch(0.98 0.01 165);
+  --sidebar-ring: oklch(0.67 0.13 165);
+  --glow-brand: oklch(0.67 0.13 165);
+  --background: oklch(0.995 0.0015 190);
+  --card: oklch(1 0 0);
+  --popover: oklch(1 0 0);
+  --secondary: oklch(0.965 0.004 190);
+  --muted: oklch(0.965 0.004 190);
+  --accent: oklch(0.955 0.009 190);
+  --sidebar: oklch(0.965 0.004 190);
+  --sidebar-accent: oklch(0.93 0.011 190);
+}
+.dark[data-accent='jade'] {
+  --primary: oklch(0.67 0.13 165);
+  --primary-foreground: oklch(0.14 0.02 165);
+  --ring: oklch(0.67 0.13 165);
+  --sidebar-primary: oklch(0.67 0.13 165);
+  --sidebar-primary-foreground: oklch(0.14 0.02 165);
+  --sidebar-ring: oklch(0.67 0.13 165);
+  --glow-brand: oklch(0.67 0.13 165);
+  --background: oklch(0.185 0.01 190);
+  --card: oklch(0.215 0.01 190);
+  --popover: oklch(0.225 0.01 190);
+  --secondary: oklch(0.265 0.01 190);
+  --muted: oklch(0.255 0.01 190);
+  --accent: oklch(0.27 0.014 190);
+  --sidebar: oklch(0.155 0.01 190);
+  --sidebar-accent: oklch(0.25 0.014 190);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

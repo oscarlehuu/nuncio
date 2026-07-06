@@ -1,7 +1,20 @@
 /** API client for the settings store (DB-backed env config). Mirrors the backend SettingDto. */
 
 export type SettingType = 'secret' | 'string' | 'path' | 'boolean';
-export type SettingCategory = 'provider' | 'general';
+export type SettingCategory =
+  | 'provider'
+  | 'general'
+  | 'agents'
+  | 'tools'
+  | 'workspaces'
+  | 'network'
+  | 'advanced';
+
+export interface SettingOption {
+  value: string;
+  label: string;
+  description?: string;
+}
 
 export interface Setting {
   key: string;
@@ -17,6 +30,7 @@ export interface Setting {
   /** Masked preview for secrets (e.g. `••••12ab`); raw value for non-secrets; null when unset. */
   value: string | null;
   readOnly: boolean;
+  options?: readonly SettingOption[];
 }
 
 export async function fetchSettings(): Promise<Setting[]> {
