@@ -47,7 +47,10 @@ class FakeCodexClient extends EventEmitter implements CodexAppServerClientLike {
       method: 'initialize',
       params: {
         clientInfo: { name: 'nuncio', version: '0.1.0' },
-        experimentalApi: true,
+        capabilities: {
+          experimentalApi: true,
+          requestAttestation: false,
+        },
       },
     });
   }
@@ -567,6 +570,79 @@ describe('CodexAgentProvider', () => {
     expect(fakeClient.responses[0]).toEqual({
       id: 'approval-1',
       result: { decision: 'approve' },
+    });
+
+    fakeClient.completeTurn();
+    await run;
+  });
+
+  it('registers runtime tools as Codex dynamic tools and responds to tool calls', async () => {
+    fakeClient.autoCompleteTurn = false;
+    fakeClient.emitApprovalRequests = false;
+    fakeClient.suppressAutoDelta = true;
+    const created = sessions.create({
+      id: 'session-dynamic-tools',
+      prompt: 'use browser',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+    });
+
+    const run = provider.run(created.id, created.prompt, {
+      model: created.model,
+      cwd: '/tmp/project',
+      tools: {
+        tools: [
+          {
+            name: 'nuncio_echo',
+            description: 'Echo a message through Nuncio runtime tools.',
+            inputSchema: {
+              type: 'object',
+              properties: { message: { type: 'string' } },
+              required: ['message'],
+            },
+            execute: async (input) => `echo ${String(input.message)}`,
+          },
+        ],
+      },
+    });
+
+    await waitUntil(() => sessions.findById(created.id)?.providerActiveTurnId === 'turn-1');
+    const threadStart = fakeClient.requests.find((request) => request.method === 'thread/start');
+    expect(threadStart?.params).toMatchObject({
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'nuncio_echo',
+          description: 'Echo a message through Nuncio runtime tools.',
+          inputSchema: {
+            type: 'object',
+            properties: { message: { type: 'string' } },
+            required: ['message'],
+          },
+        },
+      ],
+    });
+
+    fakeClient.emitServerRequest({
+      id: 'tool-call-1',
+      method: 'item/tool/call',
+      params: {
+        threadId: 'codex-thread-1',
+        turnId: 'turn-1',
+        callId: 'call-1',
+        namespace: null,
+        tool: 'nuncio_echo',
+        arguments: { message: 'hello' },
+      },
+    });
+
+    await waitUntil(() => fakeClient.responses.length === 1);
+    expect(fakeClient.responses[0]).toEqual({
+      id: 'tool-call-1',
+      result: {
+        contentItems: [{ type: 'inputText', text: 'echo hello' }],
+        success: true,
+      },
     });
 
     fakeClient.completeTurn();

@@ -200,4 +200,53 @@ describe('buildPiCustomTools', () => {
     expect(tools).toBeUndefined();
     expect(log).toHaveLength(0);
   });
+
+  it('appends runtime agent tools even when cwd is absent', async () => {
+    const log: Array<{ kind: string; cwd: string }> = [];
+    const tools = buildPiCustomTools(undefined, makeFactories(log), {
+      tools: [
+        {
+          name: 'nuncio_echo',
+          description: 'Echo a message through Nuncio runtime tools.',
+          inputSchema: {
+            type: 'object',
+            properties: { message: { type: 'string' } },
+            required: ['message'],
+          },
+          execute: async (input) => `echo ${String(input.message)}`,
+        },
+      ],
+    });
+
+    expect(log).toHaveLength(0);
+    expect(tools?.map((tool) => (tool as { name?: string }).name)).toEqual(['nuncio_echo']);
+    const result = await (tools![0] as {
+      execute: (toolCallId: string, params: { message: string }) => Promise<{ content: Array<{ text: string }> }>;
+    }).execute('call-1', { message: 'hello' });
+    expect(result.content[0].text).toBe('echo hello');
+  });
+
+  it('combines cwd-bound Pi tools with runtime agent tools', () => {
+    const log: Array<{ kind: string; cwd: string }> = [];
+    const tools = buildPiCustomTools('/tmp/workspaces/abc', makeFactories(log), {
+      tools: [
+        {
+          name: 'nuncio_echo',
+          inputSchema: { type: 'object', properties: {} },
+          execute: async () => 'ok',
+        },
+      ],
+    });
+
+    expect(tools?.map((tool) => (tool as { name?: string }).name)).toEqual([
+      'read',
+      'bash',
+      'edit',
+      'write',
+      'grep',
+      'find',
+      'ls',
+      'nuncio_echo',
+    ]);
+  });
 });
