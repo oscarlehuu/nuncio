@@ -9,6 +9,7 @@ import { DatabaseModule } from '../../../src/db/database.module';
 import { DatabaseService } from '../../../src/db/database.service';
 import { GitModule } from '../../../src/git/git.module';
 import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
+import { SteerQueueRepository } from '../../../src/sessions/persistence/steer-queue.repository';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
 import { SessionsService } from '../../../src/sessions/sessions.service';
 import { TasksRepository } from '../../../src/tasks/tasks.repository';
@@ -22,6 +23,7 @@ import {
 describe('TasksService', () => {
   let module: TestingModule;
   let service: TasksService;
+  let sessions: SessionsService;
   let repo: TasksRepository;
   let events: EventsRepository;
   let dataDir: string;
@@ -43,6 +45,7 @@ describe('TasksService', () => {
 
     module = await buildModule();
     service = module.get(TasksService);
+    sessions = module.get(SessionsService);
     repo = module.get(TasksRepository);
     events = module.get(EventsRepository);
   });
@@ -145,6 +148,83 @@ describe('TasksService', () => {
     expect(clone.prompt).toBe('retry me');
     const cloneDone = await waitForStatus(clone.id, ['DONE', 'FAILED']);
     expect(cloneDone.status).toBe('FAILED');
+  });
+
+  it('starts multitasking by creating provider-neutral child subagent tasks for a parent session', async () => {
+    writeVerifyScript('exit 0\n');
+    const parent = await sessions.create({
+      prompt: 'parent task',
+      provider: 'cursor',
+      model: 'cursor:test-model',
+      workspace,
+    });
+
+    const result = service.startMultitask({
+      parentSessionId: parent.id,
+      prompts: ['write tests', 'update docs'],
+    });
+
+    expect(result.parentSessionId).toBe(parent.id);
+    expect(result.tasks).toHaveLength(2);
+    for (const task of result.tasks) {
+      expect(task.role).toBe('subagent');
+      expect(task.parentSessionId).toBe(parent.id);
+      expect(task.provider).toBe('cursor');
+      expect(task.model).toBe('cursor:test-model');
+      expect(task.workspace).toBe(workspace);
+      expect(task.cleanupPolicy).toBe('after-review');
+    }
+
+    expect(service.list(parent.id).map((task) => task.prompt)).toEqual([
+      'update docs',
+      'write tests',
+    ]);
+
+    const done = await Promise.all(result.tasks.map((task) => waitForStatus(task.id, ['DONE', 'FAILED'])));
+    expect(done.every((task) => task.role === 'subagent')).toBe(true);
+    expect(done.every((task) => task.reviewState === 'awaiting_review')).toBe(true);
+  });
+
+  it('fans the parent steer queue out to subagents and drains it', async () => {
+    writeVerifyScript('exit 0\n');
+    const parent = await sessions.create({
+      prompt: 'parent task',
+      provider: 'cursor',
+      model: 'cursor:test-model',
+      workspace,
+    });
+    const steerQueue = module.get(SteerQueueRepository);
+    steerQueue.enqueue(parent.id, 'audit the docs');
+    steerQueue.enqueue(parent.id, 'add token tabs');
+
+    const result = service.startMultitaskFromQueue(parent.id);
+
+    expect(result.tasks).toHaveLength(2);
+    expect(result.tasks.map((task) => task.prompt)).toEqual(['audit the docs', 'add token tabs']);
+    expect(result.tasks.every((task) => task.role === 'subagent')).toBe(true);
+    // Draining the queue is what stops each prompt from also delivering
+    // sequentially when the parent settles — otherwise it would run twice.
+    expect(steerQueue.count(parent.id)).toBe(0);
+    // Live clients are told to drop the queued placeholders.
+    expect(events.list(parent.id).some((event) => event.type === 'steer_queue_cleared')).toBe(true);
+
+    await Promise.all(result.tasks.map((task) => waitForStatus(task.id, ['DONE', 'FAILED'])));
+  });
+
+  it('rejects multitask-from-queue when the parent queue is empty', async () => {
+    const parent = await sessions.create({ prompt: 'lonely parent', provider: 'cursor', workspace });
+    expect(() => service.startMultitaskFromQueue(parent.id)).toThrow(BadRequestException);
+    // Nothing was emitted for an empty drain.
+    expect(events.list(parent.id).some((event) => event.type === 'steer_queue_cleared')).toBe(false);
+  });
+
+  it('marks a terminal subagent task reviewed', async () => {
+    const task = repo.create({ prompt: 'review me', role: 'subagent', parentSessionId: 'parent123' });
+    repo.claimNextQueued();
+    repo.finish(task.id, 'DONE', { sessionStatus: 'IDLE' });
+
+    const reviewed = service.markReviewed(task.id);
+    expect(reviewed.reviewState).toBe('reviewed');
   });
 
   it('flags a running task whose session waits on user input', async () => {

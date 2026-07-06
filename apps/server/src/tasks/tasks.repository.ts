@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { v4 as uuidv4 } from 'uuid';
 import { DatabaseService } from '../db/database.service';
-import type { ModelOptionsMap } from '../models/model-options.types';
+import { taskRowToDto } from './task-row-mapper';
 import {
   TERMINAL_TASK_STATUSES,
   type CreateTaskDto,
@@ -9,36 +9,6 @@ import {
   type TaskRow,
   type TaskStatus,
 } from './tasks.types';
-
-function parseJson<T>(value: string | null): T | null {
-  if (!value) return null;
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return null;
-  }
-}
-
-function toDto(row: TaskRow): TaskDto {
-  return {
-    id: row.id,
-    prompt: row.prompt,
-    status: row.status,
-    provider: row.provider,
-    model: row.model,
-    modelOptions: parseJson<ModelOptionsMap>(row.model_options),
-    projectPath: row.project_path,
-    baseBranch: row.base_branch,
-    useWorktree: row.use_worktree === 1,
-    workspace: row.workspace,
-    sessionId: row.session_id,
-    outcome: parseJson<Record<string, unknown>>(row.outcome_json),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    startedAt: row.started_at,
-    finishedAt: row.finished_at,
-  };
-}
 
 @Injectable()
 export class TasksRepository {
@@ -57,6 +27,10 @@ export class TasksRepository {
       base_branch: input.baseBranch ?? null,
       use_worktree: input.useWorktree === true ? 1 : 0,
       workspace: input.workspace ?? null,
+      parent_session_id: input.parentSessionId ?? null,
+      role: input.role ?? 'standalone',
+      cleanup_policy: input.cleanupPolicy ?? null,
+      review_state: null,
       session_id: null,
       outcome_json: null,
       created_at: now,
@@ -67,30 +41,42 @@ export class TasksRepository {
     this.database.db
       .prepare(
         `INSERT INTO tasks (id, prompt, status, provider, model, model_options, project_path,
-           base_branch, use_worktree, workspace, session_id, outcome_json, created_at, updated_at,
-           started_at, finished_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           base_branch, use_worktree, workspace, parent_session_id, role, cleanup_policy,
+           review_state, session_id, outcome_json, created_at, updated_at, started_at, finished_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id, row.prompt, row.status, row.provider, row.model, row.model_options,
-        row.project_path, row.base_branch, row.use_worktree, row.workspace, row.session_id,
-        row.outcome_json, row.created_at, row.updated_at, row.started_at, row.finished_at,
+        row.project_path, row.base_branch, row.use_worktree, row.workspace, row.parent_session_id,
+        row.role, row.cleanup_policy, row.review_state, row.session_id, row.outcome_json,
+        row.created_at, row.updated_at, row.started_at, row.finished_at,
       );
-    return toDto(row);
+    return taskRowToDto(row);
   }
 
   list(): TaskDto[] {
     const rows = this.database.db
       .prepare<TaskRow, []>('SELECT * FROM tasks ORDER BY created_at DESC, rowid DESC')
       .all();
-    return rows.map(toDto);
+    return rows.map(taskRowToDto);
+  }
+
+  listByParentSession(parentSessionId: string): TaskDto[] {
+    const rows = this.database.db
+      .prepare<TaskRow, [string]>(
+        `SELECT * FROM tasks
+         WHERE parent_session_id = ?
+         ORDER BY created_at DESC, rowid DESC`,
+      )
+      .all(parentSessionId);
+    return rows.map(taskRowToDto);
   }
 
   findById(id: string): TaskDto | null {
     const row = this.database.db
       .prepare<TaskRow, [string]>('SELECT * FROM tasks WHERE id = ?')
       .get(id);
-    return row ? toDto(row) : null;
+    return row ? taskRowToDto(row) : null;
   }
 
   /** Atomically claim the oldest QUEUED task, marking it RUNNING. */
@@ -105,7 +91,7 @@ export class TasksRepository {
          RETURNING *`,
       )
       .get(now, now);
-    return row ? toDto(row) : null;
+    return row ? taskRowToDto(row) : null;
   }
 
   attachSession(id: string, sessionId: string): void {
@@ -118,11 +104,34 @@ export class TasksRepository {
     const now = Date.now();
     this.database.db
       .prepare(
-        `UPDATE tasks SET status = ?, outcome_json = ?, finished_at = ?, updated_at = ?
+        `UPDATE tasks
+         SET status = ?,
+             outcome_json = ?,
+             finished_at = ?,
+             updated_at = ?,
+             review_state = CASE
+               WHEN role = 'subagent' AND ? IN ('DONE', 'FAILED') THEN 'awaiting_review'
+               ELSE review_state
+             END
          WHERE id = ? AND status = 'RUNNING'`,
       )
-      .run(status, JSON.stringify(outcome), now, now, id);
+      .run(status, JSON.stringify(outcome), now, now, status, id);
     return this.findById(id);
+  }
+
+  markReviewed(id: string): TaskDto | null {
+    const now = Date.now();
+    const row = this.database.db
+      .prepare<TaskRow, [number, string]>(
+        `UPDATE tasks SET review_state = 'reviewed', updated_at = ?
+         WHERE id = ?
+           AND role = 'subagent'
+           AND status IN ('DONE', 'FAILED')
+           AND review_state = 'awaiting_review'
+         RETURNING *`,
+      )
+      .get(now, id);
+    return row ? taskRowToDto(row) : null;
   }
 
   /** Only queued work can be cancelled; running work belongs to its session. */
@@ -135,7 +144,7 @@ export class TasksRepository {
          RETURNING *`,
       )
       .get(now, now, id);
-    return row ? toDto(row) : null;
+    return row ? taskRowToDto(row) : null;
   }
 
   countRunning(): number {
@@ -150,12 +159,20 @@ export class TasksRepository {
     const now = Date.now();
     const rows = this.database.db
       .prepare<TaskRow, [string, number, number]>(
-        `UPDATE tasks SET status = 'FAILED', outcome_json = ?, finished_at = ?, updated_at = ?
+        `UPDATE tasks
+         SET status = 'FAILED',
+             outcome_json = ?,
+             finished_at = ?,
+             updated_at = ?,
+             review_state = CASE
+               WHEN role = 'subagent' THEN 'awaiting_review'
+               ELSE review_state
+             END
          WHERE status = 'RUNNING'
          RETURNING *`,
       )
       .all(JSON.stringify({ reason }), now, now);
-    return rows.map(toDto);
+    return rows.map(taskRowToDto);
   }
 
   delete(id: string): boolean {

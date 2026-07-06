@@ -1,8 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Archive, ArrowRightLeft, Check, Ellipsis, FolderGit2, FolderTree, GitBranch, Globe2, PanelRightClose, PanelRightOpen, Pause, Pencil, RotateCcw, Send, Square, SquareTerminal, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
-import type { MessageAttachment, ProviderRequestDecision, Session, SessionEvent } from '../lib/api';
-import { InteractionApiError, interactionErrorMessage, respondInteraction } from '../lib/api';
+import type { MessageAttachment, ProviderRequestDecision, Session, SessionEvent, TaskDto } from '../lib/api';
+import {
+  InteractionApiError,
+  interactionErrorMessage,
+  respondInteraction,
+  fetchChildTasks,
+  startMultitask,
+  startMultitaskFromQueue,
+  markTaskReviewed,
+} from '../lib/api';
+import { derivePendingQueuedSteers } from '../lib/transcript-build-blocks';
 import { useComposerAttachments } from '../lib/use-composer-attachments';
 import { AttachButton, AttachmentTray } from './attachment-tray';
 import { derivePendingUserInput } from '../lib/derive-pending-user-input';
@@ -14,6 +23,7 @@ import { projectDisplayName } from '../lib/projects';
 import { FALLBACK_PROVIDERS, modelById, prettyModelName, type ModelProvider } from '../lib/model-providers';
 import { isCodexApprovalEngine } from '../lib/codex-approval-engine';
 import { useContextUsage } from '../lib/use-context-usage';
+import { resolveTranscriptLinkTarget } from '../lib/transcript-link-target';
 import {
   loadInspectorPreference,
   saveInspectorPreference,
@@ -24,6 +34,8 @@ import { ContextUsageButton } from './context-usage-button';
 import { ScmPanel } from './forge/scm-panel';
 import { Transcript } from './session-transcript';
 import { PendingUserInputBanner } from './pending-user-input-banner';
+import { SubagentsPanel } from './subagents-panel';
+import { QueuedSteersPanel } from './queued-steers-panel';
 import { ApprovalModePicker, type ApprovalMode } from './approval-mode-picker';
 import { BrowserPanel, getDesktopBrowserBridge } from './browser-panel';
 import { FileExplorerPanel } from './file-explorer-panel';
@@ -53,6 +65,12 @@ import {
 } from '@/components/ui/tooltip';
 
 export { Transcript, buildMessages } from './session-transcript';
+
+function multitaskPromptFromCommand(text: string): string | null {
+  const trimmed = text.trim();
+  if (!/^\/multitask(?:\s|$)/i.test(trimmed)) return null;
+  return trimmed.replace(/^\/multitask(?:\s+)?/i, '').trim();
+}
 
 interface SessionDetailProps {
   session: Session;
@@ -125,6 +143,8 @@ export function SessionDetail({
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const [respondingRequestId, setRespondingRequestId] = useState<string | null>(null);
+  const [startingMultitask, setStartingMultitask] = useState(false);
+  const [childTasks, setChildTasks] = useState<TaskDto[]>([]);
 
   const workingDir = session.worktreePath ?? session.workspace ?? session.projectPath ?? undefined;
   const hasGitContext = !!(session.worktreePath || session.branch || session.projectPath);
@@ -153,6 +173,7 @@ export function SessionDetail({
   const [scmSegment, setScmSegment] = useState<ScmSegment>(initialInspector.scmSegment ?? 'changes');
   const [terminalMounted, setTerminalMounted] = useState(restoredTool === 'terminal');
   const [fileExplorerMounted, setFileExplorerMounted] = useState(restoredTool === 'files');
+  const [fileExplorerOpenPath, setFileExplorerOpenPath] = useState<string | null>(null);
 
   useEffect(() => {
     saveInspectorPreference({ version: 1, open: panelOpen, tool: activeTool, scmSegment });
@@ -164,6 +185,7 @@ export function SessionDetail({
   const isArchived = session.status === 'ARCHIVED';
   const pendingUserInput = useMemo(() => derivePendingUserInput(events), [events]);
   const verifyStatus = useMemo(() => deriveVerifyStatus(events), [events]);
+  const pendingQueued = useMemo(() => derivePendingQueuedSteers(events), [events]);
   const pendingRequestIds = useMemo(
     () => new Set(pendingUserInput.map((item) => item.requestId)),
     [pendingUserInput],
@@ -215,11 +237,25 @@ export function SessionDetail({
     if (el && !el.disabled) el.focus({ preventScroll: true });
   }, [autoFocusComposer, session.id]);
 
-  const handleSteer = async () => {
-    const text = steerText.trim();
-    const stagedItems = imageAttachments.items;
-    const attachments = imageAttachments.attachments;
-    if ((!text && attachments.length === 0) || steerDisabled) return;
+  const refreshChildTasks = useCallback(async () => {
+    try {
+      const tasks = await fetchChildTasks(session.id);
+      setChildTasks(tasks);
+    } catch {
+      // A missing subagent list is non-fatal — the section stays hidden.
+    }
+  }, [session.id]);
+
+  useEffect(() => {
+    setChildTasks([]);
+    void refreshChildTasks();
+  }, [refreshChildTasks]);
+
+  const submitSteer = async (
+    text: string,
+    stagedItems: typeof imageAttachments.items,
+    attachments: MessageAttachment[],
+  ) => {
     setSteerText('');
     imageAttachments.clear();
     try {
@@ -233,6 +269,69 @@ export function SessionDetail({
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   };
+
+  const submitMultitask = async (prompt: string, restoreText: string) => {
+    setSteerText('');
+    imageAttachments.clear();
+    try {
+      await startMultitask({
+        parentSessionId: session.id,
+        prompts: [prompt],
+      });
+      await refreshChildTasks();
+    } catch (error) {
+      setSteerText((current) => (current.trim() ? current : restoreText));
+      toast.error(error instanceof Error ? error.message : 'Failed to start multitasking');
+    }
+  };
+
+  // Fan the pending steer queue out as parallel subagents. The server drains
+  // the queue as it spawns them, so nothing double-runs on sequential delivery.
+  const handleStartMultitasking = async () => {
+    if (startingMultitask || pendingQueued.length === 0) return;
+    setStartingMultitask(true);
+    try {
+      await startMultitaskFromQueue(session.id);
+      await refreshChildTasks();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to start multitasking');
+    } finally {
+      setStartingMultitask(false);
+    }
+  };
+
+  const handleSteer = async () => {
+    const text = steerText.trim();
+    const stagedItems = imageAttachments.items;
+    const attachments = imageAttachments.attachments;
+    if ((!text && attachments.length === 0) || steerDisabled) return;
+    const commandPrompt = multitaskPromptFromCommand(text);
+    if (commandPrompt !== null) {
+      if (attachments.length > 0) {
+        toast.error('Multitasking supports text-only prompts for now');
+        return;
+      }
+      if (!commandPrompt) {
+        toast.error('Add a prompt after /multitask');
+        return;
+      }
+      await submitMultitask(commandPrompt, text);
+      return;
+    }
+    await submitSteer(text, stagedItems, attachments);
+  };
+
+  const handleReviewTask = useCallback(
+    async (id: string) => {
+      try {
+        await markTaskReviewed(id);
+        await refreshChildTasks();
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Failed to mark task reviewed');
+      }
+    },
+    [refreshChildTasks],
+  );
 
   const handleRenameSave = async () => {
     const trimmed = titleDraft.trim();
@@ -261,6 +360,28 @@ export function SessionDetail({
     },
     [onRespondProviderRequest],
   );
+
+  const handleTranscriptLinkClick = useCallback((href: string) => {
+    const target = resolveTranscriptLinkTarget(href, workingDir);
+    if (target.kind === 'file') {
+      if (!workingDir) {
+        toast.error('No working directory for this session');
+        return true;
+      }
+      setFileExplorerOpenPath(target.path);
+      setFileExplorerMounted(true);
+      setActiveTool('files');
+      setPanelOpen(true);
+      return true;
+    }
+    if (target.kind === 'external') {
+      void openExternalBrowser(target.href).catch((error) => {
+        toast.error(error instanceof Error ? error.message : String(error));
+      });
+      return true;
+    }
+    return false;
+  }, [workingDir]);
 
   return (
     <section className="flex-1 flex min-h-0">
@@ -448,16 +569,20 @@ export function SessionDetail({
             events={events}
             sessionId={session.id}
             streaming={streaming}
+            provider={session.provider}
+            showAvatar
             pendingRequestIds={pendingRequestIds}
             respondingRequestId={respondingRequestId}
             onRespondProviderRequest={
               onRespondProviderRequest ? handleRespondProviderRequest : undefined
             }
+            onLinkClick={handleTranscriptLinkClick}
           />
         </div>
       </div>
 
       <div className="shrink-0 px-4 md:px-5 pt-2.5 pb-3 md:pb-4">
+        <SubagentsPanel tasks={childTasks} onReview={handleReviewTask} />
         <div className="max-w-[760px] mx-auto">
           <PendingUserInputBanner
             pending={pendingUserInput}
@@ -474,6 +599,13 @@ export function SessionDetail({
                 toast.error(message);
               }
             }}
+          />
+        </div>
+        <div className="max-w-[760px] mx-auto">
+          <QueuedSteersPanel
+            steers={pendingQueued}
+            starting={startingMultitask}
+            onStartMultitasking={handleStartMultitasking}
           />
         </div>
         <div
@@ -727,7 +859,7 @@ export function SessionDetail({
 
           {panelOpen && activeTool === 'files' && fileExplorerMounted && (
             <div className="flex-1 min-h-0">
-              <FileExplorerPanel root={workingDir} />
+              <FileExplorerPanel root={workingDir} openPath={fileExplorerOpenPath} />
             </div>
           )}
 
@@ -776,4 +908,13 @@ export function SessionDetail({
       </Dialog>
     </section>
   );
+}
+
+async function openExternalBrowser(url: string) {
+  const desktopExternal = window.nuncioDesktop?.external;
+  if (desktopExternal) {
+    await desktopExternal.open(url);
+    return;
+  }
+  window.open(url, '_blank', 'noopener,noreferrer');
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { SessionEvent } from './api';
-import { buildTranscriptBlocks } from './transcript-build-blocks';
+import { buildTranscriptBlocks, derivePendingQueuedSteers } from './transcript-build-blocks';
 import { IncrementalTranscriptBuilder } from './use-transcript-blocks';
 
 let seq = 0;
@@ -46,6 +46,52 @@ describe('steer queue + interrupt transcript blocks', () => {
     expect(blocks.some((b) => b.kind === 'assistant' && b.text.includes('partial answ'))).toBe(
       true,
     );
+  });
+
+  it('drops queued placeholders when the queue is cleared for multitasking', () => {
+    const blocks = buildTranscriptBlocks([
+      ev('user_message', { text: 'do the thing' }),
+      ev('steer_queued', { text: 'follow up A' }),
+      ev('steer_queued', { text: 'follow up B' }),
+      ev('steer_queue_cleared', {}),
+    ]);
+
+    expect(blocks.some((b) => b.kind === 'user' && b.queued)).toBe(false);
+    // The delivered original prompt is untouched.
+    expect(blocks.filter((b) => b.kind === 'user')).toHaveLength(1);
+  });
+});
+
+describe('derivePendingQueuedSteers', () => {
+  it('lists queued steers not yet delivered', () => {
+    const pending = derivePendingQueuedSteers([
+      ev('user_message', { text: 'do the thing' }),
+      ev('steer_queued', { text: 'follow up A' }),
+      ev('steer_queued', { text: 'follow up B' }),
+    ]);
+
+    expect(pending.map((p) => p.text)).toEqual(['follow up A', 'follow up B']);
+    expect(new Set(pending.map((p) => p.key)).size).toBe(2);
+  });
+
+  it('drops a queued steer once it is delivered sequentially', () => {
+    const pending = derivePendingQueuedSteers([
+      ev('steer_queued', { text: 'follow up A' }),
+      ev('steer_queued', { text: 'follow up B' }),
+      ev('steer_message', { text: 'follow up A' }),
+    ]);
+
+    expect(pending.map((p) => p.text)).toEqual(['follow up B']);
+  });
+
+  it('empties when the queue is cleared for multitasking', () => {
+    const pending = derivePendingQueuedSteers([
+      ev('steer_queued', { text: 'follow up A' }),
+      ev('steer_queued', { text: 'follow up B' }),
+      ev('steer_queue_cleared', {}),
+    ]);
+
+    expect(pending).toHaveLength(0);
   });
 });
 
