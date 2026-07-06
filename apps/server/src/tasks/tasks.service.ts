@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { DatabaseService } from '../db/database.service';
 import { assembleSubagentBrief } from '../orchestration/handoff-brief.assembler';
+import { buildOutcomeDigest } from '../orchestration/outcome-digest.builder';
 import { renderHandoffBrief } from '../orchestration/handoff-brief.renderer';
 import type { HandoffBrief } from '../orchestration/handoff-brief.types';
 import { buildWorkspaceSnapshot } from '../orchestration/workspace-snapshot';
@@ -46,7 +47,12 @@ export class TasksService {
   ) {
     // A RUNNING row at boot means the runner died mid-task; its session was
     // already reconciled by the sessions sweep. Queued work simply resumes.
-    this.tasks.failInterrupted('daemon_restart');
+    // Those tasks died with the daemon, but their parents still deserve a
+    // FAILED digest so the delegation loop is closed after a restart.
+    const interrupted = this.tasks.failInterrupted('daemon_restart');
+    for (const failed of interrupted) {
+      void this.emitTaskDigest(failed, failed.sessionId);
+    }
     void this.pump();
   }
 
@@ -199,6 +205,9 @@ export class TasksService {
     if (!cancelled) {
       throw new BadRequestException('Only queued tasks can be cancelled');
     }
+    // A cancelled subagent never ran, so it has no child session; the parent
+    // still gets a digest so the delegation loop is closed.
+    void this.emitTaskDigest(cancelled, cancelled.sessionId);
     return cancelled;
   }
 
@@ -265,6 +274,7 @@ export class TasksService {
   }
 
   private async execute(task: TaskDto): Promise<void> {
+    let childSessionId: string | null = null;
     try {
       // The brief is prepended to the session prompt only; task.prompt stays
       // pure in the DB so retry/clone semantics are unaffected.
@@ -281,6 +291,7 @@ export class TasksService {
         ...(task.useWorktree ? { useWorktree: true } : {}),
         ...(task.workspace ? { workspace: task.workspace } : {}),
       });
+      childSessionId = session.id;
       this.tasks.attachSession(task.id, session.id);
       await this.sessions.awaitRun(session.id);
 
@@ -293,6 +304,35 @@ export class TasksService {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.tasks.finish(task.id, 'FAILED', { error: message });
+    } finally {
+      const finished = this.tasks.findById(task.id);
+      if (finished) await this.emitTaskDigest(finished, childSessionId);
+    }
+  }
+
+  /**
+   * Append a compact digest of a finished subagent task to its parent session's
+   * log. Best-effort and non-fatal: a failure here must never turn a DONE task
+   * into a FAILED one, so it is caught and swallowed with a log line. No-ops for
+   * standalone tasks (no parent) and vanished parents.
+   */
+  private async emitTaskDigest(task: TaskDto, childSessionId: string | null): Promise<void> {
+    if (!task.parentSessionId) return;
+    if (!this.sessions.get(task.parentSessionId)) return;
+    try {
+      const child = childSessionId ? this.sessions.get(childSessionId) : null;
+      const cwd = child
+        ? child.worktreePath ?? child.workspace ?? child.projectPath ?? null
+        : null;
+      const workspace = cwd
+        ? await buildWorkspaceSnapshot(cwd, child?.baseBranch ?? child?.branch)
+        : null;
+      const events = childSessionId ? this.events.listTail(childSessionId, PENDING_SCAN_TAIL) : [];
+      const digest = buildOutcomeDigest(task, childSessionId, events, workspace);
+      this.sessions.appendOrchestrationEvent(task.parentSessionId, 'task_completed', digest);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[tasks] failed to append task_completed digest for ${task.id}: ${message}`);
     }
   }
 

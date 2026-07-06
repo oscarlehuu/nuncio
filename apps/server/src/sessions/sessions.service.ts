@@ -23,6 +23,7 @@ import type { ModelOptionsMap } from '../models/model-options.types';
 import { PiLocalSessionsService } from '../pi-local/pi-local-sessions.service';
 import { canTransition } from './domain/sessions.fsm';
 import { deriveHasPendingInput } from './domain/derive-pending-input';
+import type { SessionEventType } from './domain/events.types';
 import type {
   CreateSessionDto,
   HandoffSessionDto,
@@ -400,6 +401,22 @@ export class SessionsService implements OnModuleDestroy {
   /** Direct handle to the steer-queue repository for a caller-owned transaction. */
   get steerQueueRepository(): SteerQueueRepository {
     return this.steerQueue;
+  }
+
+  /**
+   * Append an orchestration-authored event (e.g. a subagent digest) to a
+   * session's log through the same persist+fanout path run events take, so live
+   * subscribers update without a reload. Annotate-don't-block: the session FSM
+   * is untouched. Returns null when the session no longer exists; never throws —
+   * digest delivery must never destabilize the task that produced it.
+   */
+  appendOrchestrationEvent(
+    sessionId: string,
+    type: SessionEventType,
+    payload: unknown,
+  ): SessionEvent | null {
+    if (!this.sessions.findById(sessionId)) return null;
+    return this.appendAndEmit(sessionId, type, payload);
   }
 
   /**

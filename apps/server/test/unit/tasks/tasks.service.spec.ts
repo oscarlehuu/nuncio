@@ -9,6 +9,7 @@ import { DatabaseModule } from '../../../src/db/database.module';
 import { DatabaseService } from '../../../src/db/database.service';
 import { GitModule } from '../../../src/git/git.module';
 import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
+import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
 import { SteerQueueRepository } from '../../../src/sessions/persistence/steer-queue.repository';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
 import { SessionsService } from '../../../src/sessions/sessions.service';
@@ -527,5 +528,172 @@ describe('TasksService', () => {
     } finally {
       await restarted.close();
     }
+  });
+
+  async function waitForEventType(
+    sessionId: string,
+    type: string,
+    timeoutMs = 8000,
+  ): Promise<Record<string, unknown>> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const hit = events.list(sessionId).find((e) => e.type === type);
+      if (hit) return hit.payload as Record<string, unknown>;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(`event ${type} not appended to ${sessionId} in time`);
+  }
+
+  describe('task_completed digest', () => {
+    it('appends exactly one task_completed to the parent when a subagent finishes', async () => {
+      writeVerifyScript('echo verify-ok\nexit 0\n');
+      const parent = await sessions.create({ prompt: 'parent', provider: 'cursor', workspace });
+      const child = service.enqueue({
+        prompt: 'do subagent work',
+        provider: 'cursor',
+        workspace,
+        role: 'subagent',
+        parentSessionId: parent.id,
+      });
+      const done = await waitForStatus(child.id, ['DONE', 'FAILED']);
+      expect(done.status).toBe('DONE');
+
+      const payload = await waitForEventType(parent.id, 'task_completed');
+      const digests = events.list(parent.id).filter((e) => e.type === 'task_completed');
+      expect(digests).toHaveLength(1);
+      expect(payload.taskId).toBe(child.id);
+      expect(payload.status).toBe('DONE');
+      expect(payload.childSessionId).toBe(done.sessionId);
+      // seq ordering: the digest is the last event and monotonically after prior ones.
+      const all = events.list(parent.id);
+      expect(all[all.length - 1]!.type).toBe('task_completed');
+    });
+
+    it('does not append a digest for a standalone task with no parent', async () => {
+      writeVerifyScript('exit 0\n');
+      const task = service.enqueue({ prompt: 'standalone', provider: 'cursor', workspace });
+      const done = await waitForStatus(task.id, ['DONE', 'FAILED']);
+      // Its own child session has no task_completed (it has no parent to notify).
+      expect(events.list(done.sessionId!).some((e) => e.type === 'task_completed')).toBe(false);
+    });
+
+    it('does not throw when the parent session was deleted before the child finished', async () => {
+      writeVerifyScript('sleep 0.3\nexit 0\n');
+      const parent = await sessions.create({ prompt: 'doomed parent', provider: 'cursor', workspace });
+      const child = service.enqueue({
+        prompt: 'orphan me',
+        provider: 'cursor',
+        workspace,
+        role: 'subagent',
+        parentSessionId: parent.id,
+      });
+      await waitForStatus(child.id, ['RUNNING']);
+      // Hard-delete the parent row (bypassing the archive-first API guard) so
+      // the digest append hits a vanished parent.
+      module.get(SessionsRepository).delete(parent.id);
+      // Must still finish cleanly — the digest append silently no-ops.
+      const done = await waitForStatus(child.id, ['DONE', 'FAILED']);
+      expect(['DONE', 'FAILED']).toContain(done.status);
+    });
+
+    it('a digest append failure never flips a DONE task to FAILED', async () => {
+      writeVerifyScript('exit 0\n');
+      const parent = await sessions.create({ prompt: 'parent', provider: 'cursor', workspace });
+      const appendSpy = jest
+        .spyOn(sessions, 'appendOrchestrationEvent')
+        .mockImplementation(() => {
+          throw new Error('append boom');
+        });
+      try {
+        const child = service.enqueue({
+          prompt: 'work',
+          provider: 'cursor',
+          workspace,
+          role: 'subagent',
+          parentSessionId: parent.id,
+        });
+        const done = await waitForStatus(child.id, ['DONE', 'FAILED']);
+        expect(done.status).toBe('DONE');
+      } finally {
+        appendSpy.mockRestore();
+      }
+    });
+
+    it('does not disturb a RUNNING parent FSM when appending a digest', async () => {
+      writeVerifyScript('exit 0\n');
+      const parent = await sessions.create({ prompt: 'busy parent', provider: 'cursor', workspace });
+      // Let the parent's own run settle, then drive it back to RUNNING so the
+      // annotate-don't-block contract is under test: a digest append must not
+      // move it out of RUNNING.
+      const startWait = Date.now();
+      while (sessions.get(parent.id)?.status !== 'IDLE' && Date.now() - startWait < 8000) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      const parentRow = module.get(SessionsRepository);
+      parentRow.updateStatus(parent.id, 'RUNNING');
+
+      const finished = repo.create({
+        prompt: 'finished child',
+        role: 'subagent',
+        parentSessionId: parent.id,
+      });
+      repo.claimNextQueued();
+      repo.finish(finished.id, 'DONE', { sessionStatus: 'IDLE' });
+      // Append directly through the same path execute uses.
+      sessions.appendOrchestrationEvent(parent.id, 'task_completed', {
+        taskId: finished.id,
+        childSessionId: null,
+        status: 'DONE',
+        outcomeSummary: null,
+        verify: null,
+        workspace: null,
+        childBranch: null,
+      });
+
+      expect(sessions.get(parent.id)?.status).toBe('RUNNING');
+      expect(events.list(parent.id).some((e) => e.type === 'task_completed')).toBe(true);
+    });
+
+    it('emits a CANCELLED digest with a null summary for a cancelled subagent', async () => {
+      writeVerifyScript('sleep 0.5\nexit 0\n');
+      const parent = await sessions.create({ prompt: 'parent', provider: 'cursor', workspace });
+      const blocker = service.enqueue({ prompt: 'blocker', provider: 'cursor', workspace });
+      const victim = service.enqueue({
+        prompt: 'cancel me',
+        provider: 'cursor',
+        workspace,
+        role: 'subagent',
+        parentSessionId: parent.id,
+      });
+      await waitForStatus(blocker.id, ['RUNNING']);
+      service.cancel(victim.id);
+
+      const payload = await waitForEventType(parent.id, 'task_completed');
+      expect(payload.taskId).toBe(victim.id);
+      expect(payload.status).toBe('CANCELLED');
+      expect(payload.outcomeSummary).toBeNull();
+      await waitForStatus(blocker.id, ['DONE', 'FAILED']);
+    });
+
+    it('boot: interrupted RUNNING subagents append a FAILED digest to their parent', async () => {
+      const parent = await sessions.create({ prompt: 'restart parent', provider: 'cursor', workspace });
+      const stuck = repo.create({
+        prompt: 'was running',
+        role: 'subagent',
+        parentSessionId: parent.id,
+      });
+      repo.claimNextQueued();
+      expect(repo.findById(stuck.id)?.status).toBe('RUNNING');
+
+      const restarted = await buildModule();
+      try {
+        restarted.get(TasksService);
+        const payload = await waitForEventType(parent.id, 'task_completed');
+        expect(payload.taskId).toBe(stuck.id);
+        expect(payload.status).toBe('FAILED');
+      } finally {
+        await restarted.close();
+      }
+    });
   });
 });
