@@ -1,4 +1,5 @@
 import type { ModelOptionsMap } from '../models/model-options.types';
+import type { HandoffBrief } from '../orchestration/handoff-brief.types';
 import type { TaskDto, TaskRow } from './tasks.types';
 
 function parseJson<T>(value: string | null): T | null {
@@ -28,6 +29,7 @@ export function taskRowToDto(row: TaskRow): TaskDto {
     reviewState: row.review_state,
     sessionId: row.session_id,
     outcome: parseJson<Record<string, unknown>>(row.outcome_json),
+    contextBrief: parseJson<HandoffBrief>(row.context_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     startedAt: row.started_at,

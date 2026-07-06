@@ -233,6 +233,7 @@ export class DatabaseService implements OnModuleDestroy {
       ['role', "TEXT NOT NULL DEFAULT 'standalone'"],
       ['cleanup_policy', 'TEXT'],
       ['review_state', 'TEXT'],
+      ['context_json', 'TEXT'],
     ] as const;
 
     for (const [column, type] of taskColumnDefinitions) {

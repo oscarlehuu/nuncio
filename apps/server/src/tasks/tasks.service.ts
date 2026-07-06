@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { renderHandoffBrief } from '../orchestration/handoff-brief.renderer';
 import { deriveHasPendingInput } from '../sessions/domain/derive-pending-input';
 import { EventsRepository } from '../sessions/persistence/events.repository';
 import { SessionsService } from '../sessions/sessions.service';
@@ -120,6 +121,7 @@ export class TasksService {
       ...(task.parentSessionId ? { parentSessionId: task.parentSessionId } : {}),
       ...(task.role === 'subagent' ? { role: 'subagent' as const } : {}),
       ...(task.cleanupPolicy ? { cleanupPolicy: task.cleanupPolicy } : {}),
+      ...(task.contextBrief ? { contextBrief: task.contextBrief } : {}),
     });
   }
 
@@ -165,8 +167,13 @@ export class TasksService {
 
   private async execute(task: TaskDto): Promise<void> {
     try {
+      // The brief is prepended to the session prompt only; task.prompt stays
+      // pure in the DB so retry/clone semantics are unaffected.
+      const prompt = task.contextBrief
+        ? `${renderHandoffBrief(task.contextBrief)}\n\n---\n\n${task.prompt}`
+        : task.prompt;
       const session = await this.sessions.create({
-        prompt: task.prompt,
+        prompt,
         ...(task.provider ? { provider: task.provider } : {}),
         ...(task.model ? { model: task.model } : {}),
         ...(task.modelOptions ? { modelOptions: task.modelOptions } : {}),

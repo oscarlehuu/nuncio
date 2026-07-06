@@ -67,6 +67,32 @@ describe('TasksController', () => {
     });
   });
 
+  it('create forwards a valid contextBrief', () => {
+    const enqueue = jest.fn((input) => ({ id: 't1', ...input }));
+    const controller = new TasksController({ enqueue } as never);
+
+    controller.create({ prompt: 'ship it', contextBrief: { goal: 'do the thing' } });
+
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ contextBrief: expect.objectContaining({ goal: 'do the thing' }) }),
+    );
+  });
+
+  it('create rejects a contextBrief without a goal', () => {
+    const controller = new TasksController({ enqueue: jest.fn() } as never);
+    expect(() =>
+      controller.create({ prompt: 'ship it', contextBrief: { constraints: ['x'] } as never }),
+    ).toThrow(BadRequestException);
+  });
+
+  it('create rejects a contextBrief over the size limit', () => {
+    const controller = new TasksController({ enqueue: jest.fn() } as never);
+    const huge = { goal: 'g', constraints: ['x'.repeat(9000)] };
+    expect(() => controller.create({ prompt: 'ship it', contextBrief: huge })).toThrow(
+      BadRequestException,
+    );
+  });
+
   it('multitask rejects when no prompts remain', () => {
     const controller = new TasksController({} as never);
     expect(() => controller.multitask({ parentSessionId: 'parent123', prompts: ['  '] })).toThrow(

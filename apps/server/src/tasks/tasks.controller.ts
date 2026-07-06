@@ -1,4 +1,5 @@
 import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
+import { validateHandoffBrief } from '../orchestration/handoff-brief.validate';
 import { TasksService } from './tasks.service';
 import type { CreateTaskDto, StartMultitaskDto } from './tasks.types';
 
@@ -16,6 +17,7 @@ export class TasksController {
     if (!body?.prompt?.trim()) {
       return { error: 'prompt is required' };
     }
+    const contextBrief = this.parseBrief(body.contextBrief);
     return this.tasks.enqueue({
       prompt: body.prompt.trim(),
       ...(body.provider ? { provider: body.provider } : {}),
@@ -25,7 +27,17 @@ export class TasksController {
       ...(body.baseBranch ? { baseBranch: body.baseBranch } : {}),
       ...(body.useWorktree === true ? { useWorktree: true } : {}),
       ...(body.workspace ? { workspace: body.workspace } : {}),
+      ...(contextBrief ? { contextBrief } : {}),
     });
+  }
+
+  private parseBrief(raw: unknown) {
+    if (raw === undefined || raw === null) return undefined;
+    try {
+      return validateHandoffBrief(raw);
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : 'invalid contextBrief');
+    }
   }
 
   @Post('multitask')
@@ -36,6 +48,7 @@ export class TasksController {
     if (!prompts?.length) {
       throw new BadRequestException('at least one prompt is required');
     }
+    const contextBrief = this.parseBrief(body.contextBrief);
     return this.tasks.startMultitask({
       parentSessionId: body.parentSessionId,
       prompts,
@@ -49,6 +62,7 @@ export class TasksController {
         : {}),
       ...(body.workspace ? { workspace: body.workspace } : {}),
       ...(body.cleanupPolicy ? { cleanupPolicy: body.cleanupPolicy } : {}),
+      ...(contextBrief ? { contextBrief } : {}),
     });
   }
 

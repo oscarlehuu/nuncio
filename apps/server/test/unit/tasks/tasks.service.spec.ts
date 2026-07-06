@@ -248,6 +248,71 @@ describe('TasksService', () => {
     await waitForStatus(task.id, ['DONE', 'FAILED']);
   });
 
+  it('prepends a rendered handoff brief to the child session prompt', async () => {
+    writeVerifyScript('exit 0\n');
+    const task = service.enqueue({
+      prompt: 'implement the feature',
+      provider: 'cursor',
+      workspace,
+      contextBrief: { goal: 'Ship the feature safely', constraints: ['No new deps'] },
+    });
+
+    const done = await waitForStatus(task.id, ['DONE', 'FAILED']);
+    expect(done.status).toBe('DONE');
+    // The DB prompt stays pure — the brief lives only in the session.
+    expect(repo.findById(task.id)?.prompt).toBe('implement the feature');
+
+    const userMessages = events
+      .list(done.sessionId!)
+      .filter((e) => e.type === 'user_message');
+    const first = userMessages[0]?.payload as { text?: string; content?: string };
+    const text = first.text ?? first.content ?? JSON.stringify(first);
+    expect(text.startsWith('## Handoff brief')).toBe(true);
+    expect(text).toContain('Ship the feature safely');
+    expect(text.trimEnd().endsWith('implement the feature')).toBe(true);
+  });
+
+  it('leaves the session prompt untouched when no brief is attached', async () => {
+    writeVerifyScript('exit 0\n');
+    const task = service.enqueue({ prompt: 'plain prompt', provider: 'cursor', workspace });
+    const done = await waitForStatus(task.id, ['DONE', 'FAILED']);
+    const userMessages = events.list(done.sessionId!).filter((e) => e.type === 'user_message');
+    const first = userMessages[0]?.payload as { text?: string; content?: string };
+    const text = first.text ?? first.content ?? '';
+    expect(text).not.toContain('## Handoff brief');
+    expect(text).toContain('plain prompt');
+  });
+
+  it('round-trips a brief and lists contextBrief null for a corrupt context_json row', () => {
+    const withBrief = repo.create({
+      prompt: 'has a brief',
+      contextBrief: { goal: 'do it', decisions: ['keep it simple'] },
+    });
+    expect(repo.findById(withBrief.id)?.contextBrief).toMatchObject({ goal: 'do it' });
+
+    const corrupt = repo.create({ prompt: 'corrupt brief' });
+    module
+      .get(DatabaseService)
+      .db.prepare('UPDATE tasks SET context_json = ? WHERE id = ?')
+      .run('{not json', corrupt.id);
+    const listed = service.list().find((t) => t.id === corrupt.id);
+    expect(listed).toBeTruthy();
+    expect(listed?.contextBrief).toBeNull();
+  });
+
+  it('retry carries the handoff brief forward', async () => {
+    const task = service.enqueue({
+      prompt: 'retry with brief',
+      provider: 'no-such-provider',
+      contextBrief: { goal: 'preserve me across retry' },
+    });
+    await waitForStatus(task.id, ['FAILED']);
+
+    const clone = service.retry(task.id);
+    expect(clone.contextBrief).toMatchObject({ goal: 'preserve me across retry' });
+    await waitForStatus(clone.id, ['DONE', 'FAILED']);
+  });
+
   it('boot: interrupted RUNNING tasks fail with daemon_restart and QUEUED tasks resume', async () => {
     const stuck = repo.create({ prompt: 'was running' });
     repo.claimNextQueued();

@@ -1,4 +1,5 @@
 import type { ModelOptionsMap } from '../models/model-options.types';
+import type { HandoffBrief } from '../orchestration/handoff-brief.types';
 
 export type TaskStatus = 'QUEUED' | 'RUNNING' | 'DONE' | 'FAILED' | 'CANCELLED';
 export type TaskRole = 'standalone' | 'subagent';
@@ -24,6 +25,7 @@ export interface TaskRow {
   review_state: TaskReviewState | null;
   session_id: string | null;
   outcome_json: string | null;
+  context_json: string | null;
   created_at: number;
   updated_at: number;
   started_at: number | null;
@@ -47,6 +49,7 @@ export interface TaskDto {
   reviewState: TaskReviewState | null;
   sessionId: string | null;
   outcome: Record<string, unknown> | null;
+  contextBrief: HandoffBrief | null;
   /** Derived at read time: the linked session is waiting on the user. */
   pendingInput?: boolean;
   createdAt: number;
@@ -67,6 +70,7 @@ export interface CreateTaskDto {
   parentSessionId?: string;
   role?: TaskRole;
   cleanupPolicy?: TaskCleanupPolicy;
+  contextBrief?: HandoffBrief;
 }
 
 export interface StartMultitaskDto {
@@ -80,6 +84,8 @@ export interface StartMultitaskDto {
   useWorktree?: boolean;
   workspace?: string;
   cleanupPolicy?: TaskCleanupPolicy;
+  /** Explicit brief overriding the deterministic assembler for every child. */
+  contextBrief?: HandoffBrief;
 }
 
 export interface StartMultitaskResultDto {
