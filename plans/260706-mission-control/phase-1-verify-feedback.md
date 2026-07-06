@@ -280,7 +280,18 @@ max-rounds, re-entrancy, and archived-mid-retry.
   syntax errors. The pure-invariant tests (pass→no-steer, disabled==today) stay GREEN.
 - `bun run --filter @nuncio/server lint` clean.
 
-## Founder decisions (flagged, NOT decided here)
+## Founder decisions (LOCKED — founder, 2026-07-06)
+
+1. **Default-enabled scope: off globally, configurable in Settings.** `NUNCIO_VERIFY_AUTO_STEER`
+   defaults off; the founder flips it in the Settings UI (registry-driven, category `agents`).
+   Per-session/per-project override deferred to rung 2 (project entity).
+2. **Manual-steer semantics: RESET** (as encoded) — a manual steer between rounds resets the
+   counter; after `verify_needs_attention` it starts a fresh loop.
+3. **needs-attention delivery** stays deferred to rung 3 (the event is the seam).
+
+Original flags kept below for the decision trail.
+
+### Original flags (pre-decision)
 
 1. **Default-enabled scope.** Should `NUNCIO_VERIFY_AUTO_STEER` default **on globally** (every project
    with a verify command auto-retries), or **off globally with per-session opt-in**, or **per-project
