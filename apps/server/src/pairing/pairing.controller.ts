@@ -35,9 +35,13 @@ export class PairingController {
   ) {}
 
   @Post('start')
-  start(): { code: string; expiresAt: number; urls: string[]; hints: string[] } {
+  async start(): Promise<{ code: string; expiresAt: number; urls: string[]; hints: string[] }> {
+    // Build the URLs BEFORE minting the code: minting invalidates any prior code,
+    // so a slow/failed build must not leave a fresh code stranded on an error
+    // response. build() is designed never to throw, but ordering keeps the
+    // invariant even if that ever changes.
+    const { urls, hints } = await this.candidateUrls.build();
     const { code, expiresAt } = this.pairing.start();
-    const { urls, hints } = this.candidateUrls.build();
     return { code, expiresAt, urls, hints };
   }
 

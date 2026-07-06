@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AuthGuard } from '../../../src/auth/auth.guard';
 import type { AuthTokenService } from '../../../src/auth/auth-token.service';
-import type { TailscaleService } from '../../../src/tailscale/tailscale.service';
+import { TailscaleService } from '../../../src/tailscale/tailscale.service';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { DevicesModule } from '../../../src/devices/devices.module';
 import { DevicesService } from '../../../src/devices/devices.service';
@@ -21,12 +21,38 @@ import { PairingModule } from '../../../src/pairing/pairing.module';
 const passthroughTokens = { isValidToken: () => false } as unknown as AuthTokenService;
 const noTrust = { isTrustedRemote: async () => false } as unknown as TailscaleService;
 
+// pairing/start builds candidate URLs, which consult TailscaleService. Booting the
+// real service would run `tailscale serve/funnel` for real on a Tailscale-enabled
+// host — a unit test must never mutate machine state. Override with an inert fake
+// and assert serve/funnel are never touched.
+const tailscaleCalls: string[] = [];
+const inertTailscale = {
+  status: async () => ({
+    installed: false,
+    running: false,
+    autoTrust: false,
+    tailnet: null,
+    self: null,
+    peers: [],
+  }),
+  enableServe: async () => {
+    tailscaleCalls.push('serve');
+    return false;
+  },
+  enableFunnel: async () => {
+    tailscaleCalls.push('funnel');
+    return { ok: false, reason: 'error' as const };
+  },
+  isTrustedRemote: async () => false,
+} as unknown as TailscaleService;
+
 let app: INestApplication;
 let dataDir: string;
 
 beforeEach(async () => {
   dataDir = mkdtempSync(join(tmpdir(), 'nuncio-pairing-'));
   process.env.NUNCIO_DATA_DIR = dataDir;
+  tailscaleCalls.length = 0;
 
   const moduleRef = await Test.createTestingModule({
     imports: [DatabaseModule, DevicesModule, PairingModule],
@@ -39,7 +65,10 @@ beforeEach(async () => {
         inject: [DevicesService],
       },
     ],
-  }).compile();
+  })
+    .overrideProvider(TailscaleService)
+    .useValue(inertTailscale)
+    .compile();
 
   app = moduleRef.createNestApplication();
   app.setGlobalPrefix('api');
@@ -62,6 +91,14 @@ async function startCode(): Promise<string> {
 }
 
 describe('pairing HTTP lifecycle', () => {
+  it('start never runs tailscale serve/funnel against the host in a unit test', async () => {
+    await startCode();
+    // The inert fake reports tailscale offline, so the builder must short-circuit
+    // before ever touching serve/funnel. A regression here would mutate real machine
+    // state on a Tailscale-enabled dev/CI box.
+    expect(tailscaleCalls).toEqual([]);
+  });
+
   it('start → claim returns a deviceId + secret and a server name', async () => {
     const code = await startCode();
     const res = await request(app.getHttpServer())
