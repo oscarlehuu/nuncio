@@ -351,6 +351,45 @@ describe('TasksService', () => {
     expect(steerQueue.dequeue(parent.id)?.message).toBe('msg b');
   });
 
+  it('auto-delivers freed messages when assembly fails after the parent already drained empty', async () => {
+    writeVerifyScript('exit 0\n');
+    const parent = await sessions.create({ prompt: 'stall parent', provider: 'cursor', workspace });
+    // Wait for the parent's own run to settle to IDLE so a drain is meaningful.
+    const start = Date.now();
+    while (sessions.get(parent.id)?.status !== 'IDLE' && Date.now() - start < 8000) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(sessions.get(parent.id)?.status).toBe('IDLE');
+
+    const steerQueue = module.get(SteerQueueRepository);
+    steerQueue.enqueue(parent.id, 'stranded message');
+
+    // Assembly fails; while it was in flight the row was claimed, so a parent
+    // settle-drain firing now would find nothing. Nothing external re-triggers.
+    const assembleSpy = jest
+      .spyOn(service as unknown as { assembleParentBrief: (p: unknown) => Promise<unknown> }, 'assembleParentBrief')
+      .mockImplementation(async () => {
+        // Emulate the parent's own settle-drain racing the claimed row: it sees
+        // nothing (claimed) and returns, so only the release path can recover.
+        expect(steerQueue.dequeue(parent.id)).toBeNull();
+        throw new Error('assembly boom');
+      });
+
+    try {
+      await expect(service.startMultitaskFromQueue(parent.id)).rejects.toThrow('assembly boom');
+    } finally {
+      assembleSpy.mockRestore();
+    }
+
+    // WITHOUT any manual drain, the freed message must be delivered: the
+    // scheduled settle-drain empties the queue on its own.
+    const deadline = Date.now() + 4000;
+    while (steerQueue.count(parent.id) > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(steerQueue.count(parent.id)).toBe(0);
+  });
+
   it('boot: stale steer-queue claims are released so the rows drain again', async () => {
     const parent = await sessions.create({ prompt: 'boot parent', provider: 'cursor', workspace });
     const steerQueue = module.get(SteerQueueRepository);

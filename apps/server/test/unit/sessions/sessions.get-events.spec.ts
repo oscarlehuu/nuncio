@@ -70,6 +70,7 @@ describe('SessionsService.getEvents windows', () => {
 
   const steerQueue = {
     sessionIdsWithPending: jest.fn().mockReturnValue([]),
+    releaseAllClaims: jest.fn(),
   } as unknown as SteerQueueRepository;
 
   const service = new SessionsService(

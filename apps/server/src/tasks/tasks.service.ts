@@ -114,12 +114,13 @@ export class TasksService {
     const claimedIds = claimed.map((steer) => steer.id);
 
     // If assembly fails, the claim must not strand the messages — release them
-    // back to normal delivery and propagate the error.
+    // AND re-schedule a settle-drain, since the parent may have already settled
+    // and drained empty while the rows were claimed (nothing else would).
     let base: HandoffBrief;
     try {
       base = await this.assembleParentBrief(parent);
     } catch (error) {
-      this.sessions.releaseClaimedSteers(claimedIds);
+      this.releaseAndRescheduleDrain(trimmed, claimedIds);
       throw error;
     }
 
@@ -146,7 +147,7 @@ export class TasksService {
         return created;
       });
     } catch (error) {
-      this.sessions.releaseClaimedSteers(claimedIds);
+      this.releaseAndRescheduleDrain(trimmed, claimedIds);
       throw error;
     }
 
@@ -156,6 +157,17 @@ export class TasksService {
     this.sessions.emitSteerQueueCleared(trimmed);
 
     return { parentSessionId: trimmed, tasks };
+  }
+
+  /**
+   * A fan-out that claimed rows but aborted must both release the claim and
+   * kick a settle-drain: the parent may have already settled and drained empty
+   * (the claim hid the rows), so without this the freed messages would sit
+   * undelivered until an unrelated trigger.
+   */
+  private releaseAndRescheduleDrain(sessionId: string, claimedIds: number[]): void {
+    this.sessions.releaseClaimedSteers(claimedIds);
+    this.sessions.scheduleSteerDrain(sessionId);
   }
 
   /**

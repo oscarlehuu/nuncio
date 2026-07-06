@@ -402,6 +402,19 @@ export class SessionsService implements OnModuleDestroy {
     return this.steerQueue;
   }
 
+  /**
+   * Schedule a settle-drain for a session out-of-band — used after releasing a
+   * steer claim that a fan-out never consumed, so freed messages don't sit
+   * undelivered until an unrelated trigger. No-ops unless the session is IDLE:
+   * a RUNNING session drains on its own next settle, and PAUSED/ERROR must not
+   * be force-fed. Reuses the same drain mechanism status transitions use.
+   */
+  scheduleSteerDrain(id: string): void {
+    if (this.destroyed) return;
+    if (this.sessions.findById(id)?.status !== 'IDLE') return;
+    setTimeout(() => this.drainSteerQueue(id), 0);
+  }
+
   /** Deliver the next queued steer once the foreground run has settled. */
   private drainSteerQueue(id: string): void {
     // Drain timers can outlive the service; after shutdown the database is
