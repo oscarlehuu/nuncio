@@ -75,6 +75,29 @@ function asSessionStatus(value: unknown): Session['status'] | null {
     : null;
 }
 
+function asSessionTitle(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const title = (payload as { title?: unknown }).title;
+  return typeof title === 'string' && title.trim() ? title.trim() : null;
+}
+
+function applySessionTitle(
+  list: Session[],
+  id: string,
+  title: string,
+  createdAt: number,
+): Session[] {
+  let changed = false;
+  const next = list.map((session) => {
+    if (session.id !== id) return session;
+    const updatedAt = Math.max(session.updatedAt, createdAt);
+    if (session.title === title && session.updatedAt === updatedAt) return session;
+    changed = true;
+    return { ...session, title, updatedAt };
+  });
+  return changed ? next : list;
+}
+
 export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -353,6 +376,11 @@ export default function App() {
     }
   }, [activeId]);
 
+  const handleSessionTitle = useCallback((id: string, title: string, createdAt: number) => {
+    setSessions((prev) => applySessionTitle(prev, id, title, createdAt));
+    setArchivedSessions((prev) => applySessionTitle(prev, id, title, createdAt));
+  }, []);
+
   const handlePause = async () => {
     if (!activeId) return;
     setLifecycleBusy(true);
@@ -619,6 +647,7 @@ export default function App() {
                 onDelete={handleDelete}
                 onRename={handleRename}
                 onSessionStatus={handleSessionStatus}
+                onSessionTitle={handleSessionTitle}
                 onCreate={handleCreateReturning}
                 steering={steering}
                 lifecycleBusy={lifecycleBusy}
@@ -656,6 +685,7 @@ export default function App() {
                   });
                 }}
                 onSessionStatus={handleSessionStatus}
+                onSessionTitle={handleSessionTitle}
                 onMissingSession={() => {
                   toast.error('Session not found');
                   navigate('/', { replace: true });
@@ -756,6 +786,7 @@ interface SessionRouteProps {
   lifecycleBusy: boolean;
   onSessionLoaded: (session: Session) => void;
   onSessionStatus: (id: string, status: Session['status'], createdAt: number) => void;
+  onSessionTitle: (id: string, title: string, createdAt: number) => void;
   onMissingSession: () => void;
 }
 
@@ -779,6 +810,7 @@ function SessionRoute({
   lifecycleBusy,
   onSessionLoaded,
   onSessionStatus,
+  onSessionTitle,
   onMissingSession,
 }: SessionRouteProps) {
   const { sessionId } = useParams();
@@ -826,17 +858,31 @@ function SessionRoute({
   useEffect(() => {
     if (!session) return;
     let status: Session['status'] | null = null;
-    let createdAt = Date.now();
+    let statusCreatedAt = Date.now();
+    let title: string | null = null;
+    let titleCreatedAt = Date.now();
     for (let i = events.length - 1; i >= 0; i -= 1) {
       const event = events[i];
-      if (event?.type !== 'status') continue;
-      status = asSessionStatus(event.payload.status);
-      createdAt = event.createdAt;
-      break;
+      if (event?.type === 'status' && !status) {
+        status = asSessionStatus(event.payload.status);
+        statusCreatedAt = event.createdAt;
+      } else if (event?.type === 'session_title' && !title) {
+        title = asSessionTitle(event.payload);
+        titleCreatedAt = event.createdAt;
+      }
+      if (status && title) break;
     }
-    if (!status) return;
-    onSessionStatus(session.id, status, createdAt);
-  }, [events, onSessionStatus, session]);
+    if (status) onSessionStatus(session.id, status, statusCreatedAt);
+    if (title) {
+      setFetchedSession((prev) => {
+        if (!prev || prev.id !== session.id) return prev;
+        const updatedAt = Math.max(prev.updatedAt, titleCreatedAt);
+        if (prev.title === title && prev.updatedAt === updatedAt) return prev;
+        return { ...prev, title, updatedAt };
+      });
+      onSessionTitle(session.id, title, titleCreatedAt);
+    }
+  }, [events, onSessionStatus, onSessionTitle, session]);
 
   if (!session) return null;
 

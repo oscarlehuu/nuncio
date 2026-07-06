@@ -34,6 +34,7 @@ interface SessionTileProps {
   onSteer?: (message: string) => Promise<void>;
   steering?: boolean;
   onSessionStatus?: (id: string, status: SessionStatus, createdAt: number) => void;
+  onSessionTitle?: (id: string, title: string, createdAt: number) => void;
   /** Origin-absolute API base when the session lives on another hub machine. */
   apiBase?: string;
 }
@@ -82,6 +83,24 @@ function latestStatusEvent(
   return null;
 }
 
+function latestTitleEvent(
+  events: ReturnType<typeof useSessionStream>['events'],
+): { title: string; createdAt: number } | null {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (event?.type !== 'session_title') continue;
+    const title = asSessionTitle(event.payload);
+    if (title) return { title, createdAt: event.createdAt };
+  }
+  return null;
+}
+
+function asSessionTitle(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const title = (payload as { title?: unknown }).title;
+  return typeof title === 'string' && title.trim() ? title.trim() : null;
+}
+
 export function SessionTile({
   session,
   focused,
@@ -92,6 +111,7 @@ export function SessionTile({
   onSteer,
   steering,
   onSessionStatus,
+  onSessionTitle,
   apiBase = '',
 }: SessionTileProps) {
   const { events, loadEarlier, hasEarlier } = useSessionStream(session.id, apiBase, DETAIL_EVENT_TAIL);
@@ -100,6 +120,9 @@ export function SessionTile({
   const latestStatus = latestStatusEvent(events);
   const latestStatusValue = latestStatus?.status;
   const latestStatusCreatedAt = latestStatus?.createdAt;
+  const latestTitle = latestTitleEvent(events);
+  const latestTitleValue = latestTitle?.title;
+  const latestTitleCreatedAt = latestTitle?.createdAt;
   const status = latestStatus?.status ?? session.status;
   const [steerText, setSteerText] = useState('');
   const [loadingEarlier, setLoadingEarlier] = useState(false);
@@ -118,6 +141,11 @@ export function SessionTile({
     if (!latestStatusValue || latestStatusCreatedAt === undefined || !onSessionStatus) return;
     onSessionStatus(session.id, latestStatusValue, latestStatusCreatedAt);
   }, [latestStatusCreatedAt, latestStatusValue, onSessionStatus, session.id]);
+
+  useEffect(() => {
+    if (!latestTitleValue || latestTitleCreatedAt === undefined || !onSessionTitle) return;
+    onSessionTitle(session.id, latestTitleValue, latestTitleCreatedAt);
+  }, [latestTitleCreatedAt, latestTitleValue, onSessionTitle, session.id]);
 
   const projectName = projectDisplayName(session.projectPath);
   const modelName = session.model ? prettyModelName(session.model) : null;

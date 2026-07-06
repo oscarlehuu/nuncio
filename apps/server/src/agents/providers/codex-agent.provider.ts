@@ -25,8 +25,9 @@ import {
 type CodexRuntimeMode = 'approval-required' | 'full-access';
 
 interface CodexThreadOpenResponse {
-  thread?: { id?: string };
+  thread?: { id?: string; name?: string | null };
   threadId?: string;
+  threadName?: string | null;
 }
 
 interface CodexTurnStartResponse {
@@ -333,6 +334,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
         providerThreadId: codexThreadId,
         providerState: { resumeCursor: { threadId: codexThreadId } },
       });
+      this.syncThreadName(sessionId, active, this.readThreadName(response), codexThreadId, context.emit);
       this.activeSessions.set(sessionId, active);
       return active;
     } catch (error) {
@@ -367,6 +369,17 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
           providerState: { resumeCursor: { threadId } },
         });
       }
+      return;
+    }
+
+    if (notification.method === 'thread/name/updated') {
+      const thread = asRecord(params?.thread);
+      const threadId = asString(params?.threadId) ?? asString(thread?.id);
+      const threadName =
+        asString(params?.threadName) ??
+        asString(params?.name) ??
+        asString(thread?.name);
+      this.syncThreadName(sessionId, active, threadName, threadId, active.currentEmit);
       return;
     }
 
@@ -634,6 +647,32 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
 
   private readThreadId(response: CodexThreadOpenResponse): string | undefined {
     return response.thread?.id ?? response.threadId;
+  }
+
+  private readThreadName(response: CodexThreadOpenResponse): string | undefined {
+    return asString(response.thread?.name) ?? asString(response.threadName);
+  }
+
+  private syncThreadName(
+    sessionId: string,
+    active: ActiveCodexSession,
+    title: string | null | undefined,
+    threadId?: string,
+    emit?: EventEmitter,
+  ): void {
+    const trimmed = title?.trim();
+    if (!trimmed) return;
+    if (threadId && active.codexThreadId && threadId !== active.codexThreadId) return;
+
+    try {
+      const current = this.sessions.findById(sessionId);
+      if (!current || current.title === trimmed) return;
+      const updated = this.sessions.updateTitle(sessionId, trimmed);
+      if (!updated) return;
+      this.pushEvent(sessionId, 'session_title', { title: updated.title }, emit);
+    } catch {
+      // The user may have deleted the Nuncio session while the Codex app-server was still active.
+    }
   }
 
   private readTurnId(response: CodexTurnStartResponse): string | undefined {

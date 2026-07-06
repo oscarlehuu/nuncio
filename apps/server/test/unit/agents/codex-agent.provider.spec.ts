@@ -24,6 +24,8 @@ class FakeCodexClient extends EventEmitter implements CodexAppServerClientLike {
   autoCompleteTurn = true;
   emitApprovalRequests = true;
   suppressAutoDelta = false;
+  threadStartName: string | null | undefined;
+  threadResumeName: string | null | undefined;
   modelListResponse: unknown = {
     data: [
       {
@@ -57,14 +59,16 @@ class FakeCodexClient extends EventEmitter implements CodexAppServerClientLike {
       queueMicrotask(() => {
         this.emitNotification({
           method: 'thread/started',
-          params: { thread: { id: 'codex-thread-1' } },
+          params: { thread: this.threadPayload('codex-thread-1', this.threadStartName) },
         });
       });
-      return { thread: { id: 'codex-thread-1' } } as T;
+      return { thread: this.threadPayload('codex-thread-1', this.threadStartName) } as T;
     }
 
     if (method === 'thread/resume') {
-      return { thread: { id: (params as { threadId: string }).threadId } } as T;
+      return {
+        thread: this.threadPayload((params as { threadId: string }).threadId, this.threadResumeName),
+      } as T;
     }
 
     if (method === 'model/list') {
@@ -144,6 +148,10 @@ class FakeCodexClient extends EventEmitter implements CodexAppServerClientLike {
       method: 'turn/completed',
       params: { turn: { id: 'turn-1', status: 'completed' } },
     });
+  }
+
+  private threadPayload(id: string, name: string | null | undefined): { id: string; name?: string | null } {
+    return name === undefined ? { id } : { id, name };
   }
 }
 
@@ -227,6 +235,46 @@ describe('CodexAgentProvider', () => {
         sandboxPolicy: { type: 'dangerFullAccess' },
       },
     });
+  });
+
+  it('updates the Nuncio title from Codex thread name notifications', async () => {
+    fakeClient.autoCompleteTurn = false;
+    fakeClient.emitApprovalRequests = false;
+    const created = sessions.create({
+      id: 'session-codex-title',
+      prompt: 'Investigate why the release app is empty',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+    });
+    const emitted: Array<{ type: string; payload: unknown }> = [];
+
+    const run = provider.run(created.id, created.prompt, {
+      emit: (event) => emitted.push(event),
+      cwd: '/tmp/project',
+      model: created.model,
+    });
+
+    await waitUntil(() => sessions.findById(created.id)?.providerActiveTurnId === 'turn-1');
+    fakeClient.emitNotification({
+      method: 'thread/name/updated',
+      params: { threadId: 'codex-thread-1', threadName: 'Diagnose empty release app' },
+    });
+    fakeClient.completeTurn();
+    await run;
+
+    expect(sessions.findById(created.id)?.title).toBe('Diagnose empty release app');
+    expect(events.list(created.id)).toContainEqual(
+      expect.objectContaining({
+        type: 'session_title',
+        payload: { title: 'Diagnose empty release app' },
+      }),
+    );
+    expect(emitted).toContainEqual(
+      expect.objectContaining({
+        type: 'session_title',
+        payload: { title: 'Diagnose empty release app' },
+      }),
+    );
   });
 
   it('flushes slow Codex deltas while the turn is still running', async () => {
@@ -456,6 +504,32 @@ describe('CodexAgentProvider', () => {
         sandboxPolicy: { type: 'dangerFullAccess' },
       },
     });
+  });
+
+  it('updates the Nuncio title from the resumed Codex thread name', async () => {
+    fakeClient.threadResumeName = 'Continue Codex title sync';
+    const created = sessions.create({
+      id: 'session-resume-title',
+      prompt: 'Initial prompt with a verbose first-message title',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+    });
+    sessions.updateProviderRuntimeState(created.id, {
+      providerThreadId: 'codex-existing-thread',
+    });
+
+    await provider.steer(created.id, 'Continue', {
+      model: created.model,
+      cwd: '/tmp/project',
+    });
+
+    expect(sessions.findById(created.id)?.title).toBe('Continue Codex title sync');
+    expect(events.list(created.id)).toContainEqual(
+      expect.objectContaining({
+        type: 'session_title',
+        payload: { title: 'Continue Codex title sync' },
+      }),
+    );
   });
 
   it('waits for Nuncio approval before responding to a Codex app-server request', async () => {
