@@ -1,7 +1,12 @@
 import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { assembleSubagentBrief } from '../orchestration/handoff-brief.assembler';
 import { renderHandoffBrief } from '../orchestration/handoff-brief.renderer';
+import type { HandoffBrief } from '../orchestration/handoff-brief.types';
+import { buildWorkspaceSnapshot } from '../orchestration/workspace-snapshot';
 import { deriveHasPendingInput } from '../sessions/domain/derive-pending-input';
+import type { SessionDto } from '../sessions/domain/sessions.types';
 import { EventsRepository } from '../sessions/persistence/events.repository';
+import { resolveVerifyCommand } from '../sessions/session-verifier';
 import { SessionsService } from '../sessions/sessions.service';
 import { SettingsService } from '../settings/settings.service';
 import { buildSubagentTaskInput } from './multitask-defaults';
@@ -16,6 +21,18 @@ import {
 
 /** How many trailing events to scan when deriving "waiting on user input". */
 const PENDING_SCAN_TAIL = 200;
+
+const GOAL_MAX_CHARS = 200;
+
+/**
+ * Specialize the shared parent brief for one child by swapping in that child's
+ * own prompt as the goal. Returns undefined when there is no assembled base
+ * (an explicit DTO brief is in play), leaving the caller's override untouched.
+ */
+function briefForPrompt(base: HandoffBrief | null, prompt: string): HandoffBrief | undefined {
+  if (!base) return undefined;
+  return { ...base, goal: prompt.slice(0, GOAL_MAX_CHARS) };
+}
 
 @Injectable()
 export class TasksService {
@@ -52,7 +69,7 @@ export class TasksService {
     return task;
   }
 
-  startMultitask(input: StartMultitaskDto): StartMultitaskResultDto {
+  async startMultitask(input: StartMultitaskDto): Promise<StartMultitaskResultDto> {
     const parentSessionId = input.parentSessionId?.trim();
     if (!parentSessionId) throw new BadRequestException('parentSessionId is required');
     const parent = this.sessions.get(parentSessionId);
@@ -63,8 +80,11 @@ export class TasksService {
       .filter(Boolean);
     if (!prompts?.length) throw new BadRequestException('at least one prompt is required');
 
+    const base = input.contextBrief ? null : await this.assembleParentBrief(parent);
     const tasks = prompts.map((prompt) =>
-      this.enqueue(buildSubagentTaskInput(input, parent, prompt, this.settings)),
+      this.enqueue(
+        buildSubagentTaskInput(input, parent, prompt, this.settings, briefForPrompt(base, prompt)),
+      ),
     );
 
     return { parentSessionId, tasks };
@@ -76,7 +96,7 @@ export class TasksService {
    * sequentially when the parent's run settles — otherwise every queued prompt
    * would run twice. Subagents inherit the parent's provider/model defaults.
    */
-  startMultitaskFromQueue(parentSessionId: string): StartMultitaskResultDto {
+  async startMultitaskFromQueue(parentSessionId: string): Promise<StartMultitaskResultDto> {
     const trimmed = parentSessionId?.trim();
     if (!trimmed) throw new BadRequestException('parentSessionId is required');
     const parent = this.sessions.get(trimmed);
@@ -87,11 +107,43 @@ export class TasksService {
       throw new BadRequestException('No queued messages to multitask');
     }
 
+    const base = await this.assembleParentBrief(parent);
     const tasks = prompts.map((prompt) =>
-      this.enqueue(buildSubagentTaskInput({ parentSessionId: trimmed, prompts }, parent, prompt, this.settings)),
+      this.enqueue(
+        buildSubagentTaskInput(
+          { parentSessionId: trimmed, prompts },
+          parent,
+          prompt,
+          this.settings,
+          briefForPrompt(base, prompt),
+        ),
+      ),
     );
 
     return { parentSessionId: trimmed, tasks };
+  }
+
+  /**
+   * Assemble the shared portion of the handoff brief once per parent: workspace
+   * snapshot, harvested files, verify command, parent objective. The per-child
+   * goal is swapped in later. Best-effort — a snapshot failure yields a
+   * still-useful brief with a null workspace.
+   */
+  private async assembleParentBrief(parent: SessionDto): Promise<HandoffBrief> {
+    const cwd = parent.worktreePath ?? parent.workspace ?? parent.projectPath ?? null;
+    const workspace = cwd
+      ? await buildWorkspaceSnapshot(cwd, parent.baseBranch ?? parent.branch)
+      : null;
+    const verify = cwd
+      ? resolveVerifyCommand(cwd, this.settings?.resolve('NUNCIO_VERIFY_COMMAND'))
+      : null;
+    return assembleSubagentBrief({
+      parent,
+      subagentPrompt: parent.prompt, // placeholder goal; replaced per prompt
+      parentTailEvents: this.events.listTail(parent.id, PENDING_SCAN_TAIL),
+      workspace,
+      verifyCommand: verify?.display ?? null,
+    });
   }
 
   cancel(id: string): TaskDto {

@@ -159,7 +159,7 @@ describe('TasksService', () => {
       workspace,
     });
 
-    const result = service.startMultitask({
+    const result = await service.startMultitask({
       parentSessionId: parent.id,
       prompts: ['write tests', 'update docs'],
     });
@@ -185,6 +185,48 @@ describe('TasksService', () => {
     expect(done.every((task) => task.reviewState === 'awaiting_review')).toBe(true);
   });
 
+  it('attaches an assembled brief to each subagent with the parent objective and touched files', async () => {
+    writeVerifyScript('exit 0\n');
+    const parent = await sessions.create({
+      prompt: 'Refactor the payment flow',
+      provider: 'cursor',
+      workspace,
+    });
+    // Simulate the parent touching a file so the assembler can harvest it.
+    // A repo-relative path is kept regardless of the (unset) project root.
+    events.append(parent.id, 'tool_start', {
+      tool: 'Edit',
+      input: { file_path: 'src/pay.ts' },
+    });
+
+    const result = await service.startMultitask({
+      parentSessionId: parent.id,
+      prompts: ['write payment tests'],
+    });
+
+    const brief = repo.findById(result.tasks[0]!.id)?.contextBrief;
+    expect(brief?.goal).toBe('write payment tests');
+    expect(brief?.decisions).toContain('Parent objective: Refactor the payment flow');
+    expect(brief?.files).toContain('src/pay.ts');
+    expect(brief?.sourceSessionId).toBe(parent.id);
+
+    await Promise.all(result.tasks.map((task) => waitForStatus(task.id, ['DONE', 'FAILED'])));
+  });
+
+  it('honors an explicit contextBrief override on multitask', async () => {
+    writeVerifyScript('exit 0\n');
+    const parent = await sessions.create({ prompt: 'parent', provider: 'cursor', workspace });
+    const result = await service.startMultitask({
+      parentSessionId: parent.id,
+      prompts: ['child work'],
+      contextBrief: { goal: 'explicit goal wins' },
+    });
+    const brief = repo.findById(result.tasks[0]!.id)?.contextBrief;
+    expect(brief?.goal).toBe('explicit goal wins');
+    expect(brief?.decisions).toBeUndefined();
+    await Promise.all(result.tasks.map((task) => waitForStatus(task.id, ['DONE', 'FAILED'])));
+  });
+
   it('fans the parent steer queue out to subagents and drains it', async () => {
     writeVerifyScript('exit 0\n');
     const parent = await sessions.create({
@@ -197,7 +239,7 @@ describe('TasksService', () => {
     steerQueue.enqueue(parent.id, 'audit the docs');
     steerQueue.enqueue(parent.id, 'add token tabs');
 
-    const result = service.startMultitaskFromQueue(parent.id);
+    const result = await service.startMultitaskFromQueue(parent.id);
 
     expect(result.tasks).toHaveLength(2);
     expect(result.tasks.map((task) => task.prompt)).toEqual(['audit the docs', 'add token tabs']);
@@ -213,7 +255,7 @@ describe('TasksService', () => {
 
   it('rejects multitask-from-queue when the parent queue is empty', async () => {
     const parent = await sessions.create({ prompt: 'lonely parent', provider: 'cursor', workspace });
-    expect(() => service.startMultitaskFromQueue(parent.id)).toThrow(BadRequestException);
+    await expect(service.startMultitaskFromQueue(parent.id)).rejects.toThrow(BadRequestException);
     // Nothing was emitted for an empty drain.
     expect(events.list(parent.id).some((event) => event.type === 'steer_queue_cleared')).toBe(false);
   });
