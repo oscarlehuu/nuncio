@@ -261,6 +261,26 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
       'Shell command run in the session workspace after each turn; the result is annotated on the transcript (verify chip). A project-level .nuncio/verify script takes precedence. Empty disables verification.',
     envVar: 'NUNCIO_VERIFY_COMMAND',
   },
+  {
+    key: 'NUNCIO_VERIFY_AUTO_STEER',
+    category: 'agents',
+    type: 'boolean',
+    label: 'Auto-fix failing verifies',
+    description:
+      'When a post-turn verify fails, automatically steer the session with the failure output so the agent fixes it, up to the max rounds below, then surface "needs you". Off by default.',
+    envVar: 'NUNCIO_VERIFY_AUTO_STEER',
+    default: '0',
+  },
+  {
+    key: 'NUNCIO_VERIFY_MAX_ROUNDS',
+    category: 'agents',
+    type: 'string',
+    label: 'Max auto-fix rounds',
+    description:
+      'How many times to auto-steer a failing verify before surfacing "needs you". Default 3. 0 surfaces immediately without auto-steering. Non-integer or negative values fall back to 3.',
+    envVar: 'NUNCIO_VERIFY_MAX_ROUNDS',
+    default: '3',
+  },
   // ── MCP & Tools ─────────────────────────────────────────────────────────
   {
     key: 'NUNCIO_BROWSER_DEFAULT_TARGET',

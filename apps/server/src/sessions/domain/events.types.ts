@@ -20,6 +20,8 @@ export type SessionEventType =
   | 'runtime_stalled'
   | 'verify_start'
   | 'verify_result'
+  | 'verify_retry'
+  | 'verify_needs_attention'
   | 'steer_message'
   | 'steer_queued'
   | 'steer_queue_cleared'

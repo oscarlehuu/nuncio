@@ -40,6 +40,14 @@ import { ProviderRequestsRepository } from './persistence/provider-requests.repo
 import { SessionsRepository } from './persistence/sessions.repository';
 import { SteerQueueRepository } from './persistence/steer-queue.repository';
 import { resolveVerifyCommand, runVerifyCommand } from './session-verifier';
+import {
+  buildFeedbackMessage,
+  decideNextStep,
+  foldLoopState,
+  parseAutoSteerEnabled,
+  parseMaxRounds,
+  type VerifyResultPayload,
+} from './verify-feedback';
 import { SettingsService } from '../settings/settings.service';
 
 type StreamListener = (event: SessionEvent) => void;
@@ -73,6 +81,10 @@ export class SessionsService implements OnModuleDestroy {
   private readonly locallyProducing = new Set<string>();
   private readonly verifying = new Set<string>();
   private readonly runPromises = new Map<string, Promise<void>>();
+  // Verify-feedback loop settlement: resolves when the loop reaches a terminal
+  // state (green verify / needs-attention / no-command). Task-lane consumers
+  // await this instead of a bare awaitRun so they wait for the whole loop.
+  private readonly verifySettled = new Map<string, { promise: Promise<void>; resolve: () => void }>();
   private readonly stalledRunTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly transcriptWatchers = new Map<
     string,
@@ -99,6 +111,7 @@ export class SessionsService implements OnModuleDestroy {
     this.restorePendingSteerQueues();
     this.reconcileInterruptedSessions();
     this.resolveStaleProviderRequests();
+    this.resumeVerifyLoops();
   }
 
   list(includeArchived = false): SessionDto[] {
@@ -1002,6 +1015,9 @@ export class SessionsService implements OnModuleDestroy {
     if (session.cursorBackend === 'cli') return;
     const persisted = this.persistImageAttachments(session.id, attachments);
     this.locallyProducing.add(session.id);
+    // Arm loop settlement before the run so a task can awaitVerifySettled and
+    // wait for the whole verify-feedback loop, not just the first turn+verify.
+    this.armVerifySettlement(session.id);
     const run = (async () => {
       try {
         const provider = await this.agents.resolveAvailableForSession(session);
@@ -1017,9 +1033,11 @@ export class SessionsService implements OnModuleDestroy {
     this.runPromises.set(session.id, run);
     // Subscribe a guard so a rejection without an awaitRun caller can't
     // surface as an unhandled rejection; awaiters still see the rejection.
-    run.catch(() => undefined).finally(() => {
-      if (this.runPromises.get(session.id) === run) this.runPromises.delete(session.id);
-    });
+    run
+      .catch(() => this.settleVerify(session.id))
+      .finally(() => {
+        if (this.runPromises.get(session.id) === run) this.runPromises.delete(session.id);
+      });
   }
 
   /**
@@ -1032,30 +1050,204 @@ export class SessionsService implements OnModuleDestroy {
     const session = this.sessions.findById(sessionId);
     if (!session || session.status !== 'IDLE') return;
     const cwd = session.worktreePath ?? session.workspace ?? session.projectPath;
-    if (!cwd) return;
+    if (!cwd) {
+      this.settleVerify(sessionId);
+      return;
+    }
     const command = resolveVerifyCommand(cwd, this.settings?.resolve('NUNCIO_VERIFY_COMMAND'));
-    if (!command) return;
+    if (!command) {
+      this.settleVerify(sessionId);
+      return;
+    }
 
+    let result: VerifyResultPayload | null = null;
     this.verifying.add(sessionId);
     try {
       this.appendAndEmit(sessionId, 'verify_start', { command: command.display });
-      const result = await runVerifyCommand(command, cwd);
+      const run = await runVerifyCommand(command, cwd);
       if (!this.sessions.findById(sessionId)) return;
-      this.appendAndEmit(sessionId, 'verify_result', { command: command.display, ...result });
+      result = { command: command.display, ...run };
+      this.appendAndEmit(sessionId, 'verify_result', result);
     } catch (error) {
       if (!this.sessions.findById(sessionId)) return;
       const message = error instanceof Error ? error.message : String(error);
-      this.appendAndEmit(sessionId, 'verify_result', {
+      result = {
         command: command.display,
         ok: false,
         exitCode: null,
         durationMs: 0,
         outputTail: message,
         timedOut: false,
-      });
+      };
+      this.appendAndEmit(sessionId, 'verify_result', result);
     } finally {
       this.verifying.delete(sessionId);
     }
+
+    if (result && !result.ok) {
+      await this.driveVerifyFeedback(sessionId);
+    } else {
+      // Green verify (or nothing to drive): the loop, if any, has settled.
+      this.settleVerify(sessionId);
+    }
+  }
+
+  /** Whether the auto-fix loop is enabled and its round budget. */
+  private verifyFeedbackConfig(): { enabled: boolean; maxRounds: number } {
+    return {
+      enabled: parseAutoSteerEnabled(this.settings?.resolve('NUNCIO_VERIFY_AUTO_STEER')),
+      maxRounds: parseMaxRounds(this.settings?.resolve('NUNCIO_VERIFY_MAX_ROUNDS')),
+    };
+  }
+
+  /**
+   * Evaluate the verify-feedback loop after a failing verify and take the next
+   * step: emit a verify_retry + auto-steer, or emit verify_needs_attention, or
+   * do nothing (disabled / already surfaced). Decision folds the durable log, so
+   * it is identical live and on boot.
+   */
+  private async driveVerifyFeedback(sessionId: string): Promise<void> {
+    const { enabled, maxRounds } = this.verifyFeedbackConfig();
+    if (!enabled) {
+      this.settleVerify(sessionId);
+      return;
+    }
+    const session = this.sessions.findById(sessionId);
+    if (!session || session.status !== 'IDLE') {
+      this.settleVerify(sessionId);
+      return;
+    }
+
+    const state = foldLoopState(this.events.list(sessionId, 0));
+    const decision = decideNextStep(state, maxRounds);
+
+    if (decision.kind === 'none') {
+      this.settleVerify(sessionId);
+      return;
+    }
+    if (decision.kind === 'needs_attention') {
+      this.appendAndEmit(sessionId, 'verify_needs_attention', {
+        rounds: decision.rounds,
+        reason: decision.reason,
+        lastOutputTail: state.lastFail?.outputTail ?? '',
+      });
+      this.settleVerify(sessionId);
+      return;
+    }
+
+    // retry: mark the round then auto-steer with the failure output.
+    const retryId = uuidv4().slice(0, 12);
+    const fail = state.lastFail!;
+    this.appendAndEmit(sessionId, 'verify_retry', {
+      round: decision.round,
+      reason: 'verify_failed',
+      command: fail.command,
+      outputTail: fail.outputTail,
+      retryId,
+    });
+    await this.autoSteer(sessionId, buildFeedbackMessage(fail), retryId);
+  }
+
+  /**
+   * Deliver an auto-steer through the normal steer machinery, tagged with its
+   * origin/retryId so consumers classify it explicitly. A provider failure is
+   * surfaced (BaseAgentProvider maps the throw to a status:ERROR + error event);
+   * the loop then settles rather than spinning.
+   */
+  private async autoSteer(sessionId: string, message: string, retryId: string): Promise<void> {
+    const session = this.sessions.findById(sessionId);
+    if (!session || session.status !== 'IDLE') {
+      this.settleVerify(sessionId);
+      return;
+    }
+    let provider;
+    try {
+      provider = await this.agents.resolveAvailableForSession(session);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.appendAndEmit(sessionId, 'error', { message: `Auto-steer could not start: ${reason}` });
+      this.settleVerify(sessionId);
+      return;
+    }
+
+    this.locallyProducing.add(sessionId);
+    try {
+      await provider.steer(sessionId, message, {
+        ...this.buildAgentRunContext(session),
+        steerMeta: { origin: 'verify_retry', retryId },
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (this.sessions.findById(sessionId)) {
+        this.appendAndEmit(sessionId, 'error', { message: `Auto-steer failed: ${reason}` });
+      }
+      this.locallyProducing.delete(sessionId);
+      this.settleVerify(sessionId);
+      return;
+    }
+    this.locallyProducing.delete(sessionId);
+    // The steer settled IDLE; run the next verify, which continues the loop.
+    await this.maybeVerify(sessionId);
+  }
+
+  /**
+   * Boot scan: resume any verify-feedback loop the durable log shows as live but
+   * that no in-process run is driving (the daemon died mid-loop). Idempotent —
+   * a pure function of the log — so it is safe every boot.
+   */
+  private resumeVerifyLoops(): void {
+    if (!parseAutoSteerEnabled(this.settings?.resolve('NUNCIO_VERIFY_AUTO_STEER'))) return;
+    for (const session of this.sessions.list(false)) {
+      if (session.status !== 'IDLE') continue;
+      const events = this.events.list(session.id, 0);
+      if (events.length === 0) continue;
+      const state = foldLoopState(events);
+      // A green tail or an already-surfaced loop needs no resume.
+      if (!state.lastFail) continue;
+      const last = events[events.length - 1]!;
+      if (last.type === 'verify_needs_attention' || last.type === 'steer_message') continue;
+      setTimeout(() => {
+        void this.resumeOneVerifyLoop(session.id).catch(() => undefined);
+      }, 0);
+    }
+  }
+
+  private async resumeOneVerifyLoop(sessionId: string): Promise<void> {
+    if (this.destroyed) return;
+    const session = this.sessions.findById(sessionId);
+    if (!session || session.status !== 'IDLE') return;
+    const state = foldLoopState(this.events.list(sessionId, 0));
+    // Crash point: a retry marker was written but its auto-steer never sent —
+    // re-send exactly that steer (idempotent, keyed on retryId).
+    if (state.danglingRetryId && state.lastFail) {
+      await this.autoSteer(sessionId, buildFeedbackMessage(state.lastFail), state.danglingRetryId);
+      return;
+    }
+    // Otherwise evaluate the failed verify as if it had just landed.
+    await this.driveVerifyFeedback(sessionId);
+  }
+
+  /** Resolves once the verify-feedback loop settles (green / needs-attention / no-op). */
+  awaitVerifySettled(sessionId: string): Promise<void> {
+    return this.verifySettled.get(sessionId)?.promise ?? Promise.resolve();
+  }
+
+  /** Arm a fresh settlement deferred at the start of a run/loop. */
+  private armVerifySettlement(sessionId: string): void {
+    if (this.verifySettled.has(sessionId)) return;
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => {
+      resolve = r;
+    });
+    this.verifySettled.set(sessionId, { promise, resolve });
+  }
+
+  /** Resolve and clear the settlement deferred; the loop reached a terminal state. */
+  private settleVerify(sessionId: string): void {
+    const entry = this.verifySettled.get(sessionId);
+    if (!entry) return;
+    this.verifySettled.delete(sessionId);
+    entry.resolve();
   }
 
   private cancelProviderRequests(id: string): void {

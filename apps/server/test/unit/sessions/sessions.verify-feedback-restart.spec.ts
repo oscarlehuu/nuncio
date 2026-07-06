@@ -266,11 +266,13 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
 
   it('resumes the loop after a restart when the last event was a failed verify with no retry marker', async () => {
     // Crash point (deterministic): a failing verify_result is the tail of the log,
-    // with NO verify_retry after it. We seed exactly that state — no live loop runs
-    // during setup, so the "crash" lands precisely where intended (findings #2, #3).
+    // with NO verify_retry after it. The loop is DISABLED during seed so no live
+    // loop runs; we seed the failure by hand, then boot with the loop enabled so
+    // only the boot scan can produce the retry (findings #2, #3).
     process.env[MAX_ROUNDS] = '2';
+    process.env[AUTO_STEER] = '0';
     // A verify script is present at boot so the RESUMED loop can run its rounds,
-    // but it never ran before the crash (we seeded the result by hand).
+    // but it never auto-steered before the crash (loop disabled + hand-seeded).
     writeUniqueFailScript(workspace, 'resumed after crash');
 
     const seed = await buildCursorModule();
@@ -288,7 +290,8 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
     const seeded = seedFailingVerifyResult(seedEvents, session.id, 'RED: seeded pre-crash failure');
     await seed.close();
 
-    // Boot: the scan must resume — evaluate the seeded failed verify and auto-steer.
+    // Boot with the loop ENABLED: the scan must resume the seeded failed verify.
+    process.env[AUTO_STEER] = '1';
     const booted = await buildCursorModule();
     booted.get(SessionsService);
     const events = booted.get(EventsRepository);
@@ -318,6 +321,7 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
     // (idempotent on retryId), never a second retry marker. Fully seeded — no live
     // loop runs during setup, so the crash lands exactly here (findings #2, #3).
     process.env[MAX_ROUNDS] = '3';
+    process.env[AUTO_STEER] = '0';
     writeUniqueFailScript(workspace, 'dangling retry');
 
     const seed = await buildCursorModule();
@@ -342,6 +346,7 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
     });
     await seed.close();
 
+    process.env[AUTO_STEER] = '1';
     const booted = await buildCursorModule();
     booted.get(SessionsService);
     const events = booted.get(EventsRepository);

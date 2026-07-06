@@ -177,12 +177,18 @@ export class TasksService {
       });
       this.tasks.attachSession(task.id, session.id);
       await this.sessions.awaitRun(session.id);
+      // Wait for the verify-feedback loop (if any) to settle — a task's outcome
+      // must reflect the loop's terminal verify (green / needs-attention), not the
+      // first red result the initial run produced.
+      await this.sessions.awaitVerifySettled(session.id);
 
       const final = this.sessions.get(session.id);
       const verify = this.lastVerifyResult(session.id);
+      const needsAttention = this.needsAttention(session.id);
       this.tasks.finish(task.id, final?.status === 'IDLE' ? 'DONE' : 'FAILED', {
         sessionStatus: final?.status ?? 'UNKNOWN',
         ...(verify ? { verify } : {}),
+        ...(needsAttention ? { needsAttention } : {}),
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -196,6 +202,21 @@ export class TasksService {
       const event = tail[i];
       if (event?.type === 'verify_result') {
         return event.payload as Record<string, unknown>;
+      }
+    }
+    return null;
+  }
+
+  /** The verify-feedback needs-attention payload if the loop gave up, else null. */
+  private needsAttention(sessionId: string): Record<string, unknown> | null {
+    const tail = this.events.listTail(sessionId, PENDING_SCAN_TAIL);
+    for (let i = tail.length - 1; i >= 0; i -= 1) {
+      const event = tail[i];
+      if (event?.type === 'verify_needs_attention') {
+        return event.payload as Record<string, unknown>;
+      }
+      if (event?.type === 'verify_result' && (event.payload as { ok?: boolean }).ok === true) {
+        return null; // a later green verify cleared the needs-attention state
       }
     }
     return null;
