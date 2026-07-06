@@ -169,18 +169,67 @@ describe('classifyResult', () => {
     });
   });
 
-  it('classifies other error subtypes as errors', () => {
+  it('gives max-turns a user-actionable message and appends the SDK detail', () => {
     const classified = classifyResult(
       result({ subtype: 'error_max_turns', errors: ['exceeded max turns'] }),
       '',
     );
-    expect(classified).toEqual({ kind: 'error', message: 'exceeded max turns' });
+    expect(classified.kind).toBe('error');
+    const message = (classified as { message: string }).message;
+    expect(message).toContain('maximum number of turns');
+    expect(message).toContain('exceeded max turns');
   });
 
-  it('an error result without errors[] still yields a non-empty error message', () => {
+  it('gives max-budget a user-actionable message even without SDK detail', () => {
     const classified = classifyResult(result({ subtype: 'error_max_budget_usd', errors: [] }), '');
     expect(classified.kind).toBe('error');
-    expect((classified as { message: string }).message).toBe('error_max_budget_usd');
+    expect((classified as { message: string }).message).toContain('cost limit');
+  });
+
+  it('gives max-structured-output-retries a user-actionable message', () => {
+    const classified = classifyResult(
+      result({ subtype: 'error_max_structured_output_retries', errors: [] }),
+      '',
+    );
+    expect(classified.kind).toBe('error');
+    expect((classified as { message: string }).message).toContain('structured response');
+  });
+
+  it('classifies an invalid-API-key error result as an auth error', () => {
+    const classified = classifyResult(
+      result({
+        subtype: 'error_during_execution',
+        errors: ['authentication_error: invalid x-api-key'],
+      }),
+      '',
+    );
+    expect(classified.kind).toBe('error');
+    const message = (classified as { message: string }).message;
+    expect(message).toContain('authentication failed');
+    expect(message).toContain('ANTHROPIC_API_KEY');
+  });
+
+  it('keeps the raw subtype in the message for an unknown error subtype', () => {
+    const classified = classifyResult(
+      result({ subtype: 'error_something_new', errors: [] }),
+      '',
+    );
+    expect(classified.kind).toBe('error');
+    expect((classified as { message: string }).message).toContain('error_something_new');
+  });
+
+  it('an error result with neither errors[] nor a subtype still yields a message', () => {
+    const classified = classifyResult(result({ subtype: '', errors: [] }), '');
+    expect(classified.kind).toBe('error');
+    expect((classified as { message: string }).message.length).toBeGreaterThan(0);
+  });
+
+  it('a genuine error with an unrelated terminal_reason is still an error, not interrupted', () => {
+    const classified = classifyResult(
+      result({ subtype: 'error_max_turns', terminal_reason: 'completed', errors: [] }),
+      '',
+    );
+    expect(classified.kind).toBe('error');
   });
 });
 

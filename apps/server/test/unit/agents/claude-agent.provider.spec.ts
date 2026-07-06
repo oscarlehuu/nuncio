@@ -683,4 +683,176 @@ describe('ClaudeAgentProvider', () => {
   it('declares images capability true', () => {
     expect(provider.capabilities.images).toBe(true);
   });
+
+  it('steers a live query into a second turn (generator survives turn-end, no re-finalize)', async () => {
+    // The SDK Query is a single-pass AsyncGenerator: a turn ends on its `result`,
+    // but the generator must keep yielding for the next steer. Driving it with a
+    // stable iterator (not a fresh `for await` per turn) is what keeps it alive —
+    // a `for await` loop finalizes the generator on break, so the second turn
+    // would silently produce nothing. This fake is ONE real AsyncGenerator whose
+    // `[Symbol.asyncIterator]` returns `this` — a generator finalized on turn 1
+    // would return done when re-iterated for turn 2, which is exactly the
+    // regression this guards.
+    provider.queryFactory = ({ prompt }) => {
+      const promptIterator = prompt[Symbol.asyncIterator]();
+      async function* turns(): AsyncGenerator<ClaudeSdkMessage> {
+        yield { type: 'system', subtype: 'init', session_id: 't1' };
+        await promptIterator.next(); // consume the initial prompt
+        yield {
+          type: 'stream_event',
+          uuid: 'm1',
+          event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'FIRST' } },
+        };
+        yield { type: 'result', subtype: 'success', result: 'FIRST' };
+        // Turn 1 ended; the generator stays suspended here until the steer arrives.
+        await promptIterator.next(); // the steer message
+        yield {
+          type: 'stream_event',
+          uuid: 'm2',
+          event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'SECOND' } },
+        };
+        yield { type: 'result', subtype: 'success', result: 'SECOND' };
+      }
+      const gen = turns();
+      return {
+        async interrupt() {},
+        async setModel() {},
+        [Symbol.asyncIterator]() {
+          return gen;
+        },
+      } as ClaudeQuery;
+    };
+    const created = sessions.create({ prompt: 'go', provider: 'claude', model: 'claude:haiku' });
+    await provider.run(created.id, 'go', { cwd: '/tmp/ws', model: 'claude:haiku' });
+    expect(finalMessageText(created.id)).toBe('FIRST');
+
+    await provider.steer(created.id, 'now the second', { cwd: '/tmp/ws', model: 'claude:haiku' });
+    // The second turn actually produced output — the generator was not finalized
+    // when the first turn ended.
+    expect(finalMessageText(created.id)).toBe('SECOND');
+    expect(sessions.findById(created.id)?.status).toBe('IDLE');
+  });
+
+  function finalMessageText(sessionId: string): string {
+    const message = events.list(sessionId).findLast((event) => event.type === 'assistant_message');
+    return (message?.payload as { text?: string })?.text ?? '';
+  }
+
+  describe('subprocess audit — dispose aborts every session handle', () => {
+    /**
+     * Install one factory that parks EVERY run on a never-resolving turn and
+     * routes the per-run AbortController by cwd (unique per session here) into a
+     * shared registry. A single factory avoids the reassign-race where a later
+     * factory assignment shadows an earlier run's factory after its first await.
+     */
+    function installParkingFactory(onAbort: (key: string) => void): void {
+      provider.queryFactory = ({ options }: { options: ClaudeQueryOptions }) => {
+        const key = options.cwd;
+        options.abortController.signal.addEventListener('abort', () => onAbort(key), { once: true });
+        return {
+          async interrupt() {},
+          async setModel() {},
+          async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+            yield { type: 'system', subtype: 'init', session_id: key };
+            await new Promise<void>((resolve) => {
+              options.abortController.signal.addEventListener('abort', () => resolve(), { once: true });
+            });
+          },
+        } as ClaudeQuery;
+      };
+    }
+
+    it('disposing N concurrent sessions fires every abort controller', async () => {
+      const N = 4;
+      const aborted = new Set<string>();
+      installParkingFactory((key) => aborted.add(key));
+      const created = Array.from({ length: N }, (_, i) =>
+        sessions.create({ prompt: `p${i}`, provider: 'claude', model: 'claude:haiku' }),
+      );
+      const runs = created.map((session, i) =>
+        provider.run(session.id, 'go', { cwd: `/tmp/ws-${i}`, model: 'claude:haiku' }),
+      );
+
+      // Let every run reach its parked turn (handle registered).
+      await new Promise((r) => setTimeout(r, 30));
+      for (const session of created) provider.dispose(session.id);
+      await Promise.all(runs.map((run) => run.catch(() => {})));
+
+      expect(aborted.size).toBe(N);
+      for (let i = 0; i < N; i += 1) expect(aborted.has(`/tmp/ws-${i}`)).toBe(true);
+    });
+
+    it('double-dispose is idempotent (second call is a safe no-op)', async () => {
+      let abortCount = 0;
+      installParkingFactory(() => (abortCount += 1));
+      const created = sessions.create({ prompt: 'p', provider: 'claude', model: 'claude:haiku' });
+      const run = provider.run(created.id, 'go', { cwd: '/tmp/ws-solo', model: 'claude:haiku' });
+      await new Promise((r) => setTimeout(r, 20));
+
+      provider.dispose(created.id);
+      expect(() => provider.dispose(created.id)).not.toThrow();
+      await run.catch(() => {});
+      // The single live AbortController fired exactly once; the second dispose,
+      // finding no handle, did not re-abort or throw.
+      expect(abortCount).toBe(1);
+    });
+
+    it('onModuleDestroy disposes every remaining active session', async () => {
+      const aborted = new Set<string>();
+      installParkingFactory((key) => aborted.add(key));
+      const created = Array.from({ length: 3 }, (_, i) =>
+        sessions.create({ prompt: `p${i}`, provider: 'claude', model: 'claude:haiku' }),
+      );
+      const runs = created.map((session, i) =>
+        provider.run(session.id, 'go', { cwd: `/tmp/md-${i}`, model: 'claude:haiku' }),
+      );
+      await new Promise((r) => setTimeout(r, 30));
+
+      provider.onModuleDestroy();
+      await Promise.all(runs.map((run) => run.catch(() => {})));
+      expect(aborted.size).toBe(3);
+    });
+  });
+
+  describe('payload truncation — oversized tool output survives the event cap', () => {
+    it('a tool_end output past the event-layer cap lands truncated, not thrown', async () => {
+      // The Claude provider passes raw tool output through; the ceiling is
+      // enforced when the event is persisted (MAX_EVENT_PAYLOAD_BYTES). A huge
+      // output must flow through pushEvent without throwing and land truncated.
+      const huge = 'x'.repeat(200 * 1024);
+      provider.queryFactory = () => ({
+        async interrupt() {},
+        async setModel() {},
+        async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+          yield { type: 'system', subtype: 'init', session_id: 't1' };
+          yield {
+            type: 'stream_event',
+            uuid: 'm1',
+            event: {
+              type: 'content_block_start',
+              content_block: { type: 'tool_use', id: 'toolu_big', name: 'Bash', input: {} },
+            },
+          } as ClaudeSdkMessage;
+          yield {
+            type: 'user',
+            message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_big', content: huge }] },
+          } as ClaudeSdkMessage;
+          yield { type: 'result', subtype: 'success', result: 'done' };
+        },
+      });
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await provider.run(created.id, 'run a big command', { cwd: '/tmp/ws', model: 'claude:haiku' });
+
+      // The run completed (no throw) and reached its terminal.
+      expect(sessions.findById(created.id)?.status).toBe('IDLE');
+      // The event layer replaces a payload past MAX_EVENT_PAYLOAD_BYTES with a
+      // { truncated, preview } stub, so the oversized tool_end lands truncated
+      // rather than bloating the log or throwing.
+      const end = events.list(created.id).find((e) => e.type === 'tool_end');
+      const payload = end?.payload as { truncated?: boolean; preview?: string };
+      expect(payload.truncated).toBe(true);
+      expect(typeof payload.preview).toBe('string');
+      expect(new TextEncoder().encode(payload.preview!).byteLength).toBeLessThanOrEqual(128 * 1024);
+    });
+  });
 });

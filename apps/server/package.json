@@ -11,6 +11,7 @@
     "test:e2e": "bun test ./test/e2e/app.e2e-spec.ts",
     "test:integration": "bun test test/integration/",
     "test:integration:codex": "NUNCIO_CODEX_INTEGRATION=1 bun test test/integration/codex-agent.integration.spec.ts",
+    "test:integration:claude": "NUNCIO_CLAUDE_INTEGRATION=1 bun test test/integration/claude-agent.integration.spec.ts",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

@@ -13,7 +13,7 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 ## Features
 
 - **Delegate tasks** — create a session with a prompt; the agent runs in-process and streams output as events
-- **Per-session provider + model** — choose the agent provider (`pi` / `codex` / `cursor`) and the exact model (e.g. `codex:gpt-5.5`, `cursor:composer-2`, `anthropic:claude-sonnet-4`) per session; both are stored on the session and wired through to the provider runtime
+- **Per-session provider + model** — choose the agent provider (`pi` / `codex` / `cursor` / `claude`) and the exact model (e.g. `codex:gpt-5.5`, `cursor:composer-2`, `claude:sonnet`) per session; both are stored on the session and wired through to the provider runtime
 - **Steer mid-task** — send follow-up messages that continue the same agent conversation when the provider supports it
 - **Multitasking subagents** — fan out prompts from an existing session into provider-neutral child tasks; each child becomes its own session, inherits the parent provider/model/workspace unless overridden, and waits for review when finished
 - **Pause / archive / restore / delete** — suspend a running session, retire it to the Archived tab, restore it back to IDLE, or permanently delete it; a session FSM enforces valid transitions and a confirm dialog guards deletes
@@ -21,7 +21,7 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 - **Mobile-first PWA** — installable on iPhone via Tailscale HTTPS; standalone dark UI, safe-area aware
 - **Interactive browser dock** — desktop uses a real embedded Electron browser view with a persistent Nuncio profile; the web/PWA surface does not expose a browser dock
 - **Self-hosted** — your machine, your SQLite, your credentials; nothing leaves your tailnet
-- **Provider-neutral agent layer** — `AgentProvider` interface + `AgentRegistry`; Pi, Codex, and Cursor today (plus a `NUNCIO_FORCE_MOCK=1`-gated Mock for hermetic testing), extensible
+- **Provider-neutral agent layer** — `AgentProvider` interface + `AgentRegistry`; Pi, Codex, Cursor, and Claude today (plus a `NUNCIO_FORCE_MOCK=1`-gated Mock for hermetic testing), extensible
 - **Settings store** — runtime-configurable env vars (API keys, paths, flags) stored in SQLite and editable via the frontend; secrets encrypted at rest (AES-256-GCM), env vars still honoured as fallback
 - **Codex approvals** — switch Codex between full-access and approval-required mode from the composer, then approve or deny pending provider actions in the transcript
 - **Folder picker** — browse the host machine's directories to pick a project (server-side, works on iPhone PWA), or paste a custom path
@@ -130,6 +130,15 @@ codex login status
 
 When `NUNCIO_CODEX_BIN` is unset or left as `codex`, Nuncio scans common local install paths plus `PATH`, probes each candidate with `--version` and `login status`, and auto-selects the only logged-in install. For launchd, desktop, or machines with multiple logged-in Codex CLIs, set `NUNCIO_CODEX_BIN` to the absolute CLI path (for example `~/.local/bin/codex`); ambiguous installs are rejected instead of guessing. Override Codex's home with `NUNCIO_CODEX_HOME`; override the default cwd with `NUNCIO_CODEX_CWD`. `NUNCIO_CODEX_RUNTIME_MODE=full-access` is the default for local self-hosted use. `approval-required` starts Codex in read-only/untrusted mode and surfaces pending provider approval requests in the session transcript. Nuncio also mirrors Codex app-server thread names into session titles when Codex generates or returns a better name. Pending request state is stored in SQLite; if the server restarts while Codex is waiting, Nuncio marks that stale request denied because the original app-server callback is gone. On graceful shutdown, Nuncio flushes buffered Codex deltas and closes reusable app-server clients.
 
+### Claude credentials
+
+Nuncio runs **Claude Code** in-process through the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) for the **Claude** provider (`provider: "claude"`); the SDK spawns and manages a bundled Claude Code CLI subprocess per active session. Two auth paths, no OAuth flow inside Nuncio:
+
+- **Logged-in Claude Code (subscription ride).** If you have logged into Claude Code on this machine (`claude /login`), Nuncio rides the shared keychain automatically — the SDK's bundled binary reports the same `auth status` as your system `claude`, so no separate install and no API key are needed.
+- **`ANTHROPIC_API_KEY`.** Set the key (env var or the **Settings** UI, stored encrypted at rest, no restart needed) to run via the API for the distribution path. When set, it takes precedence and Nuncio skips the login probe.
+
+Sessions are fully isolated from your `~/.claude` config: no plugins, hooks, or `CLAUDE.md` leak in (`settingSources` is empty by default). The permission mode defaults to `acceptEdits` — file edits inside the workspace apply, and everything else (Bash, writes outside the workspace, …) routes through Nuncio's approval cards in the transcript. Override with `NUNCIO_CLAUDE_PERMISSION_MODE` (`default`, `acceptEdits`, `plan`, or `bypassPermissions`). Images are supported (paste into the composer). The session runs in the per-session `workspace` (project picker / worktree); resume is cwd-scoped, so the stored session survives a daemon restart and continues in the same directory. Point at a specific CLI build with `NUNCIO_CLAUDE_BIN` when the bundled binary is unavailable.
+
 ### Provider CLI updates
 
 Nuncio checks the installed Pi and Codex CLI versions against their public npm package versions and notifies when a newer version is available. It never auto-updates a CLI: users choose **Settings -> Providers -> Tool updates -> Update**.
@@ -166,12 +175,13 @@ bun run test                                       # server unit tests (simulate
 bun run --filter @nuncio/server test:e2e           # HTTP e2e (simulated provider)
 bun run --filter @nuncio/server test:integration   # real Pi auth — skips when ~/.pi/agent absent
 bun run --filter @nuncio/server test:integration:codex # real Codex app-server — opt-in
+bun run --filter @nuncio/server test:integration:claude # real Claude Agent SDK — opt-in
 bun run --filter @nuncio/web test                  # web component tests (vitest)
 bun run test:daily-driver                          # server unit + e2e, core, web
 bun run test:daily-driver:codex                    # daily-driver + real Codex smoke
 ```
 
-All server tests run on `bun test` (no jest). The Pi integration suite is gated on `~/.pi/agent/auth.json` and self-skips when absent, so it is CI-safe. The Codex integration suite is explicitly opt-in via `NUNCIO_CODEX_INTEGRATION=1` (the script sets it), requires `codex login status`, and makes a real app-server model discovery call plus a short run/resume check.
+All server tests run on `bun test` (no jest). The Pi integration suite is gated on `~/.pi/agent/auth.json` and self-skips when absent, so it is CI-safe. The Codex integration suite is explicitly opt-in via `NUNCIO_CODEX_INTEGRATION=1` (the script sets it), requires `codex login status`, and makes a real app-server model discovery call plus a short run/resume check. The Claude integration suite is opt-in via `NUNCIO_CLAUDE_INTEGRATION=1`, self-skips unless the Agent SDK reports a logged-in Claude Code (or `ANTHROPIC_API_KEY`), and exercises a real run, steer, interrupt, and resume-from-a-fresh-provider against the cheapest model in an isolated tmp workspace.
 
 ## Production deploy (Tailscale)
 
@@ -236,7 +246,7 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 
 ## Architecture
 
-- **Agent providers:** Pi SDK, Codex app-server, and Cursor SDK (plus a `NUNCIO_FORCE_MOCK=1`-gated Mock for testing) behind a common `AgentProvider` interface; `AgentRegistry` selects per session. Pi auth via the SDK's `AuthStorage` at `~/.pi/agent`; Codex auth via the local `codex` CLI login; Cursor auth via `CURSOR_API_KEY`. See [docs/system-architecture.md](docs/system-architecture.md).
+- **Agent providers:** Pi SDK, Codex app-server, Cursor SDK, and Claude Agent SDK (plus a `NUNCIO_FORCE_MOCK=1`-gated Mock for testing) behind a common `AgentProvider` interface; `AgentRegistry` selects per session. Pi auth via the SDK's `AuthStorage` at `~/.pi/agent`; Codex auth via the local `codex` CLI login; Cursor auth via `CURSOR_API_KEY`; Claude auth via a logged-in Claude Code keychain or `ANTHROPIC_API_KEY`. See [docs/system-architecture.md](docs/system-architecture.md).
 - **Agent runtime tools:** `AgentToolRegistry` binds per-session tools such as browser control into `AgentRunContext.tools`; providers adapt that once into Pi `customTools`, Cursor `local.customTools`, or Codex `dynamicTools`.
 - **Provider CLI updates:** Pi and Codex version checks run best-effort against public package metadata, surface optional notifications, and only run update commands after a user clicks Update.
 - **Backend:** NestJS (`apps/server`) on port 3000; after `bun run build`, it also serves `apps/web/dist` at `/` while keeping `/api/*` for JSON routes
@@ -254,7 +264,7 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 |--------|------|-------------|
 | GET | `/api/health` | Health check |
 | GET | `/api/sessions` | List sessions (`?includeArchived=1`) |
-| POST | `/api/sessions` | Create session `{ "prompt": "...", "provider?": "pi\|codex\|cursor", "model?": "...", "attachments?": [{ "kind": "image", "mimeType": "image/png", "data": "base64" }], "projectPath?": "/abs/repo", "useWorktree?": true, "baseBranch?": "main" }`; `projectPath` without `useWorktree` runs in the selected repo and records `baseBranch` as the selected branch, while `useWorktree: true` creates a generated `nuncio/<id>-<slug>` worktree from `baseBranch` |
+| POST | `/api/sessions` | Create session `{ "prompt": "...", "provider?": "pi\|codex\|cursor\|claude", "model?": "...", "attachments?": [{ "kind": "image", "mimeType": "image/png", "data": "base64" }], "projectPath?": "/abs/repo", "useWorktree?": true, "baseBranch?": "main" }`; `projectPath` without `useWorktree` runs in the selected repo and records `baseBranch` as the selected branch, while `useWorktree: true` creates a generated `nuncio/<id>-<slug>` worktree from `baseBranch` |
 | POST | `/api/sessions/handoff` | Import a Cursor IDE/CLI chat `{ "cursorChatId": "...", "workspace": "/abs/path", "title?": "..." }` or Pi CLI session `{ "piSessionPath": "/abs/session.jsonl", "workspace": "/abs/path", "title?": "..." }` → `IDLE` session with transcript hydrated |
 | GET | `/api/cursor/local-sessions?workspace=` | List in-progress Cursor chats on this Mac for the handoff picker |
 | GET | `/api/pi/local-sessions?workspace=` | List local Pi CLI sessions for a workspace using the Pi SDK session store |

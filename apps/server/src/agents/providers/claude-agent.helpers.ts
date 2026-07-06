@@ -104,14 +104,39 @@ export type ResultClassification =
 
 const INTERRUPT_TERMINALS = new Set(['aborted_tools', 'aborted_streaming']);
 const CANNOT_RESUME_MARKER = 'No conversation found';
+const AUTH_ERROR_MARKERS = ['authentication_error', 'invalid x-api-key', 'invalid api key', 'x-api-key'];
 
 /**
- * Classify a terminal `result` message. The SDK reports interrupts and
- * cannot-resume as `error_during_execution` results (not thrown exceptions), so
- * blanket-mapping the error subtype to a failure is wrong: discriminate by
- * `terminal_reason` (an interrupt is a clean stop, session stays alive) and by
- * the `errors[]` text (a moved/evicted workspace yields "No conversation
- * found", a user-actionable cannot-resume — not an internal error).
+ * User-actionable messages for the SDK's known error result subtypes. The SDK
+ * reports these as `result` messages (subtype in the SDKResultError union), not
+ * thrown exceptions, so the provider must classify them here. Each message tells
+ * the user what happened and what lever they hold; the raw `errors[]` detail is
+ * appended when the SDK supplies one.
+ */
+const ERROR_SUBTYPE_MESSAGES: Record<string, string> = {
+  error_max_turns:
+    'Claude reached its maximum number of turns for this run before finishing. Send a follow-up to continue.',
+  error_max_budget_usd:
+    'Claude reached its configured cost limit for this run before finishing. Raise the budget or start a new run to continue.',
+  error_max_structured_output_retries:
+    'Claude could not produce a valid structured response after several attempts. Retry the request.',
+};
+
+/**
+ * Classify a terminal `result` message. The SDK reports interrupts, cannot-resume,
+ * auth failures, and budget/turn limits as `error_*` results (not thrown
+ * exceptions), so blanket-mapping the error subtype to a bare failure is wrong.
+ * Discriminate in this order:
+ *  - success → authoritative text (fall back to accumulated deltas when empty).
+ *  - interrupt terminal (`aborted_tools`/`aborted_streaming`) → clean stop, the
+ *    session stays alive (NOT an error).
+ *  - `errors[]` text "No conversation found" → cannot-resume (moved/evicted
+ *    workspace), a user-actionable resume failure, not an internal error.
+ *  - `errors[]` text signalling a bad API key → an auth error the user can fix.
+ *  - a known limit subtype (`error_max_turns`/`error_max_budget_usd`/…) → a
+ *    user-actionable message plus any SDK detail.
+ *  - anything else → ERROR carrying the raw subtype so an unfamiliar failure is
+ *    still diagnosable and never swallowed.
  *
  * `accumulatedText` is the fallback terminal text when a success result carries
  * an empty `result` string (e.g. a redirected turn ended before producing text).
@@ -129,13 +154,33 @@ export function classifyResult(
     return { kind: 'interrupted' };
   }
 
-  const cannotResume = (message.errors ?? []).find((error) => error.includes(CANNOT_RESUME_MARKER));
+  const errors = message.errors ?? [];
+  const detail = errors.join('; ');
+  const detailLower = detail.toLowerCase();
+
+  const cannotResume = errors.find((error) => error.includes(CANNOT_RESUME_MARKER));
   if (cannotResume) {
     return { kind: 'cannot-resume', message: cannotResume };
   }
 
-  const detail = (message.errors ?? []).join('; ') || message.subtype || 'Claude run failed.';
-  return { kind: 'error', message: detail };
+  if (AUTH_ERROR_MARKERS.some((marker) => detailLower.includes(marker))) {
+    return {
+      kind: 'error',
+      message: `Claude authentication failed. Check ANTHROPIC_API_KEY or re-run \`claude /login\`: ${detail}`,
+    };
+  }
+
+  const known = ERROR_SUBTYPE_MESSAGES[message.subtype];
+  if (known) {
+    return { kind: 'error', message: detail ? `${known} (${detail})` : known };
+  }
+
+  // Unknown/unexpected subtype: keep the raw subtype in the message so the
+  // failure is diagnosable rather than a generic "run failed".
+  const message_ = detail
+    ? `Claude run failed (${message.subtype}): ${detail}`
+    : `Claude run failed (${message.subtype || 'unknown'}).`;
+  return { kind: 'error', message: message_ };
 }
 
 /** A `tool_end` event derived from a tool_result block, pairing back by callId. */

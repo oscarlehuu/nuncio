@@ -77,6 +77,16 @@ interface PendingApproval {
 
 interface ActiveClaudeSession {
   query: ClaudeQuery;
+  /**
+   * A SINGLE stable iterator over the query, obtained once and driven with
+   * `.next()` across every turn. The SDK `Query` is an AsyncGenerator: a
+   * `for await … of query` loop that exits (e.g. on a turn's terminal result)
+   * calls `.return()` and finalizes the generator, so a later steer would find
+   * a done iterator and produce no output. Holding one iterator and never
+   * calling `.return()` on turn-end keeps the query alive for follow-up turns;
+   * only dispose (abort) tears it down.
+   */
+  iterator?: AsyncIterator<ClaudeSdkMessage>;
   input: InputQueue;
   abort: AbortController;
   delta: DeltaMappingState;
@@ -450,15 +460,26 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     return servers as Record<string, ClaudeMcpServer> | undefined;
   }
 
-  /** Drain the SDK message stream for one turn, mapping each message to nuncio events. */
+  /**
+   * Drain the SDK message stream for one turn, mapping each message to nuncio
+   * events. Drives ONE persistent iterator with `.next()` so exiting on a turn's
+   * terminal result never finalizes the generator (a `for await` loop would call
+   * `.return()` on break and kill the query for later steers). The iterator is
+   * created once per session and reused across every turn; only dispose tears it
+   * down via the abort controller.
+   */
   private async consume(
     sessionId: string,
     active: ActiveClaudeSession,
     context: AgentRunContext,
   ): Promise<void> {
+    active.iterator ??= active.query[Symbol.asyncIterator]();
+    const iterator = active.iterator;
     try {
-      for await (const message of active.query) {
-        if (this.handleMessage(sessionId, active, message, context)) return;
+      while (true) {
+        const next = await iterator.next();
+        if (next.done) return;
+        if (this.handleMessage(sessionId, active, next.value, context)) return;
       }
     } catch (error) {
       if (this.interruptedSessions.delete(sessionId)) return;
