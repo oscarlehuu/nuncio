@@ -380,6 +380,28 @@ export class SessionsService implements OnModuleDestroy {
     return drained.map((steer) => steer.message);
   }
 
+  /**
+   * Read the queued steers (with ids) for a multitask fan-out WITHOUT removing
+   * them. The caller must persist the resulting tasks first, then call
+   * {@link clearDrainedSteers} with the same ids — this keeps the queue durable
+   * across the async work in between (restart-test invariant).
+   */
+  peekSteerQueueForMultitask(id: string): Array<{ id: number; message: string }> {
+    this.requireSession(id);
+    return this.steerQueue.peekAll(id).map((steer) => ({ id: steer.id, message: steer.message }));
+  }
+
+  /**
+   * Remove exactly the steer rows already consumed by a fan-out and tell live
+   * clients to drop the queued placeholders. Deleting by id (not by session)
+   * leaves any steer that arrived mid-fan-out in the queue.
+   */
+  clearDrainedSteers(id: string, steerIds: number[]): void {
+    if (steerIds.length === 0) return;
+    this.steerQueue.deleteByIds(steerIds);
+    this.appendAndEmit(id, 'steer_queue_cleared', {});
+  }
+
   /** Deliver the next queued steer once the foreground run has settled. */
   private drainSteerQueue(id: string): void {
     // Drain timers can outlive the service; after shutdown the database is

@@ -102,12 +102,20 @@ export class TasksService {
     const parent = this.sessions.get(trimmed);
     if (!parent) throw new NotFoundException('Parent session not found');
 
-    const prompts = this.sessions.drainSteerQueueForMultitask(trimmed);
-    if (prompts.length === 0) {
+    // Peek (no delete) up front so an empty queue rejects before any work.
+    const queued = this.sessions.peekSteerQueueForMultitask(trimmed);
+    if (queued.length === 0) {
       throw new BadRequestException('No queued messages to multitask');
     }
 
+    // Do ALL async work before touching the queue: the snapshot await is the
+    // window a crash could open, and the queue must still be intact after it.
     const base = await this.assembleParentBrief(parent);
+
+    // The rest is synchronous in a single-threaded runtime: insert every child
+    // task, THEN delete exactly the rows we consumed. If any insert throws, the
+    // steer rows remain queued and the user loses nothing.
+    const prompts = queued.map((steer) => steer.message);
     const tasks = prompts.map((prompt) =>
       this.enqueue(
         buildSubagentTaskInput(
@@ -118,6 +126,10 @@ export class TasksService {
           briefForPrompt(base, prompt),
         ),
       ),
+    );
+    this.sessions.clearDrainedSteers(
+      trimmed,
+      queued.map((steer) => steer.id),
     );
 
     return { parentSessionId: trimmed, tasks };

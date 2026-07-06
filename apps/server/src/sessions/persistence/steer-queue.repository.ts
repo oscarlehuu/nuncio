@@ -57,6 +57,31 @@ export class SteerQueueRepository {
     return { message: row.message, ...(attachments ? { attachments } : {}) };
   }
 
+  /**
+   * Read the queued steers (with their row ids) in FIFO order WITHOUT deleting
+   * them. The caller commits durable follow-on work first, then removes exactly
+   * these ids via {@link deleteByIds} — so a crash mid-fan-out never loses a
+   * steer, and a steer that arrives after this read survives untouched.
+   */
+  peekAll(sessionId: string): Array<QueuedSteer & { id: number }> {
+    const rows = this.database.db
+      .prepare<SteerQueueRow, [string]>(
+        'SELECT * FROM steer_queue WHERE session_id = ? ORDER BY id ASC',
+      )
+      .all(sessionId);
+    return rows.map((row) => {
+      const attachments = parseAttachments(row.attachments_json);
+      return { id: row.id, message: row.message, ...(attachments ? { attachments } : {}) };
+    });
+  }
+
+  /** Delete exactly the given row ids (no-op on an empty list). */
+  deleteByIds(ids: number[]): void {
+    if (ids.length === 0) return;
+    const placeholders = ids.map(() => '?').join(', ');
+    this.database.db.prepare(`DELETE FROM steer_queue WHERE id IN (${placeholders})`).run(...ids);
+  }
+
   /** Pop every queued steer for the session in FIFO order, emptying the queue. */
   drainAll(sessionId: string): QueuedSteer[] {
     const rows = this.database.db

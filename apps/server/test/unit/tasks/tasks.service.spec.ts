@@ -260,6 +260,53 @@ describe('TasksService', () => {
     expect(events.list(parent.id).some((event) => event.type === 'steer_queue_cleared')).toBe(false);
   });
 
+  it('keeps queued steers when child task insertion fails mid-fan-out', async () => {
+    const parent = await sessions.create({ prompt: 'durable parent', provider: 'cursor', workspace });
+    const steerQueue = module.get(SteerQueueRepository);
+    steerQueue.enqueue(parent.id, 'first steer');
+    steerQueue.enqueue(parent.id, 'second steer');
+    expect(steerQueue.count(parent.id)).toBe(2);
+
+    // Fail the insert step AFTER the queue is read but BEFORE it is cleared —
+    // the steer rows must survive so the user loses nothing.
+    const spy = jest.spyOn(repo, 'create').mockImplementation(() => {
+      throw new Error('simulated insert failure');
+    });
+    try {
+      await expect(service.startMultitaskFromQueue(parent.id)).rejects.toThrow('simulated insert failure');
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(steerQueue.count(parent.id)).toBe(2);
+    // No clear event was emitted since nothing was consumed.
+    expect(events.list(parent.id).some((e) => e.type === 'steer_queue_cleared')).toBe(false);
+
+    // Recovery: a real fan-out now drains the still-present queue.
+    const result = await service.startMultitaskFromQueue(parent.id);
+    expect(result.tasks).toHaveLength(2);
+    expect(steerQueue.count(parent.id)).toBe(0);
+    await Promise.all(result.tasks.map((task) => waitForStatus(task.id, ['DONE', 'FAILED'])));
+  });
+
+  it('a steer that arrives after the fan-out read survives (delete-by-id)', () => {
+    // Guards the durability contract of the peek/clear pair directly: only the
+    // ids read up front are removed; a steer enqueued in between is retained.
+    const parentId = 'race-parent';
+    const steerQueue = module.get(SteerQueueRepository);
+    steerQueue.enqueue(parentId, 'early steer');
+    const read = steerQueue.peekAll(parentId);
+    expect(read).toHaveLength(1);
+
+    // A late steer arrives during the async window.
+    steerQueue.enqueue(parentId, 'late steer');
+
+    steerQueue.deleteByIds(read.map((s) => s.id));
+    const remaining = steerQueue.peekAll(parentId);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]!.message).toBe('late steer');
+  });
+
   it('marks a terminal subagent task reviewed', async () => {
     const task = repo.create({ prompt: 'review me', role: 'subagent', parentSessionId: 'parent123' });
     repo.claimNextQueued();
