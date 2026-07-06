@@ -87,6 +87,15 @@ export class DatabaseService implements OnModuleDestroy {
     this.db.close();
   }
 
+  /**
+   * Run `fn` inside a single SQLite transaction: it commits if `fn` returns and
+   * rolls back every write if `fn` throws. Use for multi-statement invariants
+   * that must be all-or-nothing (e.g. batch inserts plus a queue delete).
+   */
+  transaction<T>(fn: () => T): T {
+    return this.db.transaction(fn)();
+  }
+
   private migrate(): void {
     const sessionColumns = this.db
       .prepare('PRAGMA table_info(sessions)')
@@ -271,6 +280,15 @@ export class DatabaseService implements OnModuleDestroy {
       CREATE INDEX IF NOT EXISTS idx_steer_queue_session
       ON steer_queue(session_id, id)
     `);
+
+    const steerQueueColumns = this.db
+      .prepare('PRAGMA table_info(steer_queue)')
+      .all() as Array<{ name: string }>;
+    if (!steerQueueColumns.some((column) => column.name === 'claimed_at')) {
+      // A non-null claim leases a row to an in-flight multitask fan-out so the
+      // normal settle-drain skips it; cleared unconditionally at daemon boot.
+      this.db.exec('ALTER TABLE steer_queue ADD COLUMN claimed_at INTEGER');
+    }
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS preferences (

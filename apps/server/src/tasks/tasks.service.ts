@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { DatabaseService } from '../db/database.service';
 import { assembleSubagentBrief } from '../orchestration/handoff-brief.assembler';
 import { renderHandoffBrief } from '../orchestration/handoff-brief.renderer';
 import type { HandoffBrief } from '../orchestration/handoff-brief.types';
@@ -40,6 +41,7 @@ export class TasksService {
     private readonly tasks: TasksRepository,
     private readonly sessions: SessionsService,
     private readonly events: EventsRepository,
+    private readonly database: DatabaseService,
     @Optional() private readonly settings?: SettingsService,
   ) {
     // A RUNNING row at boot means the runner died mid-task; its session was
@@ -102,35 +104,56 @@ export class TasksService {
     const parent = this.sessions.get(trimmed);
     if (!parent) throw new NotFoundException('Parent session not found');
 
-    // Peek (no delete) up front so an empty queue rejects before any work.
-    const queued = this.sessions.peekSteerQueueForMultitask(trimmed);
-    if (queued.length === 0) {
+    // Claim (lease) the queued rows synchronously, BEFORE any await. A claim
+    // hides them from the normal settle-drain, so a parent run that settles
+    // during the async work below cannot deliver the same messages again.
+    const claimed = this.sessions.claimSteerQueueForMultitask(trimmed);
+    if (claimed.length === 0) {
       throw new BadRequestException('No queued messages to multitask');
     }
+    const claimedIds = claimed.map((steer) => steer.id);
 
-    // Do ALL async work before touching the queue: the snapshot await is the
-    // window a crash could open, and the queue must still be intact after it.
-    const base = await this.assembleParentBrief(parent);
+    // If assembly fails, the claim must not strand the messages — release them
+    // back to normal delivery and propagate the error.
+    let base: HandoffBrief;
+    try {
+      base = await this.assembleParentBrief(parent);
+    } catch (error) {
+      this.sessions.releaseClaimedSteers(claimedIds);
+      throw error;
+    }
 
-    // The rest is synchronous in a single-threaded runtime: insert every child
-    // task, THEN delete exactly the rows we consumed. If any insert throws, the
-    // steer rows remain queued and the user loses nothing.
-    const prompts = queued.map((steer) => steer.message);
-    const tasks = prompts.map((prompt) =>
-      this.enqueue(
-        buildSubagentTaskInput(
-          { parentSessionId: trimmed, prompts },
-          parent,
-          prompt,
-          this.settings,
-          briefForPrompt(base, prompt),
-        ),
-      ),
-    );
-    this.sessions.clearDrainedSteers(
-      trimmed,
-      queued.map((steer) => steer.id),
-    );
+    // Insert every child task and delete the claimed rows as ONE atomic unit,
+    // via create() directly (not enqueue()) so the pump never interleaves
+    // mid-batch. A failure rolls back every insert while the claimed rows
+    // survive; we then release the claim so the messages re-enter normal flow.
+    const prompts = claimed.map((steer) => steer.message);
+    let tasks: TaskDto[];
+    try {
+      tasks = this.database.transaction(() => {
+        const created = prompts.map((prompt) =>
+          this.tasks.create(
+            buildSubagentTaskInput(
+              { parentSessionId: trimmed, prompts },
+              parent,
+              prompt,
+              this.settings,
+              briefForPrompt(base, prompt),
+            ),
+          ),
+        );
+        this.sessions.steerQueueRepository.deleteByIds(claimedIds);
+        return created;
+      });
+    } catch (error) {
+      this.sessions.releaseClaimedSteers(claimedIds);
+      throw error;
+    }
+
+    // Commit succeeded: kick the pump once for the whole batch and tell live
+    // clients to drop the queued placeholders.
+    void this.pump();
+    this.sessions.emitSteerQueueCleared(trimmed);
 
     return { parentSessionId: trimmed, tasks };
   }

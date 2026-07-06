@@ -94,6 +94,10 @@ export class SessionsService implements OnModuleDestroy {
     @Optional() private readonly settings?: SettingsService,
     @Optional() private readonly agentTools?: AgentToolRegistry,
   ) {
+    // A crash mid-fan-out can leave steer rows leased forever; a claim must
+    // never outlive the process that took it. Release before restore so the
+    // orphaned rows re-enter normal delivery.
+    this.steerQueue.releaseAllClaims();
     // Restore before reconcile: sessions still RUNNING here get their drain
     // scheduled by the reconcile IDLE transition instead.
     this.restorePendingSteerQueues();
@@ -365,41 +369,37 @@ export class SessionsService implements OnModuleDestroy {
     this.appendAndEmit(id, 'steer_queued', { text: message });
   }
 
+
   /**
-   * Empty the pending steer queue and return the queued prompt texts, so the
-   * caller can hand them to parallel subagents instead of delivering them
-   * sequentially. Emits `steer_queue_cleared` so live clients drop the queued
-   * placeholders. Any image attachments on a queued steer are not carried over —
-   * multitasking is text-only. Returns [] when nothing was queued.
+   * Claim (lease) the queued steers for a multitask fan-out. Claimed rows are
+   * hidden from the normal settle-drain, so the same messages can never be
+   * delivered a second time while the fan-out does async work. The caller must
+   * later {@link finalizeDrainedSteers} (success) or {@link releaseClaimedSteers}
+   * (failure) with the returned ids.
    */
-  drainSteerQueueForMultitask(id: string): string[] {
+  claimSteerQueueForMultitask(id: string): Array<{ id: number; message: string }> {
     this.requireSession(id);
-    const drained = this.steerQueue.drainAll(id);
-    if (drained.length === 0) return [];
-    this.appendAndEmit(id, 'steer_queue_cleared', {});
-    return drained.map((steer) => steer.message);
+    return this.steerQueue.claimAll(id).map((steer) => ({ id: steer.id, message: steer.message }));
+  }
+
+  /** Return claimed rows to normal delivery (fan-out aborted before consuming them). */
+  releaseClaimedSteers(steerIds: number[]): void {
+    this.steerQueue.releaseByIds(steerIds);
   }
 
   /**
-   * Read the queued steers (with ids) for a multitask fan-out WITHOUT removing
-   * them. The caller must persist the resulting tasks first, then call
-   * {@link clearDrainedSteers} with the same ids — this keeps the queue durable
-   * across the async work in between (restart-test invariant).
+   * Tell live clients the queued placeholders were consumed by a fan-out. The
+   * rows themselves are deleted inside the caller's transaction; this only
+   * emits the projection event (empty payload — the web client drops queued
+   * placeholder blocks on this signal regardless of payload).
    */
-  peekSteerQueueForMultitask(id: string): Array<{ id: number; message: string }> {
-    this.requireSession(id);
-    return this.steerQueue.peekAll(id).map((steer) => ({ id: steer.id, message: steer.message }));
+  emitSteerQueueCleared(id: string): void {
+    this.appendAndEmit(id, 'steer_queue_cleared', {});
   }
 
-  /**
-   * Remove exactly the steer rows already consumed by a fan-out and tell live
-   * clients to drop the queued placeholders. Deleting by id (not by session)
-   * leaves any steer that arrived mid-fan-out in the queue.
-   */
-  clearDrainedSteers(id: string, steerIds: number[]): void {
-    if (steerIds.length === 0) return;
-    this.steerQueue.deleteByIds(steerIds);
-    this.appendAndEmit(id, 'steer_queue_cleared', {});
+  /** Direct handle to the steer-queue repository for a caller-owned transaction. */
+  get steerQueueRepository(): SteerQueueRepository {
+    return this.steerQueue;
   }
 
   /** Deliver the next queued steer once the foreground run has settled. */

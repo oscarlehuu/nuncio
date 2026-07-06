@@ -8,6 +8,7 @@ interface SteerQueueRow {
   message: string;
   attachments_json: string | null;
   created_at: number;
+  claimed_at: number | null;
 }
 
 export interface QueuedSteer {
@@ -44,11 +45,16 @@ export class SteerQueueRepository {
       );
   }
 
-  /** Pop the oldest queued steer for the session; null when the queue is empty. */
+  /**
+   * Pop the oldest UNCLAIMED queued steer for the session; null when none are
+   * available. Claimed rows are leased to an in-flight multitask fan-out and
+   * are invisible to the normal settle-drain so a message is never delivered
+   * twice.
+   */
   dequeue(sessionId: string): QueuedSteer | null {
     const row = this.database.db
       .prepare<SteerQueueRow, [string]>(
-        'SELECT * FROM steer_queue WHERE session_id = ? ORDER BY id ASC LIMIT 1',
+        'SELECT * FROM steer_queue WHERE session_id = ? AND claimed_at IS NULL ORDER BY id ASC LIMIT 1',
       )
       .get(sessionId);
     if (!row) return null;
@@ -58,21 +64,40 @@ export class SteerQueueRepository {
   }
 
   /**
-   * Read the queued steers (with their row ids) in FIFO order WITHOUT deleting
-   * them. The caller commits durable follow-on work first, then removes exactly
-   * these ids via {@link deleteByIds} — so a crash mid-fan-out never loses a
-   * steer, and a steer that arrives after this read survives untouched.
+   * Atomically claim (lease) every currently-unclaimed row for the session and
+   * return the claimed rows with ids, in FIFO order. A claim hides the rows
+   * from the normal settle-drain, so a multitask fan-out can do async work
+   * without the same messages being delivered again. The caller must later
+   * delete the claimed ids (success) or release them (failure). Synchronous.
    */
-  peekAll(sessionId: string): Array<QueuedSteer & { id: number }> {
+  claimAll(sessionId: string): Array<QueuedSteer & { id: number }> {
+    const now = Date.now();
     const rows = this.database.db
-      .prepare<SteerQueueRow, [string]>(
-        'SELECT * FROM steer_queue WHERE session_id = ? ORDER BY id ASC',
+      .prepare<SteerQueueRow, [number, string]>(
+        `UPDATE steer_queue SET claimed_at = ?
+         WHERE session_id = ? AND claimed_at IS NULL
+         RETURNING *`,
       )
-      .all(sessionId);
+      .all(now, sessionId)
+      .sort((a, b) => a.id - b.id);
     return rows.map((row) => {
       const attachments = parseAttachments(row.attachments_json);
       return { id: row.id, message: row.message, ...(attachments ? { attachments } : {}) };
     });
+  }
+
+  /** Release a claim on the given ids, returning them to normal delivery. */
+  releaseByIds(ids: number[]): void {
+    if (ids.length === 0) return;
+    const placeholders = ids.map(() => '?').join(', ');
+    this.database.db
+      .prepare(`UPDATE steer_queue SET claimed_at = NULL WHERE id IN (${placeholders})`)
+      .run(...ids);
+  }
+
+  /** Boot recovery: a crash can leave rows leased forever — claims never outlive a process. */
+  releaseAllClaims(): void {
+    this.database.db.prepare('UPDATE steer_queue SET claimed_at = NULL WHERE claimed_at IS NOT NULL').run();
   }
 
   /** Delete exactly the given row ids (no-op on an empty list). */
@@ -80,21 +105,6 @@ export class SteerQueueRepository {
     if (ids.length === 0) return;
     const placeholders = ids.map(() => '?').join(', ');
     this.database.db.prepare(`DELETE FROM steer_queue WHERE id IN (${placeholders})`).run(...ids);
-  }
-
-  /** Pop every queued steer for the session in FIFO order, emptying the queue. */
-  drainAll(sessionId: string): QueuedSteer[] {
-    const rows = this.database.db
-      .prepare<SteerQueueRow, [string]>(
-        'SELECT * FROM steer_queue WHERE session_id = ? ORDER BY id ASC',
-      )
-      .all(sessionId);
-    if (rows.length === 0) return [];
-    this.database.db.prepare('DELETE FROM steer_queue WHERE session_id = ?').run(sessionId);
-    return rows.map((row) => {
-      const attachments = parseAttachments(row.attachments_json);
-      return { message: row.message, ...(attachments ? { attachments } : {}) };
-    });
   }
 
   count(sessionId: string): number {

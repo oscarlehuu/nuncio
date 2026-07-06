@@ -260,17 +260,21 @@ describe('TasksService', () => {
     expect(events.list(parent.id).some((event) => event.type === 'steer_queue_cleared')).toBe(false);
   });
 
-  it('keeps queued steers when child task insertion fails mid-fan-out', async () => {
+  it('rolls back all child inserts and keeps queue rows when one insert fails mid-batch', async () => {
     const parent = await sessions.create({ prompt: 'durable parent', provider: 'cursor', workspace });
     const steerQueue = module.get(SteerQueueRepository);
-    steerQueue.enqueue(parent.id, 'first steer');
-    steerQueue.enqueue(parent.id, 'second steer');
-    expect(steerQueue.count(parent.id)).toBe(2);
+    steerQueue.enqueue(parent.id, 'steer 1');
+    steerQueue.enqueue(parent.id, 'steer 2');
+    steerQueue.enqueue(parent.id, 'steer 3');
+    expect(steerQueue.count(parent.id)).toBe(3);
 
-    // Fail the insert step AFTER the queue is read but BEFORE it is cleared —
-    // the steer rows must survive so the user loses nothing.
-    const spy = jest.spyOn(repo, 'create').mockImplementation(() => {
-      throw new Error('simulated insert failure');
+    // Fail the 2nd of 3 inserts — the transaction must roll back child 1 too.
+    let calls = 0;
+    const realCreate = repo.create.bind(repo);
+    const spy = jest.spyOn(repo, 'create').mockImplementation((input) => {
+      calls += 1;
+      if (calls === 2) throw new Error('simulated insert failure');
+      return realCreate(input);
     });
     try {
       await expect(service.startMultitaskFromQueue(parent.id)).rejects.toThrow('simulated insert failure');
@@ -278,33 +282,92 @@ describe('TasksService', () => {
       spy.mockRestore();
     }
 
-    expect(steerQueue.count(parent.id)).toBe(2);
-    // No clear event was emitted since nothing was consumed.
+    // Zero child tasks survived the rollback.
+    expect(service.list(parent.id)).toHaveLength(0);
+    // All queue rows present and released (drainable again).
+    expect(steerQueue.count(parent.id)).toBe(3);
     expect(events.list(parent.id).some((e) => e.type === 'steer_queue_cleared')).toBe(false);
 
     // Recovery: a real fan-out now drains the still-present queue.
     const result = await service.startMultitaskFromQueue(parent.id);
-    expect(result.tasks).toHaveLength(2);
+    expect(result.tasks).toHaveLength(3);
     expect(steerQueue.count(parent.id)).toBe(0);
     await Promise.all(result.tasks.map((task) => waitForStatus(task.id, ['DONE', 'FAILED'])));
   });
 
-  it('a steer that arrives after the fan-out read survives (delete-by-id)', () => {
-    // Guards the durability contract of the peek/clear pair directly: only the
-    // ids read up front are removed; a steer enqueued in between is retained.
-    const parentId = 'race-parent';
+  it('does not double-deliver when the parent settle-drain fires during assembly', async () => {
+    const parent = await sessions.create({ prompt: 'racing parent', provider: 'cursor', workspace });
     const steerQueue = module.get(SteerQueueRepository);
-    steerQueue.enqueue(parentId, 'early steer');
-    const read = steerQueue.peekAll(parentId);
-    expect(read).toHaveLength(1);
+    steerQueue.enqueue(parent.id, 'only message');
 
-    // A late steer arrives during the async window.
-    steerQueue.enqueue(parentId, 'late steer');
+    // Hold assembly open so a concurrent settle-drain can race the claimed row.
+    let releaseAssembly: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseAssembly = resolve;
+    });
+    const assembleSpy = jest
+      .spyOn(service as unknown as { assembleParentBrief: (p: unknown) => Promise<unknown> }, 'assembleParentBrief')
+      .mockImplementation(async () => {
+        await gate;
+        return { goal: 'placeholder' };
+      });
 
-    steerQueue.deleteByIds(read.map((s) => s.id));
-    const remaining = steerQueue.peekAll(parentId);
-    expect(remaining).toHaveLength(1);
-    expect(remaining[0]!.message).toBe('late steer');
+    try {
+      const fanOut = service.startMultitaskFromQueue(parent.id);
+      // Simulate the parent run settling mid-assembly: the normal drain must
+      // find nothing, because the row is claimed.
+      const drainedNow = steerQueue.dequeue(parent.id);
+      expect(drainedNow).toBeNull();
+
+      releaseAssembly();
+      const result = await fanOut;
+      // Exactly one task per message — no double delivery.
+      expect(result.tasks).toHaveLength(1);
+      expect(steerQueue.count(parent.id)).toBe(0);
+      await Promise.all(result.tasks.map((task) => waitForStatus(task.id, ['DONE', 'FAILED'])));
+    } finally {
+      assembleSpy.mockRestore();
+    }
+  });
+
+  it('releases the claim when brief assembly fails, so a normal drain delivers the messages', async () => {
+    const parent = await sessions.create({ prompt: 'assembly-fail parent', provider: 'cursor', workspace });
+    const steerQueue = module.get(SteerQueueRepository);
+    steerQueue.enqueue(parent.id, 'msg a');
+    steerQueue.enqueue(parent.id, 'msg b');
+
+    const assembleSpy = jest
+      .spyOn(service as unknown as { assembleParentBrief: (p: unknown) => Promise<unknown> }, 'assembleParentBrief')
+      .mockRejectedValue(new Error('assembly boom'));
+    try {
+      await expect(service.startMultitaskFromQueue(parent.id)).rejects.toThrow('assembly boom');
+    } finally {
+      assembleSpy.mockRestore();
+    }
+
+    // Rows survive and are unclaimed — the normal settle-drain can deliver them.
+    expect(steerQueue.count(parent.id)).toBe(2);
+    expect(steerQueue.dequeue(parent.id)?.message).toBe('msg a');
+    expect(steerQueue.dequeue(parent.id)?.message).toBe('msg b');
+  });
+
+  it('boot: stale steer-queue claims are released so the rows drain again', async () => {
+    const parent = await sessions.create({ prompt: 'boot parent', provider: 'cursor', workspace });
+    const steerQueue = module.get(SteerQueueRepository);
+    steerQueue.enqueue(parent.id, 'orphaned by crash');
+    // Lease the row and never release it — simulating a crash mid-fan-out.
+    const claimed = steerQueue.claimAll(parent.id);
+    expect(claimed).toHaveLength(1);
+    expect(steerQueue.dequeue(parent.id)).toBeNull(); // claimed → invisible
+
+    // A fresh service boot must release the stale claim.
+    const rebooted = await buildModule();
+    try {
+      const rebootedQueue = rebooted.get(SteerQueueRepository);
+      expect(rebootedQueue.dequeue(parent.id)?.message).toBe('orphaned by crash');
+    } finally {
+      await rebooted.close();
+    }
   });
 
   it('marks a terminal subagent task reviewed', async () => {

@@ -54,19 +54,46 @@ describe('SteerQueueRepository', () => {
     expect(queue.dequeue(s.id)).toEqual({ message: 'plain' });
   });
 
-  it('drainAll returns every queued steer in FIFO order and empties the queue', () => {
-    const s = sessions.create({ prompt: 'drain' });
-    const attachments = [{ kind: 'image' as const, mimeType: 'image/png', data: 'aGk=' }];
-    queue.enqueue(s.id, 'first', attachments);
-    queue.enqueue(s.id, 'second');
+  it('claimAll hides rows from dequeue until released or deleted', () => {
+    const s = sessions.create({ prompt: 'claim' });
+    queue.enqueue(s.id, 'one');
+    queue.enqueue(s.id, 'two');
 
-    expect(queue.drainAll(s.id)).toEqual([
-      { message: 'first', attachments },
-      { message: 'second' },
-    ]);
+    const claimed = queue.claimAll(s.id);
+    expect(claimed.map((c) => c.message)).toEqual(['one', 'two']);
+    // Claimed rows are invisible to the normal drain (no double delivery).
+    expect(queue.dequeue(s.id)).toBeNull();
+    // But still counted as present (durability), not lost.
+    expect(queue.count(s.id)).toBe(2);
+
+    // A second claim finds nothing already-claimed.
+    expect(queue.claimAll(s.id)).toEqual([]);
+
+    queue.releaseByIds(claimed.map((c) => c.id));
+    expect(queue.dequeue(s.id)).toEqual({ message: 'one' });
+    queue.deleteByIds([claimed[1]!.id]);
     expect(queue.count(s.id)).toBe(0);
-    // A second drain on the now-empty queue is a no-op.
-    expect(queue.drainAll(s.id)).toEqual([]);
+  });
+
+  it('claimAll leaves rows enqueued after the claim untouched', () => {
+    const s = sessions.create({ prompt: 'claim-race' });
+    queue.enqueue(s.id, 'early');
+    const claimed = queue.claimAll(s.id);
+    // A steer arriving after the claim is unclaimed and drains normally.
+    queue.enqueue(s.id, 'late');
+    expect(queue.dequeue(s.id)).toEqual({ message: 'late' });
+    queue.deleteByIds(claimed.map((c) => c.id));
+    expect(queue.count(s.id)).toBe(0);
+  });
+
+  it('releaseAllClaims frees every leased row', () => {
+    const s = sessions.create({ prompt: 'boot-release' });
+    queue.enqueue(s.id, 'stuck');
+    queue.claimAll(s.id);
+    expect(queue.dequeue(s.id)).toBeNull();
+
+    queue.releaseAllClaims();
+    expect(queue.dequeue(s.id)).toEqual({ message: 'stuck' });
   });
 
   it('isolates queues per session', () => {
