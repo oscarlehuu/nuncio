@@ -20,7 +20,7 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 - **Mobile-first PWA** — installable on iPhone via Tailscale HTTPS; standalone dark UI, safe-area aware
 - **Interactive browser dock** — desktop uses a real embedded Electron browser view with a persistent Nuncio profile; the web/PWA surface does not expose a browser dock
 - **Self-hosted** — your machine, your SQLite, your credentials; nothing leaves your tailnet
-- **Provider-neutral agent layer** — `AgentProvider` interface + `AgentRegistry`; Pi, Codex, Cursor, and Mock today, extensible
+- **Provider-neutral agent layer** — `AgentProvider` interface + `AgentRegistry`; Pi, Codex, and Cursor today (plus a `NUNCIO_FORCE_MOCK=1`-gated Mock for hermetic testing), extensible
 - **Settings store** — runtime-configurable env vars (API keys, paths, flags) stored in SQLite and editable via the frontend; secrets encrypted at rest (AES-256-GCM), env vars still honoured as fallback
 - **Codex approvals** — switch Codex between full-access and approval-required mode from the composer, then approve or deny pending provider actions in the transcript
 - **Folder picker** — browse the host machine's directories to pick a project (server-side, works on iPhone PWA), or paste a custom path
@@ -54,20 +54,19 @@ bun run changeset        # select "nuncio", pick minor/patch, write a release-no
 
 Merging PRs triggers a `chore: release version` PR that bumps the version and updates `CHANGELOG.md`; merging that PR cuts the release (git tag + GitHub Release). See [`.changeset/README.md`](.changeset/README.md) and [AGENTS.md → Releases & changelog](AGENTS.md) for the full workflow.
 
-## SDK lane branches
+## Branch model
 
-Provider SDK work lands through integration branches before `main`:
+Two long-lived branches: **`dev`** (integration — produces Nuncio Dev builds) and **`main`** (stable releases):
 
 ```bash
-cursor/<feature>  →  cursor-sdk  →  main
-pi/<feature>      →  pi-sdk      →  main
-codex/<feature>   →  codex-sdk   →  main
+<type>/<slug> (worktree from dev)  →  dev  →  main   (promotion)
+changeset-release/*                →  main           (release bot)
 ```
 
-Use `codex/<slug>` branches for Codex provider work and open PRs against `codex-sdk`. Verify locally with:
+Feature work happens on `<type>/<slug>` branches (e.g. `feat/composer-autofocus`) created as git worktrees from `dev`, with PRs opened against `dev`. Only `dev` and the Changesets release bot merge to `main`. Verify locally with:
 
 ```bash
-BASE_REF=codex-sdk HEAD_REF=codex/my-feature bun run check-branch-flow
+BASE_REF=main HEAD_REF=dev bun run check-branch-flow
 ```
 
 ## Quick start
@@ -111,7 +110,7 @@ bun run build   # build server + web
 
 ### Pi credentials
 
-Nuncio drives the [Pi SDK](https://github.com/earendil-works/pi) in-process. Log in with the `pi` CLI first so `~/.pi/agent/auth.json` exists — it holds your API key **or** OAuth/subscription tokens (OpenAI, Anthropic). Override the agent directory with `PI_CODING_AGENT_DIR`. When no Pi credentials are configured, Nuncio falls back to a built-in **Mock** provider so the UI still works end-to-end.
+Nuncio drives the [Pi SDK](https://github.com/earendil-works/pi) in-process. Log in with the `pi` CLI first so `~/.pi/agent/auth.json` exists — it holds your API key **or** OAuth/subscription tokens (OpenAI, Anthropic). Override the agent directory with `PI_CODING_AGENT_DIR`. When no provider is configured at all, session creation returns `503`; for hermetic testing without any credentials, start the server with `NUNCIO_FORCE_MOCK=1` to register the built-in **Mock** provider (used by `bun run test:smoke-ui`).
 
 ### Cursor credentials
 
@@ -224,7 +223,7 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 
 ## Architecture
 
-- **Agent providers:** Pi SDK, Codex app-server, Cursor SDK, and Mock behind a common `AgentProvider` interface; `AgentRegistry` selects per session. Pi auth via the SDK's `AuthStorage` at `~/.pi/agent`; Codex auth via the local `codex` CLI login; Cursor auth via `CURSOR_API_KEY`. See [docs/system-architecture.md](docs/system-architecture.md).
+- **Agent providers:** Pi SDK, Codex app-server, and Cursor SDK (plus a `NUNCIO_FORCE_MOCK=1`-gated Mock for testing) behind a common `AgentProvider` interface; `AgentRegistry` selects per session. Pi auth via the SDK's `AuthStorage` at `~/.pi/agent`; Codex auth via the local `codex` CLI login; Cursor auth via `CURSOR_API_KEY`. See [docs/system-architecture.md](docs/system-architecture.md).
 - **Provider CLI updates:** Pi and Codex version checks run best-effort against public package metadata, surface optional notifications, and only run update commands after a user clicks Update.
 - **Backend:** NestJS (`apps/server`) on port 3000; after `bun run build`, it also serves `apps/web/dist` at `/` while keeping `/api/*` for JSON routes
 - **Frontend:** Vite + React + Tailwind + shadcn/ui (`apps/web`) on port 5173 in dev/preview (`NUNCIO_WEB_PORT` overrides dev/preview; `NUNCIO_API_ORIGIN` overrides the `/api` proxy target)

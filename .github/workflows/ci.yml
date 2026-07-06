@@ -2,11 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
     branches:
       - main
-      - "*-sdk"
+      - dev
 
 permissions:
   contents: read

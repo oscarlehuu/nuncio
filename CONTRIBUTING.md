@@ -93,18 +93,16 @@ Full spec: [AGENTS.md → Branch & worktree naming](AGENTS.md#branch--worktree-n
 
 **Branches (required):**
 
-- Feature work uses **`cursor/<slug>`** or **`pi/<slug>`** (kebab-case slug) — branch from **`cursor-sdk`** or **`pi-sdk`**, not `main`.
-- Open the PR against the matching integration branch. Only `cursor-sdk`, `pi-sdk`, and `changeset-release/*` may merge to `main`.
-- Do **not** use bare `fix/*`, `docs/*`, or `feat/*` prefixes — `branch-flow` CI will fail.
+- Feature work uses **`<type>/<slug>`** (`feat/`, `fix/`, `docs/`, `chore/` + kebab-case slug) — branch from **`dev`**, not `main`.
+- Open the PR against **`dev`**. Only `dev` (promotion) and `changeset-release/*` (release bot) may merge to `main`.
 
-**Worktrees (optional):**
+**Worktrees (default for parallel work):**
 
-- Default: one shared checkout on your feature branch.
-- For an isolated second checkout, add a worktree with the **same branch name** (`cursor/<slug>`), based on `origin/cursor-sdk` (or `pi-sdk`):
+- Take an isolated worktree per feature so parallel agent sessions never collide:
 
   ```bash
   git fetch origin
-  git worktree add -b cursor/my-feature ../nuncio-my-feature origin/cursor-sdk
+  git worktree add -b feat/my-feature ../nuncio-my-feature origin/dev
   ```
 
 - Remove when done: `git worktree remove …` + `git worktree prune`.
@@ -115,7 +113,7 @@ Full spec: [AGENTS.md → Branch & worktree naming](AGENTS.md#branch--worktree-n
 
 ## Pull request process
 
-1. **Branch** from the SDK integration branch (`cursor-sdk` or `pi-sdk`), not `main`. Use prefix `cursor/<slug>` or `pi/<slug>` — see [Branch & worktree naming](#branch--worktree-naming) and [AGENTS.md → SDK lane branches](AGENTS.md#sdk-lane-branches-enforced-by-ci).
+1. **Branch** from **`dev`**, not `main`. Use `<type>/<slug>` (e.g. `feat/my-feature`) — see [Branch & worktree naming](#branch--worktree-naming) and [AGENTS.md → Branch model](AGENTS.md#branch-model-dev--main-enforced-by-ci).
 2. **TDD-first** — see above. The suite must be green before you open a PR.
 3. **Add a changeset** if the change is user-facing.
 4. **Sync docs** — update `README.md` (commands, API, architecture, status) and `AGENTS.md` (if architecture or conventions shifted). A merged change with stale docs isn't done.
@@ -128,7 +126,7 @@ Full spec: [AGENTS.md → Branch & worktree naming](AGENTS.md#branch--worktree-n
    bun run check-branch-flow   # BASE_REF=… HEAD_REF=… — see AGENTS.md
    bun run check-changeset
    ```
-6. **Open the PR** against **`cursor-sdk`** or **`pi-sdk`** (feature work). Only integration branches (`cursor-sdk`, `pi-sdk`) merge to `main`.
+6. **Open the PR** against **`dev`** (feature work). Only `dev` and the release bot merge to `main`.
 7. **Code review** — every PR is reviewed before merge. Fix blockers; document warnings inline. Tests green alone is not done — review is part of the shipping gate.
 
 ## Code style

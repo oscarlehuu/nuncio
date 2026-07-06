@@ -2,78 +2,44 @@ import { describe, expect, it } from 'bun:test';
 import { validateBranchFlow } from './branch-flow-utils.mjs';
 
 describe('validateBranchFlow', () => {
-  describe('cursor-sdk', () => {
-    it('accepts cursor feature branches', () => {
-      expect(validateBranchFlow('cursor-sdk', 'cursor/feat-handoff')).toEqual({ ok: true });
-    });
-
-    it('accepts main sync-back', () => {
-      expect(validateBranchFlow('cursor-sdk', 'main')).toEqual({ ok: true });
-    });
-
-    it('rejects pi branches and other targets', () => {
-      expect(validateBranchFlow('cursor-sdk', 'pi/cwd-fix').ok).toBe(false);
-      expect(validateBranchFlow('cursor-sdk', 'feat/foo').ok).toBe(false);
-    });
-  });
-
-  describe('pi-sdk', () => {
-    it('accepts pi feature branches', () => {
-      expect(validateBranchFlow('pi-sdk', 'pi/session-revive')).toEqual({ ok: true });
-    });
-
-    it('accepts main sync-back', () => {
-      expect(validateBranchFlow('pi-sdk', 'main')).toEqual({ ok: true });
-    });
-
-    it('rejects cursor branches', () => {
-      expect(validateBranchFlow('pi-sdk', 'cursor/feat-handoff').ok).toBe(false);
-    });
-  });
-
-  describe('codex-sdk', () => {
-    it('accepts codex feature branches', () => {
-      expect(validateBranchFlow('codex-sdk', 'codex/provider-integration')).toEqual({ ok: true });
-    });
-
-    it('accepts main sync-back', () => {
-      expect(validateBranchFlow('codex-sdk', 'main')).toEqual({ ok: true });
-    });
-
-    it('rejects other SDK lane branches', () => {
-      expect(validateBranchFlow('codex-sdk', 'cursor/feat-handoff').ok).toBe(false);
-      expect(validateBranchFlow('codex-sdk', 'pi/cwd-fix').ok).toBe(false);
-      expect(validateBranchFlow('codex-sdk', 'feat/foo').ok).toBe(false);
-    });
-  });
-
   describe('main', () => {
-    it('accepts SDK integration branches', () => {
-      expect(validateBranchFlow('main', 'cursor-sdk')).toEqual({ ok: true });
-      expect(validateBranchFlow('main', 'pi-sdk')).toEqual({ ok: true });
-      expect(validateBranchFlow('main', 'codex-sdk')).toEqual({ ok: true });
+    it('accepts promotion from dev', () => {
+      expect(validateBranchFlow('main', 'dev')).toEqual({ ok: true });
     });
 
-    it('accepts changesets release branch', () => {
+    it('accepts changesets release branches', () => {
       expect(validateBranchFlow('main', 'changeset-release/main')).toEqual({ ok: true });
+      expect(validateBranchFlow('main', 'changeset-release/next')).toEqual({ ok: true });
     });
 
-    it('rejects SDK feature branches that skip their lane', () => {
-      expect(validateBranchFlow('main', 'cursor/feat-handoff').ok).toBe(false);
-      expect(validateBranchFlow('main', 'pi/cwd-fix').ok).toBe(false);
-      expect(validateBranchFlow('main', 'codex/provider-integration').ok).toBe(false);
+    it('rejects feature branches that skip dev', () => {
+      expect(validateBranchFlow('main', 'feat/steer-queue-ui').ok).toBe(false);
+      expect(validateBranchFlow('main', 'fix/idle-composer-lock').ok).toBe(false);
+      expect(validateBranchFlow('main', 'docs/readme-refresh').ok).toBe(false);
     });
 
-    it('accepts general (non-lane) feature branches', () => {
-      expect(validateBranchFlow('main', 'feat/foo')).toEqual({ ok: true });
-      expect(validateBranchFlow('main', 'frontend')).toEqual({ ok: true });
-      expect(validateBranchFlow('main', 'docs/readme-refresh')).toEqual({ ok: true });
+    it('rejects retired SDK lane branches', () => {
+      expect(validateBranchFlow('main', 'cursor-sdk').ok).toBe(false);
+      expect(validateBranchFlow('main', 'pi-sdk').ok).toBe(false);
+      expect(validateBranchFlow('main', 'codex-sdk').ok).toBe(false);
+    });
+  });
+
+  describe('dev', () => {
+    it('accepts any feature branch', () => {
+      expect(validateBranchFlow('dev', 'feat/steer-queue-ui')).toEqual({ ok: true });
+      expect(validateBranchFlow('dev', 'fix/idle-composer-lock')).toEqual({ ok: true });
+      expect(validateBranchFlow('dev', 'chore/ci-cache')).toEqual({ ok: true });
+    });
+
+    it('accepts main sync-back after a release', () => {
+      expect(validateBranchFlow('dev', 'main')).toEqual({ ok: true });
     });
   });
 
   describe('other bases', () => {
     it('allows any head for unconfigured bases', () => {
-      expect(validateBranchFlow('feat/experiment', 'cursor/foo')).toEqual({ ok: true });
+      expect(validateBranchFlow('feat/experiment', 'feat/spike')).toEqual({ ok: true });
     });
   });
 });

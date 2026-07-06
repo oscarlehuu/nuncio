@@ -26,8 +26,9 @@ it is nowhere.
 
 ## Self-verify playbook (no user in the loop)
 
-Pick by change type. The **Mock provider** is always available with zero credentials — use it to
-exercise the full session lifecycle (create → RUNNING → deltas → IDLE → steer) end-to-end.
+Pick by change type. The **Mock provider** needs zero credentials — it is registered only when
+the server starts with `NUNCIO_FORCE_MOCK=1` (never in normal runs) — use it to exercise the full
+session lifecycle (create → RUNNING → deltas → IDLE → steer) end-to-end.
 
 | You changed… | Verify with |
 |---|---|

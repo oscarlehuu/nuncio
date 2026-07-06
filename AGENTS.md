@@ -44,89 +44,61 @@ Bugs: write a test that reproduces the bug (red), then fix (green). No bug fix w
 
 ## Agent workflow (multi-agent sessions)
 
-Agents working on Nuncio often **share the same branch** — they are not each given an isolated worktree/branch by default. Coordinate with what is already running on the machine.
+Small reviewed steps may land directly on `dev` when the user says so; for anything bigger, take an isolated **git worktree branched from `dev`** (below) so parallel sessions never trample each other.
 
-### SDK lane branches (enforced by CI)
+### Branch model: dev → main (enforced by CI)
 
-`main` is the **release branch**. SDK work lands through long-lived integration branches — **never** open a feature PR directly against `main`.
+Two long-lived branches only. **`dev`** is the integration branch — the user's daily test bed, produces **Nuncio Dev** builds. **`main`** is the stable release branch. The old SDK lane branches (`cursor-sdk` / `pi-sdk` / `codex-sdk` and the `cursor/*` / `pi/*` / `codex/*` prefixes) are **retired** — do not create new work on them.
 
 ```
-cursor/<feature>  →  cursor-sdk  →  main
-pi/<feature>      →  pi-sdk      →  main
-codex/<feature>   →  codex-sdk   →  main
-main              →  cursor-sdk | pi-sdk | codex-sdk   (sync-back only)
+<type>/<slug> (worktree from dev)  →  dev  →  main   (promotion)
+changeset-release/*                →  main           (release bot)
+main                               →  dev            (sync-back after a release)
 ```
-
-| Your work touches | Branch prefix | PR target |
-|---|---|---|
-| Cursor provider / `@cursor/sdk` / Handoff / CLI | `cursor/<slug>` | **`cursor-sdk`** |
-| Pi provider / `@earendil-works/pi-coding-agent` | `pi/<slug>` | **`pi-sdk`** |
-| Codex provider / Codex SDK / Codex CLI | `codex/<slug>` | **`codex-sdk`** |
-| Release cut (Changesets bot) | `changeset-release/main` | **`main`** (automated) |
 
 **Rules (CI `branch-flow` job — must pass):**
 
-- `cursor-sdk` ← only `cursor/*` or `main` (sync-back)
-- `pi-sdk` ← only `pi/*` or `main` (sync-back)
-- `codex-sdk` ← only `codex/*` or `main` (sync-back)
-- `main` ← only `cursor-sdk`, `pi-sdk`, `codex-sdk`, or `changeset-release/*`
+- `main` ← only `dev` (promotion) or `changeset-release/*` (release bot)
+- `dev` ← any feature branch, plus `main` sync-back after a release
+- Feature branches: `<type>/<slug>` — conventional type (`feat/`, `fix/`, `docs/`, `chore/`) + kebab-case slug that describes the work (`feat/composer-autofocus`, not `feat/wip`)
 
-Shared harness code (`sessions`, `agents.registry`, web UI) may be touched from any SDK lane — pick the lane for the **primary SDK** under test. Before making an SDK-specific change, ask whether the behavior belongs in the shared provider contract, base provider, registry, session orchestration, event schema, settings catalog, or model-picker UI. If it can serve multiple SDKs without speculative complexity, implement the shared shape first and keep only the SDK adapter details inside `providers/<sdk>-agent.provider.ts`. After one SDK branch merges to `main`, sync the other integration branches: `git checkout pi-sdk && git merge main && git push` (or the equivalent for `cursor-sdk` / `codex-sdk`).
+**Shared-first rule** (unchanged by the branch simplification): every provider-touching PR states whether its change is provider-neutral or SDK-specific; provider-neutral improvements land in the shared contract, base provider, registry, event schema, settings catalog, or shared UI so Cursor, Pi, Codex, and future SDKs reuse them. SDK adapter details stay inside `providers/<sdk>-agent.provider.ts`.
 
-**Shared-first rule:** SDK lanes isolate risky provider work, but they must not become silos. Every SDK PR should state whether its change is provider-neutral or SDK-specific; provider-neutral improvements should be organized so Cursor, Pi, Codex, and future SDKs can reuse them through the common interfaces.
+After a release merges on `main` (Changesets version bump), sync back: `git checkout dev && git merge main && git push`.
 
-Verify locally before opening a PR: `BASE_REF=cursor-sdk HEAD_REF=cursor/my-feat bun run check-branch-flow`
+Verify locally before opening a PR: `BASE_REF=main HEAD_REF=dev bun run check-branch-flow`
 
-**GitHub branch protection (manual, one-time):** on `main`, `cursor-sdk`, `pi-sdk`, and `codex-sdk` — require PR + status checks **`branch-flow`** and **`ci`**, block direct pushes.
+**GitHub branch protection (manual, one-time):** on `main` — require PR + status checks **`branch-flow`** and **`ci`**, block direct pushes. `dev` stays directly pushable so agents can land reviewed work when the user asks.
 
 ### Branch & worktree naming (contributors)
 
 #### Git branches
 
-Every feature branch **must** use an SDK lane prefix — CI `branch-flow` rejects anything else (including `docs/*` or `fix/*` straight to `main`).
+**Multi-agent phases:** per-lane branches like `feat/phase-04-a-backend`, then combine into `feat/phase-04-combined` before one PR to `dev` (see [Parallel-agent lane convention](#parallel-agent-lane-convention)).
 
-| Lane | Branch pattern | PR target | Example |
-|---|---|---|---|
-| Cursor | `cursor/<slug>` | **`cursor-sdk`** | `cursor/handoff-picker` |
-| Pi | `pi/<slug>` | **`pi-sdk`** | `pi/session-cwd-fix` |
-| Codex | `codex/<slug>` | **`codex-sdk`** | `codex/provider-integration` |
-| Release bot | `changeset-release/*` | **`main`** | (automated — do not hand-create) |
-
-**`<slug>` rules:** kebab-case, short, describes the work — `codex/provider-integration`, not `codex/fix` or `codex/john-wip`.
-
-**Multi-agent phases:** per-lane branches like `cursor/phase-04-a-backend`, then combine into `cursor/phase-04-combined` before one PR to the integration branch (see [Parallel-agent lane convention](#parallel-agent-lane-convention)).
-
-**Shared/provider-neutral work:** if the primary change is truly shared across providers, prefer a short-lived branch under the SDK lane that is actively proving the abstraction (for example `codex/provider-contract-cleanup` while building Codex), merge it through that lane, then sync `main` back to the other SDK branches. Do not create another permanent integration branch for shared work unless the user explicitly asks; `main` is the shared source of truth.
-
-**Create a branch** (always from the updated integration branch, not `main`):
+**Create a branch** (always from updated `dev`, not `main`):
 
 ```bash
 git fetch origin
-git checkout codex-sdk && git pull --ff-only origin codex-sdk   # or cursor-sdk / pi-sdk
-git checkout -b codex/my-feature
+git checkout dev && git pull --ff-only origin dev
+git checkout -b feat/my-feature
 ```
 
-Verify before opening a PR:
+#### Default for parallel work: git worktree from dev
 
-```bash
-BASE_REF=codex-sdk HEAD_REF=codex/my-feature bun run check-branch-flow
-```
-
-#### Optional: git worktree (isolated checkout)
-
-Agents often **share one checkout** on the same branch. Use a **git worktree** when you need a second branch checked out without stashing — e.g. parallel agent sessions or long-running local servers on another branch.
+Agents doing feature work should each take a **git worktree branched from `dev`** — a second checkout without stashing, so parallel agent sessions and long-running local servers never collide.
 
 | What | Convention |
 |---|---|
-| **Branch name** | Same as above: `cursor/<slug>`, `pi/<slug>`, or `codex/<slug>` |
-| **Base ref** | `origin/cursor-sdk`, `origin/pi-sdk`, or `origin/codex-sdk` (never `main` for feature work) |
+| **Branch name** | `<type>/<slug>` (e.g. `feat/steer-queue-ui`) |
+| **Base ref** | `origin/dev` (never `main` for feature work) |
 | **Worktree path** | Sibling dir: `../nuncio-<slug>` — or Cursor-managed: `~/.cursor/worktrees/nuncio/<slug>/` |
 
 ```bash
 git fetch origin
-git worktree add -b codex/my-feature ../nuncio-my-feature origin/codex-sdk
+git worktree add -b feat/my-feature ../nuncio-my-feature origin/dev
 cd ../nuncio-my-feature && bun install
-# … work, commit, push codex/my-feature, open PR → codex-sdk
+# … work, commit, push feat/my-feature, open PR → dev
 ```
 
 **Cleanup after merge:**
@@ -535,7 +507,7 @@ Plans: `plans/260626-nuncio-roadmap/`. Per-phase reports: `plans/reports/`.
 
 ### Parallel-agent lane convention
 
-When a phase is large it is split into lanes working on isolated branches, then merged into the SDK integration branch (`cursor-sdk`, `pi-sdk`, or `codex-sdk`), then to `main`:
+When a phase is large it is split into lanes working on isolated branches (worktrees from `dev`), then combined and merged into `dev`:
 
 | Lane | Ownership |
 |---|---|
@@ -543,7 +515,7 @@ When a phase is large it is split into lanes working on isolated branches, then 
 | B — Frontend | `apps/web/src/**` |
 | C — Tests + Docs | `*.spec.ts`, `apps/server/test/**`, `README.md`, `plans/reports/` |
 
-- Branches: `cursor/phase-NN-<lane>-5323`, combined into `cursor/phase-NN-combined-5323` → PR to **`cursor-sdk`** (Pi lane: `pi/…` → **`pi-sdk`**, Codex lane: `codex/…` → **`codex-sdk`**).
+- Branches: `feat/phase-NN-<lane>`, combined into `feat/phase-NN-combined` → PR to **`dev`**.
 - **File ownership is strict** — no overlapping edits across lanes. Tests own test files only and read (never edit) implementation files.
 - Merge order is defined per phase in `phase-NN-orchestration.md`; verify with `bun run build && bun test` after each merge.
 - Each lane writes a short report to `plans/reports/phase-NN-<lane>-report.md` (status, what shipped, verify commands, unresolved).
@@ -636,7 +608,7 @@ Nuncio runs on **Bun** (≥ 1.3) — server, build, and tests. Bun replaces npm,
 - **Async-first, not realtime chat.** Sessions are delegated background tasks; optimize for "delegate and review later," not "chat back and forth."
 - **In-process agent, not subprocess.** One Bun process hosts many agent sessions (today Pi `AgentSession`s sharing `ModelRegistry`/`AuthStorage`; tomorrow each provider manages its own). Simpler and faster than spawning a CLI per session. Acceptable trade-off: one crash kills active sessions (personal scale, 3–5 concurrent, SQLite recovers).
 - **Provider-agnostic harness.** Pi SDK is the inaugural provider, not the architecture. New agent SDKs (Cursor, Codex, OpenAI/Claude agents, …) implement the same `AgentProvider` contract and register — no session-layer or UI-layer changes to adopt them.
-- **Shared-first provider design.** When working in any SDK lane, keep asking whether the code is actually common infrastructure. Prefer shared contracts, event shapes, status handling, settings definitions, model catalog plumbing, and UI affordances over one-off SDK branches in the session or frontend layers. SDK-specific code should mostly be auth, SDK client setup, model translation, tool/runtime quirks, and delta mapping.
+- **Shared-first provider design.** When working on any provider, keep asking whether the code is actually common infrastructure. Prefer shared contracts, event shapes, status handling, settings definitions, model catalog plumbing, and UI affordances over one-off SDK branches in the session or frontend layers. SDK-specific code should mostly be auth, SDK client setup, model translation, tool/runtime quirks, and delta mapping.
 - **3-layer state decoupling** — conversation durable, agent loop disposable, machine state a strict FSM.
 - **YAGNI / KISS / DRY.** Don't build ahead of the roadmap. The agent-provider abstraction is the one forward-looking investment, because the whole point is multi-SDK support.
 - **Docs stay in sync with code.** After every implementation, update `README.md` (commands/API/architecture/status) and `AGENTS.md` if conventions shifted — stale docs count as unfinished work.
@@ -693,7 +665,7 @@ Minimal web GUI for coding agents (Codex, Claude, Cursor, OpenCode). Synara fork
 - Tests must never mutate the real `~/.pi/agent/settings.json`; `session.setModel()`/`setThinkingLevel()` persist to that global file, so snapshot + restore around any test that switches model/effort.
 - Pin model-brittle Pi integration tests (cwd/tool-use) to a known tool-capable model (`cliproxyapi:claude-opus-4-8`) instead of relying on the default model.
 - Add provider capabilities additively via capability flags + optional methods (base all-off, e.g. `attachments` on `AgentRunContext`, optional `interrupt?`/`setModel?`) — never `if (id === 'pi')` branches in SessionsService/UI, and don't break shared `run()`/provider signatures.
-- Syncing `main` into an SDK integration branch (`pi-sdk`/`cursor-sdk`/`codex-sdk`) cannot be done by a direct `git push` — GitHub branch protection blocks it ("must be through PR"). Open a sync PR branch instead (e.g. `pi/sync-main-to-pi-sdk`) even for a fast-forward main merge.
+- Merging into a GitHub-protected branch (`main`) cannot be done by a direct `git push` — branch protection blocks it ("must be through PR"). Open a PR even for a fast-forward promotion/sync merge.
 - Foreman's ledger lives in `.pi/` which is gitignored, so it is tied to the repo folder, not the git branch — creating a new branch does NOT reset Foreman; stale/escalated tasks from earlier sessions persist across branches until cleaned from `.pi/plans/`. A stuck "Running…" spinner in the app UI does not mean the Foreman task failed — the on-disk ledger (`state: done` + both gates approved, plus the activity log through `task_done`) is the source of truth; verify it before assuming lost work.
 - When resuming a Foreman task, pass the correct `cwd` and an explicit `slug` — `resume: true` without a slug in a repo that has open tasks from other sessions resumes the wrong (foreign) task.
 - Process lifecycle: `child.killed` flips true the instant any signal is sent (not on exit) — never guard a SIGKILL fallback on `!killed`; track a real `exited`/`exitCode` flag or a hung child orphans forever. A daemon's SIGTERM/SIGINT handler must `app.close()` then `process.exit(0)`, or the live HTTP listener keeps the event loop alive and the process hangs (incl. plain Ctrl-C in dev).

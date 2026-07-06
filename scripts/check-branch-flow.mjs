@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 /**
- * CI gate: enforce SDK lane merge graph on pull requests.
+ * CI gate: enforce the two-branch merge graph on pull requests.
  *
- *   cursor/*  → cursor-sdk → main
- *   pi/*      → pi-sdk     → main
- *   codex/*   → codex-sdk  → main
- *   main      → cursor-sdk | pi-sdk | codex-sdk  (sync-back)
+ *   <type>/<slug> (from dev)  →  dev  →  main   (promotion)
+ *   changeset-release/*       →  main           (release bot)
+ *   main                      →  dev            (sync-back after a release)
  *
  * Usage:
- *   BASE_REF=main HEAD_REF=cursor/feat bun run check-branch-flow
+ *   BASE_REF=main HEAD_REF=dev bun run check-branch-flow
  */
 import { validateBranchFlow } from './branch-flow-utils.mjs';
 
@@ -31,11 +30,9 @@ console.error('Branch flow check failed.');
 console.error(result.reason);
 console.error('');
 console.error('Expected merge graph:');
-console.error('  cursor/<feature>  →  cursor-sdk  →  main');
-console.error('  pi/<feature>      →  pi-sdk      →  main');
-console.error('  codex/<feature>   →  codex-sdk   →  main');
-console.error('  main              →  cursor-sdk | pi-sdk | codex-sdk  (sync-back)');
-console.error('  any non-lane branch → main (general feature work)');
+console.error('  <type>/<slug> (from dev)  →  dev  →  main   (promotion)');
+console.error('  changeset-release/*       →  main           (release bot)');
+console.error('  main                      →  dev            (sync-back after a release)');
 console.error('');
-console.error('See AGENTS.md → SDK lane branches.');
+console.error('See AGENTS.md → Branch model: dev → main.');
 process.exit(1);
