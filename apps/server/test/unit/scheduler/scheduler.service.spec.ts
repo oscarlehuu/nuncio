@@ -69,12 +69,16 @@ describe('SchedulerService firing loop', () => {
     }).compile();
   }
 
-  beforeAll(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-scheduler-'));
-    process.env.NUNCIO_DATA_DIR = dataDir;
-  });
+  // Per-test data dir: each test builds one or more modules whose repo reads the
+  // WHOLE schedules table — a shared dir leaks prior tests' rows (extra due
+  // schedules / enqueues). Clean in afterAll, never mid-run (an in-flight fire
+  // may still hold the SQLite file). Same isolation lesson as rungs 1/2A.
+  const dirsToClean: string[] = [];
 
   beforeEach(async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-scheduler-'));
+    dirsToClean.push(dataDir);
+    process.env.NUNCIO_DATA_DIR = dataDir;
     tasks = new SpyTasksService();
     module = await build();
     scheduler = module.get(SchedulerService);
@@ -85,11 +89,11 @@ describe('SchedulerService firing loop', () => {
 
   afterEach(async () => {
     await module.close();
+    delete process.env.NUNCIO_DATA_DIR;
   });
 
   afterAll(() => {
-    rmSync(dataDir, { recursive: true, force: true });
-    delete process.env.NUNCIO_DATA_DIR;
+    for (const dir of dirsToClean) rmSync(dir, { recursive: true, force: true });
   });
 
   const cron = (spec: string): CreateScheduleDto => ({ kind: 'cron', spec, target: taskTarget('nightly') });
@@ -176,11 +180,14 @@ describe('SchedulerService firing loop', () => {
       }).compile();
       const s2 = gatedModule.get(SchedulerService);
       const r2 = gatedModule.get(SchedulesRepository);
-      s2.clock = { now: () => at(2026, 7, 7, 9, 0) };
+      let nowMs = at(2026, 7, 7, 8, 0);
+      s2.clock = { now: () => nowMs };
+      // Created at 08:00 → next_fire today 09:00 (strictly after now).
       const s = s2.create({ kind: 'cron', spec: 'daily@09:00', target: taskTarget('x') });
 
+      nowMs = at(2026, 7, 7, 9, 0); // now due
       s2.scanDue(); // fire 1 — blocks in flight
-      r2.setNextFire(s.id, at(2026, 7, 7, 9, 0)); // due again
+      r2.setNextFire(s.id, at(2026, 7, 7, 9, 0)); // force due again while fire 1 hangs
       s2.scanDue(); // must skip: fire 1 still in flight
       expect(r2.findById(s.id)!.lastResult).toBe('skipped-overlap');
       expect(gated.calls).toBe(1); // never a second concurrent enqueue for one schedule
