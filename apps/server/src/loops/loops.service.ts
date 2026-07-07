@@ -76,6 +76,43 @@ export class LoopsService implements OnModuleInit {
     if (this.agents) this.agents.get(id);
   };
 
+  /**
+   * Model-id validation seam (like {@link assertKnownEngine}, overridable in
+   * tests). Default: resolve the effective engine (per-loop engine → project
+   * defaultEngine → registry default), then check the model id against that
+   * provider's listModels() catalog. Throws BadRequestException on an unknown
+   * model or when no engine resolves. No engine branch — the provider's own
+   * catalog is the single source of valid model ids.
+   */
+  assertKnownModel: (
+    model: string,
+    engine: string | null,
+    projectPath: string | null,
+  ) => void | Promise<void> = async (model, engine, projectPath) => {
+    if (!this.agents) return;
+    let engineId =
+      engine ??
+      (projectPath ? this.projectDefaults?.resolveDefaultEngine(projectPath) : null) ??
+      null;
+    if (!engineId) {
+      try {
+        engineId = await this.agents.defaultId();
+      } catch {
+        throw new BadRequestException(
+          `model "${model}" requires a resolvable engine (set the loop engine, a project defaultEngine, or configure a provider)`,
+        );
+      }
+    }
+    const provider = this.agents.get(engineId); // 400s on an unknown engine id
+    const catalogs = await provider.listModels();
+    const known = catalogs.some((entry) =>
+      (entry.groups ?? []).some((group) => group.models.some((m) => m.id === model)),
+    );
+    if (!known) {
+      throw new BadRequestException(`unknown model "${model}" for engine "${engineId}"`);
+    }
+  };
+
   constructor(
     private readonly loops: LoopsRepository,
     @Optional() private readonly scheduler?: SchedulerService,
@@ -145,7 +182,7 @@ export class LoopsService implements OnModuleInit {
     return undefined;
   }
 
-  create(input: CreateLoopDto): LoopDto {
+  async create(input: CreateLoopDto): Promise<LoopDto> {
     const goal = input.goal?.trim();
     if (!goal) throw new BadRequestException('loop goal is required');
     const maxRunsPerDay = this.positiveInt(input.maxRunsPerDay, DEFAULT_MAX_RUNS_PER_DAY, 'maxRunsPerDay (budget)');
@@ -162,6 +199,7 @@ export class LoopsService implements OnModuleInit {
     // Create the loop first (its id is the schedule target), then the schedule,
     // then link — one sequence at personal scale.
     const projectPath = input.projectPath?.trim() || null;
+    const model = await this.validateModel(input.model, engine, projectPath);
     const name = this.normalizeName(input.name);
     const created = this.loops.create({
       name,
@@ -173,6 +211,7 @@ export class LoopsService implements OnModuleInit {
       escalation: 'needs-attention',
       projectPath,
       engine,
+      model,
     });
     const schedule = this.scheduler?.create({
       kind: input.schedule.kind,
@@ -280,6 +319,8 @@ export class LoopsService implements OnModuleInit {
       useWorktree: true,
       ...(loop.projectPath ? { projectPath: loop.projectPath } : {}),
       ...(provider ? { provider } : {}),
+      // Per-loop model override (validated at create/update); null = provider default.
+      ...(loop.model ? { model: loop.model } : {}),
     });
 
     // Born PENDING — a run must never be born `ok`. Settlement (onTaskSettled /
@@ -364,8 +405,8 @@ export class LoopsService implements OnModuleInit {
     return this.loops.listRuns(id);
   }
 
-  /** Patch a loop's mutable fields (v1.1). Validates budgets/stop/engine. */
-  update(id: string, patch: UpdateLoopDto): LoopDto {
+  /** Patch a loop's mutable fields (v1.1). Validates budgets/stop/engine/model. */
+  async update(id: string, patch: UpdateLoopDto): Promise<LoopDto> {
     const existing = this.loops.findById(id);
     if (!existing) throw new NotFoundException(`Loop ${id} not found`);
     // A completed loop's config is history — editing it is meaningless (it will
@@ -394,6 +435,12 @@ export class LoopsService implements OnModuleInit {
     }
     if (patch.engine !== undefined) {
       repoPatch.engine = this.validateEngine(patch.engine);
+    }
+    if (patch.model !== undefined) {
+      // Validate against the engine as patched in the SAME call, else the stored one.
+      const effectiveEngine =
+        patch.engine !== undefined ? repoPatch.engine ?? null : existing.engine;
+      repoPatch.model = await this.validateModel(patch.model, effectiveEngine, existing.projectPath);
     }
     return this.loops.update(id, repoPatch) ?? existing;
   }
@@ -533,6 +580,24 @@ export class LoopsService implements OnModuleInit {
     if (trimmed === '') return null;
     // Seam throws BadRequestException for an unknown id (default: registry.get).
     this.assertKnownEngine(trimmed);
+    return trimmed;
+  }
+
+  /**
+   * Validate a per-loop model override. Empty/null → null (the resolved engine's
+   * default model). A non-null model must be a known model id for the effective
+   * engine (loop engine → project defaultEngine → registry default) — the
+   * {@link assertKnownModel} seam 400s otherwise.
+   */
+  private async validateModel(
+    model: string | null | undefined,
+    engine: string | null,
+    projectPath: string | null,
+  ): Promise<string | null> {
+    if (model === undefined || model === null) return null;
+    const trimmed = model.trim();
+    if (trimmed === '') return null;
+    await this.assertKnownModel(trimmed, engine, projectPath);
     return trimmed;
   }
 

@@ -169,6 +169,50 @@ describe('DatabaseService schema + migration', () => {
     expect(row.name).toBeNull();
   });
 
+  it('migrates a pre-existing loops table by adding the model column', () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-loops-model-migrate-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
+
+    // A loops table from before per-loop model selection existed (has engine + name).
+    const oldDb = new Database(join(dataDir, 'nuncio.db'));
+    oldDb.exec(
+      `CREATE TABLE loops (
+        id TEXT PRIMARY KEY,
+        name TEXT,
+        goal TEXT NOT NULL,
+        schedule_id TEXT NOT NULL,
+        max_runs_per_day INTEGER NOT NULL,
+        max_consecutive_failures INTEGER NOT NULL,
+        stop_json TEXT,
+        escalation TEXT NOT NULL,
+        project_path TEXT,
+        engine TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+    );
+    oldDb
+      .prepare(
+        `INSERT INTO loops
+           (id, name, goal, schedule_id, max_runs_per_day, max_consecutive_failures,
+            stop_json, escalation, project_path, engine, status, created_at, updated_at)
+         VALUES ('old', NULL, 'g', 's', 5, 3, NULL, 'needs-attention', NULL, NULL, 'active', 0, 0)`,
+      )
+      .run();
+    oldDb.close();
+
+    db = new DatabaseService();
+
+    const cols = db.db.prepare('PRAGMA table_info(loops)').all() as Array<{ name: string }>;
+    expect(cols.map((column) => column.name)).toContain('model');
+
+    const row = db.db.prepare('SELECT model FROM loops WHERE id = ?').get('old') as {
+      model: string | null;
+    };
+    expect(row.model).toBeNull();
+  });
+
   it('enables WAL journal mode', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-wal-'));
     process.env.NUNCIO_DATA_DIR = dataDir;

@@ -16,7 +16,7 @@ function loop(status: LoopStatus): LoopDto {
   seq += 1;
   return {
     id: `L${seq}`, name: null, goal: 'g', scheduleId: 's', maxRunsPerDay: 5, maxConsecutiveFailures: 3,
-    stop: null, escalation: 'needs-attention', projectPath: null, engine: null, status, createdAt: 0, updatedAt: 0,
+    stop: null, escalation: 'needs-attention', projectPath: null, engine: null, model: null, status, createdAt: 0, updatedAt: 0,
   };
 }
 

@@ -60,6 +60,22 @@ describe('LoopsRepository', () => {
     expect(repo.findById(loop.id)!.stop).toEqual({ kind: 'maxTotalRuns', n: 5 });
   });
 
+  it('persists a model round-trip and defaults it to null', () => {
+    const withModel = repo.create({ ...base(), engine: 'mock', model: 'mock-model' });
+    expect(withModel.model).toBe('mock-model');
+    expect(repo.findById(withModel.id)!.model).toBe('mock-model');
+    expect(repo.create(base()).model).toBeNull();
+  });
+
+  it('update sets, clears, and leaves the model untouched (gated SET)', () => {
+    const loop = repo.create({ ...base(), model: 'm1' });
+    expect(repo.update(loop.id, { model: 'm2' })!.model).toBe('m2');
+    // Omitted key → untouched.
+    expect(repo.update(loop.id, { goal: 'other goal' })!.model).toBe('m2');
+    // Explicit null clears (back to the provider default).
+    expect(repo.update(loop.id, { model: null })!.model).toBeNull();
+  });
+
   it('lists loops and updates status', () => {
     const before = repo.list().length;
     const loop = repo.create(base());

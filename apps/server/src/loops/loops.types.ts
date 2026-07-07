@@ -61,6 +61,8 @@ export interface LoopDto {
   projectPath: string | null;
   /** Per-loop engine override (v1.1). Null = inherit project/registry default. */
   engine: string | null;
+  /** Per-loop model override (v1.2). Null = the resolved engine's default model. */
+  model: string | null;
   status: LoopStatus;
   createdAt: number;
   updatedAt: number;
@@ -78,6 +80,11 @@ export interface CreateLoopDto {
   projectPath?: string;
   /** Per-loop engine override (provider id); validated against AgentRegistry. */
   engine?: string | null;
+  /**
+   * Per-loop model override; requires a resolvable engine (loop engine → project
+   * defaultEngine → registry default) and must be a model id that engine lists.
+   */
+  model?: string | null;
 }
 
 /**
@@ -92,6 +99,7 @@ export interface UpdateLoopDto {
   maxConsecutiveFailures?: number;
   stop?: StopCondition;
   engine?: string | null;
+  model?: string | null;
 }
 
 export interface LoopRunDto {
@@ -115,6 +123,7 @@ export interface LoopRow {
   escalation: string;
   project_path: string | null;
   engine: string | null;
+  model: string | null;
   status: string;
   created_at: number;
   updated_at: number;

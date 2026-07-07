@@ -24,6 +24,7 @@ function loopRowToDto(row: LoopRow): LoopDto {
     escalation: row.escalation,
     projectPath: row.project_path,
     engine: row.engine ?? null,
+    model: row.model ?? null,
     status: row.status as LoopStatus,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -57,6 +58,7 @@ export class LoopsRepository {
     escalation: string;
     projectPath: string | null;
     engine?: string | null;
+    model?: string | null;
   }): LoopDto {
     const now = Date.now();
     const id = uuidv4().slice(0, 8);
@@ -64,8 +66,8 @@ export class LoopsRepository {
       .prepare(
         `INSERT INTO loops
            (id, name, goal, schedule_id, max_runs_per_day, max_consecutive_failures,
-            stop_json, escalation, project_path, engine, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+            stop_json, escalation, project_path, engine, model, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
       )
       .run(
         id,
@@ -78,6 +80,7 @@ export class LoopsRepository {
         input.escalation,
         input.projectPath,
         input.engine ?? null,
+        input.model ?? null,
         now,
         now,
       );
@@ -92,6 +95,7 @@ export class LoopsRepository {
     maxConsecutiveFailures?: number;
     stopJson?: string | null;
     engine?: string | null;
+    model?: string | null;
   }): LoopDto | null {
     if (this.database.closed) return this.findById(id);
     const sets: string[] = [];
@@ -102,6 +106,7 @@ export class LoopsRepository {
     if (patch.maxConsecutiveFailures !== undefined) { sets.push('max_consecutive_failures = ?'); args.push(patch.maxConsecutiveFailures); }
     if (patch.stopJson !== undefined) { sets.push('stop_json = ?'); args.push(patch.stopJson); }
     if (patch.engine !== undefined) { sets.push('engine = ?'); args.push(patch.engine); }
+    if (patch.model !== undefined) { sets.push('model = ?'); args.push(patch.model); }
     if (sets.length === 0) return this.findById(id);
     sets.push('updated_at = ?');
     args.push(Date.now(), id);

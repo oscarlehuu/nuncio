@@ -3,9 +3,10 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ServiceUnavailableException } from '@nestjs/common';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { SchedulerService } from '../../../src/scheduler/scheduler.service';
+import { AgentRegistry } from '../../../src/agents/agents.registry';
 import { TasksService } from '../../../src/tasks/tasks.service';
 import { LoopsRepository } from '../../../src/loops/loops.repository';
 import { LoopsService } from '../../../src/loops/loops.service';
@@ -60,12 +61,12 @@ interface FakeTask {
 }
 
 class SpyTasks {
-  readonly enqueued: Array<{ prompt: string; useWorktree?: boolean; projectPath?: string; provider?: string }> = [];
+  readonly enqueued: Array<{ prompt: string; useWorktree?: boolean; projectPath?: string; provider?: string; model?: string }> = [];
   private readonly tasks = new Map<string, FakeTask>();
   private readonly handlers = new Set<(t: FakeTask) => void>();
   private n = 0;
 
-  enqueue(input: { prompt: string; useWorktree?: boolean; projectPath?: string; provider?: string }) {
+  enqueue(input: { prompt: string; useWorktree?: boolean; projectPath?: string; provider?: string; model?: string }) {
     this.n += 1;
     const id = `task-${this.n}`;
     this.enqueued.push(input);
@@ -172,8 +173,8 @@ describe('LoopsService', () => {
     ...over,
   });
 
-  it('creates a loop and OWNS a schedule row targeting the loop', () => {
-    const loop = loops.create(create());
+  it('creates a loop and OWNS a schedule row targeting the loop', async () => {
+    const loop = await loops.create(create());
     expect(loop.status).toBe('active');
     expect(loop.goal).toBe('nightly maintenance');
     expect(scheduler.created).toHaveLength(1);
@@ -183,8 +184,8 @@ describe('LoopsService', () => {
   });
 
   describe('read path carries the displayable schedule (UI join)', () => {
-    it('list + get include schedule {kind, spec} and nextFireAt joined from the owned row', () => {
-      loops.create(create({ schedule: { kind: 'cron', spec: 'daily@22:00' } }));
+    it('list + get include schedule {kind, spec} and nextFireAt joined from the owned row', async () => {
+      await loops.create(create({ schedule: { kind: 'cron', spec: 'daily@22:00' } }));
       const listed = loops.list()[0]!;
       expect(listed.schedule).toEqual({ kind: 'cron', spec: 'daily@22:00' });
       expect(typeof listed.nextFireAt).toBe('number');
@@ -194,8 +195,8 @@ describe('LoopsService', () => {
       expect(got.nextFireAt).toBe(listed.nextFireAt);
     });
 
-    it('a missing/corrupt schedule row yields null schedule + null nextFireAt, never a throw', () => {
-      const loop = loops.create(create());
+    it('a missing/corrupt schedule row yields null schedule + null nextFireAt, never a throw', async () => {
+      const loop = await loops.create(create());
       // Simulate the schedule row vanishing (delete the scheduler side only).
       scheduler.deleteSchedule(loop.scheduleId);
       const got = loops.findById(loop.id)!;
@@ -206,23 +207,23 @@ describe('LoopsService', () => {
     });
   });
 
-  it('rejects an empty goal', () => {
-    expect(() => loops.create(create({ goal: '' }))).toThrow(/goal/i);
+  it('rejects an empty goal', async () => {
+    await expect(loops.create(create({ goal: '' }))).rejects.toThrow(/goal/i);
   });
 
-  it('rejects non-positive-integer budget counts', () => {
-    expect(() => loops.create(create({ maxRunsPerDay: 0 }))).toThrow(/runs|budget/i);
-    expect(() => loops.create(create({ maxConsecutiveFailures: -1 }))).toThrow(/failures|budget/i);
-    expect(() => loops.create(create({ maxRunsPerDay: 2.5 }))).toThrow(/runs|budget/i);
+  it('rejects non-positive-integer budget counts', async () => {
+    await expect(loops.create(create({ maxRunsPerDay: 0 }))).rejects.toThrow(/runs|budget/i);
+    await expect(loops.create(create({ maxConsecutiveFailures: -1 }))).rejects.toThrow(/failures|budget/i);
+    await expect(loops.create(create({ maxRunsPerDay: 2.5 }))).rejects.toThrow(/runs|budget/i);
   });
 
-  it('rejects an unknown stop-condition kind', () => {
-    expect(() => loops.create(create({ stop: { kind: 'whenever' } as never }))).toThrow(/stop/i);
+  it('rejects an unknown stop-condition kind', async () => {
+    await expect(loops.create(create({ stop: { kind: 'whenever' } as never }))).rejects.toThrow(/stop/i);
   });
 
   describe('fire — a loop run is a task with a fresh worktree', () => {
-    it('fires within budget, enqueues the goal as a task, and records a run row', () => {
-      const loop = loops.create(create({ maxRunsPerDay: 3 }));
+    it('fires within budget, enqueues the goal as a task, and records a run row', async () => {
+      const loop = await loops.create(create({ maxRunsPerDay: 3 }));
       const runResult = loops.fire(loop.id);
       expect(runResult).not.toBeNull();
       expect(repo.listRuns(loop.id)).toHaveLength(1);
@@ -230,14 +231,14 @@ describe('LoopsService', () => {
       expect(tasks.enqueued[0]!.prompt).toBe('nightly maintenance');
     });
 
-    it('a loop NEVER runs in-place — the enqueued task forces useWorktree=true (locked)', () => {
-      const loop = loops.create(create());
+    it('a loop NEVER runs in-place — the enqueued task forces useWorktree=true (locked)', async () => {
+      const loop = await loops.create(create());
       loops.fire(loop.id);
       expect(tasks.enqueued[0]!.useWorktree).toBe(true);
     });
 
-    it('a run is born PENDING, never ok, until its task settles', () => {
-      const loop = loops.create(create());
+    it('a run is born PENDING, never ok, until its task settles', async () => {
+      const loop = await loops.create(create());
       const run = loops.fire(loop.id)!;
       expect(run.outcome).toBe('pending');
       expect(repo.listRuns(loop.id)[0]!.outcome).toBe('pending');
@@ -245,16 +246,16 @@ describe('LoopsService', () => {
   });
 
   describe('settlement from the task lane (finding #1)', () => {
-    it('a task that FAILS finalizes its run to failed and increments the streak', () => {
-      const loop = loops.create(create({ maxConsecutiveFailures: 3, maxRunsPerDay: 10 }));
+    it('a task that FAILS finalizes its run to failed and increments the streak', async () => {
+      const loop = await loops.create(create({ maxConsecutiveFailures: 3, maxRunsPerDay: 10 }));
       const run = loops.fire(loop.id)!;
       // The task settles FAILED via the registered onTaskFinished handler.
       tasks.settle(run.taskId!, 'FAILED', { error: 'boom' });
       expect(repo.listRuns(loop.id).find((r) => r.id === run.id)!.outcome).toBe('failed');
     });
 
-    it('three FAILED task settlements trip the breaker (the loop sees reality)', () => {
-      const loop = loops.create(create({ maxConsecutiveFailures: 3, maxRunsPerDay: 10 }));
+    it('three FAILED task settlements trip the breaker (the loop sees reality)', async () => {
+      const loop = await loops.create(create({ maxConsecutiveFailures: 3, maxRunsPerDay: 10 }));
       for (let i = 0; i < 3; i += 1) {
         const r = loops.fire(loop.id)!;
         tasks.settle(r.taskId!, 'FAILED');
@@ -262,8 +263,8 @@ describe('LoopsService', () => {
       expect(repo.findById(loop.id)!.status).toBe('broken');
     });
 
-    it('a DONE task with a green verify settles the run green', () => {
-      const loop = loops.create(create({ maxRunsPerDay: 10, maxConsecutiveFailures: 10 }));
+    it('a DONE task with a green verify settles the run green', async () => {
+      const loop = await loops.create(create({ maxRunsPerDay: 10, maxConsecutiveFailures: 10 }));
       const r = loops.fire(loop.id)!;
       tasks.settle(r.taskId!, 'DONE', { verify: { ok: true } });
       const settled = repo.listRuns(loop.id).find((x) => x.id === r.id)!;
@@ -271,15 +272,15 @@ describe('LoopsService', () => {
       expect(settled.verify).toBe('green');
     });
 
-    it('a DONE task that ended needs-attention counts as failed (rung-1 gave up)', () => {
-      const loop = loops.create(create({ maxRunsPerDay: 10, maxConsecutiveFailures: 10 }));
+    it('a DONE task that ended needs-attention counts as failed (rung-1 gave up)', async () => {
+      const loop = await loops.create(create({ maxRunsPerDay: 10, maxConsecutiveFailures: 10 }));
       const r = loops.fire(loop.id)!;
       tasks.settle(r.taskId!, 'DONE', { verify: { ok: false }, needsAttention: { reason: 'max_rounds' } });
       expect(repo.listRuns(loop.id).find((x) => x.id === r.id)!.outcome).toBe('failed');
     });
 
-    it('a CANCELLED task settles its run failed and unblocks the next fire (no forever-pending)', () => {
-      const loop = loops.create(create({ maxRunsPerDay: 10, maxConsecutiveFailures: 10 }));
+    it('a CANCELLED task settles its run failed and unblocks the next fire (no forever-pending)', async () => {
+      const loop = await loops.create(create({ maxRunsPerDay: 10, maxConsecutiveFailures: 10 }));
       const run = loops.fire(loop.id)!;
       // Cancelling a loop task is terminal — the run must settle, or the overlap
       // guard would brick the loop on every future fire.
@@ -295,7 +296,7 @@ describe('LoopsService', () => {
 
   describe('restart reconciliation of pending runs (finding #1)', () => {
     it('a run left pending across a restart is reconciled from the task, not stuck pending', async () => {
-      const loop = loops.create(create({ maxConsecutiveFailures: 3, maxRunsPerDay: 10 }));
+      const loop = await loops.create(create({ maxConsecutiveFailures: 3, maxRunsPerDay: 10 }));
       const run = loops.fire(loop.id)!;
       // Simulate a crash: the task went terminal (FAILED) but the settlement hook
       // never fired before the daemon died — the run is still pending.
@@ -350,7 +351,7 @@ describe('LoopsService', () => {
     it('a still-QUEUED task keeps its run PENDING, then settles ok when it later completes', async () => {
       // The bug: reconcile eagerly failed a live task's run, and onTaskSettled
       // (which only updates pending rows) could never correct it.
-      const loop = loops.create(create({ maxConsecutiveFailures: 3, maxRunsPerDay: 10 }));
+      const loop = await loops.create(create({ maxConsecutiveFailures: 3, maxRunsPerDay: 10 }));
       const run = loops.fire(loop.id)!;
       tasks.setStatus(run.taskId!, 'QUEUED'); // alive, re-run by the pump after boot
 
@@ -366,7 +367,7 @@ describe('LoopsService', () => {
     });
 
     it('a still-RUNNING task at boot keeps its run pending (reclaimed/settled by the task lane)', async () => {
-      const loop = loops.create(create({ maxConsecutiveFailures: 1, maxRunsPerDay: 10 }));
+      const loop = await loops.create(create({ maxConsecutiveFailures: 1, maxRunsPerDay: 10 }));
       const run = loops.fire(loop.id)!;
       tasks.setStatus(run.taskId!, 'RUNNING');
       await restart(tasks);
@@ -377,7 +378,7 @@ describe('LoopsService', () => {
     });
 
     it('a vanished task finalizes the run failed', async () => {
-      const loop = loops.create(create({ maxConsecutiveFailures: 3, maxRunsPerDay: 10 }));
+      const loop = await loops.create(create({ maxConsecutiveFailures: 3, maxRunsPerDay: 10 }));
       const run = loops.fire(loop.id)!;
       tasks.vanish(run.taskId!); // task row gone across the crash
       await restart(tasks);
@@ -385,7 +386,7 @@ describe('LoopsService', () => {
     });
 
     it('an already-FAILED task finalizes the run failed', async () => {
-      const loop = loops.create(create({ maxConsecutiveFailures: 3, maxRunsPerDay: 10 }));
+      const loop = await loops.create(create({ maxConsecutiveFailures: 3, maxRunsPerDay: 10 }));
       const run = loops.fire(loop.id)!;
       tasks.forceTerminal(run.taskId!, 'FAILED'); // e.g. failInterrupted ran before reconcile
       await restart(tasks);
@@ -393,7 +394,7 @@ describe('LoopsService', () => {
     });
 
     it('a CANCELLED task at boot finalizes the run failed (any terminal status folds, not just DONE/FAILED)', async () => {
-      const loop = loops.create(create({ maxConsecutiveFailures: 3, maxRunsPerDay: 10 }));
+      const loop = await loops.create(create({ maxConsecutiveFailures: 3, maxRunsPerDay: 10 }));
       const run = loops.fire(loop.id)!;
       // Task cancelled before the daemon died; the hook never fired for this run.
       tasks.forceTerminal(run.taskId!, 'CANCELLED');
@@ -403,19 +404,17 @@ describe('LoopsService', () => {
   });
 
   describe('schedule validation at creation (finding #2)', () => {
-    it('rejects a typo cron spec — no inert loop is stored', () => {
-      expect(() => loops.create(create({ schedule: { kind: 'cron', spec: 'daliy@02:00' } }))).toThrow(/spec/i);
+    it('rejects a typo cron spec — no inert loop is stored', async () => {
+      await expect(loops.create(create({ schedule: { kind: 'cron', spec: 'daliy@02:00' } }))).rejects.toThrow(/spec/i);
       expect(loops.list().every((l) => l.goal !== 'nightly maintenance')).toBe(true);
     });
 
-    it('rejects an unsupported schedule kind', () => {
-      expect(() =>
-        loops.create(create({ schedule: { kind: 'weekly' as never, spec: 'daily@02:00' } })),
-      ).toThrow(/kind/i);
+    it('rejects an unsupported schedule kind', async () => {
+      await expect(loops.create(create({ schedule: { kind: 'weekly' as never, spec: 'daily@02:00' } }))).rejects.toThrow(/kind/i);
     });
 
-    it('accepts a valid cron spec', () => {
-      const loop = loops.create(create({ schedule: { kind: 'cron', spec: 'every:30m' } }));
+    it('accepts a valid cron spec', async () => {
+      const loop = await loops.create(create({ schedule: { kind: 'cron', spec: 'every:30m' } }));
       expect(loop.status).toBe('active');
     });
   });
@@ -428,8 +427,8 @@ describe('LoopsService', () => {
       return r;
     };
 
-    it('skips a fire once maxRunsPerDay is reached, then resumes after local midnight', () => {
-      const loop = loops.create(create({ maxRunsPerDay: 2, maxConsecutiveFailures: 10 }));
+    it('skips a fire once maxRunsPerDay is reached, then resumes after local midnight', async () => {
+      const loop = await loops.create(create({ maxRunsPerDay: 2, maxConsecutiveFailures: 10 }));
       fireAndSettle(loop.id);
       fireAndSettle(loop.id);
       // Third fire same day → budget exhausted, no new task run.
@@ -446,8 +445,8 @@ describe('LoopsService', () => {
   });
 
   describe('overlap guard — no stacking while a run is unsettled (finding #2)', () => {
-    it('a fire while a prior run is still pending SKIPS without consuming budget', () => {
-      const loop = loops.create(create({ maxRunsPerDay: 5, maxConsecutiveFailures: 3 }));
+    it('a fire while a prior run is still pending SKIPS without consuming budget', async () => {
+      const loop = await loops.create(create({ maxRunsPerDay: 5, maxConsecutiveFailures: 3 }));
       const first = loops.fire(loop.id)!;
       expect(first.outcome).toBe('pending');
       // Second fire while #1 is unsettled → skip-overlap, no new task.
@@ -460,8 +459,8 @@ describe('LoopsService', () => {
       expect(runs.filter((r) => r.outcome === 'pending')).toHaveLength(1);
     });
 
-    it('after the pending run settles, the next fire proceeds', () => {
-      const loop = loops.create(create({ maxRunsPerDay: 5, maxConsecutiveFailures: 3 }));
+    it('after the pending run settles, the next fire proceeds', async () => {
+      const loop = await loops.create(create({ maxRunsPerDay: 5, maxConsecutiveFailures: 3 }));
       const first = loops.fire(loop.id)!;
       expect(loops.fire(loop.id)).toBeNull(); // skipped while pending
       tasks.settle(first.taskId!, 'DONE', { verify: { ok: true } });
@@ -471,8 +470,8 @@ describe('LoopsService', () => {
       expect(tasks.enqueued).toHaveLength(2);
     });
 
-    it('skip-overlap rows are transparent to the failure streak (breaker still trips at 3 real failures)', () => {
-      const loop = loops.create(create({ maxRunsPerDay: 20, maxConsecutiveFailures: 3 }));
+    it('skip-overlap rows are transparent to the failure streak (breaker still trips at 3 real failures)', async () => {
+      const loop = await loops.create(create({ maxRunsPerDay: 20, maxConsecutiveFailures: 3 }));
       for (let i = 0; i < 3; i += 1) {
         const r = loops.fire(loop.id)!;
         // A stray skip attempt while pending must not reset the streak.
@@ -484,8 +483,8 @@ describe('LoopsService', () => {
   });
 
   describe('breaker', () => {
-    it('trips after N consecutive failures: status broken, schedule disabled, needs-attention emitted', () => {
-      const loop = loops.create(create({ maxConsecutiveFailures: 3 }));
+    it('trips after N consecutive failures: status broken, schedule disabled, needs-attention emitted', async () => {
+      const loop = await loops.create(create({ maxConsecutiveFailures: 3 }));
       for (let i = 0; i < 3; i += 1) {
         const r = loops.fire(loop.id)!;
         loops.recordTaskOutcome(loop.id, r.taskId ?? `t${i}`, false); // failed
@@ -496,8 +495,8 @@ describe('LoopsService', () => {
       expect(scheduler.enabledCalls.some((c) => c.id === loop.scheduleId && c.enabled === false)).toBe(true);
     });
 
-    it('honours a per-loop maxConsecutiveFailures override (trips at 2)', () => {
-      const loop = loops.create(create({ maxConsecutiveFailures: 2 }));
+    it('honours a per-loop maxConsecutiveFailures override (trips at 2)', async () => {
+      const loop = await loops.create(create({ maxConsecutiveFailures: 2 }));
       for (let i = 0; i < 2; i += 1) {
         const r = loops.fire(loop.id)!;
         loops.recordTaskOutcome(loop.id, r.taskId ?? `t${i}`, false);
@@ -505,8 +504,8 @@ describe('LoopsService', () => {
       expect(repo.findById(loop.id)!.status).toBe('broken');
     });
 
-    it('a success mid-streak resets the streak (no trip)', () => {
-      const loop = loops.create(create({ maxConsecutiveFailures: 3 }));
+    it('a success mid-streak resets the streak (no trip)', async () => {
+      const loop = await loops.create(create({ maxConsecutiveFailures: 3 }));
       const outcomes = [false, false, true, false];
       for (const ok of outcomes) {
         const r = loops.fire(loop.id)!;
@@ -515,8 +514,8 @@ describe('LoopsService', () => {
       expect(repo.findById(loop.id)!.status).toBe('active');
     });
 
-    it('manual resume re-enables the schedule and zeroes the streak', () => {
-      const loop = loops.create(create({ maxConsecutiveFailures: 2 }));
+    it('manual resume re-enables the schedule and zeroes the streak', async () => {
+      const loop = await loops.create(create({ maxConsecutiveFailures: 2 }));
       for (let i = 0; i < 2; i += 1) {
         const r = loops.fire(loop.id)!;
         loops.recordTaskOutcome(loop.id, r.taskId ?? 't', false);
@@ -534,8 +533,8 @@ describe('LoopsService', () => {
   });
 
   describe('stop condition', () => {
-    it('auto-completes when maxTotalRuns is reached', () => {
-      const loop = loops.create(create({ stop: { kind: 'maxTotalRuns', n: 2 } }));
+    it('auto-completes when maxTotalRuns is reached', async () => {
+      const loop = await loops.create(create({ stop: { kind: 'maxTotalRuns', n: 2 } }));
       const r1 = loops.fire(loop.id)!;
       loops.recordTaskOutcome(loop.id, r1.taskId ?? 't', true);
       const r2 = loops.fire(loop.id)!;
@@ -545,8 +544,8 @@ describe('LoopsService', () => {
       expect(loops.fire(loop.id)).toBeNull();
     });
 
-    it('verifyGreenN: auto-completes after N consecutive green-verify runs', () => {
-      const loop = loops.create(create({
+    it('verifyGreenN: auto-completes after N consecutive green-verify runs', async () => {
+      const loop = await loops.create(create({
         stop: { kind: 'verifyGreenN', n: 3 },
         maxRunsPerDay: 10,
         maxConsecutiveFailures: 10, // don't let the breaker interfere
@@ -558,8 +557,8 @@ describe('LoopsService', () => {
       expect(repo.findById(loop.id)!.status).toBe('completed');
     });
 
-    it('verifyGreenN: a red verify resets the green streak (does not complete early)', () => {
-      const loop = loops.create(create({
+    it('verifyGreenN: a red verify resets the green streak (does not complete early)', async () => {
+      const loop = await loops.create(create({
         stop: { kind: 'verifyGreenN', n: 2 },
         maxRunsPerDay: 10,
         maxConsecutiveFailures: 10,
@@ -572,8 +571,8 @@ describe('LoopsService', () => {
       expect(repo.findById(loop.id)!.status).toBe('active');
     });
 
-    it('verifyGreenN: a run with no verify signal carries the streak (neither counts nor resets)', () => {
-      const loop = loops.create(create({
+    it('verifyGreenN: a run with no verify signal carries the streak (neither counts nor resets)', async () => {
+      const loop = await loops.create(create({
         stop: { kind: 'verifyGreenN', n: 2 },
         maxRunsPerDay: 10,
         maxConsecutiveFailures: 10,
@@ -593,8 +592,8 @@ describe('LoopsService', () => {
   });
 
   describe('pause / resume / delete', () => {
-    it('pause disables the schedule and stops fires; resume re-enables', () => {
-      const loop = loops.create(create());
+    it('pause disables the schedule and stops fires; resume re-enables', async () => {
+      const loop = await loops.create(create());
       loops.pause(loop.id);
       expect(repo.findById(loop.id)!.status).toBe('paused');
       expect(loops.fire(loop.id)).toBeNull();
@@ -602,14 +601,14 @@ describe('LoopsService', () => {
       expect(repo.findById(loop.id)!.status).toBe('active');
     });
 
-    it('delete removes the loop (and its owned schedule)', () => {
-      const loop = loops.create(create());
+    it('delete removes the loop (and its owned schedule)', async () => {
+      const loop = await loops.create(create());
       loops.delete(loop.id);
       expect(loops.findById(loop.id)).toBeNull();
     });
 
-    it('a completed loop cannot be paused or resumed past its stop (finding #3)', () => {
-      const loop = loops.create(create({ stop: { kind: 'maxTotalRuns', n: 1 } }));
+    it('a completed loop cannot be paused or resumed past its stop (finding #3)', async () => {
+      const loop = await loops.create(create({ stop: { kind: 'maxTotalRuns', n: 1 } }));
       const r = loops.fire(loop.id)!;
       tasks.settle(r.taskId!, 'DONE', { verify: { ok: true } });
       expect(repo.findById(loop.id)!.status).toBe('completed');
@@ -626,7 +625,7 @@ describe('LoopsService', () => {
 
   describe('restart', () => {
     it('rebuilds the failure streak from loop_runs after a restart (no in-memory truth)', async () => {
-      const loop = loops.create(create({ maxConsecutiveFailures: 3 }));
+      const loop = await loops.create(create({ maxConsecutiveFailures: 3 }));
       // Two failures, not yet tripped.
       for (let i = 0; i < 2; i += 1) {
         const r = loops.fire(loop.id)!;
@@ -649,105 +648,235 @@ describe('LoopsService', () => {
   });
 
   describe('unknown project fallthrough', () => {
-    it('a loop whose projectPath has no projects row still fires (soft ref, no crash)', () => {
-      const loop = loops.create(create({ projectPath: '/never/configured/repo' }));
+    it('a loop whose projectPath has no projects row still fires (soft ref, no crash)', async () => {
+      const loop = await loops.create(create({ projectPath: '/never/configured/repo' }));
       expect(() => loops.fire(loop.id)).not.toThrow();
     });
   });
 
   describe('per-loop engine override (v1.1)', () => {
-    it('accepts a valid engine id and carries it on the LoopDto', () => {
-      const loop = loops.create(create({ engine: 'mock' }));
+    it('accepts a valid engine id and carries it on the LoopDto', async () => {
+      const loop = await loops.create(create({ engine: 'mock' }));
       expect(loop.engine).toBe('mock');
       expect(loops.findById(loop.id)!.engine).toBe('mock');
     });
 
-    it('rejects an unknown engine id at create', () => {
-      expect(() => loops.create(create({ engine: 'nope' }))).toThrow(/agent provider|nope/i);
+    it('rejects an unknown engine id at create', async () => {
+      await expect(loops.create(create({ engine: 'nope' }))).rejects.toThrow(/agent provider|nope/i);
     });
 
-    it('defaults engine to null (inherit) when unset', () => {
-      expect(loops.create(create()).engine).toBeNull();
+    it('defaults engine to null (inherit) when unset', async () => {
+      expect((await loops.create(create())).engine).toBeNull();
     });
 
-    it('patches the engine via update, validating the id', () => {
-      const loop = loops.create(create());
-      const patched = loops.update(loop.id, { engine: 'cursor' });
+    it('patches the engine via update, validating the id', async () => {
+      const loop = await loops.create(create());
+      const patched = await loops.update(loop.id, { engine: 'cursor' });
       expect(patched.engine).toBe('cursor');
-      expect(() => loops.update(loop.id, { engine: 'bogus' })).toThrow(/agent provider|bogus/i);
+      await expect(loops.update(loop.id, { engine: 'bogus' })).rejects.toThrow(/agent provider|bogus/i);
       // Clearing to null (inherit).
-      expect(loops.update(loop.id, { engine: null }).engine).toBeNull();
+      expect((await loops.update(loop.id, { engine: null })).engine).toBeNull();
     });
 
-    it('fire passes the per-loop engine as the task provider', () => {
-      const loop = loops.create(create({ engine: 'mock' }));
+    it('fire passes the per-loop engine as the task provider', async () => {
+      const loop = await loops.create(create({ engine: 'mock' }));
       loops.fire(loop.id);
       // SpyTasks records the enqueue; the loop engine overrides.
       expect(tasks.enqueued[0]!.provider).toBe('mock');
     });
   });
 
+  describe('per-loop model selection (v1.2)', () => {
+    /** Known model ids per engine for the validation seam — mirrors listModels(). */
+    const KNOWN_MODELS: Record<string, string[]> = { mock: ['mock-model', 'mock-fast'] };
+    const assertKnownModel = async (
+      model: string,
+      engine: string | null,
+      projectPath: string | null,
+    ): Promise<void> => {
+      void projectPath;
+      const resolved = engine ?? 'mock'; // the fake registry default
+      if (!KNOWN_ENGINES.has(resolved)) throw new BadRequestException(`Unknown agent provider ${resolved}`);
+      if (!(KNOWN_MODELS[resolved] ?? []).includes(model)) {
+        throw new BadRequestException(`unknown model "${model}" for engine "${resolved}"`);
+      }
+    };
+
+    beforeEach(() => {
+      loops.assertKnownModel = assertKnownModel;
+    });
+
+    it('accepts a known model and carries it on the LoopDto (round-trip)', async () => {
+      const loop = await loops.create(create({ engine: 'mock', model: 'mock-model' }));
+      expect(loop.model).toBe('mock-model');
+      expect(loops.findById(loop.id)!.model).toBe('mock-model');
+    });
+
+    it('defaults model to null (provider default) when unset', async () => {
+      expect((await loops.create(create())).model).toBeNull();
+    });
+
+    it('rejects an unknown model id at create (400)', async () => {
+      await expect(loops.create(create({ engine: 'mock', model: 'nope' }))).rejects.toThrow(/model/i);
+    });
+
+    it('rejects a model on an unknown engine (400)', async () => {
+      await expect(
+        loops.create(create({ engine: 'bogus', model: 'mock-model' })),
+      ).rejects.toThrow(/agent provider|bogus/i);
+    });
+
+    it('patches the model via update, validating the id', async () => {
+      const loop = await loops.create(create({ engine: 'mock', model: 'mock-model' }));
+      const patched = await loops.update(loop.id, { model: 'mock-fast' });
+      expect(patched.model).toBe('mock-fast');
+      await expect(loops.update(loop.id, { model: 'bogus-model' })).rejects.toThrow(/model/i);
+      // Clearing to null (provider default).
+      expect((await loops.update(loop.id, { model: null })).model).toBeNull();
+    });
+
+    it('validates a patched model against an engine patched in the same call', async () => {
+      const loop = await loops.create(create());
+      const patched = await loops.update(loop.id, { engine: 'mock', model: 'mock-fast' });
+      expect(patched.engine).toBe('mock');
+      expect(patched.model).toBe('mock-fast');
+    });
+
+    it('fire passes the per-loop model into the enqueued task', async () => {
+      const loop = await loops.create(create({ engine: 'mock', model: 'mock-model' }));
+      loops.fire(loop.id);
+      expect(tasks.enqueued[0]!.model).toBe('mock-model');
+    });
+
+    it('null model = default behavior unchanged (no model on the enqueued task)', async () => {
+      const loop = await loops.create(create());
+      loops.fire(loop.id);
+      expect(tasks.enqueued[0]!.model).toBeUndefined();
+    });
+
+    describe('default validation (no seam override) — engine resolution + listModels()', () => {
+      function fakeRegistry(over: { defaultId?: () => Promise<string> } = {}) {
+        return {
+          get(id: string) {
+            if (id !== 'mock') throw new BadRequestException(`Unknown agent provider ${id}`);
+            return {
+              listModels: async () => [
+                {
+                  id: 'mock',
+                  name: 'Mock',
+                  groups: [{ id: 'g', name: 'General', models: [{ id: 'real-model', name: 'Real' }] }],
+                },
+              ],
+            };
+          },
+          defaultId: over.defaultId ?? (async () => 'mock'),
+        };
+      }
+
+      async function rebuildWith(registry: unknown): Promise<void> {
+        await module.close();
+        module = await Test.createTestingModule({
+          imports: [DatabaseModule],
+          providers: [
+            LoopsRepository,
+            LoopsService,
+            { provide: SchedulerService, useValue: scheduler },
+            { provide: TasksService, useValue: tasks },
+            { provide: AgentRegistry, useValue: registry },
+          ],
+        }).compile();
+        loops = module.get(LoopsService);
+        repo = module.get(LoopsRepository);
+        loops.clock = { now: () => clockNow };
+        loops.onModuleInit();
+      }
+
+      it('accepts a model listed by the registry-default engine when loop.engine is null', async () => {
+        await rebuildWith(fakeRegistry());
+        const loop = await loops.create(create({ model: 'real-model' }));
+        expect(loop.model).toBe('real-model');
+        expect(loops.findById(loop.id)!.model).toBe('real-model');
+      });
+
+      it('400s a model id the resolved engine does not list', async () => {
+        await rebuildWith(fakeRegistry());
+        await expect(loops.create(create({ model: 'not-listed' }))).rejects.toThrow(/model/i);
+      });
+
+      it('400s a model when no engine resolves at all', async () => {
+        await rebuildWith(
+          fakeRegistry({
+            defaultId: async () => {
+              throw new ServiceUnavailableException('No agent provider is configured');
+            },
+          }),
+        );
+        await expect(loops.create(create({ model: 'real-model' }))).rejects.toThrow(/engine/i);
+      });
+    });
+  });
+
   describe('update (patch) (v1.1)', () => {
-    it('patches goal + budgets, leaving others unchanged', () => {
-      const loop = loops.create(create({ maxRunsPerDay: 5 }));
-      const patched = loops.update(loop.id, { goal: 'new goal', maxRunsPerDay: 9 });
+    it('patches goal + budgets, leaving others unchanged', async () => {
+      const loop = await loops.create(create({ maxRunsPerDay: 5 }));
+      const patched = await loops.update(loop.id, { goal: 'new goal', maxRunsPerDay: 9 });
       expect(patched.goal).toBe('new goal');
       expect(patched.maxRunsPerDay).toBe(9);
       expect(patched.maxConsecutiveFailures).toBe(loop.maxConsecutiveFailures);
     });
 
-    it('rejects an empty goal and a non-positive budget', () => {
-      const loop = loops.create(create());
-      expect(() => loops.update(loop.id, { goal: '  ' })).toThrow(/goal/i);
-      expect(() => loops.update(loop.id, { maxRunsPerDay: 0 })).toThrow(/runs|budget/i);
+    it('rejects an empty goal and a non-positive budget', async () => {
+      const loop = await loops.create(create());
+      await expect(loops.update(loop.id, { goal: '  ' })).rejects.toThrow(/goal/i);
+      await expect(loops.update(loop.id, { maxRunsPerDay: 0 })).rejects.toThrow(/runs|budget/i);
     });
 
-    it('404s on an unknown loop', () => {
-      expect(() => loops.update('nope', { goal: 'x' })).toThrow();
+    it('404s on an unknown loop', async () => {
+      await expect(loops.update('nope', { goal: 'x' })).rejects.toThrow();
     });
 
-    it('sets and clears the optional name', () => {
-      const loop = loops.create(create());
+    it('sets and clears the optional name', async () => {
+      const loop = await loops.create(create());
       expect(loop.name).toBeNull();
-      expect(loops.update(loop.id, { name: '  Nightly cleanup  ' }).name).toBe('Nightly cleanup');
+      expect((await loops.update(loop.id, { name: '  Nightly cleanup  ' })).name).toBe('Nightly cleanup');
       // Empty string clears back to null (fall back to goal for display).
-      expect(loops.update(loop.id, { name: '   ' }).name).toBeNull();
-      expect(loops.update(loop.id, { name: null }).name).toBeNull();
+      expect((await loops.update(loop.id, { name: '   ' })).name).toBeNull();
+      expect((await loops.update(loop.id, { name: null })).name).toBeNull();
     });
 
-    it('accepts an edit on a paused or broken loop', () => {
-      const paused = loops.create(create());
+    it('accepts an edit on a paused or broken loop', async () => {
+      const paused = await loops.create(create());
       loops.pause(paused.id);
-      expect(loops.update(paused.id, { goal: 'still editable' }).goal).toBe('still editable');
+      expect((await loops.update(paused.id, { goal: 'still editable' })).goal).toBe('still editable');
     });
 
-    it('rejects an edit on a completed loop (its config is history)', () => {
-      const loop = loops.create(create({ stop: { kind: 'maxTotalRuns', n: 1 }, maxConsecutiveFailures: 10 }));
+    it('rejects an edit on a completed loop (its config is history)', async () => {
+      const loop = await loops.create(create({ stop: { kind: 'maxTotalRuns', n: 1 }, maxConsecutiveFailures: 10 }));
       const run = loops.fire(loop.id)!;
       tasks.settle(run.taskId!, 'DONE', { verify: { ok: true } });
       expect(loops.findById(loop.id)!.status).toBe('completed');
-      expect(() => loops.update(loop.id, { goal: 'nope' })).toThrow(/completed/i);
+      await expect(loops.update(loop.id, { goal: 'nope' })).rejects.toThrow(/completed/i);
     });
   });
 
   describe('create with name (v1.1)', () => {
-    it('carries a trimmed name and defaults to null', () => {
-      expect(loops.create(create({ name: '  My loop ' })).name).toBe('My loop');
-      expect(loops.create(create()).name).toBeNull();
-      expect(loops.create(create({ name: '   ' })).name).toBeNull();
+    it('carries a trimmed name and defaults to null', async () => {
+      expect((await loops.create(create({ name: '  My loop ' }))).name).toBe('My loop');
+      expect((await loops.create(create())).name).toBeNull();
+      expect((await loops.create(create({ name: '   ' }))).name).toBeNull();
     });
   });
 
   describe('manual fire (v1.1)', () => {
-    it('an active loop fires and consumes a run (returns the pending run)', () => {
-      const loop = loops.create(create());
+    it('an active loop fires and consumes a run (returns the pending run)', async () => {
+      const loop = await loops.create(create());
       const run = loops.fireManual(loop.id)!;
       expect(run.outcome).toBe('pending');
       expect(repo.listRuns(loop.id).filter((r) => r.outcome === 'pending')).toHaveLength(1);
     });
 
-    it('409 overlap when a run is already pending (nothing enqueued)', () => {
-      const loop = loops.create(create());
+    it('409 overlap when a run is already pending (nothing enqueued)', async () => {
+      const loop = await loops.create(create());
       loops.fireManual(loop.id); // pending
       let thrown: unknown;
       try {
@@ -760,8 +889,8 @@ describe('LoopsService', () => {
       expect(tasks.enqueued).toHaveLength(1); // no new task
     });
 
-    it('409 budget when the day budget is exhausted', () => {
-      const loop = loops.create(create({ maxRunsPerDay: 1, maxConsecutiveFailures: 10 }));
+    it('409 budget when the day budget is exhausted', async () => {
+      const loop = await loops.create(create({ maxRunsPerDay: 1, maxConsecutiveFailures: 10 }));
       // Consume today's single slot and settle it so overlap does not fire first.
       const run = loops.fireManual(loop.id)!;
       tasks.settle(run.taskId!, 'DONE', { verify: { ok: true } });
@@ -775,19 +904,19 @@ describe('LoopsService', () => {
       expect((thrown as ConflictException).getResponse()).toMatchObject({ reason: 'budget' });
     });
 
-    it('rejects a broken / paused / completed loop (4xx, not 409)', () => {
-      const loop = loops.create(create());
+    it('rejects a broken / paused / completed loop (4xx, not 409)', async () => {
+      const loop = await loops.create(create());
       loops.pause(loop.id);
       expect(() => loops.fireManual(loop.id)).toThrow(/paused|cannot fire/i);
     });
   });
 
   describe('stats (v1.1)', () => {
-    it('aggregates settled outcomes across loops', () => {
-      const a = loops.create(create({ maxConsecutiveFailures: 10 }));
+    it('aggregates settled outcomes across loops', async () => {
+      const a = await loops.create(create({ maxConsecutiveFailures: 10 }));
       const ra = loops.fire(a.id)!;
       tasks.settle(ra.taskId!, 'DONE', { verify: { ok: true } });
-      const b = loops.create(create({ maxConsecutiveFailures: 10 }));
+      const b = await loops.create(create({ maxConsecutiveFailures: 10 }));
       const rb = loops.fire(b.id)!;
       tasks.settle(rb.taskId!, 'FAILED');
       const stats = loops.stats();
@@ -800,8 +929,8 @@ describe('LoopsService', () => {
   });
 
   describe('run detail (v1.1)', () => {
-    it('joins the task and derives durationMs + failureReason', () => {
-      const loop = loops.create(create({ maxConsecutiveFailures: 10 }));
+    it('joins the task and derives durationMs + failureReason', async () => {
+      const loop = await loops.create(create({ maxConsecutiveFailures: 10 }));
       const run = loops.fire(loop.id)!;
       tasks.settle(run.taskId!, 'DONE', {
         verify: { ok: false, outputTail: 'RED tail' },
@@ -812,8 +941,8 @@ describe('LoopsService', () => {
       expect(detail.verifyOutputTail).toBe('RED tail');
     });
 
-    it('is null-safe when the task vanished', () => {
-      const loop = loops.create(create());
+    it('is null-safe when the task vanished', async () => {
+      const loop = await loops.create(create());
       const run = loops.fire(loop.id)!;
       tasks.vanish(run.taskId!);
       const detail = loops.runDetail(loop.id, run.id);
@@ -821,22 +950,22 @@ describe('LoopsService', () => {
       expect(detail.durationMs).toBeNull();
     });
 
-    it('404s on an unknown run', () => {
-      const loop = loops.create(create());
+    it('404s on an unknown run', async () => {
+      const loop = await loops.create(create());
       expect(() => loops.runDetail(loop.id, 'nope')).toThrow();
     });
   });
 
   describe('run-context injection (memories v1)', () => {
-    it('the first run enqueues the bare goal (no context block)', () => {
-      const loop = loops.create(create());
+    it('the first run enqueues the bare goal (no context block)', async () => {
+      const loop = await loops.create(create());
       loops.fire(loop.id);
       expect(tasks.enqueued[0]!.prompt).toBe('nightly maintenance');
       expect(tasks.enqueued[0]!.prompt).not.toContain('Previous run context:');
     });
 
-    it('a subsequent run prepends the previous-run context block', () => {
-      const loop = loops.create(create({ maxRunsPerDay: 10, maxConsecutiveFailures: 10 }));
+    it('a subsequent run prepends the previous-run context block', async () => {
+      const loop = await loops.create(create({ maxRunsPerDay: 10, maxConsecutiveFailures: 10 }));
       const first = loops.fire(loop.id)!;
       tasks.settle(first.taskId!, 'FAILED');
       loops.fire(loop.id);

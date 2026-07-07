@@ -429,6 +429,17 @@ the agent actually left committable changes in the worktree (a no-op run commits
 
 All shapes are UI-ready (status enum, counts, last-run) so the rung-3 phone surfaces render directly.
 
+### Per-loop model selection (v1.2 additive)
+
+Loops gain a nullable `model` column (guarded ALTER, same pattern as the v1.1 `engine`/`name`
+columns). `POST /loops` and `PATCH /loops/:id` accept `model?` — validated at the boundary: a model
+requires a **resolvable engine** (loop `engine` → project `defaultEngine` → registry default) and
+must be a model id that engine's `listModels()` catalog lists; invalid combos 400. `null` = the
+resolved engine's default model. `fire()` threads `loop.model` into the enqueued task's existing
+`CreateTaskDto.model` → session `model` path — no engine branch (ADR-004); the provider's own
+catalog is the single source of valid model ids (`LoopsService.assertKnownModel` seam, mirroring
+`assertKnownEngine`).
+
 ### Direction-test walk (C)
 
 Phone: create/pause/resume/needs-attention/run-history all REST + UI-ready. Engine: a loop run's
