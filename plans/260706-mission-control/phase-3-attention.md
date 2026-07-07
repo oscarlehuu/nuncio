@@ -429,6 +429,6 @@ ledger: `.claude/maestro/rung3-attention/edge-cases-B.md` (32 rows). Test files:
 | B5 | Credential probe | **Reuse `listStatus` getCurrentUser probe**; absent ≠ failure |
 | B6 | Cadence tuning | **Settings keys** w/ locked defaults (15m / 60m / 08:00 / 20:00 / 30min zombie) |
 
-Flagged genuine picks for the founder: **B1 (disk check in/out)** and **B3 (shared vs divergent digest
+**LOCKED (founder, 2026-07-07): B1 disk check CUT from v1; B3 two templates over shared data — both as recommended.** Original flags: **B1 (disk check in/out)** and **B3 (shared vs divergent digest
 data)** — everything else follows the locked constraints. The rest are recommendations consistent with
 the founder's B constraints and rungs 1-2 patterns.
