@@ -68,24 +68,36 @@ export function LoopSettingsTab({
         />
       </Field>
 
-      <Field label="Goal" htmlFor="loop-goal-edit">
-        <Textarea
-          id="loop-goal-edit"
-          value={goal}
-          onChange={(e) => onGoalChange(e.target.value)}
-          rows={3}
-          className="resize-none"
-        />
-      </Field>
-
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-ui font-medium text-foreground">Engine</span>
-        <LoopEngineModelPicker
-          providers={providers}
-          engine={engine}
-          model={model}
-          onChange={onEngineModelChange}
-        />
+      {/*
+        Goal is a bordered container (Cursor's Agent-Instructions box): a borderless
+        textarea with the engine·model picker docked in a footer strip inside the same
+        border — the control that configures the goal lives INSIDE its block, not as a
+        separate labeled row on the page background.
+      */}
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="loop-goal-edit" className="text-ui font-medium text-foreground">
+          Goal
+        </label>
+        <div
+          data-testid="loop-goal-container"
+          className="flex flex-col rounded-xl border border-border/70 bg-card shadow-e1 surface-lit transition-shadow focus-within:ring-2 focus-within:ring-ring/40"
+        >
+          <Textarea
+            id="loop-goal-edit"
+            value={goal}
+            onChange={(e) => onGoalChange(e.target.value)}
+            rows={3}
+            className="resize-none border-0 bg-transparent px-4 pt-3 pb-2 shadow-none focus-visible:border-0 focus-visible:ring-0"
+          />
+          <div className="flex items-center gap-2 px-3 pb-2.5 pt-1 [&_button]:shrink-0">
+            <LoopEngineModelPicker
+              providers={providers}
+              engine={engine}
+              model={model}
+              onChange={onEngineModelChange}
+            />
+          </div>
+        </div>
       </div>
 
       <div className="grid gap-5 sm:grid-cols-2">

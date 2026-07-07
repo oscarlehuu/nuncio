@@ -25,6 +25,7 @@ import {
   fetchLoop,
   fetchLoopRuns,
   fireLoop,
+  resumeLoop,
   updateLoop,
   type LoopDto,
 } from '../lib/api';
@@ -87,6 +88,7 @@ describe('LoopDetailView', () => {
     vi.mocked(toast.info).mockReset();
     vi.mocked(toast.success).mockReset();
     vi.mocked(toast.error).mockReset();
+    vi.mocked(resumeLoop).mockReset().mockResolvedValue(loop({ status: 'active' }));
     vi.mocked(deleteLoop).mockReset().mockResolvedValue(undefined);
   });
 
@@ -157,6 +159,57 @@ describe('LoopDetailView', () => {
     renderDetail();
     await waitFor(() => expect(screen.getByRole('button', { name: /run now/i })).toBeDisabled());
     expect(screen.getByRole('button', { name: /run now/i })).toHaveAttribute('title', expect.stringMatching(/resume/i));
+  });
+
+  // FIX 1 — the engine·model picker lives INSIDE the Goal container (Cursor idiom),
+  // not as a separate labeled row on the page background.
+  it('renders the engine·model picker inside the Goal container', async () => {
+    vi.mocked(fetchLoop).mockResolvedValue(loop({ engine: 'pi', model: null }));
+    renderDetail();
+    const container = await screen.findByTestId('loop-goal-container');
+    const picker = within(container).getByRole('button', { name: /engine and model/i });
+    expect(picker).toBeInTheDocument();
+    // The old standalone "Engine" field label must be gone.
+    expect(screen.queryByText('Engine', { selector: 'label, span' })).not.toBeInTheDocument();
+  });
+
+  // FIX 2 — one fact, one representation. active/paused = the toggle ALONE.
+  it('shows only the toggle for an active loop — no redundant status chip', async () => {
+    vi.mocked(fetchLoop).mockResolvedValue(loop({ status: 'active' }));
+    renderDetail();
+    await waitFor(() => expect(screen.getByRole('switch', { name: /loop active/i })).toBeInTheDocument());
+    // "Active" appears once (the toggle's label), never also as a status chip.
+    expect(screen.getAllByText('Active')).toHaveLength(1);
+    expect(screen.queryByText('Needs you')).not.toBeInTheDocument();
+  });
+
+  it('a paused loop shows the toggle (off), not a chip', async () => {
+    vi.mocked(fetchLoop).mockResolvedValue(loop({ status: 'paused' }));
+    renderDetail();
+    const toggle = await screen.findByRole('switch', { name: /loop active/i });
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByText('Paused')).toBeInTheDocument();
+  });
+
+  it('a broken loop shows a chip + resume, and NO active toggle', async () => {
+    vi.mocked(fetchLoop).mockResolvedValue(loop({ status: 'broken' }));
+    vi.mocked(fetchLoopRuns).mockResolvedValue([
+      { id: 'r1', loopId: 'l1', taskId: 't1', outcome: 'failed', verify: 'red', dayBucket: '2000-01-01', createdAt: 1 },
+      { id: 'r2', loopId: 'l1', taskId: 't2', outcome: 'failed', verify: 'red', dayBucket: '2000-01-01', createdAt: 2 },
+    ]);
+    renderDetail();
+    await waitFor(() => expect(screen.getByText('Needs you')).toBeInTheDocument());
+    expect(screen.queryByRole('switch', { name: /loop active/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/2 failed runs in a row/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /fix.*resume/i }));
+    expect(resumeLoop).toHaveBeenCalledWith('l1');
+  });
+
+  it('a completed loop shows a completed chip and no toggle', async () => {
+    vi.mocked(fetchLoop).mockResolvedValue(loop({ status: 'completed' }));
+    renderDetail();
+    await waitFor(() => expect(screen.getByText('Completed')).toBeInTheDocument());
+    expect(screen.queryByRole('switch', { name: /loop active/i })).not.toBeInTheDocument();
   });
 
   it('renders the current engine + model in the embedded control', async () => {

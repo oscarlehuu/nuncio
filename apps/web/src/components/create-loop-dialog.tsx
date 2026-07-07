@@ -175,16 +175,38 @@ export function CreateLoopDialog({
         </DialogHeader>
 
         <div className="flex flex-col gap-4">
-          <Field label="Goal" htmlFor="loop-goal">
-            <Textarea
-              id="loop-goal"
-              value={goal}
-              onChange={(e) => setGoal(e.target.value)}
-              placeholder="Triage new issues labeled agent and open a fix PR"
-              rows={3}
-              className="resize-none"
-            />
-          </Field>
+          {/* Goal as a bordered container with the compact engine·model picker docked
+              in its footer — the picker configuring the goal lives inside its block. */}
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="loop-goal" className="text-ui font-medium text-foreground">
+              Goal
+            </label>
+            <div
+              data-testid="loop-goal-container"
+              className="flex flex-col rounded-xl border border-border/70 bg-card shadow-e1 surface-lit transition-shadow focus-within:ring-2 focus-within:ring-ring/40"
+            >
+              <Textarea
+                id="loop-goal"
+                value={goal}
+                onChange={(e) => setGoal(e.target.value)}
+                placeholder="Triage new issues labeled agent and open a fix PR"
+                rows={3}
+                className="resize-none border-0 bg-transparent px-4 pt-3 pb-2 shadow-none focus-visible:border-0 focus-visible:ring-0"
+              />
+              <div className="flex items-center gap-2 px-3 pb-2.5 pt-1 [&_button]:shrink-0">
+                <LoopEngineModelPicker
+                  compact
+                  providers={providers}
+                  engine={engine}
+                  model={model}
+                  onChange={(nextEngine, nextModel) => {
+                    setEngine(nextEngine);
+                    setModel(nextModel);
+                  }}
+                />
+              </div>
+            </div>
+          </div>
 
           <Field label="Project">
             <ProjectPicker value={projectPath} onChange={setProjectPath} />
@@ -225,20 +247,6 @@ export function CreateLoopDialog({
                 {DEFAULT_MAX_CONSECUTIVE_FAILURES} in a row
               </div>
             </Field>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-ui font-medium text-foreground">Engine</span>
-            <LoopEngineModelPicker
-              compact
-              providers={providers}
-              engine={engine}
-              model={model}
-              onChange={(nextEngine, nextModel) => {
-                setEngine(nextEngine);
-                setModel(nextModel);
-              }}
-            />
           </div>
 
           <Field label="Stop condition">

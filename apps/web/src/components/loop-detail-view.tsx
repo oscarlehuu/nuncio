@@ -14,7 +14,7 @@ import {
   type LoopRunDto,
 } from '../lib/api';
 import type { ModelProvider } from '../lib/model-providers';
-import { loopDisplayName } from '@nuncio/core/loop-schedule';
+import { failureStreak, loopDisplayName } from '@nuncio/core/loop-schedule';
 import { LoopStatusChip } from './loop-status-chip';
 import { LoopSettingsTab } from './loop-settings-tab';
 import { LoopRunHistory } from './loop-run-history';
@@ -197,7 +197,6 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
   };
 
   const isActive = loop.status === 'active';
-  const canResume = loop.status === 'paused' || loop.status === 'broken';
 
   return (
     <section className="flex-1 flex flex-col min-h-0 overflow-hidden bg-background">
@@ -241,22 +240,49 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
 
       <div className="flex-1 overflow-y-auto px-4 py-6">
         <div className="mx-auto w-full max-w-[720px]">
+          {/*
+            One fact, one representation. active/paused is expressed by the toggle
+            ALONE (no redundant status chip). A chip renders only for the states the
+            toggle can't carry: broken (amber + streak + a Resume affordance) and
+            completed (terminal, nothing to toggle).
+          */}
           <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 shadow-e0">
-            <div className="flex items-center gap-2.5">
-              <LoopStatusChip status={loop.status} />
-              {loop.status === 'broken' && (
-                <span className="text-ui-sm text-warning">Paused after repeated failures — resume to retry</span>
-              )}
-            </div>
-            <label className="flex items-center gap-2 text-ui text-foreground">
-              <span>{isActive ? 'Active' : 'Inactive'}</span>
-              <Switch
-                checked={isActive}
-                disabled={busy || (!isActive && !canResume)}
-                onCheckedChange={handleToggleActive}
-                aria-label="Loop active"
-              />
-            </label>
+            {loop.status === 'broken' ? (
+              <>
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <LoopStatusChip status="broken" />
+                  <span className="text-ui-sm text-warning">
+                    {failureStreak(runs)} failed run{failureStreak(runs) === 1 ? '' : 's'} in a row — fix and resume
+                  </span>
+                </div>
+                <Button
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={busy}
+                  onClick={() => handleToggleActive(true)}
+                >
+                  <Play className="size-3.5" />
+                  Fix &amp; resume
+                </Button>
+              </>
+            ) : loop.status === 'completed' ? (
+              <div className="flex items-center gap-2.5">
+                <LoopStatusChip status="completed" />
+                <span className="text-ui-sm text-muted-foreground">
+                  This loop met its stop condition and won't run again.
+                </span>
+              </div>
+            ) : (
+              <label className="flex items-center gap-2 text-ui text-foreground">
+                <span>{isActive ? 'Active' : 'Paused'}</span>
+                <Switch
+                  checked={isActive}
+                  disabled={busy}
+                  onCheckedChange={handleToggleActive}
+                  aria-label="Loop active"
+                />
+              </label>
+            )}
           </div>
 
           <div role="tablist" aria-label="Loop detail" className="mb-4 inline-flex gap-1 rounded-lg bg-muted/40 p-1">

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../lib/api', async () => {
@@ -102,6 +102,18 @@ describe('CreateLoopDialog', () => {
     const payload = vi.mocked(createLoop).mock.calls[0]![0];
     expect(payload.engine).toBe('pi');
     expect(payload.model).toBe('claude-fable-5');
+  });
+
+  // FIX 1 — the compact engine·model picker sits in the Goal container's footer,
+  // not next to the budget fields.
+  it('renders the engine·model picker inside the Goal container', async () => {
+    render(<CreateLoopDialog open onOpenChange={vi.fn()} onCreated={vi.fn()} providers={PROVIDERS} />);
+    const container = screen.getByTestId('loop-goal-container');
+    expect(
+      within(container).getByRole('button', { name: /engine and model/i }),
+    ).toBeInTheDocument();
+    // The Goal textarea is inside the same container.
+    expect(within(container).getByLabelText('Goal')).toBeInTheDocument();
   });
 
   it('omits engine + model when left on inherit + default', async () => {
