@@ -13,6 +13,7 @@ import type {
   ForgePullRequestDetail,
   ForgePullRequestSummary,
   ForgeRepoRef,
+  ForgeRepository,
   ForgeReviewThread,
   ForgeJobLog,
   ForgeStateFilter,
@@ -37,6 +38,7 @@ export abstract class BaseForgeProvider implements ForgeProvider {
   abstract isAvailable(): Promise<boolean>;
   abstract resolveAuth(): Promise<ForgeAuth | null>;
   abstract getCurrentUser(): Promise<ForgeUser>;
+  abstract listRepositories(): Promise<ForgeRepository[]>;
   abstract createPullRequest(
     repo: ForgeRepoRef,
     opts: CreatePullRequestOptions,

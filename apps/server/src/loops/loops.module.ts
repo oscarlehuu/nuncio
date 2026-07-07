@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AgentsModule } from '../agents/agents.module';
 import { DatabaseModule } from '../db/database.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { SchedulerModule } from '../scheduler/scheduler.module';
@@ -13,7 +14,7 @@ import { LoopsService } from './loops.service';
  * worktree + PR. All budget/breaker/stop state folds from durable loop_runs rows.
  */
 @Module({
-  imports: [DatabaseModule, SchedulerModule, TasksModule, ProjectsModule],
+  imports: [DatabaseModule, SchedulerModule, TasksModule, ProjectsModule, AgentsModule],
   controllers: [LoopsController],
   providers: [LoopsRepository, LoopsService],
   exports: [LoopsRepository, LoopsService],

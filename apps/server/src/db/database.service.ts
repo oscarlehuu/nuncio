@@ -245,6 +245,7 @@ export class DatabaseService implements OnModuleDestroy {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS loops (
         id TEXT PRIMARY KEY,
+        name TEXT,
         goal TEXT NOT NULL,
         schedule_id TEXT NOT NULL,
         max_runs_per_day INTEGER NOT NULL,
@@ -252,11 +253,20 @@ export class DatabaseService implements OnModuleDestroy {
         stop_json TEXT,
         escalation TEXT NOT NULL,
         project_path TEXT,
+        engine TEXT,
         status TEXT NOT NULL DEFAULT 'active',
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       )
     `);
+    // v1.1 additive columns — guarded ALTERs for pre-existing loops tables.
+    const loopColumns = this.db.prepare('PRAGMA table_info(loops)').all() as Array<{ name: string }>;
+    if (!loopColumns.some((c) => c.name === 'engine')) {
+      this.db.exec('ALTER TABLE loops ADD COLUMN engine TEXT');
+    }
+    if (!loopColumns.some((c) => c.name === 'name')) {
+      this.db.exec('ALTER TABLE loops ADD COLUMN name TEXT');
+    }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS loop_runs (
         id TEXT PRIMARY KEY,

@@ -6,14 +6,15 @@ import {
   Get,
   NotFoundException,
   Param,
+  Patch,
   Post,
 } from '@nestjs/common';
 import { LoopsService } from './loops.service';
-import type { CreateLoopDto } from './loops.types';
+import type { CreateLoopDto, UpdateLoopDto } from './loops.types';
 
 /**
- * Loop primitive REST surface (rung 2 sub-phase C). UI-ready shapes so the rung-3
- * phone/fleet surfaces render directly. Auth is the global AuthGuard.
+ * Loop primitive REST surface. UI-ready shapes so the rung-3 phone/fleet surfaces
+ * render directly. Auth is the global AuthGuard.
  */
 @Controller('loops')
 export class LoopsController {
@@ -22,6 +23,12 @@ export class LoopsController {
   @Get()
   list() {
     return { items: this.loops.list() };
+  }
+
+  // Declared BEFORE ':id' so 'stats' is not captured as a loop id.
+  @Get('stats')
+  stats() {
+    return this.loops.stats();
   }
 
   @Get(':id')
@@ -40,6 +47,11 @@ export class LoopsController {
     return this.loops.create(body);
   }
 
+  @Patch(':id')
+  update(@Param('id') id: string, @Body() body: UpdateLoopDto) {
+    return this.loops.update(id, body ?? {});
+  }
+
   @Post(':id/pause')
   pause(@Param('id') id: string) {
     this.requireLoop(id);
@@ -50,6 +62,12 @@ export class LoopsController {
   resume(@Param('id') id: string) {
     this.requireLoop(id);
     return this.loops.resume(id);
+  }
+
+  @Post(':id/fire')
+  fire(@Param('id') id: string) {
+    // Manual run-now — bypasses the schedule, still consumes a run (budget + overlap).
+    return this.loops.fireManual(id);
   }
 
   @Delete(':id')
@@ -63,6 +81,12 @@ export class LoopsController {
   runs(@Param('id') id: string) {
     this.requireLoop(id);
     return { items: this.loops.runs(id) };
+  }
+
+  @Get(':id/runs/:runId')
+  runDetail(@Param('id') id: string, @Param('runId') runId: string) {
+    this.requireLoop(id);
+    return this.loops.runDetail(id, runId);
   }
 
   private requireLoop(id: string): void {

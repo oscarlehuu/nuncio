@@ -1,4 +1,5 @@
 import { BadRequestException, Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { CloneService } from './clone.service';
 import { GitService } from './git.service';
 import { RecentProjectsRepository } from './recent-projects.repository';
 
@@ -7,6 +8,7 @@ export class GitController {
   constructor(
     private readonly git: GitService,
     private readonly recentProjects: RecentProjectsRepository,
+    private readonly clone: CloneService,
   ) {}
 
   @Get()
@@ -36,5 +38,14 @@ export class GitController {
     }
     const repoRoot = await this.git.resolveRepoRoot(trimmed);
     return this.recentProjects.record(repoRoot);
+  }
+
+  @Post('clone')
+  cloneRepository(@Body() body: { forgeId?: string; fullName?: string; cloneUrl?: string }) {
+    return this.clone.clone({
+      forgeId: body?.forgeId ?? '',
+      fullName: body?.fullName ?? '',
+      cloneUrl: body?.cloneUrl ?? '',
+    });
   }
 }

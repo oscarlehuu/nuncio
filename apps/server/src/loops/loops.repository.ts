@@ -15,6 +15,7 @@ import type {
 function loopRowToDto(row: LoopRow): LoopDto {
   return {
     id: row.id,
+    name: row.name ?? null,
     goal: row.goal,
     scheduleId: row.schedule_id,
     maxRunsPerDay: row.max_runs_per_day,
@@ -22,6 +23,7 @@ function loopRowToDto(row: LoopRow): LoopDto {
     stop: row.stop_json ? (JSON.parse(row.stop_json) as StopCondition) : null,
     escalation: row.escalation,
     projectPath: row.project_path,
+    engine: row.engine ?? null,
     status: row.status as LoopStatus,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -46,6 +48,7 @@ export class LoopsRepository {
   constructor(private readonly database: DatabaseService) {}
 
   create(input: {
+    name?: string | null;
     goal: string;
     scheduleId: string;
     maxRunsPerDay: number;
@@ -53,18 +56,20 @@ export class LoopsRepository {
     stopJson: string | null;
     escalation: string;
     projectPath: string | null;
+    engine?: string | null;
   }): LoopDto {
     const now = Date.now();
     const id = uuidv4().slice(0, 8);
     this.database.db
       .prepare(
         `INSERT INTO loops
-           (id, goal, schedule_id, max_runs_per_day, max_consecutive_failures,
-            stop_json, escalation, project_path, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+           (id, name, goal, schedule_id, max_runs_per_day, max_consecutive_failures,
+            stop_json, escalation, project_path, engine, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
       )
       .run(
         id,
+        input.name ?? null,
         input.goal,
         input.scheduleId,
         input.maxRunsPerDay,
@@ -72,10 +77,36 @@ export class LoopsRepository {
         input.stopJson,
         input.escalation,
         input.projectPath,
+        input.engine ?? null,
         now,
         now,
       );
     return this.findById(id)!;
+  }
+
+  /** Patch a subset of loop fields (v1.1). Only provided keys are updated. */
+  update(id: string, patch: {
+    name?: string | null;
+    goal?: string;
+    maxRunsPerDay?: number;
+    maxConsecutiveFailures?: number;
+    stopJson?: string | null;
+    engine?: string | null;
+  }): LoopDto | null {
+    if (this.database.closed) return this.findById(id);
+    const sets: string[] = [];
+    const args: unknown[] = [];
+    if (patch.name !== undefined) { sets.push('name = ?'); args.push(patch.name); }
+    if (patch.goal !== undefined) { sets.push('goal = ?'); args.push(patch.goal); }
+    if (patch.maxRunsPerDay !== undefined) { sets.push('max_runs_per_day = ?'); args.push(patch.maxRunsPerDay); }
+    if (patch.maxConsecutiveFailures !== undefined) { sets.push('max_consecutive_failures = ?'); args.push(patch.maxConsecutiveFailures); }
+    if (patch.stopJson !== undefined) { sets.push('stop_json = ?'); args.push(patch.stopJson); }
+    if (patch.engine !== undefined) { sets.push('engine = ?'); args.push(patch.engine); }
+    if (sets.length === 0) return this.findById(id);
+    sets.push('updated_at = ?');
+    args.push(Date.now(), id);
+    this.database.db.prepare(`UPDATE loops SET ${sets.join(', ')} WHERE id = ?`).run(...(args as never[]));
+    return this.findById(id);
   }
 
   findById(id: string): LoopDto | null {

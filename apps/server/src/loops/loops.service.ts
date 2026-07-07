@@ -1,6 +1,7 @@
-import { BadRequestException, Injectable, OnModuleInit, Optional } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
 import { SchedulerService } from '../scheduler/scheduler.service';
 import { ProjectDefaultsResolver } from '../projects/project-defaults-resolver';
+import { AgentRegistry } from '../agents/agents.registry';
 import { TasksService } from '../tasks/tasks.service';
 import { LoopsRepository } from './loops.repository';
 import {
@@ -10,6 +11,8 @@ import {
   totalRuns,
   verifyGreenStreak,
 } from './loop-accounting';
+import { buildRunContext, withRunContext } from './loop-context';
+import { computeLoopStats, type LoopStats } from './loop-stats';
 import { parseScheduleSpec } from '../scheduler/schedule-spec';
 import type { Clock } from '../scheduler/scheduler.types';
 import type { TaskDto } from '../tasks/tasks.types';
@@ -21,6 +24,7 @@ import {
   type LoopRunDto,
   type LoopRunVerify,
   type StopCondition,
+  type UpdateLoopDto,
 } from './loops.types';
 
 /** The verify signal a settled task run yields. */
@@ -55,11 +59,21 @@ export class LoopsService implements OnModuleInit {
   /** Injectable clock seam — deterministic in tests. */
   clock: Clock = { now: () => Date.now() };
 
+  /**
+   * Engine-id validation seam. Defaults to the injected AgentRegistry; tests can
+   * override it directly (like {@link clock}) to avoid pulling the full agent
+   * provider graph into a unit spec. Throws BadRequestException on an unknown id.
+   */
+  assertKnownEngine: (id: string) => void = (id) => {
+    if (this.agents) this.agents.get(id);
+  };
+
   constructor(
     private readonly loops: LoopsRepository,
     @Optional() private readonly scheduler?: SchedulerService,
     @Optional() private readonly tasks?: TasksService,
     @Optional() private readonly projectDefaults?: ProjectDefaultsResolver,
+    @Optional() private readonly agents?: AgentRegistry,
   ) {}
 
   onModuleInit(): void {
@@ -131,12 +145,15 @@ export class LoopsService implements OnModuleInit {
     );
     this.validateStop(input.stop ?? null);
     this.validateSchedule(input.schedule);
+    const engine = this.validateEngine(input.engine);
 
     // The loop OWNS a schedule targeting itself (B's {kind:'loop',loopId} seam).
     // Create the loop first (its id is the schedule target), then the schedule,
     // then link — one sequence at personal scale.
     const projectPath = input.projectPath?.trim() || null;
+    const name = this.normalizeName(input.name);
     const created = this.loops.create({
+      name,
       goal,
       scheduleId: 'pending',
       maxRunsPerDay,
@@ -144,6 +161,7 @@ export class LoopsService implements OnModuleInit {
       stopJson: input.stop ? JSON.stringify(input.stop) : null,
       escalation: 'needs-attention',
       projectPath,
+      engine,
     });
     const schedule = this.scheduler?.create({
       kind: input.schedule.kind,
@@ -214,13 +232,27 @@ export class LoopsService implements OnModuleInit {
       return null;
     }
 
-    // Enqueue a task: goal as prompt, project scope, FORCED fresh worktree (a loop
-    // NEVER runs in-place — locked write policy, regardless of project config).
-    const provider = loop.projectPath
-      ? this.projectDefaults?.resolveDefaultEngine(loop.projectPath) ?? undefined
-      : undefined;
+    // Engine resolution: per-loop override → project defaultEngine → (undefined,
+    // so the task/session path resolves the registry's AVAILABLE default). No
+    // engine branch — an explicit engine is passed through to the runner.
+    const provider =
+      loop.engine ??
+      (loop.projectPath ? this.projectDefaults?.resolveDefaultEngine(loop.projectPath) : null) ??
+      undefined;
+
+    // Memories v1: prepend a compact previous-run context block to the goal.
+    const context = buildRunContext({
+      runs,
+      lastVerifyTail: this.lastVerifyTail(runs),
+      maxRunsPerDay: loop.maxRunsPerDay,
+      now: this.clock.now(),
+    });
+    const prompt = withRunContext(loop.goal, context);
+
+    // Enqueue a task: goal (+context) as prompt, project scope, FORCED fresh
+    // worktree (a loop NEVER runs in-place — locked write policy).
     const task = this.tasks?.enqueue({
-      prompt: loop.goal,
+      prompt,
       useWorktree: true,
       ...(loop.projectPath ? { projectPath: loop.projectPath } : {}),
       ...(provider ? { provider } : {}),
@@ -235,6 +267,19 @@ export class LoopsService implements OnModuleInit {
       verify: 'none',
       dayBucket: today,
     });
+  }
+
+  /** The most recent settled run's verify output tail, from its task outcome. */
+  private lastVerifyTail(runs: LoopRunDto[]): string | null {
+    for (let i = runs.length - 1; i >= 0; i -= 1) {
+      const r = runs[i]!;
+      if (r.outcome !== 'ok' && r.outcome !== 'failed') continue;
+      if (!r.taskId) return null;
+      const task = this.tasks?.findById(r.taskId);
+      const verify = (task?.outcome as { verify?: { outputTail?: string } } | undefined)?.verify;
+      return verify?.outputTail ?? null;
+    }
+    return null;
   }
 
   /**
@@ -294,6 +339,92 @@ export class LoopsService implements OnModuleInit {
     return this.loops.listRuns(id);
   }
 
+  /** Patch a loop's mutable fields (v1.1). Validates budgets/stop/engine. */
+  update(id: string, patch: UpdateLoopDto): LoopDto {
+    const existing = this.loops.findById(id);
+    if (!existing) throw new NotFoundException(`Loop ${id} not found`);
+    // A completed loop's config is history — editing it is meaningless (it will
+    // never fire again). Active/paused/broken loops are all editable.
+    if (existing.status === 'completed') {
+      throw new BadRequestException(`Loop ${id} is completed and cannot be edited`);
+    }
+    const repoPatch: Parameters<LoopsRepository['update']>[1] = {};
+    if (patch.name !== undefined) {
+      repoPatch.name = this.normalizeName(patch.name);
+    }
+    if (patch.goal !== undefined) {
+      const g = patch.goal.trim();
+      if (!g) throw new BadRequestException('goal cannot be empty');
+      repoPatch.goal = g;
+    }
+    if (patch.maxRunsPerDay !== undefined) {
+      repoPatch.maxRunsPerDay = this.positiveInt(patch.maxRunsPerDay, existing.maxRunsPerDay, 'maxRunsPerDay (budget)');
+    }
+    if (patch.maxConsecutiveFailures !== undefined) {
+      repoPatch.maxConsecutiveFailures = this.positiveInt(patch.maxConsecutiveFailures, existing.maxConsecutiveFailures, 'maxConsecutiveFailures (budget)');
+    }
+    if (patch.stop !== undefined) {
+      this.validateStop(patch.stop);
+      repoPatch.stopJson = patch.stop ? JSON.stringify(patch.stop) : null;
+    }
+    if (patch.engine !== undefined) {
+      repoPatch.engine = this.validateEngine(patch.engine);
+    }
+    return this.loops.update(id, repoPatch) ?? existing;
+  }
+
+  /** Manual run-now: bypass the schedule, but a manual fire is still a consumed
+   *  run subject to the overlap guard + day budget. Only an active loop fires. */
+  fireManual(id: string): LoopRunDto | null {
+    const loop = this.loops.findById(id);
+    if (!loop) throw new NotFoundException(`Loop ${id} not found`);
+    if (loop.status !== 'active') {
+      throw new BadRequestException(`Loop ${id} is ${loop.status}, cannot fire`);
+    }
+    return this.fire(id); // same budget/overlap path; returns the run or null (skip)
+  }
+
+  /** Fleet loop stats (v1.1) from settled run outcomes only. */
+  stats(): LoopStats {
+    const loops = this.loops.list();
+    const runs = loops.flatMap((l) => this.loops.listRuns(l.id));
+    return computeLoopStats(loops, runs, this.clock.now());
+  }
+
+  /**
+   * Run detail (v1.1): the run row plus joined task/session/verify data. Null-safe
+   * on a vanished task. `failureReason` precedence: needs-attention reason →
+   * task error → verify red.
+   */
+  runDetail(loopId: string, runId: string): Record<string, unknown> {
+    const run = this.loops.listRuns(loopId).find((r) => r.id === runId);
+    if (!run) throw new NotFoundException(`Run ${runId} not found`);
+    const task = run.taskId ? this.tasks?.findById(run.taskId) ?? null : null;
+    const outcome = (task?.outcome ?? {}) as {
+      verify?: { ok?: boolean; outputTail?: string };
+      needsAttention?: { reason?: string };
+      error?: string;
+    };
+    let failureReason: string | null = null;
+    if (run.outcome === 'failed') {
+      failureReason =
+        outcome.needsAttention?.reason ??
+        outcome.error ??
+        (outcome.verify && outcome.verify.ok === false ? 'verify red' : null);
+    }
+    const startedAt = task?.startedAt ?? null;
+    const settledAt = task?.finishedAt ?? null;
+    return {
+      ...run,
+      sessionId: task?.sessionId ?? null,
+      durationMs: startedAt && settledAt ? settledAt - startedAt : null,
+      verifyOutputTail: outcome.verify?.outputTail ?? null,
+      failureReason,
+      startedAt,
+      settledAt,
+    };
+  }
+
   /** Re-evaluate breaker + stop from durable rows after a settled run. */
   private evaluate(loopId: string): void {
     const loop = this.loops.findById(loopId);
@@ -335,6 +466,13 @@ export class LoopsService implements OnModuleInit {
     return false;
   }
 
+  /** Trim a name to a non-empty label, or null (fall back to goal for display). */
+  private normalizeName(name: string | null | undefined): string | null {
+    if (name === undefined || name === null) return null;
+    const trimmed = name.trim();
+    return trimmed === '' ? null : trimmed;
+  }
+
   private positiveInt(value: number | undefined, fallback: number, label: string): number {
     if (value === undefined) return fallback;
     if (!Number.isInteger(value) || value <= 0) {
@@ -352,6 +490,20 @@ export class LoopsService implements OnModuleInit {
       return;
     }
     throw new BadRequestException(`unknown stop condition kind "${(stop as { kind: string }).kind}"`);
+  }
+
+  /**
+   * Validate a per-loop engine override against the AgentRegistry ids. Empty →
+   * null (inherit). An unknown engine 400s. No engine branch — the registry is
+   * the single source of valid ids.
+   */
+  private validateEngine(engine: string | null | undefined): string | null {
+    if (engine === undefined || engine === null) return null;
+    const trimmed = engine.trim();
+    if (trimmed === '') return null;
+    // Seam throws BadRequestException for an unknown id (default: registry.get).
+    this.assertKnownEngine(trimmed);
+    return trimmed;
   }
 
   /**

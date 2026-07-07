@@ -37,6 +37,8 @@ export type StopCondition =
 
 export interface LoopDto {
   id: string;
+  /** Optional human label (v1.1). Null = fall back to the goal for display. */
+  name: string | null;
   /** (1) goal — the prompt each run enqueues. */
   goal: string;
   /** (2) trigger — the loop OWNS this schedules row. */
@@ -57,12 +59,16 @@ export interface LoopDto {
   /** (5) escalation policy (v1: 'needs-attention'). */
   escalation: string;
   projectPath: string | null;
+  /** Per-loop engine override (v1.1). Null = inherit project/registry default. */
+  engine: string | null;
   status: LoopStatus;
   createdAt: number;
   updatedAt: number;
 }
 
 export interface CreateLoopDto {
+  /** Optional human label. Null/omitted → displayed as the goal. */
+  name?: string | null;
   goal: string;
   /** Trigger spec — the loop creates + owns a schedule from this. */
   schedule: { kind: 'cron' | 'heartbeat' | 'event'; spec: string };
@@ -70,6 +76,22 @@ export interface CreateLoopDto {
   maxConsecutiveFailures?: number;
   stop?: StopCondition;
   projectPath?: string;
+  /** Per-loop engine override (provider id); validated against AgentRegistry. */
+  engine?: string | null;
+}
+
+/**
+ * Patch subset for PATCH /loops/:id (v1.1). Omitted fields unchanged. The
+ * schedule spec is NOT editable via this route in v1. Rejected on completed
+ * loops (their config is history); allowed on active/paused/broken.
+ */
+export interface UpdateLoopDto {
+  name?: string | null;
+  goal?: string;
+  maxRunsPerDay?: number;
+  maxConsecutiveFailures?: number;
+  stop?: StopCondition;
+  engine?: string | null;
 }
 
 export interface LoopRunDto {
@@ -84,6 +106,7 @@ export interface LoopRunDto {
 
 export interface LoopRow {
   id: string;
+  name: string | null;
   goal: string;
   schedule_id: string;
   max_runs_per_day: number;
@@ -91,6 +114,7 @@ export interface LoopRow {
   stop_json: string | null;
   escalation: string;
   project_path: string | null;
+  engine: string | null;
   status: string;
   created_at: number;
   updated_at: number;

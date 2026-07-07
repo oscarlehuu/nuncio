@@ -9,6 +9,7 @@ import type {
   ForgePullRequestDetail,
   ForgePullRequestSummary,
   ForgeRepoRef,
+  ForgeRepository,
   ForgeReviewThread,
   ForgeStateFilter,
   MergePullRequestOptions,
@@ -71,6 +72,19 @@ interface GithubMergeResponse {
   message?: string;
 }
 
+interface GithubRepoResponse {
+  id: number;
+  full_name: string;
+  name: string;
+  description?: string | null;
+  private?: boolean;
+  default_branch?: string;
+  clone_url: string;
+  html_url: string;
+  pushed_at?: string | null;
+  updated_at?: string | null;
+}
+
 @Injectable()
 export class GithubForgeProvider extends GithubForgeActions {
   constructor(settings: SettingsService) {
@@ -85,7 +99,29 @@ export class GithubForgeProvider extends GithubForgeActions {
       resolveThreads: true,
       updateBranch: true,
       rerunFailedOnly: true,
+      listRepositories: true,
     };
+  }
+
+  async listRepositories(): Promise<ForgeRepository[]> {
+    // Repos the user can push to, most-recently-pushed first. `affiliation`
+    // excludes org repos the user can only read; `per_page=100` is one page at
+    // personal scale (a solo dev's own repos).
+    const data = await this.request<GithubRepoResponse[]>(
+      `${this.resolveApiBase()}/user/repos?sort=pushed&direction=desc&affiliation=owner,collaborator&per_page=100`,
+      { headers: await this.authHeaders() },
+    );
+    return (data ?? []).map((repo) => ({
+      id: String(repo.id),
+      fullName: repo.full_name,
+      name: repo.name,
+      description: repo.description ?? null,
+      private: repo.private ?? false,
+      defaultBranch: repo.default_branch ?? 'main',
+      cloneUrl: repo.clone_url,
+      webUrl: repo.html_url,
+      updatedAt: repo.pushed_at ?? repo.updated_at ?? null,
+    }));
   }
 
   async listPullRequests(

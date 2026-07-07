@@ -195,6 +195,16 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     default: '~/.nuncio/workspaces',
   },
   {
+    key: 'NUNCIO_CLONE_DIR',
+    category: 'workspaces',
+    type: 'path',
+    label: 'Clone directory',
+    description:
+      'Parent directory where the forge-aware picker clones repositories (created at <dir>/<repo-name>). Default: ~/nuncio/projects.',
+    envVar: 'NUNCIO_CLONE_DIR',
+    default: '~/nuncio/projects',
+  },
+  {
     key: 'NUNCIO_TAILSCALE_AUTO_TRUST',
     category: 'network',
     type: 'boolean',
