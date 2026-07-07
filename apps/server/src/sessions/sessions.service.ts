@@ -305,6 +305,7 @@ export class SessionsService implements OnModuleDestroy {
     message: string,
     forceResume?: boolean,
     attachments?: AgentAttachment[],
+    origin?: string,
   ): Promise<SessionDto> {
     this.requireSession(id);
     const trimmed = message?.trim() ?? '';
@@ -317,7 +318,7 @@ export class SessionsService implements OnModuleDestroy {
     const current = this.requireSession(id);
     if (current.status === 'RUNNING') {
       const handled = await this.steerRunning(current, trimmed, persisted);
-      if (!handled) this.enqueueSteer(id, trimmed, persisted);
+      if (!handled) this.enqueueSteer(id, trimmed, persisted, origin);
       return this.requireSession(id);
     }
     if (!canTransition(current.status, 'RUNNING')) {
@@ -334,6 +335,7 @@ export class SessionsService implements OnModuleDestroy {
         ...this.buildAgentRunContext(current),
         attachments: persisted,
         forceResume: forceResume === true,
+        ...(origin ? { steerOrigin: origin } : {}),
       });
     } finally {
       this.locallyProducing.delete(id);
@@ -384,8 +386,13 @@ export class SessionsService implements OnModuleDestroy {
     }
   }
 
-  private enqueueSteer(id: string, message: string, attachments?: AgentAttachment[]): void {
-    this.steerQueue.enqueue(id, message, attachments);
+  private enqueueSteer(
+    id: string,
+    message: string,
+    attachments?: AgentAttachment[],
+    origin?: string,
+  ): void {
+    this.steerQueue.enqueue(id, message, attachments, origin);
     this.appendAndEmit(id, 'steer_queued', { text: message });
   }
 
@@ -525,7 +532,7 @@ export class SessionsService implements OnModuleDestroy {
     if (this.destroyed) return;
     const next = this.steerQueue.dequeue(id);
     if (!next) return;
-    void this.steer(id, next.message, undefined, next.attachments).catch((error) => {
+    void this.steer(id, next.message, undefined, next.attachments, next.origin).catch((error) => {
       const reason = error instanceof Error ? error.message : String(error);
       try {
         this.appendAndEmit(id, 'error', { message: `Queued message failed to send: ${reason}` });

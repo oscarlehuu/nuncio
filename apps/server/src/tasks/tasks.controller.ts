@@ -1,7 +1,7 @@
 import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
 import { validateHandoffBrief } from '../orchestration/handoff-brief.validate';
 import { TasksService } from './tasks.service';
-import type { CreateTaskDto, StartMultitaskDto } from './tasks.types';
+import { NOTIFY_POLICIES, type CreateTaskDto, type NotifyPolicy, type StartMultitaskDto } from './tasks.types';
 
 @Controller('tasks')
 export class TasksController {
@@ -18,6 +18,7 @@ export class TasksController {
       return { error: 'prompt is required' };
     }
     const contextBrief = this.parseBrief(body.contextBrief);
+    const notifyPolicy = this.parseNotifyPolicy(body.notifyPolicy);
     return this.tasks.enqueue({
       prompt: body.prompt.trim(),
       ...(body.provider ? { provider: body.provider } : {}),
@@ -28,6 +29,7 @@ export class TasksController {
       ...(body.useWorktree === true ? { useWorktree: true } : {}),
       ...(body.workspace ? { workspace: body.workspace } : {}),
       ...(contextBrief ? { contextBrief } : {}),
+      ...(notifyPolicy ? { notifyPolicy } : {}),
     });
   }
 
@@ -40,6 +42,14 @@ export class TasksController {
     }
   }
 
+  private parseNotifyPolicy(raw: unknown): NotifyPolicy | undefined {
+    if (raw === undefined || raw === null) return undefined;
+    if (!NOTIFY_POLICIES.includes(raw as NotifyPolicy)) {
+      throw new BadRequestException(`notifyPolicy must be one of: ${NOTIFY_POLICIES.join(', ')}`);
+    }
+    return raw as NotifyPolicy;
+  }
+
   @Post('multitask')
   multitask(@Body() body: StartMultitaskDto) {
     const prompts = body?.prompts
@@ -49,6 +59,7 @@ export class TasksController {
       throw new BadRequestException('at least one prompt is required');
     }
     const contextBrief = this.parseBrief(body.contextBrief);
+    const notifyPolicy = this.parseNotifyPolicy(body.notifyPolicy);
     return this.tasks.startMultitask({
       parentSessionId: body.parentSessionId,
       prompts,
@@ -63,6 +74,7 @@ export class TasksController {
       ...(body.workspace ? { workspace: body.workspace } : {}),
       ...(body.cleanupPolicy ? { cleanupPolicy: body.cleanupPolicy } : {}),
       ...(contextBrief ? { contextBrief } : {}),
+      ...(notifyPolicy ? { notifyPolicy } : {}),
     });
   }
 

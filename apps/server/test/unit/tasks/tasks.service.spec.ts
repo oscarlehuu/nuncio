@@ -492,6 +492,18 @@ describe('TasksService', () => {
     expect(listed?.contextBrief).toBeNull();
   });
 
+  it('round-trips notifyPolicy and treats a garbage column value as unset', () => {
+    const withPolicy = repo.create({ prompt: 'notify me', notifyPolicy: 'steer' });
+    expect(repo.findById(withPolicy.id)?.notifyPolicy).toBe('steer');
+
+    const garbage = repo.create({ prompt: 'garbage policy' });
+    module
+      .get(DatabaseService)
+      .db.prepare('UPDATE tasks SET notify_policy = ? WHERE id = ?')
+      .run('shout', garbage.id);
+    expect(repo.findById(garbage.id)?.notifyPolicy).toBeNull();
+  });
+
   it('retry carries the handoff brief forward', async () => {
     const task = service.enqueue({
       prompt: 'retry with brief',
@@ -788,6 +800,153 @@ describe('TasksService', () => {
       } finally {
         await restarted.close();
       }
+    });
+  });
+
+  describe('parent notify policy', () => {
+    const sessionsRepo = () => module.get(SessionsRepository);
+
+    // Settle the parent's own initial run, then pin it to a target status so the
+    // notify decision under test is deterministic while the subagent runs.
+    async function parentAt(status: 'IDLE' | 'RUNNING' | 'PAUSED' | 'ERROR'): Promise<string> {
+      const parent = await sessions.create({ prompt: 'notify parent', provider: 'cursor', workspace });
+      const start = Date.now();
+      while (sessions.get(parent.id)?.status !== 'IDLE' && Date.now() - start < 8000) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      const repoS = sessionsRepo();
+      if (status === 'RUNNING') repoS.updateStatus(parent.id, 'RUNNING');
+      else if (status === 'PAUSED') repoS.updateStatus(parent.id, 'PAUSED');
+      else if (status === 'ERROR') repoS.updateStatus(parent.id, 'ERROR');
+      return parent.id;
+    }
+
+    async function runSubagent(parentId: string, notifyPolicy?: 'event-only' | 'steer'): Promise<void> {
+      writeVerifyScript('exit 0\n');
+      const child = service.enqueue({
+        prompt: 'notify child',
+        provider: 'cursor',
+        workspace,
+        role: 'subagent',
+        parentSessionId: parentId,
+        ...(notifyPolicy ? { notifyPolicy } : {}),
+      });
+      await waitForStatus(child.id, ['DONE', 'FAILED']);
+      // Let the post-commit notify settle.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+
+    it('IDLE + steer → parent is steered with a task-digest origin', async () => {
+      const parentId = await parentAt('IDLE');
+      const steerSpy = jest.spyOn(sessions, 'steer');
+      try {
+        await runSubagent(parentId, 'steer');
+        expect(steerSpy).toHaveBeenCalledWith(parentId, expect.any(String), undefined, undefined, 'task-digest');
+      } finally {
+        steerSpy.mockRestore();
+      }
+    });
+
+    it('RUNNING + steer → the digest is queued (origin-tagged), not steered inline', async () => {
+      const parentId = await parentAt('RUNNING');
+      const steerQueue = module.get(SteerQueueRepository);
+      await runSubagent(parentId, 'steer');
+      // The steer landed in the queue with its task-digest origin.
+      const queued = steerQueue.dequeue(parentId);
+      expect(queued).not.toBeNull();
+      expect(queued?.origin).toBe('task-digest');
+    });
+
+    it('PAUSED + steer → neither steered nor queued (event-only fallback + note)', async () => {
+      const parentId = await parentAt('PAUSED');
+      const steerSpy = jest.spyOn(sessions, 'steer');
+      const steerQueue = module.get(SteerQueueRepository);
+      try {
+        await runSubagent(parentId, 'steer');
+        expect(steerSpy).not.toHaveBeenCalled();
+        expect(steerQueue.dequeue(parentId)).toBeNull();
+        // A suppression note explains why.
+        expect(
+          events.list(parentId).some((e) => e.type === 'status' && String((e.payload as { note?: string }).note ?? '').includes('Auto-steer suppressed')),
+        ).toBe(true);
+      } finally {
+        steerSpy.mockRestore();
+      }
+    });
+
+    it('default policy (no override) is event-only → parent not steered', async () => {
+      const parentId = await parentAt('IDLE');
+      const steerSpy = jest.spyOn(sessions, 'steer');
+      try {
+        await runSubagent(parentId); // no notifyPolicy → setting default event-only
+        expect(steerSpy).not.toHaveBeenCalled();
+      } finally {
+        steerSpy.mockRestore();
+      }
+    });
+
+    it('suppresses the auto-steer when the parent sits ≥ 2 deep in a delegation chain', async () => {
+      // grandparent → parent → (subagent). The parent has 1 ancestor... we need
+      // the parent itself at depth ≥ 2, so build gp → p2 → p1(parent).
+      const repoS = sessionsRepo();
+      const gp = await sessions.create({ prompt: 'gp', provider: 'cursor', workspace });
+      const p2 = repoS.create({ prompt: 'p2', provider: 'cursor', parentSessionId: gp.id });
+      const parentId = repoS.create({ prompt: 'deep parent', provider: 'cursor', parentSessionId: p2.id }).id;
+      repoS.updateStatus(parentId, 'RUNNING');
+      repoS.updateStatus(parentId, 'IDLE');
+
+      const steerSpy = jest.spyOn(sessions, 'steer');
+      try {
+        await runSubagent(parentId, 'steer');
+        expect(steerSpy).not.toHaveBeenCalled();
+        expect(
+          events.list(parentId).some((e) => e.type === 'status' && String((e.payload as { note?: string }).note ?? '').includes('depth')),
+        ).toBe(true);
+      } finally {
+        steerSpy.mockRestore();
+      }
+    });
+
+    it('suppresses the 6th auto-steer to a parent within the hour (rate cap)', async () => {
+      const parentId = await parentAt('IDLE');
+      // Seed 5 recent task-digest steer_messages so the next one trips the cap.
+      for (let i = 0; i < 5; i += 1) {
+        events.append(parentId, 'steer_message', { text: `wake ${i}`, origin: 'task-digest' });
+      }
+      const steerSpy = jest.spyOn(sessions, 'steer');
+      try {
+        await runSubagent(parentId, 'steer');
+        expect(steerSpy).not.toHaveBeenCalled();
+        expect(
+          events.list(parentId).some((e) => e.type === 'status' && String((e.payload as { note?: string }).note ?? '').includes('rate cap')),
+        ).toBe(true);
+      } finally {
+        steerSpy.mockRestore();
+      }
+    });
+
+    it('rate cap is scoped per parent (another parent is unaffected)', async () => {
+      const parentA = await parentAt('IDLE');
+      for (let i = 0; i < 5; i += 1) {
+        events.append(parentA, 'steer_message', { text: `wake ${i}`, origin: 'task-digest' });
+      }
+      const parentB = await parentAt('IDLE');
+      const steerSpy = jest.spyOn(sessions, 'steer');
+      try {
+        await runSubagent(parentB, 'steer');
+        // parentB has no prior digest steers → steered normally.
+        expect(steerSpy).toHaveBeenCalledWith(parentB, expect.any(String), undefined, undefined, 'task-digest');
+      } finally {
+        steerSpy.mockRestore();
+      }
+    });
+
+    it('retry carries the notifyPolicy forward', async () => {
+      const task = service.enqueue({ prompt: 'retry notify', provider: 'no-such-provider', notifyPolicy: 'steer' });
+      await waitForStatus(task.id, ['FAILED']);
+      const clone = service.retry(task.id);
+      expect(clone.notifyPolicy).toBe('steer');
+      await waitForStatus(clone.id, ['DONE', 'FAILED']);
     });
   });
 });

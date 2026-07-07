@@ -253,6 +253,7 @@ export class DatabaseService implements OnModuleDestroy {
       ['cleanup_policy', 'TEXT'],
       ['review_state', 'TEXT'],
       ['context_json', 'TEXT'],
+      ['notify_policy', 'TEXT'],
     ] as const;
 
     for (const [column, type] of taskColumnDefinitions) {
@@ -298,6 +299,11 @@ export class DatabaseService implements OnModuleDestroy {
       // A non-null claim leases a row to an in-flight multitask fan-out so the
       // normal settle-drain skips it; cleared unconditionally at daemon boot.
       this.db.exec('ALTER TABLE steer_queue ADD COLUMN claimed_at INTEGER');
+    }
+    if (!steerQueueColumns.some((column) => column.name === 'origin')) {
+      // Provenance carried to the delivered steer_message (e.g. 'task-digest')
+      // so the auto-steer rate cap can count queued-then-drained wakes.
+      this.db.exec('ALTER TABLE steer_queue ADD COLUMN origin TEXT');
     }
 
     this.db.exec(`

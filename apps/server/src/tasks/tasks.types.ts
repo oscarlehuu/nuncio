@@ -5,6 +5,9 @@ export type TaskStatus = 'QUEUED' | 'RUNNING' | 'DONE' | 'FAILED' | 'CANCELLED';
 export type TaskRole = 'standalone' | 'subagent';
 export type TaskCleanupPolicy = 'after-review' | 'manual' | 'never';
 export type TaskReviewState = 'awaiting_review' | 'reviewed';
+export type NotifyPolicy = 'event-only' | 'steer';
+
+export const NOTIFY_POLICIES: readonly NotifyPolicy[] = ['event-only', 'steer'];
 
 export const TERMINAL_TASK_STATUSES: readonly TaskStatus[] = ['DONE', 'FAILED', 'CANCELLED'];
 
@@ -26,6 +29,7 @@ export interface TaskRow {
   session_id: string | null;
   outcome_json: string | null;
   context_json: string | null;
+  notify_policy: string | null;
   created_at: number;
   updated_at: number;
   started_at: number | null;
@@ -50,6 +54,8 @@ export interface TaskDto {
   sessionId: string | null;
   outcome: Record<string, unknown> | null;
   contextBrief: HandoffBrief | null;
+  /** Per-task override of the delegate-notify policy; null falls back to the setting. */
+  notifyPolicy: NotifyPolicy | null;
   /** Derived at read time: the linked session is waiting on the user. */
   pendingInput?: boolean;
   createdAt: number;
@@ -71,6 +77,7 @@ export interface CreateTaskDto {
   role?: TaskRole;
   cleanupPolicy?: TaskCleanupPolicy;
   contextBrief?: HandoffBrief;
+  notifyPolicy?: NotifyPolicy;
 }
 
 export interface StartMultitaskDto {
@@ -86,6 +93,8 @@ export interface StartMultitaskDto {
   cleanupPolicy?: TaskCleanupPolicy;
   /** Explicit brief overriding the deterministic assembler for every child. */
   contextBrief?: HandoffBrief;
+  /** Notify-policy override applied to every child in the fan-out. */
+  notifyPolicy?: NotifyPolicy;
 }
 
 export interface StartMultitaskResultDto {

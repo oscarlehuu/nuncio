@@ -60,6 +60,8 @@ export interface AgentRunContext {
   transcriptTurnEnded?: boolean;
   /** Skip active-run guard when user explicitly forces resume. */
   forceResume?: boolean;
+  /** Provenance stamped onto the emitted steer_message (e.g. 'task-digest'). */
+  steerOrigin?: string;
   /** Provider-agnostic approval hook for SDK/tool requests that need a user decision. */
   requestProviderApproval?: (request: ProviderRequestInput) => Promise<ProviderRequestResult>;
   /** Session-bound runtime tools that providers adapt into SDK-native tool contracts. */

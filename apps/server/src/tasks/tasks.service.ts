@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException, Optional } from '@n
 import { DatabaseService } from '../db/database.service';
 import { assembleSubagentBrief } from '../orchestration/handoff-brief.assembler';
 import { buildOutcomeDigest } from '../orchestration/outcome-digest.builder';
+import { renderOutcomeDigest } from '../orchestration/outcome-digest.renderer';
 import { renderHandoffBrief } from '../orchestration/handoff-brief.renderer';
 import type { HandoffBrief } from '../orchestration/handoff-brief.types';
 import { buildWorkspaceSnapshot } from '../orchestration/workspace-snapshot';
@@ -15,8 +16,10 @@ import { SettingsService } from '../settings/settings.service';
 import { buildSubagentTaskInput } from './multitask-defaults';
 import { TasksRepository } from './tasks.repository';
 import {
+  NOTIFY_POLICIES,
   TERMINAL_TASK_STATUSES,
   type CreateTaskDto,
+  type NotifyPolicy,
   type StartMultitaskDto,
   type StartMultitaskResultDto,
   type TaskDto,
@@ -38,6 +41,14 @@ function digestStatus(status: TaskDto['status']): 'DONE' | 'FAILED' | 'CANCELLED
   if (status === 'CANCELLED') return 'CANCELLED';
   return 'FAILED';
 }
+
+/** Marks a steer_message as an auto-steer wake so the rate cap can count it. */
+const DIGEST_STEER_ORIGIN = 'task-digest';
+/** A parent this deep in a delegation chain never auto-steers (anti ping-pong). */
+const STEER_DEPTH_CAP = 2;
+/** Max auto-steers per parent session within the rolling window. */
+const STEER_RATE_CAP = 5;
+const STEER_RATE_WINDOW_MS = 60 * 60 * 1000;
 
 function briefForPrompt(base: HandoffBrief | null, prompt: string): HandoffBrief | undefined {
   if (!base) return undefined;
@@ -229,7 +240,10 @@ export class TasksService {
     if (!result.row) {
       throw new BadRequestException('Only queued tasks can be cancelled');
     }
-    if (result.event && built) this.sessions.emitPersistedEvent(built.parentSessionId, result.event);
+    if (result.event && built) {
+      this.sessions.emitPersistedEvent(built.parentSessionId, result.event);
+      void this.maybeNotifyParent(result.row, built.parentSessionId, built.payload);
+    }
     return result.row;
   }
 
@@ -252,6 +266,7 @@ export class TasksService {
       ...(task.role === 'subagent' ? { role: 'subagent' as const } : {}),
       ...(task.cleanupPolicy ? { cleanupPolicy: task.cleanupPolicy } : {}),
       ...(task.contextBrief ? { contextBrief: task.contextBrief } : {}),
+      ...(task.notifyPolicy ? { notifyPolicy: task.notifyPolicy } : {}),
     });
   }
 
@@ -376,6 +391,82 @@ export class TasksService {
     });
     // Fan out to live subscribers only after the commit — never inside the txn.
     if (persisted) this.sessions.emitPersistedEvent(built.parentSessionId, persisted);
+    // Optionally wake the parent (post-commit, best-effort).
+    await this.maybeNotifyParent(task, built.parentSessionId, built.payload);
+  }
+
+  /** Effective notify policy: per-task override wins over the setting/default. */
+  private effectiveNotifyPolicy(task: TaskDto): NotifyPolicy {
+    if (task.notifyPolicy) return task.notifyPolicy;
+    const raw = this.settings?.resolve('NUNCIO_DELEGATE_NOTIFY');
+    return NOTIFY_POLICIES.includes(raw as NotifyPolicy) ? (raw as NotifyPolicy) : 'event-only';
+  }
+
+  /**
+   * When the effective policy is `steer`, wake the parent with the rendered
+   * digest so it can continue autonomously. Best-effort and non-fatal — a
+   * failure here never destabilizes the just-finished task. Hard guards
+   * (depth, rate) and non-IDLE/RUNNING states fall back to event-only and log a
+   * status-level note explaining why the parent was not woken.
+   */
+  private async maybeNotifyParent(
+    task: TaskDto,
+    parentSessionId: string,
+    payload: TaskCompletedPayload,
+  ): Promise<void> {
+    try {
+      if (this.effectiveNotifyPolicy(task) !== 'steer') return;
+      const parent = this.sessions.get(parentSessionId);
+      if (!parent) return;
+
+      // Guard: never auto-steer up a chain that is already ≥ 2 deep (ping-pong).
+      const depth = this.sessions.lineage(parentSessionId).ancestors.length;
+      if (depth >= STEER_DEPTH_CAP) {
+        this.noteSteerSuppressed(parentSessionId, `delegation depth ${depth} ≥ ${STEER_DEPTH_CAP}`);
+        return;
+      }
+      // Guard: rate-limit auto-steers per parent within the rolling window.
+      if (this.recentDigestSteers(parentSessionId) >= STEER_RATE_CAP) {
+        this.noteSteerSuppressed(
+          parentSessionId,
+          `auto-steer rate cap (${STEER_RATE_CAP}/hour) reached`,
+        );
+        return;
+      }
+
+      const message = renderOutcomeDigest(payload);
+      if (parent.status === 'IDLE' || parent.status === 'RUNNING') {
+        // steer() delivers immediately when IDLE and enqueues (origin-tagged)
+        // when RUNNING; either way the resulting steer_message carries origin.
+        await this.sessions.steer(parentSessionId, message, undefined, undefined, DIGEST_STEER_ORIGIN);
+      } else {
+        // PAUSED / ERROR / etc. → event-only fallback.
+        this.noteSteerSuppressed(parentSessionId, `parent status ${parent.status}`);
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.warn(`[tasks] auto-steer notify failed for parent ${parentSessionId}: ${reason}`);
+    }
+  }
+
+  /** Count auto-steer wakes (origin 'task-digest') in the parent's recent log within the window. */
+  private recentDigestSteers(parentSessionId: string): number {
+    const cutoff = Date.now() - STEER_RATE_WINDOW_MS;
+    return this.events
+      .listTail(parentSessionId, PENDING_SCAN_TAIL)
+      .filter(
+        (event) =>
+          event.type === 'steer_message' &&
+          event.createdAt >= cutoff &&
+          (event.payload as { origin?: unknown } | null)?.origin === DIGEST_STEER_ORIGIN,
+      ).length;
+  }
+
+  /** Append a status-level note explaining why an auto-steer was suppressed. */
+  private noteSteerSuppressed(parentSessionId: string, reason: string): void {
+    this.sessions.appendOrchestrationEvent(parentSessionId, 'status', {
+      note: `Auto-steer suppressed: ${reason}. Digest delivered as event only.`,
+    });
   }
 
   /**

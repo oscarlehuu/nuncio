@@ -253,6 +253,20 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     default: 'after-review',
   },
   {
+    key: 'NUNCIO_DELEGATE_NOTIFY',
+    category: 'agents',
+    type: 'string',
+    label: 'Delegate notify policy',
+    description:
+      'How a parent session is notified when one of its delegated subagent tasks finishes. event-only appends a digest to the transcript; steer additionally wakes an idle parent with the digest so it can continue autonomously. Per-task override wins over this default.',
+    envVar: 'NUNCIO_DELEGATE_NOTIFY',
+    default: 'event-only',
+    options: [
+      { value: 'event-only', label: 'Event only', description: 'Append the digest to the parent transcript; never wake the parent.' },
+      { value: 'steer', label: 'Auto-steer', description: 'Wake an idle parent with the digest (subject to depth and rate guards).' },
+    ],
+  },
+  {
     key: 'NUNCIO_VERIFY_COMMAND',
     category: 'agents',
     type: 'string',

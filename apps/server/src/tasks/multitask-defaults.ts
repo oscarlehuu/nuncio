@@ -54,5 +54,6 @@ export function buildSubagentTaskInput(
     cleanupPolicy: policy,
     // An explicit brief on the DTO overrides the assembled one for every child.
     ...(input.contextBrief ?? brief ? { contextBrief: input.contextBrief ?? brief } : {}),
+    ...(input.notifyPolicy ? { notifyPolicy: input.notifyPolicy } : {}),
   };
 }

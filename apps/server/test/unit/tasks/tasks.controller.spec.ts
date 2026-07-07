@@ -93,6 +93,20 @@ describe('TasksController', () => {
     );
   });
 
+  it('create forwards a valid notifyPolicy', () => {
+    const enqueue = jest.fn((input) => ({ id: 't1', ...input }));
+    const controller = new TasksController({ enqueue } as never);
+    controller.create({ prompt: 'ship it', notifyPolicy: 'steer' });
+    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ notifyPolicy: 'steer' }));
+  });
+
+  it('create rejects a notifyPolicy outside the enum', () => {
+    const controller = new TasksController({ enqueue: jest.fn() } as never);
+    expect(() =>
+      controller.create({ prompt: 'ship it', notifyPolicy: 'shout' as never }),
+    ).toThrow(BadRequestException);
+  });
+
   it('multitask rejects when no prompts remain', () => {
     const controller = new TasksController({} as never);
     expect(() => controller.multitask({ parentSessionId: 'parent123', prompts: ['  '] })).toThrow(

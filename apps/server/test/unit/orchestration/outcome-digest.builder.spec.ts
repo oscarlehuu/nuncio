@@ -21,6 +21,7 @@ function task(overrides: Partial<TaskDto> = {}): TaskDto {
     sessionId: 'child-1',
     outcome: null,
     contextBrief: null,
+    notifyPolicy: null,
     createdAt: 1,
     updatedAt: 2,
     startedAt: 1,

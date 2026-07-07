@@ -9,11 +9,14 @@ interface SteerQueueRow {
   attachments_json: string | null;
   created_at: number;
   claimed_at: number | null;
+  origin: string | null;
 }
 
 export interface QueuedSteer {
   message: string;
   attachments?: AgentAttachment[];
+  /** Provenance (e.g. 'task-digest') stamped onto the delivered steer_message. */
+  origin?: string;
 }
 
 function parseAttachments(raw: string | null): AgentAttachment[] | undefined {
@@ -31,17 +34,18 @@ function parseAttachments(raw: string | null): AgentAttachment[] | undefined {
 export class SteerQueueRepository {
   constructor(private readonly database: DatabaseService) {}
 
-  enqueue(sessionId: string, message: string, attachments?: AgentAttachment[]): void {
+  enqueue(sessionId: string, message: string, attachments?: AgentAttachment[], origin?: string): void {
     this.database.db
       .prepare(
-        `INSERT INTO steer_queue (session_id, message, attachments_json, created_at)
-         VALUES (?, ?, ?, ?)`,
+        `INSERT INTO steer_queue (session_id, message, attachments_json, created_at, origin)
+         VALUES (?, ?, ?, ?, ?)`,
       )
       .run(
         sessionId,
         message,
         attachments && attachments.length > 0 ? JSON.stringify(attachments) : null,
         Date.now(),
+        origin ?? null,
       );
   }
 
@@ -60,7 +64,11 @@ export class SteerQueueRepository {
     if (!row) return null;
     this.database.db.prepare('DELETE FROM steer_queue WHERE id = ?').run(row.id);
     const attachments = parseAttachments(row.attachments_json);
-    return { message: row.message, ...(attachments ? { attachments } : {}) };
+    return {
+      message: row.message,
+      ...(attachments ? { attachments } : {}),
+      ...(row.origin ? { origin: row.origin } : {}),
+    };
   }
 
   /**

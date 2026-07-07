@@ -227,10 +227,11 @@ export abstract class BaseAgentProvider implements AgentProvider {
       this.sessions.updateStatus(sessionId, 'RUNNING');
       this.pushEvent(sessionId, 'status', { status: 'RUNNING' }, context.emit);
       const images = eventImagesFromAttachments(context.attachments);
+      const origin = isSteer && context.steerOrigin ? { origin: context.steerOrigin } : undefined;
       this.pushEvent(
         sessionId,
         isSteer ? 'steer_message' : 'user_message',
-        { text, ...(images ? { images } : {}) },
+        { text, ...(images ? { images } : {}), ...origin },
         context.emit,
       );
 
