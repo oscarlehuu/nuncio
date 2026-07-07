@@ -4,22 +4,28 @@ import {
   failureStreak,
   runsOnDay,
   totalRuns,
+  verifyGreenStreak,
 } from '../../../src/loops/loop-accounting';
-import type { LoopRunDto, LoopRunOutcome } from '../../../src/loops/loops.types';
+import type { LoopRunDto, LoopRunOutcome, LoopRunVerify } from '../../../src/loops/loops.types';
 
 /**
  * Pure budget/breaker accounting folded from durable loop_runs — restart-safe.
- * RED until implemented. Deterministic: time / rows passed in explicitly.
+ * Deterministic: time / rows passed in explicitly.
  */
 
 let seq = 0;
-function run(outcome: LoopRunOutcome, dayBucketStr = '2026-07-07'): LoopRunDto {
+function run(
+  outcome: LoopRunOutcome,
+  dayBucketStr = '2026-07-07',
+  verify: LoopRunVerify = outcome === 'ok' ? 'green' : 'none',
+): LoopRunDto {
   seq += 1;
   return {
     id: `r${seq}`,
     loopId: 'L',
     taskId: `t${seq}`,
     outcome,
+    verify,
     dayBucket: dayBucketStr,
     createdAt: seq,
   };
@@ -84,5 +90,37 @@ describe('totalRuns (for maxTotalRuns stop condition)', () => {
   it('counts ok + failed, ignoring bookkeeping rows', () => {
     const runs = [run('ok'), run('failed'), run('budget-exhausted'), run('resume'), run('ok')];
     expect(totalRuns(runs)).toBe(3);
+  });
+});
+
+describe('verifyGreenStreak (for verifyGreenN stop)', () => {
+  const green = () => run('ok', '2026-07-07', 'green');
+  const red = () => run('failed', '2026-07-07', 'red');
+  const noVerify = () => run('ok', '2026-07-07', 'none');
+
+  it('is zero with no runs', () => {
+    expect(verifyGreenStreak([])).toBe(0);
+  });
+
+  it('counts trailing consecutive green-verify runs', () => {
+    expect(verifyGreenStreak([green(), green(), green()])).toBe(3);
+  });
+
+  it('a red verify resets the streak', () => {
+    expect(verifyGreenStreak([green(), green(), red(), green()])).toBe(1);
+  });
+
+  it('a run with NO verify signal carries the streak over (neither counts nor resets)', () => {
+    // green, green, no-verify, green -> the no-verify run is transparent, so 3 greens.
+    expect(verifyGreenStreak([green(), green(), noVerify(), green()])).toBe(3);
+  });
+
+  it('a no-verify run does not resurrect a broken streak', () => {
+    // green, red (reset), no-verify -> streak stays 0 (no-verify carries over the 0).
+    expect(verifyGreenStreak([green(), red(), noVerify()])).toBe(0);
+  });
+
+  it('bookkeeping rows (resume/budget-exhausted) are verify:none and transparent', () => {
+    expect(verifyGreenStreak([green(), run('resume', '2026-07-07', 'none'), green()])).toBe(2);
   });
 });

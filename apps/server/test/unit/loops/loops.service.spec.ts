@@ -5,19 +5,21 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { SchedulerService } from '../../../src/scheduler/scheduler.service';
+import { TasksService } from '../../../src/tasks/tasks.service';
 import { LoopsRepository } from '../../../src/loops/loops.repository';
 import { LoopsService } from '../../../src/loops/loops.service';
 import type { CreateLoopDto } from '../../../src/loops/loops.types';
 
 /**
- * The loop primitive integration — deterministic via the injected clock. RED
- * until implemented. A spy SchedulerService records created/enabled/disabled
- * schedules so we assert the loop↔schedule lifecycle without the real timer.
+ * The loop primitive integration — deterministic via the injected clock. Spy
+ * scheduler + tasks record the loop↔schedule lifecycle and enqueues without the
+ * real timer/runner.
  */
 
 class SpyScheduler {
   readonly created: Array<{ id: string; kind: string; target: unknown }> = [];
   readonly enabledCalls: Array<{ id: string; enabled: boolean }> = [];
+  readonly deleted: string[] = [];
   private n = 0;
   create(input: { kind: string; spec: string; target: unknown }) {
     this.n += 1;
@@ -30,7 +32,20 @@ class SpyScheduler {
     return { id, enabled };
   }
   deleteSchedule(id: string) {
-    void id;
+    this.deleted.push(id);
+  }
+  setLoopFireHandler(_fn: (loopId: string) => unknown) {
+    void _fn;
+  }
+}
+
+class SpyTasks {
+  readonly enqueued: Array<{ prompt: string; useWorktree?: boolean; projectPath?: string }> = [];
+  private n = 0;
+  enqueue(input: { prompt: string; useWorktree?: boolean; projectPath?: string }) {
+    this.n += 1;
+    this.enqueued.push(input);
+    return { id: `task-${this.n}` };
   }
 }
 
@@ -43,17 +58,20 @@ describe('LoopsService', () => {
   let loops: LoopsService;
   let repo: LoopsRepository;
   let scheduler: SpyScheduler;
+  let tasks: SpyTasks;
   let clockNow = at(2026, 7, 7, 8, 0);
   const dirsToClean: string[] = [];
 
   async function build(): Promise<TestingModule> {
     scheduler = new SpyScheduler();
+    tasks = new SpyTasks();
     return Test.createTestingModule({
       imports: [DatabaseModule],
       providers: [
         LoopsRepository,
         LoopsService,
         { provide: SchedulerService, useValue: scheduler },
+        { provide: TasksService, useValue: tasks },
       ],
     }).compile();
   }
@@ -110,20 +128,19 @@ describe('LoopsService', () => {
   });
 
   describe('fire — a loop run is a task with a fresh worktree', () => {
-    it('fires within budget and records a run row (fresh worktree enforced)', () => {
+    it('fires within budget, enqueues the goal as a task, and records a run row', () => {
       const loop = loops.create(create({ maxRunsPerDay: 3 }));
       const runResult = loops.fire(loop.id);
       expect(runResult).not.toBeNull();
       expect(repo.listRuns(loop.id)).toHaveLength(1);
+      expect(tasks.enqueued).toHaveLength(1);
+      expect(tasks.enqueued[0]!.prompt).toBe('nightly maintenance');
     });
 
-    it('a loop NEVER runs in-place even if the project worktreePolicy is never (locked write policy)', () => {
-      // The enqueue must force useWorktree=true regardless of project config.
-      // Asserted via the run being scoped to a worktree (contract encoded here;
-      // the enqueue seam wiring is exercised in the impl).
+    it('a loop NEVER runs in-place — the enqueued task forces useWorktree=true (locked)', () => {
       const loop = loops.create(create());
-      const runResult = loops.fire(loop.id);
-      expect(runResult).not.toBeNull();
+      loops.fire(loop.id);
+      expect(tasks.enqueued[0]!.useWorktree).toBe(true);
     });
   });
 
@@ -205,6 +222,52 @@ describe('LoopsService', () => {
       // Stop reached → completed, schedule disabled, no further fires.
       expect(repo.findById(loop.id)!.status).toBe('completed');
       expect(loops.fire(loop.id)).toBeNull();
+    });
+
+    it('verifyGreenN: auto-completes after N consecutive green-verify runs', () => {
+      const loop = loops.create(create({
+        stop: { kind: 'verifyGreenN', n: 3 },
+        maxRunsPerDay: 10,
+        maxConsecutiveFailures: 10, // don't let the breaker interfere
+      }));
+      for (let i = 0; i < 3; i += 1) {
+        const r = loops.fire(loop.id)!;
+        loops.recordTaskOutcome(loop.id, r.taskId!, { ok: true, verify: 'green' });
+      }
+      expect(repo.findById(loop.id)!.status).toBe('completed');
+    });
+
+    it('verifyGreenN: a red verify resets the green streak (does not complete early)', () => {
+      const loop = loops.create(create({
+        stop: { kind: 'verifyGreenN', n: 2 },
+        maxRunsPerDay: 10,
+        maxConsecutiveFailures: 10,
+      }));
+      const greens = [true, false, true]; // green, red, green -> streak 1, not 2
+      for (const ok of greens) {
+        const r = loops.fire(loop.id)!;
+        loops.recordTaskOutcome(loop.id, r.taskId!, { ok, verify: ok ? 'green' : 'red' });
+      }
+      expect(repo.findById(loop.id)!.status).toBe('active');
+    });
+
+    it('verifyGreenN: a run with no verify signal carries the streak (neither counts nor resets)', () => {
+      const loop = loops.create(create({
+        stop: { kind: 'verifyGreenN', n: 2 },
+        maxRunsPerDay: 10,
+        maxConsecutiveFailures: 10,
+      }));
+      const runs: Array<{ ok: boolean; verify: 'green' | 'red' | 'none' }> = [
+        { ok: true, verify: 'green' },
+        { ok: true, verify: 'none' }, // no verify configured — transparent
+        { ok: true, verify: 'green' },
+      ];
+      for (const o of runs) {
+        const r = loops.fire(loop.id)!;
+        loops.recordTaskOutcome(loop.id, r.taskId!, o);
+      }
+      // The two greens (bracketing the no-verify run) reach n=2 → completed.
+      expect(repo.findById(loop.id)!.status).toBe('completed');
     });
   });
 
