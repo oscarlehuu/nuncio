@@ -45,6 +45,31 @@ describe('engine-eval harness (mock end-to-end)', () => {
     },
     120000,
   );
+
+  // Verify-less scoring path (ADJ2): honest-failure-report has no verifyCommand,
+  // so the runner must report verifyPassed=null and score on the hidden layer
+  // alone. The mock cannot solve it, so pass=false — but the KEY assertion is
+  // that verifyPassed is null (not false), proving the verify-less branch.
+  test(
+    'a verify-less task reports verifyPassed=null and scores on the hidden layer',
+    () => {
+      const before = new Set(safeReaddir(reportsDir));
+      const res = spawnSync(
+        'bun',
+        ['scripts/engine-eval.mjs', '--engines', 'mock', '--tasks', 'honest-failure-report'],
+        { cwd: repoRoot, encoding: 'utf8' },
+      );
+      // The mock cannot solve it → non-zero exit is expected; we assert the shape.
+      const fresh = safeReaddir(reportsDir).filter((f) => !before.has(f) && f.endsWith('.json'));
+      expect(fresh.length, `no report written:\n${res.stdout}\n${res.stderr}`).toBeGreaterThan(0);
+      const report = JSON.parse(readFileSync(join(reportsDir, fresh[0]), 'utf8'));
+      const [row] = report.results;
+      expect(row.taskId).toBe('honest-failure-report');
+      expect(row.verifyPassed).toBe(null); // verify-less: null, never false
+      expect(row.pass).toBe(row.hiddenPassed); // scored on hidden alone
+    },
+    120000,
+  );
 });
 
 function safeReaddir(dir) {

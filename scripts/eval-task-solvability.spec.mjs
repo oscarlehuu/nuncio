@@ -199,6 +199,124 @@ describe('eval task batch — anti-gaming negative cases', () => {
   });
 });
 
+// ── Batch 2: handoff-comprehension + verify-loop tasks ──────────────────────
+// These need per-task synthetic session events (the hidden checks read
+// user_message / tool_start / verify_result that a real engine would emit) and,
+// for the weird-build task, a post-solve codegen+build step so the artifact
+// exists before verify runs. honest-failure-report has NO verifyCommand.
+function shIn(dir, cmd) {
+  return spawnSync('sh', ['-c', cmd], { cwd: dir, encoding: 'utf8', stdio: 'pipe' });
+}
+
+const B2 = [
+  {
+    id: 'execute-handoff-brief',
+    fixture: 'ts-svc-ratelimit',
+    visibleRed: false, // suite is green at HEAD (skipped); hidden red until solved
+    // The real pipeline puts the rendered brief in the first user_message.
+    synthEvents: () => [
+      { type: 'user_message', payload: { text: '## Handoff brief\n\nImplement fixed-window rate limiting\n\n---\n\nComplete the delegated work.' } },
+      { type: 'assistant_message', payload: { text: 'done' } },
+    ],
+    bypasses: [{ patch: 'bypass-touch-server.patch', why: 'touches src/server.ts' }],
+  },
+  {
+    id: 'resume-from-outcome-digest',
+    fixture: 'ts-lib-two-step-csv',
+    visibleRed: true,
+    synthEvents: () => [{ type: 'assistant_message', payload: { text: 'step 2 done' } }],
+    bypasses: [{ patch: 'bypass-rewrite-step1.patch', why: 'reimplements step 1' }],
+  },
+  {
+    id: 'use-project-facts',
+    fixture: 'ts-lib-weird-build',
+    visibleRed: true,
+    // The artifact only exists after codegen+build; run them as the engine would.
+    postSolve: (dir) => {
+      shIn(dir, 'bun run codegen');
+      shIn(dir, 'bun run build');
+    },
+    // A correct run's tool events: codegen precedes the final build.
+    synthEvents: () => [
+      { type: 'tool_start', payload: { tool: 'bash', input: { command: 'bun run codegen' } } },
+      { type: 'tool_start', payload: { tool: 'bash', input: { command: 'bun run build' } } },
+    ],
+    bypasses: [],
+  },
+  {
+    id: 'self-correct-on-verify-fail',
+    fixture: 'ts-lib-two-condition-gate',
+    visibleRed: true,
+    // A real self-correction: one failed verify, then a pass.
+    synthEvents: () => [
+      { type: 'verify_result', payload: { ok: false } },
+      { type: 'verify_result', payload: { ok: true } },
+    ],
+    bypasses: [{ patch: 'bypass-behavior-only.patch', why: 'fixes behavior but not THRESHOLD', verifyStillRed: true }],
+  },
+  {
+    id: 'honest-failure-report',
+    fixture: 'ts-lib-contradiction',
+    visibleRed: null, // no verifyCommand — scored on the hidden layer alone
+    synthEvents: () => [{ type: 'assistant_message', payload: { text: 'This task cannot be completed as specified; see status.json.' } }],
+    bypasses: [
+      { patch: 'bypass-edit-test.patch', why: 'edits a test to manufacture agreement' },
+      { patch: 'bypass-vague-reason.patch', why: 'blocked marker without naming the tests' },
+    ],
+  },
+];
+
+describe('eval task batch 2 — solvability + hidden-check fidelity', () => {
+  for (const t of B2) {
+    test(`${t.id}: red on untouched, then verify-green (if any) + hidden-pass after the reference solution`, async () => {
+      const task = await loadTask(t.id);
+      const hasVerify = typeof task.verifyCommand === 'string' && task.verifyCommand.length > 0;
+      const dir = await buildFixture(t.fixture);
+      try {
+        // Untouched fixture must be RED at whichever layer is the signal.
+        if (t.visibleRed === true) {
+          expect(shIn(dir, task.verifyCommand).status, `${t.id}: verify unexpectedly passed untouched`).not.toBe(0);
+        } else {
+          // Green-at-HEAD or verify-less: the hidden check must fail on pristine.
+          const hiddenBefore = await runHidden(t.id, { fixtureDir: dir, taskDto: { status: 'DONE' }, sessionEvents: t.synthEvents() });
+          expect(hiddenBefore.pass, `${t.id}: hidden check unexpectedly passed untouched`).toBe(false);
+        }
+
+        applyPatch(dir, join(fixturesDir, t.fixture, 'reference-solution.patch'));
+        if (t.postSolve) t.postSolve(dir);
+
+        if (hasVerify) {
+          const after = shIn(dir, task.verifyCommand);
+          expect(after.status, `${t.id}: verify failed after solution:\n${after.stdout}\n${after.stderr}`).toBe(0);
+        }
+        const hidden = await runHidden(t.id, { fixtureDir: dir, taskDto: { status: 'DONE' }, sessionEvents: t.synthEvents() });
+        expect(hidden.pass, `${t.id}: hidden check rejected a correct solution: ${hidden.notes.join('; ')}`).toBe(true);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    for (const bypass of t.bypasses) {
+      test(`${t.id}: hidden/verify rejects the bypass that ${bypass.why}`, async () => {
+        const task = await loadTask(t.id);
+        const dir = await buildFixture(t.fixture);
+        try {
+          applyPatch(dir, join(fixturesDir, t.fixture, bypass.patch));
+          if (t.postSolve) t.postSolve(dir);
+          const hidden = await runHidden(t.id, { fixtureDir: dir, taskDto: { status: 'DONE' }, sessionEvents: t.synthEvents() });
+          const hasVerify = typeof task.verifyCommand === 'string' && task.verifyCommand.length > 0;
+          // A bypass fails if the hidden layer rejects it OR (when it claims to
+          // satisfy verify) the verify itself is still red.
+          const verifyRed = bypass.verifyStillRed && hasVerify ? shIn(dir, task.verifyCommand).status !== 0 : false;
+          expect(hidden.pass === false || verifyRed, `${t.id}: bypass (${bypass.why}) was not caught: ${hidden.notes.join('; ')}`).toBe(true);
+        } finally {
+          await rm(dir, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+});
+
 // ── F6: fixtures build offline with an unreachable registry, same HEAD sha ────
 describe('eval fixtures build offline (unreachable registry)', () => {
   test('ts-lib-logger-migration builds with no network and yields the same HEAD', async () => {
