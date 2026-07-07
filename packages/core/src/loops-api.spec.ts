@@ -1,0 +1,129 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  createLoop,
+  deleteLoop,
+  deleteProjectConfig,
+  fetchLoop,
+  fetchLoopRuns,
+  fetchLoops,
+  fetchProjectConfigs,
+  pauseLoop,
+  resumeLoop,
+  upsertProjectConfig,
+} from './api';
+
+function jsonRes(body: unknown, ok = true, status = 200): Response {
+  return { ok, status, json: () => Promise.resolve(body), text: () => Promise.resolve('') } as Response;
+}
+
+describe('loops api client', () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock);
+    fetchMock.mockReset();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('fetchLoops unwraps the items envelope', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ items: [{ id: 'l1' }, { id: 'l2' }] }));
+    const loops = await fetchLoops();
+    expect(fetchMock).toHaveBeenCalledWith('/api/loops');
+    expect(loops.map((l) => l.id)).toEqual(['l1', 'l2']);
+  });
+
+  it('fetchLoops tolerates a missing items key', async () => {
+    fetchMock.mockResolvedValue(jsonRes({}));
+    expect(await fetchLoops()).toEqual([]);
+  });
+
+  it('fetchLoop reads one loop by id', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ id: 'l9' }));
+    const loop = await fetchLoop('l9');
+    expect(fetchMock).toHaveBeenCalledWith('/api/loops/l9');
+    expect(loop.id).toBe('l9');
+  });
+
+  it('createLoop posts the goal + schedule + budget', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ id: 'new' }));
+    await createLoop({
+      goal: 'tidy up flaky tests',
+      schedule: { kind: 'cron', spec: 'daily@22:00' },
+      maxRunsPerDay: 12,
+      stop: { kind: 'maxTotalRuns', n: 5 },
+    });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/loops');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toMatchObject({
+      goal: 'tidy up flaky tests',
+      schedule: { kind: 'cron', spec: 'daily@22:00' },
+      maxRunsPerDay: 12,
+      stop: { kind: 'maxTotalRuns', n: 5 },
+    });
+  });
+
+  it('createLoop surfaces the server error message', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ message: 'goal is required' }, false, 400));
+    await expect(createLoop({ goal: '', schedule: { kind: 'cron', spec: 'daily@22:00' } })).rejects.toThrow(
+      'goal is required',
+    );
+  });
+
+  it('pauseLoop and resumeLoop POST to their endpoints', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ id: 'l1', status: 'paused' }));
+    await pauseLoop('l1');
+    expect(fetchMock).toHaveBeenCalledWith('/api/loops/l1/pause', { method: 'POST' });
+    await resumeLoop('l1');
+    expect(fetchMock).toHaveBeenCalledWith('/api/loops/l1/resume', { method: 'POST' });
+  });
+
+  it('deleteLoop issues a DELETE', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ ok: true }));
+    await deleteLoop('l1');
+    expect(fetchMock).toHaveBeenCalledWith('/api/loops/l1', { method: 'DELETE' });
+  });
+
+  it('fetchLoopRuns unwraps the items envelope', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ items: [{ id: 'r1' }] }));
+    expect((await fetchLoopRuns('l1')).length).toBe(1);
+    expect(fetchMock).toHaveBeenCalledWith('/api/loops/l1/runs');
+  });
+});
+
+describe('project config api client', () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock);
+    fetchMock.mockReset();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('fetchProjectConfigs unwraps the items envelope', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ items: [{ path: '/a' }] }));
+    expect((await fetchProjectConfigs())[0]!.path).toBe('/a');
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/config');
+  });
+
+  it('upsertProjectConfig PUTs the patch', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ path: '/a' }));
+    await upsertProjectConfig({ path: '/a', verifyCommand: 'bun test' });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/projects/config');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body)).toEqual({ path: '/a', verifyCommand: 'bun test' });
+  });
+
+  it('deleteProjectConfig passes the path as a query param', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ ok: true }));
+    await deleteProjectConfig('/Users/me/proj');
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/config?path=%2FUsers%2Fme%2Fproj', {
+      method: 'DELETE',
+    });
+  });
+});

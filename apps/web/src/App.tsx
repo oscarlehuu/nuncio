@@ -28,6 +28,7 @@ import { useSessionNotifications } from './lib/use-session-notifications';
 import { useProviderUpdateNotifications } from './lib/use-provider-update-notifications';
 import { HomeView } from './components/home-view';
 import { GridView } from './components/grid-view';
+import { AutopilotView } from './components/autopilot-view';
 import type { ApprovalMode } from './components/approval-mode-picker';
 import { HandoffPicker } from './components/handoff-picker';
 import { ChangelogView } from './components/changelog-view';
@@ -483,6 +484,11 @@ export default function App() {
     dismissTransientSidebar();
   }, [dismissTransientSidebar, navigate]);
 
+  const handleOpenAutopilot = useCallback(() => {
+    navigate('/autopilot');
+    dismissTransientSidebar();
+  }, [dismissTransientSidebar, navigate]);
+
   const handleOpenSettings = useCallback(() => {
     navigate('/settings');
     dismissTransientSidebar();
@@ -571,6 +577,7 @@ export default function App() {
     onSelect: handleSelect,
     onNew: handleNew,
     onGrid: handleOpenGrid,
+    onAutopilot: handleOpenAutopilot,
     onSettings: handleOpenSettings,
     onChangelog: handleOpenChangelog,
     onArchive: handleArchiveById,
@@ -704,6 +711,7 @@ export default function App() {
               />
             }
           />
+          <Route path="/autopilot" element={<AutopilotView onBack={() => navigate('/')} />} />
           <Route path="/changelog" element={<ChangelogView onBack={() => navigate('/')} />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

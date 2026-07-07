@@ -21,6 +21,7 @@ import { SettingRow } from './setting-row';
 import { ProviderIcon } from './provider-icon';
 import { fetchForgeStatus, type ForgeStatusDto } from '../lib/forge-status-api';
 import { AppearanceSettingsSection } from './appearance-settings-section';
+import { ProjectsSettingsSection } from './projects-settings-section';
 import { RemoteAccessSettingsSection } from './remote-access-settings-section';
 import { ProviderUpdateSettingsSection } from './provider-update-settings-section';
 import { SettingsSectionNav, type SettingsSectionNavItem } from './settings-section-nav';
@@ -47,6 +48,7 @@ type SettingsSectionId =
   | 'mcp-tools'
   | 'agents'
   | 'workspaces'
+  | 'projects'
   | 'remote-access'
   | 'advanced';
 
@@ -58,6 +60,7 @@ const SECTION_NAV_ITEMS: ReadonlyArray<SettingsSectionNavItem & { id: SettingsSe
   { id: 'mcp-tools', label: 'MCP & Tools', icon: Puzzle },
   { id: 'agents', label: 'Agents', icon: SlidersHorizontal },
   { id: 'workspaces', label: 'Workspaces', icon: FolderGit2 },
+  { id: 'projects', label: 'Projects', icon: FolderGit2 },
   { id: 'remote-access', label: 'Remote access', icon: Network },
   { id: 'advanced', label: 'Advanced', icon: Wrench },
 ];
@@ -345,6 +348,8 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
         return renderSettingGroup('Agents', agents, 'No agent defaults are available.');
       case 'workspaces':
         return renderSettingGroup('Workspaces', workspaces, 'No workspace settings are available.');
+      case 'projects':
+        return <ProjectsSettingsSection />;
       case 'remote-access':
         return (
           <div className="space-y-6">

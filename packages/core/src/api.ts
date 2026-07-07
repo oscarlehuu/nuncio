@@ -557,3 +557,158 @@ export async function markTaskReviewed(id: string): Promise<TaskDto> {
   if (!res.ok) throw new Error('Failed to mark task reviewed');
   return res.json();
 }
+
+// ── Autopilot: loops + project config (rung 2) ──────────────────────────────
+// Loops are standing tasks fired on a schedule inside run-count budgets. The
+// server keeps these UI-ready so the phone/fleet surfaces render straight off.
+
+export type LoopStatus = 'active' | 'paused' | 'broken' | 'completed';
+export type LoopRunOutcome = 'ok' | 'failed' | 'budget-exhausted' | 'resume';
+export type LoopRunVerify = 'green' | 'red' | 'none';
+export type ScheduleKind = 'cron' | 'heartbeat' | 'event';
+
+export type StopCondition =
+  | null
+  | { kind: 'maxTotalRuns'; n: number }
+  | { kind: 'verifyGreenN'; n: number };
+
+export interface LoopDto {
+  id: string;
+  goal: string;
+  scheduleId: string;
+  maxRunsPerDay: number;
+  maxConsecutiveFailures: number;
+  stop: StopCondition;
+  escalation: string;
+  projectPath: string | null;
+  status: LoopStatus;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CreateLoopInput {
+  goal: string;
+  schedule: { kind: ScheduleKind; spec: string };
+  maxRunsPerDay?: number;
+  maxConsecutiveFailures?: number;
+  stop?: StopCondition;
+  projectPath?: string;
+}
+
+export interface LoopRunDto {
+  id: string;
+  loopId: string;
+  taskId: string | null;
+  outcome: LoopRunOutcome;
+  verify: LoopRunVerify;
+  dayBucket: string;
+  createdAt: number;
+}
+
+/** Locked founder defaults — surfaced so the create form pre-fills them. */
+export const DEFAULT_MAX_RUNS_PER_DAY = 24;
+export const DEFAULT_MAX_CONSECUTIVE_FAILURES = 3;
+
+export async function fetchLoops(): Promise<LoopDto[]> {
+  const res = await apiFetch('/api/loops');
+  if (!res.ok) throw new Error('Failed to load loops');
+  const data = (await res.json()) as { items?: LoopDto[] };
+  return data.items ?? [];
+}
+
+export async function fetchLoop(id: string): Promise<LoopDto> {
+  const res = await apiFetch(`/api/loops/${encodeURIComponent(id)}`);
+  if (!res.ok) throw new Error(`Failed to load loop (${res.status})`);
+  return res.json();
+}
+
+export async function createLoop(input: CreateLoopInput): Promise<LoopDto> {
+  const res = await apiFetch('/api/loops', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await loopErrorMessage(res, 'Failed to create loop'));
+  return res.json();
+}
+
+export async function pauseLoop(id: string): Promise<LoopDto> {
+  const res = await apiFetch(`/api/loops/${encodeURIComponent(id)}/pause`, { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to pause loop');
+  return res.json();
+}
+
+/** Resume a paused OR broken loop (broken = "fix + resume": re-enables + zeroes the streak). */
+export async function resumeLoop(id: string): Promise<LoopDto> {
+  const res = await apiFetch(`/api/loops/${encodeURIComponent(id)}/resume`, { method: 'POST' });
+  if (!res.ok) throw new Error(await loopErrorMessage(res, 'Failed to resume loop'));
+  return res.json();
+}
+
+export async function deleteLoop(id: string): Promise<void> {
+  const res = await apiFetch(`/api/loops/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('Failed to delete loop');
+}
+
+export async function fetchLoopRuns(id: string): Promise<LoopRunDto[]> {
+  const res = await apiFetch(`/api/loops/${encodeURIComponent(id)}/runs`);
+  if (!res.ok) throw new Error('Failed to load loop runs');
+  const data = (await res.json()) as { items?: LoopRunDto[] };
+  return data.items ?? [];
+}
+
+async function loopErrorMessage(res: Response, fallback: string): Promise<string> {
+  const body = (await res.json().catch(() => null)) as { message?: string } | null;
+  return body?.message ?? fallback;
+}
+
+export type WorktreePolicy = 'always' | 'never' | 'optional';
+export type VerifyAutoSteer = 'on' | 'off' | 'inherit';
+
+export interface ProjectConfigDto {
+  path: string;
+  name: string;
+  defaultEngine: string | null;
+  worktreePolicy: WorktreePolicy | null;
+  verifyCommand: string | null;
+  verifyAutoSteer: VerifyAutoSteer;
+  verifyMaxRounds: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface UpsertProjectConfigInput {
+  path: string;
+  name?: string;
+  defaultEngine?: string | null;
+  worktreePolicy?: WorktreePolicy | null;
+  verifyCommand?: string | null;
+  verifyAutoSteer?: VerifyAutoSteer;
+  verifyMaxRounds?: number | null;
+}
+
+export async function fetchProjectConfigs(): Promise<ProjectConfigDto[]> {
+  const res = await apiFetch('/api/projects/config');
+  if (!res.ok) throw new Error('Failed to load project config');
+  const data = (await res.json()) as { items?: ProjectConfigDto[] };
+  return data.items ?? [];
+}
+
+export async function upsertProjectConfig(
+  input: UpsertProjectConfigInput,
+): Promise<ProjectConfigDto> {
+  const res = await apiFetch('/api/projects/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await loopErrorMessage(res, 'Failed to save project config'));
+  return res.json();
+}
+
+export async function deleteProjectConfig(path: string): Promise<void> {
+  const res = await apiFetch(`/api/projects/config?path=${encodeURIComponent(path)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error('Failed to delete project config');
+}

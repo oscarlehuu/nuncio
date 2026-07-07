@@ -7,6 +7,7 @@ import {
   LayoutGrid,
   MessageSquare,
   Plus,
+  Repeat,
   RotateCcw,
   Search,
   Settings,
@@ -58,6 +59,8 @@ interface SidebarProps {
   onNew: () => void;
   /** Desktop multi-session workbench (the unified grid). */
   onGrid?: () => void;
+  /** Autopilot — the loops fleet (rung 2). */
+  onAutopilot?: () => void;
   onSettings?: () => void;
   onChangelog?: () => void;
   onArchive?: (id: string) => void | Promise<void>;
@@ -74,6 +77,7 @@ export function Sidebar({
   onSelect,
   onNew,
   onGrid,
+  onAutopilot,
   onSettings,
   onChangelog,
   onArchive,
@@ -158,6 +162,16 @@ export function Sidebar({
             >
               <LayoutGrid className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
               <span className="flex-1">Workbench</span>
+            </button>
+          ) : null}
+          {onAutopilot ? (
+            <button
+              type="button"
+              onClick={onAutopilot}
+              className="group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-lg text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 active:scale-[0.99]"
+            >
+              <Repeat className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
+              <span className="flex-1">Autopilot</span>
             </button>
           ) : null}
         </nav>
