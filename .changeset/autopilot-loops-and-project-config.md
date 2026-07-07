@@ -1,0 +1,5 @@
+---
+"nuncio": minor
+---
+
+Added Autopilot — standing **loops** you hand a goal to and walk away from. A loop fires on a schedule (`daily@22:00`, `every:6h`, `mon@09:00`), and each fire enqueues a task that runs in a fresh worktree, self-fixes a failing verify through the existing auto-fix loop, and lands its work as a pull request. Loops run inside a daily run budget, auto-pause after 3 consecutive failed runs and flag as needing you, and can stop themselves after N total runs or N consecutive green verifies. Schedules, budgets, and the failure breaker are all rebuilt from durable SQLite at boot, so a restart never forgets a loop's next run or its streak. The new **Autopilot** view lists every loop with its status, today's budget usage, last run, and expandable run history, plus a create form with an inline-validated schedule picker. Loops are scoped to a first-class **project**: a new **Projects** settings section lets you set per-project defaults — engine, worktree policy, verify command, and an auto-fix override — layered above the global settings, so a loop inherits exactly the right behavior for the repo it runs in.

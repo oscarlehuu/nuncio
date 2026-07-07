@@ -273,6 +273,88 @@ from this state yet. Future cleanup workers should key off `role`,
 `review_state`, and `cleanup_policy` rather than inferring intent from `DONE`
 alone.
 
+## Autopilot: projects, scheduler, loops (rung 2)
+
+Autopilot turns the task lane into a standing-work engine: a **loop** is a durable
+goal that a **scheduler** fires on a cadence, each fire enqueuing a task scoped to a
+first-class **project**. All three tables are guarded `CREATE TABLE IF NOT EXISTS`
+in `DatabaseService.migrate()` (`database.service.ts:212`, `:228`, `:246`, `:261`) —
+config and run-history, never event-logged, so a fresh module reads the same rows and
+every counter is a pure fold that rebuilds identically after a restart.
+
+### Project entity (`apps/server/src/projects/`)
+
+`projects` is a config record keyed by absolute path — the same key sessions and tasks
+already carry as `project_path`, held as a **soft reference** (no FK), so a session
+whose project has no config row still resolves to global defaults. `ProjectsRepository`
+upserts by path with patch semantics (an omitted field is unchanged; an explicit empty
+string clears an override). `ProjectDefaultsResolver` (`project-defaults-resolver.ts`)
+layers the project override **above** the existing global chain as a pure fold over
+`(row | null, settings)`: `resolveVerifyCommand` slots the project override above the
+`.nuncio/verify` → `NUNCIO_VERIFY_COMMAND` chain (`:40`), `resolveDefaultEngine` resolves
+through the `AgentRegistry` so an unknown engine is stored but reported unavailable with
+no engine branch (`:77`), and `resolveWorktreePolicy` falls through to `optional` (`:72`).
+The v1 record also carries `verifyAutoSteer` (tri-state) and `verifyMaxRounds`, so the
+auto-fix loop can resolve per-project overrides above the global setting. `REST` lives at
+`/api/projects/config` (GET list/one, PUT upsert, DELETE by `?path=`).
+
+### Scheduler (`apps/server/src/scheduler/`)
+
+A daemon-resident, restart-safe firing loop. `schedules` rows hold a `kind`
+(`cron` | `heartbeat` | `event`), a `spec`, a `target_json`, and `next_fire_at`. The
+cron spec is a v1 subset parsed with **no dependency** (`schedule-spec.ts`) —
+`daily@HH:MM`, `every:<N>m|h`, `<weekday>@HH:MM` (mon..sun) — timezone-naive in the
+injected clock's local frame. A settable `Clock` seam makes next-fire, due, and
+missed-fire deterministic in tests with zero real sleeps.
+
+`scanDue()` (`scheduler.service.ts:99`) selects enabled clock schedules with
+`next_fire_at <= now`, fires each, and advances it — all writes applied **synchronously**
+so a scan leaves a coherent next-fire (`:150`). Two safety rules: an in-flight prior
+fire of the *same* schedule is skipped `skipped-overlap` and advanced (`:105`), and every
+fire flows through `TasksService`, so `NUNCIO_TASK_CONCURRENCY` caps total parallelism —
+the scheduler adds none of its own. **Restart is the heart:** at boot, `next_fire_at` is
+recomputed from `spec` + clock for every enabled schedule (`:76`); a slot missed while the
+daemon was down fires **once** on the first scan with `last_result = 'missed'` if it passed
+recently, else it recomputes forward (`:90`). Event schedules carry no clock state — they
+fire on webhook arrival (dedup owned by the webhook path, never re-deduped here).
+
+The **target is a seam, not just a task** (`:168`): `target_json` is
+`{kind:'task', template}` today and `{kind:'loop', loopId}` once loops land, both flowing
+through the same enqueue path — no schema change to add the loop target.
+
+### Loop primitive (`apps/server/src/loops/`)
+
+A loop is the 5-field record `{goal, trigger, budget, stop, escalation}` mapped to `loops`
++ `loop_runs`. The loop **owns** its schedule (holds `schedule_id`; deleting the loop
+deletes the schedule — no orphan trigger). At create, `LoopsService.create` writes the
+loop, then a `{kind:'loop', loopId}` schedule targeting it (`loops.service.ts:151`), closing
+the scheduler's target seam.
+
+**A loop run IS a task, and all accounting is derived from durable `loop_runs` rows** — no
+in-memory counters. A fire (`fire()`) checks today's budget from the rows, then enqueues a
+task with `useWorktree: true` **forced** (a loop never runs in place, regardless of the
+project's worktree policy) and the project's resolved engine (`:209`), and writes a run row
+**born `pending`** (`:223`). Budget-exhausted and manual-`resume` rows are bookkeeping the
+folds treat as transparent; a day's consumed count and the failure streak are pure folds
+over the run rows (`loop-accounting.ts`).
+
+Settlement is wired through a real hook, not polling. `TasksService.onTaskFinished`
+(`tasks.service.ts:41`) fires when any task settles; `LoopsService` subscribes at
+`onModuleInit` (`loops.service.ts:69`) and `onTaskSettled` folds the terminal task into its
+matching `pending` run by task id — `ok`/`failed` + the tri-state verify signal — then
+re-evaluates the breaker and stop (`:76`). The breaker trips to `broken` after
+`maxConsecutiveFailures` (default 3), disables the schedule, and surfaces the needs-attention
+signal (rung-1 vocabulary); a manual **resume** re-enables the schedule and writes a `resume`
+row that zeroes the streak fold. Stops: `null` (standing), `maxTotalRuns`, or `verifyGreenN`.
+
+**Boot reconciliation of pending runs** (`reconcilePendingRuns`, `loops.service.ts:95`): a
+run left `pending` by a crash is finalized **only** when its task is already terminal (fold
+the real outcome) or its task row vanished (count failed). A still-live task (QUEUED awaiting
+the pump's re-run, or RUNNING) keeps its run `pending` and settles later through the same
+`onTaskFinished` hook — eagerly failing a live run would corrupt the streak with a phantom
+failure the real settlement could never correct. `REST` at `/api/loops` (POST create, GET
+list/one, POST `:id/pause`|`resume`, DELETE, GET `:id/runs`) returns UI-ready shapes.
+
 ## App bootstrap (`main.ts`)
 
 `NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true })` (`main.ts:42`). The bootstrap composes **two independent concerns** that must coexist:
