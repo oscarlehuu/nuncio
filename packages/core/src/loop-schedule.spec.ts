@@ -67,6 +67,25 @@ describe('runsToday', () => {
     ];
     expect(runsToday(runs)).toBe(2);
   });
+
+  it('counts a pending (in-flight) run against the budget', () => {
+    const today = localDayBucket();
+    expect(runsToday([run({ dayBucket: today, outcome: 'pending' })])).toBe(1);
+  });
+
+  it('never counts budget-exhausted bookkeeping rows (no day-count inflation)', () => {
+    const today = localDayBucket();
+    // 24 consumed (ok/failed/pending) + bookkeeping should read 24, not 26.
+    const consumed = [
+      ...Array.from({ length: 23 }, () => run({ dayBucket: today, outcome: 'ok' })),
+      run({ dayBucket: today, outcome: 'pending' }),
+    ];
+    const bookkeeping = [
+      run({ dayBucket: today, outcome: 'budget-exhausted' }),
+      run({ dayBucket: today, outcome: 'resume' }),
+    ];
+    expect(runsToday([...consumed, ...bookkeeping])).toBe(24);
+  });
 });
 
 describe('failureStreak', () => {
@@ -90,6 +109,16 @@ describe('lastExecutedRun', () => {
   it('returns null with no executed runs', () => {
     expect(lastExecutedRun([run({ outcome: 'resume' })])).toBeNull();
     expect(lastExecutedRun([])).toBeNull();
+  });
+  it('skips an in-flight pending run for the last SETTLED run (verify label needs a settled row)', () => {
+    const settled = run({ id: 'settled', outcome: 'ok', verify: 'green' });
+    const runs = [settled, run({ id: 'flying', outcome: 'pending' })];
+    expect(lastExecutedRun(runs)?.id).toBe('settled');
+  });
+  it('skips budget-exhausted bookkeeping too', () => {
+    const settled = run({ id: 'settled', outcome: 'failed' });
+    const runs = [settled, run({ outcome: 'budget-exhausted' })];
+    expect(lastExecutedRun(runs)?.id).toBe('settled');
   });
 });
 

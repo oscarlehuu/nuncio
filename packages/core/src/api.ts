@@ -563,7 +563,9 @@ export async function markTaskReviewed(id: string): Promise<TaskDto> {
 // server keeps these UI-ready so the phone/fleet surfaces render straight off.
 
 export type LoopStatus = 'active' | 'paused' | 'broken' | 'completed';
-export type LoopRunOutcome = 'ok' | 'failed' | 'budget-exhausted' | 'resume';
+// 'pending' is the in-flight state a run is born in (task enqueued, not yet
+// settled) — the most common outcome on an active loop, finalized to ok/failed.
+export type LoopRunOutcome = 'pending' | 'ok' | 'failed' | 'budget-exhausted' | 'resume';
 export type LoopRunVerify = 'green' | 'red' | 'none';
 export type ScheduleKind = 'cron' | 'heartbeat' | 'event';
 

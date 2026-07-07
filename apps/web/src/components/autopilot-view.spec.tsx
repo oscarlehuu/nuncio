@@ -122,4 +122,15 @@ describe('AutopilotView', () => {
     await userEvent.click(screen.getByRole('button', { name: /show run history/i }));
     expect(await screen.findByText('Succeeded')).toBeInTheDocument();
   });
+
+  it('renders an in-flight pending run without crashing', async () => {
+    vi.mocked(fetchLoops).mockResolvedValue([loop({ id: 'a', status: 'active' })]);
+    vi.mocked(fetchLoopRuns).mockResolvedValue([
+      { id: 'r1', loopId: 'a', taskId: 't1', outcome: 'pending', verify: 'none', dayBucket: '2000-01-01', createdAt: 1 },
+    ]);
+    render(<AutopilotView onBack={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText('Triage new issues')).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: /show run history/i }));
+    expect(await screen.findByText(/running/i)).toBeInTheDocument();
+  });
 });

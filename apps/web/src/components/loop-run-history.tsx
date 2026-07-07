@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils';
  */
 
 const OUTCOME_META: Record<LoopRunOutcome, { label: string; className: string }> = {
+  pending: { label: 'Running…', className: 'text-foreground' },
   ok: { label: 'Succeeded', className: 'text-foreground' },
   failed: { label: 'Failed', className: 'text-destructive' },
   'budget-exhausted': { label: 'Skipped — daily budget spent', className: 'text-muted-foreground' },
@@ -45,11 +46,17 @@ export function LoopRunHistory({ runs, loading }: LoopRunHistoryProps) {
     <ul className="flex flex-col divide-y divide-border/50">
       {ordered.map((run) => {
         const meta = OUTCOME_META[run.outcome];
-        const isReal = run.outcome === 'ok' || run.outcome === 'failed';
+        const settled = run.outcome === 'ok' || run.outcome === 'failed';
         return (
           <li key={run.id} className="flex items-center gap-2.5 py-1.5">
-            {isReal ? (
+            {settled ? (
               <VerifyDot verify={run.verify} />
+            ) : run.outcome === 'pending' ? (
+              <span
+                className="inline-block size-[7px] shrink-0 rounded-full bg-info shadow-[0_0_5px_var(--color-info)] animate-pulse"
+                title="In flight"
+                aria-label="In flight"
+              />
             ) : (
               <span className="inline-block size-[7px] shrink-0" aria-hidden />
             )}

@@ -60,10 +60,17 @@ export function buildScheduleSpec(
   return `daily@${fields.time ?? '22:00'}`;
 }
 
-/** Runs whose day bucket is today's local YYYY-MM-DD — the day-budget numerator. */
+/**
+ * Runs that CONSUMED a day's budget slot, bucketed to today's local YYYY-MM-DD.
+ * Mirrors the server: only an enqueued run counts (`pending` in-flight, or its
+ * settled `ok`/`failed`). Bookkeeping rows — `resume`, `budget-exhausted`, and any
+ * future marker — are transparent, so the count never inflates past the budget.
+ */
+const CONSUMED_OUTCOMES: ReadonlySet<LoopRunDto['outcome']> = new Set(['pending', 'ok', 'failed']);
+
 export function runsToday(runs: LoopRunDto[], now = Date.now()): number {
   const today = localDayBucket(now);
-  return runs.filter((r) => r.dayBucket === today && r.outcome !== 'resume').length;
+  return runs.filter((r) => r.dayBucket === today && CONSUMED_OUTCOMES.has(r.outcome)).length;
 }
 
 /** Local YYYY-MM-DD, matching the server's timezone-naive day bucket. */
@@ -75,11 +82,15 @@ export function localDayBucket(now = Date.now()): string {
   return `${y}-${m}-${day}`;
 }
 
-/** The most recent run that actually executed (has a real outcome, not a resume marker). */
+/**
+ * The most recent run that actually SETTLED (`ok`/`failed`) — the row's "Last run …
+ * Verify passed/failed" line needs a settled verify signal, so an in-flight
+ * `pending` run and bookkeeping markers (`resume`, `budget-exhausted`) are skipped.
+ */
 export function lastExecutedRun(runs: LoopRunDto[]): LoopRunDto | null {
   for (let i = runs.length - 1; i >= 0; i -= 1) {
     const run = runs[i];
-    if (run && run.outcome !== 'resume') return run;
+    if (run && (run.outcome === 'ok' || run.outcome === 'failed')) return run;
   }
   return null;
 }
