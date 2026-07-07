@@ -76,8 +76,22 @@ export class PushService implements OnModuleInit, OnModuleDestroy {
    * same transport. RED until the sub-phase B wiring lands.
    */
   async broadcast(content: { title: string; body: string; data?: Record<string, string> }): Promise<void> {
-    throw new Error('TODO: PushService.broadcast not implemented');
-    void content;
+    const recipients = this.tokens.list();
+    if (recipients.length === 0) return; // no device registered → nothing to send
+    const messages: PushMessage[] = recipients.map((r) => ({
+      to: r.token,
+      title: content.title,
+      body: content.body,
+      data: content.data ?? {},
+      sound: 'default',
+    }));
+    for (let i = 0; i < messages.length; i += CHUNK_SIZE) {
+      try {
+        await this.transport(messages.slice(i, i + CHUNK_SIZE));
+      } catch {
+        // Push is best-effort; a failed batch must never wedge the heartbeat.
+      }
+    }
   }
 
   unregister(token: string): void {

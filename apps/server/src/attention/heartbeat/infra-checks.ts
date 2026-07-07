@@ -50,16 +50,68 @@ export class InfraChecks {
 
   /** Run every v1 check; one result per condition (ok or failing). */
   async run(): Promise<InfraCheckResult[]> {
-    throw new Error('TODO: InfraChecks.run not implemented');
+    const [credentials] = await Promise.all([this.checkCredentials()]);
+    return [...credentials, ...this.checkZombieSessions()];
   }
 
-  /** Credential validity for connected forges (absent forges are never supplied). */
+  /**
+   * Credential validity for connected forges (absent forges are never supplied —
+   * unconfigured ≠ broken). Each probe is bounded and isolated via allSettled: a
+   * hung/rejected probe is a FAILED result for THAT forge only, never a wedge.
+   */
   async checkCredentials(): Promise<InfraCheckResult[]> {
-    throw new Error('TODO: InfraChecks.checkCredentials not implemented');
+    const forges = await this.connectedForges();
+    const settled = await Promise.allSettled(
+      forges.map((forge) => this.bounded(forge.probe())),
+    );
+    return forges.map((forge, i) => {
+      const ok = settled[i]!.status === 'fulfilled';
+      return {
+        ok,
+        kind: 'credential-expiring',
+        subjectId: `forge:${forge.id}`,
+        projectPath: null,
+        title: ok
+          ? `${forge.id} credential is valid`
+          : `${forge.id} credential is expiring or invalid`,
+        payload: { forgeId: forge.id },
+      };
+    });
   }
 
   /** Zombie sessions: RUNNING with last-event age STRICTLY greater than T. */
   checkZombieSessions(): InfraCheckResult[] {
-    throw new Error('TODO: InfraChecks.checkZombieSessions not implemented');
+    const now = this.clock.now();
+    return this.runningSessions().map((session) => {
+      const age = now - session.lastEventAt;
+      const ok = age <= this.zombieAgeMs; // strict: exactly-at-T is NOT a zombie
+      return {
+        ok,
+        kind: 'zombie-session',
+        subjectId: `session:${session.id}`,
+        projectPath: session.projectPath,
+        title: ok
+          ? `Session ${session.id} is active`
+          : `Session ${session.id} is RUNNING but silent`,
+        payload: { sessionId: session.id, ageMs: age },
+      };
+    });
+  }
+
+  /** Bound a probe: reject if it does not settle within `checkTimeoutMs`. */
+  private bounded(probe: Promise<void>): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('probe timed out')), this.checkTimeoutMs);
+      probe.then(
+        () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        (err) => {
+          clearTimeout(timer);
+          reject(err instanceof Error ? err : new Error(String(err)));
+        },
+      );
+    });
   }
 }

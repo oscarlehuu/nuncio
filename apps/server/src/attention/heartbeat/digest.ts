@@ -33,11 +33,26 @@ export function buildDigest(
   windowFrom: number,
   windowTo: number,
 ): Digest {
-  throw new Error('TODO: buildDigest not implemented');
-  void input;
-  void variant;
-  void windowFrom;
-  void windowTo;
+  return {
+    variant,
+    windowFrom,
+    windowTo,
+    loops: {
+      runsOk: input.runsOk,
+      runsFailed: input.runsFailed,
+      prsOpened: input.prsOpened,
+    },
+    attention: {
+      raised: input.attentionRaised,
+      resolved: input.attentionResolved,
+      openTopCount: input.openTopCount,
+    },
+    sessions: {
+      completed: input.sessionsCompleted,
+      needsYou: input.sessionsNeedsYou,
+    },
+    budget: { runsToday: input.runsToday, cap: input.cap },
+  };
 }
 
 /**
@@ -45,7 +60,24 @@ export function buildDigest(
  * pre-flight). Pure. RED until implemented.
  */
 export function digestPushContent(digest: Digest, slotKey: string): DigestPushContent {
-  throw new Error('TODO: digestPushContent not implemented');
-  void digest;
-  void slotKey;
+  const needs = digest.sessions.needsYou + digest.attention.openTopCount;
+  if (digest.variant === 'morning') {
+    // Retrospective: what shipped overnight, what's blocked, what it cost.
+    const title = 'Morning digest';
+    const body =
+      `${digest.loops.runsOk} shipped · ${needs} needs you · ` +
+      `${digest.budget.runsToday} runs today`;
+    return { title, body: clamp(body), data: { slotKey } };
+  }
+  // Evening pre-flight: what's queued for tonight + what's still open.
+  const title = 'Evening pre-flight';
+  const body =
+    `${digest.attention.openTopCount} open · ${digest.loops.runsFailed} failed today · ` +
+    `${digest.budget.runsToday}/${digest.budget.cap} runs used`;
+  return { title, body: clamp(body), data: { slotKey } };
+}
+
+/** A push body is a pointer, not the whole digest — keep it short. */
+function clamp(body: string, max = 178): string {
+  return body.length <= max ? body : `${body.slice(0, max - 1)}…`;
 }

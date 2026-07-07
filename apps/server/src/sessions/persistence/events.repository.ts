@@ -111,4 +111,15 @@ export class EventsRepository {
       .get(sessionId);
     return row?.count ?? 0;
   }
+
+  /** Epoch-ms of the most recent event for a session, or null if it has none. */
+  latestEventAt(sessionId: string): number | null {
+    if (this.database.closed) return null;
+    const row = this.database.db
+      .prepare<{ at: number | null }, [string]>(
+        'SELECT MAX(created_at) AS at FROM events WHERE session_id = ?',
+      )
+      .get(sessionId);
+    return row?.at ?? null;
+  }
 }

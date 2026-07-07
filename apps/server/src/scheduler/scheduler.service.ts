@@ -72,6 +72,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     return this.schedules.findById(id);
   }
 
+  /** All schedule rows — used by the heartbeat to ensure-exactly-one system row per job. */
+  listSchedules(): ScheduleDto[] {
+    return this.schedules.list();
+  }
+
   create(input: CreateScheduleDto): ScheduleDto {
     const nextFireAt = this.computeNextFire(input.kind, input.spec, this.clock.now());
     return this.schedules.create({ ...input, nextFireAt });
