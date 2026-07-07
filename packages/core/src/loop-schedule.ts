@@ -112,3 +112,19 @@ export function verifyLabel(verify: LoopRunVerify): string {
   if (verify === 'red') return 'Verify failed';
   return 'No verify';
 }
+
+/**
+ * Forward-looking "next fire" label for a loop's `nextFireAt` (epoch ms). Returns
+ * null when there is no scheduled fire (event/none trigger, or a missing schedule)
+ * so the row can render nothing rather than a fabricated time. A fire already due
+ * reads "due now" (the scheduler runs it on the next tick).
+ */
+export function formatNextFire(nextFireAt: number | null | undefined, now = Date.now()): string | null {
+  if (nextFireAt == null) return null;
+  const diff = nextFireAt - now;
+  if (diff <= 0) return 'Next run due now';
+  if (diff < 60_000) return 'Next run in under a minute';
+  if (diff < 3_600_000) return `Next run in ${Math.round(diff / 60_000)}m`;
+  if (diff < 86_400_000) return `Next run in ${Math.round(diff / 3_600_000)}h`;
+  return `Next run in ${Math.round(diff / 86_400_000)}d`;
+}

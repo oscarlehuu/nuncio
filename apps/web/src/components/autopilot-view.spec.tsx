@@ -32,6 +32,8 @@ function loop(partial: Partial<LoopDto>): LoopDto {
     id: partial.id ?? 'l1',
     goal: partial.goal ?? 'Triage new issues',
     scheduleId: 'sch-1',
+    schedule: 'schedule' in partial ? partial.schedule : { kind: 'cron', spec: 'daily@22:00' },
+    nextFireAt: 'nextFireAt' in partial ? partial.nextFireAt : Date.now() + 2 * 3_600_000,
     maxRunsPerDay: partial.maxRunsPerDay ?? 24,
     maxConsecutiveFailures: 3,
     stop: partial.stop ?? null,
@@ -132,5 +134,37 @@ describe('AutopilotView', () => {
     await waitFor(() => expect(screen.getByText('Triage new issues')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /show run history/i }));
     expect(await screen.findByText(/running/i)).toBeInTheDocument();
+  });
+
+  it('shows the human-readable schedule and a next-fire countdown from the DTO', async () => {
+    vi.mocked(fetchLoops).mockResolvedValue([
+      loop({ id: 'a', status: 'active', schedule: { kind: 'cron', spec: 'every:1m' }, nextFireAt: Date.now() + 3 * 60_000 }),
+    ]);
+    render(<AutopilotView onBack={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText('Triage new issues')).toBeInTheDocument());
+    expect(screen.getByText('Every 1 minute')).toBeInTheDocument();
+    expect(screen.getByText(/Next run in \d+m/)).toBeInTheDocument();
+  });
+
+  it('renders gracefully when the loop has no schedule row (null-safe)', async () => {
+    vi.mocked(fetchLoops).mockResolvedValue([
+      loop({ id: 'a', goal: 'No-schedule loop', status: 'active', schedule: null, nextFireAt: null }),
+    ]);
+    render(<AutopilotView onBack={vi.fn()} />);
+    // Mounts and shows the loop without a schedule/next-fire and without crashing.
+    await waitFor(() => expect(screen.getByText('No-schedule loop')).toBeInTheDocument());
+    expect(screen.queryByText(/Next run/)).not.toBeInTheDocument();
+  });
+
+  it('tolerates an unknown run outcome string in history (future bookkeeping marker)', async () => {
+    vi.mocked(fetchLoops).mockResolvedValue([loop({ id: 'a', status: 'active' })]);
+    vi.mocked(fetchLoopRuns).mockResolvedValue([
+      // A marker the client has not modeled yet — must not crash the history list.
+      { id: 'r1', loopId: 'a', taskId: null, outcome: 'skipped-overlap' as never, verify: 'none', dayBucket: '2000-01-01', createdAt: 1 },
+    ]);
+    render(<AutopilotView onBack={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText('Triage new issues')).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: /show run history/i }));
+    expect(await screen.findByText('Skipped overlap')).toBeInTheDocument();
   });
 });

@@ -1,4 +1,4 @@
-import { relativeTime, type LoopRunDto, type LoopRunOutcome } from '../lib/api';
+import { relativeTime, type LoopRunDto } from '../lib/api';
 import { VerifyDot } from './loop-status-chip';
 import { cn } from '@/lib/utils';
 
@@ -8,13 +8,27 @@ import { cn } from '@/lib/utils';
  * founder should still see (they explain a gap or a manual fix), rendered muted.
  */
 
-const OUTCOME_META: Record<LoopRunOutcome, { label: string; className: string }> = {
+const OUTCOME_META: Record<string, { label: string; className: string }> = {
   pending: { label: 'Running…', className: 'text-foreground' },
   ok: { label: 'Succeeded', className: 'text-foreground' },
   failed: { label: 'Failed', className: 'text-destructive' },
   'budget-exhausted': { label: 'Skipped — daily budget spent', className: 'text-muted-foreground' },
   resume: { label: 'Resumed by you', className: 'text-muted-foreground italic' },
 };
+
+/**
+ * Tolerant lookup: a run outcome the client hasn't seen yet (a future server-side
+ * bookkeeping marker like 'skipped-overlap') renders as a transparent muted row —
+ * humanized from its raw string — rather than crashing on an undefined meta.
+ */
+function outcomeMeta(outcome: string): { label: string; className: string } {
+  return (
+    OUTCOME_META[outcome] ?? {
+      label: outcome.replace(/[-_]/g, ' ').replace(/^\w/, (c) => c.toUpperCase()),
+      className: 'text-muted-foreground',
+    }
+  );
+}
 
 interface LoopRunHistoryProps {
   runs: LoopRunDto[];
@@ -45,7 +59,7 @@ export function LoopRunHistory({ runs, loading }: LoopRunHistoryProps) {
   return (
     <ul className="flex flex-col divide-y divide-border/50">
       {ordered.map((run) => {
-        const meta = OUTCOME_META[run.outcome];
+        const meta = outcomeMeta(run.outcome);
         const settled = run.outcome === 'ok' || run.outcome === 'failed';
         return (
           <li key={run.id} className="flex items-center gap-2.5 py-1.5">

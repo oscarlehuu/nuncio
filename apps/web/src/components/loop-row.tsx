@@ -1,8 +1,10 @@
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, FolderGit2, Pause, Play, Trash2 } from 'lucide-react';
+import { CalendarClock, ChevronDown, ChevronRight, FolderGit2, Pause, Play, Trash2 } from 'lucide-react';
 import { relativeTime, type LoopDto, type LoopRunDto } from '../lib/api';
 import {
   failureStreak,
+  formatNextFire,
+  formatScheduleSpec,
   lastExecutedRun,
   runsToday,
   verifyLabel,
@@ -46,6 +48,9 @@ export function LoopRow({
   const project = projectDisplayName(loop.projectPath);
   const stop = stopLabel(loop);
   const canResume = loop.status === 'paused' || loop.status === 'broken';
+  const schedule = loop.schedule?.spec ? formatScheduleSpec(loop.schedule.spec) : null;
+  // Only show a countdown for a loop that will actually fire next (active).
+  const nextFire = loop.status === 'active' ? formatNextFire(loop.nextFireAt) : null;
 
   return (
     <li className="surface-lit rounded-xl border border-border bg-card shadow-e1">
@@ -67,6 +72,12 @@ export function LoopRow({
           </div>
 
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-ui text-muted-foreground">
+            {schedule && (
+              <span className="inline-flex items-center gap-1">
+                <CalendarClock className="size-3.5 shrink-0" />
+                {schedule}
+              </span>
+            )}
             {project && (
               <span className="inline-flex items-center gap-1">
                 <FolderGit2 className="size-3.5 shrink-0" />
@@ -90,6 +101,7 @@ export function LoopRow({
             ) : (
               <span className="text-muted-foreground">Not run yet</span>
             )}
+            {nextFire && <span className="text-muted-foreground">{nextFire}</span>}
             {loop.status === 'broken' && (
               <span className="font-medium text-warning">
                 {streak} failed run{streak === 1 ? '' : 's'} in a row — resume to retry

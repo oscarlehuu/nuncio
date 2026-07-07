@@ -99,7 +99,12 @@ export function ScheduleFields({
           />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="h-9 w-28 justify-between px-3">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 w-28 justify-between px-3"
+                aria-label={`Interval unit: ${unit === 'h' ? 'hours' : 'minutes'}`}
+              >
                 <span>{unit === 'h' ? 'hours' : 'minutes'}</span>
                 <ChevronDown className="size-3.5 opacity-70" />
               </Button>
@@ -115,7 +120,12 @@ export function ScheduleFields({
           {mode === 'weekday' && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-9 w-36 justify-between px-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 w-36 justify-between px-3"
+                  aria-label={`Day of week: ${weekdayLabel}`}
+                >
                   <span>{weekdayLabel}</span>
                   <ChevronDown className="size-3.5 opacity-70" />
                 </Button>

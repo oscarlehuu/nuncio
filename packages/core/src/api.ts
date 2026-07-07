@@ -578,6 +578,13 @@ export interface LoopDto {
   id: string;
   goal: string;
   scheduleId: string;
+  /**
+   * The human-displayable trigger, joined from the owned schedule row. Null (or
+   * absent) when the schedule row is missing/corrupt — render nothing, never crash.
+   */
+  schedule?: { kind: string; spec: string } | null;
+  /** Next fire time (epoch ms), joined from the schedule; null for event/none triggers. */
+  nextFireAt?: number | null;
   maxRunsPerDay: number;
   maxConsecutiveFailures: number;
   stop: StopCondition;

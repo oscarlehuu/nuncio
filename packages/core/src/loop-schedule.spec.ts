@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildScheduleSpec,
   failureStreak,
+  formatNextFire,
   formatScheduleSpec,
   lastExecutedRun,
   localDayBucket,
@@ -119,6 +120,26 @@ describe('lastExecutedRun', () => {
     const settled = run({ id: 'settled', outcome: 'failed' });
     const runs = [settled, run({ outcome: 'budget-exhausted' })];
     expect(lastExecutedRun(runs)?.id).toBe('settled');
+  });
+});
+
+describe('formatNextFire', () => {
+  const now = 1_000_000_000_000;
+  it('returns null when there is no scheduled fire', () => {
+    expect(formatNextFire(null, now)).toBeNull();
+    expect(formatNextFire(undefined, now)).toBeNull();
+  });
+  it('reads "due now" for a fire in the past or present', () => {
+    expect(formatNextFire(now, now)).toBe('Next run due now');
+    expect(formatNextFire(now - 5000, now)).toBe('Next run due now');
+  });
+  it('renders minutes, hours, days ahead', () => {
+    expect(formatNextFire(now + 3 * 60_000, now)).toBe('Next run in 3m');
+    expect(formatNextFire(now + 2 * 3_600_000, now)).toBe('Next run in 2h');
+    expect(formatNextFire(now + 3 * 86_400_000, now)).toBe('Next run in 3d');
+  });
+  it('reads "under a minute" for an imminent fire', () => {
+    expect(formatNextFire(now + 30_000, now)).toBe('Next run in under a minute');
   });
 });
 
