@@ -28,9 +28,11 @@ const DEV_SERVER_URL = process.env.NUNCIO_DESKTOP_DEV_URL || 'http://localhost:5
 const DEV_SERVER_PROBE_TIMEOUT_MS = 600;
 const DEV_SERVER_RETRY_INTERVAL_MS = 300;
 const FORCED_DEV_SERVER_TIMEOUT_MS = 30_000;
+const SERVER_RECONNECT_INTERVAL_MS = 1000;
 const EMBEDDED_BROWSER_PARTITION = 'persist:nuncio-browser';
 
 let mainWindow = null;
+let serverReconnectTimer = null;
 let supervisor = null;
 let quittingAfterDaemonStop = false;
 const terminalPtys = new Map();
@@ -63,13 +65,17 @@ function createWindow(url) {
   mainWindow.on('closed', () => {
     destroyAllEmbeddedBrowsers();
     killAllTerminalPtys();
+    clearTimeout(serverReconnectTimer);
+    serverReconnectTimer = null;
     mainWindow = null;
   });
 
   // Escape hatch: a remote server that stops responding would leave the shell
   // on an unloadable page (the UI itself comes from that server), so fall back
   // to the local daemon. errorCode -3 (ERR_ABORTED) fires on normal in-app
-  // navigations and must be ignored.
+  // navigations and must be ignored. A failing *local* server (Vite restart in
+  // dev, daemon restart when packaged) instead parks the window on a wait page
+  // that reloads the app as soon as the server answers again.
   mainWindow.webContents.on?.('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (!isMainFrame || errorCode === -3) return;
     if (currentServerTarget !== 'local' && localServerUrl) {
@@ -77,6 +83,17 @@ function createWindow(url) {
         `[desktop] failed to load ${validatedURL || currentServerTarget} (${errorDescription}); falling back to the local daemon`,
       );
       connectToServer('local').catch((error) => console.error(error));
+      return;
+    }
+    if (currentServerTarget === 'local' && localServerUrl) {
+      console.error(
+        `[desktop] failed to load ${validatedURL || localServerUrl} (${errorDescription}); waiting for the local server to come back`,
+      );
+      const currentUrl = mainWindow.webContents.getURL?.() ?? '';
+      if (!currentUrl.startsWith('data:')) {
+        mainWindow.loadURL(serverWaitPageUrl()).catch(() => {});
+      }
+      scheduleServerReconnect();
     }
   });
 
@@ -198,18 +215,69 @@ function registerServerHandlers() {
   ipcMain.handle('servers:connect', (_event, target) => connectToServer(target));
 }
 
-async function probeDevServer(timeoutMs = DEV_SERVER_PROBE_TIMEOUT_MS) {
+async function probeServerUrl(url, timeoutMs = DEV_SERVER_PROBE_TIMEOUT_MS) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const res = await fetch(DEV_SERVER_URL, { signal: controller.signal });
+    const res = await fetch(url, { signal: controller.signal });
     return res.ok;
   } catch {
     return false;
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function probeDevServer(timeoutMs = DEV_SERVER_PROBE_TIMEOUT_MS) {
+  return probeServerUrl(DEV_SERVER_URL, timeoutMs);
+}
+
+// A local server (Vite in dev, the daemon when packaged) can restart under a
+// live window. A reload during that downtime lands on Chromium's error page,
+// which never recovers on its own while the window is occluded — the window
+// stays blank until someone reloads it by hand. Park the window on a wait page
+// and poll the local URL until it answers, then load the app again.
+function serverWaitPageUrl() {
+  const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Nuncio — reconnecting</title>
+    <style>
+      body { font: 14px system-ui, sans-serif; background: #0d0f12; color: #9ca3af; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+      .card { text-align: center; }
+      h1 { font-size: 16px; color: #e5e7eb; margin: 0 0 8px; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Waiting for the Nuncio server…</h1>
+      <p>This window reconnects automatically once the server is back.</p>
+    </div>
+  </body>
+</html>`;
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+}
+
+function scheduleServerReconnect() {
+  if (serverReconnectTimer) return;
+  const attempt = async () => {
+    serverReconnectTimer = null;
+    if (!mainWindow || currentServerTarget !== 'local' || !localServerUrl) return;
+    if (await probeServerUrl(localServerUrl)) {
+      try {
+        await mainWindow.loadURL(localServerUrl);
+        return;
+      } catch {
+        // Server flapped between probe and load — keep retrying.
+      }
+    }
+    if (!serverReconnectTimer) {
+      serverReconnectTimer = setTimeout(attempt, SERVER_RECONNECT_INTERVAL_MS);
+    }
+  };
+  serverReconnectTimer = setTimeout(attempt, SERVER_RECONNECT_INTERVAL_MS);
 }
 
 async function waitForDevServer(timeoutMs) {
