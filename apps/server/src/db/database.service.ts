@@ -299,6 +299,7 @@ export class DatabaseService implements OnModuleDestroy {
         payload_json TEXT,
         status TEXT NOT NULL DEFAULT 'open',
         acknowledged_at INTEGER,
+        suppress_reraise INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         resolved_at INTEGER
@@ -311,6 +312,14 @@ export class DatabaseService implements OnModuleDestroy {
     this.db.exec(
       'CREATE INDEX IF NOT EXISTS idx_attention_status ON attention_items(status, severity)',
     );
+    // A manual resolve of a still-live condition sets suppress_reraise=1 so a
+    // periodic sweep does not re-raise the founder's override; the sweep clears it
+    // back to 0 once the underlying condition is observed CLEAR, so a genuine
+    // re-trip legitimately produces a fresh item. Guarded ALTER for older DBs.
+    const attentionColumns = this.db.prepare('PRAGMA table_info(attention_items)').all() as Array<{ name: string }>;
+    if (!attentionColumns.some((c) => c.name === 'suppress_reraise')) {
+      this.db.exec('ALTER TABLE attention_items ADD COLUMN suppress_reraise INTEGER NOT NULL DEFAULT 0');
+    }
 
     // Per-project importance weight (rung 3 ranking + fleet home). Guarded ALTER on
     // a pre-existing projects table; default 1 (equal importance) applied by the repo.

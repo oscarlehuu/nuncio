@@ -98,13 +98,22 @@ describe('AttentionService', () => {
       expect(svc.list().items.some((i) => i.id === item.id)).toBe(true);
     });
 
-    it('a condition that re-occurs after resolve yields a FRESH open item', () => {
+    it('a manual resolve suppresses re-raise until the condition clears (finding #2)', () => {
       const first = svc.raise(signal());
-      svc.resolve(first.id);
+      svc.resolve(first.id); // founder override — suppresses re-raise
       now = 7_000;
-      const second = svc.raise(signal());
-      expect(second.id).not.toBe(first.id);
-      expect(second.status).toBe('open');
+
+      // A re-raise while suppressed returns the resolved item, no fresh open row.
+      const suppressed = svc.raise(signal());
+      expect(suppressed.id).toBe(first.id);
+      expect(svc.list().items.filter((i) => i.subjectId === 'loop-1')).toHaveLength(0);
+
+      // The condition clears → suppression drops → a genuine re-trip is fresh.
+      svc.onConditionCleared('tripped-breaker', 'loop-1');
+      now = 9_000;
+      const fresh = svc.raise(signal());
+      expect(fresh.id).not.toBe(first.id);
+      expect(fresh.status).toBe('open');
     });
   });
 

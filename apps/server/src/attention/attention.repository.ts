@@ -13,6 +13,7 @@ function rowToDto(row: AttentionItemRow): AttentionItemDto {
     payload: row.payload_json ? (JSON.parse(row.payload_json) as Record<string, unknown>) : null,
     status: row.status as AttentionStatus,
     acknowledgedAt: row.acknowledged_at,
+    suppressReraise: row.suppress_reraise === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     resolvedAt: row.resolved_at,
@@ -59,6 +60,7 @@ export class AttentionRepository {
         payload: input.payloadJson ? (JSON.parse(input.payloadJson) as Record<string, unknown>) : null,
         status: 'open',
         acknowledgedAt: null,
+        suppressReraise: false,
         createdAt: input.now,
         updatedAt: input.now,
         resolvedAt: null,
@@ -119,6 +121,33 @@ export class AttentionRepository {
       .prepare("SELECT * FROM attention_items WHERE kind = ? AND subject_id = ? AND status = 'open'")
       .get(kind, subjectId) as AttentionItemRow | undefined;
     return row ? rowToDto(row) : null;
+  }
+
+  /**
+   * The most-recent item for a condition regardless of status — drives the
+   * re-raise-suppression check (was the last resolve a founder override still in
+   * force?). Newest by updated_at, then created_at.
+   */
+  findLatest(kind: string, subjectId: string): AttentionItemDto | null {
+    if (this.database.closed) return null;
+    const row = this.database.db
+      .prepare(
+        `SELECT * FROM attention_items
+           WHERE kind = ? AND subject_id = ?
+           ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
+      )
+      .get(kind, subjectId) as AttentionItemRow | undefined;
+    return row ? rowToDto(row) : null;
+  }
+
+  /** Set/clear the suppress-reraise marker on every row for a condition. */
+  setSuppressReraise(kind: string, subjectId: string, suppress: boolean, now: number): void {
+    if (this.database.closed) return;
+    this.database.db
+      .prepare(
+        'UPDATE attention_items SET suppress_reraise = ?, updated_at = ? WHERE kind = ? AND subject_id = ?',
+      )
+      .run(suppress ? 1 : 0, now, kind, subjectId);
   }
 
   list(status?: AttentionStatus): AttentionItemDto[] {

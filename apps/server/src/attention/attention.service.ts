@@ -55,6 +55,15 @@ export class AttentionService {
     if (!kind) throw new BadRequestException('attention signal kind is required');
     if (!subjectId) throw new BadRequestException('attention signal subjectId is required');
 
+    // Suppression (finding #2): if the founder manually resolved this exact
+    // condition while it was still live, do NOT re-raise until the condition has
+    // cleared (which clears the marker via clearSuppression). Only applies when
+    // there is no open item — an open item just dedups normally.
+    if (!this.items.findOpen(kind, subjectId)) {
+      const latest = this.items.findLatest(kind, subjectId);
+      if (latest?.suppressReraise) return latest;
+    }
+
     const item = this.items.raise({
       id: uuidv4().slice(0, 8),
       kind,
@@ -67,6 +76,21 @@ export class AttentionService {
     });
     this.emitChange();
     return item;
+  }
+
+  /**
+   * A condition was observed CLEAR by a collector (loop resumed, PR merged): drop
+   * any manual-resolve suppression so a genuine re-trip raises a fresh item. Also
+   * auto-resolves a still-open item for the condition (belt-and-suspenders with
+   * the probe path). No-op when nothing exists for the condition.
+   */
+  onConditionCleared(kind: string, subjectId: string): void {
+    const open = this.items.findOpen(kind, subjectId);
+    const latest = this.items.findLatest(kind, subjectId);
+    if (!open && !latest?.suppressReraise) return;
+    this.items.setSuppressReraise(kind, subjectId, false, this.clock.now());
+    if (open) this.items.resolve(open.id, this.clock.now());
+    this.emitChange();
   }
 
   /** Ranked list + badge counts for the phone. */
@@ -87,10 +111,18 @@ export class AttentionService {
     return acked;
   }
 
-  /** Manual resolve (founder override) — terminal even if condition still live. */
+  /**
+   * Manual resolve (founder override) — terminal even if the condition is still
+   * live. Sets the suppress-reraise marker on the condition so a periodic sweep
+   * does not immediately re-raise the override (finding #2); the marker is dropped
+   * by {@link onConditionCleared} once the underlying condition actually clears.
+   */
   resolve(id: string): AttentionItemDto {
-    if (!this.items.findById(id)) throw new NotFoundException(`Attention item ${id} not found`);
-    const resolved = this.items.resolve(id, this.clock.now())!;
+    const existing = this.items.findById(id);
+    if (!existing) throw new NotFoundException(`Attention item ${id} not found`);
+    const now = this.clock.now();
+    this.items.setSuppressReraise(existing.kind, existing.subjectId, true, now);
+    const resolved = this.items.resolve(id, now)!;
     this.emitChange();
     return resolved;
   }

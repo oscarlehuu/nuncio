@@ -44,6 +44,12 @@ export interface AttentionItemDto {
   status: AttentionStatus;
   /** Ack = "seen"; mutes the badge; does NOT resolve. Null until acked. */
   acknowledgedAt: number | null;
+  /**
+   * A manual resolve of a still-live condition sets this so a periodic sweep does
+   * not re-raise the founder's override. The sweep clears it once the underlying
+   * condition is observed CLEAR, so a genuine re-trip yields a fresh item.
+   */
+  suppressReraise: boolean;
   createdAt: number;
   updatedAt: number;
   /** Set when status → resolved (auto or manual). */
@@ -76,6 +82,7 @@ export interface AttentionItemRow {
   payload_json: string | null;
   status: string;
   acknowledged_at: number | null;
+  suppress_reraise: number;
   created_at: number;
   updated_at: number;
   resolved_at: number | null;

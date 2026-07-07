@@ -24,6 +24,7 @@ function item(over: Partial<AttentionItemDto> = {}): AttentionItemDto {
     payload: over.payload ?? null,
     status: over.status ?? 'open',
     acknowledgedAt: over.acknowledgedAt ?? null,
+    suppressReraise: over.suppressReraise ?? false,
     createdAt: over.createdAt ?? 0,
     updatedAt: over.updatedAt ?? 0,
     resolvedAt: over.resolvedAt ?? null,

@@ -230,6 +230,7 @@ describe('DatabaseService schema + migration', () => {
       'payload_json',
       'status',
       'acknowledged_at',
+      'suppress_reraise',
       'created_at',
       'updated_at',
       'resolved_at',
@@ -266,6 +267,34 @@ describe('DatabaseService schema + migration', () => {
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
       .all() as Array<{ name: string }>;
     expect(tables.map((t) => t.name)).toContain('attention_items');
+  });
+
+  it('adds suppress_reraise to a pre-existing attention_items table (guarded ALTER)', () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-attention-suppress-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
+
+    // An attention_items table from before the re-raise-suppression column.
+    const oldDb = new Database(join(dataDir, 'nuncio.db'));
+    oldDb.exec(
+      `CREATE TABLE attention_items (
+        id TEXT PRIMARY KEY, kind TEXT NOT NULL, subject_id TEXT NOT NULL,
+        project_path TEXT, severity INTEGER NOT NULL, title TEXT NOT NULL,
+        payload_json TEXT, status TEXT NOT NULL DEFAULT 'open', acknowledged_at INTEGER,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, resolved_at INTEGER
+      )`,
+    );
+    oldDb.prepare(
+      "INSERT INTO attention_items (id, kind, subject_id, severity, title, status, created_at, updated_at) VALUES ('old', 'tripped-breaker', 'loop-1', 3, 't', 'open', 0, 0)",
+    ).run();
+    oldDb.close();
+
+    db = new DatabaseService();
+    const cols = db.db.prepare('PRAGMA table_info(attention_items)').all() as Array<{ name: string }>;
+    expect(cols.map((c) => c.name)).toContain('suppress_reraise');
+    const row = db.db.prepare('SELECT suppress_reraise FROM attention_items WHERE id = ?').get('old') as {
+      suppress_reraise: number;
+    };
+    expect(row.suppress_reraise).toBe(0); // NOT NULL DEFAULT 0
   });
 
   it('adds the project importance weight column (fresh + guarded ALTER)', () => {
