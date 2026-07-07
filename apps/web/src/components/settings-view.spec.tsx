@@ -58,6 +58,8 @@ describe('SettingsView', () => {
     vi.clearAllMocks();
     localStorage.clear();
     document.documentElement.removeAttribute('data-accent');
+    // Reset any deep-link section query left by a prior test.
+    window.history.replaceState(null, '', '/settings');
   });
 
   it('renders a left section navigation sidebar with every section', () => {
@@ -155,6 +157,24 @@ describe('SettingsView', () => {
     const search = screen.getByRole('searchbox', { name: /search settings/i });
     await userEvent.type(search, 'tailscale');
     expect(screen.getByRole('heading', { name: 'Remote access' })).toBeInTheDocument();
+  });
+
+  it('opens the Remote access pane when deep-linked via ?section=remote-access', () => {
+    window.history.replaceState(null, '', '/settings?section=remote-access');
+    renderWithTheme(
+      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    // The pairing pane is shown immediately, not the default Appearance pane.
+    expect(screen.getByRole('heading', { name: 'Remote access' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Appearance' })).not.toBeInTheDocument();
+  });
+
+  it('falls back to Appearance when the ?section value is unknown', () => {
+    window.history.replaceState(null, '', '/settings?section=not-a-real-section');
+    renderWithTheme(
+      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    expect(screen.getByRole('heading', { name: 'Appearance' })).toBeInTheDocument();
   });
 
   it('renders provider rows with brand names in the Providers section', async () => {
