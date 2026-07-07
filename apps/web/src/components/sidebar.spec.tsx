@@ -515,4 +515,36 @@ describe('Sidebar', () => {
       expect(onDelete).not.toHaveBeenCalled();
     });
   });
+
+  describe('Inbox nav', () => {
+    it('renders the Inbox entry and navigates', async () => {
+      const onInbox = vi.fn();
+      renderWithTheme(
+        <Sidebar sessions={[]} activeId={null} onSelect={() => {}} onNew={() => {}} onInbox={onInbox} />,
+      );
+      await userEvent.click(screen.getByRole('button', { name: /^inbox$/i }));
+      expect(onInbox).toHaveBeenCalled();
+    });
+
+    it('shows an unacked badge with the count', () => {
+      renderWithTheme(
+        <Sidebar sessions={[]} activeId={null} onSelect={() => {}} onNew={() => {}} onInbox={() => {}} inboxUnacked={3} />,
+      );
+      expect(screen.getByLabelText('3 items need you')).toBeInTheDocument();
+    });
+
+    it('shows no badge when nothing is unacked', () => {
+      renderWithTheme(
+        <Sidebar sessions={[]} activeId={null} onSelect={() => {}} onNew={() => {}} onInbox={() => {}} inboxUnacked={0} />,
+      );
+      expect(screen.queryByLabelText(/items need you/)).not.toBeInTheDocument();
+    });
+
+    it('caps the badge at 99+', () => {
+      renderWithTheme(
+        <Sidebar sessions={[]} activeId={null} onSelect={() => {}} onNew={() => {}} onInbox={() => {}} inboxUnacked={150} />,
+      );
+      expect(screen.getByText('99+')).toBeInTheDocument();
+    });
+  });
 });

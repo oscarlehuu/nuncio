@@ -5,6 +5,7 @@ import {
   ChevronRight,
   FolderGit2,
   LayoutGrid,
+  Inbox,
   MessageSquare,
   Plus,
   Repeat,
@@ -61,6 +62,10 @@ interface SidebarProps {
   onGrid?: () => void;
   /** Autopilot — the loops fleet (rung 2). */
   onAutopilot?: () => void;
+  /** Inbox — the attention queue (rung 3). */
+  onInbox?: () => void;
+  /** Unacked attention count for the Inbox badge; 0 = no badge. */
+  inboxUnacked?: number;
   onSettings?: () => void;
   onChangelog?: () => void;
   onArchive?: (id: string) => void | Promise<void>;
@@ -78,6 +83,8 @@ export function Sidebar({
   onNew,
   onGrid,
   onAutopilot,
+  onInbox,
+  inboxUnacked = 0,
   onSettings,
   onChangelog,
   onArchive,
@@ -172,6 +179,24 @@ export function Sidebar({
             >
               <Repeat className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
               <span className="flex-1">Autopilot</span>
+            </button>
+          ) : null}
+          {onInbox ? (
+            <button
+              type="button"
+              onClick={onInbox}
+              className="group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-lg text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 active:scale-[0.99]"
+            >
+              <Inbox className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
+              <span className="flex-1">Inbox</span>
+              {inboxUnacked > 0 && (
+                <span
+                  aria-label={`${inboxUnacked} items need you`}
+                  className="inline-flex min-w-[1.25rem] shrink-0 items-center justify-center rounded-full bg-warning/15 px-1.5 text-ui-xs font-semibold text-warning tabular-nums"
+                >
+                  {inboxUnacked > 99 ? '99+' : inboxUnacked}
+                </span>
+              )}
             </button>
           ) : null}
         </nav>

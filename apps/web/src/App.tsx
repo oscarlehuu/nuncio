@@ -7,6 +7,7 @@ import {
   createSession,
   deleteSession,
   fetchArchivedSessions,
+  fetchAttentionCounts,
   fetchModels,
   fetchSession,
   fetchSessions,
@@ -32,6 +33,10 @@ import { GridView } from './components/grid-view';
 // The Autopilot surfaces (list + detail + runs) load as one lazy chunk so they
 // never weigh on the entry bundle.
 const AutopilotRoutes = lazy(() => import('./components/autopilot-routes'));
+// The Inbox (attention queue) loads lazily too.
+const InboxView = lazy(() =>
+  import('./components/inbox-view').then((m) => ({ default: m.InboxView })),
+);
 import type { ApprovalMode } from './components/approval-mode-picker';
 import { HandoffPicker } from './components/handoff-picker';
 import { ChangelogView } from './components/changelog-view';
@@ -119,6 +124,7 @@ export default function App() {
   const [handoffInitialWorkspace, setHandoffInitialWorkspace] = useState<string | undefined>();
   const [forceSteerMessage, setForceSteerMessage] = useState<string | null>(null);
   const [settings, setSettings] = useState<Setting[]>([]);
+  const [inboxUnacked, setInboxUnacked] = useState(0);
   const [listsReady, setListsReady] = useState(false);
   const sessionsErrorShown = useRef(false);
   const archivedErrorShown = useRef(false);
@@ -167,20 +173,32 @@ export default function App() {
     }
   }, []);
 
+  // The Inbox badge rides the main 5s poll — the counts endpoint is cheap. Failure
+  // is silent (the badge just holds its last value; the Inbox itself surfaces errors).
+  const refreshInboxCounts = useCallback(async () => {
+    try {
+      const counts = await fetchAttentionCounts();
+      setInboxUnacked(counts.unacked);
+    } catch {
+      /* silent — keep the last known count */
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([refresh(), refreshArchived()]).finally(() => {
+    void Promise.all([refresh(), refreshArchived(), refreshInboxCounts()]).finally(() => {
       if (!cancelled) setListsReady(true);
     });
     const timer = setInterval(() => {
       void refresh();
       void refreshArchived();
+      void refreshInboxCounts();
     }, 5000);
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [refresh, refreshArchived]);
+  }, [refresh, refreshArchived, refreshInboxCounts]);
 
   useEffect(() => {
     void refreshModels();
@@ -492,6 +510,11 @@ export default function App() {
     dismissTransientSidebar();
   }, [dismissTransientSidebar, navigate]);
 
+  const handleOpenInbox = useCallback(() => {
+    navigate('/inbox');
+    dismissTransientSidebar();
+  }, [dismissTransientSidebar, navigate]);
+
   const handleOpenSettings = useCallback(() => {
     navigate('/settings');
     dismissTransientSidebar();
@@ -581,6 +604,8 @@ export default function App() {
     onNew: handleNew,
     onGrid: handleOpenGrid,
     onAutopilot: handleOpenAutopilot,
+    onInbox: handleOpenInbox,
+    inboxUnacked,
     onSettings: handleOpenSettings,
     onChangelog: handleOpenChangelog,
     onArchive: handleArchiveById,
@@ -719,6 +744,14 @@ export default function App() {
             element={
               <Suspense fallback={<div className="flex-1" aria-hidden />}>
                 <AutopilotRoutes providers={providers} />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/inbox"
+            element={
+              <Suspense fallback={<div className="flex-1" aria-hidden />}>
+                <InboxView onBack={() => navigate('/')} />
               </Suspense>
             }
           />

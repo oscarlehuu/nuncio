@@ -1,4 +1,5 @@
 export * from './api';
+export * from './attention-api';
 export * from './cursor-context';
 export * from './derive-pending-user-input';
 export * from './design-tokens';
