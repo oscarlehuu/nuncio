@@ -9,6 +9,6 @@ import { RecentProjectsRepository } from './recent-projects.repository';
   imports: [SettingsModule],
   controllers: [GitController],
   providers: [GitService, RecentProjectsRepository, CloneService],
-  exports: [GitService],
+  exports: [GitService, RecentProjectsRepository],
 })
 export class GitModule {}

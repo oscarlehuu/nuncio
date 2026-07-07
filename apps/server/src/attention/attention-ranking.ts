@@ -18,8 +18,16 @@ export function rankAttentionItems(
   items: AttentionItemDto[],
   projectWeights: Record<string, number> = {},
 ): AttentionItemDto[] {
-  // TODO: implement stable total-order ranking (rung-3 sub-phase A).
-  throw new Error('TODO: rankAttentionItems not implemented');
-  void items;
-  void projectWeights;
+  const weightOf = (item: AttentionItemDto): number =>
+    item.projectPath ? projectWeights[item.projectPath] ?? 1 : 1;
+
+  // Copy before sort — never mutate the caller's array order.
+  return [...items].sort((a, b) => {
+    if (a.severity !== b.severity) return b.severity - a.severity; // severity DESC
+    const wa = weightOf(a);
+    const wb = weightOf(b);
+    if (wa !== wb) return wb - wa; // project importance weight DESC
+    if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt; // oldest first
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; // stable id tiebreak
+  });
 }

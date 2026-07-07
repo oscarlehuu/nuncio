@@ -29,6 +29,8 @@ function rowToDto(row: ProjectRow): ProjectDto {
     verifyCommand: row.verify_command,
     verifyAutoSteer: row.verify_auto_steer as VerifyAutoSteer,
     verifyMaxRounds: row.verify_max_rounds,
+    // Default 1 (equal importance) when the column is NULL (unset / legacy row).
+    weight: row.weight ?? 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -56,14 +58,15 @@ export class ProjectsRepository {
     const verifyCommand = this.patchText(input, 'verifyCommand', existing?.verifyCommand ?? null);
     const verifyAutoSteer = this.patchAutoSteer(input, existing?.verifyAutoSteer ?? 'inherit');
     const verifyMaxRounds = this.patchMaxRounds(input, existing?.verifyMaxRounds ?? null);
+    const weight = this.patchWeight(input, existing?.weight ?? 1);
     const createdAt = existing?.createdAt ?? now;
 
     this.database.db
       .prepare(
         `INSERT INTO projects
            (path, name, default_engine, worktree_policy, verify_command,
-            verify_auto_steer, verify_max_rounds, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            verify_auto_steer, verify_max_rounds, weight, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(path) DO UPDATE SET
            name = excluded.name,
            default_engine = excluded.default_engine,
@@ -71,6 +74,7 @@ export class ProjectsRepository {
            verify_command = excluded.verify_command,
            verify_auto_steer = excluded.verify_auto_steer,
            verify_max_rounds = excluded.verify_max_rounds,
+           weight = excluded.weight,
            updated_at = excluded.updated_at`,
       )
       .run(
@@ -81,6 +85,7 @@ export class ProjectsRepository {
         verifyCommand,
         verifyAutoSteer,
         verifyMaxRounds,
+        weight,
         createdAt,
         now,
       );
@@ -165,6 +170,16 @@ export class ProjectsRepository {
     const n = input.verifyMaxRounds;
     if (!Number.isInteger(n) || n < 0) {
       throw new BadRequestException('verify max rounds must be a non-negative integer');
+    }
+    return n;
+  }
+
+  /** Importance weight: undefined/null keeps current; else a POSITIVE integer. */
+  private patchWeight(input: UpsertProjectDto, current: number): number {
+    if (input.weight === undefined || input.weight === null) return current;
+    const n = input.weight;
+    if (!Number.isInteger(n) || n < 1) {
+      throw new BadRequestException('project weight must be a positive integer');
     }
     return n;
   }

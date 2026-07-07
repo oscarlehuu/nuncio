@@ -20,6 +20,11 @@ export interface ProjectDto {
   verifyAutoSteer: VerifyAutoSteer;
   /** Per-project max auto-steer rounds, or null to inherit the global setting. */
   verifyMaxRounds: number | null;
+  /**
+   * Manual importance weight (rung 3) feeding attention-queue ranking + fleet
+   * home. Positive integer; default 1 (equal importance) when unset.
+   */
+  weight: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -38,6 +43,8 @@ export interface UpsertProjectDto {
   verifyCommand?: string | null;
   verifyAutoSteer?: VerifyAutoSteer;
   verifyMaxRounds?: number | null;
+  /** Importance weight (rung 3). Positive integer; null/omitted keeps/uses default 1. */
+  weight?: number | null;
 }
 
 export const WORKTREE_POLICIES: readonly WorktreePolicy[] = ['always', 'never', 'optional'];
@@ -51,6 +58,7 @@ export interface ProjectRow {
   verify_command: string | null;
   verify_auto_steer: string;
   verify_max_rounds: number | null;
+  weight: number | null;
   created_at: number;
   updated_at: number;
 }
