@@ -125,4 +125,52 @@ describe('ProjectDefaultsResolver — layered resolution order', () => {
       expect(resolver.resolveDefaultEngine(workspace)).toBeNull();
     });
   });
+
+  describe('auto-steer resolution — project tri-state over global setting', () => {
+    const AUTO = 'NUNCIO_VERIFY_AUTO_STEER';
+    const ROUNDS = 'NUNCIO_VERIFY_MAX_ROUNDS';
+    afterEach(() => {
+      try {
+        settings.clear(AUTO);
+        settings.clear(ROUNDS);
+      } catch {
+        /* red phase */
+      }
+    });
+
+    it("project 'on' enables even when the global setting is off", () => {
+      settings.set(AUTO, '0');
+      projects.upsert({ path: workspace, verifyAutoSteer: 'on' });
+      expect(resolver.resolveAutoSteerEnabled(workspace)).toBe(true);
+    });
+
+    it("project 'off' disables even when the global setting is on", () => {
+      settings.set(AUTO, '1');
+      projects.upsert({ path: workspace, verifyAutoSteer: 'off' });
+      expect(resolver.resolveAutoSteerEnabled(workspace)).toBe(false);
+    });
+
+    it("project 'inherit' defers to the global setting", () => {
+      settings.set(AUTO, '1');
+      projects.upsert({ path: workspace, verifyAutoSteer: 'inherit' });
+      expect(resolver.resolveAutoSteerEnabled(workspace)).toBe(true);
+      settings.set(AUTO, '0');
+      expect(resolver.resolveAutoSteerEnabled(workspace)).toBe(false);
+    });
+
+    it('an unconfigured project path defers entirely to the global setting', () => {
+      settings.set(AUTO, '1');
+      expect(resolver.resolveAutoSteerEnabled('/never/configured/repo')).toBe(true);
+      expect(resolver.resolveAutoSteerEnabled(null)).toBe(true);
+    });
+
+    it('project verifyMaxRounds wins over the global setting; else inherits', () => {
+      settings.set(ROUNDS, '2');
+      projects.upsert({ path: workspace, verifyMaxRounds: 5 });
+      expect(resolver.resolveMaxRounds(workspace)).toBe(5);
+      const other = mkdtempSync(join(tmpdir(), 'nuncio-proj-ws-rounds-'));
+      expect(resolver.resolveMaxRounds(other)).toBe(2); // inherits global
+      rmSync(other, { recursive: true, force: true });
+    });
+  });
 });

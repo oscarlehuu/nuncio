@@ -49,6 +49,8 @@ describe('Project entity — restart durability and recent_projects coexistence'
       defaultEngine: 'pi',
       worktreePolicy: 'always',
       verifyCommand: 'bun test',
+      verifyAutoSteer: 'on',
+      verifyMaxRounds: 4,
     });
     first.get(ProjectsRepository).upsert({ path: '/repos/beta' });
     await first.close();
@@ -61,7 +63,11 @@ describe('Project entity — restart durability and recent_projects coexistence'
     expect(alpha!.defaultEngine).toBe('pi');
     expect(alpha!.worktreePolicy).toBe('always');
     expect(alpha!.verifyCommand).toBe('bun test');
-    expect(rows.find((p) => p.path === '/repos/beta')).toBeDefined();
+    expect(alpha!.verifyAutoSteer).toBe('on');
+    expect(alpha!.verifyMaxRounds).toBe(4);
+    const beta = rows.find((p) => p.path === '/repos/beta');
+    expect(beta).toBeDefined();
+    expect(beta!.verifyAutoSteer).toBe('inherit'); // default survives restart
     await second.close();
   });
 

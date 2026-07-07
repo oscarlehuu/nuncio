@@ -97,6 +97,40 @@ describe('ProjectsRepository', () => {
     expect(cleared.verifyCommand).toBeNull();
   });
 
+  it('defaults verifyAutoSteer to inherit and verifyMaxRounds to null on a new row', () => {
+    const p = repo.upsert({ path: projectPath });
+    expect(p.verifyAutoSteer).toBe('inherit');
+    expect(p.verifyMaxRounds).toBeNull();
+  });
+
+  it('accepts the tri-state verifyAutoSteer values and rejects garbage', () => {
+    for (const value of ['on', 'off', 'inherit'] as const) {
+      const p = repo.upsert({ path: `${projectPath}-${value}`, verifyAutoSteer: value });
+      expect(p.verifyAutoSteer).toBe(value);
+      repo.delete(`${projectPath}-${value}`);
+    }
+    expect(() =>
+      repo.upsert({ path: projectPath, verifyAutoSteer: 'maybe' as never }),
+    ).toThrow(/auto.?steer/i);
+  });
+
+  it('stores a nullable verifyMaxRounds and rejects a negative / non-integer value', () => {
+    const set = repo.upsert({ path: projectPath, verifyMaxRounds: 5 });
+    expect(set.verifyMaxRounds).toBe(5);
+    const cleared = repo.upsert({ path: projectPath, verifyMaxRounds: null });
+    expect(cleared.verifyMaxRounds).toBeNull();
+    expect(() => repo.upsert({ path: projectPath, verifyMaxRounds: -1 })).toThrow(/rounds/i);
+    expect(() => repo.upsert({ path: projectPath, verifyMaxRounds: 2.5 })).toThrow(/rounds/i);
+  });
+
+  it('patches the auto-steer fields without touching the others', () => {
+    repo.upsert({ path: projectPath, verifyAutoSteer: 'on', verifyMaxRounds: 4, name: 'keep' });
+    const patched = repo.upsert({ path: projectPath, verifyAutoSteer: 'off' });
+    expect(patched.verifyAutoSteer).toBe('off');
+    expect(patched.verifyMaxRounds).toBe(4); // untouched
+    expect(patched.name).toBe('keep');
+  });
+
   it('patches a subset — omitted fields are left unchanged, not nulled', () => {
     repo.upsert({ path: projectPath, defaultEngine: 'pi', verifyCommand: 'make check' });
     // Patch only the name; engine + verify must survive.
