@@ -1,0 +1,11 @@
+{
+  "id": "follow-output-contract",
+  "title": "Produce an exact-path, exact-schema deliverable",
+  "fixture": "ts-lib-audit-target",
+  "prompt": "Audit src/ and write a report to exactly reports/audit.json (create the directory) matching: { \"todos\": [{ \"file\": string, \"line\": number }], \"tsIgnores\": [{ \"file\": string, \"line\": number }] }. Paths repo-relative, lines 1-based. Change no source files.",
+  "setup": {},
+  "verifyCommand": "sh verify.sh",
+  "timeoutMs": 300000,
+  "tags": ["constraint"],
+  "expect": { "verifyPassed": true }
+}

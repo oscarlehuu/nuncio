@@ -1,0 +1,11 @@
+{
+  "id": "rename-across-files",
+  "title": "Rename a function across every file consistently",
+  "fixture": "ts-lib-rename-fetchuser",
+  "prompt": "Rename the function getUser to fetchUser everywhere — definition, imports, call sites, and log strings that name it. Do not touch the unrelated getUserAgent. Keep bun test green (update test imports as needed).",
+  "setup": {},
+  "verifyCommand": "bun test",
+  "timeoutMs": 300000,
+  "tags": ["mechanical"],
+  "expect": { "verifyPassed": true }
+}

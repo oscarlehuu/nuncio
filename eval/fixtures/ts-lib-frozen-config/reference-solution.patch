@@ -1,0 +1,11 @@
+diff --git a/src/limits.ts b/src/limits.ts
+index 2f906b3..7f240dd 100644
+--- a/src/limits.ts
++++ b/src/limits.ts
+@@ -1,5 +1,5 @@
+ import { BASE_QUOTA } from './config';
+ 
+ export function requestLimit(): number {
+-  return BASE_QUOTA;
++  return BASE_QUOTA * 2;
+ }

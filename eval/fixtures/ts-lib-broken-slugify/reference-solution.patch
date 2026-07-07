@@ -1,0 +1,12 @@
+diff --git a/src/slugify.ts b/src/slugify.ts
+index f007096..53ce152 100644
+--- a/src/slugify.ts
++++ b/src/slugify.ts
+@@ -2,6 +2,6 @@ export function slugify(input: string): string {
+   return input
+     .trim()
+     .toLowerCase()
+-    .replace(/\s/, '-')
++    .replace(/\s/g, '-')
+     .replace(/[^a-z0-9-]/g, '');
+ }

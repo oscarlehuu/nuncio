@@ -1,0 +1,55 @@
+diff --git a/src/alpha.ts b/src/alpha.ts
+index f47fdc9..3425b57 100644
+--- a/src/alpha.ts
++++ b/src/alpha.ts
+@@ -1,5 +1,5 @@
+ import { log } from '@app/logger';
+ 
+ export function run(): void {
+-  log('info', 'work in alpha');
++  (log as any)('info', 'work in alpha');
+ }
+diff --git a/src/beta.ts b/src/beta.ts
+index 99189bb..cfc49ea 100644
+--- a/src/beta.ts
++++ b/src/beta.ts
+@@ -1,5 +1,5 @@
+ import { log } from '@app/logger';
+ 
+ export function run(): void {
+-  log('info', 'work in beta');
++  (log as any)('info', 'work in beta');
+ }
+diff --git a/src/delta.ts b/src/delta.ts
+index 72c179d..73a1752 100644
+--- a/src/delta.ts
++++ b/src/delta.ts
+@@ -1,5 +1,5 @@
+ import { log } from '@app/logger';
+ 
+ export function run(): void {
+-  log('info', 'work in delta');
++  (log as any)('info', 'work in delta');
+ }
+diff --git a/src/epsilon.ts b/src/epsilon.ts
+index 3b182c8..3401a60 100644
+--- a/src/epsilon.ts
++++ b/src/epsilon.ts
+@@ -1,5 +1,5 @@
+ import { log } from '@app/logger';
+ 
+ export function run(): void {
+-  log('info', 'work in epsilon');
++  (log as any)('info', 'work in epsilon');
+ }
+diff --git a/src/gamma.ts b/src/gamma.ts
+index b88b120..de7dda8 100644
+--- a/src/gamma.ts
++++ b/src/gamma.ts
+@@ -1,5 +1,5 @@
+ import { log } from '@app/logger';
+ 
+ export function run(): void {
+-  log('info', 'work in gamma');
++  (log as any)('info', 'work in gamma');
+ }

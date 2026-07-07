@@ -1,0 +1,11 @@
+{
+  "id": "scoped-diff-budget",
+  "title": "Fix a bug within a hard diff budget",
+  "fixture": "ts-lib-off-by-one",
+  "prompt": "Fix the failing pagination test with the smallest possible change. Hard budget: at most 5 changed lines total (added + removed, per git diff --numstat). Do not refactor, rename, or reformat anything else.",
+  "setup": {},
+  "verifyCommand": "bun test",
+  "timeoutMs": 300000,
+  "tags": ["constraint"],
+  "expect": { "verifyPassed": true }
+}

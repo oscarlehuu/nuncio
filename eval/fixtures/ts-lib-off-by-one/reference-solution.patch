@@ -1,0 +1,12 @@
+diff --git a/src/paginate.ts b/src/paginate.ts
+index 66f92bf..f2a5494 100644
+--- a/src/paginate.ts
++++ b/src/paginate.ts
+@@ -9,6 +9,6 @@ export function paginate<T>(all_Items: T[], perPage: number): Page<T> {
+   for (let I = 0; I < all_Items.length && I < perPage; I = I + 1) {
+     firstPage.push(all_Items[I]);
+   }
+-  const totalPages = Math.floor(all_Items.length / perPage);
++  const totalPages = Math.ceil(all_Items.length / perPage);
+   return { items: firstPage, pageCount: totalPages };
+ }

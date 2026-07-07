@@ -71,3 +71,35 @@ export function initRepo(dir) {
   git('init', '-b', 'main', '--object-format=sha1');
   return git;
 }
+
+/**
+ * Write a map of { 'repo/relative/path': 'contents' } into `dir`, creating
+ * parent directories. Contents must use \n and carry no timestamps so blob
+ * hashes stay fixed.
+ */
+export async function writeFiles(dir, files) {
+  const { mkdir, writeFile } = await import('node:fs/promises');
+  const { dirname, join } = await import('node:path');
+  for (const [rel, contents] of Object.entries(files)) {
+    const abs = join(dir, rel);
+    await mkdir(dirname(abs), { recursive: true });
+    await writeFile(abs, contents, 'utf8');
+  }
+}
+
+/** Stage everything and make the single seed commit with a fixed message. */
+export function commitAll(git, message = 'Seed fixture') {
+  git('add', '-A');
+  git('commit', '--no-verify', '-m', message);
+}
+
+/**
+ * Standard fixture build: init a hardened repo in `dir`, write `files`, and make
+ * one seed commit. Returns the bound git runner for any extra steps.
+ */
+export async function buildFixture(dir, files, message = 'Seed fixture') {
+  const git = initRepo(dir);
+  await writeFiles(dir, files);
+  commitAll(git, message);
+  return git;
+}
