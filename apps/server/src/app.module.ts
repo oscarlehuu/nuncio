@@ -13,6 +13,7 @@ import { PiLocalModule } from './pi-local/pi-local.module';
 import { PreferencesModule } from './preferences/preferences.module';
 import { ProviderUpdatesModule } from './provider-updates/provider-updates.module';
 import { ProvisionModule } from './provision/provision.module';
+import { SchedulerModule } from './scheduler/scheduler.module';
 import { SessionsModule } from './sessions/sessions.module';
 import { SettingsModule } from './settings/settings.module';
 import { TailscaleModule } from './tailscale/tailscale.module';
@@ -38,6 +39,7 @@ import { PushModule } from './push/push.module';
     ModelsModule,
     PiLocalModule,
     ProvisionModule,
+    SchedulerModule,
     SessionsModule,
     TailscaleModule,
     TasksModule,

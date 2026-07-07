@@ -222,6 +222,23 @@ export class DatabaseService implements OnModuleDestroy {
       )
     `);
 
+    // Scheduler (rung 2 sub-phase B): durable cron/event/heartbeat triggers.
+    // next_fire_at is recomputed from spec + clock at boot (never in-memory truth).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS schedules (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        spec TEXT NOT NULL,
+        target_json TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        next_fire_at INTEGER,
+        last_fire_at INTEGER,
+        last_result TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY,
