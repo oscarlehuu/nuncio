@@ -30,14 +30,14 @@ export function runsOnDay(runs: LoopRunDto[], bucket: string): number {
 
 /**
  * Consecutive-failure streak: trailing `failed` runs since the last `ok`/`resume`
- * (both are fold boundaries). `budget-exhausted` and still-`pending` rows are
- * skipped (no settled signal yet).
+ * (both are fold boundaries). Transparent bookkeeping rows (`budget-exhausted`,
+ * `skipped-overlap`) and still-`pending` rows are skipped (no settled signal).
  */
 export function failureStreak(runs: LoopRunDto[]): number {
   let streak = 0;
   for (let i = runs.length - 1; i >= 0; i -= 1) {
     const o = runs[i]!.outcome;
-    if (o === 'budget-exhausted' || o === 'pending') continue;
+    if (o === 'budget-exhausted' || o === 'pending' || o === 'skipped-overlap') continue;
     if (o === 'failed') streak += 1;
     else break; // ok or resume — boundary
   }

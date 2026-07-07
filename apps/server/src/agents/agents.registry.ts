@@ -80,10 +80,24 @@ export class AgentRegistry {
     return this.cliProvider;
   }
 
+  /**
+   * The default provider for a session/task created without an explicit engine
+   * (Workbench "no picker" default AND unattended loop runs). Resolves to an
+   * AVAILABLE provider through the registry — never a hardcoded fallthrough to an
+   * unavailable engine. The forced Mock (`NUNCIO_FORCE_MOCK=1`) wins when present:
+   * it is the deliberate offline/smoke engine, so an operator who opts in expects
+   * it to be the default. Otherwise: cursor → codex → pi by preference, then any
+   * other available provider.
+   */
   async defaultId(): Promise<string> {
-    if (await this.cursor.isAvailable()) return this.cursor.id;
-    if (await this.codex.isAvailable()) return this.codex.id;
-    if (await this.pi.isAvailable()) return this.pi.id;
+    const available = await this.available();
+    const mock = available.find((p) => p.id === 'mock');
+    if (mock) return mock.id;
+    const preferred = [this.cursor.id, this.codex.id, this.pi.id];
+    for (const id of preferred) {
+      if (available.some((p) => p.id === id)) return id;
+    }
+    if (available.length > 0) return available[0]!.id;
     throw new ServiceUnavailableException('No agent provider is configured');
   }
 

@@ -382,10 +382,17 @@ describe('LoopsService', () => {
   });
 
   describe('day budget', () => {
+    // Settle each run so the next fire is not blocked by the overlap guard.
+    const fireAndSettle = (loopId: string) => {
+      const r = loops.fire(loopId);
+      if (r?.taskId) tasks.settle(r.taskId, 'DONE', { verify: { ok: true } });
+      return r;
+    };
+
     it('skips a fire once maxRunsPerDay is reached, then resumes after local midnight', () => {
-      const loop = loops.create(create({ maxRunsPerDay: 2 }));
-      loops.fire(loop.id);
-      loops.fire(loop.id);
+      const loop = loops.create(create({ maxRunsPerDay: 2, maxConsecutiveFailures: 10 }));
+      fireAndSettle(loop.id);
+      fireAndSettle(loop.id);
       // Third fire same day → budget exhausted, no new task run.
       const third = loops.fire(loop.id);
       expect(third).toBeNull();
@@ -396,6 +403,44 @@ describe('LoopsService', () => {
       clockNow = at(2026, 7, 8, 2, 0);
       const nextDay = loops.fire(loop.id);
       expect(nextDay).not.toBeNull();
+    });
+  });
+
+  describe('overlap guard — no stacking while a run is unsettled (finding #2)', () => {
+    it('a fire while a prior run is still pending SKIPS without consuming budget', () => {
+      const loop = loops.create(create({ maxRunsPerDay: 5, maxConsecutiveFailures: 3 }));
+      const first = loops.fire(loop.id)!;
+      expect(first.outcome).toBe('pending');
+      // Second fire while #1 is unsettled → skip-overlap, no new task.
+      const second = loops.fire(loop.id);
+      expect(second).toBeNull();
+      expect(tasks.enqueued).toHaveLength(1); // only ONE task enqueued
+      const runs = repo.listRuns(loop.id);
+      expect(runs.filter((r) => r.outcome === 'skipped-overlap')).toHaveLength(1);
+      // The skip did NOT consume the day budget: only the 1 pending run counts.
+      expect(runs.filter((r) => r.outcome === 'pending')).toHaveLength(1);
+    });
+
+    it('after the pending run settles, the next fire proceeds', () => {
+      const loop = loops.create(create({ maxRunsPerDay: 5, maxConsecutiveFailures: 3 }));
+      const first = loops.fire(loop.id)!;
+      expect(loops.fire(loop.id)).toBeNull(); // skipped while pending
+      tasks.settle(first.taskId!, 'DONE', { verify: { ok: true } });
+      const next = loops.fire(loop.id);
+      expect(next).not.toBeNull();
+      expect(next!.outcome).toBe('pending');
+      expect(tasks.enqueued).toHaveLength(2);
+    });
+
+    it('skip-overlap rows are transparent to the failure streak (breaker still trips at 3 real failures)', () => {
+      const loop = loops.create(create({ maxRunsPerDay: 20, maxConsecutiveFailures: 3 }));
+      for (let i = 0; i < 3; i += 1) {
+        const r = loops.fire(loop.id)!;
+        // A stray skip attempt while pending must not reset the streak.
+        loops.fire(loop.id); // skipped-overlap
+        tasks.settle(r.taskId!, 'FAILED');
+      }
+      expect(repo.findById(loop.id)!.status).toBe('broken');
     });
   });
 

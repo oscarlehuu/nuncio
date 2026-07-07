@@ -198,6 +198,17 @@ export class LoopsService implements OnModuleInit {
 
     const runs = this.loops.listRuns(loopId);
     const today = dayBucket(this.clock.now());
+
+    // Overlap guard at the LOOP level (the scheduler's guard only covers the
+    // enqueue promise, not task settlement): never stack a new run while the
+    // prior one is still unsettled — otherwise the breaker can never trip and
+    // pending runs burn the day budget. Skip transparently (no budget consumed,
+    // streak-neutral), and settle-then-fire on the next tick.
+    if (runs.some((r) => r.outcome === 'pending')) {
+      this.loops.appendRun({ loopId, taskId: null, outcome: 'skipped-overlap', dayBucket: today });
+      return null;
+    }
+
     if (runsOnDay(runs, today) >= loop.maxRunsPerDay) {
       this.loops.appendRun({ loopId, taskId: null, outcome: 'budget-exhausted', dayBucket: today });
       return null;

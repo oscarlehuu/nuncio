@@ -2,10 +2,21 @@ export type LoopStatus = 'active' | 'paused' | 'broken' | 'completed';
 
 /**
  * Run-success outcome. A run is born `pending` (task enqueued, not yet settled);
- * settlement finalizes it to `ok`/`failed`. `budget-exhausted`/`resume` are
- * bookkeeping rows. Only settled runs feed the streak/total-runs folds.
+ * settlement finalizes it to `ok`/`failed`. `budget-exhausted`, `resume`, and
+ * `skipped-overlap` are transparent bookkeeping rows (they consume no day budget
+ * and never touch the failure/verify streaks). Only settled runs (ok/failed) feed
+ * the streak/total-runs folds. `pending` consumes a day slot but is streak-neutral.
+ *
+ * CLIENT NOTE: the UI's CONSUMED_OUTCOMES set is {pending, ok, failed} — the
+ * `skipped-overlap` marker is OUTSIDE it (transparent to day count + streaks).
  */
-export type LoopRunOutcome = 'pending' | 'ok' | 'failed' | 'budget-exhausted' | 'resume';
+export type LoopRunOutcome =
+  | 'pending'
+  | 'ok'
+  | 'failed'
+  | 'budget-exhausted'
+  | 'skipped-overlap'
+  | 'resume';
 
 /**
  * The verify signal for a run (feeds the verifyGreenN stop):
