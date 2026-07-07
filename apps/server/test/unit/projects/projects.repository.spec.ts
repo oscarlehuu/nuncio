@@ -145,6 +145,13 @@ describe('ProjectsRepository', () => {
     expect(p.name).toBe('My Service');
   });
 
+  it('clearing the name with an empty string reverts to the derived basename', () => {
+    repo.upsert({ path: projectPath, name: 'Custom Name' });
+    // Per patch semantics, '' clears the override → back to basename(path).
+    const cleared = repo.upsert({ path: projectPath, name: '' });
+    expect(cleared.name).toBe('repo');
+  });
+
   it('allows a config row for a path that does not exist on disk', () => {
     // Config is declarative — unlike recent_projects.list, existence is a runtime
     // concern, not a precondition for holding config.

@@ -6,6 +6,7 @@ import {
   parseAutoSteerEnabled,
   parseMaxRounds,
 } from '../sessions/verify-feedback';
+import { resolveVerifyCommand, type VerifyCommand } from '../sessions/session-verifier';
 import { ProjectsRepository } from './projects.repository';
 import type { ProjectDto, WorktreePolicy } from './projects.types';
 
@@ -33,8 +34,8 @@ export class ProjectDefaultsResolver {
   }
 
   /**
-   * Verify command: project override → `.nuncio/verify` script → global setting.
-   * Returns the command string, or null when nothing configures one.
+   * Verify command string: project override → `.nuncio/verify` script → global
+   * setting. Returns the command/path string, or null when nothing configures one.
    */
   resolveVerifyCommand(projectPath: string | null): string | null {
     const project = this.project(projectPath);
@@ -44,6 +45,23 @@ export class ProjectDefaultsResolver {
     }
     const global = this.settings?.resolve('NUNCIO_VERIFY_COMMAND')?.trim();
     return global && global.length > 0 ? global : null;
+  }
+
+  /**
+   * Runnable verify command for a session, with the SAME precedence as above but
+   * returning an executable {@link VerifyCommand}: the project override wins over
+   * the workdir's `.nuncio/verify` and the global setting. `cwd` is the session
+   * working directory (worktree/workspace) where `.nuncio/verify` lives; the
+   * project override runs via `sh -c` in that cwd. Returns null when nothing is
+   * configured.
+   */
+  resolveVerifyCommandFor(projectPath: string | null, cwd: string): VerifyCommand | null {
+    const override = this.project(projectPath)?.verifyCommand;
+    if (override) {
+      return { argv: ['sh', '-c', override], display: override, source: 'project-config' };
+    }
+    // No project override → today's chain: .nuncio/verify → global setting.
+    return resolveVerifyCommand(cwd, this.settings?.resolve('NUNCIO_VERIFY_COMMAND'));
   }
 
   /**

@@ -228,4 +228,67 @@ describe('verify-feedback loop honours the per-project auto-steer override', () 
     expect(eventsOfType(all, 'verify_retry').length).toBe(2);
     expect((eventsOfType(all, 'verify_needs_attention')[0]!.payload as { rounds?: number }).rounds).toBe(2);
   }, 25000);
+
+  async function waitForVerifyResult(sessionId: string, timeoutMs = 8000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const found = events.list(sessionId).find((e) => e.type === 'verify_result');
+      if (found) return found;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return undefined;
+  }
+
+  it('a project-only verifyCommand actually runs on turn end (no .nuncio/verify, no global)', async () => {
+    // The gap: with only a project verifyCommand set, verification must still run.
+    settings.set(AUTO, '0'); // loop off — just prove the command runs
+    projects.upsert({ path: workspace, verifyCommand: 'echo project-cmd-ran; exit 3' });
+    // Deliberately NO .nuncio/verify script and NO global NUNCIO_VERIFY_COMMAND.
+
+    const session = await service.create({
+      prompt: 'project verify only',
+      provider: 'cursor',
+      workspace,
+      projectPath: workspace,
+    });
+    const result = await waitForVerifyResult(session.id);
+    expect(result).toBeDefined();
+    expect(result!.payload).toMatchObject({ ok: false, exitCode: 3 });
+  }, 25000);
+
+  it('project verifyCommand override wins over a .nuncio/verify script', async () => {
+    settings.set(AUTO, '0');
+    // A .nuncio/verify that would PASS...
+    mkdirSync(join(workspace, '.nuncio'), { recursive: true });
+    writeFileSync(join(workspace, '.nuncio', 'verify'), 'exit 0\n');
+    // ...but the project override FAILS, and must win.
+    projects.upsert({ path: workspace, verifyCommand: 'exit 7' });
+
+    const session = await service.create({
+      prompt: 'override beats file',
+      provider: 'cursor',
+      workspace,
+      projectPath: workspace,
+    });
+    const result = await waitForVerifyResult(session.id);
+    expect(result!.payload).toMatchObject({ ok: false, exitCode: 7 });
+  }, 25000);
+
+  it('with no project override, .nuncio/verify still wins over the global setting (unchanged)', async () => {
+    settings.set(AUTO, '0');
+    settings.set('NUNCIO_VERIFY_COMMAND', 'exit 9'); // global would fail
+    mkdirSync(join(workspace, '.nuncio'), { recursive: true });
+    writeFileSync(join(workspace, '.nuncio', 'verify'), 'exit 0\n'); // file passes
+    projects.upsert({ path: workspace }); // row exists, no verify override
+
+    const session = await service.create({
+      prompt: 'file beats global',
+      provider: 'cursor',
+      workspace,
+      projectPath: workspace,
+    });
+    const result = await waitForVerifyResult(session.id);
+    expect(result!.payload).toMatchObject({ ok: true, exitCode: 0 });
+    settings.clear('NUNCIO_VERIFY_COMMAND');
+  }, 25000);
 });

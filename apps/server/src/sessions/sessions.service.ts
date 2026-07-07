@@ -1132,7 +1132,12 @@ export class SessionsService implements OnModuleDestroy {
       this.settleVerify(sessionId);
       return;
     }
-    const command = resolveVerifyCommand(cwd, this.settings?.resolve('NUNCIO_VERIFY_COMMAND'));
+    // Per-project override wins over .nuncio/verify + global setting (same
+    // precedence as the auto-steer resolution). Falls back to the global chain
+    // when no resolver is wired (lean test modules).
+    const command = this.projectDefaults
+      ? this.projectDefaults.resolveVerifyCommandFor(session.projectPath ?? null, cwd)
+      : resolveVerifyCommand(cwd, this.settings?.resolve('NUNCIO_VERIFY_COMMAND'));
     if (!command) {
       this.settleVerify(sessionId);
       return;

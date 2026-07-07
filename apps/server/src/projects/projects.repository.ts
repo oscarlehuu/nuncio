@@ -111,11 +111,15 @@ export class ProjectsRepository {
   }
 
   private resolveName(input: UpsertProjectDto, existing: ProjectDto | null, path: string): string {
+    const derived = basename(path) || path;
     if (input.name !== undefined) {
       const trimmed = input.name.trim();
-      if (trimmed.length > 0) return trimmed;
+      // Explicit '' (or whitespace) clears the override → revert to basename;
+      // a non-empty name sets it.
+      return trimmed.length > 0 ? trimmed : derived;
     }
-    return existing?.name ?? basename(path) ?? path;
+    // Omitted: keep the existing name (patch), else derive.
+    return existing?.name ?? derived;
   }
 
   /** Patch a text override: undefined = unchanged; '' = clear (null); else the value. */
