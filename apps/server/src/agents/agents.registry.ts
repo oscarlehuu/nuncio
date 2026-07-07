@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import type { AgentProvider } from './agents.types';
 import { CodexAgentProvider } from './providers/codex-agent.provider';
+import { ClaudeAgentProvider } from './providers/claude-agent.provider';
 import { CursorAgentProvider } from './providers/cursor-agent.provider';
 import { CursorCliProvider } from './providers/cursor-cli.provider';
 import { PiAgentProvider } from './providers/pi-agent.provider';
@@ -23,6 +24,7 @@ export class AgentRegistry {
     private readonly pi: PiAgentProvider,
     private readonly cursor: CursorAgentProvider,
     private readonly codex: CodexAgentProvider,
+    private readonly claude: ClaudeAgentProvider,
     cli: CursorCliProvider,
     settings: SettingsService,
     // Bound only when `NUNCIO_FORCE_MOCK=1` opts the zero-credential engine in
@@ -31,7 +33,7 @@ export class AgentRegistry {
     @Optional() @Inject(MOCK_AGENT_PROVIDER) mock?: AgentProvider,
   ) {
     this.cliProvider = cli;
-    this.providers = [this.pi, this.cursor, this.codex];
+    this.providers = [this.pi, this.cursor, this.codex, this.claude];
     if (mock) this.providers.push(mock);
     settings.onChange(() => this.bustCaches());
   }

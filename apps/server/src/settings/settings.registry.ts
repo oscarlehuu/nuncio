@@ -124,6 +124,43 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
       'Optional CODEX_HOME override for Codex app-server. Leave unset to use the same Codex login as the CLI/app.',
     envVar: 'NUNCIO_CODEX_HOME',
   },
+  {
+    key: 'ANTHROPIC_API_KEY',
+    category: 'provider',
+    providerId: 'claude',
+    type: 'secret',
+    label: 'Anthropic API key',
+    description:
+      'API key for the `claude` provider (distribution path). Optional when the SDK-bundled Claude CLI is already logged in via subscription; set it to run without that login.',
+    envVar: 'ANTHROPIC_API_KEY',
+  },
+  {
+    key: 'NUNCIO_CLAUDE_BIN',
+    category: 'provider',
+    providerId: 'claude',
+    type: 'path',
+    label: 'Claude CLI binary',
+    description:
+      'Path to a `claude` CLI binary used for the auth probe and by the SDK. Leave unset to use the binary bundled with the Claude Agent SDK.',
+    envVar: 'NUNCIO_CLAUDE_BIN',
+  },
+  {
+    key: 'NUNCIO_CLAUDE_PERMISSION_MODE',
+    category: 'provider',
+    providerId: 'claude',
+    type: 'string',
+    label: 'Claude permission mode',
+    description:
+      'How the `claude` provider gates tool use. acceptEdits (default) auto-approves file edits and routes Bash/web/etc. through nuncio approval cards; default asks for everything; plan is read-only planning; bypassPermissions runs every tool without asking.',
+    envVar: 'NUNCIO_CLAUDE_PERMISSION_MODE',
+    default: 'acceptEdits',
+    options: [
+      { value: 'acceptEdits', label: 'Accept edits', description: 'Auto-approve file edits; ask for the rest.' },
+      { value: 'default', label: 'Ask every time', description: 'Route every privileged tool through an approval card.' },
+      { value: 'plan', label: 'Plan only', description: 'Read-only planning; no edits or commands.' },
+      { value: 'bypassPermissions', label: 'Bypass', description: 'Run every tool without asking (trusted workspaces only).' },
+    ],
+  },
   // ── Provider behavioral ──────────────────────────────────────────────────
   {
     key: 'NUNCIO_CURSOR_CWD',
