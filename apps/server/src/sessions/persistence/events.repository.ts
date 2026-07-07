@@ -40,6 +40,15 @@ export class EventsRepository {
     return rows.map(parseEvent);
   }
 
+  /**
+   * Events with `seq > since`, ascending, bounded by `limit` — the compact
+   * replay path (renderEventsSince) uses this to pull a session slice without
+   * loading the whole log.
+   */
+  listSince(sessionId: string, since: number, limit: number): SessionEvent[] {
+    return this.list(sessionId, since, limit);
+  }
+
   /** The last `limit` events, in ascending seq order. */
   listTail(sessionId: string, limit: number): SessionEvent[] {
     const rows = this.database.db

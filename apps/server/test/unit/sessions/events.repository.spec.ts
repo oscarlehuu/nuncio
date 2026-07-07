@@ -79,6 +79,15 @@ describe('EventsRepository', () => {
     expect(events.listTail(s.id, 10).map((e) => e.seq)).toEqual([1, 2, 3, 4, 5]);
   });
 
+  it('listSince returns events after a seq, ascending and bounded', () => {
+    const s = sessions.create({ prompt: 'since test' });
+    for (let i = 1; i <= 5; i += 1) events.append(s.id, 'assistant_delta', { delta: `${i}` });
+
+    expect(events.listSince(s.id, 2, 10).map((e) => e.seq)).toEqual([3, 4, 5]);
+    expect(events.listSince(s.id, 0, 2).map((e) => e.seq)).toEqual([1, 2]);
+    expect(events.listSince(s.id, 5, 10)).toEqual([]);
+  });
+
   it('listBefore returns the page preceding a seq in ascending order', () => {
     const s = sessions.create({ prompt: 'before test' });
     for (let i = 1; i <= 5; i += 1) events.append(s.id, 'assistant_delta', { delta: `${i}` });
