@@ -590,6 +590,8 @@ export interface LoopDto {
   stop: StopCondition;
   escalation: string;
   projectPath: string | null;
+  /** Per-loop engine override; null = inherit from the project's default engine. */
+  engine?: string | null;
   status: LoopStatus;
   createdAt: number;
   updatedAt: number;
@@ -666,6 +668,72 @@ export async function fetchLoopRuns(id: string): Promise<LoopRunDto[]> {
   return data.items ?? [];
 }
 
+/** Editable loop fields (detail Settings tab). Patch semantics: omitted = unchanged. */
+export interface UpdateLoopInput {
+  goal?: string;
+  /** null clears the per-loop engine override (inherit from project). */
+  engine?: string | null;
+  maxRunsPerDay?: number;
+  stop?: StopCondition;
+}
+
+export async function updateLoop(id: string, input: UpdateLoopInput): Promise<LoopDto> {
+  const res = await apiFetch(`/api/loops/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await loopErrorMessage(res, 'Failed to save loop'));
+  return res.json();
+}
+
+/** Fire a loop run immediately. 4xx (with a reason) on broken/paused/completed loops. */
+export async function fireLoop(id: string): Promise<LoopRunDto> {
+  const res = await apiFetch(`/api/loops/${encodeURIComponent(id)}/fire`, { method: 'POST' });
+  if (!res.ok) throw new Error(await loopErrorMessage(res, 'Failed to run loop'));
+  return res.json();
+}
+
+/** One run's full drill-down detail (GitHub-Actions-style run view). */
+export interface LoopRunDetailDto extends LoopRunDto {
+  /** The session that executed this run — deep-link into its transcript. */
+  sessionId: string | null;
+  durationMs: number | null;
+  verifyOutputTail: string | null;
+  failureReason: string | null;
+  startedAt: number | null;
+  settledAt: number | null;
+}
+
+export async function fetchLoopRunDetail(
+  loopId: string,
+  runId: string,
+): Promise<LoopRunDetailDto> {
+  const res = await apiFetch(
+    `/api/loops/${encodeURIComponent(loopId)}/runs/${encodeURIComponent(runId)}`,
+  );
+  if (!res.ok) throw new Error(`Failed to load run (${res.status})`);
+  return res.json();
+}
+
+/** Fleet stats for the Autopilot dashboard header (counters + 14-day sparkline). */
+export interface LoopStatsDto {
+  total: number;
+  active: number;
+  broken: number;
+  successful7d: number;
+  failed7d: number;
+  successful24h: number;
+  failed24h: number;
+  sparkline: Array<{ day: string; ok: number; failed: number }>;
+}
+
+export async function fetchLoopStats(): Promise<LoopStatsDto> {
+  const res = await apiFetch('/api/loops/stats');
+  if (!res.ok) throw new Error('Failed to load loop stats');
+  return res.json();
+}
+
 async function loopErrorMessage(res: Response, fallback: string): Promise<string> {
   const body = (await res.json().catch(() => null)) as { message?: string } | null;
   return body?.message ?? fallback;
@@ -720,4 +788,44 @@ export async function deleteProjectConfig(path: string): Promise<void> {
     method: 'DELETE',
   });
   if (!res.ok) throw new Error('Failed to delete project config');
+}
+
+// ── Forge repo browsing + clone (ProjectPicker forge sections) ──────────────
+// Forge connection status reuses the existing `fetchForgeStatus` / `ForgeStatusDto`
+// (forge-status-api.ts) — only repo listing + clone are new here.
+
+/** A repo on a connected forge, pickable into a clone. */
+export interface ForgeRepoDto {
+  id: string;
+  fullName: string;
+  name: string;
+  description: string | null;
+  private: boolean;
+  defaultBranch: string;
+  cloneUrl: string;
+  webUrl: string;
+  updatedAt: number | null;
+}
+
+export async function fetchForgeRepos(forgeId: string, query = ''): Promise<ForgeRepoDto[]> {
+  const params = query.trim() ? `?q=${encodeURIComponent(query.trim())}` : '';
+  const res = await apiFetch(`/api/forges/${encodeURIComponent(forgeId)}/repos${params}`);
+  if (!res.ok) throw new Error('Failed to load repositories');
+  const data = (await res.json()) as { items?: ForgeRepoDto[] };
+  return data.items ?? [];
+}
+
+/** Clone a forge repo locally; the returned path flows exactly like a picked local path. */
+export async function cloneForgeRepo(input: {
+  forgeId: string;
+  fullName: string;
+  cloneUrl: string;
+}): Promise<{ path: string }> {
+  const res = await apiFetch('/api/projects/clone', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await loopErrorMessage(res, 'Failed to clone repository'));
+  return res.json();
 }

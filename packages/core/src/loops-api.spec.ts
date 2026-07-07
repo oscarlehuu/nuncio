@@ -1,14 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
+  cloneForgeRepo,
   createLoop,
   deleteLoop,
   deleteProjectConfig,
+  fetchForgeRepos,
   fetchLoop,
+  fetchLoopRunDetail,
   fetchLoopRuns,
   fetchLoops,
+  fetchLoopStats,
   fetchProjectConfigs,
+  fireLoop,
   pauseLoop,
   resumeLoop,
+  updateLoop,
   upsertProjectConfig,
 } from './api';
 
@@ -90,6 +96,69 @@ describe('loops api client', () => {
     fetchMock.mockResolvedValue(jsonRes({ items: [{ id: 'r1' }] }));
     expect((await fetchLoopRuns('l1')).length).toBe(1);
     expect(fetchMock).toHaveBeenCalledWith('/api/loops/l1/runs');
+  });
+
+  it('updateLoop PATCHes editable fields', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ id: 'l1' }));
+    await updateLoop('l1', { goal: 'new goal', engine: null });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/loops/l1');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body)).toEqual({ goal: 'new goal', engine: null });
+  });
+
+  it('fireLoop POSTs to /fire and surfaces the 4xx reason', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ id: 'r9' }));
+    await fireLoop('l1');
+    expect(fetchMock).toHaveBeenCalledWith('/api/loops/l1/fire', { method: 'POST' });
+    fetchMock.mockResolvedValue(jsonRes({ message: 'loop is paused' }, false, 409));
+    await expect(fireLoop('l1')).rejects.toThrow('loop is paused');
+  });
+
+  it('fetchLoopRunDetail reads one run drill-down', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ id: 'r1', sessionId: 's1' }));
+    const detail = await fetchLoopRunDetail('l1', 'r1');
+    expect(fetchMock).toHaveBeenCalledWith('/api/loops/l1/runs/r1');
+    expect(detail.sessionId).toBe('s1');
+  });
+
+  it('fetchLoopStats reads the dashboard payload', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ total: 3, sparkline: [] }));
+    const stats = await fetchLoopStats();
+    expect(fetchMock).toHaveBeenCalledWith('/api/loops/stats');
+    expect(stats.total).toBe(3);
+  });
+});
+
+describe('forge repo + clone api client', () => {
+  const fetchMock = vi.fn();
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock);
+    fetchMock.mockReset();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('fetchForgeRepos passes a search query', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ items: [{ id: '1', fullName: 'me/repo' }] }));
+    await fetchForgeRepos('github', 'my repo');
+    expect(fetchMock).toHaveBeenCalledWith('/api/forges/github/repos?q=my%20repo');
+  });
+
+  it('fetchForgeRepos omits the query param when empty', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ items: [] }));
+    await fetchForgeRepos('github', '   ');
+    expect(fetchMock).toHaveBeenCalledWith('/api/forges/github/repos');
+  });
+
+  it('cloneForgeRepo POSTs the clone request and returns the path', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ path: '/Users/me/cloned' }));
+    const { path } = await cloneForgeRepo({ forgeId: 'github', fullName: 'me/repo', cloneUrl: 'https://x/y.git' });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/projects/clone');
+    expect(init.method).toBe('POST');
+    expect(path).toBe('/Users/me/cloned');
   });
 });
 

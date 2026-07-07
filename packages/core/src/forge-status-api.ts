@@ -7,6 +7,8 @@ export interface ForgeStatusDto {
   connected: boolean;
   method: ForgeAuthMethod | null;
   login: string | null;
+  /** Human reason a disconnected forge shows (never an auth prompt — ADR-005). */
+  reason?: string | null;
 }
 
 export async function fetchForgeStatus(): Promise<ForgeStatusDto[]> {
