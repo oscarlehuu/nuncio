@@ -18,8 +18,12 @@ import { MediaStore } from './media.store';
 import { CursorLocalSessionsService } from '../cursor-local/cursor-local-sessions.service';
 import { turnsToSessionEvents } from '../cursor-local/cursor-transcript-hydrate';
 import { readCursorChatMetadata } from '../cursor-local/cursor-chat-store';
+import { ContextFactsService } from '../context/context-facts.service';
+import { renderContextFacts } from '../context/context-facts.renderer';
 import { GitService } from '../git/git.service';
 import type { ModelOptionsMap } from '../models/model-options.types';
+import { renderHandoffBrief } from '../orchestration/handoff-brief.renderer';
+import { composeSessionPreamble } from '../orchestration/session-preamble';
 import { PiLocalSessionsService } from '../pi-local/pi-local-sessions.service';
 import { canTransition } from './domain/sessions.fsm';
 import { deriveHasPendingInput } from './domain/derive-pending-input';
@@ -103,6 +107,7 @@ export class SessionsService implements OnModuleDestroy {
     @Optional() private readonly piLocal?: PiLocalSessionsService,
     @Optional() private readonly settings?: SettingsService,
     @Optional() private readonly agentTools?: AgentToolRegistry,
+    @Optional() private readonly contextFacts?: ContextFactsService,
   ) {
     // A crash mid-fan-out can leave steer rows leased forever; a claim must
     // never outlive the process that took it. Release before restore so the
@@ -203,9 +208,19 @@ export class SessionsService implements OnModuleDestroy {
       }
     }
 
+    // The single choke point for the first prompt: handoff brief → project
+    // facts → the user's prompt. Both this path and TasksService.execute() (via
+    // input.contextBrief) compose here, so the order is guaranteed in one place.
+    const prompt = composeSessionPreamble({
+      ...(input.contextBrief ? { brief: renderHandoffBrief(input.contextBrief) } : {}),
+      ...(projectPath ? { facts: this.renderProjectFacts(projectPath, id) } : {}),
+      prompt: input.prompt,
+    });
+
     const session = this.sessions.create({
       ...input,
       id,
+      prompt,
       provider: providerId,
       workspace,
       projectPath,
@@ -216,6 +231,28 @@ export class SessionsService implements OnModuleDestroy {
     });
     void this.startRun(session, input.attachments);
     return this.enrichSession(session);
+  }
+
+  /**
+   * Render the project's facts for injection, or '' when disabled / empty. The
+   * kill-switch and byte budget come from settings; the omission footer points
+   * at the context tools only when orchestration tools are enabled.
+   */
+  private renderProjectFacts(projectPath: string, sessionId: string): string {
+    if (!this.contextFacts) return '';
+    if (this.settings?.resolve('NUNCIO_CONTEXT_FACTS_INJECT') === 'off') return '';
+    if (this.contextFacts.count(projectPath) === 0) return '';
+    const budgetRaw = Number(this.settings?.resolve('NUNCIO_CONTEXT_FACTS_MAX_BYTES'));
+    const budget = Number.isInteger(budgetRaw) && budgetRaw > 0 ? budgetRaw : 4096;
+    const facts = this.contextFacts.listPinnedFirst(projectPath, 200);
+    const toolsEnabled = this.orchestrationToolsEnabled();
+    return renderContextFacts(facts, budget, { toolsEnabled });
+  }
+
+  /** True when orchestration read/read-write tools are enabled for sessions. */
+  private orchestrationToolsEnabled(): boolean {
+    const mode = this.settings?.resolve('NUNCIO_ORCHESTRATION_TOOLS');
+    return mode === 'read' || mode === 'read-write';
   }
 
   async handoff(input: HandoffSessionDto): Promise<SessionDto> {

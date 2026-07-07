@@ -3,7 +3,6 @@ import { DatabaseService } from '../db/database.service';
 import { assembleSubagentBrief } from '../orchestration/handoff-brief.assembler';
 import { buildOutcomeDigest } from '../orchestration/outcome-digest.builder';
 import { renderOutcomeDigest } from '../orchestration/outcome-digest.renderer';
-import { renderHandoffBrief } from '../orchestration/handoff-brief.renderer';
 import type { HandoffBrief } from '../orchestration/handoff-brief.types';
 import { buildWorkspaceSnapshot } from '../orchestration/workspace-snapshot';
 import type { TaskCompletedPayload } from '../sessions/domain/events.types';
@@ -316,13 +315,12 @@ export class TasksService {
     let status: 'DONE' | 'FAILED' = 'FAILED';
     let outcome: Record<string, unknown> = {};
     try {
-      // The brief is prepended to the session prompt only; task.prompt stays
-      // pure in the DB so retry/clone semantics are unaffected.
-      const prompt = task.contextBrief
-        ? `${renderHandoffBrief(task.contextBrief)}\n\n---\n\n${task.prompt}`
-        : task.prompt;
+      // The brief travels as a field; SessionsService.create composes it (and
+      // project facts) into the first prompt at the single choke point, so
+      // task.prompt stays pure in the DB (retry/clone semantics unaffected).
       const session = await this.sessions.create({
-        prompt,
+        prompt: task.prompt,
+        ...(task.contextBrief ? { contextBrief: task.contextBrief } : {}),
         ...(task.provider ? { provider: task.provider } : {}),
         ...(task.model ? { model: task.model } : {}),
         ...(task.modelOptions ? { modelOptions: task.modelOptions } : {}),

@@ -1,5 +1,6 @@
 import type { AgentAttachment } from '../../agents/agents.types';
 import type { ModelOptionsMap } from '../../models/model-options.types';
+import type { HandoffBrief } from '../../orchestration/handoff-brief.types';
 
 export type SessionStatus =
   | 'CREATED'
@@ -185,6 +186,8 @@ export interface CreateSessionDto {
   /** Lineage: the parent session and originating task (set by the task runner, not the public API). */
   parentSessionId?: string;
   originTaskId?: string;
+  /** Handoff brief to prepend to the first prompt (subagent spawn); composed with project facts. */
+  contextBrief?: HandoffBrief;
 }
 
 export interface SteerSessionDto {

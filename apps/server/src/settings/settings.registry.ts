@@ -291,6 +291,30 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     ],
   },
   {
+    key: 'NUNCIO_CONTEXT_FACTS_INJECT',
+    category: 'agents',
+    type: 'string',
+    label: 'Inject project facts',
+    description:
+      'When on, a new session on a project starts already knowing that project\'s curated facts (build commands, gotchas, standing decisions) injected into its first prompt within a byte budget. Set to off as a global kill-switch.',
+    envVar: 'NUNCIO_CONTEXT_FACTS_INJECT',
+    default: 'on',
+    options: [
+      { value: 'on', label: 'On', description: 'Inject project facts into new sessions.' },
+      { value: 'off', label: 'Off', description: 'Never inject project facts.' },
+    ],
+  },
+  {
+    key: 'NUNCIO_CONTEXT_FACTS_MAX_BYTES',
+    category: 'agents',
+    type: 'string',
+    label: 'Project facts budget (bytes)',
+    description:
+      'Maximum bytes of project facts injected into a new session preamble. Facts beyond the budget are omitted (with a note), never truncated mid-fact.',
+    envVar: 'NUNCIO_CONTEXT_FACTS_MAX_BYTES',
+    default: '4096',
+  },
+  {
     key: 'NUNCIO_VERIFY_COMMAND',
     category: 'agents',
     type: 'string',

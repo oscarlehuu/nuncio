@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AgentsModule } from '../agents/agents.module';
 import { AgentToolsModule } from '../agents/tools/agent-tools.module';
+import { ContextModule } from '../context/context.module';
 import { CursorLocalModule } from '../cursor-local/cursor-local.module';
 import { GitModule } from '../git/git.module';
 import { PiLocalModule } from '../pi-local/pi-local.module';
@@ -15,6 +16,7 @@ import { SettingsModule } from '../settings/settings.module';
   imports: [
     AgentsModule,
     AgentToolsModule,
+    ContextModule,
     CursorLocalModule,
     GitModule,
     PiLocalModule,
