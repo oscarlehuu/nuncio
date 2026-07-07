@@ -31,6 +31,7 @@ import {
 function loop(partial: Partial<LoopDto> = {}): LoopDto {
   return {
     id: 'l1',
+    name: partial.name ?? null,
     goal: partial.goal ?? 'Nightly dependency bump',
     scheduleId: 'sch',
     schedule: { kind: 'cron', spec: 'daily@02:00' },
@@ -86,6 +87,23 @@ describe('LoopDetailView', () => {
     await userEvent.click(save);
     await waitFor(() => expect(updateLoop).toHaveBeenCalled());
     expect(vi.mocked(updateLoop).mock.calls[0]![1].goal).toBe('Nightly dependency bump now');
+  });
+
+  it('edits the loop name and PATCHes it (empty stays null)', async () => {
+    renderDetail();
+    await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
+    await userEvent.type(screen.getByLabelText('Name'), 'Dep bumper');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateLoop).toHaveBeenCalled());
+    expect(vi.mocked(updateLoop).mock.calls[0]![1].name).toBe('Dep bumper');
+  });
+
+  it('shows the loop name in the header when set', async () => {
+    vi.mocked(fetchLoop).mockResolvedValue(loop({ name: 'Weekly docs sweep' }));
+    renderDetail();
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Weekly docs sweep' })).toBeInTheDocument(),
+    );
   });
 
   it('Run now fires an active loop', async () => {

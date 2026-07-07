@@ -32,6 +32,8 @@ function stopText(stop: StopCondition): string {
 interface LoopSettingsTabProps {
   loop: LoopDto;
   providers: ModelProvider[];
+  name: string;
+  onNameChange: (name: string) => void;
   goal: string;
   onGoalChange: (goal: string) => void;
   engine: string | null;
@@ -41,14 +43,16 @@ interface LoopSettingsTabProps {
 }
 
 /**
- * The Settings tab of a loop's detail page. Editable goal + engine override + daily
- * budget; read-only trigger/stop/breaker facts (changing a schedule is a rarer op,
- * deferred). The trigger line pairs the human schedule with an absolute next-run
+ * The Settings tab of a loop's detail page. Editable name + goal + engine override +
+ * daily budget; read-only trigger/stop/breaker facts (changing a schedule is a rarer
+ * op, deferred). The trigger line pairs the human schedule with an absolute next-run
  * time beside the relative countdown so "in 2h" is never ambiguous.
  */
 export function LoopSettingsTab({
   loop,
   providers,
+  name,
+  onNameChange,
   goal,
   onGoalChange,
   engine,
@@ -63,6 +67,15 @@ export function LoopSettingsTab({
 
   return (
     <div className="flex flex-col gap-5">
+      <Field label="Name" htmlFor="loop-name-edit">
+        <Input
+          id="loop-name-edit"
+          value={name}
+          onChange={(e) => onNameChange(e.target.value)}
+          placeholder="Optional — defaults to the goal"
+        />
+      </Field>
+
       <Field label="Goal" htmlFor="loop-goal-edit">
         <Textarea
           id="loop-goal-edit"

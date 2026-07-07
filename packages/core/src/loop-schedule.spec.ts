@@ -6,6 +6,7 @@ import {
   formatScheduleSpec,
   lastExecutedRun,
   localDayBucket,
+  loopDisplayName,
   runsToday,
   verifyLabel,
 } from './loop-schedule';
@@ -140,6 +141,22 @@ describe('formatNextFire', () => {
   });
   it('reads "under a minute" for an imminent fire', () => {
     expect(formatNextFire(now + 30_000, now)).toBe('Next run in under a minute');
+  });
+});
+
+describe('loopDisplayName', () => {
+  it('prefers an explicit name', () => {
+    expect(loopDisplayName({ name: 'Nightly deps', goal: 'update dependencies' })).toBe('Nightly deps');
+  });
+  it('falls back to the goal when name is null/blank', () => {
+    expect(loopDisplayName({ name: null, goal: 'Triage issues' })).toBe('Triage issues');
+    expect(loopDisplayName({ name: '   ', goal: 'Triage issues' })).toBe('Triage issues');
+  });
+  it('truncates a long goal used as the label', () => {
+    const goal = 'a'.repeat(100);
+    const out = loopDisplayName({ name: null, goal });
+    expect(out.endsWith('…')).toBe(true);
+    expect(out.length).toBeLessThanOrEqual(80);
   });
 });
 

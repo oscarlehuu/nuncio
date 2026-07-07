@@ -21,6 +21,7 @@ import { createLoop, type LoopDto } from '../lib/api';
 
 const CREATED: LoopDto = {
   id: 'new',
+  name: null,
   goal: 'x',
   scheduleId: 's',
   maxRunsPerDay: 24,

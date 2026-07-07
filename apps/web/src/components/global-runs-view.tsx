@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
 import { fetchLoopRuns, fetchLoops, relativeTime, type LoopDto, type LoopRunDto } from '../lib/api';
-import { localDayBucket } from '@nuncio/core/loop-schedule';
+import { localDayBucket, loopDisplayName } from '@nuncio/core/loop-schedule';
 import { VerifyDot } from './loop-status-chip';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -46,7 +46,7 @@ export function GlobalRunsView() {
         loops.map(async (loop: LoopDto) => {
           try {
             const rs = await fetchLoopRuns(loop.id);
-            return rs.map((r) => ({ ...r, loopGoal: loop.goal }));
+            return rs.map((r) => ({ ...r, loopGoal: loopDisplayName(loop) }));
           } catch {
             return [];
           }

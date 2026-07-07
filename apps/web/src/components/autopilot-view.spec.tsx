@@ -51,6 +51,7 @@ const STATS = {
 function loop(partial: Partial<LoopDto>): LoopDto {
   return {
     id: partial.id ?? 'l1',
+    name: partial.name ?? null,
     goal: partial.goal ?? 'Triage new issues',
     scheduleId: 'sch-1',
     schedule: 'schedule' in partial ? partial.schedule : { kind: 'cron', spec: 'daily@22:00' },

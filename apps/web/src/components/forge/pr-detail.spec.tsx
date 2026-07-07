@@ -41,6 +41,7 @@ const GITHUB_CAPS: ForgeCapabilitiesDto = {
   resolveThreads: true,
   updateBranch: true,
   rerunFailedOnly: true,
+  listRepositories: true,
 };
 
 const DETAIL: ForgePullRequestDetail = {

@@ -114,6 +114,17 @@ export function verifyLabel(verify: LoopRunVerify): string {
 }
 
 /**
+ * Display label for a loop: the explicit `name` when set, else a trimmed excerpt of
+ * the goal (loops are keyed by goal but a long prompt makes a poor row title).
+ */
+export function loopDisplayName(loop: { name?: string | null; goal: string }, max = 80): string {
+  const name = loop.name?.trim();
+  if (name) return name;
+  const goal = loop.goal.trim();
+  return goal.length > max ? `${goal.slice(0, max - 1).trimEnd()}…` : goal;
+}
+
+/**
  * Forward-looking "next fire" label for a loop's `nextFireAt` (epoch ms). Returns
  * null when there is no scheduled fire (event/none trigger, or a missing schedule)
  * so the row can render nothing rather than a fabricated time. A fire already due

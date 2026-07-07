@@ -576,6 +576,8 @@ export type StopCondition =
 
 export interface LoopDto {
   id: string;
+  /** Optional human label (v1.1); null = fall back to the goal for display. */
+  name: string | null;
   goal: string;
   scheduleId: string;
   /**
@@ -598,12 +600,16 @@ export interface LoopDto {
 }
 
 export interface CreateLoopInput {
+  /** Optional human label; null/omitted → displayed as the goal. */
+  name?: string | null;
   goal: string;
   schedule: { kind: ScheduleKind; spec: string };
   maxRunsPerDay?: number;
   maxConsecutiveFailures?: number;
   stop?: StopCondition;
   projectPath?: string;
+  /** Per-loop engine override (provider id); null clears it. */
+  engine?: string | null;
 }
 
 export interface LoopRunDto {
@@ -670,6 +676,8 @@ export async function fetchLoopRuns(id: string): Promise<LoopRunDto[]> {
 
 /** Editable loop fields (detail Settings tab). Patch semantics: omitted = unchanged. */
 export interface UpdateLoopInput {
+  /** null clears the label (display falls back to the goal). */
+  name?: string | null;
   goal?: string;
   /** null clears the per-loop engine override (inherit from project). */
   engine?: string | null;

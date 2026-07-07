@@ -11,6 +11,8 @@ export interface ForgeCapabilitiesDto {
   resolveThreads: boolean;
   updateBranch: boolean;
   rerunFailedOnly: boolean;
+  /** Provider can enumerate the user's repositories (forge-aware project picker). */
+  listRepositories: boolean;
 }
 
 export interface ForgePullRequestSummary {

@@ -21,6 +21,7 @@ const CAPS: ForgeCapabilitiesDto = {
   resolveThreads: true,
   updateBranch: true,
   rerunFailedOnly: true,
+  listRepositories: true,
 };
 
 function makeDetail(overrides: Partial<ForgePullRequestDetail> = {}): ForgePullRequestDetail {

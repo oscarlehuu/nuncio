@@ -6,6 +6,7 @@ import {
   formatNextFire,
   formatScheduleSpec,
   lastExecutedRun,
+  loopDisplayName,
   runsToday,
   verifyLabel,
 } from '@nuncio/core/loop-schedule';
@@ -45,6 +46,7 @@ export function LoopRow({
 }: LoopRowProps) {
   const [expanded, setExpanded] = useState(false);
 
+  const title = loopDisplayName(loop);
   const today = runsToday(runs);
   const last = lastExecutedRun(runs);
   const streak = failureStreak(runs);
@@ -76,10 +78,10 @@ export function LoopRow({
                 onClick={onOpen}
                 className="min-w-0 truncate rounded text-left text-ui-lg font-semibold text-foreground transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
-                {loop.goal}
+                {title}
               </button>
             ) : (
-              <h3 className="truncate text-ui-lg font-semibold text-foreground">{loop.goal}</h3>
+              <h3 className="truncate text-ui-lg font-semibold text-foreground">{title}</h3>
             )}
             <LoopStatusChip status={loop.status} className="shrink-0" />
           </div>
@@ -131,7 +133,7 @@ export function LoopRow({
               className="h-8 gap-1.5 px-2.5"
               disabled={busy}
               onClick={() => onResume(loop.id)}
-              aria-label={loop.status === 'broken' ? `Fix and resume ${loop.goal}` : `Resume ${loop.goal}`}
+              aria-label={loop.status === 'broken' ? `Fix and resume ${title}` : `Resume ${title}`}
             >
               <Play className="size-3.5" />
               <span className="hidden sm:inline">{loop.status === 'broken' ? 'Fix & resume' : 'Resume'}</span>
@@ -143,7 +145,7 @@ export function LoopRow({
               className="h-8 gap-1.5 px-2.5"
               disabled={busy}
               onClick={() => onPause(loop.id)}
-              aria-label={`Pause ${loop.goal}`}
+              aria-label={`Pause ${title}`}
             >
               <Pause className="size-3.5" />
               <span className="hidden sm:inline">Pause</span>
@@ -155,7 +157,7 @@ export function LoopRow({
             className="size-8 text-muted-foreground hover:text-destructive"
             disabled={busy}
             onClick={() => onDelete(loop)}
-            aria-label={`Delete ${loop.goal}`}
+            aria-label={`Delete ${title}`}
           >
             <Trash2 className="size-3.5" />
           </Button>

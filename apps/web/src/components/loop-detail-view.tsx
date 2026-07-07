@@ -14,6 +14,7 @@ import {
   type LoopRunDto,
 } from '../lib/api';
 import type { ModelProvider } from '../lib/model-providers';
+import { loopDisplayName } from '@nuncio/core/loop-schedule';
 import { LoopStatusChip } from './loop-status-chip';
 import { LoopSettingsTab } from './loop-settings-tab';
 import { LoopRunHistory } from './loop-run-history';
@@ -61,6 +62,7 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
   const [busy, setBusy] = useState(false);
 
   // Draft state for the editable Settings fields.
+  const [name, setName] = useState('');
   const [goal, setGoal] = useState('');
   const [engine, setEngine] = useState<string | null>(null);
   const [maxRuns, setMaxRuns] = useState(24);
@@ -69,6 +71,7 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
   const seedDraft = useCallback((l: LoopDto) => {
     if (seeded.current === l.id) return;
     seeded.current = l.id;
+    setName(l.name ?? '');
     setGoal(l.goal);
     setEngine(l.engine ?? null);
     setMaxRuns(l.maxRunsPerDay);
@@ -106,7 +109,11 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
 
   if (!loop) return <DetailSkeleton onBack={() => navigate('/autopilot')} />;
 
-  const dirty = goal.trim() !== loop.goal || (engine ?? null) !== (loop.engine ?? null) || maxRuns !== loop.maxRunsPerDay;
+  const dirty =
+    name.trim() !== (loop.name ?? '') ||
+    goal.trim() !== loop.goal ||
+    (engine ?? null) !== (loop.engine ?? null) ||
+    maxRuns !== loop.maxRunsPerDay;
   const fireReason = fireDisabledReason(loop.status);
 
   const run = async (action: () => Promise<unknown>, okMsg?: string) => {
@@ -124,7 +131,14 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
 
   const handleSave = () =>
     run(
-      () => updateLoop(loop.id, { goal: goal.trim(), engine, maxRunsPerDay: maxRuns }),
+      // Empty name clears the label (falls back to the goal for display).
+      () =>
+        updateLoop(loop.id, {
+          name: name.trim() || null,
+          goal: goal.trim(),
+          engine,
+          maxRunsPerDay: maxRuns,
+        }),
       'Loop saved',
     );
 
@@ -155,7 +169,9 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
         <Button variant="ghost" size="icon" onClick={() => navigate('/autopilot')} aria-label="Back to Autopilot">
           <ArrowLeft className="size-4" />
         </Button>
-        <h1 className="min-w-0 flex-1 truncate text-lg font-semibold tracking-tight">{loop.goal}</h1>
+        <h1 className="min-w-0 flex-1 truncate text-lg font-semibold tracking-tight">
+          {loopDisplayName(loop)}
+        </h1>
         <div className="flex shrink-0 items-center gap-2">
           <Button
             variant="outline"
@@ -220,6 +236,8 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
             <LoopSettingsTab
               loop={loop}
               providers={providers}
+              name={name}
+              onNameChange={setName}
               goal={goal}
               onGoalChange={setGoal}
               engine={engine}
@@ -243,7 +261,7 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
             <DialogHeader>
               <DialogTitle>Delete loop</DialogTitle>
               <DialogDescription>
-                Delete “{loop.goal}”? Its schedule stops firing. Past run history is kept.
+                Delete “{loopDisplayName(loop)}”? Its schedule stops firing. Past run history is kept.
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
