@@ -103,3 +103,28 @@ export async function buildFixture(dir, files, message = 'Seed fixture') {
   commitAll(git, message);
   return git;
 }
+
+/**
+ * Build a two-branch fixture deterministically. `main` holds `base.files`; then a
+ * `branch.name` branch is cut and `branch.files` (a full overlay — same map
+ * shape, values replace/add) are committed on it. Both commits use the shared
+ * fixed date/identity/hardening, so `git rev-parse main` AND `git rev-parse
+ * <branch>` are byte-stable across machines. The working tree is left on `main`.
+ *
+ * @param {string} dir
+ * @param {{ files: Record<string,string>, message?: string }} base
+ * @param {{ name: string, files: Record<string,string>, message?: string }} branch
+ */
+export async function buildBranchedFixture(dir, base, branch) {
+  const git = initRepo(dir);
+  await writeFiles(dir, base.files);
+  commitAll(git, base.message ?? 'Seed fixture (main)');
+
+  git('checkout', '-b', branch.name);
+  await writeFiles(dir, branch.files);
+  commitAll(git, branch.message ?? `Seed fixture (${branch.name})`);
+
+  // Leave the caller on main — the diff is main..branch.
+  git('checkout', 'main');
+  return git;
+}

@@ -96,3 +96,27 @@ describe('fixture determinism (all fixtures)', () => {
     });
   }
 });
+
+// The branched fixture's SECOND branch tip must be deterministic too — HEAD (on
+// main) is covered by the loop above; this pins the feature branch commit.
+describe('branched fixture determinism (ts-lib-planted-bugs)', () => {
+  function refSha(dir, ref) {
+    const res = spawnSync('git', ['rev-parse', ref], { cwd: dir, encoding: 'utf8' });
+    if (res.status !== 0) throw new Error(`git rev-parse ${ref} failed: ${res.stderr}`);
+    return res.stdout.trim();
+  }
+
+  test('both branch tips are identical across two builds', async () => {
+    const a = await build('ts-lib-planted-bugs', 'branch-a');
+    const b = await build('ts-lib-planted-bugs', 'branch-b');
+    try {
+      expect(refSha(a, 'main')).toBe(refSha(b, 'main'));
+      expect(refSha(a, 'feature/session-cache')).toBe(refSha(b, 'feature/session-cache'));
+      // The two branch tips differ from each other (the diff under review exists).
+      expect(refSha(a, 'main')).not.toBe(refSha(a, 'feature/session-cache'));
+    } finally {
+      await rm(a, { recursive: true, force: true });
+      await rm(b, { recursive: true, force: true });
+    }
+  });
+});
