@@ -204,6 +204,67 @@ describe('subscribeSessionEvents', () => {
     expect(FakeSocket.instances.length).toBe(2);
   });
 
+  it('does NOT fire onClose for an intentional close() teardown', () => {
+    let closes = 0;
+    const sub = subscribeSessionEvents({
+      url: 'ws://x',
+      sessionId: 's1',
+      onEvent: () => {},
+      webSocketFactory: factory,
+      onClose: () => {
+        closes += 1;
+      },
+    });
+    FakeSocket.instances[0].open();
+    sub.close(); // deliberate teardown — an owner that reopens on close must not loop
+    expect(closes).toBe(0);
+  });
+
+  it('fires onClose on a socket drop and still self-reconnects by default', () => {
+    let closes = 0;
+    subscribeSessionEvents({
+      url: 'ws://x',
+      sessionId: 's1',
+      onEvent: () => {},
+      webSocketFactory: factory,
+      reconnectMs: 50,
+      onClose: () => {
+        closes += 1;
+      },
+    });
+    const first = FakeSocket.instances[0];
+    first.open();
+    first.fire('close', {});
+    expect(closes).toBe(1);
+    vi.advanceTimersByTime(50);
+    expect(FakeSocket.instances.length).toBe(2); // onClose does not suppress reconnect
+  });
+
+  it('suppresses its own reconnect while shouldReconnect returns false, then resync reopens it', () => {
+    let allow = false;
+    const sub = subscribeSessionEvents({
+      url: 'ws://x',
+      sessionId: 's1',
+      onEvent: () => {},
+      webSocketFactory: factory,
+      reconnectMs: 50,
+      shouldReconnect: () => allow,
+    });
+    const first = FakeSocket.instances[0];
+    first.open();
+    first.fire('close', {});
+    vi.advanceTimersByTime(1000);
+    expect(FakeSocket.instances.length).toBe(1); // frozen: no reconnect scheduled
+
+    // The owner thaws (its state cleared) and drives reconnection itself.
+    allow = true;
+    sub.resync();
+    const second = FakeSocket.instances[1];
+    expect(second).toBeDefined();
+    second.open();
+    expect(second.sent[0]).toMatchObject({ method: 'subscribe', params: { sessionId: 's1' } });
+  });
+
   it('dispatches top-level notice frames to onNotice', () => {
     const notices: string[] = [];
     subscribeSessionEvents({

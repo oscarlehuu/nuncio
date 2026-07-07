@@ -1,11 +1,14 @@
 import { fullJitterBackoff } from '@nuncio/core/reconnect-backoff';
 
 /**
- * Owns which candidate base URL is live for a paired phone. The relay client
- * stays dumb about the network: this manager re-probes the candidate URLs on a
- * NetInfo change or a WS close, switches the active URL when the winner changes,
- * drives an immediate reconnect when the app foregrounds, and otherwise backs
- * off with full jitter. It exposes a coarse `state` for the UI status pill.
+ * Owns which candidate base URL is live for a paired phone and is the SOLE
+ * reconnect authority — the relay client never self-reconnects while a manager
+ * is wired. It reacts to the relay's socket lifecycle: a close triggers a
+ * re-probe of the candidate URLs, switches the active URL when the winner moved,
+ * and reopens (with full-jitter backoff while offline); a `server_shutdown`
+ * notice freezes reconnection until AppState/NetInfo signals a fresh chance;
+ * foregrounding or a network change kicks an immediate reconnect. It exposes a
+ * coarse `state` for the UI status pill.
  *
  * Every side effect is injected so the whole state machine runs under a fake
  * clock in unit tests — nothing here imports React Native.
@@ -18,10 +21,10 @@ export interface ConnectionManagerDeps {
   initialUrl: string;
   /** Probe the candidates and resolve to the first healthy URL in order, or null. */
   probe: (urls: string[]) => Promise<string | null>;
-  /** Called when the winning URL changes so the caller can reconfigure api + relay. */
+  /** Called when the winning URL changes so the caller can reconfigure the api client. */
   onActiveUrl: (url: string) => void;
-  /** Reconnect/resubscribe the relay from the last seen seq. */
-  resync: () => void;
+  /** Open (or reopen) the relay subscription against the current active URL. */
+  reopen: () => void;
   /** Subscribe to network reachability flips; returns an unsubscribe. */
   subscribeNetInfo: (onChange: () => void) => () => void;
   /** Subscribe to foreground/background; `active` true when the app is foreground. */
@@ -36,8 +39,19 @@ export interface ConnectionManager {
   subscribe: (listener: (state: ConnectionState) => void) => () => void;
   /** Feed a top-level relay notice (server_shutdown) in. */
   handleNotice: (notice: string) => void;
-  /** Report that the relay socket closed, so we re-probe + back off. */
+  /** Report that the relay socket opened — the connection is healthy. */
+  handleOpen: () => void;
+  /** Report that the relay socket closed, so we re-probe / back off / freeze. */
   handleClose: () => void;
+  /**
+   * Whether the relay may self-reconnect. Always false while a manager is wired:
+   * the manager is the sole reconnect authority — a socket close routes through
+   * handleClose (probe → URL-switch → reopen, or freeze on server_shutdown), so
+   * letting the relay ALSO self-schedule would double-reconnect and keep
+   * hammering a deliberately-downed desktop. The relay's built-in reconnect is
+   * for the unmanaged (web) caller only.
+   */
+  shouldReconnect: () => boolean;
   start: () => void;
   dispose: () => void;
 }
@@ -82,15 +96,15 @@ export function createConnectionManager(deps: ConnectionManagerDeps): Connection
     const delay = fullJitterBackoff(attempt, { random: deps.random });
     retryTimer = setTimer(() => {
       retryTimer = null;
-      void attemptConnect();
+      void reprobeAndReopen();
     }, delay);
   };
 
-  const attemptConnect = async (): Promise<void> => {
-    if (disposed) return;
-    // A shutdown freeze is only broken by an explicit AppState/NetInfo kick,
-    // which resets the state before calling here — so honor it and stay frozen.
-    if (state === 'server-shutdown') return;
+  // Probe the candidates, switch the active URL if the winner moved, then reopen
+  // the subscription. State flips to 'connected' only when the socket actually
+  // opens (handleOpen), so this never claims success prematurely.
+  const reprobeAndReopen = async (): Promise<void> => {
+    if (disposed || state === 'server-shutdown') return;
     setState('connecting');
     const token = ++probeToken;
     const winner = await deps.probe(deps.candidateUrls.length ? deps.candidateUrls : [activeUrl]);
@@ -101,24 +115,45 @@ export function createConnectionManager(deps: ConnectionManagerDeps): Connection
       scheduleRetry();
       return;
     }
-    attempt = 0;
-    clearRetry();
     if (winner !== activeUrl) {
       activeUrl = winner;
       deps.onActiveUrl(winner);
     }
-    deps.resync();
-    setState('connected');
+    deps.reopen();
   };
 
-  // An external kick (network came back, app foregrounded) bypasses the backoff
-  // timer and, crucially, thaws a server-shutdown freeze.
+  // An external kick (app foregrounded) bypasses the backoff timer and thaws a
+  // server-shutdown freeze. It is a no-op while already healthy so foregrounding
+  // a working session doesn't churn the socket.
   const kick = () => {
-    if (disposed) return;
+    if (disposed || state === 'connected') return;
     clearRetry();
     attempt = 0;
     if (state === 'server-shutdown') setState('connecting');
-    void attemptConnect();
+    void reprobeAndReopen();
+  };
+
+  // A network change can move the best endpoint even while the current socket
+  // still limps along (Wi-Fi→cellular makes a LAN URL dead but a Funnel URL
+  // live). When connected, re-probe and act only on a genuine winner change so a
+  // healthy connection on the same URL is left undisturbed (no state flip, no
+  // reopen). When NOT connected — including a server_shutdown freeze — a network
+  // change is a recovery signal and thaws exactly like a foreground kick, so a
+  // Tailscale/network recovery reconnects without needing the app foregrounded.
+  const onNetworkChange = async (): Promise<void> => {
+    if (disposed) return;
+    if (state !== 'connected') {
+      kick();
+      return;
+    }
+    const token = ++probeToken;
+    const winner = await deps.probe(deps.candidateUrls.length ? deps.candidateUrls : [activeUrl]);
+    if (disposed || token !== probeToken || currentState() !== 'connected') return;
+    if (winner && winner !== activeUrl) {
+      activeUrl = winner;
+      deps.onActiveUrl(winner);
+      deps.reopen();
+    }
   };
 
   return {
@@ -134,22 +169,33 @@ export function createConnectionManager(deps: ConnectionManagerDeps): Connection
       clearRetry();
       setState('server-shutdown');
     },
+    handleOpen() {
+      if (disposed) return;
+      attempt = 0;
+      clearRetry();
+      setState('connected');
+    },
     handleClose() {
       if (disposed || state === 'server-shutdown') return;
-      // Socket dropped — re-probe (the winner may have moved). attemptConnect
-      // owns both the reset-on-success and the schedule-a-backoff-on-failure, so
-      // there is no second retry to arm here.
-      void attemptConnect();
+      // Socket dropped — re-probe (the winner may have moved) and reopen, or back
+      // off if every candidate is down. reprobeAndReopen owns both outcomes.
+      void reprobeAndReopen();
+    },
+    shouldReconnect() {
+      return false;
     },
     start() {
       if (disposed) return;
-      unsubscribers.push(deps.subscribeNetInfo(kick));
+      unsubscribers.push(deps.subscribeNetInfo(() => void onNetworkChange()));
       unsubscribers.push(
         deps.subscribeAppState((active) => {
           if (active) kick();
         }),
       );
-      void attemptConnect();
+      // The caller has already opened the initial subscription at initialUrl;
+      // handleOpen/handleClose take it from here. Start 'connecting' until the
+      // first open resolves.
+      setState('connecting');
     },
     dispose() {
       if (disposed) return;

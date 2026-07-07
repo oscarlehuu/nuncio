@@ -104,18 +104,31 @@ export async function probeCandidates(urls: string[], options: ProbeOptions = {}
   return null;
 }
 
-async function probeOne(url: string, fetchImpl: FetchImpl, timeoutMs: number): Promise<boolean> {
+function probeOne(url: string, fetchImpl: FetchImpl, timeoutMs: number): Promise<boolean> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetchImpl(`${url}/api/health`, { signal: controller.signal });
-    return res.ok;
-  } catch {
-    // Timeout (abort), DNS failure, connection refused — all "not reachable".
-    return false;
-  } finally {
-    clearTimeout(timer);
-  }
+  // The health fetch resolves to res.ok, or false on any failure. Calling
+  // fetchImpl inside a `.then` turns a SYNCHRONOUS throw (an impl that throws
+  // before returning a promise) into a rejected promise, so the `.catch` below
+  // maps it to false — probeCandidates must never reject, only resolve to null.
+  const health = Promise.resolve()
+    .then(() => fetchImpl(`${url}/api/health`, { signal: controller.signal }))
+    .then((res) => res.ok)
+    .catch(() => false);
+
+  // Race against a hard timeout that resolves false. Aborting the fetch is
+  // best-effort — a fetch that ignores AbortSignal (or never settles) must NOT
+  // block returning: otherwise one wedged early LAN candidate would strand a
+  // healthy later Funnel URL, since callers await candidates in array order.
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => {
+      controller.abort();
+      resolve(false);
+    }, timeoutMs);
+    void health.then((ok) => {
+      clearTimeout(timer);
+      resolve(ok);
+    });
+  });
 }
 
 export interface ClaimRequest {

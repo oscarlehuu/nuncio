@@ -6,16 +6,17 @@ import {
 } from './connection-manager';
 
 /**
- * A hand-driven harness: probe returns whatever the current script says, timers
- * are queued and fired manually, and NetInfo/AppState callbacks are captured so
- * the test can flip them. Everything is synchronous except the probe promise, so
- * tests `await tick()` to let a probe settle.
+ * A hand-driven harness. The manager reaches 'connected' only when the socket
+ * actually opens, so the harness models that: `reopen` bumps a counter and the
+ * test then calls `open()` to simulate the socket connecting. Timers and
+ * NetInfo/AppState callbacks are captured so the test can fire them. Probes are
+ * async, so tests `await tick()` to let one settle.
  */
 function harness(overrides: Partial<ConnectionManagerDeps> = {}) {
   let probeResult: string | null = 'http://a';
   const timers: Array<{ fn: () => void; ms: number }> = [];
   const onActiveUrl: string[] = [];
-  let resyncs = 0;
+  let reopens = 0;
   let netInfoCb: (() => void) | null = null;
   let appStateCb: ((active: boolean) => void) | null = null;
   const states: ConnectionState[] = [];
@@ -25,8 +26,8 @@ function harness(overrides: Partial<ConnectionManagerDeps> = {}) {
     initialUrl: 'http://a',
     probe: async () => probeResult,
     onActiveUrl: (url) => onActiveUrl.push(url),
-    resync: () => {
-      resyncs += 1;
+    reopen: () => {
+      reopens += 1;
     },
     subscribeNetInfo: (cb) => {
       netInfoCb = cb;
@@ -57,9 +58,10 @@ function harness(overrides: Partial<ConnectionManagerDeps> = {}) {
     states,
     onActiveUrl,
     timers,
-    resyncs: () => resyncs,
+    reopens: () => reopens,
     netInfo: () => netInfoCb?.(),
     appState: (active: boolean) => appStateCb?.(active),
+    open: () => manager.handleOpen(),
     setProbe: (result: string | null) => {
       probeResult = result;
     },
@@ -67,7 +69,6 @@ function harness(overrides: Partial<ConnectionManagerDeps> = {}) {
       const due = timers.splice(0, timers.length);
       for (const t of due) t.fn();
     },
-    // Two microtask flushes: probe resolve, then the .then chain in attemptConnect.
     tick: async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -76,43 +77,81 @@ function harness(overrides: Partial<ConnectionManagerDeps> = {}) {
 }
 
 describe('createConnectionManager', () => {
-  it('connects on start when a candidate is healthy', async () => {
+  it('reaches connected when the initial socket opens', async () => {
     const h = harness();
     h.manager.start();
-    await h.tick();
+    expect(h.manager.getState()).toBe('connecting'); // awaiting first open
+    h.open();
     expect(h.manager.getState()).toBe('connected');
-    expect(h.resyncs()).toBe(1);
   });
 
-  it('does not reconfigure or churn when the winner is unchanged', async () => {
+  it('does not churn the socket when foregrounding a healthy session', async () => {
     const h = harness();
     h.manager.start();
+    h.open();
+    expect(h.manager.getState()).toBe('connected');
+    h.appState(true); // already connected → kick is a no-op
     await h.tick();
-    // initialUrl === winner 'http://a' → no onActiveUrl call.
+    expect(h.reopens()).toBe(0);
     expect(h.onActiveUrl).toEqual([]);
+  });
 
-    h.netInfo();
+  it('on a drop, re-probes and reopens on the same URL without switching', async () => {
+    const h = harness();
+    h.manager.start();
+    h.open();
+    h.manager.handleClose();
     await h.tick();
-    expect(h.onActiveUrl).toEqual([]); // still the same winner
+    expect(h.onActiveUrl).toEqual([]); // winner unchanged
+    expect(h.reopens()).toBe(1);
+    h.open(); // the reopened socket connects
     expect(h.manager.getState()).toBe('connected');
   });
 
-  it('switches the active URL and resyncs when the winner changes', async () => {
+  it('switches the active URL and reopens when the winner changes', async () => {
     const h = harness();
     h.manager.start();
-    await h.tick();
+    h.open();
 
+    h.setProbe('http://b');
+    h.manager.handleClose();
+    await h.tick();
+    expect(h.onActiveUrl).toEqual(['http://b']); // api client repointed first
+    expect(h.reopens()).toBe(1); // then reopened on the winner
+  });
+
+  it('a network change while connected switches to a better URL', async () => {
+    const h = harness();
+    h.manager.start();
+    h.open();
+
+    // Wi-Fi→cellular: the LAN URL is dead, the probe now prefers Funnel.
     h.setProbe('http://b');
     h.netInfo();
     await h.tick();
     expect(h.onActiveUrl).toEqual(['http://b']);
-    expect(h.resyncs()).toBe(2);
+    expect(h.reopens()).toBe(1);
+    expect(h.manager.getState()).toBe('connected'); // stayed connected, no flicker
+  });
+
+  it('a network change with the same winner leaves a healthy connection alone', async () => {
+    const h = harness();
+    h.manager.start();
+    h.open();
+
+    h.netInfo(); // winner still 'http://a'
+    await h.tick();
+    expect(h.onActiveUrl).toEqual([]); // no switch
+    expect(h.reopens()).toBe(0); // no socket churn
+    expect(h.manager.getState()).toBe('connected'); // no 'connecting' flip
   });
 
   it('goes offline and schedules a backoff retry when all probes fail', async () => {
     const h = harness();
-    h.setProbe(null);
     h.manager.start();
+    h.open();
+    h.setProbe(null);
+    h.manager.handleClose();
     await h.tick();
     expect(h.manager.getState()).toBe('offline');
     expect(h.timers.length).toBe(1);
@@ -121,13 +160,17 @@ describe('createConnectionManager', () => {
     h.setProbe('http://a');
     h.fireTimers();
     await h.tick();
+    expect(h.reopens()).toBe(1);
+    h.open();
     expect(h.manager.getState()).toBe('connected');
   });
 
   it('foregrounding kicks an immediate reconnect, bypassing the backoff timer', async () => {
     const h = harness();
-    h.setProbe(null);
     h.manager.start();
+    h.open();
+    h.setProbe(null);
+    h.manager.handleClose();
     await h.tick();
     expect(h.manager.getState()).toBe('offline');
     const pendingTimers = h.timers.length;
@@ -135,6 +178,8 @@ describe('createConnectionManager', () => {
     h.setProbe('http://a');
     h.appState(true); // immediate, does not wait for the timer
     await h.tick();
+    expect(h.reopens()).toBe(1);
+    h.open();
     expect(h.manager.getState()).toBe('connected');
     // The stale backoff timer was cleared, not left to double-fire.
     expect(h.timers.length).toBeLessThan(pendingTimers + 1);
@@ -143,51 +188,96 @@ describe('createConnectionManager', () => {
   it('server_shutdown freezes reconnects until an external kick', async () => {
     const h = harness();
     h.manager.start();
-    await h.tick();
+    h.open();
     expect(h.manager.getState()).toBe('connected');
 
     h.manager.handleNotice('server_shutdown');
     expect(h.manager.getState()).toBe('server-shutdown');
 
-    // A socket close during shutdown must NOT trigger a probe/backoff.
+    // A socket close during shutdown must NOT trigger a probe/backoff/reopen.
     h.manager.handleClose();
     await h.tick();
     expect(h.manager.getState()).toBe('server-shutdown');
     expect(h.timers.length).toBe(0);
+    expect(h.reopens()).toBe(0);
 
-    // NetInfo/AppState thaws it.
+    // AppState thaws it → probe + reopen.
     h.appState(true);
     await h.tick();
+    expect(h.reopens()).toBe(1);
+    h.open();
+    expect(h.manager.getState()).toBe('connected');
+  });
+
+  it('a NetInfo change thaws a server_shutdown freeze without AppState', async () => {
+    const h = harness();
+    h.manager.start();
+    h.open();
+    h.manager.handleNotice('server_shutdown');
+    expect(h.manager.getState()).toBe('server-shutdown');
+
+    // A network/Tailscale recovery while the app stays foregrounded must recover
+    // on its own — AppState never fires here.
+    h.netInfo();
+    await h.tick();
+    expect(h.reopens()).toBe(1);
+    h.open();
     expect(h.manager.getState()).toBe('connected');
   });
 
   it('ignores an unknown notice and stays connected', async () => {
     const h = harness();
     h.manager.start();
-    await h.tick();
+    h.open();
     h.manager.handleNotice('something_new');
     expect(h.manager.getState()).toBe('connected');
+    expect(h.reopens()).toBe(0);
   });
 
-  it('re-probes on a socket close and reconnects', async () => {
+  it('shouldReconnect is always false — the manager is the sole reconnect authority', async () => {
     const h = harness();
     h.manager.start();
+    h.open();
+    // Even while connected the relay must not self-reconnect; the manager drives
+    // every reconnect through handleClose so there is never a double-reconnect.
+    expect(h.manager.shouldReconnect()).toBe(false);
+    h.manager.handleNotice('server_shutdown');
+    expect(h.manager.shouldReconnect()).toBe(false);
+  });
+
+  it('a stale in-flight probe does not clobber a newer one', async () => {
+    // Two closes in quick succession: the first probe is slow, the second fast.
+    // Only the latest probe's reopen may apply.
+    const firstProbe: { resolve: (v: string | null) => void } = { resolve: () => {} };
+    let call = 0;
+    const h = harness({
+      probe: () => {
+        call += 1;
+        if (call === 1) return new Promise<string | null>((r) => (firstProbe.resolve = r));
+        return Promise.resolve('http://a');
+      },
+    });
+    h.manager.start();
+    h.open();
+    h.manager.handleClose(); // starts slow probe (call 1)
+    h.manager.handleClose(); // starts fast probe (call 2), supersedes call 1
     await h.tick();
-    h.manager.handleClose();
+    firstProbe.resolve('http://b'); // the stale probe finally resolves
     await h.tick();
-    expect(h.manager.getState()).toBe('connected');
-    expect(h.resyncs()).toBe(2);
+    // The stale 'http://b' must NOT have switched the URL.
+    expect(h.onActiveUrl).toEqual([]);
   });
 
   it('dispose stops listeners and is idempotent', async () => {
     const h = harness();
     h.manager.start();
-    await h.tick();
+    h.open();
     h.manager.dispose();
     // Callbacks after dispose are inert.
     h.netInfo();
     h.appState(true);
     await h.tick();
+    expect(h.reopens()).toBe(0);
     expect(() => h.manager.dispose()).not.toThrow();
   });
 });

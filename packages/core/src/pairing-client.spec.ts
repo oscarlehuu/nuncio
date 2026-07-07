@@ -124,6 +124,39 @@ describe('probeCandidates', () => {
       vi.useRealTimers();
     }
   });
+
+  it('resolves (never rejects) when fetchImpl throws synchronously', async () => {
+    // A fetch impl that throws before returning a promise must not escape and
+    // reject probeCandidates — the never-reject contract keeps the connection
+    // manager from getting stuck 'connecting' on an unhandled rejection.
+    await expect(
+      probeCandidates(['http://a', 'http://b'], {
+        fetchImpl: () => {
+          throw new Error('boom');
+        },
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it('falls through a wedged candidate that ignores abort and never settles', async () => {
+    // The early LAN candidate hangs forever AND ignores its AbortSignal — the
+    // exact "LAN present but broken, fall back to Funnel" case. The healthy later
+    // URL must still win within the timeout, not be stranded behind the hang.
+    vi.useFakeTimers();
+    try {
+      const promise = probeCandidates(['http://wedged', 'http://healthy'], {
+        timeoutMs: 1000,
+        fetchImpl: (url) =>
+          url.startsWith('http://healthy')
+            ? Promise.resolve({ ok: true, status: 200 } as Response)
+            : new Promise<Response>(() => {}), // never settles, ignores abort
+      });
+      await vi.advanceTimersByTimeAsync(1000); // wedged candidate's timeout elapses
+      expect(await promise).toBe('http://healthy');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('claimPairing', () => {

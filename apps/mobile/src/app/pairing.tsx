@@ -17,11 +17,8 @@ import {
 } from '@nuncio/core/pairing-client';
 import { apiFetch } from '@nuncio/core/http';
 import { applyConnection } from '../lib/api-setup';
-import {
-  normalizeServerUrl,
-  saveConnection,
-  type ConnectionConfig,
-} from '../lib/connection-store';
+import { normalizeServerUrl, type ConnectionConfig } from '../lib/connection-store';
+import { persistThenApply } from '../lib/persist-then-apply';
 import { secureStore } from '../lib/secure-store-adapter';
 import { registerForPush } from '../lib/push-registration';
 import { QrScanner } from '../components/qr-scanner';
@@ -34,12 +31,21 @@ export default function Pairing() {
   const [error, setError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
 
+  // Persist the credential BEFORE swapping it into the live client or routing.
+  // The QR pairing secret is single-use and returned exactly once, so if the
+  // secure-store write fails we must NOT proceed on an unpersisted secret that a
+  // crash or restart would lose (forcing the user to regenerate the QR). Returns
+  // true only when the connection is safely saved AND applied.
   const finish = useCallback(
-    async (config: ConnectionConfig) => {
-      applyConnection(config);
-      await saveConnection(secureStore, config);
+    async (config: ConnectionConfig): Promise<boolean> => {
+      const outcome = await persistThenApply(secureStore, config, applyConnection);
+      if (outcome === 'save-failed') {
+        setError("Couldn't save the pairing on this device. Try again.");
+        return false;
+      }
       router.replace('/');
       void registerForPush();
+      return true;
     },
     [router],
   );

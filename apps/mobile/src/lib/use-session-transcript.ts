@@ -91,7 +91,10 @@ export function useSessionTranscript(sessionId: string | null) {
 
     // A fresh subscription reads the LIVE active connection, so a URL switch (or
     // a rotated secret) reconnects with the current base URL and bearer. The
-    // manager owns which URL is live; `server_shutdown` is fed to it via onNotice.
+    // manager is the sole reconnect authority: socket open/close are reported to
+    // it, and it drives every reopen (probe → URL-switch → reopen, back off while
+    // offline, freeze on server_shutdown). shouldReconnect keeps the relay from
+    // reconnecting behind it.
     const openSubscription = () => {
       subscriptionRef.current?.close();
       const current = activeConnection() ?? connection;
@@ -101,6 +104,9 @@ export function useSessionTranscript(sessionId: string | null) {
         since: sinceRef.current,
         onEvent,
         onNotice: (notice) => managerRef.current?.handleNotice(notice),
+        onOpen: () => managerRef.current?.handleOpen(),
+        onClose: () => managerRef.current?.handleClose(),
+        shouldReconnect: () => managerRef.current?.shouldReconnect() ?? true,
         webSocketFactory: (url) => {
           // RN's WebSocket accepts an options bag with headers as the third arg,
           // so the relay upgrade carries the same device/legacy bearer as REST.
@@ -120,21 +126,22 @@ export function useSessionTranscript(sessionId: string | null) {
       cancelPendingEventFlush();
       setEvents(initial);
       sinceRef.current = initial.reduce((max, e) => Math.max(max, e.seq), 0);
-      openSubscription();
 
+      // Create the manager BEFORE the first socket so its lifecycle hooks are
+      // live from the very first connection, not just after a race.
       const manager = createNativeConnectionManager({
         candidateUrls: connection.candidateUrls ?? [connection.serverUrl],
         initialUrl: connection.serverUrl,
         onActiveUrl: (url) => {
           // Winner moved (network change): repoint the api client at the new base
-          // URL, keeping the same credential, then rebuild the relay socket there.
+          // URL, keeping the same credential. The manager reopens the socket next.
           applyConnection({ ...(activeConnection() ?? connection), serverUrl: url });
-          openSubscription();
         },
-        resync: () => subscriptionRef.current?.resync(),
+        reopen: openSubscription,
       });
       managerRef.current = manager;
       const unsubscribe = manager.subscribe(setConnectionState);
+      openSubscription();
       manager.start();
       cleanupManager = () => {
         unsubscribe();

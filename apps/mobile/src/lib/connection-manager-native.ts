@@ -16,7 +16,7 @@ export interface NativeManagerOptions {
   candidateUrls: string[];
   initialUrl: string;
   onActiveUrl: (url: string) => void;
-  resync: () => void;
+  reopen: () => void;
 }
 
 export function createNativeConnectionManager(options: NativeManagerOptions): ConnectionManager {
@@ -24,7 +24,7 @@ export function createNativeConnectionManager(options: NativeManagerOptions): Co
     candidateUrls: options.candidateUrls,
     initialUrl: options.initialUrl,
     onActiveUrl: options.onActiveUrl,
-    resync: options.resync,
+    reopen: options.reopen,
     probe: (urls) => probeCandidates(urls),
     subscribeNetInfo: (onChange) => NetInfo.addEventListener(() => onChange()),
     subscribeAppState: (onChange) => {
