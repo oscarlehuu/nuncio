@@ -10,6 +10,7 @@ import { SessionsPersistenceModule } from './sessions.persistence.module';
 import { SessionsService } from './sessions.service';
 import { MediaStore } from './media.store';
 import { SettingsModule } from '../settings/settings.module';
+import { ProjectsModule } from '../projects/projects.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { SettingsModule } from '../settings/settings.module';
     PiLocalModule,
     SessionsPersistenceModule,
     SettingsModule,
+    ProjectsModule,
   ],
   controllers: [SessionsController, GitSessionController],
   providers: [SessionsService, MediaStore],

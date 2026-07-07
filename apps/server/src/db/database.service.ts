@@ -205,6 +205,23 @@ export class DatabaseService implements OnModuleDestroy {
       )
     `);
 
+    // Per-project CONFIG entity (rung 2). Keyed by normalized path; distinct from
+    // recent_projects (the MRU picker). project_path on sessions/tasks is a SOFT
+    // reference into this table — no FK, so an unconfigured path is valid.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS projects (
+        path TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        default_engine TEXT,
+        worktree_policy TEXT,
+        verify_command TEXT,
+        verify_auto_steer TEXT NOT NULL DEFAULT 'inherit',
+        verify_max_rounds INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY,

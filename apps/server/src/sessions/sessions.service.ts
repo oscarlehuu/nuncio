@@ -49,6 +49,7 @@ import {
   type VerifyResultPayload,
 } from './verify-feedback';
 import { SettingsService } from '../settings/settings.service';
+import { ProjectDefaultsResolver } from '../projects/project-defaults-resolver';
 
 type StreamListener = (event: SessionEvent) => void;
 
@@ -108,6 +109,9 @@ export class SessionsService implements OnModuleDestroy {
     @Optional() private readonly piLocal?: PiLocalSessionsService,
     @Optional() private readonly settings?: SettingsService,
     @Optional() private readonly agentTools?: AgentToolRegistry,
+    // Optional: when present, the verify-feedback loop resolves per-project
+    // overrides (auto-steer / max-rounds) above the global setting.
+    @Optional() private readonly projectDefaults?: ProjectDefaultsResolver,
   ) {
     // Restore before reconcile: sessions still RUNNING here get their drain
     // scheduled by the reconcile IDLE transition instead.
@@ -1172,8 +1176,19 @@ export class SessionsService implements OnModuleDestroy {
     }
   }
 
-  /** Whether the auto-fix loop is enabled and its round budget. */
-  private verifyFeedbackConfig(): { enabled: boolean; maxRounds: number } {
+  /**
+   * Whether the auto-fix loop is enabled and its round budget, resolved for the
+   * session's project. The per-project override (auto-steer tri-state / max
+   * rounds) wins over the global setting; with no resolver or no project row it
+   * falls back to the global parse — exactly today's behavior.
+   */
+  private verifyFeedbackConfig(projectPath: string | null): { enabled: boolean; maxRounds: number } {
+    if (this.projectDefaults) {
+      return {
+        enabled: this.projectDefaults.resolveAutoSteerEnabled(projectPath),
+        maxRounds: this.projectDefaults.resolveMaxRounds(projectPath),
+      };
+    }
     return {
       enabled: parseAutoSteerEnabled(this.settings?.resolve('NUNCIO_VERIFY_AUTO_STEER')),
       maxRounds: parseMaxRounds(this.settings?.resolve('NUNCIO_VERIFY_MAX_ROUNDS')),
@@ -1191,13 +1206,13 @@ export class SessionsService implements OnModuleDestroy {
       this.settleVerify(sessionId);
       return;
     }
-    const { enabled, maxRounds } = this.verifyFeedbackConfig();
-    if (!enabled) {
+    const session = this.sessions.findById(sessionId);
+    if (!session || session.status !== 'IDLE') {
       this.settleVerify(sessionId);
       return;
     }
-    const session = this.sessions.findById(sessionId);
-    if (!session || session.status !== 'IDLE') {
+    const { enabled, maxRounds } = this.verifyFeedbackConfig(session.projectPath ?? null);
+    if (!enabled) {
       this.settleVerify(sessionId);
       return;
     }
@@ -1299,9 +1314,13 @@ export class SessionsService implements OnModuleDestroy {
    * a pure function of the log — so it is safe every boot.
    */
   private resumeVerifyLoops(): void {
-    if (!parseAutoSteerEnabled(this.settings?.resolve('NUNCIO_VERIFY_AUTO_STEER'))) return;
     for (const session of this.sessions.list(false)) {
       if (session.status !== 'IDLE') continue;
+      // Per-session gate: a project override may enable the loop even when the
+      // global setting is off (and vice versa). resumeOneVerifyLoop re-checks via
+      // driveVerifyFeedback, but skipping the disabled ones here avoids needless
+      // scheduling.
+      if (!this.verifyFeedbackConfig(session.projectPath ?? null).enabled) continue;
       // A durable queued human steer takes precedence (human wins, resets the
       // loop): defer to the steer-queue drain rather than racing an auto-retry
       // ahead of the human steer. The drained steer runs, then its own verify
