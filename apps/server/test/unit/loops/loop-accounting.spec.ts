@@ -55,11 +55,15 @@ describe('runsOnDay (day budget count)', () => {
     expect(runsOnDay(runs, '2026-07-09')).toBe(0);
   });
 
-  it('budget-exhausted bookkeeping rows still count against the day (a fire attempt)', () => {
-    const runs = [run('ok'), run('budget-exhausted')];
-    // Design: the day-count is "runs consumed today"; ok + failed count, exhausted
-    // is a skip marker and does NOT consume budget.
-    expect(runsOnDay(runs.filter((r) => r.outcome !== 'budget-exhausted'), '2026-07-07')).toBe(1);
+  it('bookkeeping rows (budget-exhausted, resume) do NOT consume budget', () => {
+    const runs = [run('ok'), run('budget-exhausted'), run('resume')];
+    expect(runsOnDay(runs, '2026-07-07')).toBe(1);
+  });
+
+  it('a pending (in-flight) run consumes a day slot — a fire happened', () => {
+    // Prevents double-firing while a run is still settling.
+    const runs = [run('ok'), run('pending')];
+    expect(runsOnDay(runs, '2026-07-07')).toBe(2);
   });
 });
 
@@ -83,6 +87,11 @@ describe('failureStreak (trailing failed since last ok/resume)', () => {
 
   it('budget-exhausted rows do not count as failures nor reset the streak', () => {
     expect(failureStreak([run('failed'), run('budget-exhausted'), run('failed')])).toBe(2);
+  });
+
+  it('a still-pending (unsettled) run is transparent — no settled signal yet', () => {
+    // fail, fail, pending -> the pending run carries the streak (2), not a reset.
+    expect(failureStreak([run('failed'), run('failed'), run('pending')])).toBe(2);
   });
 });
 

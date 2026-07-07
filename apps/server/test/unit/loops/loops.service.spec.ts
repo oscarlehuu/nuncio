@@ -39,13 +39,45 @@ class SpyScheduler {
   }
 }
 
+interface FakeTask {
+  id: string;
+  status: 'RUNNING' | 'DONE' | 'FAILED';
+  outcome?: Record<string, unknown>;
+}
+
 class SpyTasks {
   readonly enqueued: Array<{ prompt: string; useWorktree?: boolean; projectPath?: string }> = [];
+  private readonly tasks = new Map<string, FakeTask>();
+  private readonly handlers = new Set<(t: FakeTask) => void>();
   private n = 0;
+
   enqueue(input: { prompt: string; useWorktree?: boolean; projectPath?: string }) {
     this.n += 1;
+    const id = `task-${this.n}`;
     this.enqueued.push(input);
-    return { id: `task-${this.n}` };
+    this.tasks.set(id, { id, status: 'RUNNING' });
+    return { id };
+  }
+
+  onTaskFinished(handler: (t: FakeTask) => void): () => void {
+    this.handlers.add(handler);
+    return () => this.handlers.delete(handler);
+  }
+
+  findById(id: string): FakeTask | null {
+    return this.tasks.get(id) ?? null;
+  }
+
+  /** Simulate a task settling on a terminal path and firing the settlement hook. */
+  settle(id: string, status: 'DONE' | 'FAILED', outcome?: Record<string, unknown>): void {
+    const t: FakeTask = { id, status, ...(outcome ? { outcome } : {}) };
+    this.tasks.set(id, t);
+    for (const h of this.handlers) h(t);
+  }
+
+  /** Mark a task terminal WITHOUT firing the hook (simulate a crash before settle). */
+  forceTerminal(id: string, status: 'DONE' | 'FAILED', outcome?: Record<string, unknown>): void {
+    this.tasks.set(id, { id, status, ...(outcome ? { outcome } : {}) });
   }
 }
 
@@ -85,6 +117,9 @@ describe('LoopsService', () => {
     repo = module.get(LoopsRepository);
     clockNow = at(2026, 7, 7, 8, 0);
     loops.clock = { now: () => clockNow };
+    // compile() does not run lifecycle hooks — invoke onModuleInit so the
+    // scheduler/task-settlement handlers are registered (as in production).
+    loops.onModuleInit();
   });
 
   afterEach(async () => {
@@ -141,6 +176,100 @@ describe('LoopsService', () => {
       const loop = loops.create(create());
       loops.fire(loop.id);
       expect(tasks.enqueued[0]!.useWorktree).toBe(true);
+    });
+
+    it('a run is born PENDING, never ok, until its task settles', () => {
+      const loop = loops.create(create());
+      const run = loops.fire(loop.id)!;
+      expect(run.outcome).toBe('pending');
+      expect(repo.listRuns(loop.id)[0]!.outcome).toBe('pending');
+    });
+  });
+
+  describe('settlement from the task lane (finding #1)', () => {
+    it('a task that FAILS finalizes its run to failed and increments the streak', () => {
+      const loop = loops.create(create({ maxConsecutiveFailures: 3, maxRunsPerDay: 10 }));
+      const run = loops.fire(loop.id)!;
+      // The task settles FAILED via the registered onTaskFinished handler.
+      tasks.settle(run.taskId!, 'FAILED', { error: 'boom' });
+      expect(repo.listRuns(loop.id).find((r) => r.id === run.id)!.outcome).toBe('failed');
+    });
+
+    it('three FAILED task settlements trip the breaker (the loop sees reality)', () => {
+      const loop = loops.create(create({ maxConsecutiveFailures: 3, maxRunsPerDay: 10 }));
+      for (let i = 0; i < 3; i += 1) {
+        const r = loops.fire(loop.id)!;
+        tasks.settle(r.taskId!, 'FAILED');
+      }
+      expect(repo.findById(loop.id)!.status).toBe('broken');
+    });
+
+    it('a DONE task with a green verify settles the run green', () => {
+      const loop = loops.create(create({ maxRunsPerDay: 10, maxConsecutiveFailures: 10 }));
+      const r = loops.fire(loop.id)!;
+      tasks.settle(r.taskId!, 'DONE', { verify: { ok: true } });
+      const settled = repo.listRuns(loop.id).find((x) => x.id === r.id)!;
+      expect(settled.outcome).toBe('ok');
+      expect(settled.verify).toBe('green');
+    });
+
+    it('a DONE task that ended needs-attention counts as failed (rung-1 gave up)', () => {
+      const loop = loops.create(create({ maxRunsPerDay: 10, maxConsecutiveFailures: 10 }));
+      const r = loops.fire(loop.id)!;
+      tasks.settle(r.taskId!, 'DONE', { verify: { ok: false }, needsAttention: { reason: 'max_rounds' } });
+      expect(repo.listRuns(loop.id).find((x) => x.id === r.id)!.outcome).toBe('failed');
+    });
+  });
+
+  describe('restart reconciliation of pending runs (finding #1)', () => {
+    it('a run left pending across a restart is reconciled from the task, not stuck pending', async () => {
+      const loop = loops.create(create({ maxConsecutiveFailures: 3, maxRunsPerDay: 10 }));
+      const run = loops.fire(loop.id)!;
+      // Simulate a crash: the task went terminal (FAILED) but the settlement hook
+      // never fired before the daemon died — the run is still pending.
+      tasks.forceTerminal(run.taskId!, 'FAILED');
+      expect(repo.listRuns(loop.id).find((r) => r.id === run.id)!.outcome).toBe('pending');
+
+      const dataDir = process.env.NUNCIO_DATA_DIR!;
+      await module.close();
+      process.env.NUNCIO_DATA_DIR = dataDir;
+      // Fresh module on the same DB. The SAME task store is re-provided so the
+      // reconcile can read the now-terminal task.
+      const survivingTasks = tasks;
+      module = await Test.createTestingModule({
+        imports: [DatabaseModule],
+        providers: [
+          LoopsRepository,
+          LoopsService,
+          { provide: SchedulerService, useValue: new SpyScheduler() },
+          { provide: TasksService, useValue: survivingTasks },
+        ],
+      }).compile();
+      loops = module.get(LoopsService);
+      repo = module.get(LoopsRepository);
+      loops.clock = { now: () => clockNow };
+      loops.onModuleInit(); // runs reconcilePendingRuns
+
+      const reconciled = repo.listRuns(loop.id).find((r) => r.id === run.id)!;
+      expect(reconciled.outcome).toBe('failed');
+    });
+  });
+
+  describe('schedule validation at creation (finding #2)', () => {
+    it('rejects a typo cron spec — no inert loop is stored', () => {
+      expect(() => loops.create(create({ schedule: { kind: 'cron', spec: 'daliy@02:00' } }))).toThrow(/spec/i);
+      expect(loops.list().every((l) => l.goal !== 'nightly maintenance')).toBe(true);
+    });
+
+    it('rejects an unsupported schedule kind', () => {
+      expect(() =>
+        loops.create(create({ schedule: { kind: 'weekly' as never, spec: 'daily@02:00' } })),
+      ).toThrow(/kind/i);
+    });
+
+    it('accepts a valid cron spec', () => {
+      const loop = loops.create(create({ schedule: { kind: 'cron', spec: 'every:30m' } }));
+      expect(loop.status).toBe('active');
     });
   });
 
@@ -285,6 +414,21 @@ describe('LoopsService', () => {
       const loop = loops.create(create());
       loops.delete(loop.id);
       expect(loops.findById(loop.id)).toBeNull();
+    });
+
+    it('a completed loop cannot be paused or resumed past its stop (finding #3)', () => {
+      const loop = loops.create(create({ stop: { kind: 'maxTotalRuns', n: 1 } }));
+      const r = loops.fire(loop.id)!;
+      tasks.settle(r.taskId!, 'DONE', { verify: { ok: true } });
+      expect(repo.findById(loop.id)!.status).toBe('completed');
+
+      // pause must not transition a completed loop (which would let resume revive it).
+      expect(() => loops.pause(loop.id)).toThrow(/completed|pausable/i);
+      // resume must never resurrect a completed loop.
+      expect(() => loops.resume(loop.id)).toThrow(/completed|resumable/i);
+      expect(repo.findById(loop.id)!.status).toBe('completed');
+      // The schedule stays disabled (was disabled at completion).
+      expect(scheduler.enabledCalls.some((c) => c.id === loop.scheduleId && c.enabled === false)).toBe(true);
     });
   });
 
