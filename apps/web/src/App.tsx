@@ -646,6 +646,7 @@ export default function App() {
                 onRestore={handleRestore}
                 onDelete={handleDelete}
                 onRename={handleRename}
+                onOpenSession={handleSelect}
                 onSessionStatus={handleSessionStatus}
                 onSessionTitle={handleSessionTitle}
                 onCreate={handleCreateReturning}
@@ -814,6 +815,7 @@ function SessionRoute({
   onMissingSession,
 }: SessionRouteProps) {
   const { sessionId } = useParams();
+  const navigate = useNavigate();
   const [fetchedSession, setFetchedSession] = useState<Session | null>(null);
   const missingHandled = useRef(false);
 
@@ -900,6 +902,7 @@ function SessionRoute({
       onRestore={onRestore}
       onDelete={onDelete}
       onRename={onRename}
+      onOpenSession={(id) => navigate(`/session/${id}`)}
       onContinueOnMobile={() =>
         onContinueOnMobile(session.projectPath ?? session.workspace ?? undefined)
       }

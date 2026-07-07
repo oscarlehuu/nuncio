@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { CircleDot, GitBranch, Loader2 } from 'lucide-react';
-import type { TaskDto } from '../lib/api';
+import type { HandoffBrief, TaskDto } from '../lib/api';
 import { Button } from '@/components/ui/button';
 
 const STATUS_LABEL: Record<TaskDto['status'], string> = {
@@ -22,6 +22,54 @@ const STATUS_DOT: Record<TaskDto['status'], string> = {
 interface SubagentsPanelProps {
   tasks: TaskDto[];
   onReview: (id: string) => void | Promise<void>;
+}
+
+function BriefItems({ label, items }: { label: string; items?: string[] }) {
+  if (!items?.length) return null;
+  return (
+    <div>
+      <dt className="text-ui-sm font-medium text-muted-foreground">{label}</dt>
+      <dd>
+        <ul className="mt-1 list-disc space-y-0.5 pl-4">
+          {items.map((item, index) => (
+            <li key={`${label}-${index}`}>{item}</li>
+          ))}
+        </ul>
+      </dd>
+    </div>
+  );
+}
+
+function HandoffBriefDisclosure({ brief }: { brief?: HandoffBrief | null }) {
+  if (!brief) return null;
+  return (
+    <details
+      data-testid="handoff-brief"
+      className="mt-1 rounded-md border border-border/40 bg-muted/15 px-2.5 py-1.5 text-ui-sm"
+    >
+      <summary className="cursor-pointer select-none font-medium text-muted-foreground">
+        Handoff brief
+      </summary>
+      <dl className="mt-2 space-y-2 text-foreground/85">
+        <div>
+          <dt className="text-ui-sm font-medium text-muted-foreground">Goal</dt>
+          <dd className="mt-1">{brief.goal}</dd>
+        </div>
+        <BriefItems label="Constraints" items={brief.constraints} />
+        <BriefItems label="Decisions" items={brief.decisions} />
+        <BriefItems label="Files" items={brief.files} />
+        <BriefItems label="Done criteria" items={brief.doneCriteria} />
+        {brief.verifyCommand && (
+          <div>
+            <dt className="text-ui-sm font-medium text-muted-foreground">Verify command</dt>
+            <dd className="mt-1 rounded bg-muted/30 px-2 py-1 font-mono text-ui">
+              {brief.verifyCommand}
+            </dd>
+          </div>
+        )}
+      </dl>
+    </details>
+  );
 }
 
 /** Compact, dense list of child subagents spawned from this session's
@@ -59,47 +107,50 @@ export function SubagentsPanel({ tasks, onReview }: SubagentsPanelProps) {
             <li
               key={task.id}
               data-testid="subagent-row"
-              className="flex items-center gap-2.5 px-3 py-1.5 text-body min-w-0"
+              className="px-3 py-1.5 text-body"
             >
-              <span
-                className={`size-1.5 shrink-0 rounded-full ${STATUS_DOT[task.status]}`}
-                aria-hidden
-              />
-              <span className="flex-1 min-w-0 truncate" title={task.prompt}>
-                {task.prompt}
-              </span>
-              {providerModel && (
-                <span className="hidden sm:inline shrink-0 text-ui-sm text-muted-foreground truncate max-w-[40%]">
-                  {providerModel}
+              <div className="flex min-w-0 items-center gap-2.5">
+                <span
+                  className={`size-1.5 shrink-0 rounded-full ${STATUS_DOT[task.status]}`}
+                  aria-hidden
+                />
+                <span className="flex-1 min-w-0 truncate" title={task.prompt}>
+                  {task.prompt}
                 </span>
-              )}
-              <span className="shrink-0 flex items-center gap-1 text-ui-sm text-muted-foreground">
-                <span aria-label={`Status ${STATUS_LABEL[task.status]}`}>
-                  {STATUS_LABEL[task.status]}
+                {providerModel && (
+                  <span className="hidden sm:inline shrink-0 text-ui-sm text-muted-foreground truncate max-w-[40%]">
+                    {providerModel}
+                  </span>
+                )}
+                <span className="shrink-0 flex items-center gap-1 text-ui-sm text-muted-foreground">
+                  <span aria-label={`Status ${STATUS_LABEL[task.status]}`}>
+                    {STATUS_LABEL[task.status]}
+                  </span>
                 </span>
-              </span>
-              {task.reviewState === 'reviewed' && (
-                <span className="shrink-0 flex items-center gap-1 text-ui-sm text-success">
-                  <CircleDot className="size-3" />
-                  Reviewed
-                </span>
-              )}
-              {awaitingReview && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-6 shrink-0 px-2 text-ui-sm"
-                  disabled={reviewingId === task.id}
-                  onClick={() => void handleReview(task.id)}
-                  aria-label={`Review done for ${task.prompt}`}
-                >
-                  {reviewingId === task.id ? (
-                    <Loader2 className="size-3 animate-spin" />
-                  ) : (
-                    'Review done'
-                  )}
-                </Button>
-              )}
+                {task.reviewState === 'reviewed' && (
+                  <span className="shrink-0 flex items-center gap-1 text-ui-sm text-success">
+                    <CircleDot className="size-3" />
+                    Reviewed
+                  </span>
+                )}
+                {awaitingReview && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-6 shrink-0 px-2 text-ui-sm"
+                    disabled={reviewingId === task.id}
+                    onClick={() => void handleReview(task.id)}
+                    aria-label={`Review done for ${task.prompt}`}
+                  >
+                    {reviewingId === task.id ? (
+                      <Loader2 className="size-3 animate-spin" />
+                    ) : (
+                      'Review done'
+                    )}
+                  </Button>
+                )}
+              </div>
+              <HandoffBriefDisclosure brief={task.contextBrief} />
             </li>
           );
         })}
