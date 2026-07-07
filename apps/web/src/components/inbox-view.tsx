@@ -9,6 +9,7 @@ import {
   type AttentionItemDto,
 } from '../lib/api';
 import { AttentionRow } from './attention-row';
+import { DigestCard } from './digest-card';
 import type { OpenTarget } from '../lib/attention-kind';
 import { Button } from '@/components/ui/button';
 
@@ -88,6 +89,9 @@ export function InboxView({ onBack }: InboxViewProps) {
 
       <div className="flex-1 overflow-y-auto px-4 py-6">
         <div className="mx-auto w-full max-w-[720px]">
+          {/* Today's digest — a peer entry point that shares the Inbox's rhythm.
+              Self-hides until a digest exists, so it never disrupts the empty state. */}
+          <DigestCard onOpen={() => navigate('/digest')} />
           {loading ? (
             <ul className="flex flex-col gap-3" aria-hidden>
               {[0, 1, 2].map((i) => (

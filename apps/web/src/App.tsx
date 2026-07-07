@@ -37,6 +37,10 @@ const AutopilotRoutes = lazy(() => import('./components/autopilot-routes'));
 const InboxView = lazy(() =>
   import('./components/inbox-view').then((m) => ({ default: m.InboxView })),
 );
+// The heartbeat digest — a read-once briefing, lazy-loaded.
+const DigestView = lazy(() =>
+  import('./components/digest-view').then((m) => ({ default: m.DigestView })),
+);
 import type { ApprovalMode } from './components/approval-mode-picker';
 import { HandoffPicker } from './components/handoff-picker';
 import { ChangelogView } from './components/changelog-view';
@@ -752,6 +756,14 @@ export default function App() {
             element={
               <Suspense fallback={<div className="flex-1" aria-hidden />}>
                 <InboxView onBack={() => navigate('/')} />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/digest"
+            element={
+              <Suspense fallback={<div className="flex-1" aria-hidden />}>
+                <DigestView onBack={() => navigate('/inbox')} />
               </Suspense>
             }
           />

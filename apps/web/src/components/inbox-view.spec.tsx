@@ -10,6 +10,8 @@ vi.mock('../lib/api', async () => {
     fetchAttention: vi.fn(),
     ackAttentionItem: vi.fn(),
     resolveAttentionItem: vi.fn(),
+    // The DigestCard at the top of the Inbox fetches this — keep it inert here.
+    fetchDigest: vi.fn().mockResolvedValue(null),
   };
 });
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));

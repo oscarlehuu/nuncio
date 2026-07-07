@@ -81,3 +81,62 @@ export async function resolveAttentionItem(id: string): Promise<AttentionItemDto
   if (!res.ok) throw new Error('Failed to resolve item');
   return res.json();
 }
+
+// ── Heartbeat digest (rung 3 sub-phase B) — the morning/evening briefing ────
+
+export type DigestVariant = 'morning' | 'evening';
+
+/** The digest body — since-last deltas + current snapshots. Counts, not lists. */
+export interface Digest {
+  variant: DigestVariant;
+  windowFrom: number;
+  windowTo: number;
+  loops: { runsOk: number; runsFailed: number; prsOpened: number };
+  attention: { raised: number; resolved: number; openTopCount: number };
+  sessions: { completed: number; needsYou: number };
+  budget: { runsToday: number; cap: number };
+}
+
+/** A sent digest slot — `slotKey = '<YYYY-MM-DD>:<morning|evening>'`. */
+export interface DigestRunDto {
+  slotKey: string;
+  variant: DigestVariant;
+  sentAt: number;
+  windowFrom: number;
+  windowTo: number;
+  digest: Digest;
+}
+
+/** Fill any missing section so a partial/legacy payload never breaks the view. */
+const ZERO_SECTIONS = {
+  loops: { runsOk: 0, runsFailed: 0, prsOpened: 0 },
+  attention: { raised: 0, resolved: 0, openTopCount: 0 },
+  sessions: { completed: 0, needsYou: 0 },
+  budget: { runsToday: 0, cap: 0 },
+};
+
+function normalizeDigest(raw: Partial<Digest> & { variant?: DigestVariant }): Digest {
+  return {
+    variant: raw.variant === 'evening' ? 'evening' : 'morning',
+    windowFrom: raw.windowFrom ?? 0,
+    windowTo: raw.windowTo ?? 0,
+    loops: { ...ZERO_SECTIONS.loops, ...raw.loops },
+    attention: { ...ZERO_SECTIONS.attention, ...raw.attention },
+    sessions: { ...ZERO_SECTIONS.sessions, ...raw.sessions },
+    budget: { ...ZERO_SECTIONS.budget, ...raw.budget },
+  };
+}
+
+/**
+ * The in-app digest. `slot` defaults to 'latest' (the most-recent sent briefing);
+ * pass a specific `<YYYY-MM-DD>:<variant>` key for a past slot. Returns null when no
+ * digest has been built yet (a valid "no briefing yet" state). Partial sections are
+ * filled with zeros so a legacy/partial payload renders instead of crashing.
+ */
+export async function fetchDigest(slot = 'latest'): Promise<DigestRunDto | null> {
+  const res = await apiFetch(`/api/heartbeat/digest?slot=${encodeURIComponent(slot)}`);
+  if (!res.ok) throw new Error('Failed to load digest');
+  const data = (await res.json()) as DigestRunDto | null;
+  if (!data || !data.digest) return null;
+  return { ...data, digest: normalizeDigest(data.digest) };
+}
