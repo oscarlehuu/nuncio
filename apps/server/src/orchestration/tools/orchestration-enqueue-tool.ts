@@ -1,13 +1,13 @@
 import { asToolInput } from '../../agents/tools/agent-runtime-tools.types';
 import type { AgentRuntimeTool, AgentRuntimeToolResult } from '../../agents/tools/agent-runtime-tools.types';
 import { byteLength } from '../byte-truncate';
+import { ROUTING_TAGS, isRoutingTag } from '../engine-routing';
 import type { HandoffBrief } from '../handoff-brief.types';
 import type { OrchestrationScope, OrchestrationToolDeps } from './orchestration-tools.types';
 
 const DEPTH_CAP = 2;
 const OPEN_TASK_CAP = 10;
 const INPUT_MAX_BYTES = 16 * 1024;
-const VALID_TAGS = new Set(['mechanical', 'review', 'design', 'research']);
 const ANCESTOR_WALK_CAP = 10;
 
 function errorResult(reason: string): AgentRuntimeToolResult {
@@ -55,7 +55,7 @@ export function buildEnqueueTool(
           },
           required: ['goal'],
         },
-        tag: { type: 'string', enum: ['mechanical', 'review', 'design', 'research'] },
+        tag: { type: 'string', enum: [...ROUTING_TAGS] },
         provider: { type: 'string' },
         useWorktree: { type: 'boolean' },
       },
@@ -74,8 +74,8 @@ export function buildEnqueueTool(
       if (!goal) return errorResult('brief.goal is required');
 
       const tag = typeof input.tag === 'string' ? input.tag : undefined;
-      if (tag && !VALID_TAGS.has(tag)) {
-        return errorResult(`tag must be one of: ${[...VALID_TAGS].join(', ')}`);
+      if (tag && !isRoutingTag(tag)) {
+        return errorResult(`tag must be one of: ${ROUTING_TAGS.join(', ')}`);
       }
 
       const explicitProvider = typeof input.provider === 'string' ? input.provider.trim() : undefined;

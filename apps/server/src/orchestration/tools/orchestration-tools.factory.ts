@@ -1,6 +1,7 @@
 import type { AgentRuntimeTool, AgentRuntimeTools } from '../../agents/tools/agent-runtime-tools.types';
 import { buildEnqueueTool } from './orchestration-enqueue-tool';
 import { buildReadTools } from './orchestration-read-tools';
+import { buildRecordFactTool } from './orchestration-record-fact-tool';
 import type { OrchestrationMode, OrchestrationScope, OrchestrationToolDeps } from './orchestration-tools.types';
 
 const SYSTEM_PROMPT_APPEND =
@@ -26,7 +27,10 @@ export function buildOrchestrationTools(
   if (mode === 'off') return { tools: [] };
 
   const tools: AgentRuntimeTool[] = buildReadTools(deps, scope);
-  if (mode === 'read-write') tools.push(buildEnqueueTool(deps, scope));
+  if (mode === 'read-write') {
+    tools.push(buildEnqueueTool(deps, scope));
+    tools.push(buildRecordFactTool(deps, scope));
+  }
 
   return { systemPromptAppend: SYSTEM_PROMPT_APPEND, tools };
 }

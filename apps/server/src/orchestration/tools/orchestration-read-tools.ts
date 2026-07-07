@@ -214,7 +214,20 @@ export function buildReadTools(
     },
   };
 
-  return [listSessions, readSession, listTasks, getTaskResult];
+  const listProjectFacts: AgentRuntimeTool = {
+    name: 'nuncio_list_project_facts',
+    description: 'List the curated facts for this project (build commands, gotchas, standing decisions).',
+    inputSchema: { type: 'object', properties: {} },
+    execute: () => {
+      const gate = readGate(deps);
+      if (gate) return gate;
+      if (!scope.projectPath) return ok('0 project fact(s)', []);
+      const rows = deps.listProjectFacts(scope.projectPath);
+      return ok(`${rows.length} project fact(s)`, rows);
+    },
+  };
+
+  return [listSessions, readSession, listTasks, getTaskResult, listProjectFacts];
 }
 
 /** A task is visible when its parent session, or its own child session, is visible to the caller. */

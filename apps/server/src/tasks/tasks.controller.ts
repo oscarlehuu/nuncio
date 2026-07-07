@@ -1,12 +1,10 @@
 import { BadRequestException, Body, Controller, Delete, Get, Optional, Param, Post, Query } from '@nestjs/common';
 import { AgentRegistry } from '../agents/agents.registry';
 import { validateHandoffBrief } from '../orchestration/handoff-brief.validate';
-import { resolveTaskEngine } from '../orchestration/engine-routing';
+import { ROUTING_TAGS, isRoutingTag, resolveTaskEngine } from '../orchestration/engine-routing';
 import { SettingsService } from '../settings/settings.service';
 import { TasksService } from './tasks.service';
 import { NOTIFY_POLICIES, type CreateTaskDto, type NotifyPolicy, type StartMultitaskDto } from './tasks.types';
-
-const ROUTING_TAGS = new Set(['mechanical', 'review', 'design', 'research']);
 
 @Controller('tasks')
 export class TasksController {
@@ -66,8 +64,8 @@ export class TasksController {
 
   private parseTag(raw: unknown): string | undefined {
     if (raw === undefined || raw === null) return undefined;
-    if (typeof raw !== 'string' || !ROUTING_TAGS.has(raw)) {
-      throw new BadRequestException(`tag must be one of: ${[...ROUTING_TAGS].join(', ')}`);
+    if (!isRoutingTag(raw)) {
+      throw new BadRequestException(`tag must be one of: ${ROUTING_TAGS.join(', ')}`);
     }
     return raw;
   }

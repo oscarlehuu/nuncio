@@ -43,6 +43,8 @@ function makeDeps(over: Partial<OrchestrationToolDeps> = {}): OrchestrationToolD
     resolveEngine: async (parent, explicit) => ({ provider: explicit ?? parent.provider, model: parent.model }),
     buildWorkspaceSnapshot: async () => null,
     resolveVerifyCommand: () => null,
+    listProjectFacts: () => [],
+    recordProjectFact: () => ({ status: 'written', message: 'ok' }),
     ...over,
   };
 }
@@ -56,17 +58,20 @@ describe('buildOrchestrationTools gating', () => {
     expect(rt.systemPromptAppend).toBeUndefined();
   });
 
-  it('read → 4 read tools, no enqueue', () => {
+  it('read → 5 read tools, no write tools', () => {
     const rt = buildOrchestrationTools(makeDeps(), scope, 'read');
     expect(rt.tools.map((t) => t.name)).toEqual([
-      'nuncio_list_sessions', 'nuncio_read_session', 'nuncio_list_tasks', 'nuncio_get_task_result',
+      'nuncio_list_sessions', 'nuncio_read_session', 'nuncio_list_tasks', 'nuncio_get_task_result', 'nuncio_list_project_facts',
     ]);
+    expect(rt.tools.map((t) => t.name)).not.toContain('nuncio_enqueue_task');
+    expect(rt.tools.map((t) => t.name)).not.toContain('nuncio_record_project_fact');
     expect(rt.systemPromptAppend).toContain('nuncio_read_session');
   });
 
-  it('read-write → adds nuncio_enqueue_task', () => {
+  it('read-write → adds nuncio_enqueue_task and nuncio_record_project_fact', () => {
     const rt = buildOrchestrationTools(makeDeps(), scope, 'read-write');
     expect(rt.tools.map((t) => t.name)).toContain('nuncio_enqueue_task');
+    expect(rt.tools.map((t) => t.name)).toContain('nuncio_record_project_fact');
   });
 
   it('every tool has a valid object inputSchema', () => {
@@ -252,5 +257,41 @@ describe('title byte-cap (F5)', () => {
       structuredContent: Array<{ title: string }>;
     }).structuredContent;
     expect(new TextEncoder().encode(rows[0]!.title).byteLength).toBeLessThanOrEqual(256);
+  });
+});
+
+describe('project fact tools (B-workstream)', () => {
+  it('nuncio_list_project_facts returns the caller-project facts', async () => {
+    const deps = makeDeps({
+      listProjectFacts: (pp) => (pp === '/repo' ? [{ id: 'f1', projectPath: '/repo', key: 'k', value: 'v', provenance: 'founder', sourceSessionId: null, pinned: false, createdAt: 1, updatedAt: 1 }] : []),
+    });
+    const res = await callTool('read', 'nuncio_list_project_facts', {}, deps);
+    const rows = (res as { structuredContent: Array<{ key: string }> }).structuredContent;
+    expect(rows.map((r) => r.key)).toEqual(['k']);
+  });
+
+  it('nuncio_record_project_fact reports written / proposed / error', async () => {
+    let outcome: { status: 'written' | 'proposed' | 'error'; message: string } = { status: 'written', message: 'ok' };
+    const deps = makeDeps({ recordProjectFact: () => outcome });
+    const tool = buildOrchestrationTools(deps, scope, 'read-write').tools.find((t) => t.name === 'nuncio_record_project_fact')!;
+
+    outcome = { status: 'written', message: 'Recorded project fact "k".' };
+    const w = await tool.execute({ key: 'k', value: 'v' });
+    expect((w as { structuredContent: { status: string } }).structuredContent.status).toBe('written');
+
+    outcome = { status: 'proposed', message: 'pending founder review' };
+    const p = await tool.execute({ key: 'k', value: 'v2' });
+    expect((p as { structuredContent: { status: string } }).structuredContent.status).toBe('proposed');
+
+    outcome = { status: 'error', message: 'key must be a slug' };
+    const e = await tool.execute({ key: 'Bad Key', value: 'v' });
+    expect((e as { isError?: boolean }).isError).toBe(true);
+  });
+
+  it('record fact refuses under read mode (execute-time gate)', async () => {
+    const deps = makeDeps({ currentMode: () => 'read' });
+    // Build in read-write so the tool exists, then the live gate refuses.
+    const tool = buildOrchestrationTools(deps, scope, 'read-write').tools.find((t) => t.name === 'nuncio_record_project_fact')!;
+    expect(((await tool.execute({ key: 'k', value: 'v' })) as { isError?: boolean }).isError).toBe(true);
   });
 });

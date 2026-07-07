@@ -6,6 +6,14 @@
  * null and callers fall through to their existing defaults.
  */
 
+/** The routing tags accepted by the enqueue tool and the task API (single source). */
+export const ROUTING_TAGS = ['mechanical', 'review', 'design', 'research'] as const;
+export type RoutingTag = (typeof ROUTING_TAGS)[number];
+
+export function isRoutingTag(value: unknown): value is RoutingTag {
+  return typeof value === 'string' && (ROUTING_TAGS as readonly string[]).includes(value);
+}
+
 export interface EngineRoute {
   provider?: string;
   model?: string;

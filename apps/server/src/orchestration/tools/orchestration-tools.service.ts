@@ -1,5 +1,6 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import { AgentRegistry } from '../../agents/agents.registry';
+import { ContextFactsService } from '../../context/context-facts.service';
 import type { AgentRuntimeTools } from '../../agents/tools/agent-runtime-tools.types';
 import type { SessionDto } from '../../sessions/domain/sessions.types';
 import { EventsRepository } from '../../sessions/persistence/events.repository';
@@ -34,6 +35,7 @@ export class OrchestrationToolsService {
     @Optional() @Inject(TASK_ENQUEUER) private readonly enqueuer?: TaskEnqueuer,
     @Optional() private readonly settings?: SettingsService,
     @Optional() private readonly agents?: AgentRegistry,
+    @Optional() private readonly contextFacts?: ContextFactsService,
   ) {}
 
   private mode(): OrchestrationMode {
@@ -92,6 +94,27 @@ export class OrchestrationToolsService {
         const cwd = parent.worktreePath ?? parent.workspace ?? parent.projectPath ?? null;
         if (!cwd) return null;
         return resolveVerifyCommand(cwd, this.settings?.resolve('NUNCIO_VERIFY_COMMAND'))?.display ?? null;
+      },
+      listProjectFacts: (projectPath) => (this.contextFacts ? this.contextFacts.list(projectPath) : []),
+      recordProjectFact: (input) => {
+        if (!this.contextFacts) return { status: 'error', message: 'context facts store unavailable' };
+        try {
+          const outcome = this.contextFacts.upsert({
+            projectPath: input.projectPath,
+            key: input.key,
+            value: input.value,
+            provenance: 'agent',
+            sourceSessionId: input.sourceSessionId,
+          });
+          return outcome.written
+            ? { status: 'written', message: `Recorded project fact "${input.key}".` }
+            : {
+                status: 'proposed',
+                message: `A founder fact "${input.key}" already exists; your change was submitted as a proposal pending founder review.`,
+              };
+        } catch (error) {
+          return { status: 'error', message: error instanceof Error ? error.message : 'invalid fact' };
+        }
       },
     };
   }

@@ -1,4 +1,5 @@
 import type { AgentRuntimeTool } from '../../agents/tools/agent-runtime-tools.types';
+import type { ContextFactDto } from '../../context/context-facts.types';
 import type { HandoffBrief } from '../handoff-brief.types';
 import type { SessionDto, SessionEvent } from '../../sessions/domain/sessions.types';
 import type { CreateTaskDto, TaskDto } from '../../tasks/tasks.types';
@@ -47,6 +48,19 @@ export interface OrchestrationToolDeps {
   buildWorkspaceSnapshot(parent: SessionDto): Promise<HandoffBrief['workspace']>;
   /** A2 verify-command resolution for the parent workspace. */
   resolveVerifyCommand(parent: SessionDto): string | null;
+  /** B1 facts for the caller's project. */
+  listProjectFacts(projectPath: string): ContextFactDto[];
+  /**
+   * Record an agent-provenance fact (B3 rules apply). Returns the write outcome:
+   * `written` (direct), `proposed` (rejected → pending founder review), or a
+   * validation `error` message.
+   */
+  recordProjectFact(input: {
+    projectPath: string;
+    key: string;
+    value: string;
+    sourceSessionId: string;
+  }): { status: 'written' | 'proposed' | 'error'; message: string };
 }
 
 export type OrchestrationTool = AgentRuntimeTool;

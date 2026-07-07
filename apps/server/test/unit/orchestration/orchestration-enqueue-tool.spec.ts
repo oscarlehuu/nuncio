@@ -64,6 +64,8 @@ function makeDeps(over: Partial<OrchestrationToolDeps> = {}): {
     },
     buildWorkspaceSnapshot: async () => ({ branch: 'main', headSha: 'abc', baseBranch: 'main', dirtyFiles: [], diffStat: null }),
     resolveVerifyCommand: () => 'bun run test',
+    listProjectFacts: () => [],
+    recordProjectFact: () => ({ status: 'written', message: 'ok' }),
     ...over,
   };
   return { deps, created };
