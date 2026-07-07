@@ -3,7 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { SchedulerService } from '../../../src/scheduler/scheduler.service';
 import { TasksService } from '../../../src/tasks/tasks.service';
@@ -55,7 +55,7 @@ class SpyScheduler {
 
 interface FakeTask {
   id: string;
-  status: 'QUEUED' | 'RUNNING' | 'DONE' | 'FAILED';
+  status: 'QUEUED' | 'RUNNING' | 'DONE' | 'FAILED' | 'CANCELLED';
   outcome?: Record<string, unknown>;
 }
 
@@ -94,14 +94,22 @@ class SpyTasks {
   }
 
   /** Simulate a task settling on a terminal path and firing the settlement hook. */
-  settle(id: string, status: 'DONE' | 'FAILED', outcome?: Record<string, unknown>): void {
+  settle(
+    id: string,
+    status: 'DONE' | 'FAILED' | 'CANCELLED',
+    outcome?: Record<string, unknown>,
+  ): void {
     const t: FakeTask = { id, status, ...(outcome ? { outcome } : {}) };
     this.tasks.set(id, t);
     for (const h of this.handlers) h(t);
   }
 
   /** Mark a task terminal WITHOUT firing the hook (simulate a crash before settle). */
-  forceTerminal(id: string, status: 'DONE' | 'FAILED', outcome?: Record<string, unknown>): void {
+  forceTerminal(
+    id: string,
+    status: 'DONE' | 'FAILED' | 'CANCELLED',
+    outcome?: Record<string, unknown>,
+  ): void {
     this.tasks.set(id, { id, status, ...(outcome ? { outcome } : {}) });
   }
 }
@@ -269,6 +277,20 @@ describe('LoopsService', () => {
       tasks.settle(r.taskId!, 'DONE', { verify: { ok: false }, needsAttention: { reason: 'max_rounds' } });
       expect(repo.listRuns(loop.id).find((x) => x.id === r.id)!.outcome).toBe('failed');
     });
+
+    it('a CANCELLED task settles its run failed and unblocks the next fire (no forever-pending)', () => {
+      const loop = loops.create(create({ maxRunsPerDay: 10, maxConsecutiveFailures: 10 }));
+      const run = loops.fire(loop.id)!;
+      // Cancelling a loop task is terminal — the run must settle, or the overlap
+      // guard would brick the loop on every future fire.
+      tasks.settle(run.taskId!, 'CANCELLED');
+      expect(repo.listRuns(loop.id).find((r) => r.id === run.id)!.outcome).toBe('failed');
+
+      // Next fire proceeds (overlap guard no longer sees a pending run).
+      const next = loops.fire(loop.id);
+      expect(next).not.toBeNull();
+      expect(next!.outcome).toBe('pending');
+    });
   });
 
   describe('restart reconciliation of pending runs (finding #1)', () => {
@@ -366,6 +388,15 @@ describe('LoopsService', () => {
       const loop = loops.create(create({ maxConsecutiveFailures: 3, maxRunsPerDay: 10 }));
       const run = loops.fire(loop.id)!;
       tasks.forceTerminal(run.taskId!, 'FAILED'); // e.g. failInterrupted ran before reconcile
+      await restart(tasks);
+      expect(repo.listRuns(loop.id).find((r) => r.id === run.id)!.outcome).toBe('failed');
+    });
+
+    it('a CANCELLED task at boot finalizes the run failed (any terminal status folds, not just DONE/FAILED)', async () => {
+      const loop = loops.create(create({ maxConsecutiveFailures: 3, maxRunsPerDay: 10 }));
+      const run = loops.fire(loop.id)!;
+      // Task cancelled before the daemon died; the hook never fired for this run.
+      tasks.forceTerminal(run.taskId!, 'CANCELLED');
       await restart(tasks);
       expect(repo.listRuns(loop.id).find((r) => r.id === run.id)!.outcome).toBe('failed');
     });
@@ -715,15 +746,36 @@ describe('LoopsService', () => {
       expect(repo.listRuns(loop.id).filter((r) => r.outcome === 'pending')).toHaveLength(1);
     });
 
-    it('respects the overlap guard (skips while a run is pending)', () => {
+    it('409 overlap when a run is already pending (nothing enqueued)', () => {
       const loop = loops.create(create());
       loops.fireManual(loop.id); // pending
-      const second = loops.fireManual(loop.id);
-      expect(second).toBeNull(); // skipped-overlap, no new task
-      expect(tasks.enqueued).toHaveLength(1);
+      let thrown: unknown;
+      try {
+        loops.fireManual(loop.id);
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(ConflictException);
+      expect((thrown as ConflictException).getResponse()).toMatchObject({ reason: 'overlap' });
+      expect(tasks.enqueued).toHaveLength(1); // no new task
     });
 
-    it('rejects a broken / paused / completed loop', () => {
+    it('409 budget when the day budget is exhausted', () => {
+      const loop = loops.create(create({ maxRunsPerDay: 1, maxConsecutiveFailures: 10 }));
+      // Consume today's single slot and settle it so overlap does not fire first.
+      const run = loops.fireManual(loop.id)!;
+      tasks.settle(run.taskId!, 'DONE', { verify: { ok: true } });
+      let thrown: unknown;
+      try {
+        loops.fireManual(loop.id);
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(ConflictException);
+      expect((thrown as ConflictException).getResponse()).toMatchObject({ reason: 'budget' });
+    });
+
+    it('rejects a broken / paused / completed loop (4xx, not 409)', () => {
       const loop = loops.create(create());
       loops.pause(loop.id);
       expect(() => loops.fireManual(loop.id)).toThrow(/paused|cannot fire/i);

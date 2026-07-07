@@ -1,8 +1,16 @@
-import { BadRequestException, Injectable, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+  OnModuleInit,
+  Optional,
+} from '@nestjs/common';
 import { SchedulerService } from '../scheduler/scheduler.service';
 import { ProjectDefaultsResolver } from '../projects/project-defaults-resolver';
 import { AgentRegistry } from '../agents/agents.registry';
 import { TasksService } from '../tasks/tasks.service';
+import { TERMINAL_TASK_STATUSES } from '../tasks/tasks.types';
 import { LoopsRepository } from './loops.repository';
 import {
   dayBucket,
@@ -114,7 +122,10 @@ export class LoopsService implements OnModuleInit {
         if (!task) {
           // Task row vanished across the crash — nothing will ever settle it.
           this.loops.updateRunOutcome(run.id, 'failed', 'none');
-        } else if (task.status === 'DONE' || task.status === 'FAILED') {
+        } else if (TERMINAL_TASK_STATUSES.includes(task.status)) {
+          // Any terminal status folds (DONE/FAILED/CANCELLED, and any future one).
+          // A CANCELLED task is terminal but not DONE → outcomeFromTask yields
+          // ok:false, so the run settles failed and stops bricking the overlap guard.
           const { ok, verify } = outcomeFromTask(task);
           this.loops.updateRunOutcome(run.id, ok ? 'ok' : 'failed', verify);
         }
@@ -211,8 +222,21 @@ export class LoopsService implements OnModuleInit {
    * day budget exhausted). The task is enqueued with a FORCED fresh worktree.
    */
   fire(loopId: string): LoopRunDto | null {
+    const result = this.fireInternal(loopId);
+    return 'run' in result ? result.run : null;
+  }
+
+  /**
+   * The fire path, reporting WHY it skipped so callers can differentiate: the
+   * scheduler ({@link fire}) collapses a skip to null, while a manual fire
+   * ({@link fireManual}) maps overlap/budget to a 409. `inactive` covers a
+   * missing / paused / broken / completed loop (the scheduler ignores it).
+   */
+  private fireInternal(
+    loopId: string,
+  ): { run: LoopRunDto } | { skipped: 'overlap' | 'budget' | 'inactive' } {
     const loop = this.loops.findById(loopId);
-    if (!loop || loop.status !== 'active') return null;
+    if (!loop || loop.status !== 'active') return { skipped: 'inactive' };
 
     const runs = this.loops.listRuns(loopId);
     const today = dayBucket(this.clock.now());
@@ -224,12 +248,12 @@ export class LoopsService implements OnModuleInit {
     // streak-neutral), and settle-then-fire on the next tick.
     if (runs.some((r) => r.outcome === 'pending')) {
       this.loops.appendRun({ loopId, taskId: null, outcome: 'skipped-overlap', dayBucket: today });
-      return null;
+      return { skipped: 'overlap' };
     }
 
     if (runsOnDay(runs, today) >= loop.maxRunsPerDay) {
       this.loops.appendRun({ loopId, taskId: null, outcome: 'budget-exhausted', dayBucket: today });
-      return null;
+      return { skipped: 'budget' };
     }
 
     // Engine resolution: per-loop override → project defaultEngine → (undefined,
@@ -260,13 +284,14 @@ export class LoopsService implements OnModuleInit {
 
     // Born PENDING — a run must never be born `ok`. Settlement (onTaskSettled /
     // reconcile) finalizes it to ok/failed; the day-budget still counts it.
-    return this.loops.appendRun({
+    const run = this.loops.appendRun({
       loopId,
       taskId: task?.id ?? null,
       outcome: 'pending',
       verify: 'none',
       dayBucket: today,
     });
+    return { run };
   }
 
   /** The most recent settled run's verify output tail, from its task outcome. */
@@ -375,13 +400,18 @@ export class LoopsService implements OnModuleInit {
 
   /** Manual run-now: bypass the schedule, but a manual fire is still a consumed
    *  run subject to the overlap guard + day budget. Only an active loop fires. */
-  fireManual(id: string): LoopRunDto | null {
+  fireManual(id: string): LoopRunDto {
     const loop = this.loops.findById(id);
     if (!loop) throw new NotFoundException(`Loop ${id} not found`);
     if (loop.status !== 'active') {
       throw new BadRequestException(`Loop ${id} is ${loop.status}, cannot fire`);
     }
-    return this.fire(id); // same budget/overlap path; returns the run or null (skip)
+    const result = this.fireInternal(id); // same budget/overlap path as the scheduler
+    if ('run' in result) return result.run;
+    // Nothing was enqueued: a manual fire that skips is a 409, not a silent 200.
+    // `inactive` cannot occur here (status checked above) — treat it as overlap-safe.
+    const reason = result.skipped === 'budget' ? 'budget' : 'overlap';
+    throw new ConflictException({ reason, message: `manual fire skipped (${reason})` });
   }
 
   /** Fleet loop stats (v1.1) from settled run outcomes only. */

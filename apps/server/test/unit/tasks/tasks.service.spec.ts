@@ -139,6 +139,19 @@ describe('TasksService', () => {
     expect(() => service.cancel(task.id)).toThrow(BadRequestException);
   });
 
+  it('cancel fires the finish hook so settlement consumers (loops) fold the terminal task', async () => {
+    writeVerifyScript('sleep 0.5\nexit 0\n');
+    const blocker = service.enqueue({ prompt: 'blocker', provider: 'cursor', workspace });
+    const victim = service.enqueue({ prompt: 'cancel me', provider: 'cursor', workspace });
+    await waitForStatus(blocker.id, ['RUNNING']);
+
+    const finished: string[] = [];
+    service.onTaskFinished((t) => finished.push(`${t.id}:${t.status}`));
+    service.cancel(victim.id);
+
+    expect(finished).toContain(`${victim.id}:CANCELLED`);
+  });
+
   it('retry clones a terminal task into a fresh queued run', async () => {
     const task = service.enqueue({ prompt: 'retry me', provider: 'no-such-provider' });
     await waitForStatus(task.id, ['FAILED']);

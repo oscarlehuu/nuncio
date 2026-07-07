@@ -130,6 +130,10 @@ export class TasksService {
     if (!cancelled) {
       throw new BadRequestException('Only queued tasks can be cancelled');
     }
+    // Cancel is a terminal settlement path — notify finish-hook consumers (a loop
+    // folds the cancelled run to failed) exactly as DONE/FAILED do. Without this,
+    // a cancelled loop task would leave its run pending forever, bricking the loop.
+    this.notifyFinished(cancelled.id);
     return cancelled;
   }
 
