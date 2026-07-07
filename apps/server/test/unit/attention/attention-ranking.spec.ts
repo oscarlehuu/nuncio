@@ -64,6 +64,16 @@ describe('rankAttentionItems', () => {
     expect(ranked.map((r) => r.id)).toEqual(['y', 'z', 'x']);
   });
 
+  it('ranks by the CURRENT severity-of-kind, ignoring a stale materialized severity', () => {
+    // A row written before the rung-3 re-scale carries the OLD number (permission
+    // was 5, now 7; credential-expiring is now 6). Ranking must derive from kind
+    // so a pre-upgrade permission row still outranks a fresh credential item.
+    const stalePermission = item({ id: 'perm', kind: 'permission', severity: 5 }); // old scale
+    const credential = item({ id: 'cred', kind: 'credential-expiring', severity: 6 });
+    const ranked = rankAttentionItems([credential, stalePermission]);
+    expect(ranked.map((r) => r.id)).toEqual(['perm', 'cred']); // permission (7) > cred (6)
+  });
+
   it('within a severity bucket, higher project importance weight ranks first', () => {
     const low = item({ id: 'low', kind: 'pr-review', severity: 2, projectPath: '/a' });
     const high = item({ id: 'high', kind: 'pr-review', severity: 2, projectPath: '/b' });

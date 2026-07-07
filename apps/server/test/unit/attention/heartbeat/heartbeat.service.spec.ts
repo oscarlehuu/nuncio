@@ -58,4 +58,19 @@ describe('HeartbeatService.dispatch', () => {
     await svc.dispatch('reconcile');
     expect(calls.filter((c) => c === 'reconcile-attention')).toHaveLength(2);
   });
+
+  it('a never-resolving layer settles at the timeout so the next fire proceeds', async () => {
+    // Without the bounded timeout, a hung layer leaves the schedule inFlight
+    // forever → every future fire is skipped as overlap. dispatch must settle.
+    svc.layerTimeoutMs = 30;
+    svc.onInfra = () => new Promise<void>(() => {}); // never resolves
+    const start = Date.now();
+    await svc.dispatch('infra'); // must resolve (at the timeout), not hang
+    expect(Date.now() - start).toBeLessThan(2_000);
+
+    // The next fire still runs.
+    svc.onInfra = async () => { calls.push('infra'); };
+    await svc.dispatch('infra');
+    expect(calls).toContain('infra');
+  });
 });

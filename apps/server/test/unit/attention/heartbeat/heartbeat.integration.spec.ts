@@ -25,20 +25,27 @@ describe('HeartbeatService integration', () => {
   let dataDir: string;
   let now = 1_000_000;
   let broadcasts: number;
+  let settingsMap: Map<string, string>;
 
   class SpyScheduler {
     private handler: ((job: string) => unknown) | null = null;
-    private schedules: Array<{ target: { kind: string; job?: string } }> = [];
+    schedules: Array<{ id: string; kind: string; spec: string; target: { kind: string; job?: string } }> = [];
     setSystemFireHandler(h: (job: string) => unknown) { this.handler = h; void this.handler; }
     listSchedules() { return this.schedules; }
-    create(input: { target: { kind: string; job?: string } }) {
-      this.schedules.push({ target: input.target });
-      return { id: `s${this.schedules.length}` };
+    create(input: { kind: string; spec: string; target: { kind: string; job?: string } }) {
+      const id = `s${this.schedules.length + 1}`;
+      this.schedules.push({ id, kind: input.kind, spec: input.spec, target: input.target });
+      return { id };
+    }
+    updateSpec(id: string, kind: 'cron' | 'heartbeat', spec: string) {
+      const s = this.schedules.find((x) => x.id === id);
+      if (s) { s.kind = kind; s.spec = spec; }
     }
   }
   let scheduler: SpyScheduler;
 
   beforeEach(async () => {
+    settingsMap = new Map();
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-heartbeat-int-'));
     process.env.NUNCIO_DATA_DIR = dataDir;
     scheduler = new SpyScheduler();
@@ -53,9 +60,10 @@ describe('HeartbeatService integration', () => {
     digests = module.get(DigestRepository);
     infra.clock = { now: () => now };
 
+    const settings = { resolve: (k: string) => settingsMap.get(k) };
     heartbeat = new HeartbeatService(
       scheduler as never,
-      undefined, // settings
+      settings as never,
       attention,
       undefined, // loops
       infra,
@@ -122,5 +130,40 @@ describe('HeartbeatService integration', () => {
     heartbeat.ensureSchedules(); // reboot — must NOT duplicate
     const jobs = scheduler.listSchedules().map((s) => (s.target as { job: string }).job).sort();
     expect(jobs).toEqual(['digest-evening', 'digest-morning', 'infra', 'reconcile']);
+  });
+
+  it('the hourly reconcile re-runs the poll collectors (post-boot trip enters the queue) — finding #1', async () => {
+    let swept = 0;
+    heartbeat.onSweep = async () => { swept += 1; };
+    await heartbeat.dispatch('reconcile');
+    expect(swept).toBe(1);
+  });
+
+  it('ensureSchedules SYNCS an existing job spec when the setting changes — finding #4', () => {
+    settingsMap.set('NUNCIO_HEARTBEAT_INFRA_SPEC', 'every:15m');
+    heartbeat.ensureSchedules();
+    const before = scheduler.schedules.find((s) => s.target.job === 'infra')!;
+    expect(before.spec).toBe('every:15m');
+
+    // Founder changes the cadence; next boot must reflect it (not the stale row).
+    settingsMap.set('NUNCIO_HEARTBEAT_INFRA_SPEC', 'every:5m');
+    heartbeat.ensureSchedules();
+    const infraRows = scheduler.schedules.filter((s) => s.target.job === 'infra');
+    expect(infraRows).toHaveLength(1); // updated, not duplicated
+    expect(infraRows[0]!.spec).toBe('every:5m');
+  });
+
+  it('runDigest reports REAL counts from the bound seam (never fake zeros) — finding #5', async () => {
+    heartbeat.gatherDigestCounts = () => ({
+      runsOk: 3, runsFailed: 1, prsOpened: 2, attentionRaised: 4, attentionResolved: 2,
+      sessionsCompleted: 5, sessionsNeedsYou: 1, runsToday: 9, cap: 24,
+    });
+    await heartbeat.runDigest('morning');
+    const digest = digests.latest()!.digest;
+    expect(digest.loops).toEqual({ runsOk: 3, runsFailed: 1, prsOpened: 2 });
+    expect(digest.attention.raised).toBe(4);
+    expect(digest.attention.resolved).toBe(2);
+    expect(digest.sessions).toEqual({ completed: 5, needsYou: 1 });
+    expect(digest.budget).toEqual({ runsToday: 9, cap: 24 });
   });
 });
