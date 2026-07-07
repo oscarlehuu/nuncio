@@ -7,8 +7,11 @@ import {
 import { Reflector } from '@nestjs/core';
 import { AuthTokenService } from './auth-token.service';
 import { isAuthorizedRequest, type AuthRequestLike } from './auth-request';
+import { deviceAuthDecision } from './device-token';
+import { isLoopbackAddress } from '../terminal/loopback';
 import { IS_PUBLIC_KEY } from './public.decorator';
 import { TailscaleService } from '../tailscale/tailscale.service';
+import { DevicesService } from '../devices/devices.service';
 
 /**
  * Global guard over every /api route. Loopback requests pass with no token so
@@ -17,6 +20,11 @@ import { TailscaleService } from '../tailscale/tailscale.service';
  * remote clients authenticate once via POST /api/auth/login (cookie) or a
  * per-request Bearer header. Routes with their own auth (webhook HMAC) opt
  * out with @Public().
+ *
+ * Precedence invariant: a presented device credential DECIDES the outcome — a
+ * parseable `nd1.` bearer is verified and never falls back to broader
+ * credentials, so an invalid/revoked device bearer 401s even alongside a valid
+ * cookie. REST and WS agree on this ordering.
  */
 @Injectable()
 export class AuthGuard implements CanActivate {
@@ -24,6 +32,7 @@ export class AuthGuard implements CanActivate {
     private readonly reflector: Reflector,
     private readonly tokens: AuthTokenService,
     private readonly tailscale: TailscaleService,
+    private readonly devices: DevicesService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -36,11 +45,23 @@ export class AuthGuard implements CanActivate {
     }
 
     const request = context.switchToHttp().getRequest<AuthRequestLike>();
-    if (isAuthorizedRequest(request, this.tokens)) {
+    // Loopback is the owner's machine — always trusted, no credential needed.
+    if (isLoopbackAddress(request.socket?.remoteAddress)) {
       return true;
     }
-    if (await this.tailscale.isTrustedRemote(request.socket?.remoteAddress)) {
+    // A presented device credential decides the outcome and never falls back to
+    // the global token/cookie or tailnet branches below.
+    const device = deviceAuthDecision(request, this.devices);
+    if (device.kind === 'accept') {
       return true;
+    }
+    if (device.kind !== 'reject') {
+      if (isAuthorizedRequest(request, this.tokens)) {
+        return true;
+      }
+      if (await this.tailscale.isTrustedRemote(request.socket?.remoteAddress)) {
+        return true;
+      }
     }
     throw new UnauthorizedException('Access token required');
   }

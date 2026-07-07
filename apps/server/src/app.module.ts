@@ -3,12 +3,14 @@ import { AuthModule } from './auth/auth.module';
 import { BrowserModule } from './browser/browser.module';
 import { CursorLocalModule } from './cursor-local/cursor-local.module';
 import { DatabaseModule } from './db/database.module';
+import { DevicesModule } from './devices/devices.module';
 import { ForgesModule } from './forges/forges.module';
 import { FsModule } from './fs/fs.module';
 import { GitModule } from './git/git.module';
 import { HealthModule } from './health/health.module';
 import { HubModule } from './hub/hub.module';
 import { ModelsModule } from './models/models.module';
+import { PairingModule } from './pairing/pairing.module';
 import { PiLocalModule } from './pi-local/pi-local.module';
 import { PreferencesModule } from './preferences/preferences.module';
 import { ProviderUpdatesModule } from './provider-updates/provider-updates.module';
@@ -24,7 +26,9 @@ import { PushModule } from './push/push.module';
   imports: [
     PushModule,
     DatabaseModule,
+    DevicesModule,
     AuthModule,
+    PairingModule,
     SettingsModule,
     PreferencesModule,
     ProviderUpdatesModule,

@@ -55,6 +55,29 @@ Server → client pushes (no `id`):
 { "channel": "<sessionId>", "behind": true }
 ```
 
+Server → client notices (no `id`, no `channel`):
+
+```json
+{ "notice": "server_shutdown" }
+```
+
+## Notices
+
+A `notice` frame is an out-of-band signal about the connection or server, not
+tied to any session channel. It is additive to v1: clients ignore any frame
+whose top-level keys they do not recognize, so an older client simply drops an
+unknown notice.
+
+| Notice | Meaning | Client action |
+|---|---|---|
+| `server_shutdown` | The server is shutting down (explicit quit) and this socket is about to close. | Treat the server as offline immediately instead of waiting out the heartbeat timeout, then reconnect with backoff. |
+
+`server_shutdown` is broadcast to every open socket just before teardown on
+`SIGTERM`/`SIGINT`. It is best-effort and fire-and-forget: the server does not
+wait for the frame to flush before closing, and a crash (rather than a clean
+quit) sends no notice — clients fall back to the heartbeat timeout and reconnect
+in that case.
+
 ## Methods
 
 | Method | Params | Result | Notes |

@@ -1,7 +1,27 @@
 const path = require('node:path');
-const { app, BrowserWindow, BrowserView, dialog, ipcMain, Menu, Notification, shell } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  BrowserView,
+  dialog,
+  ipcMain,
+  Menu,
+  nativeImage,
+  Notification,
+  shell,
+  Tray,
+} = require('electron');
 const { DaemonSupervisor } = require('./daemon');
 const serverProfiles = require('./server-profiles');
+const shellSettings = require('./shell-settings');
+
+// A single instance owns the daemon and its stable port. A second launch must
+// not spawn a second daemon on another port (paired phones would race between
+// two servers); the loser quits immediately and hands focus to the first.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+}
 
 // Dev and stable ship as distinct apps — name them apart (separate window state,
 // server profiles, updater cache) before anything reads app.getPath('userData').
@@ -33,9 +53,27 @@ const EMBEDDED_BROWSER_PARTITION = 'persist:nuncio-browser';
 let mainWindow = null;
 let supervisor = null;
 let quittingAfterDaemonStop = false;
+// Set the moment a real quit begins (menu Quit, Cmd+Q, updater install-on-quit)
+// so the window 'close' handler lets the window actually close instead of
+// hiding it to the tray.
+let quitting = false;
+let tray = null;
+// True while the initial boot is still choosing/creating the first window
+// (daemon start + health wait is async). A second-instance launch that arrives
+// during this window must not race the boot by creating its own window; it
+// records intent in `pendingWindowFocus`, which the boot honors once its real
+// window exists.
+let booting = false;
+let pendingWindowFocus = false;
 const terminalPtys = new Map();
 const embeddedBrowserViews = new Map();
 let activeEmbeddedBrowserId = null;
+
+// Window/tray behavior. closeToTray on (default) keeps the daemon alive when the
+// window is closed so paired phones stay connected; the app lives in the menu
+// bar until an explicit Quit.
+let shellSettingsState = { closeToTray: true };
+let shellSettingsPath = null;
 
 // Server-connection state: the shell can load the local daemon or a saved
 // remote nuncio server. 'local' is always available as the fallback target.
@@ -48,7 +86,7 @@ let localServerUrl = null;
 let updater = null;
 
 function createWindow(url) {
-  mainWindow = new BrowserWindow({
+  const win = new BrowserWindow({
     width: 1280,
     height: 900,
     minWidth: 960,
@@ -59,18 +97,33 @@ function createWindow(url) {
       preload: path.join(__dirname, 'preload.js'),
     },
   });
+  mainWindow = win;
 
-  mainWindow.on('closed', () => {
+  // Closing to the tray keeps the local daemon running so paired phones stay
+  // connected; the window is hidden, not destroyed. An explicit quit sets
+  // `quitting` first, so this only intercepts an ordinary window close. Hide
+  // the specific window that is closing (not the module ref, which a later
+  // recreate could have reassigned).
+  win.on('close', (event) => {
+    if (shellSettingsState.closeToTray && !quitting) {
+      event.preventDefault();
+      win.hide();
+    }
+  });
+
+  win.on('closed', () => {
     destroyAllEmbeddedBrowsers();
     killAllTerminalPtys();
-    mainWindow = null;
+    // Only clear the module ref if this is still the current window — a recreate
+    // may already have pointed it at a newer one.
+    if (mainWindow === win) mainWindow = null;
   });
 
   // Escape hatch: a remote server that stops responding would leave the shell
   // on an unloadable page (the UI itself comes from that server), so fall back
   // to the local daemon. errorCode -3 (ERR_ABORTED) fires on normal in-app
   // navigations and must be ignored.
-  mainWindow.webContents.on?.('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+  win.webContents.on?.('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (!isMainFrame || errorCode === -3) return;
     if (currentServerTarget !== 'local' && localServerUrl) {
       console.error(
@@ -80,7 +133,7 @@ function createWindow(url) {
     }
   });
 
-  return mainWindow.loadURL(url);
+  return win.loadURL(url);
 }
 
 function resolveServerProfilesPath() {
@@ -92,6 +145,152 @@ function resolveServerProfilesPath() {
     // userData unavailable (tests); profiles stay in-memory.
   }
   return null;
+}
+
+function resolveShellSettingsPath() {
+  try {
+    if (typeof app.getPath === 'function') {
+      return path.join(app.getPath('userData'), 'shell-settings.json');
+    }
+  } catch {
+    // userData unavailable (tests); settings stay in-memory.
+  }
+  return null;
+}
+
+// The URL the app should currently load. Prefers a remembered remote target,
+// then the local daemon, falling back to the dev-server URL — the same
+// resolution `activate` used, factored out so tray actions can reopen a window.
+function currentAppUrl() {
+  if (currentServerTarget !== 'local') return currentServerTarget;
+  return localServerUrl || supervisor?.url || DEV_SERVER_URL;
+}
+
+function focusExistingWindow() {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+// Bring the window to the foreground, recreating it if a previous close (with
+// close-to-tray off, or on a fresh menu-bar launch) destroyed it. During the
+// initial boot the window does not exist yet and is being created
+// asynchronously; creating one here would race the boot into a second window,
+// so defer to a focus-once-ready intent instead.
+function showMainWindow() {
+  if (mainWindow) {
+    focusExistingWindow();
+    return;
+  }
+  if (booting) {
+    pendingWindowFocus = true;
+    return;
+  }
+  createWindow(currentAppUrl()).catch((error) => console.error(error));
+}
+
+// Open the window on the Remote access settings pane. The web app reads
+// `?section=` on the settings route to pick the initial pane, so a deep-link
+// URL lands the user straight on the pairing controls.
+function openPairingSettings() {
+  const base = currentAppUrl();
+  let target = base;
+  try {
+    const url = new URL(base);
+    url.pathname = url.pathname.replace(/\/+$/, '') + '/settings';
+    url.searchParams.set('section', 'remote-access');
+    target = url.toString();
+  } catch {
+    // A data: URL error page or malformed base — just show the window as-is.
+  }
+
+  if (mainWindow) {
+    focusExistingWindow();
+    mainWindow.loadURL(target).catch((error) => console.error(error));
+    return;
+  }
+  // The tray (the only caller) does not exist during boot, but guard anyway:
+  // defer rather than race the boot into a second window.
+  if (booting) {
+    pendingWindowFocus = true;
+    return;
+  }
+  createWindow(target).catch((error) => console.error(error));
+}
+
+function trayIconImage() {
+  // Menu-bar template image: macOS recolors it for light/dark automatically.
+  // Packaged builds ship build/ under Resources; a source checkout reads it
+  // relative to this file.
+  const candidates = [
+    path.join(__dirname, '..', 'build', 'trayTemplate.png'),
+    path.join(process.resourcesPath || '', 'build', 'trayTemplate.png'),
+  ];
+  for (const file of candidates) {
+    const image = nativeImage.createFromPath(file);
+    if (!image.isEmpty()) {
+      image.setTemplateImage(true);
+      return image;
+    }
+  }
+  // Fall back to an empty image; Tray still constructs and shows a blank slot
+  // rather than crashing when the asset is missing.
+  return nativeImage.createEmpty();
+}
+
+function trayMenuTemplate() {
+  return [
+    { label: 'Open Nuncio', click: () => showMainWindow() },
+    { label: 'Pair mobile device…', click: () => openPairingSettings() },
+    { type: 'separator' },
+    { label: 'Quit Nuncio', click: () => app.quit() },
+  ];
+}
+
+function rebuildTrayMenu() {
+  if (!tray || !Menu?.buildFromTemplate) return;
+  try {
+    tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate()));
+  } catch (error) {
+    console.error('[desktop] failed to build the tray menu', error);
+  }
+}
+
+// Create the menu-bar tray icon (idempotent). Guarded so a missing/broken asset
+// can never block boot — the app still runs without a tray.
+function ensureTray() {
+  if (tray || typeof Tray !== 'function') return;
+  try {
+    tray = new Tray(trayIconImage());
+    tray.setToolTip('Nuncio');
+    tray.on('click', () => showMainWindow());
+    rebuildTrayMenu();
+  } catch (error) {
+    console.error('[desktop] tray unavailable', error);
+    tray = null;
+  }
+}
+
+function destroyTray() {
+  if (!tray) return;
+  try {
+    tray.destroy();
+  } catch {
+    // Already destroyed or platform teardown; ignore.
+  }
+  tray = null;
+}
+
+// Reconcile the tray with the current close-to-tray setting: present when on,
+// gone when off.
+function syncTray() {
+  if (shellSettingsState.closeToTray) {
+    ensureTray();
+    rebuildTrayMenu();
+  } else {
+    destroyTray();
+  }
 }
 
 // The app menu (darwin) hosts "Check for Updates…" right under About — the
@@ -196,6 +395,24 @@ function registerServerHandlers() {
   }));
 
   ipcMain.handle('servers:connect', (_event, target) => connectToServer(target));
+}
+
+function registerShellHandlers() {
+  ipcMain.handle('shell:get-settings', () => ({ closeToTray: shellSettingsState.closeToTray }));
+
+  ipcMain.handle('shell:set-settings', (_event, payload) => {
+    // Renderer input: only strict boolean false disables; ignore anything else
+    // and keep the current value when the field is absent.
+    const requested =
+      payload && typeof payload === 'object' && 'closeToTray' in payload
+        ? shellSettings.normalizeCloseToTray(payload.closeToTray)
+        : shellSettingsState.closeToTray;
+    shellSettingsState = { closeToTray: requested };
+    shellSettings.saveSettings(shellSettingsPath, shellSettingsState);
+    // Turning the setting on brings up the tray; turning it off removes it.
+    syncTray();
+    return { closeToTray: shellSettingsState.closeToTray };
+  });
 }
 
 async function probeDevServer(timeoutMs = DEV_SERVER_PROBE_TIMEOUT_MS) {
@@ -579,14 +796,21 @@ function registerTerminalHandlers() {
 }
 
 app.whenReady().then(async () => {
+  // Guard the async window creation below: a second-instance launch arriving
+  // before the first window exists must not create a competing one.
+  booting = true;
+
   registerNotifyHandler();
   registerExternalHandlers();
   registerBrowserHandlers();
   registerTerminalHandlers();
   registerServerHandlers();
+  registerShellHandlers();
 
   serverProfilesPath = resolveServerProfilesPath();
   serverProfilesState = serverProfiles.loadProfiles(serverProfilesPath);
+  shellSettingsPath = resolveShellSettingsPath();
+  shellSettingsState = shellSettings.loadSettings(shellSettingsPath);
 
   // A packaged .app has no dev server and must never probe for one — it runs the
   // compiled server binary shipped in Resources. The dev-server path stays for
@@ -654,9 +878,18 @@ app.whenReady().then(async () => {
       updater = require('./updater');
       updater.initAutoUpdater({
         log: (message) => console.log(message),
-        // Re-render the menu on every state change so the "Check for Updates…"
+        // Re-render the menus on every state change so the "Check for Updates…"
         // item reflects checking/downloading/ready live.
-        onStateChange: () => rebuildServerMenu(),
+        onStateChange: () => {
+          rebuildServerMenu();
+          rebuildTrayMenu();
+        },
+        // The updater quit emits the window 'close' before 'before-quit', so mark
+        // the quit here — ahead of the close — or close-to-tray would hide the
+        // window and swallow the install.
+        onBeforeQuitForInstall: () => {
+          quitting = true;
+        },
       });
       // Render the idle "Check for Updates…" item immediately.
       rebuildServerMenu();
@@ -665,24 +898,55 @@ app.whenReady().then(async () => {
     }
   }
 
+  // Boot is done choosing/creating the first window. Honor a focus request that
+  // a second-instance launch deferred while we were still starting up.
+  booting = false;
+  if (pendingWindowFocus) {
+    pendingWindowFocus = false;
+    showMainWindow();
+  }
+
+  // Bring up the menu-bar tray when close-to-tray is on so there is always a way
+  // back to the window after it is hidden. Deferred to here so the icon appears
+  // once the app has a window (or an error window) to reopen.
+  syncTray();
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      const target =
-        currentServerTarget !== 'local'
-          ? currentServerTarget
-          : localServerUrl || supervisor?.url || DEV_SERVER_URL;
-      createWindow(target);
+      createWindow(currentAppUrl());
     }
   });
 });
 
+// A second launch reaches the first instance here instead of starting its own
+// daemon: surface the existing window rather than opening a new one.
+app.on('second-instance', () => {
+  showMainWindow();
+});
+
 app.on('window-all-closed', () => {
+  // With close-to-tray on, the app intentionally lives in the menu bar with no
+  // window and the daemon still running — never quit here on any platform.
+  if (shellSettingsState.closeToTray) {
+    return;
+  }
   if (process.platform !== 'darwin') {
     app.quit();
   }
 });
 
+// An update install (quitAndInstall) emits the window 'close' before
+// 'before-quit'. Mark the quit here so the close-to-tray handler lets the window
+// actually close instead of hiding it — otherwise the pending install is lost.
+app.on('before-quit-for-update', () => {
+  quitting = true;
+});
+
 app.on('before-quit', (event) => {
+  // Mark that a real quit is underway so the window 'close' handler stops
+  // intercepting to the tray. This also covers the updater's install-on-quit
+  // path, which triggers a normal app quit.
+  quitting = true;
   destroyAllEmbeddedBrowsers();
   killAllTerminalPtys();
 

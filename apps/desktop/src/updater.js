@@ -12,6 +12,11 @@ const FIRST_CHECK_DELAY_MS = 10_000;
 let state = { status: 'idle', percent: 0, version: null };
 let notifyStateChange = () => {};
 let log = () => {};
+// Invoked right before quitAndInstall(). Lets the shell mark that a real quit is
+// underway so a close-to-tray window 'close' handler does not intercept and hide
+// the window — which would swallow the install (quitAndInstall emits the window
+// 'close' before 'before-quit', so the flag must be set here, ahead of it).
+let beforeQuitForInstall = () => {};
 // True while an in-flight check was started by the founder (menu click) rather
 // than the silent background timer — only manual checks surface a result dialog.
 let manualCheck = false;
@@ -51,6 +56,13 @@ function updaterMenuItem() {
 }
 
 function installNow() {
+  // Signal the impending quit before it starts so the shell stops intercepting
+  // the window close to the tray.
+  try {
+    beforeQuitForInstall();
+  } catch {
+    // A shell callback error must not prevent the install.
+  }
   // Defer so the menu/dialog dismisses before the app tears down.
   setImmediate(() => autoUpdater.quitAndInstall());
 }
@@ -68,9 +80,14 @@ function checkForUpdates() {
   autoUpdater.checkForUpdates().catch((err) => log(`[updater] check failed: ${err?.message ?? err}`));
 }
 
-function initAutoUpdater({ log: logImpl = () => {}, onStateChange = () => {} } = {}) {
+function initAutoUpdater({
+  log: logImpl = () => {},
+  onStateChange = () => {},
+  onBeforeQuitForInstall = () => {},
+} = {}) {
   log = logImpl;
   notifyStateChange = onStateChange;
+  beforeQuitForInstall = onBeforeQuitForInstall;
 
   const channel = resolveChannel();
   autoUpdater.logger = { info: log, warn: log, error: log, debug: () => {} };

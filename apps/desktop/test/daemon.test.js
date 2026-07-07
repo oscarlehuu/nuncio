@@ -1,9 +1,18 @@
 const { afterEach, describe, expect, test } = require('bun:test');
+const fs = require('node:fs');
 const http = require('node:http');
 const net = require('node:net');
+const os = require('node:os');
+const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 const { DaemonSupervisor, findFreePort, resolveBunPath, waitForHealth } = require('../src/daemon.js');
+const {
+  resolveDataDir,
+  readPersistedPort,
+  resolveStablePort,
+  portFilePath,
+} = require('../src/daemon-port.js');
 
 function listen(server, port = 0) {
   return new Promise((resolve, reject) => {
@@ -174,5 +183,119 @@ describe('desktop daemon helpers', () => {
         await waitForExit(child, 2_000);
       }
     }
+  });
+});
+
+function tempDataDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'nuncio-daemon-port-'));
+}
+
+async function occupyPort() {
+  const server = net.createServer();
+  const address = await listen(server);
+  return { port: address.port, release: () => close(server) };
+}
+
+describe('stable daemon port', () => {
+  test('resolveDataDir honors NUNCIO_DATA_DIR and expands a ~ prefix', () => {
+    expect(resolveDataDir({ NUNCIO_DATA_DIR: '/abs/data' })).toBe('/abs/data');
+    expect(resolveDataDir({ NUNCIO_DATA_DIR: '~/.nuncio/data' })).toBe(
+      path.join(os.homedir(), '.nuncio', 'data'),
+    );
+    expect(resolveDataDir({})).toBe(path.join(os.homedir(), '.nuncio', 'data'));
+  });
+
+  test('reuses a persisted port when it is free', async () => {
+    const dataDir = tempDataDir();
+    const free = await findFreePort();
+    fs.writeFileSync(portFilePath(dataDir), `${free}\n`);
+
+    const chosen = await resolveStablePort({
+      dataDir,
+      findFreePort: () => Promise.reject(new Error('should not be called')),
+    });
+
+    expect(chosen).toBe(free);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  test('picks a new port and re-persists when the persisted one is occupied', async () => {
+    const dataDir = tempDataDir();
+    const held = await occupyPort();
+    fs.writeFileSync(portFilePath(dataDir), `${held.port}\n`);
+    const fresh = await findFreePort();
+
+    try {
+      const chosen = await resolveStablePort({ dataDir, findFreePort: () => Promise.resolve(fresh) });
+      expect(chosen).toBe(fresh);
+      // The new value must be written back for the next launch.
+      expect(readPersistedPort(dataDir)).toBe(fresh);
+    } finally {
+      await held.release();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test('leases a fresh port when the port file is missing', async () => {
+    const dataDir = tempDataDir();
+    const fresh = await findFreePort();
+
+    const chosen = await resolveStablePort({ dataDir, findFreePort: () => Promise.resolve(fresh) });
+
+    expect(chosen).toBe(fresh);
+    expect(readPersistedPort(dataDir)).toBe(fresh);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  test('ignores a corrupt port file and leases a fresh port', async () => {
+    const dataDir = tempDataDir();
+    fs.writeFileSync(portFilePath(dataDir), 'not-a-port\n');
+    expect(readPersistedPort(dataDir)).toBeNull();
+    const fresh = await findFreePort();
+
+    const chosen = await resolveStablePort({ dataDir, findFreePort: () => Promise.resolve(fresh) });
+
+    expect(chosen).toBe(fresh);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  test('rejects out-of-range persisted ports', () => {
+    const dataDir = tempDataDir();
+    for (const bad of ['0', '-5', '70000']) {
+      fs.writeFileSync(portFilePath(dataDir), `${bad}\n`);
+      expect(readPersistedPort(dataDir)).toBeNull();
+    }
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  test('ignores an oversized port file and leases a fresh port', async () => {
+    const dataDir = tempDataDir();
+    // A leading valid-looking number followed by megabytes of junk must not be slurped.
+    fs.writeFileSync(portFilePath(dataDir), `3300${'x'.repeat(1_000_000)}`);
+    expect(readPersistedPort(dataDir)).toBeNull();
+
+    const fresh = await findFreePort();
+    const chosen = await resolveStablePort({ dataDir, findFreePort: () => Promise.resolve(fresh) });
+    expect(chosen).toBe(fresh);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  test('persist failure is non-fatal: still returns a usable port', async () => {
+    // Point dataDir at a path whose parent is a file, so mkdir/write must fail.
+    const parentFile = path.join(os.tmpdir(), `nuncio-not-a-dir-${Date.now()}`);
+    fs.writeFileSync(parentFile, 'x');
+    const dataDir = path.join(parentFile, 'data');
+    const fresh = await findFreePort();
+    const logs = [];
+
+    const chosen = await resolveStablePort({
+      dataDir,
+      findFreePort: () => Promise.resolve(fresh),
+      log: (m) => logs.push(m),
+    });
+
+    expect(chosen).toBe(fresh);
+    expect(logs.some((m) => m.includes('could not persist port'))).toBe(true);
+    fs.rmSync(parentFile, { force: true });
   });
 });

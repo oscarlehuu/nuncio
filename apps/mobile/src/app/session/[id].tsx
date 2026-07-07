@@ -23,6 +23,7 @@ import {
 import { useSessionTranscript } from '../../lib/use-session-transcript';
 import { useTranscriptBlocks } from '../../lib/use-transcript-blocks';
 import { TranscriptBlockView } from '../../components/transcript-block-view';
+import { ConnectionPill } from '../../components/connection-pill';
 
 export default function SessionDetail() {
   const router = useRouter();
@@ -34,7 +35,7 @@ export default function SessionDetail() {
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<FlatList>(null);
 
-  const { events, steer } = useSessionTranscript(sessionId);
+  const { events, steer, connectionState } = useSessionTranscript(sessionId);
   const blocks = useTranscriptBlocks(events);
 
   const reloadSession = useCallback(() => {
@@ -129,6 +130,7 @@ export default function SessionDetail() {
             {session ? statusLabel(session.status) : '…'}
           </Text>
         </View>
+        <ConnectionPill state={connectionState} />
         <Pressable onPress={showActions} className="px-2 py-1">
           <Text className="text-xl text-muted-foreground">⋯</Text>
         </Pressable>

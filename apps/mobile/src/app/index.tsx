@@ -6,7 +6,7 @@ import {
   fetchSessions,
   type Session,
 } from '@nuncio/core/api';
-import { applyConnection } from '../lib/api-setup';
+import { applyConnection, updateActiveSecret } from '../lib/api-setup';
 import {
   clearConnection,
   loadConnection,
@@ -14,6 +14,7 @@ import {
 } from '../lib/connection-store';
 import { secureStore } from '../lib/secure-store-adapter';
 import { registerForPush } from '../lib/push-registration';
+import { rotateDeviceSecret } from '../lib/rotate-secret';
 import { SessionRow } from '../components/session-row';
 
 type Tab = 'active' | 'archived';
@@ -27,14 +28,27 @@ export default function SessionList() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    loadConnection(secureStore).then((loaded) => {
+    loadConnection(secureStore).then(async (loaded) => {
       if (loaded) {
         applyConnection(loaded);
         void registerForPush();
+        // Rotate the device secret once per launch. A revoked device lands back
+        // on the pairing screen; every other outcome keeps the session going.
+        const outcome = await rotateDeviceSecret({
+          config: loaded,
+          store: secureStore,
+          fetchImpl: (input, init) => fetch(input, init),
+          applySecret: updateActiveSecret,
+        });
+        if (outcome === 'revoked') {
+          await clearConnection(secureStore);
+          router.replace('/pairing');
+          return;
+        }
       }
       setConnection(loaded);
     });
-  }, []);
+  }, [router]);
 
   const refresh = useCallback(async () => {
     if (!connection) return;

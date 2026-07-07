@@ -24,7 +24,47 @@ export interface SessionSubscriptionOptions {
   onEvent: (event: SessionEvent) => void;
   /** Injected for React Native (auth headers) and tests; defaults to the global WebSocket. */
   webSocketFactory?: WebSocketFactory;
+  /**
+   * Fixed delay between reconnect attempts. Used only when `reconnectDelays` is
+   * absent — the two are mutually exclusive and `reconnectDelays` wins.
+   */
   reconnectMs?: number;
+  /**
+   * Per-attempt reconnect delay in ms, overriding the fixed `reconnectMs`. The
+   * mobile connection manager supplies exponential backoff + jitter here. When
+   * omitted, the client keeps its historical fixed-delay behavior exactly.
+   * `attempt` starts at 1 for the first reconnect and increments each time a
+   * connect fails; it resets to 0 once a socket opens.
+   */
+  reconnectDelays?: (attempt: number) => number;
+  /**
+   * Called with the string from any top-level `{ notice }` frame the server
+   * pushes (e.g. `server_shutdown`), which is additive to the event envelope.
+   * When omitted, such frames are silently ignored — this is why web callers,
+   * which pass neither this nor `reconnectDelays`, see identical behavior.
+   */
+  onNotice?: (notice: string) => void;
+  /**
+   * Called each time a socket successfully opens. Lets an owner mark the
+   * connection healthy and reset its backoff. No-op when omitted.
+   */
+  onOpen?: () => void;
+  /**
+   * Called once each time the underlying socket closes (before any reconnect is
+   * scheduled). Lets an owner — the mobile connection manager — react to a drop
+   * by re-probing candidate URLs and switching the live endpoint. Omitting it is
+   * a no-op, so web callers are unaffected.
+   */
+  onClose?: () => void;
+  /**
+   * Gate consulted before the client self-schedules a reconnect after a close.
+   * Returning false suppresses the client's own reconnect entirely, handing that
+   * responsibility to the caller (which reconnects via `resync()` when ready) —
+   * the manager returns false while a `server_shutdown` freeze is in effect so
+   * the phone stops hammering a deliberately-downed desktop. When omitted, the
+   * client always self-reconnects exactly as before.
+   */
+  shouldReconnect?: () => boolean;
 }
 
 export interface SessionSubscription {
@@ -47,7 +87,15 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
   let closed = false;
   let socket: WebSocketLike | null = null;
   let socketOpen = false;
+  // True while resync() is deliberately tearing down a stale socket to open a
+  // fresh one. That close is intentional, not a drop, so the close handler must
+  // NOT fire onClose or schedule a reconnect — otherwise a manager that reopens
+  // via resync() would see its own teardown as a fresh drop and recurse.
+  let reopening = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  // Counts consecutive reconnect attempts for the backoff hook; reset to 0 the
+  // moment a socket opens so a recovered connection starts the next storm fresh.
+  let reconnectAttempt = 0;
   let nextRpcId = 1;
   const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
 
@@ -63,10 +111,12 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
 
   const scheduleReconnect = () => {
     if (closed || reconnectTimer !== null) return;
+    reconnectAttempt += 1;
+    const delay = options.reconnectDelays ? options.reconnectDelays(reconnectAttempt) : reconnectMs;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       if (!closed) connect();
-    }, reconnectMs);
+    }, delay);
   };
 
   const connect = () => {
@@ -78,7 +128,9 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
     ws.addEventListener('open', () => {
       if (closed || socket !== ws) return;
       socketOpen = true;
+      reconnectAttempt = 0;
       sendSubscribe();
+      options.onOpen?.();
     });
 
     ws.addEventListener('message', (msg) => {
@@ -90,6 +142,7 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
         channel?: string;
         event?: SessionEvent;
         behind?: boolean;
+        notice?: string;
       };
       try {
         parsed = JSON.parse(String(msg.data));
@@ -108,6 +161,13 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
         }
         return;
       }
+      // Additive top-level notice frame (e.g. server_shutdown). Unknown to web
+      // callers, which pass no onNotice and so ignore it — that is what keeps
+      // their behavior identical.
+      if (typeof parsed.notice === 'string') {
+        options.onNotice?.(parsed.notice);
+        return;
+      }
       if (typeof parsed.id === 'number' && pending.has(parsed.id)) {
         const rpc = pending.get(parsed.id)!;
         pending.delete(parsed.id);
@@ -121,6 +181,17 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
       socketOpen = false;
       for (const rpc of pending.values()) rpc.reject(new Error('connection closed'));
       pending.clear();
+      // Intentional teardowns are not drops: close() (the whole subscription is
+      // being disposed) and resync()'s stale-socket swap both close deliberately,
+      // so neither must fire onClose or schedule a reconnect — otherwise an owner
+      // that reopens on close would see its own teardown as a fresh drop and loop.
+      if (closed || reopening) return;
+      // Let an owner react to the drop first (probe/URL-switch), then self-heal
+      // only if it hasn't taken over reconnection. A caller that gates via
+      // shouldReconnect()===false owns the reconnect and drives it with resync();
+      // with no gate, the client self-reconnects exactly as it always has.
+      options.onClose?.();
+      if (options.shouldReconnect && !options.shouldReconnect()) return;
       scheduleReconnect();
     });
   };
@@ -138,10 +209,13 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
       }
+      reopening = true;
       try {
         socket?.close();
       } catch {
         // already dead — reconnect below regardless
+      } finally {
+        reopening = false;
       }
       connect();
     },

@@ -4,6 +4,7 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { resolveDataDir, resolveStablePort } = require('./daemon-port');
 
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_HEALTH_TIMEOUT_MS = 20_000;
@@ -141,7 +142,14 @@ class DaemonSupervisor {
   async start() {
     this.stopping = false;
     this.restartAttempts = 0;
-    this.port = await findFreePort(this.host);
+    // Reuse a persisted port when it is still free so LAN QR URLs (http://<ip>:<port>)
+    // saved on a phone survive desktop restarts; only fall back to a random port.
+    this.port = await resolveStablePort({
+      dataDir: resolveDataDir(this.env),
+      findFreePort,
+      host: this.host,
+      log: this.log,
+    });
     this.url = `http://${this.host}:${this.port}/`;
 
     this.spawnDaemon();
