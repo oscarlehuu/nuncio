@@ -35,6 +35,7 @@ export class TasksRepository {
       outcome_json: null,
       context_json: input.contextBrief ? JSON.stringify(input.contextBrief) : null,
       notify_policy: input.notifyPolicy ?? null,
+      tag: input.tag ?? null,
       created_at: now,
       updated_at: now,
       started_at: null,
@@ -44,15 +45,15 @@ export class TasksRepository {
       .prepare(
         `INSERT INTO tasks (id, prompt, status, provider, model, model_options, project_path,
            base_branch, use_worktree, workspace, parent_session_id, role, cleanup_policy,
-           review_state, session_id, outcome_json, context_json, notify_policy, created_at,
+           review_state, session_id, outcome_json, context_json, notify_policy, tag, created_at,
            updated_at, started_at, finished_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id, row.prompt, row.status, row.provider, row.model, row.model_options,
         row.project_path, row.base_branch, row.use_worktree, row.workspace, row.parent_session_id,
         row.role, row.cleanup_policy, row.review_state, row.session_id, row.outcome_json,
-        row.context_json, row.notify_policy, row.created_at, row.updated_at, row.started_at,
+        row.context_json, row.notify_policy, row.tag, row.created_at, row.updated_at, row.started_at,
         row.finished_at,
       );
     return taskRowToDto(row);

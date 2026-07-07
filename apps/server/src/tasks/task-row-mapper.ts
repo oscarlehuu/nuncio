@@ -35,6 +35,7 @@ export function taskRowToDto(row: TaskRow): TaskDto {
     outcome: parseJson<Record<string, unknown>>(row.outcome_json),
     contextBrief: parseJson<HandoffBrief>(row.context_json),
     notifyPolicy: parseNotifyPolicy(row.notify_policy),
+    tag: row.tag,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     startedAt: row.started_at,

@@ -253,6 +253,21 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     default: 'after-review',
   },
   {
+    key: 'NUNCIO_ORCHESTRATION_TOOLS',
+    category: 'agents',
+    type: 'string',
+    label: 'Orchestration tools',
+    description:
+      'Whether a running engine can observe the session fleet and delegate work via the nuncio_* tools. off exposes nothing; read adds read-only observation tools; read-write also lets the engine enqueue subagent tasks. Same-machine, same-founder — these govern context hygiene, not multi-tenant security.',
+    envVar: 'NUNCIO_ORCHESTRATION_TOOLS',
+    default: 'off',
+    options: [
+      { value: 'off', label: 'Off', description: 'No orchestration tools are exposed to engines.' },
+      { value: 'read', label: 'Read-only', description: 'Engines can list and read sessions and task results.' },
+      { value: 'read-write', label: 'Read-write', description: 'Engines can also enqueue subagent tasks.' },
+    ],
+  },
+  {
     key: 'NUNCIO_DELEGATE_NOTIFY',
     category: 'agents',
     type: 'string',

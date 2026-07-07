@@ -22,6 +22,7 @@ function task(overrides: Partial<TaskDto> = {}): TaskDto {
     outcome: null,
     contextBrief: null,
     notifyPolicy: null,
+    tag: null,
     createdAt: 1,
     updatedAt: 2,
     startedAt: 1,

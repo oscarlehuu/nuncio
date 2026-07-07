@@ -30,6 +30,7 @@ export interface TaskRow {
   outcome_json: string | null;
   context_json: string | null;
   notify_policy: string | null;
+  tag: string | null;
   created_at: number;
   updated_at: number;
   started_at: number | null;
@@ -56,6 +57,8 @@ export interface TaskDto {
   contextBrief: HandoffBrief | null;
   /** Per-task override of the delegate-notify policy; null falls back to the setting. */
   notifyPolicy: NotifyPolicy | null;
+  /** Routing tag (mechanical|review|design|research); persisted for C3, not yet routed on. */
+  tag: string | null;
   /** Derived at read time: the linked session is waiting on the user. */
   pendingInput?: boolean;
   createdAt: number;
@@ -78,6 +81,7 @@ export interface CreateTaskDto {
   cleanupPolicy?: TaskCleanupPolicy;
   contextBrief?: HandoffBrief;
   notifyPolicy?: NotifyPolicy;
+  tag?: string;
 }
 
 export interface StartMultitaskDto {

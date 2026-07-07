@@ -1,4 +1,5 @@
-import { Module } from '@nestjs/common';
+import { Global, Module } from '@nestjs/common';
+import { TASK_ENQUEUER } from '../orchestration/tools/task-enqueuer.token';
 import { SessionsModule } from '../sessions/sessions.module';
 import { SessionsPersistenceModule } from '../sessions/sessions.persistence.module';
 import { SettingsModule } from '../settings/settings.module';
@@ -6,10 +7,14 @@ import { TasksController } from './tasks.controller';
 import { TasksRepository } from './tasks.repository';
 import { TasksService } from './tasks.service';
 
+// Global so the TASK_ENQUEUER token is injectable by OrchestrationToolsModule
+// without a value import of TasksModule — that import would close a module-load
+// cycle (Sessions → AgentTools → OrchestrationTools → Tasks → Sessions).
+@Global()
 @Module({
   imports: [SessionsModule, SessionsPersistenceModule, SettingsModule],
   controllers: [TasksController],
-  providers: [TasksRepository, TasksService],
-  exports: [TasksService],
+  providers: [TasksRepository, TasksService, { provide: TASK_ENQUEUER, useExisting: TasksService }],
+  exports: [TasksService, TasksRepository, TASK_ENQUEUER],
 })
 export class TasksModule {}

@@ -254,6 +254,7 @@ export class DatabaseService implements OnModuleDestroy {
       ['review_state', 'TEXT'],
       ['context_json', 'TEXT'],
       ['notify_policy', 'TEXT'],
+      ['tag', 'TEXT'],
     ] as const;
 
     for (const [column, type] of taskColumnDefinitions) {

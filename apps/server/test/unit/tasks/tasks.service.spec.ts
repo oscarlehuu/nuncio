@@ -504,6 +504,12 @@ describe('TasksService', () => {
     expect(repo.findById(garbage.id)?.notifyPolicy).toBeNull();
   });
 
+  it('round-trips the routing tag column', () => {
+    const tagged = repo.create({ prompt: 'tagged', tag: 'review' });
+    expect(repo.findById(tagged.id)?.tag).toBe('review');
+    expect(repo.create({ prompt: 'untagged' }).tag).toBeNull();
+  });
+
   it('retry carries the handoff brief forward', async () => {
     const task = service.enqueue({
       prompt: 'retry with brief',

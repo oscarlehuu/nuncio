@@ -1065,7 +1065,7 @@ export class SessionsService implements OnModuleDestroy {
       transcriptMtimeMs,
       chatStoreMtimeMs,
       transcriptTurnEnded,
-      tools: this.agentTools?.forSession(session.id),
+      tools: this.agentTools?.forSession({ sessionId: session.id, projectPath: session.projectPath }),
     };
   }
 
