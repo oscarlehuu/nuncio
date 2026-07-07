@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from './auth/auth.module';
 import { BrowserModule } from './browser/browser.module';
+import { ContextModule } from './context/context.module';
 import { CursorLocalModule } from './cursor-local/cursor-local.module';
 import { DatabaseModule } from './db/database.module';
 import { ForgesModule } from './forges/forges.module';
@@ -29,6 +30,7 @@ import { PushModule } from './push/push.module';
     PreferencesModule,
     ProviderUpdatesModule,
     BrowserModule,
+    ContextModule,
     CursorLocalModule,
     ForgesModule,
     FsModule,

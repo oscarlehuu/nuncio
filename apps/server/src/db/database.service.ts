@@ -314,5 +314,43 @@ export class DatabaseService implements OnModuleDestroy {
         updated_at INTEGER NOT NULL
       )
     `);
+
+    // Durable, per-project curated facts every engine can read. No expires_at —
+    // facts are curated, not cached; staleness is handled by founder deletion.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS context_facts (
+        id TEXT PRIMARY KEY,
+        project_path TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        provenance TEXT NOT NULL,
+        source_session_id TEXT,
+        pinned INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(project_path, key)
+      )
+    `);
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_context_facts_project
+      ON context_facts(project_path, updated_at)
+    `);
+
+    // Agent-proposed changes to a founder fact land here for founder review.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS context_fact_proposals (
+        id TEXT PRIMARY KEY,
+        project_path TEXT NOT NULL,
+        key TEXT NOT NULL,
+        proposed_value TEXT NOT NULL,
+        source_session_id TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at INTEGER NOT NULL
+      )
+    `);
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_context_fact_proposals_project
+      ON context_fact_proposals(project_path, status)
+    `);
   }
 }
