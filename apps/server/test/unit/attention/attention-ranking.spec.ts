@@ -33,11 +33,20 @@ function item(over: Partial<AttentionItemDto> = {}): AttentionItemDto {
 
 describe('severityForKind', () => {
   it('maps the known kinds to their static buckets (permission highest)', () => {
-    expect(severityForKind('permission')).toBe(5);
-    expect(severityForKind('verify-dead')).toBe(4);
-    expect(severityForKind('tripped-breaker')).toBe(3);
+    expect(severityForKind('permission')).toBe(7);
+    expect(severityForKind('credential-expiring')).toBe(6);
+    expect(severityForKind('verify-dead')).toBe(5);
+    expect(severityForKind('tripped-breaker')).toBe(4);
+    expect(severityForKind('zombie-session')).toBe(3);
     expect(severityForKind('pr-review')).toBe(2);
     expect(severityForKind('anomaly')).toBe(1);
+  });
+
+  it('ranks the rung-3 heartbeat infra kinds — credential near top, zombie mid', () => {
+    // A dead credential outranks a stalled loop; a zombie session outranks a PR.
+    expect(severityForKind('credential-expiring')).toBeGreaterThan(severityForKind('tripped-breaker'));
+    expect(severityForKind('zombie-session')).toBeGreaterThan(severityForKind('pr-review'));
+    expect(severityForKind('credential-expiring')).toBeLessThan(severityForKind('permission'));
   });
 
   it('maps an unknown / legacy kind to 0 (ranks last, never throws)', () => {

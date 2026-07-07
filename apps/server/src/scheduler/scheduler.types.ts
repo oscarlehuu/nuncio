@@ -12,7 +12,11 @@ export type FireResult = 'ok' | 'skipped-overlap' | 'missed' | `error:${string}`
  */
 export type ScheduleTarget =
   | { kind: 'task'; template: Partial<CreateTaskDto> & { prompt: string } }
-  | { kind: 'loop'; loopId: string };
+  | { kind: 'loop'; loopId: string }
+  // A rung-3 heartbeat layer — an internal system job, resolved through the
+  // registered system-fire handler (like `loop` via setLoopFireHandler). These
+  // are NOT exposed in the loops UI, so they are not deletable/breakable there.
+  | { kind: 'system'; job: string };
 
 /** Parsed cron/heartbeat spec (v1 subset — no full crontab). */
 export type ParsedSpec =

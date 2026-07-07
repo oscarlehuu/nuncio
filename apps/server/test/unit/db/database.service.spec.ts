@@ -326,6 +326,47 @@ describe('DatabaseService schema + migration', () => {
     expect(row.weight).toBeNull(); // default applied by the repo, not the schema
   });
 
+  it('creates the digest_runs marker table on a fresh DB (rung 3 sub-phase B)', () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-digest-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
+
+    db = new DatabaseService();
+    const cols = db.db.prepare('PRAGMA table_info(digest_runs)').all() as Array<{ name: string }>;
+    expect(cols.map((c) => c.name)).toEqual([
+      'slot_key',
+      'variant',
+      'sent_at',
+      'window_from',
+      'window_to',
+      'summary_json',
+    ]);
+    // slot_key is the PRIMARY KEY → a second insert of the same slot is rejected
+    // (the durable not-double-sent guard).
+    const ins = (n: number) =>
+      db!.db
+        .prepare(
+          "INSERT INTO digest_runs (slot_key, variant, sent_at, window_from, window_to, summary_json) VALUES ('2026-07-07:morning', 'morning', ?, 0, ?, '{}')",
+        )
+        .run(n, n);
+    ins(1);
+    expect(() => ins(2)).toThrow();
+  });
+
+  it('adds digest_runs to a pre-existing DB that lacks it (migration-from-nothing)', () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-digest-migrate-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
+
+    const oldDb = new Database(join(dataDir, 'nuncio.db'));
+    oldDb.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'CREATED', prompt TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)");
+    oldDb.close();
+
+    db = new DatabaseService();
+    const tables = db.db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .all() as Array<{ name: string }>;
+    expect(tables.map((t) => t.name)).toContain('digest_runs');
+  });
+
   it('enables WAL journal mode', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-wal-'));
     process.env.NUNCIO_DATA_DIR = dataDir;

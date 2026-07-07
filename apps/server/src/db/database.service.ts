@@ -321,6 +321,21 @@ export class DatabaseService implements OnModuleDestroy {
       this.db.exec('ALTER TABLE attention_items ADD COLUMN suppress_reraise INTEGER NOT NULL DEFAULT 0');
     }
 
+    // Heartbeat digest markers (rung 3 sub-phase B). One row per SENT digest slot
+    // — the durable record behind not-double-sent-on-catch-up + the since-last
+    // window + the in-app read. slot_key = '<YYYY-MM-DD>:<morning|evening>'.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS digest_runs (
+        slot_key TEXT PRIMARY KEY,
+        variant TEXT NOT NULL,
+        sent_at INTEGER NOT NULL,
+        window_from INTEGER NOT NULL,
+        window_to INTEGER NOT NULL,
+        summary_json TEXT NOT NULL
+      )
+    `);
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_digest_runs_sent ON digest_runs(sent_at DESC)');
+
     // Per-project importance weight (rung 3 ranking + fleet home). Guarded ALTER on
     // a pre-existing projects table; default 1 (equal importance) applied by the repo.
     const projectColumns = this.db.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>;

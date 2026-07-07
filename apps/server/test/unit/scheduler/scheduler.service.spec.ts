@@ -121,6 +121,21 @@ describe('SchedulerService firing loop', () => {
     expect(tasks.enqueued).toHaveLength(0);
   });
 
+  it('a {kind:system} target resolves through the registered system-fire handler (rung 3 heartbeat)', () => {
+    const fired: string[] = [];
+    scheduler.setSystemFireHandler((job) => { fired.push(job); });
+    scheduler.create({
+      kind: 'heartbeat',
+      spec: 'every:15m',
+      target: { kind: 'system', job: 'infra' },
+    });
+    clockNow = at(2026, 7, 7, 8, 15); // one interval later → due
+    scheduler.scanDue();
+    expect(fired).toEqual(['infra']);
+    // A system fire never touches the task runner.
+    expect(tasks.enqueued).toHaveLength(0);
+  });
+
   it('fires all schedules due at once, each advancing independently', () => {
     scheduler.create({ kind: 'cron', spec: 'daily@09:00', target: taskTarget('a') });
     scheduler.create({ kind: 'cron', spec: 'daily@09:00', target: taskTarget('b') });

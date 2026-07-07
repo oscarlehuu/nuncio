@@ -194,6 +194,55 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     envVar: 'NUNCIO_WORKSPACES_DIR',
     default: '~/.nuncio/workspaces',
   },
+  // ── Heartbeat (rung 3) — founder-tunable cadences. ───────────────────────
+  {
+    key: 'NUNCIO_HEARTBEAT_INFRA_SPEC',
+    category: 'advanced',
+    type: 'string',
+    label: 'Heartbeat: infra self-check cadence',
+    description:
+      'Schedule spec for the infra self-check (expiring credentials, zombie sessions). Default every 15 minutes.',
+    envVar: 'NUNCIO_HEARTBEAT_INFRA_SPEC',
+    default: 'every:15m',
+  },
+  {
+    key: 'NUNCIO_HEARTBEAT_RECONCILE_SPEC',
+    category: 'advanced',
+    type: 'string',
+    label: 'Heartbeat: fleet reconciliation cadence',
+    description:
+      'Schedule spec for the hourly fleet reconciliation (auto-resolve cleared attention, fold settled loop runs). Default every 60 minutes.',
+    envVar: 'NUNCIO_HEARTBEAT_RECONCILE_SPEC',
+    default: 'every:60m',
+  },
+  {
+    key: 'NUNCIO_HEARTBEAT_DIGEST_MORNING',
+    category: 'advanced',
+    type: 'string',
+    label: 'Heartbeat: morning digest time',
+    description: 'Daily time for the retrospective morning digest. Default 08:00.',
+    envVar: 'NUNCIO_HEARTBEAT_DIGEST_MORNING',
+    default: 'daily@08:00',
+  },
+  {
+    key: 'NUNCIO_HEARTBEAT_DIGEST_EVENING',
+    category: 'advanced',
+    type: 'string',
+    label: 'Heartbeat: evening digest time',
+    description: 'Daily time for the pre-flight evening digest. Default 20:00.',
+    envVar: 'NUNCIO_HEARTBEAT_DIGEST_EVENING',
+    default: 'daily@20:00',
+  },
+  {
+    key: 'NUNCIO_HEARTBEAT_ZOMBIE_AGE_MIN',
+    category: 'advanced',
+    type: 'string',
+    label: 'Heartbeat: zombie session threshold (minutes)',
+    description:
+      'A RUNNING session with no event for this many minutes is flagged as a zombie. Default 30.',
+    envVar: 'NUNCIO_HEARTBEAT_ZOMBIE_AGE_MIN',
+    default: '30',
+  },
   {
     key: 'NUNCIO_CLONE_DIR',
     category: 'workspaces',

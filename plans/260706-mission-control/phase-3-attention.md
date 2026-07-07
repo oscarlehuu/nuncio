@@ -266,3 +266,169 @@ is design + red only. They need a founder lock before sub-phase A implementation
 table was locked before its build. Flagged reversible: decision #2 (ack≠resolve), #3 (persist+
 reconcile over pure-derive), and the already-resolved-idempotent choice are the ones most worth an
 explicit founder confirm.
+
+---
+
+# Sub-phase B design — heartbeat (3 layers)
+
+**Status:** Design + red suite (2026-07-07). Sub-phase A is closed (server + Inbox UI + live smoke).
+Founder-locked constraints: **3 layers**; cadences **infra 15min / fleet-reconcile hourly / digest
+2×/day (~08:00, ~20:00)**, all founder-tunable; **digest data-first**, delivered via **PushModule +
+in-app view**. The heartbeat rides the **rung-2 scheduler** (a `heartbeat` kind + handler-registration
+seam already exist). It is a rhythm layer: it PRODUCES attention items (through the sub-phase A seam)
+and SUMMARIES, it does not add a new signal store beyond a tiny digest marker.
+
+## What already exists (scout — lean on it, don't rebuild)
+
+| Need | Where it lives | How B uses it |
+|------|----------------|---------------|
+| Cadence firing | `SchedulerService` — `heartbeat` kind, `scanDue()`, boot rehydrate, `missed`/fire-once, per-schedule overlap guard (`inFlight`) | The 3 layers are 3 system schedules; a new `{kind:'system'}` target + `setSystemFireHandler` seam mirrors `setLoopFireHandler` (`scheduler.service.ts:144`). |
+| Forge auth probe (bounded) | `ForgesService.listStatus()` — `resolveAuth()` (cheap, cached) + `getCurrentUser()` behind `withTimeout(2500)` (`forges.service.ts:132-149`) | Credential VALIDITY probe: connected-but-`getCurrentUser` throws/401 = invalid/expiring. Absent token = "not configured", NOT a failure. |
+| Agent provider probe | `AgentRegistry.available()` (`agents.registry.ts:43`) | Same pattern for provider auth where a provider exposes a validity probe. |
+| Attention raise/resolve + suppression | sub-phase A `AttentionService` (`raise`, `onConditionCleared`, suppress-reraise) | Every failed check raises an item; a passing check calls `onConditionCleared` (auto-resolve, founder-override-safe). |
+| Boot reconcile passes | `AttentionService.reconcileOpenItems`, `LoopsService.reconcilePendingRuns` (idempotent by design) — vs `SchedulerService.rehydrate` (recomputes nextFire) | Layer 2 runs the two IDEMPOTENT reconciles on a cadence; it does NOT run `rehydrate` (that mutates schedule timing and is boot-only). |
+| Loop/run + budget data | `loop_runs` rows (`createdAt`, `outcome`), `computeLoopStats` | `buildDigest()` reads these for since-last deltas + today's usage. |
+| Push delivery | `PushService` (Expo transport, test seam) — currently session-event-driven only (`push.service.ts:77`) | Add an additive `broadcast(content)` for the digest (no new transport). |
+| Latest-event age | events table `created_at` per row | Add a cheap `latestEventAt(sessionId)` (`SELECT MAX(created_at)`) for zombie detection. |
+
+## Design questions — resolved (proposed; flag only genuine can't-picks)
+
+### Q1 — Layer 1 infra self-check: exact v1 checks
+1. **Credential validity (expiring/invalid)** — for each *connected* forge (`resolveAuth() !== null`),
+   probe `getCurrentUser()` behind a per-check timeout. Throw/401 → raise a
+   `credential-expiring` item keyed `forge:<id>`. **Absent token → NO item** (unconfigured ≠ broken —
+   distinguishing these is the whole point; a dead `glab` token at 3am must page, an intentionally
+   unused GitLab must not). Recommendation: reuse `ForgesService.listStatus()`'s exact probe shape so
+   there is ONE auth-probe path; the check is cheap (one `/user` call per connected forge, ≤2.5s,
+   every 15min — no rate-limit risk).
+2. **Zombie sessions** — a session `RUNNING` whose `latestEventAt` age `> T` (default 30min, tunable)
+   while the daemon is alive. Raise `zombie-session` keyed `session:<id>`. This is DISTINCT from the
+   boot pass `reconcileInterruptedSessions` (which fires RUNNING→IDLE on ANY running session at boot,
+   assuming the daemon died) — the heartbeat catches a session that hangs *while we're up*. v1 raises
+   an attention item (surfaces it); it does not auto-kill (founder decides).
+3. **Disk-space floor** for `NUNCIO_DATA_DIR` + clone dir — **PROPOSED then CUT for v1 (YAGNI)**. A
+   self-hosted single-founder box rarely hits a disk floor silently, and a cheap portable free-bytes
+   check across platforms is fiddly. FLAG: add in v1.1 if the founder wants it; the collector seam is
+   generic so it drops in without touching layer plumbing.
+   New kinds → added to `SEVERITY_BY_KIND`: `credential-expiring` (high — a dead cred kills the night)
+   and `zombie-session` (mid). The Inbox already tolerates unknown kinds; ranking them is the change.
+
+### Q2 — Layer 2 fleet reconciliation: what it re-checks
+Run the **two idempotent boot-reconcile passes on a cadence**: `AttentionService.reconcileOpenItems()`
+(auto-resolve items whose condition cleared) and `LoopsService.reconcilePendingRuns()` (fold a
+crashed/settled task's run). Both are already written to be safe to re-run (they only act on
+open/pending rows against live terminal/probe state, never re-fire a live loop run or re-resolve a
+still-live item — proven by the rung-1/2 restart suites). **EXCLUDED: `SchedulerService.rehydrate()`**
+— it recomputes `next_fire_at` and would perturb cadence timing if run mid-cycle; it is boot-only by
+design. The red suite asserts the two included passes are idempotent (double-run = no-op) and that
+rehydrate is NOT invoked by the hourly job.
+
+### Q3 — Layer 3 digest: shape, storage, delivery, variants
+- **Shape (`buildDigest(data, sinceMs, now, variant)` — pure):**
+  `{ variant, windowFrom, windowTo, loops: {runsOk, runsFailed, prsOpened}, attention: {raised,
+  resolved, openTop: RankedItem[N]}, sessions: {completed, needsYou}, budget: {runsToday, cap} }`.
+  Deltas are "since the last digest marker"; `openTop` + `budget` are current snapshots.
+- **Storage — `digest_runs` marker table (ADR-006), NOT a full digests archive:** one row per SENT
+  slot: `{ slot_key TEXT PRIMARY KEY, variant, sent_at, window_from, window_to, summary_json }`.
+  `slot_key = '<YYYY-MM-DD>:<morning|evening>'`. The **since-last window** derives from the previous
+  marker's `window_to` (durable across restart → Q14). Storing the summary_json lets the in-app GET
+  return the last built digest without recomputing. Recommendation: marker-table over derive-on-demand
+  because delivery idempotency (Q15/16) needs a durable "already sent this slot" record anyway.
+- **Delivery — BOTH:** `PushService.broadcast({title, body, data})` (short: e.g. *"3 shipped, 1 needs
+  you, 12 runs"* + a `data.slotKey` pointer) AND `GET /heartbeat/digest?slot=latest` for the in-app
+  view (returns the durable `summary_json`, UI-ready).
+- **Morning vs evening — two templates over the SAME data (v1):** morning = retrospective
+  ("what shipped overnight, what's blocked, what it cost"); evening = pre-flight ("what's queued
+  tonight" — the open loops due before next morning + attention still open). Same `buildDigest` data;
+  the `variant` selects the template + reorders emphasis. FLAG: if the founder wants genuinely
+  divergent *data* per variant (not just template), that's a small extension — recommend v1 shared.
+
+### Q4 — Scheduling: three system schedules
+Ride the rung-2 `schedules` table with a new target `{ kind: 'system', job: 'infra' | 'reconcile' |
+'digest-morning' | 'digest-evening' }` and a `setSystemFireHandler(handler)` seam on
+`SchedulerService` (mirrors `setLoopFireHandler`; the `fire()` switch gains a `system` arm). On boot,
+`HeartbeatService` **ensures the schedules exist (upsert-by-job, idempotent — a reboot never
+duplicates)** with specs from settings. Cadence specs are **founder-tunable via settings keys**
+(below) and the system target is **not exposed in the loops UI** (the loops surface only lists
+loop-owned schedules), so they are **not deletable/breakable** from there — satisfying the founder
+constraint. Settings keys (all with sensible defaults, ADR-005 registry pattern):
+`NUNCIO_HEARTBEAT_INFRA_SPEC` (`every:15m`), `NUNCIO_HEARTBEAT_RECONCILE_SPEC` (`every:60m`),
+`NUNCIO_HEARTBEAT_DIGEST_MORNING` (`daily@08:00`), `NUNCIO_HEARTBEAT_DIGEST_EVENING` (`daily@20:00`),
+`NUNCIO_HEARTBEAT_ZOMBIE_AGE_MIN` (`30`).
+
+### Q5 — Safety (all handlers)
+- **Bounded:** every check/probe runs behind a per-check `withTimeout` (reuse the forge pattern) so a
+  hung forge probe returns a "check-failed" result rather than wedging `scanDue`. A layer runs its
+  checks with `Promise.allSettled` — one timeout never blocks the others.
+- **Closed-guarded:** each handler short-circuits on `database.closed` (a fire mid-shutdown is a
+  no-op), matching every repo write.
+- **Idempotent / double-fire safe:** infra re-raises are deduped by sub-phase A's open-dedup; the
+  reconcile passes are idempotent; the digest is slot-keyed (a second fire of the same slot is a
+  no-op). The scheduler's own `inFlight` overlap guard already prevents a slow handler from
+  re-entering.
+
+## Architecture (design)
+
+- **`HeartbeatService`** (`OnModuleInit`) — registers `setSystemFireHandler`, ensures the 3+1 system
+  schedules on boot, and dispatches a fired job to the right layer:
+  `infra` → `runInfraChecks()`, `reconcile` → `runFleetReconcile()`, `digest-*` → `runDigest(variant)`.
+  Injectable `Clock`; all layers bounded + closed-guarded.
+- **`InfraChecks`** — the credential + zombie collectors; each returns a `{ ok, kind, subjectId,
+  title }[]` that `HeartbeatService` folds into `AttentionService.raise` / `onConditionCleared`.
+- **`buildDigest()`** — pure (`apps/server/src/attention/heartbeat/digest.ts`), plus a
+  `DigestRepository` (marker table) for since-last window + slot idempotency + in-app read.
+- **`PushService.broadcast()`** — additive.
+- **`HeartbeatController`** — `GET /heartbeat/digest?slot=latest` (in-app view).
+
+## Restart / replay story (ADR-006)
+
+1. Guarded `CREATE` of `digest_runs`; guarded ALTER-free (new table only). System schedules
+   ensured-on-boot (upsert-by-job) so a reboot converges to exactly 3+1 rows.
+2. The since-last digest window derives from the last durable marker → correct deltas across a
+   restart between digests.
+3. `missed` fire-once (scheduler) + `digest_runs` slot marker together guarantee a digest is not
+   double-sent when a missed slot is caught up on boot.
+
+## Direction-test walk (B)
+
+- **Phone test** — the digest push lands on the iPhone; the in-app digest view + the Inbox items
+  (credential-expiring, zombie) are all phone-rendered. THE point of the layer.
+- **Engine/Forge test** — cred probes reach every provider/forge through the registries; no engine or
+  forge branch. GitLab cred expiry pages exactly like GitHub.
+- **Restart test** — schedules + digest marker durable; since-last window survives; no double-send.
+- **Self-host test** — all local: SQLite marker, local scheduler tick, Expo push via the existing
+  self-hosted PushModule. Zero new cloud dependency.
+
+## Red suite for sub-phase B
+
+Edge-case-first, deterministic (injected `Clock`), neutral `TODO:` skeletons (no false greens). Full
+ledger: `.claude/maestro/rung3-attention/edge-cases-B.md` (32 rows). Test files:
+- `heartbeat/infra-checks.spec.ts` — credential invalid→item, valid-again→auto-resolve (suppress
+  respected), absent→no item, zombie boundary (exactly-at-T not flagged, one-past is), healthy→none,
+  probe-timeout isolation, new kinds in the severity map.
+- `heartbeat/heartbeat.service.spec.ts` — layer dispatch, per-check timeout isolation, closed-guard,
+  double-fire idempotency, ensure-schedules-once.
+- `heartbeat/fleet-reconcile.spec.ts` — runs the two idempotent passes, double-run no-op, does NOT
+  call rehydrate.
+- `heartbeat/digest.spec.ts` — pure `buildDigest` deltas, empty digest, morning/evening templates,
+  since-last window from marker, restart-durable window.
+- `heartbeat/digest-repository.spec.ts` — slot marker durable, not-double-sent on catch-up, slot
+  idempotency, latest read.
+- `heartbeat/push-broadcast.spec.ts` — payload shape via transport spy.
+- `scheduler` (extend) — `{kind:'system'}` target + `setSystemFireHandler` fires; overlap guard holds.
+- `db/database.service.spec` (extend) — guarded CREATE of `digest_runs`.
+
+## Founder decisions (status — proposed, not yet locked)
+
+| # | Decision | Recommendation |
+|---|----------|----------------|
+| B1 | Disk-space check v1 | **CUT** (YAGNI); seam ready for v1.1 |
+| B2 | Zombie action v1 | **Surface an attention item only** (no auto-kill) |
+| B3 | Digest variants | **Two templates, shared data** (v1) |
+| B4 | Digest storage | **`digest_runs` marker table** (durable slot + since-last + in-app read) |
+| B5 | Credential probe | **Reuse `listStatus` getCurrentUser probe**; absent ≠ failure |
+| B6 | Cadence tuning | **Settings keys** w/ locked defaults (15m / 60m / 08:00 / 20:00 / 30min zombie) |
+
+Flagged genuine picks for the founder: **B1 (disk check in/out)** and **B3 (shared vs divergent digest
+data)** — everything else follows the locked constraints. The rest are recommendations consistent with
+the founder's B constraints and rungs 1-2 patterns.

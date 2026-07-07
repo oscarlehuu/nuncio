@@ -8,8 +8,10 @@
 /** The condition families the queue tracks. Unknown/legacy kinds rank last, never throw. */
 export type AttentionKind =
   | 'permission'
+  | 'credential-expiring'
   | 'verify-dead'
   | 'tripped-breaker'
+  | 'zombie-session'
   | 'pr-review'
   | 'anomaly';
 
@@ -17,12 +19,16 @@ export type AttentionStatus = 'open' | 'resolved';
 
 /**
  * Static severity buckets (decision #1 — NOT a learned score). Higher = more
- * urgent. An unknown kind maps to 0 (ranks last).
+ * urgent. An unknown kind maps to 0 (ranks last). The rung-3 heartbeat (sub-phase
+ * B) adds the two infra kinds: an expiring/invalid credential is near the top (a
+ * dead cred at 3am kills the whole night's queue); a zombie session sits mid.
  */
 export const SEVERITY_BY_KIND: Readonly<Record<AttentionKind, number>> = {
-  permission: 5,
-  'verify-dead': 4,
-  'tripped-breaker': 3,
+  permission: 7,
+  'credential-expiring': 6,
+  'verify-dead': 5,
+  'tripped-breaker': 4,
+  'zombie-session': 3,
   'pr-review': 2,
   anomaly: 1,
 };

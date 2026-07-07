@@ -51,7 +51,7 @@ describe('AttentionService', () => {
     it('raises an open item with the kind-derived severity + injected clock', () => {
       const item = svc.raise(signal());
       expect(item.status).toBe('open');
-      expect(item.severity).toBe(3); // tripped-breaker
+      expect(item.severity).toBe(4); // tripped-breaker (post rung-3 severity scale)
       expect(item.createdAt).toBe(1_000);
     });
 

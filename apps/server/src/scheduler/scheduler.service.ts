@@ -40,6 +40,12 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
    */
   private loopFireHandler: ((loopId: string) => unknown) | null = null;
 
+  /**
+   * System-fire handler (HeartbeatService, registered to avoid a DI cycle).
+   * Resolves a {kind:'system',job} target — a rung-3 heartbeat layer.
+   */
+  private systemFireHandler: ((job: string) => unknown) | null = null;
+
   constructor(
     private readonly schedules: SchedulesRepository,
     @Optional() private readonly tasks?: TasksService,
@@ -145,6 +151,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     this.loopFireHandler = handler;
   }
 
+  /** Register the system-fire handler (HeartbeatService, to avoid a DI cycle). */
+  setSystemFireHandler(handler: (job: string) => unknown): void {
+    this.systemFireHandler = handler;
+  }
+
   /**
    * Fire a schedule's target through TasksService. DB-observable effects (inFlight,
    * recordFire, advance) are applied SYNCHRONOUSLY so `scanDue()` leaves a
@@ -170,6 +181,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       } else if (target.kind === 'loop') {
         // Loop targets resolve through the registered handler (budget-checked run).
         returned = this.loopFireHandler?.(target.loopId);
+      } else if (target.kind === 'system') {
+        // Heartbeat layer — resolves through the system-fire handler (rung 3).
+        returned = this.systemFireHandler?.(target.job);
       }
       pending = Promise.resolve(returned);
     } catch (error) {
