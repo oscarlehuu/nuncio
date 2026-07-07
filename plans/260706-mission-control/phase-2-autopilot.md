@@ -285,6 +285,144 @@ missed-fire policy on the first `scanDue()`. Event schedules carry no clock stat
 (schedules are config + fire-history, not conversation). The restart test asserts a second module
 instance rebuilds a coherent `next_fire_at` with no in-memory truth.
 
+## Sub-phase C design (loop primitive) — design + red tests only (2026-07-07)
+
+A **loop** is the standing task that makes rung 2 *Autopilot*: `{goal, trigger, budget, stop,
+escalation}` as a durable record. It fires **loop-runs** — each a task (rung 1), in a fresh worktree,
+with project defaults resolved (A) — through the scheduler (B), inside run-count budgets and a
+consecutive-failure breaker, landing output via worktree + PR. **All counting is derived from durable
+`loop_runs` rows** (restart-safe, no in-memory counters). Locked constraints: budgets = run-count
+(`maxRunsPerDay` + `maxConsecutiveFailures`); breaker pauses after 3 consecutive failures (per-loop
+overridable) + emits needs-attention (rung-1 vocabulary); output ALWAYS worktree + PR, never a direct
+branch write.
+
+### Scout (what already exists — reuse)
+
+- **PR creation seam exists.** `ForgesService.openPullRequestForSession(id)` takes a session that has
+  a `branch` + `worktreePath` and opens a PR through the `ForgeProvider` (GitHub/GitLab, ADR-005);
+  `git.service` has `commit`, `push`, `createWorktree`. So the loop's PR leg is small — it reuses
+  these, it is NOT new plumbing.
+- **Task outcome is durable + already carries the loop signal.** `TasksService.execute` finishes a
+  task `DONE`/`FAILED` with `outcome_json = {sessionStatus, verify:{ok,…}, needsAttention?}` after
+  awaiting `awaitVerifySettled` (so it reflects the rung-1 terminal verify, not the first red). A
+  loop-run's outcome derives from the task's terminal status + `verify.ok` / `needsAttention`.
+- **Scheduler target seam (B).** A schedule's `{kind:'loop', loopId}` target resolves to a loop-run
+  fire — the loop closes B's seam.
+
+### Loop record — the 5 fields mapped to schema (ADR-006, guarded CREATE)
+
+```sql
+CREATE TABLE IF NOT EXISTS loops (
+  id                       TEXT PRIMARY KEY,
+  goal                     TEXT NOT NULL,     -- (1) the prompt each run enqueues
+  schedule_id              TEXT NOT NULL,     -- (2) trigger — the loop OWNS this schedules row
+  max_runs_per_day         INTEGER NOT NULL,  -- (3) budget count
+  max_consecutive_failures INTEGER NOT NULL,  -- (3) budget / breaker threshold (default 3)
+  stop_json                TEXT,              -- (4) stop condition: NULL | {"kind":"maxTotalRuns","n":N}
+  escalation               TEXT NOT NULL,     -- (5) escalation policy: 'needs-attention' (v1)
+  project_path             TEXT,              -- soft ref → project entity (engine/verify/auto-steer)
+  status                   TEXT NOT NULL DEFAULT 'active', -- active | paused | broken | completed
+  created_at               INTEGER NOT NULL,
+  updated_at               INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS loop_runs (
+  id         TEXT PRIMARY KEY,
+  loop_id    TEXT NOT NULL,
+  task_id    TEXT,                            -- the task this run enqueued
+  outcome    TEXT NOT NULL,                   -- 'ok' | 'failed' | 'budget-exhausted' | 'resume'
+  day_bucket TEXT NOT NULL,                   -- local YYYY-MM-DD (day-count key, tz-naive)
+  created_at INTEGER NOT NULL
+);
+```
+
+- **Loop OWNS its schedule** (not vice-versa): the schedule is the loop's trigger — meaningless
+  without the loop — so the loop is the aggregate root, holds `schedule_id`, and deleting the loop
+  deletes its schedules row (no orphan trigger). Justification: a one-to-one where the trigger's
+  lifecycle is strictly the loop's; the reverse (schedule owns loop) would let a schedule outlive its
+  only reason to exist.
+- **YAGNI:** exactly the 5 fields + project_path + status + timestamps. No per-loop token budgets
+  (rung 4), no context files (rung 3), no extra knobs.
+
+### Stop condition v1 — FLAGGED founder decision
+
+**Recommendation: `null` (standing, run until paused) | `{kind:'maxTotalRuns', n}`.** Maintenance /
+overnight-batch loops are standing (null); improvement loops ("do N runs then stop") get
+`maxTotalRuns` — a durable count over `loop_runs`, restart-safe. **Deferred:**
+`verify-green-N-consecutive` (needs cross-run verify history + a definition of "consecutive green"
+that the breaker's failure-streak machinery half-provides — cleaner to add once the run-accounting is
+proven). Flagged: the founder may want the improvement family's green-streak stop in v1.
+
+### A loop run IS a task (accounting derived from durable rows)
+
+A fire (scheduler → loop) enqueues a **task** with: `prompt = loop.goal`, `useWorktree = true`
+(**locked** — a loop NEVER runs in-place, enforced regardless of the project's `worktreePolicy`),
+`projectPath = loop.project_path` (so engine via project entity → `AgentRegistry`, verify + auto-steer
+per project — no engine branch). A `loop_runs` row is written at fire time (task_id, day_bucket).
+
+**Run outcome accounting** (restart-safe, from durable rows): when the task settles
+(`awaitVerifySettled`), the loop-run's outcome is derived from the task's `outcome_json`:
+- task `DONE` + `verify.ok === true` (or no verify) → **`ok`**, resets the failure streak;
+  red-then-autofixed by the rung-1 loop lands here (verify went green).
+- task `FAILED`, or outcome carries `needsAttention` (rung-1 gave up) → **`failed`**, streak++.
+
+The **failure streak** and **today's run count** are both *folded from `loop_runs`* — the streak is the
+count of trailing `failed` runs since the last `ok`/`resume`; today's count is the number of runs whose
+`day_bucket` equals the local `YYYY-MM-DD` of `clock.now()`. No in-memory counters → a restart rebuilds
+both by re-folding (the restart test).
+
+### Budgets & breaker
+
+- **`maxRunsPerDay`**: before a fire, if today's `loop_runs` count (by `day_bucket`) `>= maxRunsPerDay`,
+  skip with a `budget-exhausted` run row and do not enqueue. The day boundary is **local midnight,
+  timezone-naive** (documented, like B; DST a known v1 limitation). Crossing midnight (injected clock)
+  resets the day bucket → fires resume.
+- **Breaker**: the failure streak (folded from `loop_runs`) reaching `maxConsecutiveFailures` (default
+  3, per-loop overridable) **trips**: set `status='broken'`, **disable the loop's schedule** (via the
+  scheduler seam, so no further fires), and **emit a needs-attention signal** reusing the rung-1
+  vocabulary (`verify_needs_attention`-shaped payload with `{reason:'loop_breaker', loopId, streak}`)
+  so the rung-3 attention queue keys on one vocabulary.
+- **Manual resume**: `status='active'`, re-enable the schedule, and write a `resume` run row so the
+  streak fold resets to 0 (the resume row is the fold boundary). A success mid-streak also resets it
+  naturally (an `ok` is a fold boundary).
+
+### The PR leg (locked "worktree + PR")
+
+Reuses the existing seam. On a green run, the loop: commits the agent's worktree changes
+(`git.service.commit`) → pushes (`git.service.push`) → opens a PR (`ForgesService.openPullRequestForSession`)
+**when the project has a forge remote configured**; otherwise it leaves the committed worktree branch
+and surfaces it (the branch is the deliverable, PR-able later). **This is a design contract for this
+sub-phase** (unit tests can't drive a live forge/git remote); the seam is real and small, so v1 ships
+PR-when-possible + branch-commit fallback — no scope flag needed, but the one honest dependency is that
+the agent actually left committable changes in the worktree (a no-op run commits nothing → no PR).
+
+### API surface (phone-ready)
+
+- `POST /loops` `{ goal, schedule:{kind,spec}, maxRunsPerDay?, maxConsecutiveFailures?, stop?,
+  projectPath? }` — creates the loop + its schedule (one call).
+- `GET /loops` / `GET /loops/:id` — list / one (status, budgets, last run, streak).
+- `POST /loops/:id/pause` · `POST /loops/:id/resume` — pause disables the schedule; resume re-enables +
+  zeroes the streak (only a `broken` or `paused` loop resumes).
+- `DELETE /loops/:id` — removes the loop + its schedule (run history: **kept** as durable history by
+  default — FLAGGED: cascade-delete is the alternative).
+- `GET /loops/:id/runs` — the durable `loop_runs` history (the fleet-view / digest data).
+
+All shapes are UI-ready (status enum, counts, last-run) so the rung-3 phone surfaces render directly.
+
+### Direction-test walk (C)
+
+Phone: create/pause/resume/needs-attention/run-history all REST + UI-ready. Engine: a loop run's
+engine comes from the project entity via `AgentRegistry` — no engine branch (ADR-004). Forge: PR leg
+goes through `ForgeProvider` (GitHub + GitLab). Restart: streak + day-count re-folded from `loop_runs`
+at boot — the pillar-4 heart. Self-host: worktrees local, PRs via CLI forge creds.
+
+### Restart / replay story
+
+No event-log replay (loops are config + run-history rows). At boot the scheduler already rehydrates
+`next_fire_at` (B); the loop layer adds nothing stateful in memory — streak and today's count are pure
+folds over `loop_runs`, so a fresh module computes identical budget/breaker state. The restart test
+asserts a second module derives the same streak (e.g. mid-breaker) and day-count.
+
 ## Verify (for THIS task)
 
 - Server specs under `apps/server/test/unit/projects/`:
