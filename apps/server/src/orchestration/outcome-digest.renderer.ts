@@ -39,7 +39,16 @@ export function renderOutcomeDigest(
     // steer budget — the parse-time section cap makes this unreachable under
     // valid data.
     warn('digest wrapper pushed the message over budget; clamping');
-    return truncateHeadBytes(wrapped, DIGEST_MAX_BYTES);
+    const clamped = truncateHeadBytes(wrapped, DIGEST_MAX_BYTES);
+    if (clamped.endsWith(DIGEST_ACTION_SENTENCE)) return clamped;
+    // The clamp cut off the action sentence — restore the invariant: trim the
+    // body to leave room for a newline + the full sentence, on a clean UTF-8
+    // boundary, so the digest always ends with the exact call-to-action.
+    const body = truncateHeadBytes(
+      clamped,
+      DIGEST_MAX_BYTES - byteLength(DIGEST_ACTION_SENTENCE) - 1,
+    );
+    return `${body}\n${DIGEST_ACTION_SENTENCE}`;
   };
   const build = (summary: string | null): string => {
     const lines: string[] = [`### Subagent task ${payload.status}`];

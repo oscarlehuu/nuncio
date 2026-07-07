@@ -81,6 +81,17 @@ describe('renderOutcomeDigest', () => {
     expect(warnings.some((w) => w.includes('clamp'))).toBe(true);
   });
 
+  it('prefix-heavy parse-valid wrapper: clamp still ends with the exact action sentence within budget', () => {
+    const warnings: string[] = [];
+    const out = renderOutcomeDigest(payload(), {
+      digestWrapper: 'X'.repeat(1500) + '{{content}}',
+      warn: (m) => warnings.push(m),
+    });
+    expect(byteLength(out)).toBeLessThanOrEqual(1536);
+    expect(out.endsWith(DIGEST_ACTION_SENTENCE)).toBe(true);
+    expect(warnings.some((w) => w.includes('clamp'))).toBe(true);
+  });
+
   it('no wrapper → byte-identical to the unwrapped digest (pass-through)', () => {
     const p = payload();
     expect(renderOutcomeDigest(p, {})).toBe(renderOutcomeDigest(p));
