@@ -94,4 +94,19 @@ describe('AttentionRepository', () => {
     repo = module.get(AttentionRepository);
     expect(repo.findById(created.id)!.status).toBe('open');
   });
+
+  it('write-after-close is a safe no-op (shutdown during an in-flight raise)', async () => {
+    await module.close(); // DB handle closed
+    // No throw: raise/ack/resolve/reads all short-circuit on the closed handle.
+    expect(() => repo.raise(raise({ id: 'late' }))).not.toThrow();
+    expect(repo.findById('late')).toBeNull();
+    expect(repo.list()).toEqual([]);
+    // Re-provide dataDir so afterEach cleanup can recreate a handle to remove it.
+    process.env.NUNCIO_DATA_DIR = dataDir;
+    module = await Test.createTestingModule({
+      imports: [DatabaseModule],
+      providers: [AttentionRepository],
+    }).compile();
+    repo = module.get(AttentionRepository);
+  });
 });

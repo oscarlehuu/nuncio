@@ -57,6 +57,23 @@ describe('ProjectsRepository', () => {
     expect(typeof project.createdAt).toBe('number');
   });
 
+  it('defaults the importance weight to 1 and patches it as a positive integer', () => {
+    const created = repo.upsert({ path: projectPath });
+    expect(created.weight).toBe(1); // equal importance by default (rung 3)
+
+    const weighted = repo.upsert({ path: projectPath, weight: 7 });
+    expect(weighted.weight).toBe(7);
+
+    // Omitting weight on a later patch leaves it unchanged.
+    const patched = repo.upsert({ path: projectPath, name: 'renamed' });
+    expect(patched.weight).toBe(7);
+
+    // Non-positive / non-integer weights are rejected at the boundary.
+    expect(() => repo.upsert({ path: projectPath, weight: 0 })).toThrow(/weight/i);
+    expect(() => repo.upsert({ path: projectPath, weight: -3 })).toThrow(/weight/i);
+    expect(() => repo.upsert({ path: projectPath, weight: 1.5 })).toThrow(/weight/i);
+  });
+
   it('dedups by path — a second upsert updates the same row, never a duplicate', () => {
     repo.upsert({ path: projectPath, name: 'first' });
     repo.upsert({ path: projectPath, name: 'second' });
