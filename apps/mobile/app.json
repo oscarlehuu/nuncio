@@ -8,7 +8,12 @@
     "scheme": "nuncio",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -17,6 +22,7 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
+      "usesCleartextTraffic": true,
       "predictiveBackGestureEnabled": false
     },
     "web": {
@@ -33,7 +39,13 @@
           "imageWidth": 76
         }
       ],
-      "expo-notifications"
+      "expo-notifications",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Nuncio uses the camera to scan the pairing QR code shown on your desktop."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

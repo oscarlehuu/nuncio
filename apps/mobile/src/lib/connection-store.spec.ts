@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  authHeader,
   clearConnection,
   loadConnection,
   normalizeServerUrl,
@@ -68,5 +69,64 @@ describe('connection persistence', () => {
     expect(await loadConnection(store)).toBeNull();
     await store.set('nuncio.connection', JSON.stringify({ token: 'x' }));
     expect(await loadConnection(store)).toBeNull();
+  });
+
+  it('round-trips a v2 device-credential connection', async () => {
+    const store = memoryStore();
+    const config = {
+      serverUrl: 'http://192.168.1.5:3000',
+      token: null,
+      deviceId: 'dev-1',
+      deviceSecret: 'sec-1',
+      candidateUrls: ['http://192.168.1.5:3000', 'https://mac.ts.net'],
+    };
+    await saveConnection(store, config);
+    expect(await loadConnection(store)).toEqual(config);
+  });
+
+  it('still loads a legacy {serverUrl, token} connection unchanged', async () => {
+    // An already-paired phone from before QR pairing has no device fields.
+    const store = memoryStore();
+    await store.set('nuncio.connection', JSON.stringify({ serverUrl: 'https://mac.ts.net', token: 't' }));
+    expect(await loadConnection(store)).toEqual({ serverUrl: 'https://mac.ts.net', token: 't' });
+  });
+
+  it('drops a half-written device credential and keeps the legacy token', async () => {
+    const store = memoryStore();
+    await store.set(
+      'nuncio.connection',
+      JSON.stringify({ serverUrl: 'https://mac.ts.net', token: 't', deviceId: 'dev-1' }),
+    );
+    const loaded = await loadConnection(store);
+    expect(loaded?.deviceId).toBeUndefined();
+    expect(loaded?.deviceSecret).toBeUndefined();
+    expect(loaded?.token).toBe('t');
+  });
+
+  it('drops candidateUrls that are not a string array', async () => {
+    const store = memoryStore();
+    await store.set(
+      'nuncio.connection',
+      JSON.stringify({ serverUrl: 'https://mac.ts.net', token: null, candidateUrls: 'not-array' }),
+    );
+    expect((await loadConnection(store))?.candidateUrls).toBeUndefined();
+  });
+});
+
+describe('authHeader', () => {
+  it('prefers the device bearer when credentials are present', () => {
+    expect(
+      authHeader({ serverUrl: 'x', token: 'legacy', deviceId: 'dev-1', deviceSecret: 'sec-1' }),
+    ).toEqual({ Authorization: 'Bearer nd1.dev-1.sec-1' });
+  });
+
+  it('falls back to the legacy token when there are no device credentials', () => {
+    expect(authHeader({ serverUrl: 'x', token: 'legacy' })).toEqual({
+      Authorization: 'Bearer legacy',
+    });
+  });
+
+  it('returns no header when there is neither a device credential nor a token', () => {
+    expect(authHeader({ serverUrl: 'x', token: null })).toEqual({});
   });
 });

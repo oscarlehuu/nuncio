@@ -157,6 +157,84 @@ describe('subscribeSessionEvents', () => {
     await expect(failCall).rejects.toEqual({ code: 409, message: 'busy' });
   });
 
+  it('uses the reconnectDelays hook per attempt and resets the counter on open', () => {
+    const attempts: number[] = [];
+    subscribeSessionEvents({
+      url: 'ws://x',
+      sessionId: 's1',
+      onEvent: () => {},
+      webSocketFactory: factory,
+      reconnectDelays: (attempt) => {
+        attempts.push(attempt);
+        return 10;
+      },
+    });
+    const first = FakeSocket.instances[0];
+    first.open();
+    first.fire('close', {});
+    expect(attempts).toEqual([1]); // first reconnect → attempt 1
+
+    vi.advanceTimersByTime(10);
+    const second = FakeSocket.instances[1];
+    second.fire('close', {}); // never opened → attempt keeps climbing
+    expect(attempts).toEqual([1, 2]);
+
+    vi.advanceTimersByTime(10);
+    const third = FakeSocket.instances[2];
+    third.open(); // a successful open resets the storm counter
+    third.fire('close', {});
+    expect(attempts).toEqual([1, 2, 1]);
+  });
+
+  it('keeps fixed reconnectMs when no reconnectDelays hook is supplied', () => {
+    subscribeSessionEvents({
+      url: 'ws://x',
+      sessionId: 's1',
+      onEvent: () => {},
+      webSocketFactory: factory,
+      reconnectMs: 250,
+    });
+    const first = FakeSocket.instances[0];
+    first.open();
+    first.fire('close', {});
+    // Nothing reconnects before the fixed delay elapses.
+    vi.advanceTimersByTime(249);
+    expect(FakeSocket.instances.length).toBe(1);
+    vi.advanceTimersByTime(1);
+    expect(FakeSocket.instances.length).toBe(2);
+  });
+
+  it('dispatches top-level notice frames to onNotice', () => {
+    const notices: string[] = [];
+    subscribeSessionEvents({
+      url: 'ws://x',
+      sessionId: 's1',
+      onEvent: () => {},
+      webSocketFactory: factory,
+      onNotice: (n) => notices.push(n),
+    });
+    const ws = FakeSocket.instances[0];
+    ws.open();
+    ws.push({ notice: 'server_shutdown' });
+    ws.push({ notice: 'something_else' }); // unknown notice still forwarded
+    expect(notices).toEqual(['server_shutdown', 'something_else']);
+  });
+
+  it('ignores a notice frame when no onNotice is supplied', () => {
+    const seen: number[] = [];
+    subscribeSessionEvents({
+      url: 'ws://x',
+      sessionId: 's1',
+      onEvent: (e) => seen.push(e.seq),
+      webSocketFactory: factory,
+    });
+    const ws = FakeSocket.instances[0];
+    ws.open();
+    expect(() => ws.push({ notice: 'server_shutdown' })).not.toThrow();
+    ws.push({ channel: 's1', event: event(1) });
+    expect(seen).toEqual([1]); // event delivery still works after the notice
+  });
+
   it('close() stops reconnecting and event delivery', () => {
     const seen: number[] = [];
     const sub = subscribeSessionEvents({

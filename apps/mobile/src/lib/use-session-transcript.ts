@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState } from 'react-native';
 import { fetchEvents, type Session, type SessionEvent } from '@nuncio/core/api';
 import {
   subscribeSessionEvents,
   type SessionSubscription,
   type WebSocketLike,
 } from '@nuncio/core/session-relay-client';
-import { activeConnection } from './api-setup';
-import { relayUrlFor } from './connection-store';
+import { activeConnection, applyConnection } from './api-setup';
+import { authHeader, relayUrlFor } from './connection-store';
+import { type ConnectionManager, type ConnectionState } from './connection-manager';
+import { createNativeConnectionManager } from './connection-manager-native';
 
 type ScheduledFlush = {
   id: number;
@@ -35,8 +36,10 @@ function mergeEvents(prev: SessionEvent[], incoming: SessionEvent[]): SessionEve
  */
 export function useSessionTranscript(sessionId: string | null) {
   const [events, setEvents] = useState<SessionEvent[]>([]);
+  const [connectionState, setConnectionState] = useState<ConnectionState>('connecting');
   const sinceRef = useRef(0);
   const subscriptionRef = useRef<SessionSubscription | null>(null);
+  const managerRef = useRef<ConnectionManager | null>(null);
   const pendingEventsRef = useRef<SessionEvent[]>([]);
   const scheduledFlushRef = useRef<ScheduledFlush | null>(null);
 
@@ -84,41 +87,65 @@ export function useSessionTranscript(sessionId: string | null) {
     if (!connection) return;
 
     let cancelled = false;
-    fetchEvents(sessionId, 0).then((initial) => {
-      if (cancelled) return;
-      cancelPendingEventFlush();
-      setEvents(initial);
-      sinceRef.current = initial.reduce((max, e) => Math.max(max, e.seq), 0);
+    let cleanupManager: (() => void) | null = null;
+
+    // A fresh subscription reads the LIVE active connection, so a URL switch (or
+    // a rotated secret) reconnects with the current base URL and bearer. The
+    // manager owns which URL is live; `server_shutdown` is fed to it via onNotice.
+    const openSubscription = () => {
+      subscriptionRef.current?.close();
+      const current = activeConnection() ?? connection;
       subscriptionRef.current = subscribeSessionEvents({
-        url: relayUrlFor(connection.serverUrl),
+        url: relayUrlFor(current.serverUrl),
         sessionId,
         since: sinceRef.current,
         onEvent,
+        onNotice: (notice) => managerRef.current?.handleNotice(notice),
         webSocketFactory: (url) => {
-          // RN's WebSocket accepts an options bag with headers as the third arg.
+          // RN's WebSocket accepts an options bag with headers as the third arg,
+          // so the relay upgrade carries the same device/legacy bearer as REST.
           const RNWebSocket = WebSocket as unknown as new (
             u: string,
             protocols?: string[] | null,
             options?: { headers?: Record<string, string> },
           ) => WebSocketLike;
-          return new RNWebSocket(
-            url,
-            null,
-            connection.token
-              ? { headers: { Authorization: `Bearer ${connection.token}` } }
-              : undefined,
-          );
+          const headers = authHeader(activeConnection() ?? current);
+          return new RNWebSocket(url, null, Object.keys(headers).length ? { headers } : undefined);
         },
       });
-    });
+    };
 
-    const appState = AppState.addEventListener('change', (state) => {
-      if (state === 'active') subscriptionRef.current?.resync();
+    fetchEvents(sessionId, 0).then((initial) => {
+      if (cancelled) return;
+      cancelPendingEventFlush();
+      setEvents(initial);
+      sinceRef.current = initial.reduce((max, e) => Math.max(max, e.seq), 0);
+      openSubscription();
+
+      const manager = createNativeConnectionManager({
+        candidateUrls: connection.candidateUrls ?? [connection.serverUrl],
+        initialUrl: connection.serverUrl,
+        onActiveUrl: (url) => {
+          // Winner moved (network change): repoint the api client at the new base
+          // URL, keeping the same credential, then rebuild the relay socket there.
+          applyConnection({ ...(activeConnection() ?? connection), serverUrl: url });
+          openSubscription();
+        },
+        resync: () => subscriptionRef.current?.resync(),
+      });
+      managerRef.current = manager;
+      const unsubscribe = manager.subscribe(setConnectionState);
+      manager.start();
+      cleanupManager = () => {
+        unsubscribe();
+        manager.dispose();
+      };
     });
 
     return () => {
       cancelled = true;
-      appState.remove();
+      cleanupManager?.();
+      managerRef.current = null;
       subscriptionRef.current?.close();
       subscriptionRef.current = null;
       cancelPendingEventFlush();
@@ -133,5 +160,5 @@ export function useSessionTranscript(sessionId: string | null) {
     [sessionId],
   );
 
-  return { events, steer };
+  return { events, steer, connectionState };
 }

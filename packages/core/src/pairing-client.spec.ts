@@ -1,0 +1,180 @@
+import { describe, expect, it, vi } from 'vitest';
+import {
+  claimPairing,
+  deviceBearer,
+  parsePairingQr,
+  PairingClaimError,
+  probeCandidates,
+} from './pairing-client';
+
+describe('parsePairingQr', () => {
+  const ok = (extra: Record<string, unknown> = {}) =>
+    JSON.stringify({ v: 1, code: 'abc-123_XYZ', urls: ['http://192.168.1.5:3000'], ...extra });
+
+  it('parses a well-formed v1 payload', () => {
+    expect(parsePairingQr(ok())).toEqual({ code: 'abc-123_XYZ', urls: ['http://192.168.1.5:3000'] });
+  });
+
+  it('rejects non-JSON and empty input', () => {
+    expect(parsePairingQr('')).toBeNull();
+    expect(parsePairingQr('   ')).toBeNull();
+    expect(parsePairingQr('not json {')).toBeNull();
+  });
+
+  it('rejects non-object JSON (array, number, null)', () => {
+    expect(parsePairingQr('[1,2]')).toBeNull();
+    expect(parsePairingQr('42')).toBeNull();
+    expect(parsePairingQr('null')).toBeNull();
+  });
+
+  it('rejects a wrong or missing version', () => {
+    expect(parsePairingQr(JSON.stringify({ code: 'abc', urls: ['http://x'] }))).toBeNull();
+    expect(parsePairingQr(ok({ v: 2 }))).toBeNull();
+    expect(parsePairingQr(ok({ v: '1' }))).toBeNull();
+  });
+
+  it('rejects a missing, empty, or non-base64url code', () => {
+    expect(parsePairingQr(JSON.stringify({ v: 1, urls: ['http://x'] }))).toBeNull();
+    expect(parsePairingQr(ok({ code: '' }))).toBeNull();
+    expect(parsePairingQr(ok({ code: 'has spaces' }))).toBeNull();
+    expect(parsePairingQr(ok({ code: 'has.dot' }))).toBeNull();
+  });
+
+  it('rejects a missing, empty, oversized, or non-http url array', () => {
+    expect(parsePairingQr(JSON.stringify({ v: 1, code: 'abc' }))).toBeNull();
+    expect(parsePairingQr(ok({ urls: [] }))).toBeNull();
+    expect(parsePairingQr(ok({ urls: 'http://x' }))).toBeNull();
+    expect(parsePairingQr(ok({ urls: ['ftp://x'] }))).toBeNull();
+    expect(parsePairingQr(ok({ urls: ['javascript:alert(1)'] }))).toBeNull();
+    expect(parsePairingQr(ok({ urls: ['http://x', 42] }))).toBeNull();
+    const nine = Array.from({ length: 9 }, (_, i) => `http://h${i}`);
+    expect(parsePairingQr(ok({ urls: nine }))).toBeNull();
+  });
+
+  it('accepts exactly the max of 8 urls (boundary)', () => {
+    const eight = Array.from({ length: 8 }, (_, i) => `http://h${i}`);
+    expect(parsePairingQr(ok({ urls: eight }))?.urls).toHaveLength(8);
+  });
+});
+
+describe('probeCandidates', () => {
+  const okResponse = { ok: true, status: 200 } as Response;
+  const badResponse = { ok: false, status: 500 } as Response;
+
+  it('returns null for an empty list', async () => {
+    expect(await probeCandidates([], { fetchImpl: async () => okResponse })).toBeNull();
+  });
+
+  it('returns the first-in-order healthy url', async () => {
+    const seen: string[] = [];
+    const winner = await probeCandidates(['http://a', 'http://b'], {
+      fetchImpl: async (url) => {
+        seen.push(url);
+        return okResponse;
+      },
+    });
+    expect(winner).toBe('http://a');
+    // Both are probed in parallel (order priority, not first-response).
+    expect(seen).toEqual(['http://a/api/health', 'http://b/api/health']);
+  });
+
+  it('prefers array order even when a later url answers first', async () => {
+    // Real timers on purpose: the property under test only means something with
+    // genuine timing — a fast later probe must not beat a slower earlier one.
+    const winner = await probeCandidates(['http://slow', 'http://fast'], {
+      fetchImpl: (url) =>
+        new Promise((resolve) => {
+          const delay = url.startsWith('http://slow') ? 40 : 5;
+          setTimeout(() => resolve(okResponse), delay);
+        }),
+    });
+    expect(winner).toBe('http://slow');
+  });
+
+  it('falls through to the next url when the first is unhealthy', async () => {
+    const winner = await probeCandidates(['http://down', 'http://up'], {
+      fetchImpl: async (url) => (url.startsWith('http://down') ? badResponse : okResponse),
+    });
+    expect(winner).toBe('http://up');
+  });
+
+  it('returns null when a candidate throws (connection refused)', async () => {
+    const winner = await probeCandidates(['http://a'], {
+      fetchImpl: async () => {
+        throw new Error('ECONNREFUSED');
+      },
+    });
+    expect(winner).toBeNull();
+  });
+
+  it('returns null when every candidate times out without hanging', async () => {
+    vi.useFakeTimers();
+    try {
+      const promise = probeCandidates(['http://a', 'http://b'], {
+        timeoutMs: 1000,
+        // Never resolves on its own; only the abort timeout ends it.
+        fetchImpl: (_url, init) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+          }),
+      });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await promise).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('claimPairing', () => {
+  const claim = { deviceId: 'd1', deviceSecret: 's1', serverName: 'mac' };
+  const jsonResponse = (status: number, body: unknown): Response =>
+    ({
+      status,
+      ok: status >= 200 && status < 300,
+      json: async () => body,
+    }) as Response;
+
+  it('returns the credential on 200', async () => {
+    const got = await claimPairing('http://a', { code: 'c' }, async () => jsonResponse(200, claim));
+    expect(got).toEqual(claim);
+  });
+
+  it('maps 401 to an expired reason', async () => {
+    await expect(
+      claimPairing('http://a', { code: 'c' }, async () => jsonResponse(401, {})),
+    ).rejects.toMatchObject({ reason: 'expired' });
+  });
+
+  it('maps 429 to a too-many reason', async () => {
+    await expect(
+      claimPairing('http://a', { code: 'c' }, async () => jsonResponse(429, {})),
+    ).rejects.toMatchObject({ reason: 'too-many' });
+  });
+
+  it('maps other non-ok statuses to a generic error', async () => {
+    await expect(
+      claimPairing('http://a', { code: 'c' }, async () => jsonResponse(500, {})),
+    ).rejects.toBeInstanceOf(PairingClaimError);
+  });
+
+  it('rejects a network failure', async () => {
+    await expect(
+      claimPairing('http://a', { code: 'c' }, async () => {
+        throw new Error('offline');
+      }),
+    ).rejects.toMatchObject({ reason: 'error' });
+  });
+
+  it('rejects a 200 with a malformed body rather than saving half a credential', async () => {
+    await expect(
+      claimPairing('http://a', { code: 'c' }, async () => jsonResponse(200, { deviceId: 'd1' })),
+    ).rejects.toBeInstanceOf(PairingClaimError);
+  });
+});
+
+describe('deviceBearer', () => {
+  it('formats the nd1 device bearer value', () => {
+    expect(deviceBearer('d1', 's1')).toBe('nd1.d1.s1');
+  });
+});

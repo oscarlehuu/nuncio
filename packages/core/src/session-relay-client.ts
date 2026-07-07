@@ -24,7 +24,26 @@ export interface SessionSubscriptionOptions {
   onEvent: (event: SessionEvent) => void;
   /** Injected for React Native (auth headers) and tests; defaults to the global WebSocket. */
   webSocketFactory?: WebSocketFactory;
+  /**
+   * Fixed delay between reconnect attempts. Used only when `reconnectDelays` is
+   * absent — the two are mutually exclusive and `reconnectDelays` wins.
+   */
   reconnectMs?: number;
+  /**
+   * Per-attempt reconnect delay in ms, overriding the fixed `reconnectMs`. The
+   * mobile connection manager supplies exponential backoff + jitter here. When
+   * omitted, the client keeps its historical fixed-delay behavior exactly.
+   * `attempt` starts at 1 for the first reconnect and increments each time a
+   * connect fails; it resets to 0 once a socket opens.
+   */
+  reconnectDelays?: (attempt: number) => number;
+  /**
+   * Called with the string from any top-level `{ notice }` frame the server
+   * pushes (e.g. `server_shutdown`), which is additive to the event envelope.
+   * When omitted, such frames are silently ignored — this is why web callers,
+   * which pass neither this nor `reconnectDelays`, see identical behavior.
+   */
+  onNotice?: (notice: string) => void;
 }
 
 export interface SessionSubscription {
@@ -48,6 +67,9 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
   let socket: WebSocketLike | null = null;
   let socketOpen = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  // Counts consecutive reconnect attempts for the backoff hook; reset to 0 the
+  // moment a socket opens so a recovered connection starts the next storm fresh.
+  let reconnectAttempt = 0;
   let nextRpcId = 1;
   const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
 
@@ -63,10 +85,12 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
 
   const scheduleReconnect = () => {
     if (closed || reconnectTimer !== null) return;
+    reconnectAttempt += 1;
+    const delay = options.reconnectDelays ? options.reconnectDelays(reconnectAttempt) : reconnectMs;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       if (!closed) connect();
-    }, reconnectMs);
+    }, delay);
   };
 
   const connect = () => {
@@ -78,6 +102,7 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
     ws.addEventListener('open', () => {
       if (closed || socket !== ws) return;
       socketOpen = true;
+      reconnectAttempt = 0;
       sendSubscribe();
     });
 
@@ -90,6 +115,7 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
         channel?: string;
         event?: SessionEvent;
         behind?: boolean;
+        notice?: string;
       };
       try {
         parsed = JSON.parse(String(msg.data));
@@ -106,6 +132,13 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
           lastSeq = Math.max(lastSeq, parsed.event.seq);
           options.onEvent(parsed.event);
         }
+        return;
+      }
+      // Additive top-level notice frame (e.g. server_shutdown). Unknown to web
+      // callers, which pass no onNotice and so ignore it — that is what keeps
+      // their behavior identical.
+      if (typeof parsed.notice === 'string') {
+        options.onNotice?.(parsed.notice);
         return;
       }
       if (typeof parsed.id === 'number' && pending.has(parsed.id)) {
