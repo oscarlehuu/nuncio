@@ -6,7 +6,7 @@ import { GeneralSettingsSection } from './general-settings-section';
 type ShellApi = NonNullable<NonNullable<Window['nuncioDesktop']>['shell']>;
 
 function setDesktop(shell?: Partial<ShellApi>, marker = 'desktop') {
-  (window as Window & { nuncioDesktop?: unknown }).nuncioDesktop = {
+  (window as unknown as { nuncioDesktop?: unknown }).nuncioDesktop = {
     marker,
     ...(shell ? { shell } : {}),
   };
