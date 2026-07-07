@@ -82,23 +82,29 @@ export class LoopsService implements OnModuleInit {
   }
 
   /**
-   * Boot reconciliation: for each still-`pending` loop-run, fold the task's
-   * now-terminal outcome; if the task is gone/non-terminal, mark the run `failed`
-   * (a crash mid-run counts as a failure — the breaker sees reality). A run must
-   * never be stuck `pending` forever across a restart.
+   * Boot reconciliation of runs left `pending` by a crash. Finalize a run ONLY
+   * when its task is already TERMINAL (fold the real outcome) or MISSING (the row
+   * vanished → count as failed). A still-LIVE task (QUEUED awaiting the pump's
+   * re-run, or RUNNING) keeps its run `pending` and settles later through the
+   * normal `onTaskFinished` hook — the task lane re-drives a QUEUED task and
+   * fails a RUNNING one via its own restart sweep (`failInterrupted`, which runs
+   * before this since TasksService is constructed first), each firing the hook.
+   * Eagerly failing a live run would corrupt the streak with a phantom failure
+   * the later real settlement could never correct.
    */
   reconcilePendingRuns(): void {
     for (const loop of this.loops.list()) {
       for (const run of this.loops.listRuns(loop.id)) {
         if (run.outcome !== 'pending' || !run.taskId) continue;
         const task = this.tasks?.findById(run.taskId);
-        if (task && (task.status === 'DONE' || task.status === 'FAILED')) {
+        if (!task) {
+          // Task row vanished across the crash — nothing will ever settle it.
+          this.loops.updateRunOutcome(run.id, 'failed', 'none');
+        } else if (task.status === 'DONE' || task.status === 'FAILED') {
           const { ok, verify } = outcomeFromTask(task);
           this.loops.updateRunOutcome(run.id, ok ? 'ok' : 'failed', verify);
-        } else {
-          // Task vanished or never terminal — the crash aborted it → failed.
-          this.loops.updateRunOutcome(run.id, 'failed', 'none');
         }
+        // else: task is QUEUED/RUNNING — still alive; leave the run pending.
       }
       this.evaluate(loop.id);
     }

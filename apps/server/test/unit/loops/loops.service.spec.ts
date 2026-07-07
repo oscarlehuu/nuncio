@@ -48,7 +48,7 @@ class SpyScheduler {
 
 interface FakeTask {
   id: string;
-  status: 'RUNNING' | 'DONE' | 'FAILED';
+  status: 'QUEUED' | 'RUNNING' | 'DONE' | 'FAILED';
   outcome?: Record<string, unknown>;
 }
 
@@ -64,6 +64,17 @@ class SpyTasks {
     this.enqueued.push(input);
     this.tasks.set(id, { id, status: 'RUNNING' });
     return { id };
+  }
+
+  /** Set a task to a non-terminal state (simulate a QUEUED/RUNNING task at boot). */
+  setStatus(id: string, status: FakeTask['status']): void {
+    const t = this.tasks.get(id);
+    if (t) t.status = status;
+  }
+
+  /** Remove a task entirely (simulate its row vanishing across a crash). */
+  vanish(id: string): void {
+    this.tasks.delete(id);
   }
 
   onTaskFinished(handler: (t: FakeTask) => void): () => void {
@@ -283,6 +294,72 @@ describe('LoopsService', () => {
 
       const reconciled = repo.listRuns(loop.id).find((r) => r.id === run.id)!;
       expect(reconciled.outcome).toBe('failed');
+    });
+
+    // Rebuild the module on the SAME DB with the surviving task store — as a
+    // daemon restart would, so reconcilePendingRuns runs against real task state.
+    async function restart(survivingTasks: SpyTasks): Promise<void> {
+      const dataDir = process.env.NUNCIO_DATA_DIR!;
+      await module.close();
+      process.env.NUNCIO_DATA_DIR = dataDir;
+      module = await Test.createTestingModule({
+        imports: [DatabaseModule],
+        providers: [
+          LoopsRepository,
+          LoopsService,
+          { provide: SchedulerService, useValue: new SpyScheduler() },
+          { provide: TasksService, useValue: survivingTasks },
+        ],
+      }).compile();
+      loops = module.get(LoopsService);
+      repo = module.get(LoopsRepository);
+      loops.clock = { now: () => clockNow };
+      loops.onModuleInit(); // runs reconcilePendingRuns
+    }
+
+    it('a still-QUEUED task keeps its run PENDING, then settles ok when it later completes', async () => {
+      // The bug: reconcile eagerly failed a live task's run, and onTaskSettled
+      // (which only updates pending rows) could never correct it.
+      const loop = loops.create(create({ maxConsecutiveFailures: 3, maxRunsPerDay: 10 }));
+      const run = loops.fire(loop.id)!;
+      tasks.setStatus(run.taskId!, 'QUEUED'); // alive, re-run by the pump after boot
+
+      await restart(tasks);
+      // A live task's run must NOT be phantom-failed at boot.
+      expect(repo.listRuns(loop.id).find((r) => r.id === run.id)!.outcome).toBe('pending');
+
+      // The re-run completes green → the normal settlement hook folds it.
+      tasks.settle(run.taskId!, 'DONE', { verify: { ok: true } });
+      const settled = repo.listRuns(loop.id).find((r) => r.id === run.id)!;
+      expect(settled.outcome).toBe('ok');
+      expect(repo.findById(loop.id)!.status).toBe('active'); // no phantom failure → no breaker
+    });
+
+    it('a still-RUNNING task at boot keeps its run pending (reclaimed/settled by the task lane)', async () => {
+      const loop = loops.create(create({ maxConsecutiveFailures: 1, maxRunsPerDay: 10 }));
+      const run = loops.fire(loop.id)!;
+      tasks.setStatus(run.taskId!, 'RUNNING');
+      await restart(tasks);
+      // maxConsecutiveFailures=1: if reconcile wrongly failed it, the breaker would
+      // trip. It must stay pending → active.
+      expect(repo.listRuns(loop.id).find((r) => r.id === run.id)!.outcome).toBe('pending');
+      expect(repo.findById(loop.id)!.status).toBe('active');
+    });
+
+    it('a vanished task finalizes the run failed', async () => {
+      const loop = loops.create(create({ maxConsecutiveFailures: 3, maxRunsPerDay: 10 }));
+      const run = loops.fire(loop.id)!;
+      tasks.vanish(run.taskId!); // task row gone across the crash
+      await restart(tasks);
+      expect(repo.listRuns(loop.id).find((r) => r.id === run.id)!.outcome).toBe('failed');
+    });
+
+    it('an already-FAILED task finalizes the run failed', async () => {
+      const loop = loops.create(create({ maxConsecutiveFailures: 3, maxRunsPerDay: 10 }));
+      const run = loops.fire(loop.id)!;
+      tasks.forceTerminal(run.taskId!, 'FAILED'); // e.g. failInterrupted ran before reconcile
+      await restart(tasks);
+      expect(repo.listRuns(loop.id).find((r) => r.id === run.id)!.outcome).toBe('failed');
     });
   });
 
