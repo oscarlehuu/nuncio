@@ -60,7 +60,12 @@ view renders project rows. B is second because the webhook substrate is already 
 mostly the cron/heartbeat clock + a durable schedule table, smaller than it looks) and C's triggers
 need it. No re-ordering needed.
 
-## Founder-decision table (recommendations only — founder locks before implementation)
+## Founder-decision table — LOCKED (founder, 2026-07-07)
+
+All five locked as recommended, with ONE amendment: **(e) pulled into v1** — the project entity
+ships with `verifyAutoSteer` (tri-state on/off/inherit) and `verifyMaxRounds` (nullable) from the
+start, so v1 has **7 fields**, and the verify-feedback loop resolves per-project overrides above
+the global setting. Original table:
 
 | # | Decision | Recommendation | Rationale |
 |---|----------|----------------|-----------|
@@ -180,11 +185,11 @@ unknown-project soft-reference fallthrough, resolution order (4 layers), patch (
 delete-with-live-sessions, list, restart rebuild, fresh-DB migration, recent_projects coexistence,
 name override vs derived, missing-on-disk config allowed, all-optional fields.
 
-## Founder decisions (flagged, NOT decided here)
+## Founder decisions — resolved
 
-The decision table above is recommendations only. The founder locks: budget semantics v1, loop write
-policy, breaker defaults, project entity v1 field scope, and whether per-project auto-steer override
-is pulled into v1. Implementation of sub-phase A waits on (d) and (e).
+Locked 2026-07-07 (see table above): run-count budgets (a), worktree+PR-only loop writes (b),
+3-consecutive-failure breaker with manual resume (c), 7-field project entity v1 (d + e pulled in).
+Sub-phase A implementation unblocked.
 
 ## Open conflicts
 
