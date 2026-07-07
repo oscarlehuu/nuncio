@@ -63,6 +63,8 @@ proceed concurrently once A lands.
 
 ## Founder-decision table — proposed (recommendations; needs founder lock before A implementation)
 
+**LOCKED (founder, 2026-07-07): all 8 as recommended** — static severity buckets · ack≠resolve + auto-resolve · persist+reconcile · digest push+in-app · cadences 15m/1h/2×day · manual project weight · worktree-diff-only v1 · exactly 2 anomaly heuristics.
+
 | # | Decision | Recommendation | Rationale |
 |---|----------|----------------|-----------|
 | 1 | **Ranking formula v1** | **Static severity buckets** (permission > verify-dead > tripped-breaker > PR-review > anomaly), then project-importance weight, then age. NOT a learned/weighted score. | KISS + explainable + deterministic (testable). A learned score is rung-4 intelligence territory; v1 must be a total order the founder can predict from the phone. |
