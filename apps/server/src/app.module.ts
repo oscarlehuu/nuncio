@@ -12,6 +12,7 @@ import { HubModule } from './hub/hub.module';
 import { ModelsModule } from './models/models.module';
 import { PiLocalModule } from './pi-local/pi-local.module';
 import { PreferencesModule } from './preferences/preferences.module';
+import { PromptsModule } from './prompts/prompts.module';
 import { ProviderUpdatesModule } from './provider-updates/provider-updates.module';
 import { ProvisionModule } from './provision/provision.module';
 import { SessionsModule } from './sessions/sessions.module';
@@ -39,6 +40,7 @@ import { PushModule } from './push/push.module';
     HubModule,
     ModelsModule,
     PiLocalModule,
+    PromptsModule,
     ProvisionModule,
     SessionsModule,
     TailscaleModule,

@@ -315,6 +315,47 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     default: '4096',
   },
   {
+    key: 'NUNCIO_CONTEXT_FILE_POLICY',
+    category: 'agents',
+    type: 'string',
+    label: 'Context-file policy',
+    description:
+      'Whether nuncio materializes the engine\'s native context file (e.g. CLAUDE.local.md, from the prompt profile) into a session worktree, containing the current project facts. worktree-local writes only into the worktree and .git/info/exclude (never a repo-owned file, never an existing one); none writes nothing. Facts still arrive via the session preamble regardless — the file is engine-idiomatic reinforcement, not the guarantee.',
+    envVar: 'NUNCIO_CONTEXT_FILE_POLICY',
+    default: 'none',
+    options: [
+      { value: 'none', label: 'None', description: 'Never write a context file.' },
+      { value: 'worktree-local', label: 'Worktree-local', description: 'Write the engine context file into the session worktree only.' },
+    ],
+  },
+  {
+    key: 'NUNCIO_PROMPT_PROFILE_PI',
+    category: 'agents',
+    type: 'string',
+    label: 'Prompt profile override (Pi)',
+    description:
+      'A full prompt-profile document (markdown with YAML frontmatter + named ## sections: brief-wrapper, facts-wrapper, digest-wrapper, tools-preamble, idioms) that overrides the repo profile for the Pi engine. See apps/server/prompt-profiles/README.md for the format. Empty uses the repo profile / pass-through default.',
+    envVar: 'NUNCIO_PROMPT_PROFILE_PI',
+  },
+  {
+    key: 'NUNCIO_PROMPT_PROFILE_CURSOR',
+    category: 'agents',
+    type: 'string',
+    label: 'Prompt profile override (Cursor)',
+    description:
+      'Full prompt-profile document overriding the repo profile for the Cursor engine (same format as the Pi override; see prompt-profiles/README.md).',
+    envVar: 'NUNCIO_PROMPT_PROFILE_CURSOR',
+  },
+  {
+    key: 'NUNCIO_PROMPT_PROFILE_CODEX',
+    category: 'agents',
+    type: 'string',
+    label: 'Prompt profile override (Codex)',
+    description:
+      'Full prompt-profile document overriding the repo profile for the Codex engine (same format as the Pi override; see prompt-profiles/README.md).',
+    envVar: 'NUNCIO_PROMPT_PROFILE_CODEX',
+  },
+  {
     key: 'NUNCIO_VERIFY_COMMAND',
     category: 'agents',
     type: 'string',
