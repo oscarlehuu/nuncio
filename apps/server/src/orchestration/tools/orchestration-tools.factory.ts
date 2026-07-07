@@ -23,6 +23,8 @@ export function buildOrchestrationTools(
   deps: OrchestrationToolDeps,
   scope: OrchestrationScope,
   mode: OrchestrationMode,
+  /** D2: profile `tools-preamble` overrides the default systemPromptAppend when present. */
+  toolsPreamble?: string,
 ): AgentRuntimeTools {
   if (mode === 'off') return { tools: [] };
 
@@ -32,5 +34,6 @@ export function buildOrchestrationTools(
     tools.push(buildRecordFactTool(deps, scope));
   }
 
-  return { systemPromptAppend: SYSTEM_PROMPT_APPEND, tools };
+  const systemPromptAppend = toolsPreamble?.trim() || SYSTEM_PROMPT_APPEND;
+  return { systemPromptAppend, tools };
 }

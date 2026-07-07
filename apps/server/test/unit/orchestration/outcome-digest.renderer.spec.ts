@@ -62,4 +62,16 @@ describe('renderOutcomeDigest', () => {
     expect(out).toContain('CANCELLED');
     expect(out.trimEnd().endsWith(DIGEST_ACTION_SENTENCE)).toBe(true);
   });
+
+  it('wraps the digest with a profile digest-wrapper (D2)', () => {
+    const out = renderOutcomeDigest(payload(), { digestWrapper: '<<{{content}}>>' });
+    expect(out.startsWith('<<')).toBe(true);
+    expect(out.endsWith('>>')).toBe(true);
+    expect(out).toContain('DONE');
+  });
+
+  it('no wrapper → byte-identical to the unwrapped digest (pass-through)', () => {
+    const p = payload();
+    expect(renderOutcomeDigest(p, {})).toBe(renderOutcomeDigest(p));
+  });
 });

@@ -24,6 +24,7 @@ import { GitService } from '../git/git.service';
 import type { ModelOptionsMap } from '../models/model-options.types';
 import { renderHandoffBrief } from '../orchestration/handoff-brief.renderer';
 import { composeSessionPreamble } from '../orchestration/session-preamble';
+import { PromptProfileService } from '../prompts/prompt-profile.service';
 import { PiLocalSessionsService } from '../pi-local/pi-local-sessions.service';
 import { canTransition } from './domain/sessions.fsm';
 import { deriveHasPendingInput } from './domain/derive-pending-input';
@@ -108,6 +109,7 @@ export class SessionsService implements OnModuleDestroy {
     @Optional() private readonly settings?: SettingsService,
     @Optional() private readonly agentTools?: AgentToolRegistry,
     @Optional() private readonly contextFacts?: ContextFactsService,
+    @Optional() private readonly profiles?: PromptProfileService,
   ) {
     // A crash mid-fan-out can leave steer rows leased forever; a claim must
     // never outlive the process that took it. Release before restore so the
@@ -211,10 +213,13 @@ export class SessionsService implements OnModuleDestroy {
     // The single choke point for the first prompt: handoff brief → project
     // facts → the user's prompt. Both this path and TasksService.execute() (via
     // input.contextBrief) compose here, so the order is guaranteed in one place.
+    // Resolve the engine profile ONCE here (ADR-004: adapters get finished strings).
+    const profile = this.profiles?.resolve(providerId, input.model);
     const prompt = composeSessionPreamble({
       ...(input.contextBrief ? { brief: renderHandoffBrief(input.contextBrief) } : {}),
       ...(projectPath ? { facts: this.renderProjectFacts(projectPath, id) } : {}),
       prompt: input.prompt,
+      ...(profile ? { profile } : {}),
     });
 
     const session = this.sessions.create({
@@ -1102,7 +1107,12 @@ export class SessionsService implements OnModuleDestroy {
       transcriptMtimeMs,
       chatStoreMtimeMs,
       transcriptTurnEnded,
-      tools: this.agentTools?.forSession({ sessionId: session.id, projectPath: session.projectPath }),
+      tools: this.agentTools?.forSession({
+        sessionId: session.id,
+        projectPath: session.projectPath,
+        provider: session.provider,
+        model: session.model,
+      }),
     };
   }
 

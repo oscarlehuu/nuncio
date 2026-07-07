@@ -14,6 +14,9 @@ const BROWSER_PROMPT_APPEND =
 export interface ToolScope {
   sessionId: string;
   projectPath: string | null;
+  /** The session's engine — resolves the prompt profile's tools-preamble (D2). */
+  provider?: string;
+  model?: string | null;
 }
 
 @Injectable()

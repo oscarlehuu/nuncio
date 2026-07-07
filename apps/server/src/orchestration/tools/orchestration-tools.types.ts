@@ -10,6 +10,9 @@ export type OrchestrationMode = 'off' | 'read' | 'read-write';
 export interface OrchestrationScope {
   sessionId: string;
   projectPath: string | null;
+  /** The session's engine — resolves the prompt profile's tools-preamble (D2). */
+  provider?: string;
+  model?: string | null;
 }
 
 /**

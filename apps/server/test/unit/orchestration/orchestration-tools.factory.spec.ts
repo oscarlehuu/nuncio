@@ -74,6 +74,13 @@ describe('buildOrchestrationTools gating', () => {
     expect(rt.tools.map((t) => t.name)).toContain('nuncio_record_project_fact');
   });
 
+  it('a profile tools-preamble overrides the default systemPromptAppend (D2)', () => {
+    const rt = buildOrchestrationTools(makeDeps(), scope, 'read', 'CUSTOM PREAMBLE');
+    expect(rt.systemPromptAppend).toBe('CUSTOM PREAMBLE');
+    // Absent preamble → the default is kept.
+    expect(buildOrchestrationTools(makeDeps(), scope, 'read').systemPromptAppend).toContain('nuncio_read_session');
+  });
+
   it('every tool has a valid object inputSchema', () => {
     const rt = buildOrchestrationTools(makeDeps(), scope, 'read-write');
     for (const tool of rt.tools) {

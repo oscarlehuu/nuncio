@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AgentsModule } from '../../agents/agents.module';
 import { ContextModule } from '../../context/context.module';
+import { PromptsModule } from '../../prompts/prompts.module';
 import { SessionsPersistenceModule } from '../../sessions/sessions.persistence.module';
 import { SettingsModule } from '../../settings/settings.module';
 import { TasksRepository } from '../../tasks/tasks.repository';
@@ -16,7 +17,7 @@ import { OrchestrationToolsService } from './orchestration-tools.service';
  * back, so no module-load cycle is created.
  */
 @Module({
-  imports: [SessionsPersistenceModule, SettingsModule, AgentsModule, ContextModule],
+  imports: [SessionsPersistenceModule, SettingsModule, AgentsModule, ContextModule, PromptsModule],
   providers: [OrchestrationToolsService, TasksRepository],
   exports: [OrchestrationToolsService],
 })

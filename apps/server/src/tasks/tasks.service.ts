@@ -11,6 +11,7 @@ import type { SessionDto, SessionEvent } from '../sessions/domain/sessions.types
 import { EventsRepository } from '../sessions/persistence/events.repository';
 import { resolveVerifyCommand } from '../sessions/session-verifier';
 import { SessionsService } from '../sessions/sessions.service';
+import { PromptProfileService } from '../prompts/prompt-profile.service';
 import { SettingsService } from '../settings/settings.service';
 import { buildSubagentTaskInput } from './multitask-defaults';
 import { TasksRepository } from './tasks.repository';
@@ -62,6 +63,7 @@ export class TasksService {
     private readonly events: EventsRepository,
     private readonly database: DatabaseService,
     @Optional() private readonly settings?: SettingsService,
+    @Optional() private readonly profiles?: PromptProfileService,
   ) {
     // A RUNNING row at boot means the runner died mid-task; its session was
     // already reconciled by the sessions sweep. Queued work simply resumes.
@@ -438,7 +440,9 @@ export class TasksService {
         return;
       }
 
-      const message = renderOutcomeDigest(payload);
+      // D2: the parent engine's digest-wrapper shapes the message it receives.
+      const digestWrapper = this.profiles?.resolve(parent.provider, parent.model).sections.digestWrapper;
+      const message = renderOutcomeDigest(payload, digestWrapper ? { digestWrapper } : {});
       if (parent.status === 'IDLE' || parent.status === 'RUNNING') {
         // steer() delivers immediately when IDLE and enqueues (origin-tagged)
         // when RUNNING; either way the resulting steer_message carries origin.

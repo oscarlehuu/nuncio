@@ -1,3 +1,4 @@
+import { applyWrapper } from '../prompts/profile-wrapper';
 import type { TaskCompletedPayload } from '../sessions/domain/events.types';
 import { byteLength, truncateTailBytes } from './byte-truncate';
 
@@ -6,6 +7,12 @@ export const DIGEST_ACTION_SENTENCE =
   'Reply with next action, or reply DONE if the objective is met.';
 
 const DIGEST_MAX_BYTES = 1536;
+
+export interface RenderDigestOptions {
+  /** Profile `digest-wrapper` section, wrapping the canonical digest (D2). */
+  digestWrapper?: string;
+  warn?: (message: string) => void;
+}
 
 function verifyLine(verify: TaskCompletedPayload['verify']): string | null {
   if (!verify) return null;
@@ -20,7 +27,12 @@ function verifyLine(verify: TaskCompletedPayload['verify']): string | null {
  * always ending with {@link DIGEST_ACTION_SENTENCE}. Bounded to 1.5 KB on
  * serialized bytes — the summary is trimmed (never the action sentence) to fit.
  */
-export function renderOutcomeDigest(payload: TaskCompletedPayload): string {
+export function renderOutcomeDigest(
+  payload: TaskCompletedPayload,
+  options: RenderDigestOptions = {},
+): string {
+  const wrap = (text: string) =>
+    applyWrapper(options.digestWrapper, text, options.warn ?? ((m) => console.warn(`[outcome-digest] ${m}`)));
   const build = (summary: string | null): string => {
     const lines: string[] = [`### Subagent task ${payload.status}`];
     const verify = verifyLine(payload.verify);
@@ -31,8 +43,10 @@ export function renderOutcomeDigest(payload: TaskCompletedPayload): string {
     return lines.join('\n');
   };
 
+  // The 1.5KB budget bounds the CANONICAL digest; the profile wrapper (small
+  // engine framing) is applied afterward.
   let rendered = build(payload.outcomeSummary);
-  if (byteLength(rendered) <= DIGEST_MAX_BYTES) return rendered;
+  if (byteLength(rendered) <= DIGEST_MAX_BYTES) return wrap(rendered);
 
   // Over budget: shrink the summary toward empty (the action sentence, status,
   // verify, and branch are all bounded and must survive).
@@ -42,11 +56,11 @@ export function renderOutcomeDigest(payload: TaskCompletedPayload): string {
       budget = Math.floor(budget / 2);
       rendered = build(budget <= 0 ? null : truncateTailBytes(payload.outcomeSummary, budget));
     }
-    if (byteLength(rendered) <= DIGEST_MAX_BYTES) return rendered;
+    if (byteLength(rendered) <= DIGEST_MAX_BYTES) return wrap(rendered);
   }
 
   // Summary gone and still over budget (a pathological childBranch/verify.output
   // — both already byte-capped upstream, so this is a hard backstop): keep only
   // the status header and the action sentence.
-  return [`### Subagent task ${payload.status}`, '', DIGEST_ACTION_SENTENCE].join('\n');
+  return wrap([`### Subagent task ${payload.status}`, '', DIGEST_ACTION_SENTENCE].join('\n'));
 }

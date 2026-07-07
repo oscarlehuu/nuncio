@@ -1,6 +1,7 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import { AgentRegistry } from '../../agents/agents.registry';
 import { ContextFactsService } from '../../context/context-facts.service';
+import { PromptProfileService } from '../../prompts/prompt-profile.service';
 import type { AgentRuntimeTools } from '../../agents/tools/agent-runtime-tools.types';
 import type { SessionDto } from '../../sessions/domain/sessions.types';
 import { EventsRepository } from '../../sessions/persistence/events.repository';
@@ -36,6 +37,7 @@ export class OrchestrationToolsService {
     @Optional() private readonly settings?: SettingsService,
     @Optional() private readonly agents?: AgentRegistry,
     @Optional() private readonly contextFacts?: ContextFactsService,
+    @Optional() private readonly profiles?: PromptProfileService,
   ) {}
 
   private mode(): OrchestrationMode {
@@ -45,7 +47,11 @@ export class OrchestrationToolsService {
 
   /** Build the orchestration tools for a scope; empty when the setting is off. */
   forScope(scope: OrchestrationScope): AgentRuntimeTools {
-    return buildOrchestrationTools(this.buildDeps(), scope, this.mode());
+    // D2: the profile's tools-preamble overrides the default systemPromptAppend.
+    const toolsPreamble = scope.provider
+      ? this.profiles?.resolve(scope.provider, scope.model).sections.toolsPreamble
+      : undefined;
+    return buildOrchestrationTools(this.buildDeps(), scope, this.mode(), toolsPreamble);
   }
 
   private buildDeps(): OrchestrationToolDeps {
