@@ -688,7 +688,10 @@ describe('LoopsService', () => {
 
   describe('per-loop model selection (v1.2)', () => {
     /** Known model ids per engine for the validation seam — mirrors listModels(). */
-    const KNOWN_MODELS: Record<string, string[]> = { mock: ['mock-model', 'mock-fast'] };
+    const KNOWN_MODELS: Record<string, string[]> = {
+      mock: ['mock-model', 'mock-fast'],
+      cursor: ['composer-2.5'],
+    };
     const assertKnownModel = async (
       model: string,
       engine: string | null,
@@ -740,6 +743,24 @@ describe('LoopsService', () => {
       const patched = await loops.update(loop.id, { engine: 'mock', model: 'mock-fast' });
       expect(patched.engine).toBe('mock');
       expect(patched.model).toBe('mock-fast');
+    });
+
+    it('PATCH {engine} WITHOUT a model key clears the stored model (stale-combo guard)', async () => {
+      const loop = await loops.create(create({ engine: 'mock', model: 'mock-model' }));
+      const patched = await loops.update(loop.id, { engine: 'cursor' });
+      expect(patched.engine).toBe('cursor');
+      expect(patched.model).toBeNull();
+      // The cleared model must persist (next fire() sends no stale model).
+      expect(repo.findById(loop.id)!.model).toBeNull();
+      loops.fire(loop.id);
+      expect(tasks.enqueued[0]!.model).toBeUndefined();
+    });
+
+    it('PATCH {engine, model} still validates and stores the explicit model', async () => {
+      const loop = await loops.create(create({ engine: 'mock', model: 'mock-model' }));
+      const patched = await loops.update(loop.id, { engine: 'cursor', model: 'composer-2.5' });
+      expect(patched.engine).toBe('cursor');
+      expect(patched.model).toBe('composer-2.5');
     });
 
     it('fire passes the per-loop model into the enqueued task', async () => {

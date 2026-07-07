@@ -435,6 +435,12 @@ export class LoopsService implements OnModuleInit {
     }
     if (patch.engine !== undefined) {
       repoPatch.engine = this.validateEngine(patch.engine);
+      // Engine change without an explicit model key CLEARS the stored model
+      // (clear-always): the old model belongs to the old engine's catalog, and
+      // keeping it would let the next fire() enqueue an invalid provider/model
+      // combo. Matches the UI semantic — picking an engine resets the model to
+      // the provider default. An explicit model in the same patch overrides below.
+      if (patch.model === undefined) repoPatch.model = null;
     }
     if (patch.model !== undefined) {
       // Validate against the engine as patched in the SAME call, else the stored one.
