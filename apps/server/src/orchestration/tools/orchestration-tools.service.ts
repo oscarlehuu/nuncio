@@ -45,6 +45,7 @@ export class OrchestrationToolsService {
 
   private buildDeps(): OrchestrationToolDeps {
     return {
+      currentMode: () => this.mode(),
       listSessions: () => this.sessionsRepo.list(),
       findSession: (id) => this.sessionsRepo.findById(id),
       childrenOf: (parentSessionId) => this.sessionsRepo.childrenOf(parentSessionId),

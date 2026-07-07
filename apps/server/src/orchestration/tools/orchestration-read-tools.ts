@@ -1,4 +1,5 @@
 import { renderEventsSince } from '../../context/events-compactor';
+import { truncateHeadBytes } from '../byte-truncate';
 import { buildOutcomeDigest } from '../outcome-digest.builder';
 import { asToolInput } from '../../agents/tools/agent-runtime-tools.types';
 import type { AgentRuntimeTool, AgentRuntimeToolResult } from '../../agents/tools/agent-runtime-tools.types';
@@ -10,6 +11,7 @@ const LIST_LIMIT_DEFAULT = 10;
 const READ_BUDGET_MAX = 8192;
 const READ_BUDGET_DEFAULT = 4096;
 const TASK_PROMPT_PREVIEW = 120;
+const TITLE_MAX_BYTES = 256;
 const ANCESTOR_WALK_CAP = 10;
 
 function errorResult(reason: string): AgentRuntimeToolResult {
@@ -18,6 +20,10 @@ function errorResult(reason: string): AgentRuntimeToolResult {
 
 function ok(text: string, structuredContent: unknown): AgentRuntimeToolResult {
   return { content: [{ type: 'text', text }], structuredContent };
+}
+
+function capTitle(title: string): string {
+  return truncateHeadBytes(title, TITLE_MAX_BYTES);
 }
 
 /** Ancestor ids of a session, cycle-safe, capped — reuses the A6 walk shape. */
@@ -33,6 +39,21 @@ function ancestorIds(deps: OrchestrationToolDeps, sessionId: string): Set<string
   return ids;
 }
 
+/**
+ * A target session is visible to the caller when it shares a NON-NULL project
+ * with the caller, or is in the caller's lineage (self / ancestor / child).
+ * A null project matches nothing project-wise (so no-project sessions are not
+ * mutually readable) — visibility then reduces to lineage only.
+ */
+function isVisible(deps: OrchestrationToolDeps, scope: OrchestrationScope, target: SessionDto): boolean {
+  const sameProject =
+    scope.projectPath !== null && target.projectPath !== null && target.projectPath === scope.projectPath;
+  if (sameProject) return true;
+  if (target.id === scope.sessionId) return true;
+  if (ancestorIds(deps, scope.sessionId).has(target.id)) return true;
+  return deps.childrenOf(scope.sessionId).some((c) => c.id === target.id);
+}
+
 function lastVerifyResult(events: SessionEvent[]): { passed: boolean } | null {
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const event = events[i];
@@ -41,6 +62,13 @@ function lastVerifyResult(events: SessionEvent[]): { passed: boolean } | null {
     if (typeof ok === 'boolean') return { passed: ok };
   }
   return null;
+}
+
+const DISABLED = 'orchestration tools are disabled';
+
+/** Re-read the current mode; return an isError result when read access is not permitted. */
+function readGate(deps: OrchestrationToolDeps): AgentRuntimeToolResult | null {
+  return deps.currentMode() === 'off' ? errorResult(DISABLED) : null;
 }
 
 export function buildReadTools(
@@ -58,6 +86,8 @@ export function buildReadTools(
       },
     },
     execute: (raw) => {
+      const gate = readGate(deps);
+      if (gate) return gate;
       const input = asToolInput(raw);
       const status = typeof input.status === 'string' ? input.status : undefined;
       const limit = Math.min(
@@ -68,12 +98,14 @@ export function buildReadTools(
       const childIds = new Set(deps.childrenOf(scope.sessionId).map((c) => c.id));
       const rows = deps
         .listSessions()
-        .filter((s) => s.projectPath === scope.projectPath)
+        // A null caller project matches nothing project-wise — only its own
+        // lineage stays visible; a project caller sees same-project rows.
+        .filter((s) => (scope.projectPath !== null && s.projectPath === scope.projectPath) || ancestors.has(s.id) || childIds.has(s.id) || s.id === scope.sessionId)
         .filter((s) => (status ? s.status === status : true))
         .slice(0, limit)
         .map((s: SessionDto) => ({
           id: s.id,
-          title: s.title,
+          title: capTitle(s.title),
           status: s.status,
           provider: s.provider,
           branch: s.branch,
@@ -81,7 +113,7 @@ export function buildReadTools(
           isAncestor: ancestors.has(s.id),
           isChild: childIds.has(s.id),
         }));
-      return ok(`${rows.length} session(s) in project`, rows);
+      return ok(`${rows.length} session(s) visible`, rows);
     },
   };
 
@@ -98,16 +130,14 @@ export function buildReadTools(
       required: ['sessionId'],
     },
     execute: (raw) => {
+      const gate = readGate(deps);
+      if (gate) return gate;
       const input = asToolInput(raw);
       const targetId = typeof input.sessionId === 'string' ? input.sessionId : '';
       if (!targetId) return errorResult('sessionId is required');
       const target = deps.findSession(targetId);
       if (!target) return errorResult(`session ${targetId} not found`);
-      const sameProject = target.projectPath === scope.projectPath;
-      const inLineage = ancestorIds(deps, scope.sessionId).has(targetId) ||
-        deps.childrenOf(scope.sessionId).some((c) => c.id === targetId) ||
-        targetId === scope.sessionId;
-      if (!sameProject && !inLineage) {
+      if (!isVisible(deps, scope, target)) {
         return errorResult(`session ${targetId} is outside your project and lineage`);
       }
       const sinceSeq = Number.isFinite(input.sinceSeq) ? Math.max(0, Number(input.sinceSeq)) : 0;
@@ -130,8 +160,17 @@ export function buildReadTools(
       properties: { parentSessionId: { type: 'string' } },
     },
     execute: (raw) => {
+      const gate = readGate(deps);
+      if (gate) return gate;
       const input = asToolInput(raw);
       const parentSessionId = typeof input.parentSessionId === 'string' ? input.parentSessionId : scope.sessionId;
+      // A caller may only list tasks under a parent session it can see.
+      if (parentSessionId !== scope.sessionId) {
+        const parent = deps.findSession(parentSessionId);
+        if (!parent || !isVisible(deps, scope, parent)) {
+          return errorResult(`session ${parentSessionId} is outside your project and lineage`);
+        }
+      }
       const rows = deps.listTasks(parentSessionId).map((t) => ({
         id: t.id,
         status: t.status,
@@ -153,11 +192,18 @@ export function buildReadTools(
       required: ['taskId'],
     },
     execute: (raw) => {
+      const gate = readGate(deps);
+      if (gate) return gate;
       const input = asToolInput(raw);
       const taskId = typeof input.taskId === 'string' ? input.taskId : '';
       if (!taskId) return errorResult('taskId is required');
       const task = deps.findTask(taskId);
       if (!task) return errorResult(`task ${taskId} not found`);
+      // Scope guard: the task must belong to a session the caller can see —
+      // either its parent session or its own child session.
+      if (!taskVisible(deps, scope, task)) {
+        return errorResult(`task ${taskId} is outside your project and lineage`);
+      }
       const terminal = task.status === 'DONE' || task.status === 'FAILED' || task.status === 'CANCELLED';
       if (!terminal) return errorResult(`task ${taskId} is ${task.status}, not finished`);
       // Build the digest on demand (covers terminal tasks predating the digest event).
@@ -169,6 +215,16 @@ export function buildReadTools(
   };
 
   return [listSessions, readSession, listTasks, getTaskResult];
+}
+
+/** A task is visible when its parent session, or its own child session, is visible to the caller. */
+function taskVisible(deps: OrchestrationToolDeps, scope: OrchestrationScope, task: { parentSessionId: string | null; sessionId: string | null }): boolean {
+  for (const id of [task.parentSessionId, task.sessionId]) {
+    if (!id) continue;
+    const session = deps.findSession(id);
+    if (session && isVisible(deps, scope, session)) return true;
+  }
+  return false;
 }
 
 function verifyPassedFromOutcome(outcome: Record<string, unknown> | null): boolean | null {

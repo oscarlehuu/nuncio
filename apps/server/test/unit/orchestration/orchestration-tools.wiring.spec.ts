@@ -80,4 +80,19 @@ describe('orchestration tools wiring', () => {
     expect(projectPaths.every((p) => p === '/proj-a')).toBe(true);
     expect(rows.length).toBeGreaterThanOrEqual(2);
   });
+
+  it('a tool built while enabled refuses after the setting flips to off (F3)', async () => {
+    settings.set('NUNCIO_ORCHESTRATION_TOOLS', 'read');
+    const s = sessions.create({ prompt: 'p', projectPath: '/repo' });
+    const tool = registry
+      .forSession({ sessionId: s.id, projectPath: '/repo' })
+      .tools.find((t) => t.name === 'nuncio_list_sessions')!;
+    // Works now...
+    expect(((await tool.execute({})) as { isError?: boolean }).isError).toBeUndefined();
+    // ...refuses after a mid-session flip to off, even on the same handle.
+    settings.set('NUNCIO_ORCHESTRATION_TOOLS', 'off');
+    const res = await tool.execute({});
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    expect((res as { content: Array<{ text: string }> }).content[0].text).toContain('disabled');
+  });
 });

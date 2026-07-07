@@ -37,6 +37,7 @@ function makeDeps(over: Partial<OrchestrationToolDeps> = {}): {
   const created: CreateTaskDto[] = [];
   const sessions = [session({ id: 's1' })];
   const deps: OrchestrationToolDeps = {
+    currentMode: () => 'read-write',
     listSessions: () => sessions,
     findSession: (id) => sessions.find((s) => s.id === id) ?? null,
     childrenOf: () => [],
@@ -128,13 +129,49 @@ describe('nuncio_enqueue_task', () => {
     expect((res as { content: Array<{ text: string }> }).content[0].text).toContain('cap');
   });
 
-  it('rejects oversized prompt + brief (>16KB)', async () => {
+  it('rejects oversized measured input including tag + provider (>16KB)', async () => {
     const { deps } = makeDeps();
     const res = await buildEnqueueTool(deps, scope).execute({
       prompt: 'x'.repeat(20000),
       brief: { goal: 'g' },
     });
     expect((res as { isError?: boolean }).isError).toBe(true);
+  });
+
+  it('the cap holds under concurrent enqueues gated on a shared snapshot (F4 TOCTOU)', async () => {
+    // 9 open tasks seeded; both calls await the SAME snapshot promise before the
+    // cap re-check. Because the re-check + insert run synchronously after the
+    // await, exactly one call inserts (reaching 10) and the other is rejected.
+    const open: TaskDto[] = Array.from({ length: 9 }, (_, i) => task({ id: `o${i}`, status: 'QUEUED', role: 'subagent' }));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { deps, created } = makeDeps({
+      // Live count: reflects tasks inserted so far in this test.
+      listTasks: () => [...open, ...created.map((c, i) => task({ id: `new-${i}`, status: 'QUEUED', role: 'subagent', prompt: c.prompt }))],
+      enqueueTask: (input) => {
+        created.push(input);
+        return task({ id: `new-${created.length - 1}`, prompt: input.prompt });
+      },
+      buildWorkspaceSnapshot: async () => {
+        await gate;
+        return null;
+      },
+    });
+    const tool = buildEnqueueTool(deps, scope);
+
+    const p1 = tool.execute({ prompt: 'a', brief: { goal: 'g' } });
+    const p2 = tool.execute({ prompt: 'b', brief: { goal: 'g' } });
+    release();
+    const [r1, r2] = await Promise.all([p1, p2]);
+
+    const errors = [r1, r2].filter((r) => (r as { isError?: boolean }).isError).length;
+    expect(errors).toBe(1); // exactly one rejected by the cap
+    expect(created).toHaveLength(1); // exactly one inserted
+    // The rejection is the cap, not something else.
+    const rejected = [r1, r2].find((r) => (r as { isError?: boolean }).isError)!;
+    expect((rejected as { content: Array<{ text: string }> }).content[0].text).toContain('cap');
   });
 
   it('survives a workspace-snapshot failure (best-effort, still enqueues)', async () => {

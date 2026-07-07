@@ -17,6 +17,12 @@ export interface OrchestrationScope {
  * factory has no path back to the tool registry (no DI cycle).
  */
 export interface OrchestrationToolDeps {
+  /**
+   * The CURRENT gating mode, re-read on every tool call. Long-lived provider
+   * handles register tools once, so a mid-session mode flip is enforced here at
+   * execute time — not only at registration.
+   */
+  currentMode(): OrchestrationMode;
   listSessions(): SessionDto[];
   findSession(id: string): SessionDto | null;
   childrenOf(parentSessionId: string): SessionDto[];

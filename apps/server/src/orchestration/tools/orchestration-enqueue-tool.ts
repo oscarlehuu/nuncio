@@ -63,6 +63,10 @@ export function buildEnqueueTool(
     },
     execute: async (raw) => {
       const input = asToolInput(raw);
+      // Re-read the CURRENT mode: a mid-session flip to a mode that no longer
+      // permits writes must be refused even on a long-lived provider handle.
+      if (deps.currentMode() !== 'read-write') return errorResult('orchestration tools are disabled');
+
       const prompt = typeof input.prompt === 'string' ? input.prompt.trim() : '';
       if (!prompt) return errorResult('prompt is required');
       const briefInput = asToolInput(input.brief);
@@ -74,32 +78,23 @@ export function buildEnqueueTool(
         return errorResult(`tag must be one of: ${[...VALID_TAGS].join(', ')}`);
       }
 
-      // Size guard on the whole payload (prompt + brief).
-      if (byteLength(prompt) + byteLength(JSON.stringify(briefInput)) > INPUT_MAX_BYTES) {
+      const explicitProvider = typeof input.provider === 'string' ? input.provider.trim() : undefined;
+
+      // Size guard on the whole measured input: prompt + brief JSON + tag + provider.
+      const measured =
+        byteLength(prompt) +
+        byteLength(JSON.stringify(briefInput)) +
+        byteLength(tag ?? '') +
+        byteLength(explicitProvider ?? '');
+      if (measured > INPUT_MAX_BYTES) {
         return errorResult('prompt + brief exceed the 16KB limit');
       }
 
       const parent = deps.findSession(scope.sessionId);
       if (!parent) return errorResult('calling session not found');
 
-      // Depth guard: the child-to-be's chain = caller chain + 1. Reject at ≥ cap
-      // so an agent two levels deep reports to its parent instead of delegating.
-      const childChainDepth = callerChainDepth(deps, scope.sessionId) + 1;
-      if (childChainDepth >= DEPTH_CAP) {
-        return errorResult(
-          `delegation chain would reach depth ${childChainDepth} (cap ${DEPTH_CAP}); report your result to your parent instead of delegating further`,
-        );
-      }
-
-      // Open-task cap per parent (QUEUED or RUNNING subagents).
-      const open = deps
-        .listTasks(scope.sessionId)
-        .filter((t) => t.role === 'subagent' && (t.status === 'QUEUED' || t.status === 'RUNNING'));
-      if (open.length >= OPEN_TASK_CAP) {
-        return errorResult(`open subagent task cap reached (${OPEN_TASK_CAP}); wait for some to finish`);
-      }
-
-      // Merge agent intent with nuncio ground truth (workspace snapshot + verify).
+      // Build the brief (the only async step) BEFORE the cap re-check, so the
+      // caps are evaluated in the same synchronous tick as the insert.
       let workspace: HandoffBrief['workspace'] = null;
       try {
         workspace = await deps.buildWorkspaceSnapshot(parent);
@@ -118,9 +113,25 @@ export function buildEnqueueTool(
         sourceSessionId: scope.sessionId,
       };
 
-      const explicitProvider = typeof input.provider === 'string' ? input.provider.trim() : undefined;
       const defaults = deps.resolveSubagentDefaults(parent, explicitProvider || undefined);
       const useWorktree = input.useWorktree === false ? false : true;
+
+      // Depth + open-task caps are re-evaluated HERE — after all awaits, in the
+      // same synchronous tick as enqueueTask. In a single-threaded runtime no
+      // other enqueue can interleave between this check and the insert, so N
+      // parallel calls cannot each see 9-open and overshoot the cap.
+      const childChainDepth = callerChainDepth(deps, scope.sessionId) + 1;
+      if (childChainDepth >= DEPTH_CAP) {
+        return errorResult(
+          `delegation chain would reach depth ${childChainDepth} (cap ${DEPTH_CAP}); report your result to your parent instead of delegating further`,
+        );
+      }
+      const open = deps
+        .listTasks(scope.sessionId)
+        .filter((t) => t.role === 'subagent' && (t.status === 'QUEUED' || t.status === 'RUNNING'));
+      if (open.length >= OPEN_TASK_CAP) {
+        return errorResult(`open subagent task cap reached (${OPEN_TASK_CAP}); wait for some to finish`);
+      }
 
       const task = deps.enqueueTask({
         prompt,
