@@ -1013,6 +1013,61 @@ describe('TasksService', () => {
       }
     });
 
+    it('a skipped digest wake does not pin a user steer queued behind it (ERROR drain)', async () => {
+      const parentId = await parentAt('RUNNING');
+      const steerQueue = module.get(SteerQueueRepository);
+      // Queue order: [digest-wake, user-steer].
+      await runSubagent(parentId, 'steer');
+      expect(steerQueue.countByOrigin(parentId, 'task-digest')).toBe(1);
+      steerQueue.enqueue(parentId, 'real user steer'); // no origin → user row
+
+      sessionsRepo().updateStatus(parentId, 'ERROR');
+      const steerSpy = jest.spyOn(sessions, 'steer').mockResolvedValue(undefined as never);
+      try {
+        (sessions as unknown as { drainSteerQueue: (id: string) => void }).drainSteerQueue(parentId);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        // The wake was dropped (not steered) with a note...
+        expect(steerQueue.countByOrigin(parentId, 'task-digest')).toBe(0);
+        expect(
+          events.list(parentId).some((e) => e.type === 'status' && String((e.payload as { note?: string }).note ?? '').includes('ERROR')),
+        ).toBe(true);
+        // ...and the user steer queued behind it was delivered per today's ERROR
+        // behavior (steer() is invoked for the user row) — not pinned.
+        expect(steerSpy).toHaveBeenCalledTimes(1);
+        expect(steerSpy).toHaveBeenCalledWith(parentId, 'real user steer', undefined, undefined, undefined);
+      } finally {
+        steerSpy.mockRestore();
+      }
+    });
+
+    it('skip-wake is atomic: a note-persist failure keeps the wake queued (both-or-neither)', async () => {
+      const parentId = await parentAt('RUNNING');
+      const steerQueue = module.get(SteerQueueRepository);
+      await runSubagent(parentId, 'steer');
+      expect(steerQueue.countByOrigin(parentId, 'task-digest')).toBe(1);
+
+      sessionsRepo().updateStatus(parentId, 'ERROR');
+      // Force the note persist to throw inside the skip transaction → rollback.
+      const persistSpy = jest
+        .spyOn(sessions, 'persistOrchestrationEvent')
+        .mockImplementation(() => {
+          throw new Error('note persist boom');
+        });
+      try {
+        (sessions as unknown as { drainSteerQueue: (id: string) => void }).drainSteerQueue(parentId);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        // The delete rolled back with the failed note: the wake is still queued.
+        expect(steerQueue.countByOrigin(parentId, 'task-digest')).toBe(1);
+        expect(
+          events.list(parentId).some((e) => e.type === 'status' && String((e.payload as { note?: string }).note ?? '').includes('suppressed')),
+        ).toBe(false);
+      } finally {
+        persistSpy.mockRestore();
+      }
+      // Cleanup: clear the stuck wake so it doesn't leak into later tests.
+      steerQueue.deleteForSession(parentId);
+    });
+
     it('multitask-from-queue fan-out does not claim a queued digest wake', async () => {
       const parentId = await parentAt('RUNNING');
       const steerQueue = module.get(SteerQueueRepository);

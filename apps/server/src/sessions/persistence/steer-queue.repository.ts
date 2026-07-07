@@ -50,6 +50,41 @@ export class SteerQueueRepository {
   }
 
   /**
+   * Read the oldest UNCLAIMED queued steer WITH its id, without deleting it.
+   * Lets the drain decide (deliver vs. transactionally skip a task-digest wake
+   * on ERROR/PAUSED) before the row leaves the queue. Claimed rows are leased to
+   * an in-flight fan-out and stay invisible.
+   */
+  peekNext(sessionId: string): (QueuedSteer & { id: number }) | null {
+    const row = this.database.db
+      .prepare<SteerQueueRow, [string]>(
+        'SELECT * FROM steer_queue WHERE session_id = ? AND claimed_at IS NULL ORDER BY id ASC LIMIT 1',
+      )
+      .get(sessionId);
+    if (!row) return null;
+    const attachments = parseAttachments(row.attachments_json);
+    return {
+      id: row.id,
+      message: row.message,
+      ...(attachments ? { attachments } : {}),
+      ...(row.origin ? { origin: row.origin } : {}),
+    };
+  }
+
+  /** Delete a single row by id (no-op if already gone). */
+  deleteById(id: number): void {
+    this.database.db.prepare('DELETE FROM steer_queue WHERE id = ?').run(id);
+  }
+
+  /**
+   * Run `fn` in one SQLite transaction. Exposed so a caller can bundle a steer
+   * row delete with another same-db write (e.g. a suppression event) atomically.
+   */
+  transaction<T>(fn: () => T): T {
+    return this.database.transaction(fn);
+  }
+
+  /**
    * Pop the oldest UNCLAIMED queued steer for the session; null when none are
    * available. Claimed rows are leased to an in-flight multitask fan-out and
    * are invisible to the normal settle-drain so a message is never delivered

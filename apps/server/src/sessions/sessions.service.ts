@@ -532,22 +532,39 @@ export class SessionsService implements OnModuleDestroy {
     // Drain timers can outlive the service; after shutdown the database is
     // closed, so touching the queue would throw from a detached timer.
     if (this.destroyed) return;
-    const next = this.steerQueue.dequeue(id);
-    if (!next) return;
-    // A task-digest auto-steer must never be what restarts an ERROR/PAUSED
-    // session (the notify policy falls back to event-only for those states). The
-    // row is already dequeued (removed); drop it and note why. A normal user
-    // steer keeps today's behavior — the FSM guard in steer() applies to it.
-    if (next.origin === 'task-digest') {
-      const status = this.sessions.findById(id)?.status;
-      if (status === 'ERROR' || status === 'PAUSED') {
-        this.appendAndEmit(id, 'status', {
-          note: `Auto-steer suppressed: parent status ${status}. Digest delivered as event only.`,
-        });
-        return;
+
+    // Skip any leading task-digest wakes that must not restart an ERROR/PAUSED
+    // session, then deliver the first eligible row. Skipping is atomic (row
+    // delete + suppression note commit together) so a crash mid-skip never
+    // swallows a wake, and the loop ensures a user steer queued behind skipped
+    // wakes is not pinned.
+    let next = this.steerQueue.peekNext(id);
+    while (next) {
+      if (next.origin === 'task-digest') {
+        const status = this.sessions.findById(id)?.status;
+        if (status === 'ERROR' || status === 'PAUSED') {
+          try {
+            this.skipQueuedDigestWake(id, next.id, status);
+          } catch (error) {
+            // Atomic skip failed (both-or-neither): the row is still queued.
+            // Stop this pass rather than spin; a later drain retries it.
+            const reason = error instanceof Error ? error.message : String(error);
+            console.warn(`[sessions] failed to skip queued digest wake for ${id}: ${reason}`);
+            return;
+          }
+          next = this.steerQueue.peekNext(id);
+          continue;
+        }
       }
+      break;
     }
-    void this.steer(id, next.message, undefined, next.attachments, next.origin).catch((error) => {
+    if (!next) return;
+
+    // Deliver exactly this row (dequeue removes it); one-per-pass semantics for
+    // real steers are preserved.
+    this.steerQueue.deleteById(next.id);
+    const delivered = next;
+    void this.steer(id, delivered.message, undefined, delivered.attachments, delivered.origin).catch((error) => {
       const reason = error instanceof Error ? error.message : String(error);
       try {
         this.appendAndEmit(id, 'error', { message: `Queued message failed to send: ${reason}` });
@@ -555,6 +572,21 @@ export class SessionsService implements OnModuleDestroy {
         // Session gone (deleted/archived mid-drain) — nothing left to notify.
       }
     });
+  }
+
+  /**
+   * Drop a queued task-digest wake that must not restart an ERROR/PAUSED parent,
+   * atomically: the row delete and the suppression-note persist commit as one
+   * transaction (both-or-neither), so a crash between them can never swallow the
+   * wake. The note is fanned out to subscribers only after the commit.
+   */
+  private skipQueuedDigestWake(sessionId: string, rowId: number, status: SessionStatus): void {
+    const note = `Auto-steer suppressed: parent status ${status}. Digest delivered as event only.`;
+    const event = this.steerQueue.transaction<SessionEvent | null>(() => {
+      this.steerQueue.deleteById(rowId);
+      return this.persistOrchestrationEvent(sessionId, 'status', { note });
+    });
+    if (event) this.emitPersistedEvent(sessionId, event);
   }
 
   /** Grace period before a non-unwinding interrupted run is forced idle. */

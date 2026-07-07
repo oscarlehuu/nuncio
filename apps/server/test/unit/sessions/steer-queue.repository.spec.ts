@@ -99,6 +99,22 @@ describe('SteerQueueRepository', () => {
     queue.deleteForSession(s.id);
   });
 
+  it('peekNext reads the oldest unclaimed row with its id without deleting; deleteById removes it', () => {
+    const s = sessions.create({ prompt: 'peek' });
+    queue.enqueue(s.id, 'first', undefined, 'task-digest');
+    queue.enqueue(s.id, 'second');
+
+    const peeked = queue.peekNext(s.id);
+    expect(peeked?.message).toBe('first');
+    expect(peeked?.origin).toBe('task-digest');
+    expect(typeof peeked?.id).toBe('number');
+    expect(queue.count(s.id)).toBe(2); // peek does not remove
+
+    queue.deleteById(peeked!.id);
+    expect(queue.peekNext(s.id)?.message).toBe('second');
+    queue.deleteForSession(s.id);
+  });
+
   it('claimAll leaves rows enqueued after the claim untouched', () => {
     const s = sessions.create({ prompt: 'claim-race' });
     queue.enqueue(s.id, 'early');
