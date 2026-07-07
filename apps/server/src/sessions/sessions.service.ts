@@ -20,6 +20,7 @@ import { turnsToSessionEvents } from '../cursor-local/cursor-transcript-hydrate'
 import { readCursorChatMetadata } from '../cursor-local/cursor-chat-store';
 import { ContextFactsService } from '../context/context-facts.service';
 import { renderContextFacts } from '../context/context-facts.renderer';
+import { materializeContextFile } from '../context/context-file.materializer';
 import { GitService } from '../git/git.service';
 import type { ModelOptionsMap } from '../models/model-options.types';
 import { renderHandoffBrief } from '../orchestration/handoff-brief.renderer';
@@ -195,6 +196,10 @@ export class SessionsService implements OnModuleDestroy {
     let worktreePath: string | undefined;
     let branch: string | undefined;
 
+    // Resolve the engine profile ONCE here (ADR-004: adapters get finished
+    // strings). It drives both the preamble wrappers and the B4 context file.
+    const profile = this.profiles?.resolve(providerId, input.model);
+
     if (input.projectPath?.trim()) {
       projectPath = input.projectPath.trim();
       await this.git.listBranches(projectPath);
@@ -213,8 +218,6 @@ export class SessionsService implements OnModuleDestroy {
     // The single choke point for the first prompt: handoff brief → project
     // facts → the user's prompt. Both this path and TasksService.execute() (via
     // input.contextBrief) compose here, so the order is guaranteed in one place.
-    // Resolve the engine profile ONCE here (ADR-004: adapters get finished strings).
-    const profile = this.profiles?.resolve(providerId, input.model);
     const prompt = composeSessionPreamble({
       ...(input.contextBrief ? { brief: renderHandoffBrief(input.contextBrief) } : {}),
       ...(projectPath ? { facts: this.renderProjectFacts(projectPath, id) } : {}),
@@ -234,6 +237,12 @@ export class SessionsService implements OnModuleDestroy {
       branch,
       cursorBackend: 'sdk',
     });
+    // B4: materialize the engine's native context file into the worktree now
+    // that the session row exists (so a skip note can be recorded). Opt-in per
+    // project; the preamble injection above is the guarantee, this reinforces it.
+    if (worktreePath && projectPath) {
+      this.materializeWorktreeContextFile(worktreePath, projectPath, profile?.contextFileName, session.id);
+    }
     void this.startRun(session, input.attachments);
     return this.enrichSession(session);
   }
@@ -258,6 +267,40 @@ export class SessionsService implements OnModuleDestroy {
   private orchestrationToolsEnabled(): boolean {
     const mode = this.settings?.resolve('NUNCIO_ORCHESTRATION_TOOLS');
     return mode === 'read' || mode === 'read-write';
+  }
+
+  /**
+   * B4: write the engine's native context file into a fresh worktree when the
+   * project's policy opts in and the profile names one. Best-effort — a failure
+   * (or a skipped existing file) never blocks session creation; a skip is noted
+   * on the transcript. The rendered facts here are NOT gated by the preamble
+   * inject kill-switch: the file and the preamble are independent channels.
+   */
+  private materializeWorktreeContextFile(
+    worktreePath: string,
+    projectPath: string,
+    contextFileName: string | undefined,
+    sessionId: string,
+  ): void {
+    const policy = this.settings?.resolve('NUNCIO_CONTEXT_FILE_POLICY') === 'worktree-local'
+      ? 'worktree-local'
+      : 'none';
+    if (policy !== 'worktree-local' || !contextFileName) return;
+    try {
+      const budgetRaw = Number(this.settings?.resolve('NUNCIO_CONTEXT_FACTS_MAX_BYTES'));
+      const budget = Number.isInteger(budgetRaw) && budgetRaw > 0 ? budgetRaw : 4096;
+      const facts = this.contextFacts?.listPinnedFirst(projectPath, 200) ?? [];
+      const factsBlock = renderContextFacts(facts, budget, { toolsEnabled: this.orchestrationToolsEnabled() });
+      const result = materializeContextFile(worktreePath, { policy, contextFileName, factsBlock });
+      if (result.skipped) {
+        this.appendAndEmit(sessionId, 'status', {
+          note: `Context file "${contextFileName}" already exists in the worktree; nuncio left it untouched.`,
+        });
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.warn(`[sessions] context-file materialization failed for ${sessionId}: ${reason}`);
+    }
   }
 
   async handoff(input: HandoffSessionDto): Promise<SessionDto> {
