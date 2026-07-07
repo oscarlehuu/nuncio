@@ -3,12 +3,19 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { BadRequestException } from '@nestjs/common';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { SchedulerService } from '../../../src/scheduler/scheduler.service';
 import { TasksService } from '../../../src/tasks/tasks.service';
 import { LoopsRepository } from '../../../src/loops/loops.repository';
 import { LoopsService } from '../../../src/loops/loops.service';
 import type { CreateLoopDto } from '../../../src/loops/loops.types';
+
+/** Known engine ids for the validation seam — mirrors the real AgentRegistry. */
+const KNOWN_ENGINES = new Set(['mock', 'pi', 'cursor', 'codex']);
+function assertKnownEngine(id: string): void {
+  if (!KNOWN_ENGINES.has(id)) throw new BadRequestException(`Unknown agent provider ${id}`);
+}
 
 /**
  * The loop primitive integration — deterministic via the injected clock. Spy
@@ -53,12 +60,12 @@ interface FakeTask {
 }
 
 class SpyTasks {
-  readonly enqueued: Array<{ prompt: string; useWorktree?: boolean; projectPath?: string }> = [];
+  readonly enqueued: Array<{ prompt: string; useWorktree?: boolean; projectPath?: string; provider?: string }> = [];
   private readonly tasks = new Map<string, FakeTask>();
   private readonly handlers = new Set<(t: FakeTask) => void>();
   private n = 0;
 
-  enqueue(input: { prompt: string; useWorktree?: boolean; projectPath?: string }) {
+  enqueue(input: { prompt: string; useWorktree?: boolean; projectPath?: string; provider?: string }) {
     this.n += 1;
     const id = `task-${this.n}`;
     this.enqueued.push(input);
@@ -135,6 +142,7 @@ describe('LoopsService', () => {
     repo = module.get(LoopsRepository);
     clockNow = at(2026, 7, 7, 8, 0);
     loops.clock = { now: () => clockNow };
+    loops.assertKnownEngine = assertKnownEngine;
     // compile() does not run lifecycle hooks — invoke onModuleInit so the
     // scheduler/task-settlement handlers are registered (as in production).
     loops.onModuleInit();
@@ -613,6 +621,177 @@ describe('LoopsService', () => {
     it('a loop whose projectPath has no projects row still fires (soft ref, no crash)', () => {
       const loop = loops.create(create({ projectPath: '/never/configured/repo' }));
       expect(() => loops.fire(loop.id)).not.toThrow();
+    });
+  });
+
+  describe('per-loop engine override (v1.1)', () => {
+    it('accepts a valid engine id and carries it on the LoopDto', () => {
+      const loop = loops.create(create({ engine: 'mock' }));
+      expect(loop.engine).toBe('mock');
+      expect(loops.findById(loop.id)!.engine).toBe('mock');
+    });
+
+    it('rejects an unknown engine id at create', () => {
+      expect(() => loops.create(create({ engine: 'nope' }))).toThrow(/agent provider|nope/i);
+    });
+
+    it('defaults engine to null (inherit) when unset', () => {
+      expect(loops.create(create()).engine).toBeNull();
+    });
+
+    it('patches the engine via update, validating the id', () => {
+      const loop = loops.create(create());
+      const patched = loops.update(loop.id, { engine: 'cursor' });
+      expect(patched.engine).toBe('cursor');
+      expect(() => loops.update(loop.id, { engine: 'bogus' })).toThrow(/agent provider|bogus/i);
+      // Clearing to null (inherit).
+      expect(loops.update(loop.id, { engine: null }).engine).toBeNull();
+    });
+
+    it('fire passes the per-loop engine as the task provider', () => {
+      const loop = loops.create(create({ engine: 'mock' }));
+      loops.fire(loop.id);
+      // SpyTasks records the enqueue; the loop engine overrides.
+      expect(tasks.enqueued[0]!.provider).toBe('mock');
+    });
+  });
+
+  describe('update (patch) (v1.1)', () => {
+    it('patches goal + budgets, leaving others unchanged', () => {
+      const loop = loops.create(create({ maxRunsPerDay: 5 }));
+      const patched = loops.update(loop.id, { goal: 'new goal', maxRunsPerDay: 9 });
+      expect(patched.goal).toBe('new goal');
+      expect(patched.maxRunsPerDay).toBe(9);
+      expect(patched.maxConsecutiveFailures).toBe(loop.maxConsecutiveFailures);
+    });
+
+    it('rejects an empty goal and a non-positive budget', () => {
+      const loop = loops.create(create());
+      expect(() => loops.update(loop.id, { goal: '  ' })).toThrow(/goal/i);
+      expect(() => loops.update(loop.id, { maxRunsPerDay: 0 })).toThrow(/runs|budget/i);
+    });
+
+    it('404s on an unknown loop', () => {
+      expect(() => loops.update('nope', { goal: 'x' })).toThrow();
+    });
+
+    it('sets and clears the optional name', () => {
+      const loop = loops.create(create());
+      expect(loop.name).toBeNull();
+      expect(loops.update(loop.id, { name: '  Nightly cleanup  ' }).name).toBe('Nightly cleanup');
+      // Empty string clears back to null (fall back to goal for display).
+      expect(loops.update(loop.id, { name: '   ' }).name).toBeNull();
+      expect(loops.update(loop.id, { name: null }).name).toBeNull();
+    });
+
+    it('accepts an edit on a paused or broken loop', () => {
+      const paused = loops.create(create());
+      loops.pause(paused.id);
+      expect(loops.update(paused.id, { goal: 'still editable' }).goal).toBe('still editable');
+    });
+
+    it('rejects an edit on a completed loop (its config is history)', () => {
+      const loop = loops.create(create({ stop: { kind: 'maxTotalRuns', n: 1 }, maxConsecutiveFailures: 10 }));
+      const run = loops.fire(loop.id)!;
+      tasks.settle(run.taskId!, 'DONE', { verify: { ok: true } });
+      expect(loops.findById(loop.id)!.status).toBe('completed');
+      expect(() => loops.update(loop.id, { goal: 'nope' })).toThrow(/completed/i);
+    });
+  });
+
+  describe('create with name (v1.1)', () => {
+    it('carries a trimmed name and defaults to null', () => {
+      expect(loops.create(create({ name: '  My loop ' })).name).toBe('My loop');
+      expect(loops.create(create()).name).toBeNull();
+      expect(loops.create(create({ name: '   ' })).name).toBeNull();
+    });
+  });
+
+  describe('manual fire (v1.1)', () => {
+    it('an active loop fires and consumes a run (returns the pending run)', () => {
+      const loop = loops.create(create());
+      const run = loops.fireManual(loop.id)!;
+      expect(run.outcome).toBe('pending');
+      expect(repo.listRuns(loop.id).filter((r) => r.outcome === 'pending')).toHaveLength(1);
+    });
+
+    it('respects the overlap guard (skips while a run is pending)', () => {
+      const loop = loops.create(create());
+      loops.fireManual(loop.id); // pending
+      const second = loops.fireManual(loop.id);
+      expect(second).toBeNull(); // skipped-overlap, no new task
+      expect(tasks.enqueued).toHaveLength(1);
+    });
+
+    it('rejects a broken / paused / completed loop', () => {
+      const loop = loops.create(create());
+      loops.pause(loop.id);
+      expect(() => loops.fireManual(loop.id)).toThrow(/paused|cannot fire/i);
+    });
+  });
+
+  describe('stats (v1.1)', () => {
+    it('aggregates settled outcomes across loops', () => {
+      const a = loops.create(create({ maxConsecutiveFailures: 10 }));
+      const ra = loops.fire(a.id)!;
+      tasks.settle(ra.taskId!, 'DONE', { verify: { ok: true } });
+      const b = loops.create(create({ maxConsecutiveFailures: 10 }));
+      const rb = loops.fire(b.id)!;
+      tasks.settle(rb.taskId!, 'FAILED');
+      const stats = loops.stats();
+      expect(stats.total).toBe(2);
+      expect(stats.active).toBe(2);
+      expect(stats.successful24h).toBe(1);
+      expect(stats.failed24h).toBe(1);
+      expect(stats.sparkline).toHaveLength(14);
+    });
+  });
+
+  describe('run detail (v1.1)', () => {
+    it('joins the task and derives durationMs + failureReason', () => {
+      const loop = loops.create(create({ maxConsecutiveFailures: 10 }));
+      const run = loops.fire(loop.id)!;
+      tasks.settle(run.taskId!, 'DONE', {
+        verify: { ok: false, outputTail: 'RED tail' },
+        needsAttention: { reason: 'max_rounds' },
+      });
+      const detail = loops.runDetail(loop.id, run.id);
+      expect(detail.failureReason).toBe('max_rounds');
+      expect(detail.verifyOutputTail).toBe('RED tail');
+    });
+
+    it('is null-safe when the task vanished', () => {
+      const loop = loops.create(create());
+      const run = loops.fire(loop.id)!;
+      tasks.vanish(run.taskId!);
+      const detail = loops.runDetail(loop.id, run.id);
+      expect(detail.sessionId).toBeNull();
+      expect(detail.durationMs).toBeNull();
+    });
+
+    it('404s on an unknown run', () => {
+      const loop = loops.create(create());
+      expect(() => loops.runDetail(loop.id, 'nope')).toThrow();
+    });
+  });
+
+  describe('run-context injection (memories v1)', () => {
+    it('the first run enqueues the bare goal (no context block)', () => {
+      const loop = loops.create(create());
+      loops.fire(loop.id);
+      expect(tasks.enqueued[0]!.prompt).toBe('nightly maintenance');
+      expect(tasks.enqueued[0]!.prompt).not.toContain('Previous run context:');
+    });
+
+    it('a subsequent run prepends the previous-run context block', () => {
+      const loop = loops.create(create({ maxRunsPerDay: 10, maxConsecutiveFailures: 10 }));
+      const first = loops.fire(loop.id)!;
+      tasks.settle(first.taskId!, 'FAILED');
+      loops.fire(loop.id);
+      const prompt = tasks.enqueued[1]!.prompt;
+      expect(prompt).toContain('Previous run context:');
+      expect(prompt).toContain('Previous run: failed');
+      expect(prompt.endsWith('nightly maintenance')).toBe(true);
     });
   });
 });

@@ -142,6 +142,62 @@ describe('ForgesService', () => {
     await expect(service.openPullRequestForSession(s.id)).rejects.toThrow(BadRequestException);
   });
 
+  describe('listRepositories', () => {
+    const repo = {
+      id: '1',
+      fullName: 'octo/nuncio',
+      name: 'nuncio',
+      description: null,
+      private: false,
+      defaultBranch: 'main',
+      cloneUrl: 'https://github.com/octo/nuncio.git',
+      webUrl: 'https://github.com/octo/nuncio',
+      updatedAt: null,
+    };
+
+    it('resolves the available provider and returns its repositories', async () => {
+      const provider = {
+        id: 'github',
+        capabilities: () => ({ listRepositories: true }),
+        listRepositories: async () => [repo],
+      };
+      const registry = { getAvailable: async () => provider };
+      const svc = new ForgesService(registry as never, gitStub as never, sessions);
+      expect(await svc.listRepositories('github')).toEqual([repo]);
+    });
+
+    it('propagates a 4xx when the forge is unavailable (unauthenticated)', async () => {
+      const registry = {
+        getAvailable: async () => {
+          throw new BadRequestException('Forge provider github is not available');
+        },
+      };
+      const svc = new ForgesService(registry as never, gitStub as never, sessions);
+      await expect(svc.listRepositories('github')).rejects.toThrow(BadRequestException);
+    });
+
+    it('propagates a 4xx for an unknown forge id', async () => {
+      const registry = {
+        getAvailable: async () => {
+          throw new BadRequestException('Unknown forge provider bogus');
+        },
+      };
+      const svc = new ForgesService(registry as never, gitStub as never, sessions);
+      await expect(svc.listRepositories('bogus')).rejects.toThrow(BadRequestException);
+    });
+
+    it('4xx when the provider cannot enumerate repositories (capability off)', async () => {
+      const provider = {
+        id: 'x',
+        capabilities: () => ({ listRepositories: false }),
+        listRepositories: async () => [repo],
+      };
+      const registry = { getAvailable: async () => provider };
+      const svc = new ForgesService(registry as never, gitStub as never, sessions);
+      await expect(svc.listRepositories('x')).rejects.toThrow(BadRequestException);
+    });
+  });
+
   describe('listStatus', () => {
     it('returns status with login when provider is available and responds within timeout', async () => {
       const p1 = {

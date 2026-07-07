@@ -109,6 +109,7 @@ describe('GithubForgeProvider — review/merge/issues surface', () => {
       resolveThreads: true,
       updateBranch: true,
       rerunFailedOnly: true,
+      listRepositories: true,
     });
   });
 
