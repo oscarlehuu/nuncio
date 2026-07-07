@@ -344,7 +344,7 @@ CREATE TABLE IF NOT EXISTS loop_runs (
 - **YAGNI:** exactly the 5 fields + project_path + status + timestamps. No per-loop token budgets
   (rung 4), no context files (rung 3), no extra knobs.
 
-### Stop condition v1 — FLAGGED founder decision
+### Stop condition v1 — LOCKED (founder, 2026-07-07): null | maxTotalRuns | **verifyGreenN pulled into v1** (founder override of the defer recommendation) — FLAGGED founder decision
 
 **Recommendation: `null` (standing, run until paused) | `{kind:'maxTotalRuns', n}`.** Maintenance /
 overnight-batch loops are standing (null); improvement loops ("do N runs then stop") get
