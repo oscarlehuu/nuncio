@@ -16,13 +16,16 @@ export class PromptProfileService {
 
   constructor(@Optional() private readonly settings?: SettingsService) {
     this.loader = new PromptProfileLoader(repoProfilesDir(), (key) => this.settings?.resolve(key));
+    // Settings changes (e.g. NUNCIO_PROMPT_PROFILE_<PROVIDER>) must take effect
+    // without a restart — same mechanism as AgentRegistry's provider-cache bust.
+    this.settings?.onChange(() => this.bustCache());
   }
 
   resolve(provider: string, model: string | null | undefined): PromptProfile {
     return this.loader.resolve(provider, model);
   }
 
-  /** Re-read profiles from disk/settings — called alongside the provider-registry bust. */
+  /** Re-read profiles from disk/settings — self-subscribed to settings changes. */
   bustCache(): void {
     this.loader.bustCache();
   }

@@ -70,6 +70,27 @@ describe('PromptProfileLoader', () => {
     expect(loader.resolve('claude', 'opus').sections.briefWrapper).toBe('v2');
   });
 
+  it('equal-specificity glob ties resolve to the lexicographically-first file', () => {
+    // Both patterns have specificity 6 and match 'opus-4'. The lexicographically
+    // LATER file is written first so raw readdir/insertion order would pick it.
+    writeProfile(dir, 'claude--bb.md', '---\nprovider: claude\nmodelPattern: "op*s-4"\n---\n\n## brief-wrapper\nBB\n');
+    writeProfile(dir, 'claude--aa.md', '---\nprovider: claude\nmodelPattern: "opu*-4"\n---\n\n## brief-wrapper\nAA\n');
+    expect(loader.resolve('claude', 'opus-4').sections.briefWrapper).toBe('AA');
+
+    // Reversed write order in a fresh dir → the same deterministic winner.
+    const dir2 = mkdtempSync(join(tmpdir(), 'nuncio-profiles-'));
+    try {
+      const loader2 = new PromptProfileLoader(dir2, () => undefined);
+      writeProfile(dir2, 'claude--aa.md', '---\nprovider: claude\nmodelPattern: "opu*-4"\n---\n\n## brief-wrapper\nAA\n');
+      writeProfile(dir2, 'claude--bb.md', '---\nprovider: claude\nmodelPattern: "op*s-4"\n---\n\n## brief-wrapper\nBB\n');
+      expect(loader2.resolve('claude', 'opus-4').sections.briefWrapper).toBe('AA');
+      loader2.bustCache();
+      expect(loader2.resolve('claude', 'opus-4').sections.briefWrapper).toBe('AA');
+    } finally {
+      rmSync(dir2, { recursive: true, force: true });
+    }
+  });
+
   it('a null/undefined model resolves against the wildcard', () => {
     writeProfile(dir, 'claude.md', '---\nprovider: claude\n---\n\n## brief-wrapper\nok\n');
     expect(loader.resolve('claude', null).sections.briefWrapper).toBe('ok');

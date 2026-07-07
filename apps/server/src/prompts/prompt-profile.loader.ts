@@ -79,6 +79,11 @@ export class PromptProfileLoader {
     } catch {
       return [];
     }
+    // Sort lexicographically so equal-specificity modelPattern ties resolve
+    // deterministically to the lexicographically-first file (the strict
+    // `score > bestScore` comparison keeps the first candidate), regardless
+    // of filesystem/readdir order.
+    files.sort();
     const out: PromptProfile[] = [];
     for (const file of files) {
       if (!file.endsWith('.md')) continue;

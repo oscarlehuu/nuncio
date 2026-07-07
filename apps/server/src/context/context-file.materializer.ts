@@ -1,5 +1,5 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 export type ContextFilePolicy = 'none' | 'worktree-local';
 
@@ -12,6 +12,8 @@ export interface MaterializeOptions {
   contextFileName?: string;
   /** Rendered project-facts block (B2 renderer); may be empty. */
   factsBlock: string;
+  /** Warning sink for rejected file names; defaults to console.warn. */
+  warn?: (message: string) => void;
 }
 
 export interface MaterializeResult {
@@ -66,7 +68,23 @@ export function materializeContextFile(
     return { written: false, skipped: false };
   }
 
-  const target = join(worktreePath, fileName);
+  const warn = options.warn ?? ((message: string) => console.warn(`[context-file] ${message}`));
+  // Bare-filename guard: the profile field must never carry separators,
+  // traversal segments, or an absolute path — skip (write nothing) otherwise.
+  if (fileName.includes('/') || fileName.includes('\\') || fileName.includes('..') || isAbsolute(fileName)) {
+    warn(`context file name "${fileName}" is not a bare filename; skipping materialization`);
+    return { written: false, skipped: false };
+  }
+  // Containment backstop: the resolved target must stay directly inside the
+  // worktree root (mirrors the resolve+relative check in handoff-brief.assembler).
+  const root = resolve(worktreePath);
+  const target = resolve(root, fileName);
+  const rel = relative(root, target);
+  if (rel.startsWith('..') || isAbsolute(rel) || rel.includes(sep)) {
+    warn(`context file name "${fileName}" resolves outside the worktree; skipping materialization`);
+    return { written: false, skipped: false };
+  }
+
   if (existsSync(target)) {
     return { written: false, skipped: true };
   }

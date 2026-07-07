@@ -1,6 +1,6 @@
 import { applyWrapper } from '../prompts/profile-wrapper';
 import type { TaskCompletedPayload } from '../sessions/domain/events.types';
-import { byteLength, truncateTailBytes } from './byte-truncate';
+import { byteLength, truncateHeadBytes, truncateTailBytes } from './byte-truncate';
 
 /** The exact call-to-action a steered parent sees at the end of every digest. */
 export const DIGEST_ACTION_SENTENCE =
@@ -31,8 +31,16 @@ export function renderOutcomeDigest(
   payload: TaskCompletedPayload,
   options: RenderDigestOptions = {},
 ): string {
-  const wrap = (text: string) =>
-    applyWrapper(options.digestWrapper, text, options.warn ?? ((m) => console.warn(`[outcome-digest] ${m}`)));
+  const warn = options.warn ?? ((m: string) => console.warn(`[outcome-digest] ${m}`));
+  const wrap = (text: string): string => {
+    const wrapped = applyWrapper(options.digestWrapper, text, warn);
+    if (byteLength(wrapped) <= DIGEST_MAX_BYTES) return wrapped;
+    // Backstop: a hostile/stale cached profile wrapper must never blow the
+    // steer budget — the parse-time section cap makes this unreachable under
+    // valid data.
+    warn('digest wrapper pushed the message over budget; clamping');
+    return truncateHeadBytes(wrapped, DIGEST_MAX_BYTES);
+  };
   const build = (summary: string | null): string => {
     const lines: string[] = [`### Subagent task ${payload.status}`];
     const verify = verifyLine(payload.verify);

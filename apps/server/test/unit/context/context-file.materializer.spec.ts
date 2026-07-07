@@ -76,6 +76,63 @@ describe('materializeContextFile', () => {
     expect(exclude.split('\n').filter((l) => l.trim() === 'CLAUDE.local.md')).toHaveLength(1);
   });
 
+  describe('non-bare contextFileName rejection', () => {
+    let parent: string;
+    let nestedWorktree: string;
+
+    beforeEach(() => {
+      parent = mkdtempSync(join(tmpdir(), 'nuncio-ctxfile-parent-'));
+      nestedWorktree = join(parent, 'worktree');
+      mkdirSync(join(nestedWorktree, '.git', 'info'), { recursive: true });
+    });
+
+    afterEach(() => {
+      rmSync(parent, { recursive: true, force: true });
+    });
+
+    it('rejects a traversal name and writes nothing outside the worktree', () => {
+      const warnings: string[] = [];
+      const result = materializeContextFile(nestedWorktree, {
+        policy: 'worktree-local',
+        contextFileName: '../escaped-context.md',
+        factsBlock: 'x',
+        warn: (m) => warnings.push(m),
+      });
+      expect(result).toEqual({ written: false, skipped: false });
+      expect(warnings).toHaveLength(1);
+      expect(existsSync(join(parent, 'escaped-context.md'))).toBe(false);
+      expect(existsSync(join(nestedWorktree, 'escaped-context.md'))).toBe(false);
+    });
+
+    it('rejects a nested relative path and writes nothing', () => {
+      const warnings: string[] = [];
+      const result = materializeContextFile(nestedWorktree, {
+        policy: 'worktree-local',
+        contextFileName: 'a/b.md',
+        factsBlock: 'x',
+        warn: (m) => warnings.push(m),
+      });
+      expect(result).toEqual({ written: false, skipped: false });
+      expect(warnings).toHaveLength(1);
+      expect(existsSync(join(nestedWorktree, 'a', 'b.md'))).toBe(false);
+      expect(existsSync(join(nestedWorktree, 'a'))).toBe(false);
+    });
+
+    it('rejects an absolute path and writes nothing', () => {
+      const escape = join(parent, 'abs-escape.md');
+      const warnings: string[] = [];
+      const result = materializeContextFile(nestedWorktree, {
+        policy: 'worktree-local',
+        contextFileName: escape,
+        factsBlock: 'x',
+        warn: (m) => warnings.push(m),
+      });
+      expect(result).toEqual({ written: false, skipped: false });
+      expect(warnings).toHaveLength(1);
+      expect(existsSync(escape)).toBe(false);
+    });
+  });
+
   it('creates .git/info/exclude when it is missing', () => {
     rmSync(join(worktree, '.git', 'info'), { recursive: true, force: true });
     mkdirSync(join(worktree, '.git'), { recursive: true }); // .git exists, info does not

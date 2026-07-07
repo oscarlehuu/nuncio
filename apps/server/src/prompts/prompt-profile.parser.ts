@@ -1,6 +1,13 @@
+import { byteLength } from '../orchestration/byte-truncate';
 import type { ProfileSections, ProfileStatus, PromptProfile } from './prompt-profile.types';
 
 export type WarnFn = (message: string) => void;
+
+/**
+ * Ceiling per profile section (serialized bytes) — an oversized section is
+ * dropped with a warning (pass-through for that section), never truncated.
+ */
+const SECTION_MAX_BYTES = 2048;
 
 /** Section heading (kebab) → the ProfileSections field it fills. */
 const SECTION_FIELDS: Record<string, keyof ProfileSections> = {
@@ -39,6 +46,17 @@ function cleanSection(body: string): string {
 
 const STATUSES: readonly ProfileStatus[] = ['draft', 'active', 'retired'];
 
+/** A context file name must be a bare filename — no separators, no traversal, not absolute. */
+function isBareFileName(name: string): boolean {
+  return (
+    name.length > 0 &&
+    !name.includes('/') &&
+    !name.includes('\\') &&
+    name !== '.' &&
+    name !== '..'
+  );
+}
+
 /**
  * Parse a profile document (YAML frontmatter + `## section` bodies). Returns null
  * (skip) with a single warning on malformed input — the caller falls through to
@@ -46,7 +64,9 @@ const STATUSES: readonly ProfileStatus[] = ['draft', 'active', 'retired'];
  * daemon tolerates a newer profile.
  */
 export function parseProfileDocument(text: string, warn: WarnFn): PromptProfile | null {
-  const trimmedStart = text.replace(/^﻿/, '');
+  // Normalize CRLF / lone CR to LF so Windows-authored profiles parse identically.
+  const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const trimmedStart = normalized.replace(/^\uFEFF/, '');
   if (!trimmedStart.startsWith('---')) {
     warn('prompt profile skipped: missing YAML frontmatter');
     return null;
@@ -86,7 +106,22 @@ export function parseProfileDocument(text: string, warn: WarnFn): PromptProfile 
       warn(`prompt profile: unknown section "${heading}" ignored`);
       continue;
     }
-    sections[field] = cleanSection(headingMatch[2] ?? '');
+    const cleaned = cleanSection(headingMatch[2] ?? '');
+    if (byteLength(cleaned) > SECTION_MAX_BYTES) {
+      warn(`prompt profile: section "${heading}" exceeds ${SECTION_MAX_BYTES} bytes; section dropped`);
+      continue;
+    }
+    sections[field] = cleaned;
+  }
+
+  const rawContextFileName = fm.contextFileName?.trim();
+  let contextFileName: string | undefined;
+  if (rawContextFileName) {
+    if (isBareFileName(rawContextFileName)) {
+      contextFileName = rawContextFileName;
+    } else {
+      warn(`prompt profile: contextFileName "${rawContextFileName}" is not a bare filename; field dropped`);
+    }
   }
 
   return {
@@ -94,7 +129,7 @@ export function parseProfileDocument(text: string, warn: WarnFn): PromptProfile 
     modelPattern: fm.modelPattern?.trim() || '*',
     version,
     status,
-    ...(fm.contextFileName?.trim() ? { contextFileName: fm.contextFileName.trim() } : {}),
+    ...(contextFileName ? { contextFileName } : {}),
     sections,
   };
 }

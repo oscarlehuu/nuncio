@@ -1,4 +1,5 @@
 import { renderOutcomeDigest, DIGEST_ACTION_SENTENCE } from '../../../src/orchestration/outcome-digest.renderer';
+import { byteLength } from '../../../src/orchestration/byte-truncate';
 import type { TaskCompletedPayload } from '../../../src/sessions/domain/events.types';
 
 function payload(overrides: Partial<TaskCompletedPayload> = {}): TaskCompletedPayload {
@@ -68,6 +69,16 @@ describe('renderOutcomeDigest', () => {
     expect(out.startsWith('<<')).toBe(true);
     expect(out.endsWith('>>')).toBe(true);
     expect(out).toContain('DONE');
+  });
+
+  it('clamps the final wrapped output to the 1.5KB budget under a hostile wrapper', () => {
+    const warnings: string[] = [];
+    const out = renderOutcomeDigest(payload(), {
+      digestWrapper: 'HUGE'.repeat(15000) + '{{content}}',
+      warn: (m) => warnings.push(m),
+    });
+    expect(byteLength(out)).toBeLessThanOrEqual(1536);
+    expect(warnings.some((w) => w.includes('clamp'))).toBe(true);
   });
 
   it('no wrapper → byte-identical to the unwrapped digest (pass-through)', () => {
