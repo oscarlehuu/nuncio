@@ -33,6 +33,12 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly missed = new Set<string>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private destroyed = false;
+  /**
+   * Loop-fire handler, registered by LoopsService — avoids a DI cycle between
+   * SchedulerModule and LoopsModule. Resolves a {kind:'loop',loopId} target to a
+   * budget-checked loop run.
+   */
+  private loopFireHandler: ((loopId: string) => unknown) | null = null;
 
   constructor(
     private readonly schedules: SchedulesRepository,
@@ -123,6 +129,17 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     return this.schedules.setEnabled(id, enabled, nextFireAt);
   }
 
+  /** Remove a schedule row (a loop deleting its owned schedule). */
+  deleteSchedule(id: string): void {
+    this.missed.delete(id);
+    this.schedules.delete(id);
+  }
+
+  /** Register the loop-fire handler (LoopsService, to avoid a DI cycle). */
+  setLoopFireHandler(handler: (loopId: string) => unknown): void {
+    this.loopFireHandler = handler;
+  }
+
   /**
    * Fire a schedule's target through TasksService. DB-observable effects (inFlight,
    * recordFire, advance) are applied SYNCHRONOUSLY so `scanDue()` leaves a
@@ -142,10 +159,13 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     let pending: Promise<unknown>;
     try {
       const target = schedule.target;
-      const returned =
-        target.kind === 'task'
-          ? this.tasks?.enqueue({ ...target.template, prompt: target.template.prompt })
-          : undefined;
+      let returned: unknown;
+      if (target.kind === 'task') {
+        returned = this.tasks?.enqueue({ ...target.template, prompt: target.template.prompt });
+      } else if (target.kind === 'loop') {
+        // Loop targets resolve through the registered handler (budget-checked run).
+        returned = this.loopFireHandler?.(target.loopId);
+      }
       pending = Promise.resolve(returned);
     } catch (error) {
       pending = Promise.reject(error);

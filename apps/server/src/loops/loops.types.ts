@@ -1,9 +1,24 @@
 export type LoopStatus = 'active' | 'paused' | 'broken' | 'completed';
 
+/** Run-success outcome (feeds the failure-streak breaker + total-runs stop). */
 export type LoopRunOutcome = 'ok' | 'failed' | 'budget-exhausted' | 'resume';
 
-/** Stop condition v1: null = standing (run until paused) | max total runs. */
-export type StopCondition = null | { kind: 'maxTotalRuns'; n: number };
+/**
+ * The verify signal for a run (feeds the verifyGreenN stop):
+ *   'green' — verify ran and the final verify_result was ok (incl. green-after-autofix)
+ *   'red'   — verify ran and stayed failing (rung-1 exhausted / task failed)
+ *   'none'  — no verify configured, OR a bookkeeping row (no signal either way)
+ */
+export type LoopRunVerify = 'green' | 'red' | 'none';
+
+/**
+ * Stop condition v1 (founder-locked): null = standing (run until paused) |
+ * maxTotalRuns | verifyGreenN (complete after n consecutive green-verify runs).
+ */
+export type StopCondition =
+  | null
+  | { kind: 'maxTotalRuns'; n: number }
+  | { kind: 'verifyGreenN'; n: number };
 
 export interface LoopDto {
   id: string;
@@ -39,6 +54,7 @@ export interface LoopRunDto {
   loopId: string;
   taskId: string | null;
   outcome: LoopRunOutcome;
+  verify: LoopRunVerify;
   dayBucket: string;
   createdAt: number;
 }
@@ -62,6 +78,7 @@ export interface LoopRunRow {
   loop_id: string;
   task_id: string | null;
   outcome: string;
+  verify: string;
   day_bucket: string;
   created_at: number;
 }

@@ -371,6 +371,22 @@ count of trailing `failed` runs since the last `ok`/`resume`; today's count is t
 `day_bucket` equals the local `YYYY-MM-DD` of `clock.now()`. No in-memory counters → a restart rebuilds
 both by re-folding (the restart test).
 
+**verifyGreenN (founder pulled into v1):** each loop-run also records a `verify` signal —
+`green` (verify ran and the final `verify_result` was ok, incl. green-after-autofix), `red` (verify
+ran and stayed failing / task failed), or `none` (no verify configured, or a bookkeeping row). The
+`verifyGreenN` stop completes the loop after **n consecutive green runs**; a `red` resets the
+green-streak, a `none` carries it over (no signal either way — documented so a maintenance loop with no
+verify never accidentally "completes" an improvement goal nor is penalized for a missing signal). Same
+pure-fold discipline (`verifyGreenStreak` over `loop_runs`).
+
+**Implementation seam (settlement observation):** `LoopsService.recordTaskOutcome(loopId, taskId,
+{ok, verify})` is the fold-and-re-evaluate entry point. Wiring it to *automatically* fire when a task
+settles needs a per-task completion hook on `TasksService` (which does not exist today and is a
+load-bearing contract change) — so the end-to-end fire→settle→record loop is completed when that hook
+lands (a small, well-defined follow-up); the accounting itself is proven here (the suite drives
+`recordTaskOutcome` at each settlement). The `fire` → enqueue → breaker/stop-evaluation path and all
+folds are green.
+
 ### Budgets & breaker
 
 - **`maxRunsPerDay`**: before a fire, if today's `loop_runs` count (by `day_bucket`) `>= maxRunsPerDay`,

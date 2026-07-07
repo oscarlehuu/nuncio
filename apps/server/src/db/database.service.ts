@@ -239,6 +239,37 @@ export class DatabaseService implements OnModuleDestroy {
       )
     `);
 
+    // Loop primitive (rung 2 sub-phase C): standing tasks. A loop OWNS its
+    // schedule_id; budgets/breaker/stop are folded from loop_runs (restart-safe,
+    // no in-memory counters). Run history is KEPT on delete (founder-locked).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS loops (
+        id TEXT PRIMARY KEY,
+        goal TEXT NOT NULL,
+        schedule_id TEXT NOT NULL,
+        max_runs_per_day INTEGER NOT NULL,
+        max_consecutive_failures INTEGER NOT NULL,
+        stop_json TEXT,
+        escalation TEXT NOT NULL,
+        project_path TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS loop_runs (
+        id TEXT PRIMARY KEY,
+        loop_id TEXT NOT NULL,
+        task_id TEXT,
+        outcome TEXT NOT NULL,
+        verify TEXT NOT NULL DEFAULT 'none',
+        day_bucket TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    `);
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_loop_runs_loop ON loop_runs(loop_id, created_at)');
+
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY,

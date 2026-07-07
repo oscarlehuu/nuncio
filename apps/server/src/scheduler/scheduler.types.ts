@@ -10,10 +10,9 @@ export type FireResult = 'ok' | 'skipped-overlap' | 'missed' | `error:${string}`
  * A `{ kind: 'loop', loopId }` variant rides the same column when sub-phase C
  * lands; the firing path branches on `kind`, both flow through TasksService.
  */
-export type ScheduleTarget = {
-  kind: 'task';
-  template: Partial<CreateTaskDto> & { prompt: string };
-};
+export type ScheduleTarget =
+  | { kind: 'task'; template: Partial<CreateTaskDto> & { prompt: string } }
+  | { kind: 'loop'; loopId: string };
 
 /** Parsed cron/heartbeat spec (v1 subset — no full crontab). */
 export type ParsedSpec =
