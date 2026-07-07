@@ -88,6 +88,24 @@ describe('EventsRepository', () => {
     expect(events.listBefore(s.id, 1, 5)).toEqual([]);
   });
 
+  it('countRecentByTypeWithOriginTag counts tagged events since the cutoff, ignoring the flood', () => {
+    const s = sessions.create({ prompt: 'origin count' });
+    for (let i = 0; i < 3; i += 1) {
+      events.append(s.id, 'steer_message', { text: `wake ${i}`, origin: 'task-digest' });
+    }
+    // A different origin and untagged noise must NOT be counted.
+    events.append(s.id, 'steer_message', { text: 'user steer' });
+    events.append(s.id, 'steer_message', { text: 'other', origin: 'mobile' });
+    // A large flood of other-typed events (the tail-window evasion case).
+    for (let i = 0; i < 300; i += 1) events.append(s.id, 'assistant_delta', { delta: `${i}` });
+
+    expect(events.countRecentByTypeWithOriginTag(s.id, 'steer_message', 'task-digest', 0)).toBe(3);
+    // A cutoff in the future counts nothing.
+    expect(
+      events.countRecentByTypeWithOriginTag(s.id, 'steer_message', 'task-digest', Date.now() + 60_000),
+    ).toBe(0);
+  });
+
   it('append truncates oversized payloads with an explicit marker', () => {
     const s = sessions.create({ prompt: 'oversize test' });
     const oversized = 'x'.repeat(200 * 1024);

@@ -80,10 +80,13 @@ export class SteerQueueRepository {
    */
   claimAll(sessionId: string): Array<QueuedSteer & { id: number }> {
     const now = Date.now();
+    // Auto-steer wakes (origin 'task-digest') are NOT user work items — a
+    // multitask fan-out must not convert a queued digest into a child prompt,
+    // so they are left unclaimed for the normal settle-drain.
     const rows = this.database.db
       .prepare<SteerQueueRow, [number, string]>(
         `UPDATE steer_queue SET claimed_at = ?
-         WHERE session_id = ? AND claimed_at IS NULL
+         WHERE session_id = ? AND claimed_at IS NULL AND (origin IS NULL OR origin != 'task-digest')
          RETURNING *`,
       )
       .all(now, sessionId)
@@ -113,6 +116,16 @@ export class SteerQueueRepository {
     if (ids.length === 0) return;
     const placeholders = ids.map(() => '?').join(', ');
     this.database.db.prepare(`DELETE FROM steer_queue WHERE id IN (${placeholders})`).run(...ids);
+  }
+
+  /** Pending rows for the session carrying the given origin (e.g. queued auto-steer wakes). */
+  countByOrigin(sessionId: string, origin: string): number {
+    const row = this.database.db
+      .prepare<{ total: number }, [string, string]>(
+        'SELECT COUNT(*) AS total FROM steer_queue WHERE session_id = ? AND origin = ?',
+      )
+      .get(sessionId, origin);
+    return row?.total ?? 0;
   }
 
   count(sessionId: string): number {

@@ -317,7 +317,7 @@ export class SessionsService implements OnModuleDestroy {
 
     const current = this.requireSession(id);
     if (current.status === 'RUNNING') {
-      const handled = await this.steerRunning(current, trimmed, persisted);
+      const handled = await this.steerRunning(current, trimmed, persisted, origin);
       if (!handled) this.enqueueSteer(id, trimmed, persisted, origin);
       return this.requireSession(id);
     }
@@ -372,6 +372,7 @@ export class SessionsService implements OnModuleDestroy {
     session: SessionDto,
     message: string,
     attachments?: AgentAttachment[],
+    origin?: string,
   ): Promise<boolean> {
     const provider = this.agents.resolveForSession(session);
     if (!provider.capabilities.steerWhileRunning || !provider.steerMidRun) return false;
@@ -380,6 +381,7 @@ export class SessionsService implements OnModuleDestroy {
       return await provider.steerMidRun(session.id, message, {
         ...this.buildAgentRunContext(session),
         attachments,
+        ...(origin ? { steerOrigin: origin } : {}),
       });
     } finally {
       this.locallyProducing.delete(session.id);
@@ -532,6 +534,19 @@ export class SessionsService implements OnModuleDestroy {
     if (this.destroyed) return;
     const next = this.steerQueue.dequeue(id);
     if (!next) return;
+    // A task-digest auto-steer must never be what restarts an ERROR/PAUSED
+    // session (the notify policy falls back to event-only for those states). The
+    // row is already dequeued (removed); drop it and note why. A normal user
+    // steer keeps today's behavior — the FSM guard in steer() applies to it.
+    if (next.origin === 'task-digest') {
+      const status = this.sessions.findById(id)?.status;
+      if (status === 'ERROR' || status === 'PAUSED') {
+        this.appendAndEmit(id, 'status', {
+          note: `Auto-steer suppressed: parent status ${status}. Digest delivered as event only.`,
+        });
+        return;
+      }
+    }
     void this.steer(id, next.message, undefined, next.attachments, next.origin).catch((error) => {
       const reason = error instanceof Error ? error.message : String(error);
       try {

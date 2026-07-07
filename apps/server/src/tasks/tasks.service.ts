@@ -419,10 +419,16 @@ export class TasksService {
       const parent = this.sessions.get(parentSessionId);
       if (!parent) return;
 
-      // Guard: never auto-steer up a chain that is already ≥ 2 deep (ping-pong).
-      const depth = this.sessions.lineage(parentSessionId).ancestors.length;
-      if (depth >= STEER_DEPTH_CAP) {
-        this.noteSteerSuppressed(parentSessionId, `delegation depth ${depth} ≥ ${STEER_DEPTH_CAP}`);
+      // Guard: suppress when the FINISHING (child) session's own chain is ≥ 2
+      // deep (anti ping-pong). The child's chain length = the parent's ancestor
+      // depth + 1 (the parent itself). Net: only a depth-1 child may wake its
+      // root parent.
+      const childChainDepth = this.sessions.lineage(parentSessionId).ancestors.length + 1;
+      if (childChainDepth >= STEER_DEPTH_CAP) {
+        this.noteSteerSuppressed(
+          parentSessionId,
+          `delegation chain depth ${childChainDepth} ≥ ${STEER_DEPTH_CAP}`,
+        );
         return;
       }
       // Guard: rate-limit auto-steers per parent within the rolling window.
@@ -449,17 +455,23 @@ export class TasksService {
     }
   }
 
-  /** Count auto-steer wakes (origin 'task-digest') in the parent's recent log within the window. */
+  /**
+   * Count auto-steer wakes attributable to this parent within the window:
+   * DELIVERED (origin-tagged steer_message events, exact SQL count so a chatty
+   * transcript can't hide them) PLUS PENDING (queued wakes not yet drained).
+   * Counting the queue at enqueue time closes the RUNNING-parent bypass without
+   * needing a drain-time recheck.
+   */
   private recentDigestSteers(parentSessionId: string): number {
     const cutoff = Date.now() - STEER_RATE_WINDOW_MS;
-    return this.events
-      .listTail(parentSessionId, PENDING_SCAN_TAIL)
-      .filter(
-        (event) =>
-          event.type === 'steer_message' &&
-          event.createdAt >= cutoff &&
-          (event.payload as { origin?: unknown } | null)?.origin === DIGEST_STEER_ORIGIN,
-      ).length;
+    const delivered = this.events.countRecentByTypeWithOriginTag(
+      parentSessionId,
+      'steer_message',
+      DIGEST_STEER_ORIGIN,
+      cutoff,
+    );
+    const pending = this.sessions.steerQueueRepository.countByOrigin(parentSessionId, DIGEST_STEER_ORIGIN);
+    return delivered + pending;
   }
 
   /** Append a status-level note explaining why an auto-steer was suppressed. */

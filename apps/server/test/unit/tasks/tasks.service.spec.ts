@@ -885,22 +885,34 @@ describe('TasksService', () => {
       }
     });
 
-    it('suppresses the auto-steer when the parent sits ≥ 2 deep in a delegation chain', async () => {
-      // grandparent → parent → (subagent). The parent has 1 ancestor... we need
-      // the parent itself at depth ≥ 2, so build gp → p2 → p1(parent).
-      const repoS = sessionsRepo();
-      const gp = await sessions.create({ prompt: 'gp', provider: 'cursor', workspace });
-      const p2 = repoS.create({ prompt: 'p2', provider: 'cursor', parentSessionId: gp.id });
-      const parentId = repoS.create({ prompt: 'deep parent', provider: 'cursor', parentSessionId: p2.id }).id;
-      repoS.updateStatus(parentId, 'RUNNING');
-      repoS.updateStatus(parentId, 'IDLE');
-
+    it('depth cap: a depth-1 child (root parent) DOES wake its parent', async () => {
+      // Parent has zero ancestors → finishing child chain = 1 → allowed.
+      const parentId = await parentAt('IDLE');
       const steerSpy = jest.spyOn(sessions, 'steer');
       try {
         await runSubagent(parentId, 'steer');
+        expect(steerSpy).toHaveBeenCalledWith(parentId, expect.any(String), undefined, undefined, 'task-digest');
+      } finally {
+        steerSpy.mockRestore();
+      }
+    });
+
+    it('depth cap: A→B→C — C finishing suppresses waking B (child chain ≥ 2)', async () => {
+      // A (root) → B (parent of the finishing child) → C (the subagent). B has
+      // one ancestor (A), so the finishing child's chain = 1 + 1 = 2 ≥ cap.
+      const repoS = sessionsRepo();
+      const a = await sessions.create({ prompt: 'A root', provider: 'cursor', workspace });
+      const bId = repoS.create({ prompt: 'B parent', provider: 'cursor', parentSessionId: a.id }).id;
+      repoS.updateStatus(bId, 'RUNNING');
+      repoS.updateStatus(bId, 'IDLE');
+
+      const steerSpy = jest.spyOn(sessions, 'steer');
+      try {
+        // The subagent (C) is delegated by B.
+        await runSubagent(bId, 'steer');
         expect(steerSpy).not.toHaveBeenCalled();
         expect(
-          events.list(parentId).some((e) => e.type === 'status' && String((e.payload as { note?: string }).note ?? '').includes('depth')),
+          events.list(bId).some((e) => e.type === 'status' && String((e.payload as { note?: string }).note ?? '').includes('depth')),
         ).toBe(true);
       } finally {
         steerSpy.mockRestore();
@@ -925,6 +937,28 @@ describe('TasksService', () => {
       }
     });
 
+    it('rate cap survives a chatty transcript (200-event flood after the 5 wakes)', async () => {
+      const parentId = await parentAt('IDLE');
+      for (let i = 0; i < 5; i += 1) {
+        events.append(parentId, 'steer_message', { text: `wake ${i}`, origin: 'task-digest' });
+      }
+      // Bury the tagged steers under a flood far larger than any tail window.
+      for (let i = 0; i < 200; i += 1) {
+        events.append(parentId, 'assistant_delta', { delta: `chatter ${i}` });
+      }
+      const steerSpy = jest.spyOn(sessions, 'steer');
+      try {
+        await runSubagent(parentId, 'steer');
+        // The bounded SQL count still sees all 5 → 6th suppressed.
+        expect(steerSpy).not.toHaveBeenCalled();
+        expect(
+          events.list(parentId).some((e) => e.type === 'status' && String((e.payload as { note?: string }).note ?? '').includes('rate cap')),
+        ).toBe(true);
+      } finally {
+        steerSpy.mockRestore();
+      }
+    });
+
     it('rate cap is scoped per parent (another parent is unaffected)', async () => {
       const parentA = await parentAt('IDLE');
       for (let i = 0; i < 5; i += 1) {
@@ -939,6 +973,61 @@ describe('TasksService', () => {
       } finally {
         steerSpy.mockRestore();
       }
+    });
+
+    it('rate cap counts PENDING queued wakes while the parent is RUNNING (no bypass)', async () => {
+      const parentId = await parentAt('RUNNING');
+      const steerQueue = module.get(SteerQueueRepository);
+      // Run 6 children back-to-back while the parent streams; each wake queues.
+      // The cap must count queued (pending) wakes, so only 5 land and the 6th is
+      // suppressed with a note — not all 6 delivered later.
+      for (let i = 0; i < 6; i += 1) {
+        await runSubagent(parentId, 'steer');
+      }
+      expect(steerQueue.countByOrigin(parentId, 'task-digest')).toBe(5);
+      expect(
+        events.list(parentId).some((e) => e.type === 'status' && String((e.payload as { note?: string }).note ?? '').includes('rate cap')),
+      ).toBe(true);
+    });
+
+    it('a queued digest wake is dropped (not delivered) if the parent has gone ERROR', async () => {
+      const parentId = await parentAt('RUNNING');
+      const steerQueue = module.get(SteerQueueRepository);
+      await runSubagent(parentId, 'steer');
+      expect(steerQueue.countByOrigin(parentId, 'task-digest')).toBe(1);
+
+      // The parent errors, then its drain fires: the wake must be skipped+deleted.
+      sessionsRepo().updateStatus(parentId, 'ERROR');
+      const steerSpy = jest.spyOn(sessions, 'steer');
+      try {
+        // Trigger a drain the same way a settle would.
+        (sessions as unknown as { drainSteerQueue: (id: string) => void }).drainSteerQueue(parentId);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(steerSpy).not.toHaveBeenCalled();
+        expect(steerQueue.countByOrigin(parentId, 'task-digest')).toBe(0);
+        expect(
+          events.list(parentId).some((e) => e.type === 'status' && String((e.payload as { note?: string }).note ?? '').includes('ERROR')),
+        ).toBe(true);
+      } finally {
+        steerSpy.mockRestore();
+      }
+    });
+
+    it('multitask-from-queue fan-out does not claim a queued digest wake', async () => {
+      const parentId = await parentAt('RUNNING');
+      const steerQueue = module.get(SteerQueueRepository);
+      // A real user steer plus a digest wake are both queued.
+      steerQueue.enqueue(parentId, 'do real work');
+      await runSubagent(parentId, 'steer');
+      expect(steerQueue.countByOrigin(parentId, 'task-digest')).toBe(1);
+
+      // Bring the parent back to IDLE so the fan-out is allowed, then fan out.
+      sessionsRepo().updateStatus(parentId, 'IDLE');
+      const result = await service.startMultitaskFromQueue(parentId);
+      // Only the real user steer became a child task — the wake was left behind.
+      expect(result.tasks.map((t) => t.prompt)).toEqual(['do real work']);
+      expect(steerQueue.countByOrigin(parentId, 'task-digest')).toBe(1);
+      await Promise.all(result.tasks.map((task) => waitForStatus(task.id, ['DONE', 'FAILED'])));
     });
 
     it('retry carries the notifyPolicy forward', async () => {

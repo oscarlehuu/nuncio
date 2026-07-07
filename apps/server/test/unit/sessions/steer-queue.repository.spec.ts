@@ -75,6 +75,30 @@ describe('SteerQueueRepository', () => {
     expect(queue.count(s.id)).toBe(0);
   });
 
+  it('claimAll excludes task-digest wakes (they are not user work items)', () => {
+    const s = sessions.create({ prompt: 'fanout-skip' });
+    queue.enqueue(s.id, 'user work');
+    queue.enqueue(s.id, 'wake me', undefined, 'task-digest');
+
+    const claimed = queue.claimAll(s.id);
+    // Only the user steer is claimed; the wake stays queued for normal drain.
+    expect(claimed.map((c) => c.message)).toEqual(['user work']);
+    expect(queue.countByOrigin(s.id, 'task-digest')).toBe(1);
+    // The wake is still drainable normally.
+    queue.deleteByIds(claimed.map((c) => c.id));
+    expect(queue.dequeue(s.id)?.message).toBe('wake me');
+    queue.deleteForSession(s.id);
+  });
+
+  it('countByOrigin counts pending rows for the given origin', () => {
+    const s = sessions.create({ prompt: 'origin-count' });
+    queue.enqueue(s.id, 'a', undefined, 'task-digest');
+    queue.enqueue(s.id, 'b', undefined, 'task-digest');
+    queue.enqueue(s.id, 'c'); // no origin
+    expect(queue.countByOrigin(s.id, 'task-digest')).toBe(2);
+    queue.deleteForSession(s.id);
+  });
+
   it('claimAll leaves rows enqueued after the claim untouched', () => {
     const s = sessions.create({ prompt: 'claim-race' });
     queue.enqueue(s.id, 'early');

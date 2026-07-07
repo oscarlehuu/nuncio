@@ -235,6 +235,21 @@ describe('PiAgentProvider', () => {
     expect(emitted.some((e) => e.type === 'steer_message')).toBe(true);
   });
 
+  it('steerMidRun stamps context.steerOrigin onto the emitted steer_message', async () => {
+    const created = sessions.create({ prompt: 'long task', provider: 'pi' });
+    await provider.run(created.id, created.prompt, { emit: () => {} });
+
+    isStreaming = true;
+    const emitted: Array<{ type: string; payload: unknown }> = [];
+    await provider.steerMidRun(created.id, 'digest wake', {
+      emit: (event) => emitted.push(event),
+      steerOrigin: 'task-digest',
+    });
+
+    const steer = emitted.find((e) => e.type === 'steer_message');
+    expect((steer?.payload as { origin?: string }).origin).toBe('task-digest');
+  });
+
   it('steerMidRun reports false when the session is not streaming', async () => {
     const created = sessions.create({ prompt: 'idle task', provider: 'pi' });
     await provider.run(created.id, created.prompt, { emit: () => {} });
