@@ -49,7 +49,13 @@ function makeStubSdk(opts: StubOpts = {}) {
 
   const agent = {
     agentId: 'stub-agent-1',
-    send: async (text: string, options?: { onDelta?: (args: { update: { type: string; [key: string]: unknown } }) => void }) => {
+    send: async (
+      text: string,
+      options?: {
+        onDelta?: (args: { update: { type: string; [key: string]: unknown } }) => void;
+        local?: unknown;
+      },
+    ) => {
       sendCalls.push(text);
       sendOptionsCalls.push(options);
       // Fire onDelta updates (simulating the SDK streaming tokens/tool state).
@@ -440,6 +446,46 @@ describe('CursorAgentProvider', () => {
     expect(args.local.store).toBeInstanceOf(sdk.JsonlLocalAgentStore);
     expect(args.model.id).toBe('composer-2');
     expect(args.apiKey).toBe('cursor_test_key');
+  });
+
+  it('wires runtime agent tools into Cursor local customTools', async () => {
+    const { sdk, createCalls, sendCalls, sendOptionsCalls } = makeStubSdk({ waitResult: 'ok' });
+    provider.sdkOverride = sdk as never;
+    process.env.CURSOR_API_KEY = 'cursor_test_key';
+
+    const created = sessions.create({ prompt: 'open the browser', provider: 'cursor' });
+    await provider.run(created.id, created.prompt, {
+      emit: () => {},
+      tools: {
+        systemPromptAppend: 'Use Nuncio browser tools when browser work is requested.',
+        tools: [
+          {
+            name: 'nuncio_echo',
+            description: 'Echo a message through Nuncio runtime tools.',
+            inputSchema: {
+              type: 'object',
+              properties: { message: { type: 'string' } },
+              required: ['message'],
+            },
+            execute: async (input) => `echo ${String(input.message)}`,
+          },
+        ],
+      },
+    });
+
+    const createArgs = createCalls[0] as {
+      local: { customTools?: Record<string, { inputSchema?: unknown; execute: (args: unknown) => Promise<unknown> }> };
+    };
+    expect(createArgs.local.customTools?.nuncio_echo.inputSchema).toEqual({
+      type: 'object',
+      properties: { message: { type: 'string' } },
+      required: ['message'],
+    });
+    expect(sendCalls[0]).toContain('Use Nuncio browser tools');
+    expect((sendOptionsCalls[0] as { local?: { customTools?: Record<string, unknown> } }).local?.customTools?.nuncio_echo).toBeDefined();
+
+    const result = await createArgs.local.customTools!.nuncio_echo.execute({ message: 'hello' });
+    expect(result).toMatchObject({ content: [{ type: 'text', text: 'echo hello' }] });
   });
 
   it('run reaches ERROR when wait status is error (case C)', async () => {

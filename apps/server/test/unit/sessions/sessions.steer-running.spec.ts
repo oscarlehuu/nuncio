@@ -274,6 +274,37 @@ describe('SessionsService steer while RUNNING', () => {
     expect(steer.mock.calls[0]?.[1]).toBe('queued while hung');
   });
 
+  it('auto force-idles a silent stalled run after a long timeout, then drains the queue', async () => {
+    const steer = jest.fn(async (_sessionId: string, _message: string) => undefined);
+    const dispose = jest.fn();
+    installProvider(
+      stubProvider({
+        run: async (sessionId: string, _prompt: string, context: AgentRunContext) => {
+          sessions.updateStatus(sessionId, 'RUNNING');
+          context.emit?.(events.append(sessionId, 'status', { status: 'RUNNING' }));
+          context.emit?.(events.append(sessionId, 'assistant_delta', { delta: 'partial' }));
+          await new Promise(() => undefined);
+        },
+        steer,
+        dispose,
+      }),
+    );
+    (service as unknown as { stalledRunForceIdleMs: number }).stalledRunForceIdleMs = 20;
+
+    const created = await service.create({ prompt: 'stalled run', provider: 'cursor' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(sessions.findById(created.id)?.status).toBe('RUNNING');
+
+    await service.steer(created.id, 'queued while stalled');
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    expect(dispose).toHaveBeenCalledWith(created.id);
+    expect(sessions.findById(created.id)?.status).toBe('IDLE');
+    expect(events.list(created.id).some((e) => e.type === 'runtime_stalled')).toBe(true);
+    expect(steer).toHaveBeenCalledTimes(1);
+    expect(steer.mock.calls[0]?.[1]).toBe('queued while stalled');
+  });
+
   it('exposes interrupt and steer-while-running capabilities on the session DTO', async () => {
     const id = seedRunning();
     installProvider(

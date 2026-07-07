@@ -1,7 +1,8 @@
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, Loader2 } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import type { ToolSummary } from '@/lib/tool-summary';
+import { ToolGlyph } from './tool-glyph';
 
 function formatPayload(value: unknown): string {
   if (value === undefined) return '';
@@ -50,7 +51,8 @@ export function ToolCallBlock({
 
   const row = (
     <>
-      <span className="chat-text-xs shrink-0">
+      <ToolGlyph verb={summary.verb} status={status} />
+      <span className="chat-text-xs shrink-0 text-foreground/80">
         {summary.verb}
       </span>
       {summary.subject && (
@@ -65,7 +67,7 @@ export function ToolCallBlock({
       )}
       <span className="ml-auto flex items-center gap-1.5 shrink-0">
         {status === 'running' && (
-          <span className="inline-block size-1.5 rounded-full bg-primary animate-pulse" aria-hidden />
+          <Loader2 className="size-3 animate-spin text-muted-foreground/70" aria-hidden />
         )}
         {statusLabel && (
           <span
@@ -95,7 +97,7 @@ export function ToolCallBlock({
   if (!hasDetails) {
     return (
       <div
-        className="flex items-center gap-1.5 px-1 py-0.5 min-h-[20px] text-left text-muted-foreground"
+        className="flex items-center gap-1.5 rounded-md px-1.5 py-0.5 min-h-[22px] text-left text-muted-foreground"
         data-testid="tool-row"
         data-tool={tool}
       >
@@ -108,7 +110,7 @@ export function ToolCallBlock({
     <div data-testid="tool-row" data-tool={tool}>
       <button
         type="button"
-        className="group flex w-full items-center gap-1.5 px-1 py-0.5 min-h-[20px] text-left text-muted-foreground"
+        className="group flex w-full items-center gap-1.5 rounded-md px-1.5 py-0.5 min-h-[22px] text-left text-muted-foreground transition-colors hover:bg-muted/40"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >

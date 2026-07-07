@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ThemeProvider } from './components/theme-provider';
 import { AppearanceProvider } from './components/appearance-provider';
+import { AccentProvider } from './components/accent-provider';
 
 vi.mock('sonner', () => ({
   toast: {
@@ -119,11 +120,13 @@ function renderApp(initialEntry = '/') {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
       <ThemeProvider defaultTheme="light">
-        <AppearanceProvider>
-          <Routes>
-            <Route path="/*" element={<App />} />
-          </Routes>
-        </AppearanceProvider>
+        <AccentProvider>
+          <AppearanceProvider>
+            <Routes>
+              <Route path="/*" element={<App />} />
+            </Routes>
+          </AppearanceProvider>
+        </AccentProvider>
       </ThemeProvider>
     </MemoryRouter>,
   );
@@ -572,6 +575,7 @@ describe('App settings', () => {
 
     await pinDesktopSidebar();
     await userEvent.click(screen.getByRole('button', { name: /settings/i }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Providers' }));
     
     // We need to click "Connect" on the Cursor row to expand the settings and reveal "Cursor API Key"
     const connectButton = await screen.findByRole('button', { name: /Connect Cursor/i });

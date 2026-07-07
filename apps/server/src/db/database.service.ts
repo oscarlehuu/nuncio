@@ -206,6 +206,10 @@ export class DatabaseService implements OnModuleDestroy {
         base_branch TEXT,
         use_worktree INTEGER NOT NULL DEFAULT 0,
         workspace TEXT,
+        parent_session_id TEXT,
+        role TEXT NOT NULL DEFAULT 'standalone',
+        cleanup_policy TEXT,
+        review_state TEXT,
         session_id TEXT,
         outcome_json TEXT,
         created_at INTEGER NOT NULL,
@@ -218,6 +222,28 @@ export class DatabaseService implements OnModuleDestroy {
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_tasks_status_created
       ON tasks(status, created_at)
+    `);
+
+    const taskColumns = this.db
+      .prepare('PRAGMA table_info(tasks)')
+      .all() as Array<{ name: string }>;
+
+    const taskColumnDefinitions = [
+      ['parent_session_id', 'TEXT'],
+      ['role', "TEXT NOT NULL DEFAULT 'standalone'"],
+      ['cleanup_policy', 'TEXT'],
+      ['review_state', 'TEXT'],
+    ] as const;
+
+    for (const [column, type] of taskColumnDefinitions) {
+      if (!taskColumns.some((entry) => entry.name === column)) {
+        this.db.exec(`ALTER TABLE tasks ADD COLUMN ${column} ${type}`);
+      }
+    }
+
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_tasks_parent_session
+      ON tasks(parent_session_id, created_at)
     `);
 
     this.db.exec(`

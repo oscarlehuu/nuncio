@@ -19,6 +19,8 @@ export function SettingRow({ setting, onUpdate, onClear }: SettingRowProps) {
   const [saving, setSaving] = useState(false);
 
   const isOn = setting.type === 'boolean' && setting.hasValue && setting.value === '1';
+  const hasOptions = !setting.readOnly && (setting.options?.length ?? 0) > 0;
+  const selectedOption = setting.options?.find((option) => option.value === setting.value);
 
   const handleSave = async () => {
     if (!draft.trim() || saving) return;
@@ -36,6 +38,16 @@ export function SettingRow({ setting, onUpdate, onClear }: SettingRowProps) {
     try {
       if (isOn) await onClear(setting.key);
       else await onUpdate(setting.key, '1');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleOptionSelect = async (value: string) => {
+    if (saving || value === setting.value) return;
+    setSaving(true);
+    try {
+      await onUpdate(setting.key, value);
     } finally {
       setSaving(false);
     }
@@ -74,12 +86,44 @@ export function SettingRow({ setting, onUpdate, onClear }: SettingRowProps) {
         )}
       </div>
       <p className="text-ui text-muted-foreground leading-snug">{setting.description}</p>
-      {!isBooleanToggle && (
+      {!isBooleanToggle && !hasOptions && (
         <div className="text-ui font-mono text-foreground/80 mt-0.5">
           {setting.hasValue ? setting.value : <span className="text-muted-foreground italic">Not set</span>}
         </div>
       )}
-      {!setting.readOnly && setting.type !== 'boolean' && (
+      {hasOptions && (
+        <div className="mt-2 space-y-2">
+          <div role="group" aria-label={setting.label} className="flex flex-wrap gap-2">
+            {setting.options!.map((option) => {
+              const selected = option.value === setting.value;
+              return (
+                <Button
+                  key={option.value}
+                  type="button"
+                  variant={selected ? 'default' : 'outline'}
+                  size="sm"
+                  aria-pressed={selected}
+                  disabled={saving}
+                  onClick={() => void handleOptionSelect(option.value)}
+                  className="h-8 min-w-[88px]"
+                >
+                  {option.label}
+                </Button>
+              );
+            })}
+          </div>
+          {selectedOption?.description && (
+            <p className="text-ui-sm text-muted-foreground leading-snug">{selectedOption.description}</p>
+          )}
+          {setting.source === 'db' && (
+            <Button size="sm" variant="ghost" onClick={handleClear} disabled={saving} className="h-8" aria-label="Clear">
+              <Trash2 className="size-3.5" />
+              <span>Clear</span>
+            </Button>
+          )}
+        </div>
+      )}
+      {!setting.readOnly && setting.type !== 'boolean' && !hasOptions && (
         <div className="flex items-center gap-2 mt-1.5">
           <Input
             value={draft}

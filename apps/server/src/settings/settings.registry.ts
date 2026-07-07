@@ -88,7 +88,7 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     type: 'path',
     label: 'Pi agent directory',
     description:
-      'Path to the Pi auth/config root (holds auth.json + models.json). The directory path is configurable here; the auth.json *contents* are read-only — manage them with the `pi` CLI. Default: ~/.pi/agent.',
+      'Path to the Pi agent config root. Nuncio only needs Pi installed; manage Pi itself with the `pi` CLI. Default: ~/.pi/agent.',
     envVar: 'PI_CODING_AGENT_DIR',
     altEnvVar: 'PI_AGENT_DIR',
   },
@@ -123,6 +123,43 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     description:
       'Optional CODEX_HOME override for Codex app-server. Leave unset to use the same Codex login as the CLI/app.',
     envVar: 'NUNCIO_CODEX_HOME',
+  },
+  {
+    key: 'ANTHROPIC_API_KEY',
+    category: 'provider',
+    providerId: 'claude',
+    type: 'secret',
+    label: 'Anthropic API key',
+    description:
+      'API key for the `claude` provider (distribution path). Optional when the SDK-bundled Claude CLI is already logged in via subscription; set it to run without that login.',
+    envVar: 'ANTHROPIC_API_KEY',
+  },
+  {
+    key: 'NUNCIO_CLAUDE_BIN',
+    category: 'provider',
+    providerId: 'claude',
+    type: 'path',
+    label: 'Claude CLI binary',
+    description:
+      'Path to a `claude` CLI binary used for the auth probe and by the SDK. Leave unset to use the binary bundled with the Claude Agent SDK.',
+    envVar: 'NUNCIO_CLAUDE_BIN',
+  },
+  {
+    key: 'NUNCIO_CLAUDE_PERMISSION_MODE',
+    category: 'provider',
+    providerId: 'claude',
+    type: 'string',
+    label: 'Claude permission mode',
+    description:
+      'How the `claude` provider gates tool use. acceptEdits (default) auto-approves file edits and routes Bash/web/etc. through nuncio approval cards; default asks for everything; plan is read-only planning; bypassPermissions runs every tool without asking.',
+    envVar: 'NUNCIO_CLAUDE_PERMISSION_MODE',
+    default: 'acceptEdits',
+    options: [
+      { value: 'acceptEdits', label: 'Accept edits', description: 'Auto-approve file edits; ask for the rest.' },
+      { value: 'default', label: 'Ask every time', description: 'Route every privileged tool through an approval card.' },
+      { value: 'plan', label: 'Plan only', description: 'Read-only planning; no edits or commands.' },
+      { value: 'bypassPermissions', label: 'Bypass', description: 'Run every tool without asking (trusted workspaces only).' },
+    ],
   },
   // ── Provider behavioral ──────────────────────────────────────────────────
   {
@@ -169,7 +206,7 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
   // ── General ──────────────────────────────────────────────────────────────
   {
     key: 'NUNCIO_PROJECT_ROOTS',
-    category: 'general',
+    category: 'workspaces',
     type: 'path',
     label: 'Project roots',
     description: 'Comma-separated directories scanned one level deep for git repos (project picker).',
@@ -177,7 +214,7 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
   },
   {
     key: 'NUNCIO_PROVIDER_UPDATE_CHECKS',
-    category: 'general',
+    category: 'advanced',
     type: 'boolean',
     label: 'Provider update checks',
     description:
@@ -187,7 +224,7 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
   },
   {
     key: 'NUNCIO_WORKSPACES_DIR',
-    category: 'general',
+    category: 'workspaces',
     type: 'path',
     label: 'Workspaces directory',
     description: 'Parent directory for per-session git worktrees (created at <dir>/<sessionId>).',
@@ -196,7 +233,7 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
   },
   {
     key: 'NUNCIO_TAILSCALE_AUTO_TRUST',
-    category: 'general',
+    category: 'network',
     type: 'boolean',
     label: 'Trust Tailscale devices',
     description:
@@ -206,7 +243,7 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
   },
   {
     key: 'NUNCIO_HUB_MODE',
-    category: 'general',
+    category: 'network',
     type: 'boolean',
     label: 'Hub mode',
     description:
@@ -216,22 +253,78 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
   },
   {
     key: 'NUNCIO_TASK_CONCURRENCY',
-    category: 'general',
+    category: 'agents',
     type: 'string',
-    label: 'Task queue concurrency',
+    label: 'Max parallel subtasks',
     description:
-      'How many queued tasks may run at once on this machine. Default 1 (strict FIFO).',
+      'How many queued tasks or delegated subtasks may run at once on this machine. Default 1 (strict FIFO).',
     envVar: 'NUNCIO_TASK_CONCURRENCY',
     default: '1',
   },
   {
+    key: 'NUNCIO_SUBAGENT_PROVIDER',
+    category: 'agents',
+    type: 'string',
+    label: 'Default subagent provider',
+    description:
+      'Provider-neutral routing default for delegated subagents. Leave empty to inherit the session provider.',
+    envVar: 'NUNCIO_SUBAGENT_PROVIDER',
+  },
+  {
+    key: 'NUNCIO_SUBAGENT_MODEL',
+    category: 'agents',
+    type: 'string',
+    label: 'Default subagent model',
+    description:
+      'Provider-neutral model default for delegated subagents. Leave empty to inherit the session model.',
+    envVar: 'NUNCIO_SUBAGENT_MODEL',
+  },
+  {
+    key: 'NUNCIO_SUBAGENT_CLEANUP_POLICY',
+    category: 'agents',
+    type: 'string',
+    label: 'Subagent cleanup policy',
+    description:
+      'Metadata for subagent workspace cleanup: immediate cleanup after review now, with snapshot later reserved for durable review artifacts.',
+    envVar: 'NUNCIO_SUBAGENT_CLEANUP_POLICY',
+    default: 'after-review',
+  },
+  {
     key: 'NUNCIO_VERIFY_COMMAND',
-    category: 'general',
+    category: 'agents',
     type: 'string',
     label: 'Verify command',
     description:
       'Shell command run in the session workspace after each turn; the result is annotated on the transcript (verify chip). A project-level .nuncio/verify script takes precedence. Empty disables verification.',
     envVar: 'NUNCIO_VERIFY_COMMAND',
+  },
+  // ── MCP & Tools ─────────────────────────────────────────────────────────
+  {
+    key: 'NUNCIO_BROWSER_DEFAULT_TARGET',
+    category: 'tools',
+    type: 'string',
+    label: 'Default browser',
+    description:
+      'Browser target used when agents, MCP adapters, or API clients do not specify one.',
+    envVar: 'NUNCIO_BROWSER_DEFAULT_TARGET',
+    default: 'auto',
+    options: [
+      {
+        value: 'auto',
+        label: 'Auto',
+        description: 'Use the desktop in-app browser when connected, otherwise use the Nuncio-owned CDP browser.',
+      },
+      {
+        value: 'in_app',
+        label: 'In-app',
+        description: 'Require the desktop embedded browser and fail when the desktop shell is not connected.',
+      },
+      {
+        value: 'external',
+        label: 'External CDP',
+        description: 'Always use the Nuncio-owned Chrome CDP browser.',
+      },
+    ],
   },
 ];
 

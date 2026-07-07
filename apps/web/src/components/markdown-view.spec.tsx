@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { MarkdownView } from './markdown-view';
 
@@ -42,5 +42,24 @@ describe('MarkdownView', () => {
       expect(screen.queryByText('MERMAID')).not.toBeInTheDocument();
     });
     expect(document.querySelector('svg[data-mermaid-source]')).toBeTruthy();
+  });
+
+  it('linkifies bare source file paths outside code spans', () => {
+    render(
+      <MarkdownView text={'Check apps/web/src/components/session-detail.tsx and `apps/web/src/App.tsx`.'} />,
+    );
+
+    expect(
+      screen.getByRole('link', { name: 'apps/web/src/components/session-detail.tsx' }),
+    ).toHaveAttribute('href', 'apps/web/src/components/session-detail.tsx');
+    expect(screen.getByText('apps/web/src/App.tsx').tagName).toBe('CODE');
+  });
+
+  it('leaves external links as normal anchors when no click handler is provided', () => {
+    render(<MarkdownView text={'Open https://example.com/docs'} />);
+
+    const link = screen.getByRole('link', { name: 'https://example.com/docs' });
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(fireEvent.click(link)).toBe(true);
   });
 });

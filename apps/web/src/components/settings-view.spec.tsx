@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from './theme-provider';
 import { AppearanceProvider } from './appearance-provider';
+import { AccentProvider } from './accent-provider';
 import { SettingsView } from './settings-view';
 import type { Setting } from '../lib/settings-api';
 
@@ -23,7 +24,9 @@ vi.mock('../lib/provider-updates-api', () => ({
 function renderWithTheme(ui: ReactElement) {
   return render(
     <ThemeProvider defaultTheme="light">
-      <AppearanceProvider>{ui}</AppearanceProvider>
+      <AccentProvider>
+        <AppearanceProvider>{ui}</AppearanceProvider>
+      </AccentProvider>
     </ThemeProvider>,
   );
 }
@@ -44,38 +47,163 @@ function makeSetting(over: Partial<Setting> = {}): Setting {
   };
 }
 
+/** Click a left-sidebar section navigation entry. */
+async function goToSection(name: string) {
+  const nav = screen.getByRole('navigation', { name: /settings sections/i });
+  await userEvent.click(within(nav).getByRole('button', { name }));
+}
+
 describe('SettingsView', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
+    document.documentElement.removeAttribute('data-accent');
   });
 
-  it('renders Providers, Source Control, and General section headers', () => {
+  it('renders a left section navigation sidebar with every section', () => {
     const settings = [
       makeSetting({ key: 'A', label: 'Cursor API Key', category: 'provider', providerId: 'cursor' }),
       makeSetting({ key: 'B', label: 'GitHub token', category: 'provider', providerId: 'github' }),
-      makeSetting({ key: 'C', label: 'Alpha', category: 'general' }),
+      makeSetting({ key: 'C', label: 'Alpha', category: 'general', providerId: undefined }),
     ];
     renderWithTheme(
       <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
     );
-    expect(screen.getByText('Providers')).toBeInTheDocument();
-    expect(screen.getByText('Source control')).toBeInTheDocument();
-    expect(screen.getByText('General')).toBeInTheDocument();
+    const nav = screen.getByRole('navigation', { name: /settings sections/i });
+    expect(within(nav).getByRole('button', { name: 'Appearance' })).toBeInTheDocument();
+    expect(within(nav).getByRole('button', { name: 'Providers' })).toBeInTheDocument();
+    expect(within(nav).getByRole('button', { name: 'Source control' })).toBeInTheDocument();
+    expect(within(nav).getByRole('button', { name: 'MCP & Tools' })).toBeInTheDocument();
+    expect(within(nav).getByRole('button', { name: 'Remote access' })).toBeInTheDocument();
+    expect(within(nav).getByRole('button', { name: 'General' })).toBeInTheDocument();
   });
 
-  it('renders provider rows with brand names', () => {
+  it('defaults to the Appearance section and hides other sections until selected', () => {
     const settings = [
       makeSetting({ key: 'A', label: 'Cursor API Key', category: 'provider', providerId: 'cursor' }),
-      makeSetting({ key: 'B', label: 'GitHub token', category: 'provider', providerId: 'github' }),
     ];
     renderWithTheme(
       <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
     );
+    expect(screen.getByRole('heading', { name: 'Appearance' })).toBeInTheDocument();
+    // Provider content lives in a different section, not shown by default.
+    expect(screen.queryByText('Cursor')).not.toBeInTheDocument();
+  });
+
+  it('selecting a section swaps the visible content pane', async () => {
+    const settings = [
+      makeSetting({ key: 'A', label: 'Cursor API Key', category: 'provider', providerId: 'cursor' }),
+    ];
+    renderWithTheme(
+      <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    await goToSection('Providers');
     expect(screen.getByText('Cursor')).toBeInTheDocument();
-    expect(screen.getByText('GitHub')).toBeInTheDocument();
+    // Appearance content is no longer rendered once Providers is active.
+    expect(screen.queryByRole('heading', { name: 'Appearance' })).not.toBeInTheDocument();
   });
 
-  it('shows connection status in subtitles', async () => {
+  it('marks the active section navigation entry as current', async () => {
+    renderWithTheme(
+      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    const nav = screen.getByRole('navigation', { name: /settings sections/i });
+    expect(within(nav).getByRole('button', { name: 'Appearance' })).toHaveAttribute('aria-current', 'page');
+    await userEvent.click(within(nav).getByRole('button', { name: 'Providers' }));
+    const providersButton = within(nav).getByRole('button', { name: 'Providers' });
+    const appearanceButton = within(nav).getByRole('button', { name: 'Appearance' });
+    expect(providersButton).toHaveAttribute('aria-current', 'page');
+    expect(providersButton.className).toContain('bg-primary/10');
+    expect(appearanceButton).not.toHaveAttribute('aria-current', 'page');
+    expect(appearanceButton).toHaveClass('border-transparent');
+  });
+
+  it('filters rows across sections with the search field', async () => {
+    const settings = [
+      makeSetting({ key: 'A', label: 'Cursor API Key', category: 'provider', providerId: 'cursor' }),
+      makeSetting({
+        key: 'B',
+        label: 'GitHub token',
+        description: 'Personal access token for source control',
+        category: 'provider',
+        providerId: 'github',
+      }),
+    ];
+    renderWithTheme(
+      <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    const search = screen.getByRole('searchbox', { name: /search settings/i });
+    await userEvent.type(search, 'cursor');
+    expect(screen.getByText('Cursor')).toBeInTheDocument();
+    // GitHub is in another section and does not match the query.
+    expect(screen.queryByText('GitHub')).not.toBeInTheDocument();
+  });
+
+  it('shows an empty state when the search matches nothing', async () => {
+    renderWithTheme(
+      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    const search = screen.getByRole('searchbox', { name: /search settings/i });
+    await userEvent.type(search, 'zzzznomatch');
+    expect(screen.getByText(/no settings match/i)).toBeInTheDocument();
+  });
+
+  it('finds the Remote access section when searching for Tailscale trust settings', async () => {
+    renderWithTheme(
+      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    const search = screen.getByRole('searchbox', { name: /search settings/i });
+    await userEvent.type(search, 'tailscale');
+    expect(screen.getByRole('heading', { name: 'Remote access' })).toBeInTheDocument();
+  });
+
+  it('renders provider rows with brand names in the Providers section', async () => {
+    const settings = [
+      makeSetting({ key: 'A', label: 'Cursor API Key', category: 'provider', providerId: 'cursor' }),
+    ];
+    renderWithTheme(
+      <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    await goToSection('Providers');
+    expect(screen.getByText('Cursor')).toBeInTheDocument();
+  });
+
+  it('renders MCP & Tools settings and updates the default browser option', async () => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const settings = [
+      makeSetting({
+        key: 'NUNCIO_BROWSER_DEFAULT_TARGET',
+        category: 'tools',
+        providerId: undefined,
+        type: 'string',
+        label: 'Default browser',
+        description: 'Browser target used when tools do not specify one',
+        hasValue: true,
+        source: 'default',
+        value: 'auto',
+        options: [
+          { value: 'auto', label: 'Auto', description: 'Prefer in-app, then external' },
+          { value: 'in_app', label: 'In-app', description: 'Require the desktop browser' },
+          { value: 'external', label: 'External CDP', description: 'Use the managed Chrome browser' },
+        ],
+      }),
+    ];
+    renderWithTheme(
+      <SettingsView settings={settings} onUpdate={onUpdate} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+
+    await goToSection('MCP & Tools');
+
+    expect(screen.getByRole('heading', { name: 'MCP & Tools' })).toBeInTheDocument();
+    expect(screen.getByText('Default browser')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Auto' })).toHaveAttribute('aria-pressed', 'true');
+
+    await userEvent.click(screen.getByRole('button', { name: 'External CDP' }));
+
+    expect(onUpdate).toHaveBeenCalledWith('NUNCIO_BROWSER_DEFAULT_TARGET', 'external');
+  });
+
+  it('shows connection status in subtitles in the Source control section', async () => {
     const settings = [
       makeSetting({ key: 'A', label: 'GitHub token', category: 'provider', providerId: 'github' }),
       makeSetting({ key: 'B', label: 'GitLab token', category: 'provider', providerId: 'gitlab' }),
@@ -83,6 +211,7 @@ describe('SettingsView', () => {
     renderWithTheme(
       <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
     );
+    await goToSection('Source control');
     await waitFor(() => {
       expect(screen.getByText('Connected as octocat · via gh CLI')).toBeInTheDocument();
       expect(screen.getByText('Connect GitLab for merge requests and pipelines')).toBeInTheDocument();
@@ -96,12 +225,13 @@ describe('SettingsView', () => {
     renderWithTheme(
       <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
     );
-    
+    await goToSection('Providers');
+
     expect(screen.queryByPlaceholderText(/enter new value/i)).not.toBeInTheDocument();
-    
+
     const manageBtn = screen.getByRole('button', { name: /connect cursor/i });
     await userEvent.click(manageBtn);
-    
+
     expect(screen.getByPlaceholderText(/enter new value/i)).toBeInTheDocument();
   });
 
@@ -125,10 +255,11 @@ describe('SettingsView', () => {
         onBack={vi.fn()}
       />,
     );
-    
+    await goToSection('Providers');
+
     const manageBtn = screen.getByRole('button', { name: /manage cursor/i });
     await userEvent.click(manageBtn);
-    
+
     expect(screen.getByText('••••12ab')).toBeInTheDocument();
   });
 
@@ -146,10 +277,11 @@ describe('SettingsView', () => {
     renderWithTheme(
       <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
     );
-    
+    await goToSection('Providers');
+
     const manageBtn = screen.getByRole('button', { name: /connect cursor/i });
     await userEvent.click(manageBtn);
-    
+
     expect(screen.getByText(/not set/i)).toBeInTheDocument();
   });
 
@@ -166,10 +298,11 @@ describe('SettingsView', () => {
     renderWithTheme(
       <SettingsView settings={settings} onUpdate={onUpdate} onClear={vi.fn()} onBack={vi.fn()} />,
     );
-    
+    await goToSection('Providers');
+
     const manageBtn = screen.getByRole('button', { name: /connect cursor/i });
     await userEvent.click(manageBtn);
-    
+
     const input = screen.getByPlaceholderText(/enter new value/i);
     await userEvent.type(input, 'sk-new-secret');
     await userEvent.click(screen.getByRole('button', { name: /save/i }));
@@ -197,10 +330,11 @@ describe('SettingsView', () => {
         onBack={vi.fn()}
       />,
     );
-    
+    await goToSection('Providers');
+
     const manageBtn = screen.getByRole('button', { name: /manage cursor/i });
     await userEvent.click(manageBtn);
-    
+
     await userEvent.click(screen.getByRole('button', { name: /clear/i }));
     expect(onClear).toHaveBeenCalledWith('CURSOR_API_KEY');
   });
@@ -225,10 +359,11 @@ describe('SettingsView', () => {
         onBack={vi.fn()}
       />,
     );
-    
+    await goToSection('Providers');
+
     const manageBtn = screen.getByRole('button', { name: /manage cursor/i });
     await userEvent.click(manageBtn);
-    
+
     expect(screen.getByText('env')).toBeInTheDocument();
   });
 
@@ -245,10 +380,55 @@ describe('SettingsView', () => {
     renderWithTheme(
       <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
     );
-    expect(screen.getByText('Appearance')).toBeInTheDocument();
-    expect(screen.getByRole('group', { name: 'Theme' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Appearance' })).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: 'Theme' })).toBeInTheDocument();
     expect(screen.getByLabelText('Chat font size')).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Density' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Interface font size')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Reduce motion' })).toBeInTheDocument();
+  });
+
+  it('"Reduce motion: On" force-stills motion (label contract, not raw axis)', async () => {
+    renderWithTheme(
+      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    const reduce = screen.getByRole('group', { name: 'Reduce motion' });
+    // Selecting the option that reduces motion must reach the force-still state.
+    await userEvent.click(within(reduce).getByRole('button', { name: 'On' }));
+    expect(document.documentElement.getAttribute('data-motion')).toBe('off');
+    // And "Off" (do not reduce) keeps motion running.
+    await userEvent.click(within(reduce).getByRole('button', { name: 'Off' }));
+    expect(document.documentElement.getAttribute('data-motion')).toBe('on');
+  });
+
+  it('renders the accent color picker defaulting to cobalt', () => {
+    renderWithTheme(
+      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    const group = screen.getByRole('radiogroup', { name: 'Accent color' });
+    expect(within(group).getByRole('radio', { name: 'Cobalt' })).toHaveAttribute('aria-checked', 'true');
+    expect(document.documentElement.getAttribute('data-accent')).toBe('cobalt');
+  });
+
+  it('selecting an accent swatch updates data-accent live', async () => {
+    renderWithTheme(
+      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    const group = screen.getByRole('radiogroup', { name: 'Accent color' });
+    await userEvent.click(within(group).getByRole('radio', { name: 'Ember' }));
+    expect(within(group).getByRole('radio', { name: 'Ember' })).toHaveAttribute('aria-checked', 'true');
+    expect(document.documentElement.getAttribute('data-accent')).toBe('ember');
+  });
+
+  it('reset to defaults restores the cobalt accent', async () => {
+    renderWithTheme(
+      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    const group = screen.getByRole('radiogroup', { name: 'Accent color' });
+    await userEvent.click(within(group).getByRole('radio', { name: 'Jade' }));
+    expect(document.documentElement.getAttribute('data-accent')).toBe('jade');
+    await userEvent.click(screen.getByRole('button', { name: /reset to defaults/i }));
+    expect(document.documentElement.getAttribute('data-accent')).toBe('cobalt');
   });
 
   it('moving the font size slider updates the applied --chat-font-scale', async () => {
@@ -271,13 +451,14 @@ describe('SettingsView', () => {
     expect(compactBtn).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it('clicking a theme option calls setTheme (reflected as pressed)', async () => {
+  it('selecting a theme card calls setTheme (reflected as checked)', async () => {
     renderWithTheme(
       <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
     );
-    const darkBtn = screen.getByRole('button', { name: 'Dark' });
-    await userEvent.click(darkBtn);
-    expect(darkBtn).toHaveAttribute('aria-pressed', 'true');
+    const themeGroup = screen.getByRole('radiogroup', { name: 'Theme' });
+    const darkCard = within(themeGroup).getByRole('radio', { name: 'Dark' });
+    await userEvent.click(darkCard);
+    expect(darkCard).toHaveAttribute('aria-checked', 'true');
     expect(document.documentElement.classList.contains('dark')).toBe(true);
   });
 
@@ -297,10 +478,11 @@ describe('SettingsView', () => {
     renderWithTheme(
       <SettingsView settings={settings} onUpdate={onUpdate} onClear={vi.fn()} onBack={vi.fn()} />,
     );
-    
+    await goToSection('Providers');
+
     const manageBtn = screen.getByRole('button', { name: /connect cursor/i });
     await userEvent.click(manageBtn);
-    
+
     await userEvent.type(screen.getByPlaceholderText(/enter new value/i), 'x');
     await userEvent.click(screen.getByRole('button', { name: /save/i }));
     await waitFor(() => expect(screen.getByText(/saving/i)).toBeInTheDocument());
@@ -324,6 +506,7 @@ describe('SettingsView', () => {
     renderWithTheme(
       <SettingsView settings={settings} onUpdate={onUpdate} onClear={vi.fn()} onBack={vi.fn()} />,
     );
+    await goToSection('General');
 
     const toggle = screen.getByRole('switch', { name: 'Telemetry' });
     expect(toggle).toHaveAttribute('aria-checked', 'false');

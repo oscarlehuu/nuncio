@@ -15,6 +15,12 @@ import { SettingsService } from '../../settings/settings.service';
 import type { AgentRunContext, InteractionResponse } from '../agents.types';
 import { BaseAgentProvider } from '../agents.base-provider';
 import { eventImagesFromAttachments } from '../agents.attachments';
+import {
+  appendRuntimeToolInstructions,
+  asToolInput,
+  normalizeAgentRuntimeToolResult,
+  type AgentRuntimeTools,
+} from '../tools/agent-runtime-tools.types';
 import { piThinkingDescriptors, resolvePiThinkingLevel } from './pi-thinking.helpers';
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent');
@@ -258,7 +264,10 @@ export class PiAgentProvider extends BaseAgentProvider {
     this.interruptedSessions.delete(sessionId);
     let interrupted = false;
     try {
-      await handle.prompt(text, Object.keys(promptOptions).length ? promptOptions : undefined);
+      await handle.prompt(
+        appendRuntimeToolInstructions(text, context.tools),
+        Object.keys(promptOptions).length ? promptOptions : undefined,
+      );
     } catch (error) {
       if (this.interruptedSessions.delete(sessionId)) {
         interrupted = true;
@@ -318,7 +327,7 @@ export class PiAgentProvider extends BaseAgentProvider {
         resumeManager = undefined;
       }
     }
-    const customTools = buildPiCustomTools(context.cwd, pi);
+    const customTools = buildPiCustomTools(context.cwd, pi, context.tools);
     const { session } = await pi.createAgentSession({
       agentDir,
       ...(context.cwd ? { cwd: context.cwd } : {}),
@@ -375,7 +384,7 @@ export class PiAgentProvider extends BaseAgentProvider {
         if (inner?.type === 'text_delta' && inner.delta) {
           assistantText += inner.delta;
           this.pushEvent(sessionId, 'assistant_delta', { delta: inner.delta }, context.emit);
-          this.sessions.touchPreview(sessionId, assistantText);
+          this.touchPreview(sessionId, assistantText);
         }
         if (inner?.type === 'thinking_start') {
           ensureThinkingStarted();
@@ -572,16 +581,45 @@ export function buildPiCustomTools(
     createGrepTool: (cwd: string) => unknown;
     createFindTool: (cwd: string) => unknown;
     createLsTool: (cwd: string) => unknown;
+    defineTool?: (tool: unknown) => unknown;
   },
+  runtimeTools?: AgentRuntimeTools,
 ): unknown[] | undefined {
-  if (!cwd) return undefined;
-  return [
-    factories.createReadTool(cwd),
-    factories.createBashTool(cwd),
-    factories.createEditTool(cwd),
-    factories.createWriteTool(cwd),
-    factories.createGrepTool(cwd),
-    factories.createFindTool(cwd),
-    factories.createLsTool(cwd),
-  ];
+  const tools = cwd
+    ? [
+        factories.createReadTool(cwd),
+        factories.createBashTool(cwd),
+        factories.createEditTool(cwd),
+        factories.createWriteTool(cwd),
+        factories.createGrepTool(cwd),
+        factories.createFindTool(cwd),
+        factories.createLsTool(cwd),
+      ]
+    : [];
+  tools.push(...buildPiRuntimeTools(runtimeTools, factories.defineTool));
+  return tools.length > 0 ? tools : undefined;
+}
+
+function buildPiRuntimeTools(
+  runtimeTools: AgentRuntimeTools | undefined,
+  defineTool: ((tool: unknown) => unknown) | undefined,
+): unknown[] {
+  const wrap = defineTool ?? ((tool: unknown) => tool);
+  return (runtimeTools?.tools ?? []).map((tool) =>
+    wrap({
+      name: tool.name,
+      label: tool.name,
+      description: tool.description ?? tool.name,
+      promptSnippet: tool.description ?? tool.name,
+      parameters: tool.inputSchema,
+      execute: async (_toolCallId: string, params: unknown) => {
+        const result = normalizeAgentRuntimeToolResult(await tool.execute(asToolInput(params)));
+        return {
+          content: result.content,
+          details: result.structuredContent ?? {},
+          isError: result.isError === true,
+        };
+      },
+    }),
+  );
 }

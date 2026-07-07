@@ -5,8 +5,14 @@ import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { SessionDetail } from './session-detail';
 import { INSPECTOR_PREFERENCE_STORAGE_KEY } from '../lib/inspector-preference';
-import { fetchGitStatus } from '../lib/api';
-import type { Session, SessionEvent } from '../lib/api';
+import {
+  fetchGitStatus,
+  fetchChildTasks,
+  startMultitask,
+  startMultitaskFromQueue,
+  markTaskReviewed,
+} from '../lib/api';
+import type { Session, SessionEvent, TaskDto } from '../lib/api';
 import type { ModelProvider } from '../lib/model-providers';
 
 const xtermMocks = vi.hoisted(() => {
@@ -40,8 +46,11 @@ vi.mock('sonner', () => ({
 }));
 
 vi.mock('./file-explorer-panel', () => ({
-  FileExplorerPanel: ({ root }: { root?: string }) => (
-    <div data-testid="file-explorer-panel">Files {root}</div>
+  FileExplorerPanel: ({ root, openPath }: { root?: string; openPath?: string | null }) => (
+    <div data-testid="file-explorer-panel">
+      Files {root}
+      {openPath ? ` open ${openPath}` : ''}
+    </div>
   ),
 }));
 
@@ -79,6 +88,10 @@ vi.mock('../lib/api', async () => {
     commitSession: vi.fn(),
     pushSession: vi.fn(),
     openPullRequest: vi.fn(),
+    fetchChildTasks: vi.fn(async () => []),
+    startMultitask: vi.fn(async () => ({ parentSessionId: 's1', tasks: [] })),
+    startMultitaskFromQueue: vi.fn(async () => ({ parentSessionId: 's1', tasks: [] })),
+    markTaskReviewed: vi.fn(async () => ({})),
   };
 });
 
@@ -102,6 +115,32 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     supportsInteraction: false,
     createdAt: Date.now() - 3_600_000,
     updatedAt: Date.now() - 120_000,
+    ...overrides,
+  };
+}
+
+function makeTask(overrides: Partial<TaskDto> = {}): TaskDto {
+  return {
+    id: 't1',
+    prompt: 'Investigate the flaky test',
+    status: 'RUNNING',
+    provider: 'pi',
+    model: 'claude-fable-5',
+    modelOptions: null,
+    projectPath: null,
+    baseBranch: null,
+    useWorktree: false,
+    workspace: null,
+    parentSessionId: 's1',
+    role: 'subagent',
+    cleanupPolicy: 'after-review',
+    reviewState: null,
+    sessionId: 'child-session-1',
+    outcome: null,
+    createdAt: Date.now() - 1000,
+    updatedAt: Date.now(),
+    startedAt: Date.now() - 500,
+    finishedAt: null,
     ...overrides,
   };
 }
@@ -569,6 +608,41 @@ describe('SessionDetail', () => {
     expect(screen.queryByTestId('file-explorer-panel')).toBeNull();
   });
 
+  it('opens transcript source paths in the Files dock and web URLs externally', async () => {
+    const externalOpen = vi.fn().mockResolvedValue(undefined);
+    const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
+    (window as Window & { nuncioDesktop?: unknown }).nuncioDesktop = {
+      external: { open: externalOpen },
+    };
+    const events: SessionEvent[] = [
+      {
+        seq: 1,
+        type: 'assistant_delta',
+        payload: {
+          delta: 'See apps/web/src/components/session-detail.tsx and https://example.com/docs',
+        },
+        createdAt: Date.now(),
+      },
+    ];
+
+    await renderDetail({ projectPath: '/Users/dev/code/nuncio' }, events);
+
+    await userEvent.click(
+      await screen.findByRole('link', {
+        name: 'apps/web/src/components/session-detail.tsx',
+      }),
+    );
+    expect(screen.getByText('Files')).toBeInTheDocument();
+    expect(screen.getByTestId('file-explorer-panel')).toHaveTextContent(
+      'Files /Users/dev/code/nuncio open apps/web/src/components/session-detail.tsx',
+    );
+
+    await userEvent.click(screen.getByRole('link', { name: 'https://example.com/docs' }));
+    expect(externalOpen).toHaveBeenCalledWith('https://example.com/docs');
+    expect(windowOpen).not.toHaveBeenCalled();
+    windowOpen.mockRestore();
+  });
+
   it('keeps the terminal mounted (hidden, not unmounted) after closing it', async () => {
     Object.defineProperty(globalThis, 'WebSocket', {
       configurable: true,
@@ -926,6 +1000,117 @@ describe('SessionDetail', () => {
       );
       expect(view.queryByRole('button', { name: /restore session/i })).toBeNull();
       expect(view.queryByRole('button', { name: /delete session/i })).toBeNull();
+    });
+  });
+
+  describe('multitasking subagents', () => {
+    it('queues normally by default when sending to a busy non-steer provider', async () => {
+      const { onSteer } = await renderDetail({
+        status: 'RUNNING',
+        supportsSteerWhileRunning: false,
+      });
+      const textarea = screen.getByPlaceholderText(/your message will be queued/i);
+      await userEvent.type(textarea, 'Look into the auth bug');
+      await userEvent.click(screen.getByRole('button', { name: /send/i }));
+
+      expect(onSteer).toHaveBeenCalledWith('Look into the auth bug', undefined);
+      expect(startMultitask).not.toHaveBeenCalled();
+    });
+
+    it('surfaces queued steers in a panel above the composer, not inline', async () => {
+      await renderDetail({ status: 'RUNNING', supportsSteerWhileRunning: false }, [
+        { seq: 1, type: 'user_message', payload: { text: 'do the thing' }, createdAt: 1 },
+        {
+          seq: 2,
+          type: 'steer_queued',
+          payload: { text: 'then run the docs audit' },
+          createdAt: 2,
+        },
+      ]);
+      const panel = screen.getByTestId('queued-steers-panel');
+      expect(panel).toHaveTextContent('1 Queued');
+      expect(panel).toHaveTextContent('then run the docs audit');
+    });
+
+    it('has no queue panel when nothing is queued', async () => {
+      await renderDetail({ status: 'RUNNING' });
+      expect(screen.queryByTestId('queued-steers-panel')).not.toBeInTheDocument();
+    });
+
+    it('fans the queue out to subagents when Start Multitasking is clicked', async () => {
+      const { onSteer } = await renderDetail(
+        { status: 'RUNNING', supportsSteerWhileRunning: false },
+        [
+          { seq: 1, type: 'steer_queued', payload: { text: 'audit the docs' }, createdAt: 1 },
+          { seq: 2, type: 'steer_queued', payload: { text: 'add token tabs' }, createdAt: 2 },
+        ],
+      );
+      await userEvent.click(screen.getByRole('button', { name: /start multitasking/i }));
+
+      await waitFor(() => expect(startMultitaskFromQueue).toHaveBeenCalledWith('s1'));
+      expect(onSteer).not.toHaveBeenCalled();
+    });
+
+    it('supports /multitask as an explicit composer command', async () => {
+      const { onSteer } = await renderDetail({
+        status: 'RUNNING',
+        supportsSteerWhileRunning: true,
+      });
+      const textarea = screen.getByPlaceholderText(/steer the live run/i);
+      await userEvent.type(textarea, '/multitask check provider defaults');
+      await userEvent.click(screen.getByRole('button', { name: /send/i }));
+
+      await waitFor(() =>
+        expect(startMultitask).toHaveBeenCalledWith(
+          expect.objectContaining({ parentSessionId: 's1', prompts: ['check provider defaults'] }),
+        ),
+      );
+      expect(onSteer).not.toHaveBeenCalled();
+    });
+
+    it('keeps image steers on the normal queue path instead of dropping attachments into multitasking', async () => {
+      const { onSteer } = await renderDetail({
+        status: 'RUNNING',
+        supportsImages: true,
+        supportsSteerWhileRunning: false,
+      });
+      const textarea = screen.getByPlaceholderText(/your message will be queued/i);
+      fireEvent.paste(textarea, { clipboardData: clipboardWithImage() });
+      await userEvent.type(textarea, 'Look at this screenshot');
+      await userEvent.click(screen.getByRole('button', { name: /send/i }));
+
+      await waitFor(() => expect(onSteer).toHaveBeenCalled());
+      expect(startMultitask).not.toHaveBeenCalled();
+    });
+
+    it('renders child subagents fetched for the session', async () => {
+      vi.mocked(fetchChildTasks).mockResolvedValueOnce([
+        makeTask({ prompt: 'Investigate the flaky test', status: 'RUNNING' }),
+      ]);
+      await renderDetail({ status: 'RUNNING' });
+
+      expect(await screen.findByTestId('subagents-panel')).toBeInTheDocument();
+      expect(screen.getByText('Investigate the flaky test')).toBeInTheDocument();
+      expect(screen.getByText('Running')).toBeInTheDocument();
+    });
+
+    it('Review done marks the task reviewed and refreshes the list', async () => {
+      vi.mocked(fetchChildTasks)
+        .mockResolvedValueOnce([
+          makeTask({ id: 't1', status: 'DONE', reviewState: 'awaiting_review' }),
+        ])
+        .mockResolvedValueOnce([
+          makeTask({ id: 't1', status: 'DONE', reviewState: 'reviewed' }),
+        ]);
+      await renderDetail({ status: 'RUNNING' });
+
+      await screen.findByTestId('subagents-panel');
+      await userEvent.click(screen.getByRole('button', { name: /review done/i }));
+
+      await waitFor(() => expect(markTaskReviewed).toHaveBeenCalledWith('t1'));
+      // A second fetch refreshes the list after review.
+      await waitFor(() => expect(fetchChildTasks).toHaveBeenCalledTimes(2));
+      expect(await screen.findByText(/reviewed/i)).toBeInTheDocument();
     });
   });
 });

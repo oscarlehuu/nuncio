@@ -367,6 +367,12 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
     return;
   }
 
+  if (event.type === 'steer_queue_cleared') {
+    // The queue was fanned out into parallel subagents; drop the placeholders.
+    state.out = state.out.filter((block) => !(block.kind === 'user' && block.queued));
+    return;
+  }
+
   if (event.type === 'interrupted') {
     flushAssistant(state);
     flushThinking(state);
@@ -638,6 +644,28 @@ export function buildTranscriptBlocks(events: SessionEvent[]): TranscriptBlock[]
     stepEvent(state, event);
   }
   return finalizeBlocks(state);
+}
+
+export interface PendingQueuedSteer {
+  key: string;
+  text: string;
+}
+
+/**
+ * The steers still waiting in the queue — surfaced in the composer's queue
+ * panel rather than inline in the transcript. Derived from the same block pass
+ * as the transcript, so a queued message that gets delivered (or the whole
+ * queue being fanned out for multitasking) drops out of the panel in lockstep
+ * with the conversation.
+ */
+export function derivePendingQueuedSteers(events: SessionEvent[]): PendingQueuedSteer[] {
+  const pending: PendingQueuedSteer[] = [];
+  for (const block of buildTranscriptBlocks(events)) {
+    if (block.kind === 'user' && block.queued) {
+      pending.push({ key: block.key, text: block.text });
+    }
+  }
+  return pending;
 }
 
 export function workingIndicatorLabel(blocks: TranscriptBlock[], streaming: boolean): string {

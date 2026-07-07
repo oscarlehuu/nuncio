@@ -215,7 +215,7 @@ export class CursorCliProvider extends BaseAgentProvider {
         break;
       case 'assistant_message':
         this.pushEvent(sessionId, 'assistant_message', { text: event.text }, context.emit);
-        this.sessions.touchPreview(sessionId, event.text);
+        this.touchPreview(sessionId, event.text);
         break;
       case 'tool_start': {
         const userInputPayload = buildUserInputRequestedPayload(

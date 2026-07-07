@@ -23,6 +23,29 @@ class FakeTransport extends EventEmitter implements CodexAppServerTransport {
 }
 
 describe('CodexAppServerClient', () => {
+  it('initializes with the experimental app-server capability for dynamic tools', async () => {
+    const transport = new FakeTransport();
+    const client = new CodexAppServerClient(transport);
+
+    const result = client.initialize();
+    expect(transport.sent[0]).toEqual({
+      id: 1,
+      method: 'initialize',
+      params: {
+        clientInfo: { name: 'nuncio', version: '0.1.0' },
+        capabilities: {
+          experimentalApi: true,
+          requestAttestation: false,
+        },
+      },
+    });
+
+    transport.emitJson({ id: 1, result: {} });
+
+    await expect(result).resolves.toBeUndefined();
+    expect(transport.sent[1]).toEqual({ method: 'initialized' });
+  });
+
   it('correlates JSON-RPC request responses by id', async () => {
     const transport = new FakeTransport();
     const client = new CodexAppServerClient(transport);

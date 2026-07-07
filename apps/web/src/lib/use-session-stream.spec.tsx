@@ -116,6 +116,34 @@ describe('useSessionStream', () => {
     expect(getByTestId('count').textContent).toBe('1');
   });
 
+  it('batches a live event burst into one animation-frame state flush', async () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal(
+      'requestAnimationFrame',
+      vi.fn((callback: FrameRequestCallback) => {
+        frames.push(callback);
+        return frames.length;
+      }),
+    );
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    vi.mocked(fetchEvents).mockResolvedValue([ev(1)]);
+    const { getByTestId } = render(<Harness sid="s1" />);
+    await waitFor(() => expect(getByTestId('count').textContent).toBe('1'));
+    await waitFor(() => expect(lastSocket).toBeDefined());
+
+    act(() => {
+      lastSocket!.push(ev(2, 'assistant_delta', { delta: 'a' }));
+      lastSocket!.push(ev(3, 'assistant_delta', { delta: 'b' }));
+      lastSocket!.push(ev(4, 'assistant_delta', { delta: 'c' }));
+    });
+
+    expect(getByTestId('count').textContent).toBe('1');
+    expect(frames.length).toBe(1);
+
+    act(() => frames.shift()?.(16));
+    await waitFor(() => expect(getByTestId('count').textContent).toBe('4'));
+  });
+
   it('clears events and skips fetch when the session id is null', async () => {
     vi.mocked(fetchEvents).mockResolvedValue([ev(1)]);
     const { getByTestId } = render(<Harness sid={null} />);

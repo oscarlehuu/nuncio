@@ -3,10 +3,13 @@ import { deriveHasPendingInput } from '../sessions/domain/derive-pending-input';
 import { EventsRepository } from '../sessions/persistence/events.repository';
 import { SessionsService } from '../sessions/sessions.service';
 import { SettingsService } from '../settings/settings.service';
+import { buildSubagentTaskInput } from './multitask-defaults';
 import { TasksRepository } from './tasks.repository';
 import {
   TERMINAL_TASK_STATUSES,
   type CreateTaskDto,
+  type StartMultitaskDto,
+  type StartMultitaskResultDto,
   type TaskDto,
 } from './tasks.types';
 
@@ -27,8 +30,11 @@ export class TasksService {
     void this.pump();
   }
 
-  list(): TaskDto[] {
-    return this.tasks.list().map((task) => ({
+  list(parentSessionId?: string): TaskDto[] {
+    const tasks = parentSessionId
+      ? this.tasks.listByParentSession(parentSessionId)
+      : this.tasks.list();
+    return tasks.map((task) => ({
       ...task,
       pendingInput:
         task.status === 'RUNNING' && task.sessionId
@@ -43,6 +49,48 @@ export class TasksService {
     const task = this.tasks.create({ ...input, prompt });
     void this.pump();
     return task;
+  }
+
+  startMultitask(input: StartMultitaskDto): StartMultitaskResultDto {
+    const parentSessionId = input.parentSessionId?.trim();
+    if (!parentSessionId) throw new BadRequestException('parentSessionId is required');
+    const parent = this.sessions.get(parentSessionId);
+    if (!parent) throw new NotFoundException('Parent session not found');
+
+    const prompts = input.prompts
+      ?.map((prompt) => prompt.trim())
+      .filter(Boolean);
+    if (!prompts?.length) throw new BadRequestException('at least one prompt is required');
+
+    const tasks = prompts.map((prompt) =>
+      this.enqueue(buildSubagentTaskInput(input, parent, prompt, this.settings)),
+    );
+
+    return { parentSessionId, tasks };
+  }
+
+  /**
+   * Convert the parent session's pending steer queue into parallel subagents.
+   * Draining the queue is what keeps each prompt from also being delivered
+   * sequentially when the parent's run settles — otherwise every queued prompt
+   * would run twice. Subagents inherit the parent's provider/model defaults.
+   */
+  startMultitaskFromQueue(parentSessionId: string): StartMultitaskResultDto {
+    const trimmed = parentSessionId?.trim();
+    if (!trimmed) throw new BadRequestException('parentSessionId is required');
+    const parent = this.sessions.get(trimmed);
+    if (!parent) throw new NotFoundException('Parent session not found');
+
+    const prompts = this.sessions.drainSteerQueueForMultitask(trimmed);
+    if (prompts.length === 0) {
+      throw new BadRequestException('No queued messages to multitask');
+    }
+
+    const tasks = prompts.map((prompt) =>
+      this.enqueue(buildSubagentTaskInput({ parentSessionId: trimmed, prompts }, parent, prompt, this.settings)),
+    );
+
+    return { parentSessionId: trimmed, tasks };
   }
 
   cancel(id: string): TaskDto {
@@ -69,7 +117,19 @@ export class TasksService {
       ...(task.baseBranch ? { baseBranch: task.baseBranch } : {}),
       ...(task.useWorktree ? { useWorktree: true } : {}),
       ...(task.workspace ? { workspace: task.workspace } : {}),
+      ...(task.parentSessionId ? { parentSessionId: task.parentSessionId } : {}),
+      ...(task.role === 'subagent' ? { role: 'subagent' as const } : {}),
+      ...(task.cleanupPolicy ? { cleanupPolicy: task.cleanupPolicy } : {}),
     });
+  }
+
+  markReviewed(id: string): TaskDto {
+    this.requireTask(id);
+    const reviewed = this.tasks.markReviewed(id);
+    if (!reviewed) {
+      throw new BadRequestException('Only finished subagents awaiting review can be marked reviewed');
+    }
+    return reviewed;
   }
 
   delete(id: string): void {

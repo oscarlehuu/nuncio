@@ -58,6 +58,23 @@ describe('TasksRepository', () => {
     });
   });
 
+  it('creates subagent tasks linked to a parent session', () => {
+    const task = tasks.create({
+      prompt: 'write tests',
+      provider: 'codex',
+      parentSessionId: 'parent123',
+      role: 'subagent',
+      cleanupPolicy: 'after-review',
+    });
+
+    expect(task.role).toBe('subagent');
+    expect(task.parentSessionId).toBe('parent123');
+    expect(task.cleanupPolicy).toBe('after-review');
+    expect(task.reviewState).toBeNull();
+
+    expect(tasks.listByParentSession('parent123').map((child) => child.id)).toEqual([task.id]);
+  });
+
   it('claims queued tasks in FIFO order and marks them RUNNING', () => {
     const first = tasks.create({ prompt: 'first' });
     const second = tasks.create({ prompt: 'second' });
@@ -88,6 +105,18 @@ describe('TasksRepository', () => {
     expect(finished?.outcome).toMatchObject({ sessionStatus: 'IDLE', verify: { ok: true } });
   });
 
+  it('marks finished subagent tasks as awaiting review', () => {
+    const task = tasks.create({ prompt: 'subtask', role: 'subagent', parentSessionId: 'parent123' });
+    tasks.claimNextQueued();
+    const finished = tasks.finish(task.id, 'DONE', { sessionStatus: 'IDLE' });
+
+    expect(finished?.status).toBe('DONE');
+    expect(finished?.reviewState).toBe('awaiting_review');
+
+    const reviewed = tasks.markReviewed(task.id);
+    expect(reviewed?.reviewState).toBe('reviewed');
+  });
+
   it('cancel only applies to queued tasks', () => {
     const queued = tasks.create({ prompt: 'cancel me' });
     expect(tasks.cancel(queued.id)?.status).toBe('CANCELLED');
@@ -109,12 +138,21 @@ describe('TasksRepository', () => {
   it('failInterrupted marks every RUNNING task failed with a reason', () => {
     const task = tasks.create({ prompt: 'interrupted' });
     tasks.claimNextQueued();
+    const subagent = tasks.create({
+      prompt: 'interrupted subagent',
+      role: 'subagent',
+      parentSessionId: 'parent123',
+    });
+    tasks.claimNextQueued();
 
     const failed = tasks.failInterrupted('daemon_restart');
     const ids = failed.map((t) => t.id);
     expect(ids).toContain(task.id);
+    expect(ids).toContain(subagent.id);
     expect(tasks.findById(task.id)?.status).toBe('FAILED');
     expect(tasks.findById(task.id)?.outcome).toMatchObject({ reason: 'daemon_restart' });
+    expect(tasks.findById(subagent.id)?.status).toBe('FAILED');
+    expect(tasks.findById(subagent.id)?.reviewState).toBe('awaiting_review');
     expect(tasks.countRunning()).toBe(0);
   });
 

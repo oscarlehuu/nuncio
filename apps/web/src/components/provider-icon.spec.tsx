@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render } from '@testing-library/react';
-import { ProviderIcon, CursorIcon, PiIcon, CodexIcon, GitHubIcon, GitLabIcon } from './provider-icon';
+import { ProviderIcon, ClaudeIcon, CursorIcon, PiIcon, CodexIcon, GitHubIcon, GitLabIcon } from './provider-icon';
 
 describe('ProviderIcon', () => {
   it('renders the Cursor SVG for providerId "cursor"', () => {
@@ -15,6 +15,15 @@ describe('ProviderIcon', () => {
     const svg = container.querySelector('svg');
     expect(svg).not.toBeNull();
     expect(svg?.getAttribute('viewBox')).toBe('0 0 800 800');
+  });
+
+  it('renders the Claude SVG for providerId "claude" instead of the fallback character', () => {
+    const { container, queryByText } = render(<ProviderIcon providerId="claude" className="size-4" />);
+    const svg = container.querySelector('svg');
+    expect(svg).not.toBeNull();
+    expect(svg?.getAttribute('viewBox')).toBe('0 0 24 24');
+    expect(svg?.getAttribute('data-provider-icon')).toBe('claude');
+    expect(queryByText('✳')).not.toBeInTheDocument();
   });
 
   it('renders the Codex SVG for providerId "codex" instead of the fallback character', () => {
@@ -45,12 +54,14 @@ describe('ProviderIcon', () => {
     expect(getByText('Z')).toBeInTheDocument();
   });
 
-  it('CursorIcon, PiIcon, CodexIcon, GitHubIcon, and GitLabIcon are exported as SVG components', () => {
+  it('ClaudeIcon, CursorIcon, PiIcon, CodexIcon, GitHubIcon, and GitLabIcon are exported as SVG components', () => {
+    const { container: claude } = render(<ClaudeIcon className="size-4" />);
     const { container: cursor } = render(<CursorIcon className="size-4" />);
     const { container: pi } = render(<PiIcon className="size-4" />);
     const { container: codex } = render(<CodexIcon className="size-4" />);
     const { container: github } = render(<GitHubIcon className="size-4" />);
     const { container: gitlab } = render(<GitLabIcon className="size-4" />);
+    expect(claude.querySelector('svg')).not.toBeNull();
     expect(cursor.querySelector('svg')).not.toBeNull();
     expect(pi.querySelector('svg')).not.toBeNull();
     expect(codex.querySelector('svg')).not.toBeNull();

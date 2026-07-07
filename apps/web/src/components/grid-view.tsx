@@ -47,6 +47,7 @@ interface GridViewProps {
   onDelete: (id: string) => Promise<void>;
   onRename: (id: string, title: string) => Promise<void>;
   onSessionStatus?: (id: string, status: SessionStatus, createdAt: number) => void;
+  onSessionTitle?: (id: string, title: string, createdAt: number) => void;
   onCreate: (
     prompt: string,
     model?: string,
@@ -250,6 +251,7 @@ export function GridView(props: GridViewProps) {
               onDelete={props.onDelete}
               onRename={props.onRename}
               onSessionStatus={props.onSessionStatus}
+              onSessionTitle={props.onSessionTitle}
               steering={props.steering}
               lifecycleBusy={props.lifecycleBusy}
               onRestoreGrid={requestRestore}
@@ -359,6 +361,7 @@ export function GridView(props: GridViewProps) {
                   onSteer={(msg) => props.onSteerSession(session.id, msg)}
                   steering={props.steering}
                   onSessionStatus={props.onSessionStatus}
+                  onSessionTitle={props.onSessionTitle}
                 />
               );
             }
@@ -436,6 +439,7 @@ interface MaximizedSessionProps {
   onDelete: (id: string) => Promise<void>;
   onRename: (id: string, title: string) => Promise<void>;
   onSessionStatus?: (id: string, status: SessionStatus, createdAt: number) => void;
+  onSessionTitle?: (id: string, title: string, createdAt: number) => void;
   steering?: boolean;
   lifecycleBusy?: boolean;
   onRestoreGrid: () => void;
@@ -454,6 +458,7 @@ function MaximizedSession({
   onDelete,
   onRename,
   onSessionStatus,
+  onSessionTitle,
   steering,
   lifecycleBusy,
   onRestoreGrid,
@@ -468,11 +473,19 @@ function MaximizedSession({
   const latestStatus = latestStatusEvent(events);
   const latestStatusValue = latestStatus?.status;
   const latestStatusCreatedAt = latestStatus?.createdAt;
+  const latestTitle = latestTitleEvent(events);
+  const latestTitleValue = latestTitle?.title;
+  const latestTitleCreatedAt = latestTitle?.createdAt;
 
   useEffect(() => {
     if (!latestStatusValue || latestStatusCreatedAt === undefined || !onSessionStatus) return;
     onSessionStatus(session.id, latestStatusValue, latestStatusCreatedAt);
   }, [latestStatusCreatedAt, latestStatusValue, onSessionStatus, session.id]);
+
+  useEffect(() => {
+    if (!latestTitleValue || latestTitleCreatedAt === undefined || !onSessionTitle) return;
+    onSessionTitle(session.id, latestTitleValue, latestTitleCreatedAt);
+  }, [latestTitleCreatedAt, latestTitleValue, onSessionTitle, session.id]);
 
   return (
     <div className="relative flex flex-1 flex-col min-h-0">
@@ -537,4 +550,22 @@ function latestStatusEvent(
     if (status) return { status, createdAt: event.createdAt };
   }
   return null;
+}
+
+function latestTitleEvent(
+  events: ReturnType<typeof useSessionStream>['events'],
+): { title: string; createdAt: number } | null {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (event?.type !== 'session_title') continue;
+    const title = asSessionTitle(event.payload);
+    if (title) return { title, createdAt: event.createdAt };
+  }
+  return null;
+}
+
+function asSessionTitle(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const title = (payload as { title?: unknown }).title;
+  return typeof title === 'string' && title.trim() ? title.trim() : null;
 }

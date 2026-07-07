@@ -13,6 +13,8 @@ import { SessionsRepository } from '../../sessions/persistence/sessions.reposito
 import { SettingsService } from '../../settings/settings.service';
 import type { AgentRunContext } from '../agents.types';
 import { BaseAgentProvider } from '../agents.base-provider';
+import { appendRuntimeToolInstructions } from '../tools/agent-runtime-tools.types';
+import { buildCursorCustomTools } from '../tools/cursor-runtime-tools.adapter';
 import {
   CURSOR_PREFERRED_MODEL,
   isCursorDefaultModelId,
@@ -133,6 +135,7 @@ export class CursorAgentProvider extends BaseAgentProvider {
     context: AgentRunContext,
   ): Promise<void> {
     let handle = this.activeSessions.get(sessionId);
+    const customTools = buildCursorCustomTools(context.tools);
     if (!handle) {
       const sdk = await this.loadSdk();
       const apiKey = this.settings.resolve('CURSOR_API_KEY')!;
@@ -148,6 +151,7 @@ export class CursorAgentProvider extends BaseAgentProvider {
           cwd: this.resolveCwd(sessionId, context),
           useHttp1ForAgent: true,
           store: this.resolveStore(sdk),
+          ...(customTools ? { customTools } : {}),
         },
       });
       handle = { agent, accumulatedText: '', accumulatedThinking: '', thinkingOpen: false };
@@ -163,8 +167,9 @@ export class CursorAgentProvider extends BaseAgentProvider {
     // onDelta gives token-by-token text + tool-call state (finer-grained than
     // run.stream()'s block-level `assistant` events). run.wait() drains the run
     // and returns the terminal result.
-    const run = await active.agent.send(text, {
+    const run = await active.agent.send(appendRuntimeToolInstructions(text, context.tools), {
       onDelta: ({ update }) => this.handleDelta(sessionId, active, update, context),
+      ...(customTools ? { local: { customTools } } : {}),
     });
     const result = await run.wait();
     switch (result.status) {
@@ -198,7 +203,7 @@ export class CursorAgentProvider extends BaseAgentProvider {
         if (update.text) {
           active.accumulatedText += update.text;
           this.pushEvent(sessionId, 'assistant_delta', { delta: update.text }, context.emit);
-          this.sessions.touchPreview(sessionId, active.accumulatedText);
+          this.touchPreview(sessionId, active.accumulatedText);
         }
         return;
       case 'thinking-delta':

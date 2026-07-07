@@ -26,6 +26,7 @@ async function runMain({ env = {}, fetchImpl, advanceTimers = false } = {}) {
     windows: [],
     logs: [],
     errors: [],
+    externalOpens: [],
     quitCalls: 0,
   };
 
@@ -156,6 +157,7 @@ async function runMain({ env = {}, fetchImpl, advanceTimers = false } = {}) {
     Date: SandboxDate,
     encodeURIComponent,
     fetch: fetchImpl || (() => Promise.reject(new Error('fetch should not be called'))),
+    URL,
     module: sandboxModule,
     exports: sandboxModule.exports,
     process: {
@@ -188,6 +190,12 @@ async function runMain({ env = {}, fetchImpl, advanceTimers = false } = {}) {
             }
             on() {}
             show() {}
+          },
+          shell: {
+            openExternal(url) {
+              state.externalOpens.push(url);
+              return Promise.resolve();
+            },
           },
         };
       }
@@ -312,6 +320,21 @@ describe('desktop main dev-mode loading', () => {
     expect(state.browserViews).toHaveLength(1);
     expect(state.removedBrowserViews).toEqual([state.browserViews[0]]);
     expect(state.setBrowserViews).toEqual([state.browserViews[0], state.browserViews[0]]);
+  });
+
+  test('external:open delegates http links to the system browser only', async () => {
+    const state = await runMain({
+      fetchImpl: async (url) => ({ ok: url === 'http://localhost:5173' }),
+    });
+
+    await expect(state.ipcHandlers['external:open']({}, 'https://example.com/docs')).resolves.toEqual({
+      ok: true,
+      url: 'https://example.com/docs',
+    });
+    await expect(state.ipcHandlers['external:open']({}, 'javascript:alert(1)')).rejects.toThrow(
+      /http or https/i,
+    );
+    expect(state.externalOpens).toEqual(['https://example.com/docs']);
   });
 
   test('servers:connect switches the shell to a remote server, lists it, and returns to local', async () => {

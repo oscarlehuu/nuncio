@@ -104,6 +104,53 @@ export interface SessionEvent {
 
 export type ProviderRequestDecision = 'approve' | 'deny';
 
+export type TaskStatus = 'QUEUED' | 'RUNNING' | 'DONE' | 'FAILED' | 'CANCELLED';
+export type TaskRole = 'standalone' | 'subagent';
+export type TaskCleanupPolicy = 'after-review' | 'manual' | 'never';
+export type TaskReviewState = 'awaiting_review' | 'reviewed';
+
+export interface TaskDto {
+  id: string;
+  prompt: string;
+  status: TaskStatus;
+  provider: string | null;
+  model: string | null;
+  modelOptions: ModelOptionsMap | null;
+  projectPath: string | null;
+  baseBranch: string | null;
+  useWorktree: boolean;
+  workspace: string | null;
+  parentSessionId: string | null;
+  role: TaskRole;
+  cleanupPolicy: TaskCleanupPolicy | null;
+  reviewState: TaskReviewState | null;
+  sessionId: string | null;
+  outcome: Record<string, unknown> | null;
+  pendingInput?: boolean;
+  createdAt: number;
+  updatedAt: number;
+  startedAt: number | null;
+  finishedAt: number | null;
+}
+
+export interface StartMultitaskInput {
+  parentSessionId: string;
+  prompts: string[];
+  provider?: string;
+  model?: string;
+  modelOptions?: ModelOptionsMap | null;
+  projectPath?: string;
+  baseBranch?: string;
+  useWorktree?: boolean;
+  workspace?: string;
+  cleanupPolicy?: TaskCleanupPolicy;
+}
+
+export interface StartMultitaskResult {
+  parentSessionId: string;
+  tasks: TaskDto[];
+}
+
 export class SteerApiError extends Error {
   readonly status: number;
 
@@ -466,5 +513,47 @@ export async function openPullRequest(
 export async function fetchPullRequest(id: string): Promise<ForgePullRequest> {
   const res = await apiFetch(`/api/sessions/${id}/forge/pull-request`);
   if (!res.ok) throw new Error(await forgeErrorMessage(res, 'Failed to fetch pull request'));
+  return res.json();
+}
+
+/** Child subagent tasks spawned from a parent session's multitasking. */
+export async function fetchChildTasks(parentSessionId: string): Promise<TaskDto[]> {
+  const res = await apiFetch(
+    `/api/tasks?parentSessionId=${encodeURIComponent(parentSessionId)}`,
+  );
+  if (!res.ok) throw new Error('Failed to load subagent tasks');
+  return res.json();
+}
+
+/** Run one or more prompts as child subagents while the parent session continues. */
+export async function startMultitask(input: StartMultitaskInput): Promise<StartMultitaskResult> {
+  const res = await apiFetch('/api/tasks/multitask', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error('Failed to start multitasking');
+  return res.json();
+}
+
+/** Fan the parent session's queued messages out as parallel subagents. */
+export async function startMultitaskFromQueue(
+  parentSessionId: string,
+): Promise<StartMultitaskResult> {
+  const res = await apiFetch('/api/tasks/multitask-from-queue', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ parentSessionId }),
+  });
+  if (!res.ok) throw new Error('Failed to start multitasking');
+  return res.json();
+}
+
+/** Mark a subagent task that is awaiting review as reviewed. */
+export async function markTaskReviewed(id: string): Promise<TaskDto> {
+  const res = await apiFetch(`/api/tasks/${encodeURIComponent(id)}/reviewed`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error('Failed to mark task reviewed');
   return res.json();
 }

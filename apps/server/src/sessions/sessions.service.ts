@@ -13,6 +13,7 @@ import { homedir } from 'node:os';
 import { v4 as uuidv4 } from 'uuid';
 import { AgentRegistry } from '../agents/agents.registry';
 import type { AgentAttachment, AgentRunContext } from '../agents/agents.types';
+import { AgentToolRegistry } from '../agents/tools/agent-tool-registry';
 import { MediaStore } from './media.store';
 import { CursorLocalSessionsService } from '../cursor-local/cursor-local-sessions.service';
 import { turnsToSessionEvents } from '../cursor-local/cursor-transcript-hydrate';
@@ -47,6 +48,14 @@ const DEFAULT_BACKFILL_LIMIT = 200;
 
 /** Trailing events scanned to decide whether a run is blocked on your input. */
 const PENDING_SCAN_TAIL = 200;
+const DEFAULT_STALLED_RUN_FORCE_IDLE_MS = 30 * 60 * 1000;
+
+function resolveStalledRunForceIdleMs(): number {
+  const raw = process.env.NUNCIO_STALLED_RUN_FORCE_IDLE_MS;
+  if (!raw) return DEFAULT_STALLED_RUN_FORCE_IDLE_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_STALLED_RUN_FORCE_IDLE_MS;
+}
 
 interface PendingProviderRequest {
   sessionId: string;
@@ -64,10 +73,12 @@ export class SessionsService implements OnModuleDestroy {
   private readonly locallyProducing = new Set<string>();
   private readonly verifying = new Set<string>();
   private readonly runPromises = new Map<string, Promise<void>>();
+  private readonly stalledRunTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly transcriptWatchers = new Map<
     string,
     { watcher: FSWatcher; count: number; debounce?: ReturnType<typeof setTimeout> }
   >();
+  private stalledRunForceIdleMs = resolveStalledRunForceIdleMs();
 
   constructor(
     private readonly sessions: SessionsRepository,
@@ -81,6 +92,7 @@ export class SessionsService implements OnModuleDestroy {
     @Optional() private readonly media?: MediaStore,
     @Optional() private readonly piLocal?: PiLocalSessionsService,
     @Optional() private readonly settings?: SettingsService,
+    @Optional() private readonly agentTools?: AgentToolRegistry,
   ) {
     // Restore before reconcile: sessions still RUNNING here get their drain
     // scheduled by the reconcile IDLE transition instead.
@@ -353,6 +365,21 @@ export class SessionsService implements OnModuleDestroy {
     this.appendAndEmit(id, 'steer_queued', { text: message });
   }
 
+  /**
+   * Empty the pending steer queue and return the queued prompt texts, so the
+   * caller can hand them to parallel subagents instead of delivering them
+   * sequentially. Emits `steer_queue_cleared` so live clients drop the queued
+   * placeholders. Any image attachments on a queued steer are not carried over —
+   * multitasking is text-only. Returns [] when nothing was queued.
+   */
+  drainSteerQueueForMultitask(id: string): string[] {
+    this.requireSession(id);
+    const drained = this.steerQueue.drainAll(id);
+    if (drained.length === 0) return [];
+    this.appendAndEmit(id, 'steer_queue_cleared', {});
+    return drained.map((steer) => steer.message);
+  }
+
   /** Deliver the next queued steer once the foreground run has settled. */
   private drainSteerQueue(id: string): void {
     // Drain timers can outlive the service; after shutdown the database is
@@ -523,6 +550,8 @@ export class SessionsService implements OnModuleDestroy {
 
   onModuleDestroy(): void {
     this.destroyed = true;
+    for (const timer of this.stalledRunTimers.values()) clearTimeout(timer);
+    this.stalledRunTimers.clear();
     for (const entry of this.transcriptWatchers.values()) {
       if (entry.debounce) clearTimeout(entry.debounce);
       try {
@@ -844,11 +873,13 @@ export class SessionsService implements OnModuleDestroy {
       transcriptMtimeMs,
       chatStoreMtimeMs,
       transcriptTurnEnded,
+      tools: this.agentTools?.forSession(session.id),
     };
   }
 
   private transition(id: string, status: SessionStatus): void {
     this.sessions.updateStatus(id, status);
+    this.updateStalledRunWatchForStatus(id, status);
     this.appendAndEmit(id, 'status', { status });
     if (status === 'IDLE') {
       setTimeout(() => this.drainSteerQueue(id), 0);
@@ -878,11 +909,74 @@ export class SessionsService implements OnModuleDestroy {
       if (latest) this.emit(id, latest);
       else this.emit(id, { seq: 0, type: event.type, payload: event.payload, createdAt: Date.now() });
     }
+    this.updateStalledRunWatchForEvent(id, event);
     if (event.type !== 'status') return;
     const status = (event.payload as { status?: SessionStatus } | null)?.status;
     if (status !== 'IDLE' && status !== 'ERROR') return;
     // Deliver after the finishing run fully unwinds (provider finally blocks).
     setTimeout(() => this.drainSteerQueue(id), 0);
+  }
+
+  private updateStalledRunWatchForEvent(
+    id: string,
+    event: { type: string; payload: unknown },
+  ): void {
+    if (event.type === 'status') {
+      const status = (event.payload as { status?: SessionStatus } | null)?.status;
+      if (status) this.updateStalledRunWatchForStatus(id, status);
+      return;
+    }
+    const session = this.sessions.findById(id);
+    if (session?.status === 'RUNNING') this.scheduleStalledRunWatch(id);
+  }
+
+  private updateStalledRunWatchForStatus(id: string, status: SessionStatus): void {
+    if (status === 'RUNNING') {
+      this.scheduleStalledRunWatch(id);
+      return;
+    }
+    this.clearStalledRunWatch(id);
+  }
+
+  private scheduleStalledRunWatch(id: string): void {
+    if (this.destroyed || this.stalledRunForceIdleMs <= 0) return;
+    this.clearStalledRunWatch(id);
+    const timer = setTimeout(() => this.forceIdleStalledRun(id), this.stalledRunForceIdleMs);
+    this.stalledRunTimers.set(id, timer);
+  }
+
+  private clearStalledRunWatch(id: string): void {
+    const timer = this.stalledRunTimers.get(id);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.stalledRunTimers.delete(id);
+  }
+
+  private forceIdleStalledRun(id: string): void {
+    this.stalledRunTimers.delete(id);
+    if (this.destroyed) return;
+    const session = this.sessions.findById(id);
+    if (!session || session.status !== 'RUNNING') return;
+    if (deriveHasPendingInput(this.events.listTail(id, PENDING_SCAN_TAIL))) {
+      this.scheduleStalledRunWatch(id);
+      return;
+    }
+    try {
+      this.agents.resolveForSession(session).dispose(id);
+    } catch {
+      // Provider lookup/dispose failure should not leave the UI wedged RUNNING.
+    }
+    this.locallyProducing.delete(id);
+    try {
+      this.sessions.updateProviderRuntimeState(id, { providerActiveTurnId: null });
+    } catch {
+      // Session may have been deleted while the timer was pending.
+    }
+    this.appendAndEmit(id, 'runtime_stalled', {
+      timeoutMs: this.stalledRunForceIdleMs,
+      resumable: this.isResumableAfterRestart(session),
+    });
+    this.transition(id, 'IDLE');
   }
 
   private getOrCreateBus(id: string): EventEmitter {
@@ -912,15 +1006,8 @@ export class SessionsService implements OnModuleDestroy {
       try {
         const provider = await this.agents.resolveAvailableForSession(session);
         await provider.run(session.id, session.prompt, {
-          emit: (event) => this.onAgentEvent(session.id, event),
-          requestProviderApproval: (request) =>
-            this.requestProviderApproval(session.id, request),
-          model: session.model,
-          modelOptions: session.modelOptions,
+          ...this.buildAgentRunContext(session),
           attachments: persisted,
-          workspace: session.worktreePath ?? session.workspace ?? undefined,
-          cwd: session.worktreePath ?? undefined,
-          cursorChatId: session.cursorChatId,
         });
       } finally {
         this.locallyProducing.delete(session.id);

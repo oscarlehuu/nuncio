@@ -54,6 +54,21 @@ describe('SteerQueueRepository', () => {
     expect(queue.dequeue(s.id)).toEqual({ message: 'plain' });
   });
 
+  it('drainAll returns every queued steer in FIFO order and empties the queue', () => {
+    const s = sessions.create({ prompt: 'drain' });
+    const attachments = [{ kind: 'image' as const, mimeType: 'image/png', data: 'aGk=' }];
+    queue.enqueue(s.id, 'first', attachments);
+    queue.enqueue(s.id, 'second');
+
+    expect(queue.drainAll(s.id)).toEqual([
+      { message: 'first', attachments },
+      { message: 'second' },
+    ]);
+    expect(queue.count(s.id)).toBe(0);
+    // A second drain on the now-empty queue is a no-op.
+    expect(queue.drainAll(s.id)).toEqual([]);
+  });
+
   it('isolates queues per session', () => {
     const a = sessions.create({ prompt: 'session a' });
     const b = sessions.create({ prompt: 'session b' });

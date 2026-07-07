@@ -161,6 +161,12 @@ describe('SettingsService', () => {
       // source is 'db' because a DB row exists, even though it's empty
       expect(service.resolveSource('CURSOR_API_KEY').source).toBe('db');
     });
+
+    it('rejects values outside a setting option list', () => {
+      expect(() => service.set('NUNCIO_BROWSER_DEFAULT_TARGET', 'personal-chrome')).toThrow(
+        /must be one of: auto, in_app, external/i,
+      );
+    });
   });
 
   describe('clear (delete DB row, fallback to env/default)', () => {
@@ -213,6 +219,11 @@ describe('SettingsService', () => {
       expect(dto!.hasValue).toBe(true);
       expect(dto!.source).toBe('env');
       expect(dto!.value).toBe('~/code');
+    });
+
+    it('list includes option metadata for enumerated settings', () => {
+      const dto = service.list().find((d) => d.key === 'NUNCIO_BROWSER_DEFAULT_TARGET');
+      expect(dto!.options?.map((option) => option.value)).toEqual(['auto', 'in_app', 'external']);
     });
 
     it('list reports hasValue=false and value=null for unset secrets', () => {

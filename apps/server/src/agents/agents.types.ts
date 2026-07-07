@@ -6,6 +6,7 @@ import type {
   SessionDto,
 } from '../sessions/domain/sessions.types';
 import type { UserInputAnswer } from '../sessions/domain/user-input.types';
+import type { AgentRuntimeTools } from './tools/agent-runtime-tools.types';
 
 /**
  * Providers emit the event exactly as it was appended to the log: when `seq`
@@ -61,6 +62,8 @@ export interface AgentRunContext {
   forceResume?: boolean;
   /** Provider-agnostic approval hook for SDK/tool requests that need a user decision. */
   requestProviderApproval?: (request: ProviderRequestInput) => Promise<ProviderRequestResult>;
+  /** Session-bound runtime tools that providers adapt into SDK-native tool contracts. */
+  tools?: AgentRuntimeTools;
 }
 
 export interface AgentProvider {

@@ -73,7 +73,8 @@ export class SettingsService {
 
   /** Persist a value. Secrets are encrypted at rest. Fires onChange. */
   set(key: string, value: string): void {
-    this.requireDefinition(key);
+    const def = this.requireDefinition(key);
+    this.validateOptionValue(def, value);
     const stored = isSecretSetting(key) ? encryptValue(value, this.key) : value;
     this.repo.set(key, stored);
     this.emit(key);
@@ -114,6 +115,7 @@ export class SettingsService {
         source,
         value: hasValue ? maskSecret(value!) : null,
         readOnly: def.readOnly ?? false,
+        options: def.options,
       };
     }
     return {
@@ -127,6 +129,7 @@ export class SettingsService {
       source,
       value: hasValue ? value! : null,
       readOnly: def.readOnly ?? false,
+      options: def.options,
     };
   }
 
@@ -157,6 +160,14 @@ export class SettingsService {
     const def = getSettingDefinition(key);
     if (!def) throw new BadRequestException(`unknown setting key: ${key}`);
     return def;
+  }
+
+  private validateOptionValue(def: SettingDefinition, value: string): void {
+    if (!def.options || value === '') return;
+    const allowed = def.options.map((option) => option.value);
+    if (!allowed.includes(value)) {
+      throw new BadRequestException(`${def.key} must be one of: ${allowed.join(', ')}`);
+    }
   }
 
   private emit(key: string): void {

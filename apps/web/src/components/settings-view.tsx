@@ -1,6 +1,21 @@
-import { ArrowLeft, ChevronDown, ChevronUp } from 'lucide-react';
+import {
+  ArrowLeft,
+  Bot,
+  ChevronDown,
+  ChevronUp,
+  FolderGit2,
+  GitPullRequest,
+  Network,
+  Palette,
+  Puzzle,
+  Search,
+  Settings2,
+  SlidersHorizontal,
+  Wrench,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { useState, useEffect } from 'react';
+import { Input } from '@/components/ui/input';
+import { useState, useEffect, type ReactNode } from 'react';
 import type { Setting } from '../lib/settings-api';
 import { SettingRow } from './setting-row';
 import { ProviderIcon } from './provider-icon';
@@ -8,6 +23,7 @@ import { fetchForgeStatus, type ForgeStatusDto } from '../lib/forge-status-api';
 import { AppearanceSettingsSection } from './appearance-settings-section';
 import { RemoteAccessSettingsSection } from './remote-access-settings-section';
 import { ProviderUpdateSettingsSection } from './provider-update-settings-section';
+import { SettingsSectionNav, type SettingsSectionNavItem } from './settings-section-nav';
 
 interface SettingsViewProps {
   settings: Setting[];
@@ -23,6 +39,29 @@ interface ProviderMetaInfo {
   primaryKey: string;
 }
 
+type SettingsSectionId =
+  | 'general'
+  | 'appearance'
+  | 'providers'
+  | 'source-control'
+  | 'mcp-tools'
+  | 'agents'
+  | 'workspaces'
+  | 'remote-access'
+  | 'advanced';
+
+const SECTION_NAV_ITEMS: ReadonlyArray<SettingsSectionNavItem & { id: SettingsSectionId }> = [
+  { id: 'general', label: 'General', icon: Settings2 },
+  { id: 'appearance', label: 'Appearance', icon: Palette },
+  { id: 'providers', label: 'Providers', icon: Bot },
+  { id: 'source-control', label: 'Source control', icon: GitPullRequest },
+  { id: 'mcp-tools', label: 'MCP & Tools', icon: Puzzle },
+  { id: 'agents', label: 'Agents', icon: SlidersHorizontal },
+  { id: 'workspaces', label: 'Workspaces', icon: FolderGit2 },
+  { id: 'remote-access', label: 'Remote access', icon: Network },
+  { id: 'advanced', label: 'Advanced', icon: Wrench },
+];
+
 const PROVIDER_METAS: Record<string, ProviderMetaInfo> = {
   cursor: {
     id: 'cursor',
@@ -33,7 +72,7 @@ const PROVIDER_METAS: Record<string, ProviderMetaInfo> = {
   pi: {
     id: 'pi',
     name: 'Pi',
-    description: 'Pi coding agent settings and configuration directory',
+    description: 'Install or manage the Pi CLI and agent directory',
     primaryKey: 'PI_AGENT_DIR',
   },
   codex: {
@@ -62,9 +101,16 @@ function sourceControlAuthMethodSuffix(providerId: string, method: ForgeStatusDt
   return '';
 }
 
+function matchesQuery(text: string | null | undefined, query: string): boolean {
+  if (!query) return true;
+  return (text ?? '').toLowerCase().includes(query);
+}
+
 export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsViewProps) {
   const [forgeStatus, setForgeStatus] = useState<ForgeStatusDto[]>([]);
   const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({});
+  const [activeSection, setActiveSection] = useState<SettingsSectionId>('appearance');
+  const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
     fetchForgeStatus()
@@ -78,6 +124,11 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
   const general = settings.filter(
     (s) => s.category === 'general' && s.key !== 'NUNCIO_TAILSCALE_AUTO_TRUST',
   );
+  const agents = settings.filter((s) => s.category === 'agents');
+  const tools = settings.filter((s) => s.category === 'tools');
+  const workspaces = settings.filter((s) => s.category === 'workspaces');
+  const network = settings.filter((s) => s.category === 'network' && s.key !== 'NUNCIO_TAILSCALE_AUTO_TRUST');
+  const advanced = settings.filter((s) => s.category === 'advanced');
   const providerSettings = settings.filter((s) => s.category === 'provider');
 
   // Group by providerId
@@ -98,12 +149,21 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
     }));
   };
 
-  const renderProviderRow = (providerId: string) => {
+  const renderProviderRow = (providerId: string, query = '') => {
     const meta = PROVIDER_METAS[providerId];
     if (!meta) return null;
 
     const pSettings = settingsByProvider[providerId] || [];
     if (pSettings.length === 0) return null;
+    const normalizedQuery = query.trim().toLowerCase();
+    if (
+      normalizedQuery &&
+      !matchesQuery(meta.name, normalizedQuery) &&
+      !matchesQuery(meta.description, normalizedQuery) &&
+      !pSettings.some((s) => matchesQuery(s.label, normalizedQuery) || matchesQuery(s.description, normalizedQuery))
+    ) {
+      return null;
+    }
 
     const isSourceControl = providerId === 'github' || providerId === 'gitlab';
     let isConnected = false;
@@ -125,6 +185,7 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
       isConnected = primarySetting?.hasValue ?? false;
     }
 
+    const actionLabel = providerId === 'pi' ? 'Manage' : isConnected ? 'Manage' : 'Connect';
     const isExpanded = !!expandedProviders[providerId];
 
     return (
@@ -143,9 +204,9 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
             className="h-8 font-medium px-3 text-ui flex items-center gap-1.5"
             onClick={() => toggleExpand(providerId)}
             aria-expanded={isExpanded}
-            aria-label={`${isConnected ? 'Manage' : 'Connect'} ${meta.name}`}
+            aria-label={`${actionLabel} ${meta.name}`}
           >
-            <span>{isConnected ? 'Manage' : 'Connect'}</span>
+            <span>{actionLabel}</span>
             {isExpanded ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
           </Button>
         </div>
@@ -160,8 +221,149 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
     );
   };
 
+  const renderSettingGroup = (title: string, rows: Setting[], emptyText: string) => (
+    <section>
+      <h2 className="mb-2 text-ui-lg font-medium text-muted-foreground">{title}</h2>
+      {rows.length > 0 ? (
+        <div className="overflow-hidden rounded-lg border border-border bg-card px-4 divide-y divide-border/60">
+          {rows.map((s) => (
+            <SettingRow key={s.key} setting={s} onUpdate={onUpdate} onClear={onClear} />
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-lg border border-border bg-card px-4 py-3 text-ui text-muted-foreground">
+          {emptyText}
+        </div>
+      )}
+    </section>
+  );
+
+  const renderProviderGroup = (title: string, providerIds: string[], includeUpdates = false, query = '') => {
+    const rows = providerIds.map((id) => renderProviderRow(id, query)).filter(Boolean);
+    return (
+      <section>
+        <h2 className="mb-2 text-ui-lg font-medium text-muted-foreground">{title}</h2>
+        {rows.length > 0 || includeUpdates ? (
+          <div className="overflow-hidden rounded-lg border border-border bg-card">
+            {rows}
+            {includeUpdates && <ProviderUpdateSettingsSection />}
+          </div>
+        ) : (
+          <div className="rounded-lg border border-border bg-card px-4 py-3 text-ui text-muted-foreground">
+            No settings in this section.
+          </div>
+        )}
+      </section>
+    );
+  };
+
+  const filterSettings = (rows: Setting[], query: string) => {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) return rows;
+    return rows.filter(
+      (s) =>
+        matchesQuery(s.label, normalizedQuery) ||
+        matchesQuery(s.description, normalizedQuery) ||
+        matchesQuery(s.key, normalizedQuery),
+    );
+  };
+
+  const renderSearchResults = () => {
+    const query = searchQuery.trim().toLowerCase();
+    const resultSections: ReactNode[] = [];
+    const remoteAccessMatches = ['remote access', 'access token', 'tailscale', 'tailnet', 'trust'].some((term) =>
+      term.includes(query),
+    );
+
+    const providerResult = renderProviderGroup('Providers', ['cursor', 'pi', 'codex'], false, query);
+    const sourceResult = renderProviderGroup('Source control', ['github', 'gitlab'], false, query);
+    const matchingAgents = filterSettings(agents, query);
+    const matchingTools = filterSettings(tools, query);
+    const matchingWorkspaces = filterSettings(workspaces, query);
+    const matchingNetwork = filterSettings(network, query);
+    const matchingAdvanced = filterSettings(advanced, query);
+    const matchingGeneral = filterSettings(general, query);
+
+    if (['cursor', 'pi', 'codex'].some((id) => renderProviderRow(id, query))) {
+      resultSections.push(<div key="providers">{providerResult}</div>);
+    }
+    if (['github', 'gitlab'].some((id) => renderProviderRow(id, query))) {
+      resultSections.push(<div key="source-control">{sourceResult}</div>);
+    }
+    if (matchingAgents.length > 0) {
+      resultSections.push(<div key="agents">{renderSettingGroup('Agents', matchingAgents, '')}</div>);
+    }
+    if (matchingTools.length > 0) {
+      resultSections.push(<div key="mcp-tools">{renderSettingGroup('MCP & Tools', matchingTools, '')}</div>);
+    }
+    if (matchingWorkspaces.length > 0) {
+      resultSections.push(<div key="workspaces">{renderSettingGroup('Workspaces', matchingWorkspaces, '')}</div>);
+    }
+    if (remoteAccessMatches || matchingNetwork.length > 0) {
+      resultSections.push(
+        <div key="remote-access" className="space-y-6">
+          <RemoteAccessSettingsSection />
+          {matchingNetwork.length > 0 && renderSettingGroup('Network', matchingNetwork, '')}
+        </div>,
+      );
+    }
+    if (matchingAdvanced.length > 0) {
+      resultSections.push(<div key="advanced">{renderSettingGroup('Advanced', matchingAdvanced, '')}</div>);
+    }
+    if (matchingGeneral.length > 0) {
+      resultSections.push(<div key="general">{renderSettingGroup('General', matchingGeneral, '')}</div>);
+    }
+
+    if (resultSections.length === 0) {
+      return (
+        <section>
+          <h2 className="mb-2 text-ui-lg font-medium text-muted-foreground">Search results</h2>
+          <div className="rounded-lg border border-border bg-card px-4 py-3 text-ui text-muted-foreground">
+            No settings match "{searchQuery}".
+          </div>
+        </section>
+      );
+    }
+
+    return <div className="space-y-6">{resultSections}</div>;
+  };
+
+  const renderActiveSection = () => {
+    if (searchQuery.trim()) return renderSearchResults();
+    switch (activeSection) {
+      case 'general':
+        return renderSettingGroup('General', general, 'No general settings are available.');
+      case 'appearance':
+        return <AppearanceSettingsSection />;
+      case 'providers':
+        return renderProviderGroup('Providers', ['cursor', 'pi', 'codex'], true);
+      case 'source-control':
+        return renderProviderGroup('Source control', ['github', 'gitlab']);
+      case 'mcp-tools':
+        return renderSettingGroup('MCP & Tools', tools, 'No MCP or tool settings are available.');
+      case 'agents':
+        return renderSettingGroup('Agents', agents, 'No agent defaults are available.');
+      case 'workspaces':
+        return renderSettingGroup('Workspaces', workspaces, 'No workspace settings are available.');
+      case 'remote-access':
+        return (
+          <div className="space-y-6">
+            <RemoteAccessSettingsSection />
+            {network.length > 0 && renderSettingGroup('Network', network, 'No network settings are available.')}
+          </div>
+        );
+      case 'advanced':
+        return renderSettingGroup('Advanced', advanced, 'No advanced settings are available.');
+    }
+  };
+
+  const handleSectionSelect = (sectionId: string) => {
+    setActiveSection(sectionId as SettingsSectionId);
+    setSearchQuery('');
+  };
+
   return (
-    <section className="flex-1 flex flex-col min-h-0 overflow-y-auto">
+    <section className="flex-1 flex flex-col min-h-0 overflow-hidden bg-background">
       <header className="flex items-center gap-2 px-4 py-3 border-b border-border sticky top-0 bg-background/80 backdrop-blur z-10">
         <Button variant="ghost" size="icon" onClick={onBack} aria-label="Back">
           <ArrowLeft className="size-4" />
@@ -169,45 +371,35 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
         <h1 className="text-lg font-semibold tracking-tight">Settings</h1>
       </header>
 
-      <div className="flex-1 px-4 py-4 max-w-[640px] w-full mx-auto space-y-8">
-        <AppearanceSettingsSection />
-
-        {/* Providers Section */}
-        <section>
-          <h2 className="text-ui-lg font-medium text-muted-foreground mb-2">Providers</h2>
-          <div className="border border-border rounded-xl overflow-hidden bg-card">
-            {['cursor', 'pi', 'codex'].map((id) => renderProviderRow(id))}
-            <ProviderUpdateSettingsSection />
-          </div>
-        </section>
-
-        {/* Source Control Section */}
-        <section>
-          <h2 className="text-ui-lg font-medium text-muted-foreground mb-2">Source control</h2>
-          <div className="border border-border rounded-xl overflow-hidden bg-card">
-            {['github', 'gitlab'].map((id) => renderProviderRow(id))}
-          </div>
-        </section>
-
-        <RemoteAccessSettingsSection />
-
-        {/* General Section */}
-        {general.length > 0 && (
-          <section>
-            <h2 className="text-ui-lg font-medium text-muted-foreground mb-2">General</h2>
-            <div className="border border-border rounded-xl overflow-hidden bg-card px-4 divide-y divide-border/60">
-              {general.map((s) => (
-                <SettingRow key={s.key} setting={s} onUpdate={onUpdate} onClear={onClear} />
-              ))}
+      <div className="flex flex-1 min-h-0 flex-col sm:flex-row">
+        <aside className="shrink-0 border-b border-border bg-sidebar/40 sm:w-60 sm:border-b-0 sm:border-r">
+          <div className="p-2 sm:p-3">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                type="search"
+                role="searchbox"
+                aria-label="Search settings"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search Settings"
+                className="h-8 pl-8 text-ui"
+              />
             </div>
-          </section>
-        )}
+          </div>
+          <SettingsSectionNav items={SECTION_NAV_ITEMS} activeId={activeSection} onSelect={handleSectionSelect} />
+        </aside>
 
-        <p className="text-ui-sm text-muted-foreground leading-relaxed pt-2">
-          Settings override environment variables at runtime. Secrets are encrypted at rest
-          (AES-256-GCM) and never returned in plain text. Boot-only vars (NUNCIO_DATA_DIR, PORT,
-          NUNCIO_SETTINGS_KEY) remain env-only.
-        </p>
+        <div className="flex-1 overflow-y-auto px-4 py-5">
+          <div className="mx-auto w-full max-w-[720px] space-y-6">
+            {renderActiveSection()}
+            <p className="text-ui-sm text-muted-foreground leading-relaxed pt-2">
+              Settings override environment variables at runtime. Secrets are encrypted at rest
+              (AES-256-GCM) and never returned in plain text. Boot-only vars (NUNCIO_DATA_DIR, PORT,
+              NUNCIO_SETTINGS_KEY) remain env-only.
+            </p>
+          </div>
+        </div>
       </div>
     </section>
   );

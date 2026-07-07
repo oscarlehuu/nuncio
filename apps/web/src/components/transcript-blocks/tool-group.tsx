@@ -1,8 +1,9 @@
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, Loader2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { summarizeToolGroup, type ToolSummary } from '@/lib/tool-summary';
 import { ToolCallBlock } from './tool-call-block';
+import { ToolGlyph } from './tool-glyph';
 
 export interface ToolGroupTool {
   callId: string;
@@ -19,6 +20,7 @@ interface ToolGroupProps {
 
 export function ToolGroup({ tools }: ToolGroupProps) {
   const hasRunning = tools.some((t) => t.status === 'running');
+  const hasError = tools.some((t) => t.status === 'error');
   const [open, setOpen] = useState(false);
   const [userToggled, setUserToggled] = useState(false);
   const effectiveOpen = userToggled ? open : hasRunning;
@@ -49,16 +51,17 @@ export function ToolGroup({ tools }: ToolGroupProps) {
     <div className="rounded-md">
       <button
         type="button"
-        className="group flex w-full items-center gap-1.5 px-1 py-0.5 min-h-[20px] text-left text-muted-foreground"
+        className="group flex w-full items-center gap-1.5 rounded-md px-1.5 py-0.5 min-h-[22px] text-left text-muted-foreground transition-colors hover:bg-muted/40"
         aria-expanded={effectiveOpen}
         onClick={handleClick}
         data-testid="tool-group-summary"
       >
-        {hasRunning && (
-          <span className="inline-block size-1.5 rounded-full bg-primary animate-pulse" aria-hidden />
-        )}
-        <span className="text-ui">{summaryText}</span>
-        <span className="ml-auto">
+        <ToolGlyph verb={tools[0].summary.verb} status={hasError ? 'error' : undefined} />
+        <span className="text-ui text-foreground/80">{summaryText}</span>
+        <span className="ml-auto flex items-center gap-1.5">
+          {hasRunning && (
+            <Loader2 className="size-3 animate-spin text-muted-foreground/70" aria-hidden />
+          )}
           <ChevronDown
             className={cn(
               'size-3 text-muted-foreground/50 transition-transform group-hover:text-muted-foreground',
@@ -69,7 +72,7 @@ export function ToolGroup({ tools }: ToolGroupProps) {
         </span>
       </button>
       {effectiveOpen && (
-        <div className="pl-1 pr-0.5 pb-1 flex flex-col">
+        <div className="ml-[13px] mt-0.5 flex flex-col border-l border-border/40 pl-2 pr-0.5 pb-1">
           {tools.map((t) => (
             <ToolCallBlock
               key={t.callId}

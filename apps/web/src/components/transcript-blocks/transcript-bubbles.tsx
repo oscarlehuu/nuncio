@@ -1,14 +1,22 @@
 import { useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { useThrottledStreamText } from '@/lib/use-throttled-stream-text';
-import { MarkdownView } from '../markdown-view';
+import { MarkdownView, type MarkdownLinkClickHandler } from '../markdown-view';
 import { cn } from '@/lib/utils';
 
-export function AssistantBubble({ text, streaming }: { text: string; streaming?: boolean }) {
+export function AssistantBubble({
+  text,
+  streaming,
+  onLinkClick,
+}: {
+  text: string;
+  streaming?: boolean;
+  onLinkClick?: MarkdownLinkClickHandler;
+}) {
   const displayed = useThrottledStreamText(text, streaming ?? false);
   return (
     <>
-      <MarkdownView text={displayed} streaming={streaming} />
+      <MarkdownView text={displayed} streaming={streaming} onLinkClick={onLinkClick} />
       {streaming && (
         <span className="inline-block w-2 h-4 ml-0.5 bg-primary animate-pulse align-middle" />
       )}
@@ -20,14 +28,20 @@ export function AssistantBubble({ text, streaming }: { text: string; streaming?:
 const USER_MSG_COLLAPSE_THRESHOLD = 600;
 const USER_MSG_PREVIEW = 400;
 
-export function UserBubble({ text }: { text: string }) {
+export function UserBubble({
+  text,
+  onLinkClick,
+}: {
+  text: string;
+  onLinkClick?: MarkdownLinkClickHandler;
+}) {
   const isLong = text.length > USER_MSG_COLLAPSE_THRESHOLD;
   const [expanded, setExpanded] = useState(false);
 
   if (!isLong) {
     return (
       <div className="text-foreground/90">
-        <MarkdownView text={text} />
+        <MarkdownView text={text} onLinkClick={onLinkClick} />
       </div>
     );
   }
@@ -36,7 +50,7 @@ export function UserBubble({ text }: { text: string }) {
 
   return (
     <div className="text-foreground/90" data-testid="user-bubble-collapsible">
-      <MarkdownView text={expanded ? text : preview} />
+      <MarkdownView text={expanded ? text : preview} onLinkClick={onLinkClick} />
       {!expanded && (
         <div className="mt-1 text-muted-foreground/60 text-ui">
           … {text.length - USER_MSG_PREVIEW} more chars

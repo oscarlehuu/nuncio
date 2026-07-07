@@ -7,6 +7,11 @@ import type { ModelOptionDescriptorDto, ModelOptionsMap } from '../../models/mod
 import type { ModelProviderDto } from '../../models/models.types';
 import { AgentRunCancelledError, BaseAgentProvider } from '../agents.base-provider';
 import type { AgentRunContext, EventEmitter } from '../agents.types';
+import { appendRuntimeToolInstructions, type AgentRuntimeTools } from '../tools/agent-runtime-tools.types';
+import {
+  buildCodexDynamicTools,
+  executeCodexRuntimeTool,
+} from '../tools/codex-runtime-tools.adapter';
 import type { ProviderRequestResult } from '../../sessions/domain/sessions.types';
 import {
   CodexAppServerClient,
@@ -25,8 +30,9 @@ import {
 type CodexRuntimeMode = 'approval-required' | 'full-access';
 
 interface CodexThreadOpenResponse {
-  thread?: { id?: string };
+  thread?: { id?: string; name?: string | null };
   threadId?: string;
+  threadName?: string | null;
 }
 
 interface CodexTurnStartResponse {
@@ -72,6 +78,7 @@ interface ActiveCodexSession {
   codexThreadId: string;
   currentEmit?: EventEmitter;
   requestProviderApproval?: AgentRunContext['requestProviderApproval'];
+  runtimeTools?: AgentRuntimeTools;
   activeTurnId?: string;
   accumulatedText: string;
   /** itemId of the agentMessage item currently streaming — a change marks a new
@@ -238,13 +245,20 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
     const active = await this.ensureSession(sessionId, context);
     active.currentEmit = context.emit;
     active.requestProviderApproval = context.requestProviderApproval;
+    active.runtimeTools = context.tools;
     active.accumulatedText = '';
     active.currentAgentItemId = undefined;
 
     const model = this.resolveModel(context.model);
     const effort = this.resolveReasoningEffort(context.modelOptions);
     const serviceTier = this.resolveServiceTier(context.modelOptions);
-    const turnInput = [{ type: 'text' as const, text, text_elements: [] as [] }];
+    const turnInput = [
+      {
+        type: 'text' as const,
+        text: appendRuntimeToolInstructions(text, context.tools),
+        text_elements: [] as [],
+      },
+    ];
 
     const turn =
       isSteer && active.activeTurnId
@@ -283,6 +297,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
       codexThreadId: '',
       currentEmit: context.emit,
       requestProviderApproval: context.requestProviderApproval,
+      runtimeTools: context.tools,
       accumulatedText: '',
       completions: new Map(),
       completedTurns: new Map(),
@@ -308,6 +323,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
       const session = this.sessions.findById(sessionId);
       const model = this.resolveModel(context.model);
       const runtime = this.threadRuntimeOverrides();
+      const dynamicTools = buildCodexDynamicTools(context.tools);
       const persistedThreadId = session?.providerThreadId;
       const response = persistedThreadId
         ? await client.request<CodexThreadOpenResponse>('thread/resume', {
@@ -321,6 +337,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
             cwd,
             ...runtime,
             experimentalRawEvents: false,
+            ...(dynamicTools ? { dynamicTools } : {}),
           });
 
       const codexThreadId = this.readThreadId(response) ?? persistedThreadId;
@@ -333,6 +350,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
         providerThreadId: codexThreadId,
         providerState: { resumeCursor: { threadId: codexThreadId } },
       });
+      this.syncThreadName(sessionId, active, this.readThreadName(response), codexThreadId, context.emit);
       this.activeSessions.set(sessionId, active);
       return active;
     } catch (error) {
@@ -370,6 +388,17 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
       return;
     }
 
+    if (notification.method === 'thread/name/updated') {
+      const thread = asRecord(params?.thread);
+      const threadId = asString(params?.threadId) ?? asString(thread?.id);
+      const threadName =
+        asString(params?.threadName) ??
+        asString(params?.name) ??
+        asString(thread?.name);
+      this.syncThreadName(sessionId, active, threadName, threadId, active.currentEmit);
+      return;
+    }
+
     if (notification.method === 'turn/started') {
       const turnId = asString(asRecord(params?.turn)?.id) ?? asString(params?.turnId);
       if (turnId) {
@@ -398,7 +427,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
       if (itemId !== undefined) active.currentAgentItemId = itemId;
       active.accumulatedText += piece;
       this.pushEvent(sessionId, 'assistant_delta', { delta: piece }, active.currentEmit);
-      this.sessions.touchPreview(sessionId, active.accumulatedText);
+      this.touchPreview(sessionId, active.accumulatedText);
       return;
     }
 
@@ -426,12 +455,41 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
     active: ActiveCodexSession,
     request: CodexServerRequest,
   ): Promise<void> {
+    if (await this.handleDynamicToolCall(active, request)) return;
     const result = await this.resolveProviderRequest(sessionId, active, request);
     try {
       active.client.respond(request.id, { decision: result.decision });
     } catch {
       // The session may have been paused/archived while the approval was open.
     }
+  }
+
+  private async handleDynamicToolCall(
+    active: ActiveCodexSession,
+    request: CodexServerRequest,
+  ): Promise<boolean> {
+    if (request.method !== 'item/tool/call') return false;
+
+    const params = asRecord(request.params);
+    const toolName =
+      asString(params?.tool) ??
+      asString(params?.name) ??
+      asString(asRecord(params?.item)?.tool);
+    if (!toolName) {
+      active.client.respond(request.id, {
+        contentItems: [{ type: 'inputText', text: 'Dynamic tool request did not include a tool name.' }],
+        success: false,
+      });
+      return true;
+    }
+
+    const response =
+      (await executeCodexRuntimeTool(active.runtimeTools, toolName, params?.arguments)) ?? {
+        contentItems: [{ type: 'inputText', text: `Unknown Nuncio runtime tool: ${toolName}` }],
+        success: false,
+      };
+    active.client.respond(request.id, response);
+    return true;
   }
 
   private async resolveProviderRequest(
@@ -634,6 +692,32 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
 
   private readThreadId(response: CodexThreadOpenResponse): string | undefined {
     return response.thread?.id ?? response.threadId;
+  }
+
+  private readThreadName(response: CodexThreadOpenResponse): string | undefined {
+    return asString(response.thread?.name) ?? asString(response.threadName);
+  }
+
+  private syncThreadName(
+    sessionId: string,
+    active: ActiveCodexSession,
+    title: string | null | undefined,
+    threadId?: string,
+    emit?: EventEmitter,
+  ): void {
+    const trimmed = title?.trim();
+    if (!trimmed) return;
+    if (threadId && active.codexThreadId && threadId !== active.codexThreadId) return;
+
+    try {
+      const current = this.sessions.findById(sessionId);
+      if (!current || current.title === trimmed) return;
+      const updated = this.sessions.updateTitle(sessionId, trimmed);
+      if (!updated) return;
+      this.pushEvent(sessionId, 'session_title', { title: updated.title }, emit);
+    } catch {
+      // The user may have deleted the Nuncio session while the Codex app-server was still active.
+    }
   }
 
   private readTurnId(response: CodexTurnStartResponse): string | undefined {

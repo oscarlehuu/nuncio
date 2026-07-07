@@ -8,7 +8,20 @@
 
 export type SettingType = 'secret' | 'string' | 'path' | 'boolean';
 
-export type SettingCategory = 'provider' | 'general';
+export type SettingCategory =
+  | 'provider'
+  | 'general'
+  | 'agents'
+  | 'tools'
+  | 'workspaces'
+  | 'network'
+  | 'advanced';
+
+export interface SettingOption {
+  value: string;
+  label: string;
+  description?: string;
+}
 
 /**
  * Declarative metadata for one configurable key. Aggregated in
@@ -30,6 +43,8 @@ export interface SettingDefinition {
   altEnvVar?: string;
   /** Literal default when neither DB nor env provides a value. `~`-paths left for consumer to expand. */
   default?: string;
+  /** Optional allowlist for string settings rendered as option controls. */
+  options?: readonly SettingOption[];
   /** If true, this setting is read-only on the frontend (status-only display). */
   readOnly?: boolean;
 }
@@ -60,6 +75,8 @@ export interface SettingDto {
   value: string | null;
   /** Whether the frontend should render this as read-only. */
   readOnly: boolean;
+  /** Optional allowlist for settings that should render as finite choices. */
+  options?: readonly SettingOption[];
 }
 
 /** Body for PUT /api/settings/:key. */

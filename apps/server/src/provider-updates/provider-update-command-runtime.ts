@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
 export type ProviderUpdateCommandRunner = (
@@ -11,6 +12,14 @@ export type ProviderUpdateCommandRunner = (
 export const VERSION_TIMEOUT_MS = 4_000;
 
 const MAX_OUTPUT_CHARS = 10_000;
+const PROVIDER_UPDATE_FALLBACK_PATH_DIRS = [
+  '/opt/homebrew/bin',
+  '/usr/local/bin',
+  `${homedir()}/.bun/bin`,
+  `${homedir()}/.local/bin`,
+  '/usr/bin',
+  '/bin',
+];
 
 export async function fetchNpmLatestVersion(packageName: string): Promise<string | null> {
   try {
@@ -32,7 +41,9 @@ export function resolveRealCommandPath(binaryPath: string): string | null {
   const candidates =
     binaryPath.includes('/') || binaryPath.includes('\\')
       ? [binaryPath]
-      : (process.env.PATH ?? '').split(delimiter).map((entry) => join(entry, binaryPath));
+      : providerUpdatePath(process.env.PATH)
+          .split(delimiter)
+          .map((entry) => join(entry, binaryPath));
   for (const candidate of candidates) {
     if (!existsSync(candidate)) continue;
     try {
@@ -44,6 +55,22 @@ export function resolveRealCommandPath(binaryPath: string): string | null {
   return null;
 }
 
+export function providerUpdatePath(currentPath: string | undefined = process.env.PATH): string {
+  const existing = currentPath ? currentPath.split(delimiter).filter(Boolean) : [];
+  const seen = new Set(existing);
+  const merged = [...existing];
+  for (const dir of PROVIDER_UPDATE_FALLBACK_PATH_DIRS) {
+    if (seen.has(dir)) continue;
+    merged.push(dir);
+    seen.add(dir);
+  }
+  return merged.join(delimiter);
+}
+
+export function providerUpdateEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...env, PATH: providerUpdatePath(env.PATH) };
+}
+
 export function runCommand(
   command: string,
   args: string[],
@@ -51,7 +78,7 @@ export function runCommand(
 ): Promise<{ status: number | null; stdout: string; stderr: string; timedOut?: boolean }> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
-      env: options.env ?? process.env,
+      env: providerUpdateEnv(options.env ?? process.env),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';

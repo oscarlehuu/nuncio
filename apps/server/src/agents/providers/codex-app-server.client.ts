@@ -110,7 +110,10 @@ export class CodexAppServerClient implements CodexAppServerClientLike {
         name: 'nuncio',
         version: '0.1.0',
       },
-      experimentalApi: true,
+      capabilities: {
+        experimentalApi: true,
+        requestAttestation: false,
+      },
     }).then(() => {
       this.transport.send({ method: 'initialized' });
     });

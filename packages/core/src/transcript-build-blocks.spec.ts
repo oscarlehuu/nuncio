@@ -1,10 +1,50 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionEvent } from './api';
-import { buildTranscriptBlocks, workingIndicatorLabel } from './transcript-build-blocks';
+import {
+  buildTranscriptBlocks,
+  derivePendingQueuedSteers,
+  workingIndicatorLabel,
+} from './transcript-build-blocks';
 
 function ev(seq: number, type: string, payload: Record<string, unknown>): SessionEvent {
   return { seq, type, payload, createdAt: seq };
 }
+
+describe('derivePendingQueuedSteers', () => {
+  it('lists queued steers, drops delivered ones, and empties on clear', () => {
+    expect(
+      derivePendingQueuedSteers([
+        ev(1, 'steer_queued', { text: 'A' }),
+        ev(2, 'steer_queued', { text: 'B' }),
+      ]).map((s) => s.text),
+    ).toEqual(['A', 'B']);
+
+    expect(
+      derivePendingQueuedSteers([
+        ev(1, 'steer_queued', { text: 'A' }),
+        ev(2, 'steer_queued', { text: 'B' }),
+        ev(3, 'steer_message', { text: 'A' }),
+      ]).map((s) => s.text),
+    ).toEqual(['B']);
+
+    expect(
+      derivePendingQueuedSteers([
+        ev(1, 'steer_queued', { text: 'A' }),
+        ev(2, 'steer_queue_cleared', {}),
+      ]),
+    ).toHaveLength(0);
+  });
+
+  it('steer_queue_cleared removes queued placeholder blocks from the transcript', () => {
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'user_message', { text: 'do it' }),
+      ev(2, 'steer_queued', { text: 'later' }),
+      ev(3, 'steer_queue_cleared', {}),
+    ]);
+    expect(blocks.some((b) => b.kind === 'user' && b.queued)).toBe(false);
+    expect(blocks.filter((b) => b.kind === 'user')).toHaveLength(1);
+  });
+});
 
 describe('buildTranscriptBlocks', () => {
   it('pairs legacy tool_start and tool_end into one done block', () => {

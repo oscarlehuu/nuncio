@@ -23,6 +23,8 @@ const COALESCED_EVENT_TYPES = new Set(['assistant_delta', 'thinking_delta']);
 const DELTA_FLUSH_MS = 100;
 /** Flush before a merged payload can approach the 4KB event truncation limit. */
 const DELTA_FLUSH_MAX_CHARS = 2000;
+/** Sidebar/session-list preview is useful live, but must not write SQLite per token. */
+const PREVIEW_FLUSH_MS = 250;
 
 interface DeltaBuffer {
   type: string;
@@ -30,6 +32,12 @@ interface DeltaBuffer {
   base: Record<string, unknown>;
   delta: string;
   emit?: EventEmitter;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+interface PreviewBuffer {
+  preview: string;
+  dirty: boolean;
   timer: ReturnType<typeof setTimeout>;
 }
 
@@ -92,6 +100,7 @@ export abstract class BaseAgentProvider implements AgentProvider {
   ): Promise<void>;
 
   private readonly deltaBuffers = new Map<string, DeltaBuffer>();
+  private readonly previewBuffers = new Map<string, PreviewBuffer>();
 
   protected pushEvent(
     sessionId: string,
@@ -153,6 +162,36 @@ export abstract class BaseAgentProvider implements AgentProvider {
     buffered.emit?.(event);
   }
 
+  /** Update the session-list preview without turning every raw token into a DB write. */
+  protected touchPreview(sessionId: string, preview: string): void {
+    const buffered = this.previewBuffers.get(sessionId);
+    if (buffered) {
+      buffered.preview = preview;
+      buffered.dirty = true;
+      return;
+    }
+    this.sessions.touchPreview(sessionId, preview);
+    this.previewBuffers.set(sessionId, {
+      preview,
+      dirty: false,
+      timer: setTimeout(() => {
+        try {
+          this.flushPreview(sessionId);
+        } catch {
+          this.previewBuffers.delete(sessionId);
+        }
+      }, PREVIEW_FLUSH_MS),
+    });
+  }
+
+  private flushPreview(sessionId: string): void {
+    const buffered = this.previewBuffers.get(sessionId);
+    if (!buffered) return;
+    clearTimeout(buffered.timer);
+    this.previewBuffers.delete(sessionId);
+    if (buffered.dirty) this.sessions.touchPreview(sessionId, buffered.preview);
+  }
+
   /**
    * Separator to prefix onto a new assistant-message segment so it starts a
    * fresh paragraph. Providers whose stream splits one turn into discrete
@@ -186,15 +225,18 @@ export abstract class BaseAgentProvider implements AgentProvider {
       );
 
       await this.executePrompt(sessionId, text, isSteer, context);
+      this.flushPreview(sessionId);
 
       // The session may have been deleted (e.g. user deleted an archived
       // session) while the agent loop was in flight. Silently no-op instead of
       // throwing "Session not found" out of run() — that would escape as an
       // unhandled rejection and crash the process.
-      if (!this.sessions.findById(sessionId)) return;
+      const current = this.sessions.findById(sessionId);
+      if (!current || current.status !== 'RUNNING') return;
       this.sessions.updateStatus(sessionId, 'IDLE');
       this.pushEvent(sessionId, 'status', { status: 'IDLE' }, context.emit);
     } catch (error) {
+      this.flushPreview(sessionId);
       if (error instanceof AgentRunCancelledError) return;
       this.handleError(sessionId, error, context.emit);
     }

@@ -10,6 +10,11 @@ import {
 /** Initial window for the full session view; older history pages in on demand. */
 export const DETAIL_EVENT_TAIL = 1000;
 
+type ScheduledFlush = {
+  id: number;
+  cancel: (id: number) => void;
+};
+
 /** ws(s):// URL of the session relay (page hub base, or an explicit machine base). */
 export function sessionRelayUrl(base = ''): string {
   const path = '/api/sessions/ws';
@@ -22,7 +27,12 @@ export function sessionRelayUrl(base = ''): string {
 function mergeEvents(prev: SessionEvent[], incoming: SessionEvent[]): SessionEvent[] {
   if (incoming.length === 0) return prev;
   const seen = new Set(prev.map((e) => e.seq));
-  const fresh = incoming.filter((e) => !seen.has(e.seq));
+  const fresh: SessionEvent[] = [];
+  for (const event of incoming) {
+    if (seen.has(event.seq)) continue;
+    seen.add(event.seq);
+    fresh.push(event);
+  }
   if (fresh.length === 0) return prev;
   return [...prev, ...fresh].sort((a, b) => a.seq - b.seq);
 }
@@ -49,6 +59,8 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
   tailRef.current = tail;
   const eventsRef = useRef<SessionEvent[]>([]);
   const loadingEarlierRef = useRef(false);
+  const pendingEventsRef = useRef<SessionEvent[]>([]);
+  const scheduledFlushRef = useRef<ScheduledFlush | null>(null);
 
   const replaceEvents = useCallback((next: SessionEvent[]) => {
     eventsRef.current = next;
@@ -61,15 +73,39 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
     setEvents(next);
   }, []);
 
+  const flushPendingEvents = useCallback(() => {
+    scheduledFlushRef.current = null;
+    const pending = pendingEventsRef.current;
+    if (pending.length === 0) return;
+    pendingEventsRef.current = [];
+    updateEvents((prev) => mergeEvents(prev, pending));
+  }, [updateEvents]);
+
+  const scheduleEventFlush = useCallback(() => {
+    if (scheduledFlushRef.current) return;
+    if (typeof requestAnimationFrame === 'function') {
+      const id = requestAnimationFrame(flushPendingEvents);
+      scheduledFlushRef.current = { id, cancel: cancelAnimationFrame };
+      return;
+    }
+    const id = window.setTimeout(() => flushPendingEvents(), 16);
+    scheduledFlushRef.current = { id, cancel: (handle) => window.clearTimeout(handle) };
+  }, [flushPendingEvents]);
+
+  const cancelPendingEventFlush = useCallback(() => {
+    const scheduled = scheduledFlushRef.current;
+    if (scheduled) {
+      scheduled.cancel(scheduled.id);
+      scheduledFlushRef.current = null;
+    }
+    pendingEventsRef.current = [];
+  }, []);
+
   const onEvent = useCallback((event: SessionEvent) => {
     sinceRef.current = Math.max(sinceRef.current, event.seq);
-    updateEvents((prev) => {
-      const last = prev[prev.length - 1];
-      if (last && event.seq > last.seq) return [...prev, event];
-      if (prev.some((e) => e.seq === event.seq)) return prev;
-      return [...prev, event].sort((a, b) => a.seq - b.seq);
-    });
-  }, [updateEvents]);
+    pendingEventsRef.current.push(event);
+    scheduleEventFlush();
+  }, [scheduleEventFlush]);
 
   const fetchInitial = useCallback((id: string) => {
     const depth = tailRef.current;
@@ -94,10 +130,11 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
     if (!sessionId || cancelledRef.current) return;
     const initial = await fetchInitial(sessionId);
     if (cancelledRef.current) return;
+    cancelPendingEventFlush();
     replaceEvents(initial);
     sinceRef.current = initial.reduce((max, e) => Math.max(max, e.seq), 0);
     connect();
-  }, [sessionId, connect, fetchInitial, replaceEvents]);
+  }, [sessionId, connect, fetchInitial, replaceEvents, cancelPendingEventFlush]);
 
   /** Page one window of history in before the oldest loaded event. */
   const loadEarlier = useCallback(async () => {
@@ -128,6 +165,7 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
 
     fetchInitial(sessionId).then((initial) => {
       if (cancelled) return;
+      cancelPendingEventFlush();
       replaceEvents(initial);
       sinceRef.current = initial.reduce((max, e) => Math.max(max, e.seq), 0);
       connect();
@@ -146,8 +184,9 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
       document.removeEventListener('visibilitychange', onVisibility);
       subscriptionRef.current?.close();
       subscriptionRef.current = null;
+      cancelPendingEventFlush();
     };
-  }, [sessionId, base, connect, fetchInitial, replaceEvents]);
+  }, [sessionId, base, connect, fetchInitial, replaceEvents, cancelPendingEventFlush]);
 
   const hasEarlier = (events[0]?.seq ?? 0) > 1;
 
