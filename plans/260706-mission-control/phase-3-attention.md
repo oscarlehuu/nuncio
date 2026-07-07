@@ -432,3 +432,172 @@ ledger: `.claude/maestro/rung3-attention/edge-cases-B.md` (32 rows). Test files:
 **LOCKED (founder, 2026-07-07): B1 disk check CUT from v1; B3 two templates over shared data — both as recommended.** Original flags: **B1 (disk check in/out)** and **B3 (shared vs divergent digest
 data)** — everything else follows the locked constraints. The rest are recommendations consistent with
 the founder's B constraints and rungs 1-2 patterns.
+
+---
+
+# Sub-phase C design — fleet home + anomaly heuristics
+
+**Status:** Design + red suite (2026-07-07). Sub-phase B (heartbeat) is closed. Fleet home is the
+founder's cockpit LANDING surface — the **phone test rules everything** (project-health rows,
+thumb-scrollable, one-tap into a project). Locked constraints: anomaly = **EXACTLY two heuristics**
+((a) RUNNING session > T min with an EMPTY diff; (b) loop ≥N runs today all failed/budget with no
+green), both tunable, both raising through the sub-phase A seam as NEW kinds in the **bottom severity
+bucket**; project importance = the **manual `weight` field** (already exists, rung 3 A/B).
+
+## What already exists (scout — derive, don't duplicate)
+
+Fleet home adds NO new store — it is a **pure fold at GET time** over rows rungs 1-3 already keep.
+
+| Fleet input | Source (already durable) |
+|-------------|--------------------------|
+| Project list + name + **weight** | `ProjectsRepository.list()` (`weight` default 1) |
+| Projects with recent activity | `SessionsRepository.list()` (project_path) + `LoopsService.list()`/loop_runs |
+| Open attention per project | `AttentionRepository.list('open')` filtered by `projectPath` (severity via `severityForKind`) |
+| Running sessions count | `SessionsRepository.list()` where `status==='RUNNING'` |
+| Active loops count | `LoopsService.list()` where `status==='active'` |
+| Verify streak | recent `loop_runs.verify` (`verifyGreenStreak` / last green-or-red) |
+| Open PRs count | `ForgeRepoService.listPullRequests(path,'open')` (best-effort, forge-neutral) |
+| Empty-diff signal (anomaly a) | `GitService` — a lightweight `hasChanges(path)` (`git status --porcelain`, NO numstat) |
+| Loop-failing signal (anomaly b) | pure fold over `loop_runs` today (outcome + verify) |
+
+**Two seams from earlier rungs the fleet leans on:** `registerSessionEventHook` is NOT needed here
+(fleet is poll/derive, not event-driven); the **anomaly collectors ride the existing
+`AttentionCollectors.sweep()`** (broken-loop + PR collectors already live there) so every raiser is
+paired with a clear-path — the hard-won sub-phase-B lesson (a poll-collector that only enumerates
+current-matching state must also clear items whose subject no longer matches).
+
+## Design questions — resolved (proposed; flag only genuine can't-picks)
+
+### Q1 — Project health aggregation & the formula
+**Population rule (C1, proposed):** the fleet is the **union of (a) configured projects
+(`projects` table) and (b) projects with a recent session or loop**, deduped by normalized path. A
+configured project with no activity still appears (green — nothing needs you); an unconfigured path
+that has a running session appears (name = `basename(path)`, weight = 1 default). This is the honest
+"everything the founder is running or has configured," not just configured rows.
+
+**Health formula (pure fold — table-testable, explainable, NO scores):**
+```
+health(project):
+  open   = OPEN attention items whose projectPath == project.path
+  highBucket = open items with severityForKind(kind) >= HIGH_THRESHOLD   // HIGH_THRESHOLD = 4 (tripped-breaker)
+  if highBucket.length > 0                      -> 'red'      // needs you
+  else if open.length > 0                       -> 'yellow'   // needs review
+  else                                          -> 'green'    // cruising
+```
+`HIGH_THRESHOLD = 4` (tripped-breaker) means permission(7)/credential-expiring(6)/verify-dead(5)/
+tripped-breaker(4) → **red**; zombie-session(3)/pr-review(2)/anomaly-bucket(1) → **yellow**. Rationale:
+the top four are "the founder must act or work stops"; the bottom three are "worth a look." Monotone:
+red ⊃ yellow ⊃ green, one red item wins. `reasons[]` names WHAT drove the color (e.g. red →
+`["2 items need you"]`, yellow → `["1 PR awaiting review","1 anomaly"]`) so the phone row is
+self-explaining. The health fold is a pure function `foldHealth(open, running, activeLoops, prs)` →
+`{health, reasons, counts}`.
+
+### Q2 — Anomaly collectors (EXACTLY two, both with clear-paths)
+**(a) Empty-diff detection — signal source:** the cheapest TRUE signal is a **lightweight
+`GitService.hasChanges(path)`** = `git status --porcelain` (bare, WITHOUT the `populateFileStats`
+numstat that the full `status()` runs). A tool-activity proxy (counting `tool_end` events) is a
+*guess* — an agent can run read-only tools for minutes and still be "empty diff," and can also make
+changes via a tool nuncio doesn't classify. `git status --porcelain` is the ground truth and is cheap
+(one process, no diff computation). At personal scale (a handful of RUNNING sessions) running it per
+running session on the **15-min infra cadence** is fine; if the founder ever runs dozens of
+concurrent sessions we revisit, but that is not v1 (flagged). Anomaly (a): a session `RUNNING` for
+`> T` minutes (default 30, tunable) whose worktree `hasChanges === false` → raise
+`session-empty-diff` keyed `session:<id>`. **Clear-paths:** the diff appears (hasChanges true) OR the
+session leaves RUNNING → the collector emits `onConditionCleared`.
+
+**(b) Loop-all-failed-today — pure fold:** a loop whose **today** runs number `>= N` (default 3,
+tunable) and are ALL `failed`/`budget-exhausted` with **no** green-verify run today → raise
+`loop-failing` keyed `loop:<id>`. Trivial pure fold over `loop_runs` filtered to `dayBucket(now)`.
+**Clear-paths:** a green run lands today OR the loop vanishes OR the day rolls over → cleared.
+
+**Cadence:** both ride the **existing 15-min infra sweep** (`AttentionCollectors.sweep()` gains the
+two anomaly collectors) — no new schedule. 15 min matches the "long-running > T" grain; a loop that
+fails all day is caught within a sweep of its Nth failure. (Justified over a dedicated schedule:
+fewer moving parts, and the sweep already has the raise+clear plumbing.)
+
+### Q3 — Where fleet data lives: DERIVE-ON-DEMAND
+**Recommend derive-on-demand** — a pure fold at `GET /fleet` time over the existing tables. At
+personal scale every input is a small indexed read (projects, sessions, loops, attention, plus a
+best-effort forge PR count). No materialized fleet table, no staleness, no migration. FLAG: the only
+potentially-slow input is the **forge PR count per project** (a network call per project); v1 makes it
+best-effort with a short timeout and treats a failure as "unknown / 0 PRs" (never blocks the row) —
+exactly the sub-phase-A/B forge-unreachable discipline. If a founder has many forge-connected projects
+and the GET feels slow, cache the PR count on the heartbeat reconcile cadence (a small follow-up, not
+v1).
+
+### Q4 — API shape (phone-first)
+```
+GET /fleet -> { items: FleetRow[] }
+FleetRow = {
+  path, name, weight,
+  health: 'green' | 'yellow' | 'red',
+  reasons: string[],                 // why yellow/red (empty for green)
+  topItem: RankedAttentionItem | null, // highest-ranked open item for this project
+  counts: { openAttention, runningSessions, activeLoops, openPRs },
+  lastActivityAt: number | null,     // max(session updatedAt, loop-run createdAt); null if none
+}
+```
+**Ordering (deterministic total order):** `red first (health rank) → weight DESC → lastActivityAt
+DESC → path ASC` (stable tiebreak). Red-needs-you floats to the top; within a health tier the
+higher-importance project leads; ties break by recency then path so the list never flickers. `topItem`
+reuses the sub-phase-A ranker so the row's headline is the same item the Inbox would surface first.
+
+## Architecture (design)
+
+- **`FleetService.list()`** — derive-on-demand: gather the population (projects ∪ active), and for
+  each fold `foldHealth` + counts + verify streak + lastActivity + topItem, then order.
+- **`foldHealth()` / `orderFleet()`** — pure functions (`apps/server/src/attention/fleet/fleet.ts`),
+  table-testable.
+- **`AnomalyCollector`** — two heuristics, raise + clear, registered into the `AttentionCollectors`
+  sweep (or a sibling the sweep invokes). New kinds `session-empty-diff` + `loop-failing` added to
+  `SEVERITY_BY_KIND` at the bottom bucket (severity 1).
+- **`GitService.hasChanges(path)`** — additive lightweight porcelain check.
+- **`FleetController`** — `GET /fleet` (UI-ready rows).
+
+## Restart / replay story (ADR-006)
+
+Nothing new is persisted — fleet is derived from durable rows that already survive restart, and the
+anomaly items live in the sub-phase-A `attention_items` table (durable + reconciled). A restart
+mid-run simply re-derives the fleet on the next GET and re-raises/clears anomalies on the next sweep.
+
+## Direction-test walk (C)
+
+- **Phone test** — `GET /fleet` returns ready-to-render rows (health color + reasons + topItem +
+  counts); the landing screen is a thumb-scroll of project rows, tap into the Workbench grid. THE
+  point of the sub-phase.
+- **Engine/Forge test** — health reads provider-neutral signals; PR count via `ForgeProvider`
+  (GitHub + GitLab). No engine/forge branch in the fold.
+- **Restart test** — derive-on-demand + durable anomaly items; nothing to lose.
+- **Self-host test** — all local reads + a best-effort forge call; zero new cloud dependency.
+
+## Red suite for sub-phase C
+
+Edge-case-first, deterministic (injected `Clock`), neutral `TODO:` skeletons. Full ledger:
+`.claude/maestro/rung3-attention/edge-cases-C.md` (34 rows). Test files:
+- `fleet/fleet-health.spec.ts` — `foldHealth` table: green/yellow/red transitions, high-bucket
+  threshold, monotonicity, reasons[], counts, verify streak, lastActivity, zero-signal project.
+- `fleet/fleet-order.spec.ts` — ordering (red→weight→activity→path), stable tiebreak.
+- `fleet/fleet.service.spec.ts` — population union + dedup, unconfigured-with-session, topItem =
+  ranked, unknown-kind tolerance, derive-on-demand over seeded rows.
+- `fleet/fleet.controller.spec.ts` — `GET /fleet` shape.
+- `attention/anomaly-collector.spec.ts` — (a) RUNNING>T + empty diff raises; boundary T; non-empty →
+  none; diff-appears clears; leaves-RUNNING clears. (b) ≥N all-failed no-green raises; N-1 boundary;
+  one-green resets; green-after clears; loop-gone/day-roll clears.
+- `attention/attention-ranking.spec` (extend) — the two anomaly kinds map to the bottom bucket.
+- `git` (extend) — `hasChanges(path)` returns false on a clean worktree, true on a dirty one.
+
+## Founder decisions (status — proposed, not yet locked)
+
+| # | Decision | Recommendation |
+|---|----------|----------------|
+| C1 | Population rule | **Union: configured ∪ recently-active**, deduped by path |
+| C2 | Health formula | **red = any high-bucket (sev≥4) open item; yellow = any open item; else green** |
+| C3 | Empty-diff signal | **`git status --porcelain` per running session on the 15m sweep** (ground truth, not a proxy) |
+| C4 | Fleet storage | **Derive-on-demand** (no materialized table) |
+| C5 | Anomaly cadence | **Ride the existing 15m infra sweep** (no new schedule) |
+| C6 | PR count in health | **Best-effort with timeout; failure → unknown/0, never blocks the row** |
+
+Flagged genuine picks: **C2's HIGH_THRESHOLD** (is a stalled-loop breaker "red" or "yellow"? — I put
+tripped-breaker in red because a broken loop stops shipping) and **C3's cost ceiling** (git-status per
+running session is fine at personal scale; revisit if concurrency grows). Everything else follows the
+locked constraints.

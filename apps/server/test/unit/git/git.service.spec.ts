@@ -230,6 +230,21 @@ describe('GitService', () => {
       expect(status.files).toEqual([]);
     });
 
+    it('hasChanges is false on a clean tree, true once a file is added (rung-3 empty-diff signal)', async () => {
+      expect(await service.hasChanges(repo)).toBe(false);
+      writeFileSync(join(repo, 'work.txt'), 'wip\n');
+      expect(await service.hasChanges(repo)).toBe(true);
+    });
+
+    it('hasChanges returns false for a non-repo path (never throws)', async () => {
+      const notARepo = mkdtempSync(join(tmpdir(), 'nuncio-not-a-repo-'));
+      try {
+        expect(await service.hasChanges(notARepo)).toBe(false);
+      } finally {
+        rmSync(notARepo, { recursive: true, force: true });
+      }
+    });
+
     it('status lists an untracked file with the correct staged flag', async () => {
       writeFileSync(join(repo, 'new.txt'), 'hello\n');
       const status = await service.status(repo);

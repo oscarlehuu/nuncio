@@ -49,6 +49,15 @@ describe('severityForKind', () => {
     expect(severityForKind('credential-expiring')).toBeLessThan(severityForKind('permission'));
   });
 
+  it('ranks the sub-phase-C anomaly kinds in the BOTTOM bucket (low-confidence)', () => {
+    // Both anomaly heuristics sit at severity 1 (with generic anomaly), below every
+    // "needs you / needs review" kind — a hint, not a demand.
+    expect(severityForKind('session-empty-diff')).toBe(1);
+    expect(severityForKind('loop-failing')).toBe(1);
+    expect(severityForKind('session-empty-diff')).toBeLessThan(severityForKind('pr-review'));
+    expect(severityForKind('loop-failing')).toBeLessThan(severityForKind('zombie-session'));
+  });
+
   it('maps an unknown / legacy kind to 0 (ranks last, never throws)', () => {
     expect(severityForKind('some-future-kind')).toBe(0);
     expect(() => severityForKind('')).not.toThrow();

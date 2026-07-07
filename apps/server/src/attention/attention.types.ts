@@ -13,7 +13,9 @@ export type AttentionKind =
   | 'tripped-breaker'
   | 'zombie-session'
   | 'pr-review'
-  | 'anomaly';
+  | 'anomaly'
+  | 'session-empty-diff'
+  | 'loop-failing';
 
 export type AttentionStatus = 'open' | 'resolved';
 
@@ -21,7 +23,9 @@ export type AttentionStatus = 'open' | 'resolved';
  * Static severity buckets (decision #1 — NOT a learned score). Higher = more
  * urgent. An unknown kind maps to 0 (ranks last). The rung-3 heartbeat (sub-phase
  * B) adds the two infra kinds: an expiring/invalid credential is near the top (a
- * dead cred at 3am kills the whole night's queue); a zombie session sits mid.
+ * dead cred at 3am kills the whole night's queue); a zombie session sits mid. The
+ * two anomaly heuristics (sub-phase C) sit in the BOTTOM bucket (=1), alongside
+ * the generic `anomaly` — low-confidence "worth a look" signals.
  */
 export const SEVERITY_BY_KIND: Readonly<Record<AttentionKind, number>> = {
   permission: 7,
@@ -31,6 +35,8 @@ export const SEVERITY_BY_KIND: Readonly<Record<AttentionKind, number>> = {
   'zombie-session': 3,
   'pr-review': 2,
   anomaly: 1,
+  'session-empty-diff': 1,
+  'loop-failing': 1,
 };
 
 export const UNKNOWN_SEVERITY = 0;

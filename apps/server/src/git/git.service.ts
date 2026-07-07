@@ -330,6 +330,23 @@ export class GitService {
     return 'main';
   }
 
+  /**
+   * Cheap dirty-check for the rung-3 empty-diff anomaly (sub-phase C): a bare
+   * `git status --porcelain` (no branch header, no numstat) — any non-empty line
+   * means uncommitted work exists. Much lighter than {@link status}, so it is safe
+   * to run per RUNNING session on the heartbeat sweep. A non-repo path → false
+   * (nothing to change), never a throw.
+   */
+  async hasChanges(path: string): Promise<boolean> {
+    try {
+      const repoRoot = await this.resolveRepoRoot(path);
+      const output = await git(['status', '--porcelain'], repoRoot);
+      return output.trim().length > 0;
+    } catch {
+      return false;
+    }
+  }
+
   async status(path: string): Promise<GitStatusDto> {
     const repoRoot = await this.resolveRepoRoot(path);
     const output = await git(['status', '--porcelain=v1', '-b'], repoRoot);
