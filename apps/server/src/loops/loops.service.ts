@@ -151,11 +151,34 @@ export class LoopsService implements OnModuleInit {
   }
 
   list(): LoopDto[] {
-    return this.loops.list();
+    return this.loops.list().map((loop) => this.withSchedule(loop));
   }
 
   findById(id: string): LoopDto | null {
-    return this.loops.findById(id);
+    const loop = this.loops.findById(id);
+    return loop ? this.withSchedule(loop) : null;
+  }
+
+  /**
+   * Join the owned schedule row so the UI can render the displayable trigger +
+   * next fire. A missing/corrupt schedule → `schedule`/`nextFireAt` null (never a
+   * throw) so a loop whose schedule vanished still lists.
+   */
+  private withSchedule(loop: LoopDto): LoopDto {
+    let schedule: LoopDto['schedule'] = null;
+    let nextFireAt: number | null = null;
+    if (loop.scheduleId && loop.scheduleId !== 'pending') {
+      try {
+        const row = this.scheduler?.getSchedule(loop.scheduleId);
+        if (row) {
+          schedule = { kind: row.kind, spec: row.spec };
+          nextFireAt = row.nextFireAt;
+        }
+      } catch {
+        // Corrupt schedule read — leave nulls, never break the list.
+      }
+    }
+    return { ...loop, schedule, nextFireAt };
   }
 
   /**

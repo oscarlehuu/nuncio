@@ -30,6 +30,14 @@ export interface LoopDto {
   goal: string;
   /** (2) trigger — the loop OWNS this schedules row. */
   scheduleId: string;
+  /**
+   * The human-displayable trigger, joined from the owned schedule row (UI shows
+   * "Daily at 22:00"). Null when the schedule row is missing/corrupt — never a
+   * throw. Additive: absent on the bare repository DTO, filled on the read path.
+   */
+  schedule?: { kind: string; spec: string } | null;
+  /** Next fire time (epoch ms), joined from the schedule; null for event/none. */
+  nextFireAt?: number | null;
   /** (3) budget. */
   maxRunsPerDay: number;
   maxConsecutiveFailures: number;

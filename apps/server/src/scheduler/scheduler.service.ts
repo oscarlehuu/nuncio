@@ -61,6 +61,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     this.timer = null;
   }
 
+  /** One schedule by id, or null — for consumers joining schedule data (e.g. loops). */
+  getSchedule(id: string): ScheduleDto | null {
+    return this.schedules.findById(id);
+  }
+
   create(input: CreateScheduleDto): ScheduleDto {
     const nextFireAt = this.computeNextFire(input.kind, input.spec, this.clock.now());
     return this.schedules.create({ ...input, nextFireAt });

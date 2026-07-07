@@ -20,11 +20,13 @@ class SpyScheduler {
   readonly created: Array<{ id: string; kind: string; target: unknown }> = [];
   readonly enabledCalls: Array<{ id: string; enabled: boolean }> = [];
   readonly deleted: string[] = [];
+  private readonly rows = new Map<string, { kind: string; spec: string; nextFireAt: number | null }>();
   private n = 0;
   create(input: { kind: string; spec: string; target: unknown }) {
     this.n += 1;
     const id = `sched-${this.n}`;
     this.created.push({ id, kind: input.kind, target: input.target });
+    this.rows.set(id, { kind: input.kind, spec: input.spec, nextFireAt: 1_800_000 });
     return { id };
   }
   setEnabled(id: string, enabled: boolean) {
@@ -33,6 +35,11 @@ class SpyScheduler {
   }
   deleteSchedule(id: string) {
     this.deleted.push(id);
+    this.rows.delete(id);
+  }
+  getSchedule(id: string) {
+    const row = this.rows.get(id);
+    return row ? { id, kind: row.kind, spec: row.spec, nextFireAt: row.nextFireAt } : null;
   }
   setLoopFireHandler(_fn: (loopId: string) => unknown) {
     void _fn;
@@ -146,6 +153,30 @@ describe('LoopsService', () => {
     expect(loop.scheduleId).toBe(scheduler.created[0]!.id);
     // The schedule's target references this loop (B's {kind:'loop',loopId} seam).
     expect(scheduler.created[0]!.target).toMatchObject({ kind: 'loop', loopId: loop.id });
+  });
+
+  describe('read path carries the displayable schedule (UI join)', () => {
+    it('list + get include schedule {kind, spec} and nextFireAt joined from the owned row', () => {
+      loops.create(create({ schedule: { kind: 'cron', spec: 'daily@22:00' } }));
+      const listed = loops.list()[0]!;
+      expect(listed.schedule).toEqual({ kind: 'cron', spec: 'daily@22:00' });
+      expect(typeof listed.nextFireAt).toBe('number');
+
+      const got = loops.findById(listed.id)!;
+      expect(got.schedule).toEqual({ kind: 'cron', spec: 'daily@22:00' });
+      expect(got.nextFireAt).toBe(listed.nextFireAt);
+    });
+
+    it('a missing/corrupt schedule row yields null schedule + null nextFireAt, never a throw', () => {
+      const loop = loops.create(create());
+      // Simulate the schedule row vanishing (delete the scheduler side only).
+      scheduler.deleteSchedule(loop.scheduleId);
+      const got = loops.findById(loop.id)!;
+      expect(got.schedule).toBeNull();
+      expect(got.nextFireAt).toBeNull();
+      // list must also survive it.
+      expect(() => loops.list()).not.toThrow();
+    });
   });
 
   it('rejects an empty goal', () => {
