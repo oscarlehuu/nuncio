@@ -165,6 +165,126 @@ not conversation). A fresh module reads the same rows; resolution is a pure fold
 so no reconciliation is needed. The restart test asserts a second module instance sees every row
 unchanged.
 
+## Sub-phase B design (scheduler) — design + red tests only (2026-07-07)
+
+The scheduler is a **daemon-resident, restart-safe firing loop**: cron-like schedules + forge-webhook
+event triggers + a heartbeat tick, each firing a **target** (v1 = enqueue a task from a template)
+through the existing `TasksService`, so runner concurrency caps (`NUNCIO_TASK_CONCURRENCY`) still
+apply. Personal scale — a single daemon timer scans due schedules; no distributed locking.
+
+### Scout (what already exists — lean on it)
+
+- **Webhook substrate already dedups deliveries.** `WebhooksService.recordDelivery`
+  (`forges/webhooks/webhooks.service.ts`) does `INSERT OR IGNORE INTO forge_webhook_deliveries` and
+  returns false on a replay — event triggers reuse this; the scheduler does **not** re-dedup.
+  `ForgeWebhookEvent` carries `{provider, deliveryId, kind, action, owner, repo, labels, …}` — the
+  exact fields an event filter needs.
+- **`TasksService.enqueue(CreateTaskDto)`** is the fire seam (exported from `TasksModule`); a fired
+  schedule enqueues a task, inheriting the FIFO pump + concurrency cap.
+- **No injectable clock exists yet** — services call `Date.now()` directly. The scheduler introduces a
+  tiny `Clock` seam (a settable `now()` — the repo's field-override test pattern) so next-fire and
+  missed-fire are deterministic without hour-long sleeps.
+
+### Durable schedule state (ADR-006)
+
+Guarded `CREATE TABLE IF NOT EXISTS` in `DatabaseService.migrate()`:
+
+```sql
+CREATE TABLE IF NOT EXISTS schedules (
+  id            TEXT PRIMARY KEY,
+  kind          TEXT NOT NULL,        -- 'cron' | 'event' | 'heartbeat'
+  spec          TEXT NOT NULL,        -- cron: the v1 spec string; event: JSON filter; heartbeat: interval
+  target_json   TEXT NOT NULL,        -- what to fire (v1: a task template — a CreateTaskDto subset)
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  next_fire_at  INTEGER,              -- epoch ms; NULL for pure event triggers (fired by webhook, not clock)
+  last_fire_at  INTEGER,
+  last_result   TEXT,                 -- 'ok' | 'skipped-overlap' | 'missed' | 'error:<reason>'
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+```
+
+- **`target` is a seam, not just a task.** v1 `target_json` = `{ kind: 'task', template: <CreateTaskDto
+  subset> }`. When C lands, a `{ kind: 'loop', loopId }` target rides the same column — the firing
+  path branches on `target.kind`, and both flow through `TasksService`. No schema change for C.
+- **Restart is the heart.** `next_fire_at` is **derived from `spec` + the clock at boot**, never
+  trusted as in-memory truth: on module init the scheduler recomputes `next_fire_at` for every enabled
+  cron/heartbeat schedule from its spec relative to `now`, so a cron that "forgets its schedule after
+  reboot" (pillar 4 failure) is impossible. Event schedules have `next_fire_at = NULL` (they fire on
+  webhook arrival, not on the clock).
+
+### Cron spec v1 — FLAGGED founder decision
+
+**Recommendation: a small parsed subset, NO dependency** —
+`daily@HH:MM` · `every:<N>m` / `every:<N>h` · `<weekday>@HH:MM` (mon..sun). Rationale: cockpit-map's
+loop families need only *nightly*, *interval*, and *webhook* triggers; full crontab syntax (`*/5 * * *
+1-5`) needs a parser dependency (croner et al. — must be Bun-clean and is an ongoing maintenance
+surface) for expressiveness v1 will not use. The subset is a ~40-line pure parser + next-fire
+computer, fully unit-testable. **Flagged:** the founder may prefer full crontab via a vetted Bun-clean
+dep — if so, swap the parser, the table/firing loop are unaffected. v1 is **timezone-naive**: `HH:MM`
+is the injected clock's local frame; DST transitions are a documented v1 limitation (not handled).
+
+### Missed-fire policy — FLAGGED founder decision
+
+**Recommendation: fire-once-on-boot when missed.** If the daemon was down when a schedule's
+`next_fire_at` passed, on boot fire it exactly once (a maintenance loop should still run "tonight" even
+if the machine was asleep at the scheduled minute), record `last_result = 'missed'` as the marker,
+then advance to the next occurrence. **Flagged:** the alternative is skip-to-next (never fire late) —
+correct for triggers where a late run is worse than a skipped one (e.g. a "good morning" digest at
+noon is noise). Recommend fire-once because the rung-2 families (maintenance / overnight batch) want
+the work done; a per-schedule `missedPolicy` field is a natural v1.1 if the founder wants both.
+
+### Clock injection & the firing loop
+
+- **`Clock`**: `{ now(): number }`, default `() => Date.now()`; the scheduler holds it as a settable
+  field (test seam). Every time read — next-fire, due check, missed check — goes through it. Tests
+  advance time by setting the clock and invoking the scan directly; **zero real sleeps**.
+- **Firing loop**: one daemon timer (a single `setInterval`-like tick, itself gated by `destroyed`)
+  runs `scanDue()`: select enabled cron/heartbeat schedules with `next_fire_at <= now`, fire each,
+  advance its `next_fire_at`. Tests call `scanDue()` directly with a set clock — the timer is only the
+  production driver.
+
+### Event triggers (ADR-005 vocabulary)
+
+- An event schedule is `kind='event'`, `spec` = a JSON filter `{ event: 'issue.opened', label?: 'agent'
+  }` (`event` = `<kind>.<action>` from the normalized `ForgeWebhookEvent`). It has no `next_fire_at`.
+- Firing is driven by the webhook path, not the clock: when a verified, **de-duplicated** delivery
+  arrives (dedup already done by `forge_webhook_deliveries` — verified in the scout:
+  `WebhooksService.recordDelivery` returns false on a replay), the scheduler matches it against
+  enabled event schedules; each matching filter fires the same enqueue seam. The scheduler **must
+  not** re-dedup — dedup is the webhook path's responsibility, so `handleWebhookEvent` is only invoked
+  for unique deliveries. (Design contract, not a scheduler unit test, since re-dedup would be
+  redundant; the wiring test that a replay does not reach the scheduler belongs with the
+  webhook-scheduler integration when implementation lands.)
+- Filter match: `event` equals `<kind>.<action>` AND (no `label`, or the label is in `event.labels`).
+
+### Concurrency & safety
+
+- **Overlap skip** (never overlap the SAME schedule): if a schedule's prior fire is still in flight
+  when its next fire is due, skip with `last_result='skipped-overlap'` and advance — never two
+  concurrent fires of one schedule. (Distinct schedules run independently, capped by the task runner.)
+- **Shutdown mid-fire**: the firing loop is `destroyed`-gated and its DB writes flow through the
+  repository funnel, which no-ops on `database.closed` (the rung-1 round-7 guard) — a fire enqueuing
+  during shutdown never writes to a torn-down DB; a due fire not yet started is simply not started.
+- **Fires go through `TasksService`**, so `NUNCIO_TASK_CONCURRENCY` caps total concurrent runs across
+  all schedules — the scheduler adds no parallelism of its own.
+
+### Direction-test walk (B)
+
+Phone: schedules list/pause/next-fire viewable from the phone (rung-3 surface). Engine: a fired task
+picks its engine from the project config (sub-phase A) through `AgentRegistry` — no engine branch.
+Forge: event triggers already normalize GitHub/GitLab vocabulary (ADR-005). Restart: `next_fire_at`
+recomputed from spec + clock at boot — the pillar-4 heart. Self-host: cron clock is local; webhooks
+arrive over the tailnet.
+
+### Restart / rehydration story
+
+At module init: for each enabled `cron`/`heartbeat` schedule, recompute `next_fire_at` from its spec
+relative to `clock.now()`; if the recomputed (or stored) next-fire is already in the past, apply the
+missed-fire policy on the first `scanDue()`. Event schedules carry no clock state. No event-log replay
+(schedules are config + fire-history, not conversation). The restart test asserts a second module
+instance rebuilds a coherent `next_fire_at` with no in-memory truth.
+
 ## Verify (for THIS task)
 
 - Server specs under `apps/server/test/unit/projects/`:
