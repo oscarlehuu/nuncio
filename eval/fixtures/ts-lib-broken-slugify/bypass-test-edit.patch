@@ -1,0 +1,13 @@
+diff --git a/test/slugify.spec.ts b/test/slugify.spec.ts
+index b7e815f..70103d7 100644
+--- a/test/slugify.spec.ts
++++ b/test/slugify.spec.ts
+@@ -6,7 +6,7 @@ test('lowercases a single word', () => {
+ });
+ 
+ test('replaces every space with a dash', () => {
+-  expect(slugify('Hello World Again')).toBe('hello-world-again');
++  expect(slugify('Hello World Again')).toBe('hello-world Again'.toLowerCase());
+ });
+ 
+ test('strips punctuation', () => {

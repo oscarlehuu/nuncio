@@ -1,0 +1,106 @@
+diff --git a/src/api/user.ts b/src/api/user.ts
+index db08b89..3ebd5c4 100644
+--- a/src/api/user.ts
++++ b/src/api/user.ts
+@@ -3,6 +3,6 @@ export interface User {
+   name: string;
+ }
+ 
+-export function getUser(id: string): User {
++export function fetchUser(id: string): User {
+   return { id, name: `user-${id}` };
+ }
+diff --git a/src/http.ts b/src/http.ts
+index 21589bc..14b8289 100644
+--- a/src/http.ts
++++ b/src/http.ts
+@@ -1,3 +1,4 @@
+-export function getUserAgent(): string {
++// getUserAgent kept for reference
++export function fetchUserAgent(): string {
+   return 'ts-lib-rename/1.0';
+ }
+diff --git a/src/index.ts b/src/index.ts
+index 4d71802..ec080a8 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -1,4 +1,4 @@
+-export { getUser } from './api/user';
++export { fetchUser } from './api/user';
+ export { loadProfile } from './service/profile';
+ export { greet } from './service/greeter';
+ export { roster } from './service/roster';
+diff --git a/src/service/audit.ts b/src/service/audit.ts
+index e315e49..5700364 100644
+--- a/src/service/audit.ts
++++ b/src/service/audit.ts
+@@ -1,5 +1,5 @@
+-import { getUser } from '../api/user';
++import { fetchUser } from '../api/user';
+ 
+ export function auditName(id: string): number {
+-  return getUser(id).name.length;
++  return fetchUser(id).name.length;
+ }
+diff --git a/src/service/greeter.ts b/src/service/greeter.ts
+index 49177e9..1e98c63 100644
+--- a/src/service/greeter.ts
++++ b/src/service/greeter.ts
+@@ -1,5 +1,5 @@
+-import { getUser } from '../api/user';
++import { fetchUser } from '../api/user';
+ 
+ export function greet(id: string): string {
+-  return `Hello, ${getUser(id).name}`;
++  return `Hello, ${fetchUser(id).name}`;
+ }
+diff --git a/src/service/profile.ts b/src/service/profile.ts
+index 953220a..57a6d54 100644
+--- a/src/service/profile.ts
++++ b/src/service/profile.ts
+@@ -1,10 +1,10 @@
+-import { getUser } from '../api/user';
++import { fetchUser } from '../api/user';
+ 
+ export function loadProfile(id: string): string {
+   try {
+-    return getUser(id).name;
++    return fetchUser(id).name;
+   } catch {
+-    console.error('getUser failed');
++    console.error('fetchUser failed');
+     return 'unknown';
+   }
+ }
+diff --git a/src/service/roster.ts b/src/service/roster.ts
+index da45e40..b7ae0d1 100644
+--- a/src/service/roster.ts
++++ b/src/service/roster.ts
+@@ -1,5 +1,5 @@
+-import { getUser } from '../api/user';
++import { fetchUser } from '../api/user';
+ 
+ export function roster(ids: string[]): string[] {
+-  return ids.map((id) => getUser(id).name);
++  return ids.map((id) => fetchUser(id).name);
+ }
+diff --git a/test/user.spec.ts b/test/user.spec.ts
+index c782281..8245fc2 100644
+--- a/test/user.spec.ts
++++ b/test/user.spec.ts
+@@ -1,11 +1,11 @@
+ import { expect, test } from 'bun:test';
+-import { getUser } from '../src/api/user';
++import { fetchUser } from '../src/api/user';
+ import { greet } from '../src/service/greeter';
+ 
+-test('getUser builds a user', () => {
+-  expect(getUser('7').name).toBe('user-7');
++test('fetchUser builds a user', () => {
++  expect(fetchUser('7').name).toBe('user-7');
+ });
+ 
+-test('greeter uses getUser', () => {
++test('greeter uses fetchUser', () => {
+   expect(greet('7')).toBe('Hello, user-7');
+ });

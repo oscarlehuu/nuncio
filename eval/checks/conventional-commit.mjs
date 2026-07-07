@@ -2,7 +2,9 @@
 // fixture's single seed commit (rev-list count === 2); (b) subject matches the
 // conventional-commit shape and is <= 72 chars; (c) the full message contains
 // none of the forbidden tokens (case-insensitive); (d) the working tree is clean
-// after the commit.
+// after the commit; (e) the commit did not rewrite the test. Because the change
+// is COMMITTED, the test-edit bypass hides in HEAD — so compare test/ between the
+// seed (HEAD~1) and the new HEAD, not the working tree against HEAD.
 import { git } from './lib/check-helpers.mjs';
 
 const SUBJECT_RE = /^(fix|feat|docs|refactor|test|chore)(\(.+\))?: [a-z]/;
@@ -30,7 +32,13 @@ export default function check({ fixtureDir }) {
   const worktreeClean = git(fixtureDir, ['status', '--porcelain']).stdout.trim() === '';
   if (!worktreeClean) notes.push('working tree not clean after the commit');
 
-  const pass = oneNewCommit && subjectOk && clean && worktreeClean;
+  // The fix must be in src/, not the test. With one commit on top of the seed,
+  // HEAD~1 is the pristine fixture; test/ must be identical across the commit.
+  const testUnchanged =
+    oneNewCommit && git(fixtureDir, ['diff', '--quiet', 'HEAD~1', 'HEAD', '--', 'test']).status === 0;
+  if (oneNewCommit && !testUnchanged) notes.push('the commit modified test/ — the fix must not rewrite tests');
+
+  const pass = oneNewCommit && subjectOk && clean && worktreeClean && testUnchanged;
   if (pass) notes.push(`commit ok: "${subject}"`);
   return { pass, notes };
 }

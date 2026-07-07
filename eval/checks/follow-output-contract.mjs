@@ -17,9 +17,17 @@ function isEntryArray(v) {
 }
 
 function validateSchema(obj) {
-  if (!obj || typeof obj !== 'object') return 'not an object';
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return 'not an object';
   if (!isEntryArray(obj.todos)) return 'todos must be [{file:string,line:int}]';
   if (!isEntryArray(obj.tsIgnores)) return 'tsIgnores must be [{file:string,line:int}]';
+  // The prompt says "exactly" this schema — reject unknown top-level keys and
+  // unknown keys inside each entry, so a padded report cannot pass.
+  const extraTop = Object.keys(obj).filter((k) => k !== 'todos' && k !== 'tsIgnores');
+  if (extraTop.length) return `unexpected top-level key(s): ${extraTop.join(', ')}`;
+  for (const entry of [...obj.todos, ...obj.tsIgnores]) {
+    const extra = Object.keys(entry).filter((k) => k !== 'file' && k !== 'line');
+    if (extra.length) return `unexpected key(s) in entry: ${extra.join(', ')}`;
+  }
   return null;
 }
 

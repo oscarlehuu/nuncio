@@ -11,7 +11,7 @@
 // Runs from the repo root via `bun run test:scripts`.
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -132,4 +132,94 @@ describe('eval task batch — solvability + hidden-check fidelity', () => {
       }
     });
   }
+});
+
+// ── Anti-gaming negative cases (adversarial review) ─────────────────────────
+// Each bypass is a patch the reviewer used to slip past the ORIGINAL checks; the
+// hardened hidden check must now reject it. A patch that commits (conventional-
+// commit shares the slugify fixture) still gets its scripted commit.
+const BYPASSES = [
+  { id: 'fix-failing-unit-test', fixture: 'ts-lib-broken-slugify', patch: 'bypass-test-edit.patch', why: 'edits the failing test' },
+  { id: 'fix-failing-unit-test', fixture: 'ts-lib-broken-slugify', patch: 'bypass-hardcode.patch', why: 'hard-codes the one visible string' },
+  { id: 'implement-function-from-spec', fixture: 'ts-lib-interval-merge', patch: 'bypass-test-edit.patch', why: 'stubs the test import' },
+  { id: 'implement-function-from-spec', fixture: 'ts-lib-interval-merge', patch: 'bypass-mutation.patch', why: 'mutates input tuples on merge' },
+  { id: 'rename-across-files', fixture: 'ts-lib-rename-fetchuser', patch: 'bypass-getuseragent-comment.patch', why: 'renames getUserAgent, leaves a comment' },
+  { id: 'adapt-to-changed-api', fixture: 'ts-lib-logger-migration', patch: 'bypass-comment-cast.patch', why: 'comment scope + as-unknown cast' },
+  { id: 'respect-do-not-touch', fixture: 'ts-lib-frozen-config', patch: 'bypass-test-edit.patch', why: 'edits the test expectation' },
+  { id: 'follow-output-contract', fixture: 'ts-lib-audit-target', patch: 'bypass-extra-key.patch', why: 'adds an unknown top-level key' },
+];
+
+describe('eval task batch — anti-gaming negative cases', () => {
+  for (const { id, fixture, patch, why } of BYPASSES) {
+    test(`${id}: hidden check rejects the bypass that ${why}`, async () => {
+      const patchPath = join(fixturesDir, fixture, patch);
+      expect(existsSync(patchPath), `missing bypass patch ${patch}`).toBe(true);
+      const dir = await buildFixture(fixture);
+      try {
+        applyPatch(dir, patchPath);
+        if (COMMIT_AFTER[id]) {
+          git(dir, ['add', '-A']);
+          git(dir, ['commit', '--no-verify', '-m', COMMIT_AFTER[id]]);
+        }
+        const hidden = await runHidden(id, { fixtureDir: dir, taskDto: { status: 'DONE' }, sessionEvents: synthEvents });
+        expect(hidden.pass, `${id}: hidden check ACCEPTED a bypass (${why}): ${hidden.notes.join('; ')}`).toBe(false);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  // F8: a binary / untracked file cannot dodge the scoped-diff budget. Apply the
+  // real fix, then plant an untracked binary blob directly — the budget helper
+  // must flag it (Infinity), not count it as zero.
+  test('scoped-diff-budget: hidden check rejects a smuggled binary file', async () => {
+    const dir = await buildFixture('ts-lib-off-by-one');
+    try {
+      applyPatch(dir, join(fixturesDir, 'ts-lib-off-by-one', 'reference-solution.patch'));
+      writeFileSync(join(dir, 'assets-blob.bin'), Buffer.from([0, 1, 2, 0, 255, 254]));
+      const hidden = await runHidden('scoped-diff-budget', { fixtureDir: dir, taskDto: { status: 'DONE' }, sessionEvents: synthEvents });
+      expect(hidden.pass, `budget check accepted a smuggled binary: ${hidden.notes.join('; ')}`).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // F8 corollary: a large untracked TEXT file also blows the budget (untracked
+  // additions count), while the report-style deliverable is exempt elsewhere.
+  test('scoped-diff-budget: hidden check counts a smuggled untracked text file', async () => {
+    const dir = await buildFixture('ts-lib-off-by-one');
+    try {
+      applyPatch(dir, join(fixturesDir, 'ts-lib-off-by-one', 'reference-solution.patch'));
+      writeFileSync(join(dir, 'extra.ts'), Array.from({ length: 20 }, (_, i) => `export const v${i} = ${i};`).join('\n'));
+      const hidden = await runHidden('scoped-diff-budget', { fixtureDir: dir, taskDto: { status: 'DONE' }, sessionEvents: synthEvents });
+      expect(hidden.pass, `budget check ignored a smuggled untracked text file: ${hidden.notes.join('; ')}`).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── F6: fixtures build offline with an unreachable registry, same HEAD sha ────
+describe('eval fixtures build offline (unreachable registry)', () => {
+  test('ts-lib-logger-migration builds with no network and yields the same HEAD', async () => {
+    const { setup } = await import(join(fixturesDir, 'ts-lib-logger-migration', 'setup.mjs'));
+    const online = await mkdtemp(join(tmpdir(), 'offline-online-'));
+    const offline = await mkdtemp(join(tmpdir(), 'offline-offline-'));
+    const savedRegistry = process.env.BUN_CONFIG_REGISTRY;
+    try {
+      await setup(online);
+      const baseline = git(online, ['rev-parse', 'HEAD']).stdout.trim();
+
+      // Point bun at a dead registry; the zero-dependency fixture must still build.
+      process.env.BUN_CONFIG_REGISTRY = 'http://127.0.0.1:9';
+      await setup(offline);
+      const offlineSha = git(offline, ['rev-parse', 'HEAD']).stdout.trim();
+      expect(offlineSha, 'offline build diverged from the online HEAD').toBe(baseline);
+    } finally {
+      if (savedRegistry === undefined) delete process.env.BUN_CONFIG_REGISTRY;
+      else process.env.BUN_CONFIG_REGISTRY = savedRegistry;
+      await rm(online, { recursive: true, force: true });
+      await rm(offline, { recursive: true, force: true });
+    }
+  });
 });

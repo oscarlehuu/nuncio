@@ -1,5 +1,5 @@
 diff --git a/src/merge-intervals.ts b/src/merge-intervals.ts
-index a3c859c..2271c09 100644
+index a3c859c..ae9b6d6 100644
 --- a/src/merge-intervals.ts
 +++ b/src/merge-intervals.ts
 @@ -2,16 +2,19 @@ export type Interval = [start: number, end: number];
@@ -20,15 +20,15 @@ index a3c859c..2271c09 100644
 -  throw new Error('not implemented');
 +export function mergeIntervals(intervals: Interval[]): Interval[] {
 +  if (intervals.length === 0) return [];
-+  const sorted = intervals.map((i) => [i[0], i[1]] as Interval).slice().sort((a, b) => a[0] - b[0]);
-+  const out: Interval[] = [[sorted[0][0], sorted[0][1]]];
++  const sorted = intervals.slice().sort((a, b) => a[0] - b[0]);
++  const out: Interval[] = [sorted[0]];
 +  for (let k = 1; k < sorted.length; k += 1) {
 +    const last = out[out.length - 1];
 +    const cur = sorted[k];
 +    if (cur[0] <= last[1]) {
 +      last[1] = Math.max(last[1], cur[1]);
 +    } else {
-+      out.push([cur[0], cur[1]]);
++      out.push(cur);
 +    }
 +  }
 +  return out;

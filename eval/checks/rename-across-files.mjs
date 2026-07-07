@@ -1,10 +1,13 @@
 // Hidden layer for rename-across-files: (a) no word-boundary `getUser` remains in
-// src/ or test/; (b) the unrelated getUserAgent survives in src/http.ts; (c) the
-// log string that named the function was updated to fetchUser; (d) the bundle
-// still builds. Run inside the fixture dir.
+// src/ or test/; (b) the unrelated getUserAgent DEFINITION line survives
+// byte-identical (a line anchor, not a raw grep — renaming it but leaving a
+// comment that mentions it does not pass); (c) the log string was updated to
+// fetchUser; (d) the bundle still builds. Note: this task legitimately updates
+// test imports, so test/ is NOT asserted unchanged (unlike the src-only tasks).
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { headLineSurvives } from './lib/check-helpers.mjs';
 
 function grepWordCount(dir, word, paths) {
   // git grep is word-boundary aware and only scans tracked+worktree files.
@@ -19,13 +22,9 @@ export default function check({ fixtureDir }) {
   const remaining = grepWordCount(fixtureDir, 'getUser', ['src', 'test']);
   if (remaining > 0) notes.push(`getUser still present ${remaining}x (must be renamed everywhere)`);
 
-  let httpOk = false;
-  try {
-    httpOk = /\bgetUserAgent\b/.test(readFileSync(join(fixtureDir, 'src/http.ts'), 'utf8'));
-  } catch {
-    httpOk = false;
-  }
-  if (!httpOk) notes.push('getUserAgent missing from src/http.ts (must not be renamed)');
+  // Anchor to the exact HEAD definition line, so the symbol truly survives.
+  const httpOk = headLineSurvives(fixtureDir, 'src/http.ts', /export function getUserAgent\b/);
+  if (!httpOk) notes.push('getUserAgent definition line in src/http.ts was altered (must not be renamed)');
 
   let logOk = false;
   try {

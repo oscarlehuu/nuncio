@@ -4,6 +4,7 @@
 // input-mutation (deep-frozen input), negatives. All 8 must pass. The probe runs
 // inside the fixture dir (bun) so it resolves the fixture's own module graph.
 import { spawnSync } from 'node:child_process';
+import { testDirUnchanged } from './lib/check-helpers.mjs';
 
 const PROBE = `
 import { mergeIntervals } from './src/merge-intervals.ts';
@@ -20,36 +21,46 @@ check('full containment', mergeIntervals([[1, 10], [3, 5]]), [[1, 10]]);
 check('duplicate intervals', mergeIntervals([[2, 4], [2, 4]]), [[2, 4]]);
 check('negative numbers', mergeIntervals([[-5, -2], [-3, 0]]), [[-5, 0]]);
 
-// input-mutation probe: deep-freeze the input and its tuples; a mutating
-// implementation throws in strict mode (ESM is strict), failing this case.
-const input = [Object.freeze([9, 10]), Object.freeze([1, 2])];
-Object.freeze(input);
-let mutationOk = true;
-try {
-  const out = mergeIntervals(input);
-  if (!eq(out, [[1, 2], [9, 10]])) mutationOk = false;
-} catch {
-  mutationOk = false; // threw => it tried to mutate the frozen input
-}
-cases.push({ name: 'no input mutation', ok: mutationOk });
+// input-mutation probes: deep-freeze the input AND its tuples; a mutating
+// implementation throws in strict mode (ESM is strict), failing the case.
+const probeNoMutation = (name, input, want) => {
+  input.forEach((t) => Object.freeze(t));
+  Object.freeze(input);
+  let ok = true;
+  try {
+    if (!eq(mergeIntervals(input), want)) ok = false;
+  } catch {
+    ok = false; // threw => it tried to mutate a frozen tuple/array
+  }
+  cases.push({ name, ok });
+};
+// Non-overlapping: catches whole-array/tuple reassignment.
+probeNoMutation('no mutation (disjoint)', [[9, 10], [1, 2]], [[1, 2], [9, 10]]);
+// OVERLAPPING multi-merge: the merge step is where a lazy impl mutates the
+// accumulator tuple in place (last[1] = ...); with frozen tuples that throws.
+probeNoMutation('no mutation (overlapping merge)', [[1, 4], [2, 6], [5, 8]], [[1, 8]]);
 
 const passed = cases.filter((c) => c.ok).length;
 console.log(JSON.stringify({ passed, total: cases.length, failed: cases.filter((c) => !c.ok).map((c) => c.name) }));
 `;
 
 export default function check({ fixtureDir }) {
+  const notes = [];
+  const testClean = testDirUnchanged(fixtureDir);
+  if (!testClean) notes.push('test/ was modified — implement the spec, do not weaken tests');
+
   const res = spawnSync('bun', ['-e', PROBE], { cwd: fixtureDir, encoding: 'utf8', stdio: 'pipe' });
   if (res.status !== 0) {
-    return { pass: false, notes: [`held-out probe failed to run: ${(res.stderr || res.stdout || '').slice(-300)}`] };
+    return { pass: false, notes: [...notes, `held-out probe failed to run: ${(res.stderr || res.stdout || '').slice(-300)}`] };
   }
   let report;
   try {
     report = JSON.parse(res.stdout.trim().split('\n').pop());
   } catch {
-    return { pass: false, notes: [`could not parse probe output: ${res.stdout.slice(-200)}`] };
+    return { pass: false, notes: [...notes, `could not parse probe output: ${res.stdout.slice(-200)}`] };
   }
-  const pass = report.passed === report.total;
-  const notes = [`held-out cases ${report.passed}/${report.total}`];
-  if (!pass) notes.push(`failed: ${report.failed.join(', ')}`);
-  return { pass, notes };
+  const heldOk = report.passed === report.total;
+  notes.push(`held-out cases ${report.passed}/${report.total}`);
+  if (!heldOk) notes.push(`failed: ${report.failed.join(', ')}`);
+  return { pass: testClean && heldOk, notes };
 }
