@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import {
   createLoop,
@@ -38,13 +38,23 @@ const STOP_LABELS: Record<StopKind, string> = {
   verifyGreenN: 'Stop after N green verifies',
 };
 
+/** A template prefill — schedule fields + goal/budget/stop, project still user-picked. */
+export interface CreateLoopPrefill {
+  goal: string;
+  schedule: { mode: ScheduleMode; time?: string; interval?: number; unit?: 'm' | 'h'; weekday?: string };
+  maxRunsPerDay?: number;
+  stop?: StopCondition;
+}
+
 interface CreateLoopDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated: (loop: LoopDto) => void;
+  /** Seed the form (e.g. from a template); applied each time the dialog opens. */
+  prefill?: CreateLoopPrefill | null;
 }
 
-export function CreateLoopDialog({ open, onOpenChange, onCreated }: CreateLoopDialogProps) {
+export function CreateLoopDialog({ open, onOpenChange, onCreated, prefill }: CreateLoopDialogProps) {
   const [goal, setGoal] = useState('');
   const [projectPath, setProjectPath] = useState<string>('');
   const [mode, setMode] = useState<ScheduleMode>('daily');
@@ -77,6 +87,30 @@ export function CreateLoopDialog({ open, onOpenChange, onCreated }: CreateLoopDi
     setStopKind('standing');
     setStopN(5);
   };
+
+  // Seed the form from a template when the dialog opens with a prefill. Keyed on
+  // `open` so re-picking a template (close → open) re-seeds; the project stays the
+  // user's to pick, so it is intentionally not part of the prefill.
+  useEffect(() => {
+    if (!open || !prefill) return;
+    setGoal(prefill.goal);
+    setMode(prefill.schedule.mode);
+    if (prefill.schedule.time) setTime(prefill.schedule.time);
+    if (prefill.schedule.interval) setInterval(prefill.schedule.interval);
+    if (prefill.schedule.unit) setUnit(prefill.schedule.unit);
+    if (prefill.schedule.weekday) setWeekday(prefill.schedule.weekday);
+    setMaxRunsPerDay(prefill.maxRunsPerDay ?? DEFAULT_MAX_RUNS_PER_DAY);
+    if (prefill.stop?.kind === 'maxTotalRuns') {
+      setStopKind('maxTotalRuns');
+      setStopN(prefill.stop.n);
+    } else if (prefill.stop?.kind === 'verifyGreenN') {
+      setStopKind('verifyGreenN');
+      setStopN(prefill.stop.n);
+    } else {
+      setStopKind('standing');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const handleOpenChange = (next: boolean) => {
     if (!next) reset();

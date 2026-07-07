@@ -33,9 +33,11 @@ function outcomeMeta(outcome: string): { label: string; className: string } {
 interface LoopRunHistoryProps {
   runs: LoopRunDto[];
   loading?: boolean;
+  /** When set, each run row is a button that opens its drill-down detail. */
+  onSelectRun?: (runId: string) => void;
 }
 
-export function LoopRunHistory({ runs, loading }: LoopRunHistoryProps) {
+export function LoopRunHistory({ runs, loading, onSelectRun }: LoopRunHistoryProps) {
   if (loading) {
     return (
       <div className="flex flex-col gap-1.5 py-1" aria-hidden>
@@ -61,23 +63,40 @@ export function LoopRunHistory({ runs, loading }: LoopRunHistoryProps) {
       {ordered.map((run) => {
         const meta = outcomeMeta(run.outcome);
         const settled = run.outcome === 'ok' || run.outcome === 'failed';
-        return (
-          <li key={run.id} className="flex items-center gap-2.5 py-1.5">
-            {settled ? (
-              <VerifyDot verify={run.verify} />
-            ) : run.outcome === 'pending' ? (
-              <span
-                className="inline-block size-[7px] shrink-0 rounded-full bg-info shadow-[0_0_5px_var(--color-info)] animate-pulse"
-                title="In flight"
-                aria-label="In flight"
-              />
-            ) : (
-              <span className="inline-block size-[7px] shrink-0" aria-hidden />
-            )}
+        const dot = settled ? (
+          <VerifyDot verify={run.verify} />
+        ) : run.outcome === 'pending' ? (
+          <span
+            className="inline-block size-[7px] shrink-0 rounded-full bg-info shadow-[0_0_5px_var(--color-info)] animate-pulse"
+            title="In flight"
+            aria-label="In flight"
+          />
+        ) : (
+          <span className="inline-block size-[7px] shrink-0" aria-hidden />
+        );
+        const body = (
+          <>
+            {dot}
             <span className={cn('text-ui-lg', meta.className)}>{meta.label}</span>
             <span className="ml-auto shrink-0 text-ui-sm tabular-nums text-muted-foreground">
               {relativeTime(run.createdAt)}
             </span>
+          </>
+        );
+        return (
+          <li key={run.id}>
+            {onSelectRun ? (
+              <button
+                type="button"
+                onClick={() => onSelectRun(run.id)}
+                className="-mx-2 flex w-[calc(100%+1rem)] items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.99]"
+                aria-label={`Open run — ${meta.label}`}
+              >
+                {body}
+              </button>
+            ) : (
+              <div className="flex items-center gap-2.5 py-1.5">{body}</div>
+            )}
           </li>
         );
       })}

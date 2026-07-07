@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
+import type { ReactElement } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../lib/api', async () => {
@@ -8,6 +10,7 @@ vi.mock('../lib/api', async () => {
     ...actual,
     fetchLoops: vi.fn(),
     fetchLoopRuns: vi.fn(),
+    fetchLoopStats: vi.fn(),
     pauseLoop: vi.fn(),
     resumeLoop: vi.fn(),
     deleteLoop: vi.fn(),
@@ -16,16 +19,34 @@ vi.mock('../lib/api', async () => {
 
 // Toasts are noise in jsdom; stub sonner so the view mounts clean.
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+// The project picker (in the create dialog) hits the network; keep it inert.
+vi.mock('./project-picker', () => ({ ProjectPicker: () => <button type="button">pick</button> }));
 
 import { AutopilotView } from './autopilot-view';
 import {
   deleteLoop,
   fetchLoopRuns,
   fetchLoops,
+  fetchLoopStats,
   pauseLoop,
   resumeLoop,
   type LoopDto,
 } from '../lib/api';
+
+function renderView(ui: ReactElement = <AutopilotView onBack={vi.fn()} />) {
+  return render(<MemoryRouter>{ui}</MemoryRouter>);
+}
+
+const STATS = {
+  total: 1,
+  active: 1,
+  broken: 0,
+  successful7d: 0,
+  failed7d: 0,
+  successful24h: 0,
+  failed24h: 0,
+  sparkline: [],
+};
 
 function loop(partial: Partial<LoopDto>): LoopDto {
   return {
@@ -49,6 +70,7 @@ describe('AutopilotView', () => {
   beforeEach(() => {
     vi.mocked(fetchLoopRuns).mockReset().mockResolvedValue([]);
     vi.mocked(fetchLoops).mockReset();
+    vi.mocked(fetchLoopStats).mockReset().mockResolvedValue(STATS);
     vi.mocked(pauseLoop).mockReset().mockResolvedValue(loop({ status: 'paused' }));
     vi.mocked(resumeLoop).mockReset().mockResolvedValue(loop({ status: 'active' }));
     vi.mocked(deleteLoop).mockReset().mockResolvedValue(undefined);
@@ -56,7 +78,7 @@ describe('AutopilotView', () => {
 
   it('shows the empty state explaining a loop plus a create button', async () => {
     vi.mocked(fetchLoops).mockResolvedValue([]);
-    render(<AutopilotView onBack={vi.fn()} />);
+    renderView();
     await waitFor(() => expect(screen.getByText('No loops yet')).toBeInTheDocument());
     expect(screen.getByText(/standing task nuncio runs on a schedule/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /create your first loop/i })).toBeInTheDocument();
@@ -69,7 +91,7 @@ describe('AutopilotView', () => {
       loop({ id: 'b', goal: 'Broken loop', status: 'broken' }),
       loop({ id: 'c', goal: 'Completed loop', status: 'completed' }),
     ]);
-    render(<AutopilotView onBack={vi.fn()} />);
+    renderView();
     await waitFor(() => expect(screen.getByText('Active loop')).toBeInTheDocument());
     expect(screen.getByText('Active')).toBeInTheDocument();
     expect(screen.getByText('Paused')).toBeInTheDocument();
@@ -83,13 +105,13 @@ describe('AutopilotView', () => {
       { id: 'r1', loopId: 'b', taskId: 't1', outcome: 'failed', verify: 'red', dayBucket: '2000-01-01', createdAt: 1 },
       { id: 'r2', loopId: 'b', taskId: 't2', outcome: 'failed', verify: 'red', dayBucket: '2000-01-01', createdAt: 2 },
     ]);
-    render(<AutopilotView onBack={vi.fn()} />);
+    renderView();
     await waitFor(() => expect(screen.getByText(/2 failed runs in a row/i)).toBeInTheDocument());
   });
 
   it('pauses an active loop', async () => {
     vi.mocked(fetchLoops).mockResolvedValue([loop({ id: 'a', status: 'active' })]);
-    render(<AutopilotView onBack={vi.fn()} />);
+    renderView();
     await waitFor(() => expect(screen.getByText('Triage new issues')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /pause triage new issues/i }));
     expect(pauseLoop).toHaveBeenCalledWith('a');
@@ -97,7 +119,7 @@ describe('AutopilotView', () => {
 
   it('resumes a broken loop with fix-and-resume semantics', async () => {
     vi.mocked(fetchLoops).mockResolvedValue([loop({ id: 'b', status: 'broken' })]);
-    render(<AutopilotView onBack={vi.fn()} />);
+    renderView();
     await waitFor(() => expect(screen.getByText('Triage new issues')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /fix and resume/i }));
     expect(resumeLoop).toHaveBeenCalledWith('b');
@@ -105,7 +127,7 @@ describe('AutopilotView', () => {
 
   it('deletes a loop only after confirming', async () => {
     vi.mocked(fetchLoops).mockResolvedValue([loop({ id: 'a', status: 'active' })]);
-    render(<AutopilotView onBack={vi.fn()} />);
+    renderView();
     await waitFor(() => expect(screen.getByText('Triage new issues')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /delete triage new issues/i }));
     expect(deleteLoop).not.toHaveBeenCalled();
@@ -119,7 +141,7 @@ describe('AutopilotView', () => {
     vi.mocked(fetchLoopRuns).mockResolvedValue([
       { id: 'r1', loopId: 'a', taskId: 't1', outcome: 'ok', verify: 'green', dayBucket: '2000-01-01', createdAt: 1 },
     ]);
-    render(<AutopilotView onBack={vi.fn()} />);
+    renderView();
     await waitFor(() => expect(screen.getByText('Triage new issues')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /show run history/i }));
     expect(await screen.findByText('Succeeded')).toBeInTheDocument();
@@ -130,7 +152,7 @@ describe('AutopilotView', () => {
     vi.mocked(fetchLoopRuns).mockResolvedValue([
       { id: 'r1', loopId: 'a', taskId: 't1', outcome: 'pending', verify: 'none', dayBucket: '2000-01-01', createdAt: 1 },
     ]);
-    render(<AutopilotView onBack={vi.fn()} />);
+    renderView();
     await waitFor(() => expect(screen.getByText('Triage new issues')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /show run history/i }));
     expect(await screen.findByText(/running/i)).toBeInTheDocument();
@@ -140,7 +162,7 @@ describe('AutopilotView', () => {
     vi.mocked(fetchLoops).mockResolvedValue([
       loop({ id: 'a', status: 'active', schedule: { kind: 'cron', spec: 'every:1m' }, nextFireAt: Date.now() + 3 * 60_000 }),
     ]);
-    render(<AutopilotView onBack={vi.fn()} />);
+    renderView();
     await waitFor(() => expect(screen.getByText('Triage new issues')).toBeInTheDocument());
     expect(screen.getByText('Every 1 minute')).toBeInTheDocument();
     expect(screen.getByText(/Next run in \d+m/)).toBeInTheDocument();
@@ -150,7 +172,7 @@ describe('AutopilotView', () => {
     vi.mocked(fetchLoops).mockResolvedValue([
       loop({ id: 'a', goal: 'No-schedule loop', status: 'active', schedule: null, nextFireAt: null }),
     ]);
-    render(<AutopilotView onBack={vi.fn()} />);
+    renderView();
     // Mounts and shows the loop without a schedule/next-fire and without crashing.
     await waitFor(() => expect(screen.getByText('No-schedule loop')).toBeInTheDocument());
     expect(screen.queryByText(/Next run/)).not.toBeInTheDocument();
@@ -162,7 +184,7 @@ describe('AutopilotView', () => {
       // A marker the client has not modeled yet — must not crash the history list.
       { id: 'r1', loopId: 'a', taskId: null, outcome: 'skipped-overlap' as never, verify: 'none', dayBucket: '2000-01-01', createdAt: 1 },
     ]);
-    render(<AutopilotView onBack={vi.fn()} />);
+    renderView();
     await waitFor(() => expect(screen.getByText('Triage new issues')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /show run history/i }));
     expect(await screen.findByText('Skipped overlap')).toBeInTheDocument();

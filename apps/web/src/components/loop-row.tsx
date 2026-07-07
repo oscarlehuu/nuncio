@@ -20,6 +20,8 @@ interface LoopRowProps {
   runs: LoopRunDto[];
   runsLoading?: boolean;
   busy?: boolean;
+  /** Open the loop's detail page (row title). Falls back to no-op when absent. */
+  onOpen?: () => void;
   onPause: (id: string) => void;
   onResume: (id: string) => void;
   onDelete: (loop: LoopDto) => void;
@@ -36,6 +38,7 @@ export function LoopRow({
   runs,
   runsLoading,
   busy,
+  onOpen,
   onPause,
   onResume,
   onDelete,
@@ -67,7 +70,17 @@ export function LoopRow({
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <h3 className="truncate text-ui-lg font-semibold text-foreground">{loop.goal}</h3>
+            {onOpen ? (
+              <button
+                type="button"
+                onClick={onOpen}
+                className="min-w-0 truncate rounded text-left text-ui-lg font-semibold text-foreground transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {loop.goal}
+              </button>
+            ) : (
+              <h3 className="truncate text-ui-lg font-semibold text-foreground">{loop.goal}</h3>
+            )}
             <LoopStatusChip status={loop.status} className="shrink-0" />
           </div>
 

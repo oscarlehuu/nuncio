@@ -1,18 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Plus, Repeat } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { ArrowLeft, ListChecks, Plus, Repeat } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   deleteLoop,
   fetchLoopRuns,
   fetchLoops,
+  fetchLoopStats,
   pauseLoop,
   resumeLoop,
   type LoopDto,
   type LoopRunDto,
+  type LoopStatsDto,
 } from '../lib/api';
 import { LoopRow } from './loop-row';
+import { LoopDashboardHeader } from './loop-dashboard-header';
+import { LoopTemplates, type LoopTemplate } from './loop-templates';
 import { Button } from '@/components/ui/button';
-import { CreateLoopDialog } from './create-loop-dialog';
+import { CreateLoopDialog, type CreateLoopPrefill } from './create-loop-dialog';
 import {
   Dialog,
   DialogContent,
@@ -33,13 +38,25 @@ interface AutopilotViewProps {
  * its own, but a paused/completed-only list is inert — no need to poll).
  */
 export function AutopilotView({ onBack }: AutopilotViewProps) {
+  const navigate = useNavigate();
   const [loops, setLoops] = useState<LoopDto[]>([]);
   const [runsByLoop, setRunsByLoop] = useState<Record<string, LoopRunDto[]>>({});
+  const [stats, setStats] = useState<LoopStatsDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
+  const [prefill, setPrefill] = useState<CreateLoopPrefill | null>(null);
   const [pendingDelete, setPendingDelete] = useState<LoopDto | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const errorShown = useRef(false);
+
+  const openCreate = (seed: CreateLoopPrefill | null) => {
+    setPrefill(seed);
+    setCreateOpen(true);
+  };
+
+  const pickTemplate = (t: LoopTemplate) => {
+    openCreate({ goal: t.goal, schedule: t.schedule, maxRunsPerDay: t.maxRunsPerDay, stop: t.stop });
+  };
 
   const loadRuns = useCallback(async (list: LoopDto[]) => {
     const entries = await Promise.all(
@@ -59,7 +76,13 @@ export function AutopilotView({ onBack }: AutopilotViewProps) {
       const list = await fetchLoops();
       setLoops(list);
       errorShown.current = false;
-      await loadRuns(list);
+      // Stats + per-loop runs load in parallel; stats failure is non-fatal.
+      await Promise.all([
+        loadRuns(list),
+        fetchLoopStats()
+          .then(setStats)
+          .catch(() => {}),
+      ]);
       return list;
     } catch {
       if (!errorShown.current) {
@@ -76,12 +99,15 @@ export function AutopilotView({ onBack }: AutopilotViewProps) {
     void refresh();
   }, [refresh]);
 
-  const hasLiveLoops = loops.some((l) => l.status === 'active');
+  // Poll while the view is mounted and any loop exists. A tripped breaker leaves
+  // NO loop 'active', so gating on active froze the list on stale breaker/pause
+  // state (smoke finding) — as long as loops exist, keep them fresh.
+  const hasLoops = loops.length > 0;
   useEffect(() => {
-    if (!hasLiveLoops) return;
+    if (!hasLoops) return;
     const timer = setInterval(() => void refresh(), 8000);
     return () => clearInterval(timer);
-  }, [hasLiveLoops, refresh]);
+  }, [hasLoops, refresh]);
 
   const runAction = async (id: string, action: (id: string) => Promise<unknown>) => {
     setBusyId(id);
@@ -121,8 +147,18 @@ export function AutopilotView({ onBack }: AutopilotViewProps) {
           <ArrowLeft className="size-4" />
         </Button>
         <h1 className="text-lg font-semibold tracking-tight">Autopilot</h1>
-        <div className="ml-auto">
-          <Button size="sm" className="gap-1.5" onClick={() => setCreateOpen(true)}>
+        <div className="ml-auto flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="gap-1.5"
+            onClick={() => navigate('/autopilot/runs')}
+            aria-label="View all run history"
+          >
+            <ListChecks className="size-4" />
+            <span className="hidden sm:inline">Run history</span>
+          </Button>
+          <Button size="sm" className="gap-1.5" onClick={() => openCreate(null)}>
             <Plus className="size-4" />
             <span className="hidden sm:inline">New loop</span>
           </Button>
@@ -130,29 +166,44 @@ export function AutopilotView({ onBack }: AutopilotViewProps) {
       </header>
 
       <div className="flex-1 overflow-y-auto px-4 py-6">
-        <div className="mx-auto w-full max-w-[720px]">
+        <div className="mx-auto w-full max-w-[720px] space-y-6">
           {loading ? (
-            <ul className="flex flex-col gap-3" aria-hidden>
-              {[0, 1].map((i) => (
-                <li key={i} className="h-24 rounded-xl border border-border bg-card shadow-e1 animate-pulse" />
-              ))}
-            </ul>
+            <>
+              <div className="grid grid-cols-3 gap-3" aria-hidden>
+                {[0, 1, 2].map((i) => (
+                  <div key={i} className="h-[72px] rounded-xl border border-border bg-card shadow-e0 animate-pulse" />
+                ))}
+              </div>
+              <ul className="flex flex-col gap-3" aria-hidden>
+                {[0, 1].map((i) => (
+                  <li key={i} className="h-24 rounded-xl border border-border bg-card shadow-e1 animate-pulse" />
+                ))}
+              </ul>
+            </>
           ) : loops.length === 0 ? (
-            <EmptyState onCreate={() => setCreateOpen(true)} />
+            <>
+              <EmptyState onCreate={() => openCreate(null)} />
+              <LoopTemplates onPick={pickTemplate} />
+            </>
           ) : (
-            <ul className="flex flex-col gap-3">
-              {loops.map((loop) => (
-                <LoopRow
-                  key={loop.id}
-                  loop={loop}
-                  runs={runsByLoop[loop.id] ?? []}
-                  busy={busyId === loop.id}
-                  onPause={handlePause}
-                  onResume={handleResume}
-                  onDelete={setPendingDelete}
-                />
-              ))}
-            </ul>
+            <>
+              <LoopDashboardHeader stats={stats} />
+              <ul className="flex flex-col gap-3">
+                {loops.map((loop) => (
+                  <LoopRow
+                    key={loop.id}
+                    loop={loop}
+                    runs={runsByLoop[loop.id] ?? []}
+                    busy={busyId === loop.id}
+                    onOpen={() => navigate(`/autopilot/${loop.id}`)}
+                    onPause={handlePause}
+                    onResume={handleResume}
+                    onDelete={setPendingDelete}
+                  />
+                ))}
+              </ul>
+              {loops.length < 3 && <LoopTemplates onPick={pickTemplate} />}
+            </>
           )}
         </div>
       </div>
@@ -161,26 +212,36 @@ export function AutopilotView({ onBack }: AutopilotViewProps) {
         open={createOpen}
         onOpenChange={setCreateOpen}
         onCreated={() => void refresh()}
+        prefill={prefill}
       />
 
-      <Dialog open={pendingDelete !== null} onOpenChange={(open) => !open && setPendingDelete(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete loop</DialogTitle>
-            <DialogDescription>
-              Delete “{pendingDelete?.goal}”? Its schedule stops firing. Past run history is kept.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setPendingDelete(null)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={() => void confirmDelete()}>
-              Delete loop
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/*
+        Confirm delete. Rendered only when open (never a mounted-but-closed peer of
+        CreateLoopDialog) and pinned to z-[60] so the Content sits unambiguously above
+        the overlay's isolate/backdrop-filter stacking context — the Electron webview
+        painted an equal-z Content behind the blurred overlay, so the confirm was
+        invisible and un-clickable.
+      */}
+      {pendingDelete !== null && (
+        <Dialog open onOpenChange={(open) => !open && setPendingDelete(null)}>
+          <DialogContent className="z-[60]">
+            <DialogHeader>
+              <DialogTitle>Delete loop</DialogTitle>
+              <DialogDescription>
+                Delete “{pendingDelete.goal}”? Its schedule stops firing. Past run history is kept.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setPendingDelete(null)}>
+                Cancel
+              </Button>
+              <Button variant="destructive" onClick={() => void confirmDelete()}>
+                Delete loop
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </section>
   );
 }
