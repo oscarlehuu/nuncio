@@ -44,6 +44,16 @@ describe('PromptProfileService', () => {
     expect(profiles.resolve('cursor', 'some-model').sections.briefWrapper).toBe('OVERRIDE {{content}}');
   });
 
+  it('resolves to the pass-through profile for a provider with no override setting key', () => {
+    // The override key is derived from the provider id
+    // (NUNCIO_PROMPT_PROFILE_MOCK). No such key is registered, and
+    // settings.resolve() throws on unregistered keys by design — resolving a
+    // profile for such a provider must fall through to pass-through, never throw
+    // (otherwise session creation for that provider crashes).
+    expect(() => profiles.resolve('mock', 'mock:default')).not.toThrow();
+    expect(profiles.resolve('mock', 'mock:default').sections.briefWrapper).toBeUndefined();
+  });
+
   it('clearing the setting also takes effect without a restart', () => {
     settings.set(
       'NUNCIO_PROMPT_PROFILE_CURSOR',

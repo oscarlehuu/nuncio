@@ -15,7 +15,20 @@ export class PromptProfileService {
   private readonly loader: PromptProfileLoader;
 
   constructor(@Optional() private readonly settings?: SettingsService) {
-    this.loader = new PromptProfileLoader(repoProfilesDir(), (key) => this.settings?.resolve(key));
+    // The loader asks for a per-provider override key it derives from the
+    // provider id (NUNCIO_PROMPT_PROFILE_<PROVIDER>). Providers without a
+    // registered override key — the test-only mock, and any new engine before
+    // its key is added to the registry — must fall through to the repo profile
+    // / pass-through default, not crash session creation. settings.resolve()
+    // throws on an unregistered key by design (a typo guard), so treat that
+    // throw here as "no override present" rather than letting it escape.
+    this.loader = new PromptProfileLoader(repoProfilesDir(), (key) => {
+      try {
+        return this.settings?.resolve(key);
+      } catch {
+        return undefined;
+      }
+    });
     // Settings changes (e.g. NUNCIO_PROMPT_PROFILE_<PROVIDER>) must take effect
     // without a restart — same mechanism as AgentRegistry's provider-cache bust.
     this.settings?.onChange(() => this.bustCache());
