@@ -10,6 +10,19 @@ export type HeartbeatJob = 'infra' | 'reconcile' | 'digest-morning' | 'digest-ev
 
 export type DigestVariant = 'morning' | 'evening';
 
+/** Real window-scoped counts folded from durable rows for the digest (finding #5). */
+export interface DigestCounts {
+  runsOk: number;
+  runsFailed: number;
+  prsOpened: number;
+  attentionRaised: number;
+  attentionResolved: number;
+  sessionsCompleted: number;
+  sessionsNeedsYou: number;
+  runsToday: number;
+  cap: number;
+}
+
 /** One infra self-check result the heartbeat folds into the attention queue. */
 export interface InfraCheckResult {
   /** True = healthy (auto-resolve any prior item); false = raise an item. */

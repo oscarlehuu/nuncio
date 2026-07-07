@@ -8,14 +8,29 @@ import { ForgeRegistry } from '../../forges/forges.registry';
 import { SessionsRepository } from '../../sessions/persistence/sessions.repository';
 import { EventsRepository } from '../../sessions/persistence/events.repository';
 import { AttentionService } from '../attention.service';
+import { AttentionRepository } from '../attention.repository';
+import { AttentionCollectors } from '../attention-collectors';
 import type { Clock } from '../../scheduler/scheduler.types';
 import { DigestRepository } from './digest.repository';
 import { InfraChecks } from './infra-checks';
 import { buildDigest, digestPushContent, type DigestInput } from './digest';
-import type { DigestVariant, HeartbeatJob, InfraCheckResult } from './heartbeat.types';
+import { gatherDigestCounts } from './digest-counts';
+import type { DigestCounts, DigestVariant, HeartbeatJob, InfraCheckResult } from './heartbeat.types';
 
 /** Bounded run of one layer's work, so a hung layer can never wedge the scan. */
 export const DEFAULT_LAYER_TIMEOUT_MS = 10_000;
+
+const EMPTY_COUNTS: DigestCounts = {
+  runsOk: 0,
+  runsFailed: 0,
+  prsOpened: 0,
+  attentionRaised: 0,
+  attentionResolved: 0,
+  sessionsCompleted: 0,
+  sessionsNeedsYou: 0,
+  runsToday: 0,
+  cap: 24,
+};
 
 /** The 4 system jobs → their settings-key + variant, ensured on boot. */
 const SYSTEM_JOBS: ReadonlyArray<{ job: HeartbeatJob; specKey: string; defaultSpec: string }> = [
@@ -48,6 +63,14 @@ export class HeartbeatService implements OnModuleInit {
   onDigest: (variant: DigestVariant) => Promise<void> = async (v) => this.runDigest(v);
   reconcileAttention: () => void = () => this.attention?.reconcileOpenItems();
   reconcileLoops: () => void = () => this.loops?.reconcilePendingRuns();
+  /**
+   * Poll-collector sweep — re-run on the reconcile cadence so a loop that trips or
+   * a PR opened AFTER boot enters the queue without a restart (finding #1). Bound
+   * to AttentionCollectors.sweep() in onModuleInit.
+   */
+  onSweep: () => Promise<void> = async () => {};
+  /** Window-scoped digest counts from durable rows — bound in onModuleInit. */
+  gatherDigestCounts: (from: number, to: number) => DigestCounts = () => EMPTY_COUNTS;
   isClosed: () => boolean = () => this.database?.closed ?? false;
 
   constructor(
@@ -62,12 +85,38 @@ export class HeartbeatService implements OnModuleInit {
     @Optional() private readonly forges?: ForgeRegistry,
     @Optional() private readonly sessions?: SessionsRepository,
     @Optional() private readonly events?: EventsRepository,
+    @Optional() private readonly collectors?: AttentionCollectors,
+    @Optional() private readonly attentionItems?: AttentionRepository,
   ) {}
 
   onModuleInit(): void {
     this.bindInfraProbes();
+    this.bindDataSeams();
     this.scheduler?.setSystemFireHandler((job) => this.dispatch(job as HeartbeatJob));
     this.ensureSchedules();
+  }
+
+  /** Bind the sweep + digest-count seams to real collaborators (findings #1, #5). */
+  private bindDataSeams(): void {
+    if (this.collectors) this.onSweep = () => this.collectors!.sweep();
+    this.gatherDigestCounts = (from, to) =>
+      gatherDigestCounts(
+        {
+          loopRuns: this.allLoopRuns(),
+          attentionItems: this.attentionItems?.list() ?? [],
+          sessions: this.sessions?.list(false) ?? [],
+          latestEventAt: (id) => this.events?.latestEventAt(id) ?? null,
+          maxRunsPerDay: 24,
+        },
+        from,
+        to,
+        this.clock.now(),
+      );
+  }
+
+  private allLoopRuns() {
+    const loops = this.loops?.list() ?? [];
+    return loops.flatMap((l) => this.loops!.runs(l.id));
   }
 
   /**
@@ -103,6 +152,18 @@ export class HeartbeatService implements OnModuleInit {
             // No event yet → treat the session's own createdAt as the last activity.
             lastEventAt: this.events!.latestEventAt(s.id) ?? s.createdAt,
           }));
+
+      // A zombie item clears once its session leaves RUNNING-and-stale (finding
+      // #3): the infra check only enumerates CURRENT running sessions, so a
+      // finished/errored session emits no OK signal. This probe lets
+      // reconcileOpenItems auto-resolve the stale item. subjectId = 'session:<id>'.
+      this.attention?.registerProbe('zombie-session', (item) => {
+        const sessionId = item.subjectId.replace(/^session:/, '');
+        const session = this.sessions!.findById(sessionId);
+        if (!session || session.status !== 'RUNNING') return false; // gone/finished → clear
+        const lastEventAt = this.events!.latestEventAt(sessionId) ?? session.createdAt;
+        return this.clock.now() - lastEventAt > this.infra!.zombieAgeMs; // still stale?
+      });
     }
   }
 
@@ -111,19 +172,41 @@ export class HeartbeatService implements OnModuleInit {
     if (this.isClosed()) return; // fire during shutdown → no-op
     try {
       if (job === 'infra') {
-        await this.onInfra();
+        await this.withTimeout(this.onInfra());
       } else if (job === 'reconcile') {
         this.reconcileAttention();
         this.reconcileLoops();
+        // Re-run the poll collectors so post-boot loop trips / new PRs enter the
+        // queue without a restart (finding #1).
+        await this.withTimeout(this.onSweep());
       } else if (job === 'digest-morning') {
-        await this.onDigest('morning');
+        await this.withTimeout(this.onDigest('morning'));
       } else if (job === 'digest-evening') {
-        await this.onDigest('evening');
+        await this.withTimeout(this.onDigest('evening'));
       }
     } catch {
       // A layer failure is recorded via the layer's own paths (attention items /
       // best-effort push); it must never escape into scanDue.
     }
+  }
+
+  /**
+   * Bound a layer's promise: settle (resolve) at `layerTimeoutMs` even if the work
+   * hangs, so the schedule's inFlight releases and the next fire proceeds (finding
+   * #2). The underlying work keeps running best-effort; we just stop waiting.
+   */
+  private withTimeout(work: Promise<unknown>): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, this.layerTimeoutMs);
+      const settle = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      // Settle on BOTH success and failure — the layer records its own failures;
+      // the bounded wrapper only stops waiting and must swallow the rejection so
+      // it never surfaces as an unhandled rejection.
+      work.then(settle, settle);
+    });
   }
 
   /** Layer 1 — infra self-check: fold check results into the attention queue. */
@@ -172,23 +255,25 @@ export class HeartbeatService implements OnModuleInit {
     await this.push?.broadcast(digestPushContent(digest, slotKey));
   }
 
-  /** Gather digest inputs from existing durable rows (loops/attention/sessions). */
+  /**
+   * Gather digest inputs from existing durable rows (finding #5): REAL
+   * window-scoped counts via the bound `gatherDigestCounts` seam, plus the current
+   * open-attention snapshot. Every exposed number is true — never a fake all-clear.
+   */
   private digestInput(windowFrom: number, windowTo: number): DigestInput {
-    // v1: counts derived from the attention snapshot + loop runs. The exact
-    // loop/session delta queries are read-only folds over listRuns/list; kept
-    // minimal here and expanded as the fleet-home data (sub-phase C) lands.
-    const open = this.attention?.list().counts.total ?? 0;
+    const c = this.gatherDigestCounts(windowFrom, windowTo);
+    const openTopCount = this.attention?.list().counts.total ?? 0;
     return {
-      runsOk: 0,
-      runsFailed: 0,
-      prsOpened: 0,
-      attentionRaised: 0,
-      attentionResolved: 0,
-      openTopCount: open,
-      sessionsCompleted: 0,
-      sessionsNeedsYou: 0,
-      runsToday: 0,
-      cap: 24,
+      runsOk: c.runsOk,
+      runsFailed: c.runsFailed,
+      prsOpened: c.prsOpened,
+      attentionRaised: c.attentionRaised,
+      attentionResolved: c.attentionResolved,
+      openTopCount,
+      sessionsCompleted: c.sessionsCompleted,
+      sessionsNeedsYou: c.sessionsNeedsYou,
+      runsToday: c.runsToday,
+      cap: c.cap,
     };
   }
 
@@ -199,23 +284,29 @@ export class HeartbeatService implements OnModuleInit {
   }
 
   /**
-   * Ensure the system schedules exist (idempotent — a reboot never duplicates).
-   * Keyed by job: an existing `{kind:'system',job}` schedule is left as-is, so
-   * re-running this on every boot converges to exactly one row per job.
+   * Ensure the system schedules exist AND reflect the current cadence settings
+   * (idempotent — a reboot never duplicates). Keyed by job: a missing job is
+   * created; an EXISTING job whose stored spec differs from the current setting is
+   * updated so a NUNCIO_HEARTBEAT_* change takes effect on the next boot (finding
+   * #4). A matching spec is left untouched (no needless next-fire reset).
    */
   ensureSchedules(): void {
     if (!this.scheduler || this.isClosed()) return;
-    const existing = new Set(
-      this.scheduler
-        .listSchedules()
-        .filter((s) => s.target.kind === 'system')
-        .map((s) => (s.target as { kind: 'system'; job: string }).job),
-    );
+    const bySystemJob = new Map<string, { id: string; spec: string }>();
+    for (const s of this.scheduler.listSchedules()) {
+      if (s.target.kind === 'system') {
+        bySystemJob.set((s.target as { kind: 'system'; job: string }).job, { id: s.id, spec: s.spec });
+      }
+    }
     for (const { job, specKey, defaultSpec } of SYSTEM_JOBS) {
-      if (existing.has(job)) continue;
       const spec = this.settings?.resolve(specKey)?.trim() || defaultSpec;
       const kind: 'cron' | 'heartbeat' = spec.startsWith('daily@') ? 'cron' : 'heartbeat';
-      this.scheduler.create({ kind, spec, target: { kind: 'system', job } });
+      const current = bySystemJob.get(job);
+      if (!current) {
+        this.scheduler.create({ kind, spec, target: { kind: 'system', job } });
+      } else if (current.spec !== spec) {
+        this.scheduler.updateSpec(current.id, kind, spec);
+      }
     }
   }
 }

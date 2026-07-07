@@ -120,6 +120,14 @@ export class SchedulesRepository {
       .run(nextFireAt, Date.now(), id);
   }
 
+  /** Change a schedule's kind + spec (used when a heartbeat cadence setting changes). */
+  setSpec(id: string, kind: string, spec: string, nextFireAt: number | null): void {
+    if (this.database.closed) return;
+    this.database.db
+      .prepare('UPDATE schedules SET kind = ?, spec = ?, next_fire_at = ?, updated_at = ? WHERE id = ?')
+      .run(kind, spec, nextFireAt, Date.now(), id);
+  }
+
   delete(id: string): void {
     if (this.database.closed) return;
     this.database.db.prepare('DELETE FROM schedules WHERE id = ?').run(id);

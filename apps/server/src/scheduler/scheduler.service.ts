@@ -77,6 +77,16 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     return this.schedules.list();
   }
 
+  /**
+   * Change a schedule's kind + spec and recompute next fire (used when a heartbeat
+   * cadence setting changes). Clears any pending missed-fire marker.
+   */
+  updateSpec(id: string, kind: 'cron' | 'heartbeat', spec: string): void {
+    this.missed.delete(id);
+    const nextFireAt = this.computeNextFire(kind, spec, this.clock.now());
+    this.schedules.setSpec(id, kind, spec, nextFireAt);
+  }
+
   create(input: CreateScheduleDto): ScheduleDto {
     const nextFireAt = this.computeNextFire(input.kind, input.spec, this.clock.now());
     return this.schedules.create({ ...input, nextFireAt });
