@@ -12,6 +12,7 @@
 // (GET /api/models is server-filtered by isAvailable); no server modules are
 // imported here. Serial execution. Usage:
 //   bun run eval:engines -- --engines mock --tasks smoke-mock-echo
+import { rmSync } from 'node:fs';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -32,6 +33,23 @@ const POLL_INTERVAL_MS = 500;
 // adding a server endpoint just for the harness.
 const PROFILE_VERSION = 0;
 const PROFILE_NOTE = 'profileVersion=0: no prompt-profile HTTP surface on this build';
+
+// The hermetic-stack lib already installs a synchronous process-exit safety net
+// that SIGKILLs any live daemon and removes its data dir — including a signal
+// that lands mid-boot. It does NOT know about the fixture dir this runner
+// creates, so we register a synchronous 'exit' handler for the currently-live
+// fixture dir here. Synchronous (rmSync) because Node ignores async work in an
+// 'exit' handler, and the lib turns SIGINT/SIGTERM into a normal exit.
+let activeFixtureDir = null;
+process.on('exit', () => {
+  if (activeFixtureDir) {
+    try {
+      rmSync(activeFixtureDir, { recursive: true, force: true });
+    } catch {
+      // best effort
+    }
+  }
+});
 
 function parseArgs(argv) {
   const out = { tasks: null, engines: null, models: null };
@@ -130,6 +148,7 @@ function countRounds(events) {
 async function runOneTask(baseUrl, { task, provider, model }) {
   const started = Date.now();
   const fixtureDir = await mkdtemp(join(tmpdir(), `nuncio-eval-${task.fixture}-`));
+  activeFixtureDir = fixtureDir; // so a signal mid-task removes it
   try {
     const setup = await loadFixtureSetup(task.fixture);
     await setup(fixtureDir);
@@ -149,12 +168,15 @@ async function runOneTask(baseUrl, { task, provider, model }) {
     const verifyPassed = lastVerifyOk(events);
     const rounds = countRounds(events);
 
-    const check = await loadHiddenCheck(task.id);
+    // A hidden check that fails to LOAD (bad import, syntax error) or THROWS at
+    // runtime must score the task as failing — never a silent pass. Both paths
+    // keep verifyPassed/rounds so the row stays honest about what did happen.
     let hidden;
     try {
+      const check = await loadHiddenCheck(task.id);
       hidden = await check({ fixtureDir, taskDto: dto, sessionEvents: events });
     } catch (err) {
-      hidden = { pass: false, notes: [`hidden check threw: ${err.message}`] };
+      hidden = { pass: false, notes: [`hidden check error: ${err.message}`] };
     }
     const hiddenPassed = hidden?.pass === true;
 
@@ -170,6 +192,7 @@ async function runOneTask(baseUrl, { task, provider, model }) {
     return row(task, { pass: false, verifyPassed: false, hiddenPassed: false, durationMs: Date.now() - started, rounds: 0, notes: [`infra error: ${err.message}`] });
   } finally {
     await rm(fixtureDir, { recursive: true, force: true });
+    if (activeFixtureDir === fixtureDir) activeFixtureDir = null;
   }
 }
 

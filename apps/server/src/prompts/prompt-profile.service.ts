@@ -18,16 +18,16 @@ export class PromptProfileService {
     // The loader asks for a per-provider override key it derives from the
     // provider id (NUNCIO_PROMPT_PROFILE_<PROVIDER>). Providers without a
     // registered override key — the test-only mock, and any new engine before
-    // its key is added to the registry — must fall through to the repo profile
-    // / pass-through default, not crash session creation. settings.resolve()
-    // throws on an unregistered key by design (a typo guard), so treat that
-    // throw here as "no override present" rather than letting it escape.
+    // its key is added to the registry — must fall through to pass-through, not
+    // crash session creation. settings.resolve() throws on an UNREGISTERED key
+    // by design (a typo guard). Gate the lookup on registry membership
+    // (settings.get() returns null for an unknown key and never throws) instead
+    // of swallowing resolve()'s throw: a genuine resolution failure on a
+    // REGISTERED key must still propagate, never silently degrade to
+    // pass-through.
     this.loader = new PromptProfileLoader(repoProfilesDir(), (key) => {
-      try {
-        return this.settings?.resolve(key);
-      } catch {
-        return undefined;
-      }
+      if (!this.settings || this.settings.get(key) === null) return undefined;
+      return this.settings.resolve(key);
     });
     // Settings changes (e.g. NUNCIO_PROMPT_PROFILE_<PROVIDER>) must take effect
     // without a restart — same mechanism as AgentRegistry's provider-cache bust.

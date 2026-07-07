@@ -8,7 +8,7 @@
 // place.
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { existsSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -21,6 +21,39 @@ export const webDist = join(repoRoot, 'apps/web/dist');
 const serverDir = join(repoRoot, 'apps/server');
 
 const CANONICAL_PORTS = new Set([3000, 5173]);
+
+// Every live daemon registers its { child, dataDir } here so a process exit
+// (including a signal that lands DURING boot, before the caller has a stop()
+// handle) can never orphan a daemon or leak its temp dir. Handlers below are
+// installed exactly once. The 'exit' handler is synchronous by necessity —
+// Node ignores async work there — so it SIGKILLs and rmSync's.
+const liveStacks = new Set();
+let exitNetInstalled = false;
+
+function installExitNet() {
+  if (exitNetInstalled) return;
+  exitNetInstalled = true;
+  process.on('exit', () => {
+    for (const { child, dataDir } of liveStacks) {
+      try {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      } catch {
+        // already gone
+      }
+      try {
+        rmSync(dataDir, { recursive: true, force: true });
+      } catch {
+        // best effort
+      }
+    }
+  });
+  // Turn signals into a normal exit so the 'exit' handler runs, then leave with
+  // a non-zero code. Callers may add their own handlers too; process.once here
+  // fires once and process.exit re-enters synchronously.
+  for (const sig of ['SIGINT', 'SIGTERM']) {
+    process.once(sig, () => process.exit(1));
+  }
+}
 
 /** Ask the OS for a free TCP port; never returns a canonical dev port. */
 export function findFreePort() {
@@ -94,6 +127,12 @@ export async function startServer({ port, healthTimeoutMs = 45000, serveWebDist,
     },
   });
 
+  // Register for the exit safety net immediately — before health-wait — so a
+  // signal mid-boot still tears this daemon + its dir down.
+  installExitNet();
+  const stackHandle = { child, dataDir };
+  liveStacks.add(stackHandle);
+
   const logs = [];
   const capture = (buf) => logs.push(buf.toString());
   child.stdout.on('data', capture);
@@ -103,6 +142,7 @@ export async function startServer({ port, healthTimeoutMs = 45000, serveWebDist,
   const stop = async () => {
     if (stopped) return;
     stopped = true;
+    liveStacks.delete(stackHandle);
     if (child.exitCode === null && child.signalCode === null) {
       child.kill('SIGTERM');
       await new Promise((r) => {

@@ -54,6 +54,24 @@ describe('PromptProfileService', () => {
     expect(profiles.resolve('mock', 'mock:default').sections.briefWrapper).toBeUndefined();
   });
 
+  it('propagates a resolve failure on a REGISTERED key instead of degrading to pass-through', () => {
+    // A registered key that fails to resolve (e.g. a DB/decrypt error) is a real
+    // fault — it must surface, not silently become the pass-through profile. The
+    // membership gate (settings.get) reports the key as known, so resolve() runs
+    // and its throw propagates.
+    const boom = new Error('db read failed');
+    const faultySettings = {
+      // Non-null => the key is "registered" for the membership gate.
+      get: () => ({ key: 'NUNCIO_PROMPT_PROFILE_CURSOR' }),
+      resolve: () => {
+        throw boom;
+      },
+      onChange: () => undefined,
+    } as unknown as SettingsService;
+    const service = new PromptProfileService(faultySettings);
+    expect(() => service.resolve('cursor', 'some-model')).toThrow('db read failed');
+  });
+
   it('clearing the setting also takes effect without a restart', () => {
     settings.set(
       'NUNCIO_PROMPT_PROFILE_CURSOR',

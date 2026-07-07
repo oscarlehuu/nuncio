@@ -3,6 +3,7 @@
 // eval/ tree, plus report rendering. Kept separate from engine-eval.mjs so the
 // orchestration script stays under the file-size budget and these bits are
 // unit-testable without booting a daemon.
+import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -61,24 +62,27 @@ export async function loadFixtureSetup(fixtureId) {
 }
 
 /**
- * Load the hidden check for a task if one exists. A missing check file is legal
- * (returns a pass-through), but a present-yet-broken one is a hard error.
+ * Load the hidden check for a task if one exists. A missing check FILE is legal
+ * (pass-through), but a present-yet-broken one is a hard error — including a
+ * typo'd import inside it, which must NEVER silently score the task as passing.
+ * We discriminate by disk presence of the check file itself, not by the error
+ * code: a bad `import` in a present check also throws ERR_MODULE_NOT_FOUND, so
+ * catching that code blindly would turn a broken check into a false pass.
  */
 export async function loadHiddenCheck(taskId) {
   const path = join(checksDir, `${taskId}.mjs`);
-  try {
-    const mod = await import(pathToFileURL(path).href);
-    const fn = mod.default ?? mod.check;
-    if (typeof fn !== 'function') {
-      throw new Error(`eval/checks/${taskId}.mjs must default-export a check function`);
-    }
-    return fn;
-  } catch (err) {
-    if (err?.code === 'ERR_MODULE_NOT_FOUND') {
-      return () => ({ pass: true, notes: ['no hidden check defined'] });
-    }
-    throw err;
+  if (!existsSync(path)) {
+    return () => ({ pass: true, notes: ['no hidden check defined'] });
   }
+  // The file exists: any load error (bad import, syntax error, missing export)
+  // is a real defect. Surface it — the caller scores the task FAILED with the
+  // error in notes rather than letting a broken check pass.
+  const mod = await import(pathToFileURL(path).href);
+  const fn = mod.default ?? mod.check;
+  if (typeof fn !== 'function') {
+    throw new Error(`eval/checks/${taskId}.mjs must default-export a check function`);
+  }
+  return fn;
 }
 
 /** Render results as a markdown table for stdout. */
