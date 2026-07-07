@@ -6,7 +6,7 @@
 // the planted line; PASS needs >= 2/3; (d) precision guard: <= 6 findings total,
 // so a shotgun that happens to cover the plants does not pass.
 import { readWorktree, git } from './lib/check-helpers.mjs';
-import { PLANTED_BUGS, EXPECTED_COMMITS } from '../fixtures/ts-lib-planted-bugs/setup.mjs';
+import { PLANTED_BUGS, PINNED_SHAS } from '../fixtures/ts-lib-planted-bugs/setup.mjs';
 
 const MAX_FINDINGS = 6;
 const LINE_TOLERANCE = 5;
@@ -15,8 +15,10 @@ const SEVERITIES = new Set(['high', 'medium', 'low']);
 // The review must change no committed CODE on either branch. Two signals:
 //   - the working tree has no uncommitted change to a tracked file (reviews/ is
 //     untracked and exempt), so nothing was edited-in-place;
-//   - each branch still points at its single seed commit (no new commit was made
-//     on top of either), so nothing was committed either.
+//   - each branch tip is byte-EXACTLY the pinned deterministic SHA. Pinning the
+//     SHA (not just the commit count) catches `git commit --amend`, which keeps
+//     the count the same but rewrites the tip. This exact match is the primary
+//     integrity anchor for the read-only contract.
 // (Comparing the worktree against the *other* branch is meaningless — that diff
 // IS the code under review.)
 function noCodeChanged(dir) {
@@ -28,10 +30,10 @@ function noCodeChanged(dir) {
     .filter((line) => !/\breviews\//.test(line));
   if (porcelain.length > 0) return { ok: false, why: `uncommitted change(s): ${porcelain.join(', ')}` };
 
-  for (const [branch, expected] of Object.entries(EXPECTED_COMMITS)) {
-    const count = Number(git(dir, ['rev-list', '--count', branch]).stdout.trim());
-    if (!Number.isFinite(count) || count !== expected) {
-      return { ok: false, why: `${branch} has ${count} commits (expected ${expected} — reviewer must not commit)` };
+  for (const [branch, sha] of Object.entries(PINNED_SHAS)) {
+    const tip = git(dir, ['rev-parse', branch]).stdout.trim();
+    if (tip !== sha) {
+      return { ok: false, why: `${branch} tip ${tip.slice(0, 8)} != pinned ${sha.slice(0, 8)} (reviewer amended or committed)` };
     }
   }
   return { ok: true };

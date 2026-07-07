@@ -514,6 +514,17 @@ describe('eval task batch 3 — discipline + read-only', () => {
     } finally {
       await rm(te, { recursive: true, force: true });
     }
+    // F4: delete the unused import, leave a comment copy of its text → the line
+    // anchor (not a substring count) catches it.
+    const dic = await buildFixture('ts-lib-tempting-todos');
+    try {
+      applyPatch(dic, join(fixturesDir, 'ts-lib-tempting-todos', 'bypass-delete-import-comment.patch'));
+      const res = await hidden('no-scope-creep', { fixtureDir: dic });
+      expect(res.pass, 'delete-import+comment not caught').toBe(false);
+      expect(res.notes.some((n) => /unused formatFlag import/.test(n)), 'import-anchor note missing').toBe(true);
+    } finally {
+      await rm(dic, { recursive: true, force: true });
+    }
   });
 
   test('worktree-hygiene: committed clean fix passes; leftover debris and stray commit rejected', async () => {
@@ -550,6 +561,23 @@ describe('eval task batch 3 — discipline + read-only', () => {
       git(dir, ['add', '-A']);
       git(dir, ['commit', '--no-verify', '-m', 'fix: slugify + touch test']);
       expect((await hidden('worktree-hygiene', { fixtureDir: dir })).pass, 'stray commit file not caught').toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+    // F3: commit scratch.log FIRST, then remove it in a clean-looking commit —
+    // the net diff hides it, but the per-commit history walk catches it.
+    dir = await buildFixture('ts-lib-broken-slugify');
+    try {
+      writeFileSync(join(dir, 'debug.log'), 'scratch\n');
+      git(dir, ['add', '-A']);
+      git(dir, ['commit', '--no-verify', '-m', 'wip: debugging']);
+      git(dir, ['rm', 'debug.log']);
+      applyPatch(dir, join(fixturesDir, 'ts-lib-broken-slugify', 'hygiene-solution.patch'));
+      git(dir, ['add', '-A']);
+      git(dir, ['commit', '--no-verify', '-m', 'fix: slugify']);
+      const res = await hidden('worktree-hygiene', { fixtureDir: dir });
+      expect(res.pass, 'scratch-log-then-clean trick not caught').toBe(false);
+      expect(res.notes.some((n) => /debug\.log/.test(n)), 'history-walk note missing').toBe(true);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -594,6 +622,20 @@ describe('eval task batch 3 — discipline + read-only', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+    // F2: `git commit --amend` on the feature branch keeps the commit COUNT the
+    // same but rewrites the tip SHA — the pinned-SHA check catches it even though
+    // the findings.json is valid.
+    dir = await buildFixture('ts-lib-planted-bugs');
+    try {
+      writeFindings(dir, goodFindings);
+      git(dir, ['checkout', 'feature/session-cache']);
+      git(dir, ['commit', '--amend', '--no-edit', '--no-verify']);
+      const res = await hidden('review-diff-findings', { fixtureDir: dir });
+      expect(res.pass, 'amended branch not caught').toBe(false);
+      expect(res.notes.some((n) => /pinned/.test(n)), 'pinned-sha note missing').toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -609,6 +651,20 @@ async function withDaemon(env, fn) {
     return await fn(server);
   } finally {
     await server.stop();
+  }
+}
+// Inject a synthetic tool_start event into a session's log via the daemon's
+// SQLite DB (the same simulation mechanism used for the agent-provenance fact) —
+// a real engine would emit this at runtime; the mock does not. Visible over the
+// HTTP events API immediately.
+function injectToolEvent(server, sessionId, tool, input = {}) {
+  const db = new Database(join(server.dataDir, 'nuncio.db'));
+  try {
+    const maxSeq = db.query('SELECT MAX(seq) AS m FROM events WHERE session_id = ?').get(sessionId)?.m ?? 0;
+    db.query('INSERT INTO events (session_id, seq, type, payload, created_at) VALUES (?,?,?,?,?)')
+      .run(sessionId, maxSeq + 1, 'tool_start', JSON.stringify({ tool, input }), Date.now());
+  } finally {
+    db.close();
   }
 }
 async function createSession(baseUrl, projectPath) {
@@ -648,6 +704,8 @@ describe('eval task batch 3 — delegate-subtask (API-driven simulation)', () =>
             contextBrief: { goal: 'Implement tokenize in src/tokenize.ts', files: ['src/tokenize.ts'], doneCriteria: ['bun test green'] } }),
         });
         expect(mt.ok, 'multitask enqueue failed').toBe(true);
+        // A real delegator invokes the enqueue TOOL at runtime — inject that event.
+        injectToolEvent(server, evalSession, 'nuncio_enqueue_task', { tag: 'mechanical', prompt: 'implement the tokenizer' });
         // Child runs to DONE → task_completed lands on the parent.
         const completed = await waitFor(async () => {
           const ev = await (await fetch(`${base}/api/sessions/${evalSession}/events?since=0`)).json();
@@ -689,6 +747,38 @@ describe('eval task batch 3 — delegate-subtask (API-driven simulation)', () =>
         const events = await (await fetch(`${base}/api/sessions/${evalSession}/events?since=0`)).json();
         const res = await hidden('delegate-subtask', { fixtureDir: dir, taskDto: { sessionId: evalSession }, sessionEvents: events, baseUrl: base });
         expect(res.pass, 'no-delegation self-do was accepted').toBe(false);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  }, 60000);
+
+  test('forgery: HTTP-only enqueue + self-written tokenizer is rejected', async () => {
+    await withDaemon({ NUNCIO_ORCHESTRATION_TOOLS: 'read-write' }, async (server) => {
+      const base = server.baseUrl;
+      const { setup } = await import(join(fixturesDir, 'ts-lib-two-module-feature', 'setup.mjs'));
+      const dir = await mkdtemp(join(tmpdir(), 'solv-deleg-forge-'));
+      await setup(dir);
+      try {
+        const evalSession = await createSession(base, dir);
+        await waitFor(async () => (await (await fetch(`${base}/api/sessions/${evalSession}`)).json()).status === 'IDLE');
+        // Forge: enqueue a useless child straight over HTTP — NO enqueue tool event
+        // is emitted (the parent didn't use the tool) — and write the tokenizer via
+        // a tool call itself.
+        await fetch(`${base}/api/tasks/multitask`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ parentSessionId: evalSession, prompts: ['noop'],
+            contextBrief: { goal: 'Implement tokenize in src/tokenize.ts', files: ['src/tokenize.ts'], doneCriteria: ['x'] } }),
+        });
+        injectToolEvent(server, evalSession, 'write_file', { path: 'src/tokenize.ts', contents: '…' });
+        applyPatch(dir, join(fixturesDir, 'ts-lib-two-module-feature', 'tokenize-solution.patch'));
+        applyPatch(dir, join(fixturesDir, 'ts-lib-two-module-feature', 'highlight-solution.patch'));
+        const events = await (await fetch(`${base}/api/sessions/${evalSession}/events?since=0`)).json();
+        const res = await hidden('delegate-subtask', { fixtureDir: dir, taskDto: { sessionId: evalSession }, sessionEvents: events, baseUrl: base });
+        expect(res.pass, 'forge (HTTP-only enqueue + self-write) was accepted').toBe(false);
+        // It must be caught by BOTH the forge guard and the no-self-write guard.
+        expect(res.notes.some((n) => /nuncio_enqueue_task tool call/.test(n)), 'forge-guard note missing').toBe(true);
+        expect(res.notes.some((n) => /targeted src\/tokenize\.ts/.test(n)), 'no-self-write note missing').toBe(true);
       } finally {
         await rm(dir, { recursive: true, force: true });
       }
