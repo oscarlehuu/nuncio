@@ -178,7 +178,9 @@ async function runOneTask(baseUrl, { task, provider, model }) {
     let hidden;
     try {
       const check = await loadHiddenCheck(task.id);
-      hidden = await check({ fixtureDir, taskDto: dto, sessionEvents: events });
+      // baseUrl is passed so delegation/fact checks can query the daemon HTTP
+      // API (task rows, context facts). Existing checks ignore the extra field.
+      hidden = await check({ fixtureDir, taskDto: dto, sessionEvents: events, baseUrl });
     } catch (err) {
       hidden = { pass: false, notes: [`hidden check error: ${err.message}`] };
     }
@@ -235,9 +237,14 @@ async function main() {
       const port = await findFreePort();
       const server = await startServer({
         port,
-        // Only wire a verify command when the task declares one; a verify-less
-        // task must produce no verify_result event at all.
-        env: task.verifyCommand ? { NUNCIO_VERIFY_COMMAND: task.verifyCommand } : {},
+        env: {
+          // Only wire a verify command when the task declares one; a verify-less
+          // task must produce no verify_result event at all.
+          ...(task.verifyCommand ? { NUNCIO_VERIFY_COMMAND: task.verifyCommand } : {}),
+          // daemonEnv is validateTask-allowlisted (orchestration tools / routing)
+          // — it flips server behavior on for the delegation-family tasks.
+          ...(task.daemonEnv ?? {}),
+        },
       });
       try {
         const available = await fetchAvailableEngines(server.baseUrl);

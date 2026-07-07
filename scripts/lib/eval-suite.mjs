@@ -69,9 +69,27 @@ export function validateTask(task, name) {
   if (task.informational && !task.tags.includes('control')) {
     throw new Error(`eval/tasks/${name} is informational but its tags do not include 'control'`);
   }
+  // daemonEnv flips server behavior on at boot (orchestration tools, routing), so
+  // it is allowlisted to exactly those keys — a task cannot smuggle arbitrary env
+  // (e.g. NUNCIO_FORCE_MOCK, a data dir) into the daemon and quietly change what
+  // is being measured.
+  if (task.daemonEnv !== undefined) {
+    if (typeof task.daemonEnv !== 'object' || task.daemonEnv === null || Array.isArray(task.daemonEnv)) {
+      throw new Error(`eval/tasks/${name} daemonEnv must be an object`);
+    }
+    const disallowed = Object.keys(task.daemonEnv).filter(
+      (k) => !DAEMON_ENV_ALLOWLIST.has(k),
+    );
+    if (disallowed.length) {
+      throw new Error(`eval/tasks/${name} daemonEnv has non-allowlisted key(s): ${disallowed.join(', ')} (allowed: ${[...DAEMON_ENV_ALLOWLIST].join(', ')})`);
+    }
+  }
   task.setup = task.setup ?? {};
   task.expect = task.expect ?? { verifyPassed: true };
 }
+
+/** The only env keys a task may inject into the hermetic daemon at boot. */
+export const DAEMON_ENV_ALLOWLIST = new Set(['NUNCIO_ORCHESTRATION_TOOLS', 'NUNCIO_ENGINE_ROUTING']);
 
 /** Dynamic-import a fixture builder; returns its `setup(dir)` function. */
 export async function loadFixtureSetup(fixtureId) {

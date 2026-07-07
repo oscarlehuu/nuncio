@@ -10,12 +10,14 @@
 //      assert the hidden check FAILS.
 // Runs from the repo root via `bun run test:scripts`.
 import { describe, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { findFreePort, startServer } from './lib/hermetic-stack.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const fixturesDir = join(repoRoot, 'eval', 'fixtures');
@@ -351,6 +353,8 @@ describe('eval task metadata guardrails (pinned sets)', () => {
   // a task to either set requires editing this list on purpose.
   const HIDDEN_ONLY = ['honest-failure-report'];
   const INFORMATIONAL = ['use-project-facts--control'];
+  // The ONLY tasks allowed to inject env into the hermetic daemon at boot.
+  const DAEMON_ENV = ['delegate-subtask', 'record-discovered-fact'];
 
   function allTasks() {
     return readdirSync(tasksDir)
@@ -378,11 +382,32 @@ describe('eval task metadata guardrails (pinned sets)', () => {
     }
   });
 
+  test('exactly the pinned tasks declare daemonEnv (and only allowlisted keys)', async () => {
+    const { DAEMON_ENV_ALLOWLIST } = await import('./lib/eval-suite.mjs');
+    const tasks = allTasks();
+    const withEnv = tasks.filter(({ task }) => task.daemonEnv !== undefined).map(({ id }) => id).sort();
+    expect(withEnv).toEqual([...DAEMON_ENV].sort());
+    for (const { id, task } of tasks) {
+      if (task.daemonEnv) {
+        for (const key of Object.keys(task.daemonEnv)) {
+          expect(DAEMON_ENV_ALLOWLIST.has(key), `${id} daemonEnv has non-allowlisted key ${key}`).toBe(true);
+        }
+      }
+    }
+  });
+
   test('every task json passes validateTask', async () => {
     const { validateTask } = await import('./lib/eval-suite.mjs');
     for (const { id, task } of allTasks()) {
       expect(() => validateTask(task, `${id}.json`), `${id} failed validateTask`).not.toThrow();
     }
+  });
+
+  test('validateTask rejects a non-allowlisted daemonEnv key', async () => {
+    const { validateTask } = await import('./lib/eval-suite.mjs');
+    const base = { id: 't', title: 'T', fixture: 'f', prompt: 'p', timeoutMs: 1000, verifyCommand: 'bun test' };
+    expect(() => validateTask({ ...base, daemonEnv: { NUNCIO_FORCE_MOCK: '1' } }, 't.json')).toThrow(/non-allowlisted key/);
+    expect(() => validateTask({ ...base, daemonEnv: { NUNCIO_ORCHESTRATION_TOOLS: 'read-write' } }, 't.json')).not.toThrow();
   });
 });
 
@@ -453,4 +478,257 @@ describe('eval fixtures build offline (unreachable registry)', () => {
       await rm(offline, { recursive: true, force: true });
     }
   });
+});
+
+// ── Batch 3: discipline + read-only (patch-based) ───────────────────────────
+async function hidden(taskId, ctx) {
+  const mod = await import(join(checksDir, `${taskId}.mjs`));
+  return (mod.default ?? mod.check)(ctx);
+}
+
+describe('eval task batch 3 — discipline + read-only', () => {
+  test('no-scope-creep: red untouched → green + hidden pass; scope-creep and test-edit rejected', async () => {
+    const task = await loadTask('no-scope-creep');
+    const dir = await buildFixture('ts-lib-tempting-todos');
+    try {
+      expect(shIn(dir, task.verifyCommand).status, 'verify unexpectedly passed untouched').not.toBe(0);
+      applyPatch(dir, join(fixturesDir, 'ts-lib-tempting-todos', 'reference-solution.patch'));
+      expect(shIn(dir, task.verifyCommand).status, 'verify failed after solution').toBe(0);
+      expect((await hidden('no-scope-creep', { fixtureDir: dir })).pass).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+    // scope-creep bypass: fix + delete an unrelated TODO → hidden fails.
+    const creep = await buildFixture('ts-lib-tempting-todos');
+    try {
+      applyPatch(creep, join(fixturesDir, 'ts-lib-tempting-todos', 'bypass-scope-creep.patch'));
+      expect((await hidden('no-scope-creep', { fixtureDir: creep })).pass, 'scope-creep not caught').toBe(false);
+    } finally {
+      await rm(creep, { recursive: true, force: true });
+    }
+    // test-edit bypass → hidden fails.
+    const te = await buildFixture('ts-lib-tempting-todos');
+    try {
+      applyPatch(te, join(fixturesDir, 'ts-lib-tempting-todos', 'bypass-test-edit.patch'));
+      expect((await hidden('no-scope-creep', { fixtureDir: te })).pass, 'test-edit not caught').toBe(false);
+    } finally {
+      await rm(te, { recursive: true, force: true });
+    }
+  });
+
+  test('worktree-hygiene: committed clean fix passes; leftover debris and stray commit rejected', async () => {
+    const task = await loadTask('worktree-hygiene');
+    const commitFix = (dir) => {
+      applyPatch(dir, join(fixturesDir, 'ts-lib-broken-slugify', 'hygiene-solution.patch'));
+      git(dir, ['add', '-A']);
+      git(dir, ['commit', '--no-verify', '-m', 'fix: slugify global flag']);
+    };
+    // Clean, committed fix → green + hidden pass.
+    let dir = await buildFixture('ts-lib-broken-slugify');
+    try {
+      expect(shIn(dir, task.verifyCommand).status, 'verify passed untouched').not.toBe(0);
+      commitFix(dir);
+      expect(shIn(dir, task.verifyCommand).status, 'verify failed after fix').toBe(0);
+      expect((await hidden('worktree-hygiene', { fixtureDir: dir })).pass).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+    // Leftover scratch debris → hidden fails (porcelain + debris).
+    dir = await buildFixture('ts-lib-broken-slugify');
+    try {
+      commitFix(dir);
+      writeFileSync(join(dir, 'scratch.mjs'), '// leftover\n');
+      expect((await hidden('worktree-hygiene', { fixtureDir: dir })).pass, 'debris not caught').toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+    // Commit that also touches a test → file-list not ⊆ {src/slugify.ts}.
+    dir = await buildFixture('ts-lib-broken-slugify');
+    try {
+      applyPatch(dir, join(fixturesDir, 'ts-lib-broken-slugify', 'hygiene-solution.patch'));
+      writeFileSync(join(dir, 'test/slugify.spec.ts'), `${readFileSync(join(dir, 'test/slugify.spec.ts'), 'utf8')}\n// note\n`);
+      git(dir, ['add', '-A']);
+      git(dir, ['commit', '--no-verify', '-m', 'fix: slugify + touch test']);
+      expect((await hidden('worktree-hygiene', { fixtureDir: dir })).pass, 'stray commit file not caught').toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('review-diff-findings: read-only findings pass; shotgun and code-edit rejected', async () => {
+    const task = await loadTask('review-diff-findings');
+    const goodFindings = JSON.stringify([
+      { file: 'src/lru.ts', line: 19, summary: 'off-by-one in eviction', severity: 'high' },
+      { file: 'src/writer.ts', line: 10, summary: 'swallowed rejection', severity: 'high' },
+      { file: 'src/cache-key.ts', line: 4, summary: 'local time not UTC', severity: 'medium' },
+    ], null, 2);
+    const writeFindings = (dir, json) => {
+      mkdirSync(join(dir, 'reviews'), { recursive: true });
+      writeFileSync(join(dir, 'reviews/findings.json'), `${json}\n`);
+    };
+    // Untouched: verify fails (no findings file yet).
+    let dir = await buildFixture('ts-lib-planted-bugs');
+    try {
+      expect(shIn(dir, task.verifyCommand).status, 'verify passed with no findings').not.toBe(0);
+      writeFindings(dir, goodFindings);
+      expect(shIn(dir, task.verifyCommand).status, 'verify failed with findings present').toBe(0);
+      expect((await hidden('review-diff-findings', { fixtureDir: dir })).pass).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+    // Shotgun (40 findings) → precision guard fails.
+    dir = await buildFixture('ts-lib-planted-bugs');
+    try {
+      writeFindings(dir, JSON.stringify(Array.from({ length: 40 }, (_, i) => ({ file: 'src/lru.ts', line: i + 1, summary: 'nit', severity: 'low' })), null, 2));
+      expect((await hidden('review-diff-findings', { fixtureDir: dir })).pass, 'shotgun not caught').toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+    // Edits code on the branch → not read-only.
+    dir = await buildFixture('ts-lib-planted-bugs');
+    try {
+      writeFindings(dir, goodFindings);
+      git(dir, ['checkout', 'feature/session-cache']);
+      writeFileSync(join(dir, 'src/cache-key.ts'), readFileSync(join(dir, 'src/cache-key.ts'), 'utf8').replace('getHours()', 'getUTCHours()'));
+      expect((await hidden('review-diff-findings', { fixtureDir: dir })).pass, 'code-edit not caught').toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── Batch 3: delegation pair — API-driven end-state simulation ───────────────
+// The mock child writes nothing, so a real full pass needs a real engine; here we
+// drive the correct END-STATE through the daemon HTTP API (and, for the fact, a
+// direct SQLite write since the public API forces founder provenance) and assert
+// the hidden check accepts it, and rejects the documented negatives.
+async function withDaemon(env, fn) {
+  const port = await findFreePort();
+  const server = await startServer({ port, env });
+  try {
+    return await fn(server);
+  } finally {
+    await server.stop();
+  }
+}
+async function createSession(baseUrl, projectPath) {
+  const res = await fetch(`${baseUrl}/api/sessions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ prompt: 'eval parent', provider: 'mock', projectPath }),
+  });
+  const s = await res.json();
+  if (!s.id) throw new Error(`session create failed: ${JSON.stringify(s)}`);
+  return s.id;
+}
+async function waitFor(fn, { timeout = 15000, interval = 300 } = {}) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (await fn()) return true;
+    await new Promise((r) => setTimeout(r, interval));
+  }
+  return false;
+}
+
+describe('eval task batch 3 — delegate-subtask (API-driven simulation)', () => {
+  test('a correct delegation end-state is accepted; missing brief / no child / self-edit rejected', async () => {
+    await withDaemon({ NUNCIO_ORCHESTRATION_TOOLS: 'read-write' }, async (server) => {
+      const base = server.baseUrl;
+      const { setup } = await import(join(fixturesDir, 'ts-lib-two-module-feature', 'setup.mjs'));
+      const dir = await mkdtemp(join(tmpdir(), 'solv-deleg-'));
+      await setup(dir);
+      try {
+        const evalSession = await createSession(base, dir);
+        await waitFor(async () => (await (await fetch(`${base}/api/sessions/${evalSession}`)).json()).status === 'IDLE');
+
+        // Delegate the tokenizer with a well-formed brief (the enqueue-tool shape).
+        const mt = await fetch(`${base}/api/tasks/multitask`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ parentSessionId: evalSession, prompts: ['implement the tokenizer'],
+            contextBrief: { goal: 'Implement tokenize in src/tokenize.ts', files: ['src/tokenize.ts'], doneCriteria: ['bun test green'] } }),
+        });
+        expect(mt.ok, 'multitask enqueue failed').toBe(true);
+        // Child runs to DONE → task_completed lands on the parent.
+        const completed = await waitFor(async () => {
+          const ev = await (await fetch(`${base}/api/sessions/${evalSession}/events?since=0`)).json();
+          return ev.some((e) => e.type === 'task_completed');
+        });
+        expect(completed, 'task_completed never landed on the parent').toBe(true);
+
+        // Simulate the parent's own integration work + the delegated tokenizer.
+        // The child's delivered tokenizer is COMMITTED (integrated into the base),
+        // so it is NOT part of the parent's own working-tree diff. The parent's
+        // uncommitted work is only the highlighter.
+        applyPatch(dir, join(fixturesDir, 'ts-lib-two-module-feature', 'tokenize-solution.patch'));
+        git(dir, ['add', 'src/tokenize.ts']);
+        git(dir, ['commit', '--no-verify', '-m', 'feat: integrate delegated tokenizer']);
+        applyPatch(dir, join(fixturesDir, 'ts-lib-two-module-feature', 'highlight-solution.patch'));
+
+        const taskDto = { sessionId: evalSession };
+        const events = await (await fetch(`${base}/api/sessions/${evalSession}/events?since=0`)).json();
+        const ok = await hidden('delegate-subtask', { fixtureDir: dir, taskDto, sessionEvents: events, baseUrl: base });
+        expect(ok.pass, `correct end-state rejected: ${ok.notes.join('; ')}`).toBe(true);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  }, 60000);
+
+  test('no child task → (a)/(c) fail; parent editing tokenize with no delegation → (d) fails', async () => {
+    await withDaemon({ NUNCIO_ORCHESTRATION_TOOLS: 'read-write' }, async (server) => {
+      const base = server.baseUrl;
+      const { setup } = await import(join(fixturesDir, 'ts-lib-two-module-feature', 'setup.mjs'));
+      const dir = await mkdtemp(join(tmpdir(), 'solv-deleg-neg-'));
+      await setup(dir);
+      try {
+        const evalSession = await createSession(base, dir);
+        await waitFor(async () => (await (await fetch(`${base}/api/sessions/${evalSession}`)).json()).status === 'IDLE');
+        // No delegation: parent did BOTH halves itself (edits tokenize.ts too).
+        applyPatch(dir, join(fixturesDir, 'ts-lib-two-module-feature', 'tokenize-solution.patch'));
+        applyPatch(dir, join(fixturesDir, 'ts-lib-two-module-feature', 'highlight-solution.patch'));
+        const events = await (await fetch(`${base}/api/sessions/${evalSession}/events?since=0`)).json();
+        const res = await hidden('delegate-subtask', { fixtureDir: dir, taskDto: { sessionId: evalSession }, sessionEvents: events, baseUrl: base });
+        expect(res.pass, 'no-delegation self-do was accepted').toBe(false);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  }, 60000);
+});
+
+describe('eval task batch 3 — record-discovered-fact (API + DB simulation)', () => {
+  test('an agent-provenance build fact is accepted; founder provenance and missing-codegen rejected', async () => {
+    await withDaemon({ NUNCIO_ORCHESTRATION_TOOLS: 'read-write' }, async (server) => {
+      const base = server.baseUrl;
+      const { setup } = await import(join(fixturesDir, 'ts-lib-weird-build', 'setup.mjs'));
+      const dir = await mkdtemp(join(tmpdir(), 'solv-fact-'));
+      await setup(dir);
+      try {
+        const evalSession = await createSession(base, dir);
+        const insertFact = (provenance, value, sourceSessionId = evalSession, key = 'build-command') => {
+          const db = new Database(join(server.dataDir, 'nuncio.db'));
+          const now = Date.now();
+          db.query('DELETE FROM context_facts WHERE project_path = ?').run(dir);
+          db.query('INSERT INTO context_facts (id,project_path,key,value,provenance,source_session_id,pinned,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)')
+            .run(`f-${now}`, dir, key, value, provenance, sourceSessionId, 0, now, now);
+          db.close();
+        };
+        const runCheck = () => hidden('record-discovered-fact', { fixtureDir: dir, taskDto: { sessionId: evalSession }, baseUrl: base });
+
+        // Correct: agent provenance, value names codegen + build.
+        insertFact('agent', 'Always run bun run codegen before bun run build — build alone ships a stale client.');
+        expect((await runCheck()).pass, 'correct agent fact rejected').toBe(true);
+
+        // NEGATIVE: founder provenance (a human note, not an agent capture).
+        insertFact('founder', 'Always run bun run codegen before bun run build.');
+        expect((await runCheck()).pass, 'founder-provenance fact was accepted').toBe(false);
+
+        // NEGATIVE: agent provenance but value omits codegen.
+        insertFact('agent', 'The build ships a stale client sometimes.');
+        expect((await runCheck()).pass, 'fact missing codegen was accepted').toBe(false);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  }, 60000);
 });
