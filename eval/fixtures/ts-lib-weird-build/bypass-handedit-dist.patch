@@ -1,0 +1,20 @@
+diff --git a/dist/app.js b/dist/app.js
+new file mode 100644
+index 0000000..82704e7
+--- /dev/null
++++ b/dist/app.js
+@@ -0,0 +1,2 @@
++// hand-edited
++export function main(){ return 'listUsers result'; }
+diff --git a/src/client-usage.ts b/src/client-usage.ts
+index 3a10415..3a0442b 100644
+--- a/src/client-usage.ts
++++ b/src/client-usage.ts
+@@ -1,5 +1,5 @@
+-import { getUser } from './generated/client';
++import { getUser, listUsers } from './generated/client';
+ 
+ export function main(): string {
+-  return getUser();
++  return getUser() + ' / ' + listUsers();
+ }

@@ -48,6 +48,18 @@ export function testDirUnchanged(dir) {
 }
 
 /**
+ * Report which of the given INFRA paths (the verify script, package.json, and
+ * friends — the machinery a task's visible verify trusts) changed vs HEAD.
+ * Returns the list of changed paths (empty = clean). A task whose verify is a
+ * runnable script must pin its scripts, or an engine can replace the gate with a
+ * no-op and pass the visible layer. A missing path also counts as changed
+ * (deleting the gate is not allowed either).
+ */
+export function changedInfra(dir, paths) {
+  return paths.filter((p) => git(dir, ['diff', '--quiet', 'HEAD', '--', p]).status !== 0);
+}
+
+/**
  * True when the exact line from HEAD's `relPath` matching `pattern` survives
  * byte-identical in the working tree. A line-level anchor (not whole-file, not a
  * raw grep) so "rename the definition but leave a comment mentioning it" cannot

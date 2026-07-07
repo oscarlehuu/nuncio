@@ -30,7 +30,7 @@ index f446344..a1820fa 100644
      },
    };
 diff --git a/test/rate-limit.spec.ts b/test/rate-limit.spec.ts
-index e1281ad..1c03087 100644
+index 484c39a..f5bcef3 100644
 --- a/test/rate-limit.spec.ts
 +++ b/test/rate-limit.spec.ts
 @@ -1,7 +1,7 @@

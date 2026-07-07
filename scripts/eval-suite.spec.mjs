@@ -58,19 +58,32 @@ describe('loadHiddenCheck scoring integrity', () => {
   });
 });
 
-describe('validateTask (verify-less + informational)', () => {
-  const base = { id: 't', title: 'T', fixture: 'f', prompt: 'p', timeoutMs: 1000 };
+describe('validateTask (verify-less + informational guardrails)', () => {
+  const base = { id: 't', title: 'T', fixture: 'f', prompt: 'p', timeoutMs: 1000, verifyCommand: 'bun test' };
 
-  test('accepts a task with no verifyCommand and defaults informational=false', () => {
+  test('a normal task with a verifyCommand validates; informational defaults false', () => {
     const task = { ...base };
     expect(() => validateTask(task, 't.json')).not.toThrow();
     expect(task.informational).toBe(false);
   });
 
-  test('honors informational=true', () => {
-    const task = { ...base, informational: true };
-    validateTask(task, 't.json');
-    expect(task.informational).toBe(true);
+  test('a missing verifyCommand is REJECTED unless scoring: hidden-only', () => {
+    const bad = { ...base };
+    delete bad.verifyCommand;
+    expect(() => validateTask(bad, 't.json')).toThrow(/no verifyCommand/);
+    const ok = { ...bad, scoring: 'hidden-only' };
+    expect(() => validateTask(ok, 't.json')).not.toThrow();
+  });
+
+  test('an invalid scoring value is rejected', () => {
+    expect(() => validateTask({ ...base, scoring: 'whatever' }, 't.json')).toThrow(/scoring must be "hidden-only"/);
+  });
+
+  test('informational: true REQUIRES the control tag', () => {
+    expect(() => validateTask({ ...base, informational: true, tags: ['x'] }, 't.json')).toThrow(/tags do not include 'control'/);
+    const ok = { ...base, informational: true, tags: ['x', 'control'] };
+    expect(() => validateTask(ok, 't.json')).not.toThrow();
+    expect(ok.informational).toBe(true);
   });
 
   test('rejects a non-string verifyCommand', () => {
@@ -78,7 +91,7 @@ describe('validateTask (verify-less + informational)', () => {
   });
 
   test('still requires the core fields', () => {
-    expect(() => validateTask({ title: 'x', fixture: 'f', prompt: 'p', timeoutMs: 1 }, 't.json')).toThrow(/missing required field/);
+    expect(() => validateTask({ title: 'x', fixture: 'f', prompt: 'p', timeoutMs: 1, verifyCommand: 'x' }, 't.json')).toThrow(/missing required field/);
   });
 });
 

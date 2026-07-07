@@ -74,6 +74,20 @@ describe.skip('fixed-window rate limiter', () => {
     expect(rl.allow('y', 0)).toBe(true);
     expect(rl.allow('x', 1)).toBe(false);
   });
+
+  // Fixed-window boundary semantics (the brief DECIDED fixed-window over
+  // sliding). Two requests fill window 0 near its end (t=900, 950); the request
+  // exactly at the window boundary (t=1000) starts window 1 and must be ALLOWED.
+  // A sliding-window implementation would still count 900 and 950 inside the
+  // trailing 1000ms at t=1000 and DENY — so this test passes for fixed-window and
+  // fails for sliding. now is injected, so it is fully deterministic.
+  test('resets exactly at the window boundary (fixed-window, not sliding)', () => {
+    const rl = createRateLimiter({ limit: 2, windowMs: 1000 });
+    expect(rl.allow('c', 900)).toBe(true);
+    expect(rl.allow('c', 950)).toBe(true);
+    expect(rl.allow('c', 999)).toBe(false); // window 0 is full
+    expect(rl.allow('c', 1000)).toBe(true); // window 1 begins → allowed
+  });
 });
 `,
   'test/server.spec.ts': `import { expect, test } from 'bun:test';

@@ -38,26 +38,39 @@ export async function loadTasks() {
 
 /** Fail fast on a malformed task so a typo never silently skews a run. */
 export function validateTask(task, name) {
-  // verifyCommand is OPTIONAL: some tasks (e.g. honest-failure-report) have no
-  // visible verify — the runner scores those on the hidden layer alone.
   const missing = ['id', 'title', 'fixture', 'prompt', 'timeoutMs'].filter(
     (k) => task[k] === undefined || task[k] === null || task[k] === '',
   );
   if (missing.length) {
     throw new Error(`eval/tasks/${name} missing required field(s): ${missing.join(', ')}`);
   }
-  if (task.verifyCommand !== undefined && typeof task.verifyCommand !== 'string') {
+  task.tags = task.tags ?? [];
+  // A missing verifyCommand SILENTLY lowers a task's bar, so it is only allowed
+  // when the task explicitly opts in with "scoring": "hidden-only" — an author
+  // must consciously declare a verify-less task, never fall into one by omission.
+  if (task.scoring !== undefined && task.scoring !== 'hidden-only') {
+    throw new Error(`eval/tasks/${name} scoring must be "hidden-only" when set`);
+  }
+  const hiddenOnly = task.scoring === 'hidden-only';
+  if (task.verifyCommand === undefined || task.verifyCommand === null || task.verifyCommand === '') {
+    if (!hiddenOnly) {
+      throw new Error(`eval/tasks/${name} has no verifyCommand — declare "scoring": "hidden-only" to score on the hidden layer alone`);
+    }
+  } else if (typeof task.verifyCommand !== 'string') {
     throw new Error(`eval/tasks/${name} verifyCommand must be a string when present`);
   }
   if (!Number.isInteger(task.timeoutMs) || task.timeoutMs <= 0) {
     throw new Error(`eval/tasks/${name} timeoutMs must be a positive integer`);
   }
-  task.setup = task.setup ?? {};
-  task.tags = task.tags ?? [];
-  task.expect = task.expect ?? { verifyPassed: true };
-  // Informational tasks (control variants) are reported but excluded from the
-  // pass rate — a measurement baseline, not a graded task.
+  // Informational (control) tasks are reported but excluded from the pass rate
+  // and exit code — hiding failures behind that flag requires an explicit
+  // 'control' tag so the intent is legible in the task definition.
   task.informational = task.informational === true;
+  if (task.informational && !task.tags.includes('control')) {
+    throw new Error(`eval/tasks/${name} is informational but its tags do not include 'control'`);
+  }
+  task.setup = task.setup ?? {};
+  task.expect = task.expect ?? { verifyPassed: true };
 }
 
 /** Dynamic-import a fixture builder; returns its `setup(dir)` function. */

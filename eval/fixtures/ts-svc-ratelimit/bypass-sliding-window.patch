@@ -1,8 +1,17 @@
 diff --git a/src/middleware/rate-limit.ts b/src/middleware/rate-limit.ts
-index f446344..a1820fa 100644
+index f446344..647dd7a 100644
 --- a/src/middleware/rate-limit.ts
 +++ b/src/middleware/rate-limit.ts
-@@ -10,14 +10,19 @@ export interface RateLimiter {
+@@ -1,23 +1,24 @@
+ export interface RateLimitOptions {
+-  /** Max requests allowed within the window. */
+   limit: number;
+-  /** Window length in milliseconds. */
+   windowMs: number;
+ }
+ 
+ export interface RateLimiter {
+-  /** Returns true if the request from `key` is allowed, false if limited. */
    allow(key: string, now: number): boolean;
  }
  
@@ -12,33 +21,22 @@ index f446344..a1820fa 100644
 - * NOT YET IMPLEMENTED — currently allows every request.
 - */
 -export function createRateLimiter(_options: RateLimitOptions): RateLimiter {
-+/** Create a fixed-window rate limiter. */
++/** Sliding-window limiter (VIOLATES the brief's fixed-window decision). */
 +export function createRateLimiter(options: RateLimitOptions): RateLimiter {
-+  const buckets = new Map<string, { windowStart: number; count: number }>();
++  const hits = new Map<string, number[]>();
    return {
 -    allow(_key: string, _now: number): boolean {
 +    allow(key: string, now: number): boolean {
-+      const windowStart = now - (now % options.windowMs);
-+      const bucket = buckets.get(key);
-+      if (!bucket || bucket.windowStart !== windowStart) {
-+        buckets.set(key, { windowStart, count: 1 });
-+        return true;
++      const arr = (hits.get(key) ?? []).filter((t) => t > now - options.windowMs);
++      if (arr.length >= options.limit) {
++        hits.set(key, arr);
++        return false;
 +      }
-+      if (bucket.count >= options.limit) return false;
-+      bucket.count += 1;
++      arr.push(now);
++      hits.set(key, arr);
        return true;
      },
    };
-diff --git a/src/server.ts b/src/server.ts
-index 8080386..0ad1fe4 100644
---- a/src/server.ts
-+++ b/src/server.ts
-@@ -5,3 +5,5 @@ export const limiter = createRateLimiter({ limit: 3, windowMs: 1000 });
- export function handle(key: string, now: number): number {
-   return limiter.allow(key, now) ? 200 : 429;
- }
-+
-+// touched
 diff --git a/test/rate-limit.spec.ts b/test/rate-limit.spec.ts
 index 484c39a..f5bcef3 100644
 --- a/test/rate-limit.spec.ts
