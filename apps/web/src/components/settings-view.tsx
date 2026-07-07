@@ -271,9 +271,18 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
   const renderSearchResults = () => {
     const query = searchQuery.trim().toLowerCase();
     const resultSections: ReactNode[] = [];
-    const remoteAccessMatches = ['remote access', 'access token', 'tailscale', 'tailnet', 'trust'].some((term) =>
-      term.includes(query),
-    );
+    const remoteAccessMatches = [
+      'remote access',
+      'access token',
+      'tailscale',
+      'tailnet',
+      'trust',
+      'pair',
+      'device',
+      'qr',
+      'mobile',
+      'phone',
+    ].some((term) => term.includes(query));
 
     const providerResult = renderProviderGroup('Providers', ['cursor', 'pi', 'codex'], false, query);
     const sourceResult = renderProviderGroup('Source control', ['github', 'gitlab'], false, query);
