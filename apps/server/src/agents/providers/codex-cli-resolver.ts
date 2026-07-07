@@ -1,6 +1,11 @@
 import { accessSync, constants, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
+import { expandHome } from './cli-path.helpers';
+
+// Re-exported so existing importers (and specs) that pull `expandHome` from this
+// resolver keep working after the implementation moved to the shared helper.
+export { expandHome };
 
 export type CodexCliCommandRunner = (
   command: string,
@@ -148,12 +153,6 @@ export async function resolveCodexCli(input: ResolveInput): Promise<CodexCliReso
     reason: 'No Codex CLI install was discovered. Install Codex or set NUNCIO_CODEX_BIN to the absolute CLI path.',
     candidates,
   };
-}
-
-export function expandHome(path: string, env: NodeJS.ProcessEnv = process.env): string {
-  if (path === '~') return env.HOME || homedir();
-  if (path.startsWith('~/')) return join(env.HOME || homedir(), path.slice(2));
-  return path;
 }
 
 async function probeCli(

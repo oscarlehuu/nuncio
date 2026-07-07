@@ -169,6 +169,20 @@ describe('classifyResult', () => {
     });
   });
 
+  it('matches cannot-resume case-insensitively, preserving the original-cased text', () => {
+    const classified = classifyResult(
+      result({
+        subtype: 'error_during_execution',
+        errors: ['no conversation found with session ID: abc'],
+      }),
+      '',
+    );
+    expect(classified).toEqual({
+      kind: 'cannot-resume',
+      message: 'no conversation found with session ID: abc',
+    });
+  });
+
   it('gives max-turns a user-actionable message and appends the SDK detail', () => {
     const classified = classifyResult(
       result({ subtype: 'error_max_turns', errors: ['exceeded max turns'] }),

@@ -109,6 +109,13 @@ interface ActiveClaudeSession {
    * produces the real terminal result.
    */
   pendingRedirects: number;
+  /**
+   * A cheap signature of the runtime toolset the live query was last built with
+   * (tool names + serialized input shapes). A follow-up turn whose derived
+   * toolset differs pushes the rebuilt set through `setMcpServers`; an unchanged
+   * signature skips the call.
+   */
+  mcpToolSignature: string;
 }
 
 @Injectable()
@@ -262,6 +269,7 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
       existing.delta = createDeltaMappingState();
       existing.requestProviderApproval = context.requestProviderApproval;
       this.interruptedSessions.delete(sessionId);
+      await this.maybeRebuildMcpServers(existing, context);
       existing.input.push(this.buildUserMessage(text, context, false));
       await this.consume(sessionId, existing, context);
       return;
@@ -301,8 +309,12 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
    * Resolve a parked tool-approval prompt by requestId. The binary approval card
    * (respondProviderRequest) already resolves canUseTool through
    * `requestProviderApproval`; this path handles the richer respond flow (e.g.
-   * an "always allow" option). Idempotent: a redelivered or already-resolved id
-   * is a no-op rather than a throw once the pending entry is gone.
+   * an "always allow" option).
+   *
+   * Redelivery-safe: an unknown or already-settled requestId — a response
+   * redelivered after the entry settled, or a session that already ended — is a
+   * graceful no-op rather than a throw, so a duplicate HTTP respond never bubbles
+   * as a 500 through the sessions path.
    */
   async submitInteraction(
     sessionId: string,
@@ -310,10 +322,9 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     response: InteractionResponse,
   ): Promise<void> {
     const active = this.activeSessions.get(sessionId);
-    const pending = active ? this.findPendingByRequestId(active, requestId) : undefined;
-    if (!active || !pending) {
-      throw new Error(`No pending Claude approval ${requestId}`);
-    }
+    if (!active) return;
+    const pending = this.findPendingByRequestId(active, requestId);
+    if (!pending) return;
     const { decision, alwaysAllow } = interactionToDecision(response);
     this.settlePending(active, pending.key, decisionToPermissionResult(decision, pending.entry.input, pending.entry.options, alwaysAllow));
   }
@@ -383,10 +394,16 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     active: ActiveClaudeSession,
     requestId: string,
   ): { key: string; entry: PendingApproval } | undefined {
+    const unset: Array<{ key: string; entry: PendingApproval }> = [];
     for (const [key, entry] of active.pendingApprovals) {
       if (key === requestId || entry.nuncioRequestId === requestId) return { key, entry };
+      if (entry.nuncioRequestId === undefined) unset.push({ key, entry });
     }
-    return undefined;
+    // Race: a respond can arrive before the approval hook's promise recorded its
+    // nuncio requestId. The requestId matched no key yet, so correlate it to the
+    // single live approval whose id is not yet set. With more than one such
+    // approval the mapping is ambiguous, so decline rather than guess wrong.
+    return unset.length === 1 ? unset[0] : undefined;
   }
 
   private async startSession(
@@ -414,6 +431,7 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
       pendingApprovals: new Map(),
       openTools: new Map(),
       requestProviderApproval: context.requestProviderApproval,
+      mcpToolSignature: this.mcpToolSignature(context),
     };
 
     const mcpServers = await this.buildMcpServers(context);
@@ -458,6 +476,40 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     const create = this.createSdkMcpServer ?? (await loadCreateSdkMcpServer());
     const servers = buildClaudeMcpServers(create, context.tools);
     return servers as Record<string, ClaudeMcpServer> | undefined;
+  }
+
+  /**
+   * MCP servers are baked at query construction, but sessions.service derives
+   * `context.tools` per turn — a changed toolset on a follow-up would otherwise
+   * be silently ignored. Compare the derived toolset signature against the one
+   * the live query was last built with; when it differs, rebuild the servers and
+   * push them through `setMcpServers`. A query without `setMcpServers` support
+   * (a fake/older SDK) is skipped gracefully. The signature is always refreshed
+   * so a later turn compares against the currently-live toolset.
+   */
+  private async maybeRebuildMcpServers(
+    active: ActiveClaudeSession,
+    context: AgentRunContext,
+  ): Promise<void> {
+    const signature = this.mcpToolSignature(context);
+    if (signature === active.mcpToolSignature) return;
+    active.mcpToolSignature = signature;
+    if (!active.query.setMcpServers) return;
+    const servers = (await this.buildMcpServers(context)) ?? {};
+    await active.query.setMcpServers(servers);
+  }
+
+  /**
+   * A cheap, stable signature of a session's runtime toolset — tool names paired
+   * with their serialized input schemas — so a follow-up turn can detect a
+   * changed toolset without diffing the live MCP server instances. Empty when the
+   * turn carries no tools.
+   */
+  private mcpToolSignature(context: AgentRunContext): string {
+    const tools = context.tools?.tools ?? [];
+    return JSON.stringify(
+      tools.map((tool) => [tool.name, tool.inputSchema ?? {}]),
+    );
   }
 
   /**
@@ -598,8 +650,9 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
       // This is the truncated turn a live steer cut short: consume it silently
       // (the fresh redirected turn still follows and carries the real terminal).
       // Any tool the redirect aborted mid-flight never gets a result, so seal it
-      // now rather than leaving a dangling tool_start.
-      active.pendingRedirects -= 1;
+      // now rather than leaving a dangling tool_start. Clamp at zero so an
+      // unexpected extra result never drives the counter negative.
+      active.pendingRedirects = Math.max(0, active.pendingRedirects - 1);
       this.sealOpenTools(sessionId, active, context);
       return false;
     }
@@ -717,7 +770,7 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     return this.settings.resolve('ANTHROPIC_API_KEY')?.trim() || undefined;
   }
 
-  /** Read the founder permission-mode setting fresh each run; an unknown value falls back to the default. */
+  /** Read the configured permission-mode setting fresh each run; unknown values fall back to the default. */
   private resolvePermissionMode(): ClaudePermissionMode {
     const value = this.settings.resolve('NUNCIO_CLAUDE_PERMISSION_MODE')?.trim();
     return value && VALID_PERMISSION_MODES.has(value as ClaudePermissionMode)

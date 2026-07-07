@@ -62,6 +62,18 @@ describe('claude permission bridge', () => {
       const result = decisionToPermissionResult('approve', { path: 'a' }, options({ suggestions: [] }), true);
       expect(result).toEqual({ behavior: 'allow', updatedInput: { path: 'a' } });
     });
+
+    it('fails closed: a malformed decision denies rather than allowing', () => {
+      // Only an explicit 'approve' allows; anything else (a garbage value that
+      // slipped past the type boundary) must deny, never fall through to allow.
+      const result = decisionToPermissionResult(
+        'maybe' as unknown as 'approve' | 'deny',
+        { command: 'curl x' },
+        options(),
+      );
+      expect(result.behavior).toBe('deny');
+      if (result.behavior === 'deny') expect(result.message.length).toBeGreaterThan(0);
+    });
   });
 
   describe('interactionToDecision', () => {

@@ -37,7 +37,7 @@ const APPROVAL_METHOD = 'tool/approve';
 
 /**
  * Build the approval request from the callback payload. Prompt text prefers the
- * bridge-rendered `title`; when absent (e.g. Write, per the spike) it composes
+ * bridge-rendered `title`; some tools omit `title` (e.g. Write), so it composes
  * from displayName + description, falling back to the raw tool name.
  */
 export function buildApprovalRequest(
@@ -72,8 +72,9 @@ function resolvePromptText(toolName: string, options: ClaudePermissionOptions): 
 }
 
 /**
- * Translate an approve/deny decision into an SDK PermissionResult. `allow` must
- * echo the (possibly unchanged) input. When `alwaysAllow` is set the callback's
+ * Translate a decision into an SDK PermissionResult. Fail closed: allow ONLY on
+ * an explicit `approve`; a `deny` or any other/malformed value denies. `allow`
+ * echoes the (possibly unchanged) input. When `alwaysAllow` is set the callback's
  * `suggestions` are returned as `updatedPermissions` so the SDK stops asking for
  * this tool in-session (the exact round-trip the typings document).
  */
@@ -83,7 +84,7 @@ export function decisionToPermissionResult(
   options: ClaudePermissionOptions,
   alwaysAllow = false,
 ): ClaudePermissionResult {
-  if (decision === 'deny') {
+  if (decision !== 'approve') {
     return { behavior: 'deny', message: 'Denied by nuncio approval policy.' };
   }
   const suggestions = options.suggestions ?? [];

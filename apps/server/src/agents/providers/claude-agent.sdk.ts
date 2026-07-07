@@ -104,9 +104,15 @@ export interface ClaudeQuery extends AsyncIterable<ClaudeSdkMessage> {
    * push through today; optional because a fake/older query may not implement it.
    */
   applyFlagSettings?(settings: { effortLevel?: string }): Promise<void>;
+  /**
+   * Replace the live query's MCP servers mid-session so a follow-up turn whose
+   * runtime toolset changed sees the new tools. Optional because a fake/older
+   * query may not implement it; the provider skips the update gracefully then.
+   */
+  setMcpServers?(servers: Record<string, ClaudeMcpServer>): Promise<void>;
 }
 
-/** Permission modes the founder setting exposes; mirrors the SDK's PermissionMode subset we use. */
+/** Permission modes the NUNCIO_CLAUDE_PERMISSION_MODE setting exposes; mirrors the SDK's PermissionMode subset we use. */
 export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
 
 /** An in-process SDK MCP server config, passed straight through to the SDK. */
@@ -205,6 +211,12 @@ export function buildClaudeQueryFactory(): ClaudeQueryFactory {
           applyFlagSettings?: (s: { effortLevel?: string }) => Promise<void>;
         };
         await query.applyFlagSettings?.(settings);
+      },
+      async setMcpServers(servers: Record<string, ClaudeMcpServer>): Promise<void> {
+        const query = (await load()) as ClaudeQuery & {
+          setMcpServers?: (s: Record<string, ClaudeMcpServer>) => Promise<void>;
+        };
+        await query.setMcpServers?.(servers);
       },
     };
   };

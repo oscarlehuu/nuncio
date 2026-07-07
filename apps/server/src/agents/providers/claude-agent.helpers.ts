@@ -103,7 +103,7 @@ export type ResultClassification =
   | { kind: 'error'; message: string };
 
 const INTERRUPT_TERMINALS = new Set(['aborted_tools', 'aborted_streaming']);
-const CANNOT_RESUME_MARKER = 'No conversation found';
+const CANNOT_RESUME_MARKER = 'no conversation found';
 const AUTH_ERROR_MARKERS = ['authentication_error', 'invalid x-api-key', 'invalid api key', 'x-api-key'];
 
 /**
@@ -158,7 +158,9 @@ export function classifyResult(
   const detail = errors.join('; ');
   const detailLower = detail.toLowerCase();
 
-  const cannotResume = errors.find((error) => error.includes(CANNOT_RESUME_MARKER));
+  // Match case-insensitively (consistent with the auth markers below) but keep
+  // the original-cased error text in the user-facing message.
+  const cannotResume = errors.find((error) => error.toLowerCase().includes(CANNOT_RESUME_MARKER));
   if (cannotResume) {
     return { kind: 'cannot-resume', message: cannotResume };
   }

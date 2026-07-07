@@ -94,7 +94,7 @@ describe('ClaudeAgentProvider', () => {
     expect(await provider.isAvailable()).toBe(false);
   });
 
-  it('strips the claude: prefix, sets founder options, and gates effort on presence', async () => {
+  it('strips the claude: prefix, applies configured options, and gates effort on presence', async () => {
     const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:sonnet' });
     await provider.run(created.id, 'hi', {
       cwd: '/tmp/ws',
@@ -185,6 +185,52 @@ describe('ClaudeAgentProvider', () => {
     expect(sessions.findById(created.id)?.status).toBe('IDLE');
   });
 
+  it('two priority steers in one turn each swallow their truncated terminal', async () => {
+    // Two `priority:'now'` steers cut the in-flight turn short twice. Each
+    // truncated terminal is a redirect the run must swallow; only the FINAL
+    // turn's result is the real terminal. The pendingRedirects counter must
+    // track both and never mis-classify the real terminal.
+    provider.queryFactory = ({ prompt }) => ({
+      async interrupt() {},
+      async setModel() {},
+      async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+        yield { type: 'system', subtype: 'init', session_id: 't1' };
+        yield {
+          type: 'stream_event',
+          uuid: 'm1',
+          event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'one' } },
+        };
+        const iterator = prompt[Symbol.asyncIterator]();
+        await iterator.next(); // initial prompt
+        await iterator.next(); // first steer
+        yield { type: 'result', subtype: 'success', result: '' }; // first truncated redirect
+        yield {
+          type: 'stream_event',
+          uuid: 'm2',
+          event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'two' } },
+        };
+        await iterator.next(); // second steer
+        yield { type: 'result', subtype: 'success', result: '' }; // second truncated redirect
+        yield {
+          type: 'stream_event',
+          uuid: 'm3',
+          event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'FINAL' } },
+        };
+        yield { type: 'result', subtype: 'success', result: 'FINAL' };
+      },
+    });
+    const created = sessions.create({ prompt: 'q', provider: 'claude', model: 'claude:haiku' });
+    const run = provider.run(created.id, 'first', { cwd: '/tmp/ws', model: 'claude:haiku' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await provider.steerMidRun(created.id, 'steer one', {});
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await provider.steerMidRun(created.id, 'steer two', {});
+    await run;
+    const message = events.list(created.id).findLast((event) => event.type === 'assistant_message');
+    expect((message?.payload as { text: string }).text).toBe('FINAL');
+    expect(sessions.findById(created.id)?.status).toBe('IDLE');
+  });
+
   it('surfaces a clean cannot-resume error when the workspace moved', async () => {
     provider.queryFactory = () => ({
       async interrupt() {},
@@ -255,6 +301,106 @@ describe('ClaudeAgentProvider', () => {
       await provider.run(created.id, 'hi', { cwd: '/tmp/ws', model: 'claude:haiku' });
       expect(capturedOptions?.mcpServers).toBeUndefined();
       expect(capturedOptions?.appendSystemPrompt).toBeUndefined();
+    });
+  });
+
+  describe('follow-up turn → rebuild MCP servers when the toolset changes', () => {
+    /**
+     * A multi-turn query: each turn consumes one prompt then emits a terminal.
+     * Records every setMcpServers call so the test can assert whether a follow-up
+     * turn rebuilt the toolset. `supportsSetMcpServers:false` omits the method to
+     * exercise the graceful-skip path.
+     */
+    function multiTurnQuery(records: Array<Record<string, unknown>>, supportsSetMcpServers = true) {
+      return ({ prompt }: { prompt: AsyncIterable<unknown> }) => {
+        const promptIterator = prompt[Symbol.asyncIterator]();
+        async function* turns(): AsyncGenerator<ClaudeSdkMessage> {
+          yield { type: 'system', subtype: 'init', session_id: 't1' };
+          await promptIterator.next();
+          yield { type: 'result', subtype: 'success', result: 'one' };
+          await promptIterator.next();
+          yield { type: 'result', subtype: 'success', result: 'two' };
+        }
+        const gen = turns();
+        const query: Record<string, unknown> = {
+          async interrupt() {},
+          async setModel() {},
+          [Symbol.asyncIterator]() {
+            return gen;
+          },
+        };
+        if (supportsSetMcpServers) {
+          query.setMcpServers = async (servers: Record<string, unknown>) => {
+            records.push(servers);
+          };
+        }
+        return query as unknown as ClaudeQuery;
+      };
+    }
+
+    const toolset = (name: string) => ({
+      tools: [{ name, inputSchema: {}, execute: () => 'ok' }],
+    });
+
+    it('does not call setMcpServers when the follow-up toolset is unchanged', async () => {
+      const records: Array<Record<string, unknown>> = [];
+      provider.createSdkMcpServer = ((opts: { name: string }) => ({
+        type: 'sdk' as const,
+        name: opts.name,
+        instance: {},
+      })) as never;
+      provider.queryFactory = multiTurnQuery(records) as never;
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await provider.run(created.id, 'first', { cwd: '/tmp/ws', model: 'claude:haiku', tools: toolset('verify') });
+      await provider.steer(created.id, 'second', { cwd: '/tmp/ws', model: 'claude:haiku', tools: toolset('verify') });
+      expect(records).toHaveLength(0);
+    });
+
+    it('rebuilds and pushes setMcpServers when the follow-up toolset changed', async () => {
+      const records: Array<Record<string, unknown>> = [];
+      provider.createSdkMcpServer = ((opts: { name: string }) => ({
+        type: 'sdk' as const,
+        name: opts.name,
+        instance: {},
+      })) as never;
+      provider.queryFactory = multiTurnQuery(records) as never;
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await provider.run(created.id, 'first', { cwd: '/tmp/ws', model: 'claude:haiku', tools: toolset('verify') });
+      await provider.steer(created.id, 'second', { cwd: '/tmp/ws', model: 'claude:haiku', tools: toolset('deploy') });
+      expect(records).toHaveLength(1);
+      expect(records[0]['nuncio-runtime']).toBeDefined();
+    });
+
+    it('pushes an empty server set when the follow-up removed all tools', async () => {
+      const records: Array<Record<string, unknown>> = [];
+      provider.createSdkMcpServer = ((opts: { name: string }) => ({
+        type: 'sdk' as const,
+        name: opts.name,
+        instance: {},
+      })) as never;
+      provider.queryFactory = multiTurnQuery(records) as never;
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await provider.run(created.id, 'first', { cwd: '/tmp/ws', model: 'claude:haiku', tools: toolset('verify') });
+      await provider.steer(created.id, 'second', { cwd: '/tmp/ws', model: 'claude:haiku' });
+      expect(records).toHaveLength(1);
+      expect(records[0]).toEqual({});
+    });
+
+    it('skips gracefully when the live query has no setMcpServers support', async () => {
+      const records: Array<Record<string, unknown>> = [];
+      provider.createSdkMcpServer = ((opts: { name: string }) => ({
+        type: 'sdk' as const,
+        name: opts.name,
+        instance: {},
+      })) as never;
+      provider.queryFactory = multiTurnQuery(records, false) as never;
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await provider.run(created.id, 'first', { cwd: '/tmp/ws', model: 'claude:haiku', tools: toolset('verify') });
+      await expect(
+        provider.steer(created.id, 'second', { cwd: '/tmp/ws', model: 'claude:haiku', tools: toolset('deploy') }),
+      ).resolves.toBeUndefined();
+      expect(records).toHaveLength(0);
+      expect(sessions.findById(created.id)?.status).toBe('IDLE');
     });
   });
 
@@ -419,12 +565,57 @@ describe('ClaudeAgentProvider', () => {
       expect(resolved?.updatedPermissions).toHaveLength(1);
     });
 
-    it('submitInteraction throws for an unknown requestId', async () => {
+    it('submitInteraction is a graceful no-op for an unknown requestId (redelivery-safe)', async () => {
+      // A response redelivered after the entry settled, or for an id that never
+      // existed, must NOT throw — a duplicate HTTP respond would otherwise bubble
+      // as a 500 through the sessions path.
       const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
       await provider.run(created.id, 'hi', { cwd: '/tmp/ws', model: 'claude:haiku' });
       await expect(
         provider.submitInteraction(created.id, 'nope', { answers: [], resolvedBy: 'skip' }),
-      ).rejects.toThrow();
+      ).resolves.toBeUndefined();
+    });
+
+    it('submitInteraction is a no-op for a session with no live handle', async () => {
+      // No active session for the id at all — still must not throw.
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      await expect(
+        provider.submitInteraction(created.id, 'whatever', { answers: [], resolvedBy: 'skip' }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('submitInteraction correlates a live approval even before its nuncio id is recorded', async () => {
+      // Race: the respond arrives BEFORE the approval hook's promise resolved (so
+      // pending.nuncioRequestId is still unset). The single unset pending approval
+      // is correlated by fallback and settled with the answer.
+      let resolved: { behavior: string } | undefined;
+      provider.queryFactory = ({ options }: { options: ClaudeQueryOptions }) => ({
+        async interrupt() {},
+        async setModel() {},
+        async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+          yield { type: 'system', subtype: 'init', session_id: 't1' };
+          const decision = await options.canUseTool('Bash', { command: 'x' }, { requestId: 'sdk-race' });
+          resolved = decision;
+          yield { type: 'result', subtype: 'success', result: 'done' };
+        },
+      }) as never;
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      const run = provider.run(created.id, 'run curl', {
+        cwd: '/tmp/ws',
+        model: 'claude:haiku',
+        // Never resolves via the card, so nuncioRequestId is never recorded —
+        // submitInteraction must still correlate the single live approval.
+        requestProviderApproval: () => new Promise(() => {}),
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      // requestId here does not match the SDK key ('sdk-race') nor any recorded
+      // nuncio id (there is none yet) — the single-unset fallback correlates it.
+      await provider.submitInteraction(created.id, 'nuncio-not-yet-linked', {
+        answers: [{ questionId: 'q', selectedOptionIds: ['allow'] }],
+        resolvedBy: 'user',
+      });
+      await run;
+      expect(resolved?.behavior).toBe('allow');
     });
 
     it('interrupt denies a parked callback (the tool will not run)', async () => {

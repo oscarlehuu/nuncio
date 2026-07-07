@@ -1,7 +1,11 @@
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { accessSync, constants } from 'node:fs';
-import { homedir } from 'node:os';
+import { expandHome } from './cli-path.helpers';
+
+// Re-exported so existing importers (and specs) that pull `expandHome` from this
+// resolver keep working after the implementation moved to the shared helper.
+export { expandHome };
 
 /**
  * Availability/auth probe for the Claude provider. The Claude Agent SDK bundles
@@ -165,12 +169,6 @@ export function parseAuthStatus(stdout: string): ClaudeAuthStatus | null {
   } catch {
     return null;
   }
-}
-
-export function expandHome(path: string, env: NodeJS.ProcessEnv = process.env): string {
-  if (path === '~') return env.HOME || homedir();
-  if (path.startsWith('~/')) return join(env.HOME || homedir(), path.slice(2));
-  return path;
 }
 
 function executableExists(path: string): boolean {
