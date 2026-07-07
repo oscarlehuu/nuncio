@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findFreePort, startServer } from './lib/hermetic-stack.mjs';
 import {
-  SUITE_VERSION,
+  buildReport as buildReportBase,
   loadFixtureSetup,
   loadHiddenCheck,
   loadTasks,
@@ -165,7 +165,11 @@ async function runOneTask(baseUrl, { task, provider, model }) {
     }
 
     const events = dto.sessionId ? await fetchEvents(baseUrl, dto.sessionId) : [];
-    const verifyPassed = lastVerifyOk(events);
+    // A task with no verifyCommand has no visible layer: verifyPassed is null
+    // (reported '—') and the score rests on the hidden check alone. A task WITH
+    // a verifyCommand that produced no verify event is a genuine false.
+    const hasVerify = typeof task.verifyCommand === 'string' && task.verifyCommand.length > 0;
+    const verifyPassed = hasVerify ? lastVerifyOk(events) : null;
     const rounds = countRounds(events);
 
     // A hidden check that fails to LOAD (bad import, syntax error) or THROWS at
@@ -179,9 +183,10 @@ async function runOneTask(baseUrl, { task, provider, model }) {
       hidden = { pass: false, notes: [`hidden check error: ${err.message}`] };
     }
     const hiddenPassed = hidden?.pass === true;
+    const pass = hasVerify ? verifyPassed === true && hiddenPassed : hiddenPassed;
 
     return row(task, {
-      pass: verifyPassed && hiddenPassed,
+      pass,
       verifyPassed,
       hiddenPassed,
       durationMs: Date.now() - started,
@@ -196,7 +201,7 @@ async function runOneTask(baseUrl, { task, provider, model }) {
   }
 }
 
-const row = (task, r) => ({ taskId: task.id, ...r });
+const row = (task, r) => ({ taskId: task.id, informational: task.informational === true, ...r });
 
 async function writeReport(report) {
   await mkdir(reportsDir, { recursive: true });
@@ -230,7 +235,9 @@ async function main() {
       const port = await findFreePort();
       const server = await startServer({
         port,
-        env: { NUNCIO_VERIFY_COMMAND: task.verifyCommand },
+        // Only wire a verify command when the task declares one; a verify-less
+        // task must produce no verify_result event at all.
+        env: task.verifyCommand ? { NUNCIO_VERIFY_COMMAND: task.verifyCommand } : {},
       });
       try {
         const available = await fetchAvailableEngines(server.baseUrl);
@@ -246,7 +253,9 @@ async function main() {
           const result = await runOneTask(server.baseUrl, { task, provider: engine, model });
           const report = buildReport(engine, model, [result]);
           const file = await emit(report);
-          if (!result.pass) overallExit = 1;
+          // Informational (control) rows are expected to fail and must not drive
+          // the exit code any more than they drive the pass rate.
+          if (!result.pass && result.informational !== true) overallExit = 1;
           void file;
         }
       } finally {
@@ -258,17 +267,7 @@ async function main() {
 }
 
 function buildReport(engine, model, results) {
-  const passed = results.filter((r) => r.pass).length;
-  return {
-    suiteVersion: SUITE_VERSION,
-    engine,
-    model: model ?? 'default',
-    profileVersion: PROFILE_VERSION,
-    results,
-    passRate: results.length ? passed / results.length : 0,
-    tokens: null,
-    notes: [PROFILE_NOTE],
-  };
+  return buildReportBase({ engine, model, results, profileVersion: PROFILE_VERSION, notes: [PROFILE_NOTE] });
 }
 
 async function emit(report) {

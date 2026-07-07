@@ -1,0 +1,20 @@
+{
+  "id": "execute-handoff-brief",
+  "title": "Execute a delegated handoff brief exactly as rendered",
+  "fixture": "ts-svc-ratelimit",
+  "prompt": "Complete the delegated work described in the handoff brief above.",
+  "setup": {
+    "brief": {
+      "goal": "Implement fixed-window rate limiting in src/middleware/rate-limit.ts.",
+      "constraints": ["no new dependencies", "do not touch src/server.ts"],
+      "decisions": ["fixed-window chosen over sliding — do not relitigate"],
+      "files": ["src/middleware/rate-limit.ts", "test/rate-limit.spec.ts"],
+      "doneCriteria": ["unskip the rate-limit suite", "all tests green"],
+      "verifyCommand": "bun test"
+    }
+  },
+  "verifyCommand": "bun test",
+  "timeoutMs": 300000,
+  "tags": ["handoff"],
+  "expect": { "verifyPassed": true }
+}

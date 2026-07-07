@@ -38,11 +38,16 @@ export async function loadTasks() {
 
 /** Fail fast on a malformed task so a typo never silently skews a run. */
 export function validateTask(task, name) {
-  const missing = ['id', 'title', 'fixture', 'prompt', 'verifyCommand', 'timeoutMs'].filter(
+  // verifyCommand is OPTIONAL: some tasks (e.g. honest-failure-report) have no
+  // visible verify — the runner scores those on the hidden layer alone.
+  const missing = ['id', 'title', 'fixture', 'prompt', 'timeoutMs'].filter(
     (k) => task[k] === undefined || task[k] === null || task[k] === '',
   );
   if (missing.length) {
     throw new Error(`eval/tasks/${name} missing required field(s): ${missing.join(', ')}`);
+  }
+  if (task.verifyCommand !== undefined && typeof task.verifyCommand !== 'string') {
+    throw new Error(`eval/tasks/${name} verifyCommand must be a string when present`);
   }
   if (!Number.isInteger(task.timeoutMs) || task.timeoutMs <= 0) {
     throw new Error(`eval/tasks/${name} timeoutMs must be a positive integer`);
@@ -50,6 +55,9 @@ export function validateTask(task, name) {
   task.setup = task.setup ?? {};
   task.tags = task.tags ?? [];
   task.expect = task.expect ?? { verifyPassed: true };
+  // Informational tasks (control variants) are reported but excluded from the
+  // pass rate — a measurement baseline, not a graded task.
+  task.informational = task.informational === true;
 }
 
 /** Dynamic-import a fixture builder; returns its `setup(dir)` function. */
@@ -91,18 +99,44 @@ export function renderMarkdownTable(results) {
   const sep = '|---|---|---|---|---|---|---|';
   const rows = results.map((r) => {
     const notes = (r.notes ?? []).join('; ').replace(/\|/g, '\\|');
-    return `| ${r.taskId} | ${mark(r.pass)} | ${mark(r.verifyPassed)} | ${mark(r.hiddenPassed)} | ${r.durationMs ?? ''} | ${r.rounds ?? ''} | ${notes} |`;
+    // Informational (control) rows are tagged and their pass shown as '—' so a
+    // reader never mistakes an excluded baseline for a graded pass/fail.
+    const taskId = r.informational ? `${r.taskId} (info)` : r.taskId;
+    const passCell = r.informational ? '—' : mark(r.pass);
+    return `| ${taskId} | ${passCell} | ${mark(r.verifyPassed)} | ${mark(r.hiddenPassed)} | ${r.durationMs ?? ''} | ${r.rounds ?? ''} | ${notes} |`;
   });
   return [header, sep, ...rows].join('\n');
 }
 
+// null/undefined (e.g. a verify-less task's verifyPassed) renders as an em dash.
 function mark(v) {
   if (v === true) return 'PASS';
   if (v === false) return 'FAIL';
-  return '-';
+  return '—';
 }
 
 /** Timestamp slug for report filenames: 2026-07-07T12-34-56-789Z-ish. */
 export function reportStamp(date = new Date()) {
   return date.toISOString().replace(/[:.]/g, '-');
+}
+
+/**
+ * Assemble a report for one (engine, model) run. `profileVersion`/`notes` are
+ * caller-supplied (the runner owns those). passRate counts only GRADED rows —
+ * informational (control) rows are reported but excluded from the denominator,
+ * so they never move the score. Kept here (pure) so it is unit-testable.
+ */
+export function buildReport({ engine, model, results, profileVersion = 0, notes = [] }) {
+  const graded = results.filter((r) => r.informational !== true);
+  const passed = graded.filter((r) => r.pass).length;
+  return {
+    suiteVersion: SUITE_VERSION,
+    engine,
+    model: model ?? 'default',
+    profileVersion,
+    results,
+    passRate: graded.length ? passed / graded.length : 0,
+    tokens: null,
+    notes,
+  };
 }

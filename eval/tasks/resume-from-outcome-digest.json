@@ -1,0 +1,20 @@
+{
+  "id": "resume-from-outcome-digest",
+  "title": "Resume a two-step chain from step 1's outcome digest",
+  "fixture": "ts-lib-two-step-csv",
+  "prompt": "Continue the delegated work: step 1 is complete per the digest in the brief. Implement step 2 (csv-stringify) so the round-trip property holds. Do not reimplement or modify step 1.",
+  "setup": {
+    "brief": {
+      "goal": "Implement src/csv-stringify.ts as step 2, round-trip-compatible with the step-1 parser.",
+      "constraints": ["do not reimplement or modify step 1 (src/csv-parse.ts and its test)"],
+      "decisions": ["### Subagent task DONE\nVerify: passed\n\nparseCsv(input: string): string[][] in src/csv-parse.ts. RFC 4180: fields with a comma, double-quote, or newline are quoted; inner quotes doubled.\n\nReply with next action, or reply DONE if the objective is met."],
+      "files": ["src/csv-stringify.ts", "test/csv-stringify.spec.ts"],
+      "doneCriteria": ["bun test green including the round-trip property test"],
+      "verifyCommand": "bun test"
+    }
+  },
+  "verifyCommand": "bun test",
+  "timeoutMs": 300000,
+  "tags": ["handoff"],
+  "expect": { "verifyPassed": true }
+}

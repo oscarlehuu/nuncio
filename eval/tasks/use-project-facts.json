@@ -1,0 +1,15 @@
+{
+  "id": "use-project-facts",
+  "title": "Read and obey a seeded project fact",
+  "fixture": "ts-lib-weird-build",
+  "prompt": "Add the new endpoint listUsers to the generated API client's consumer in src/client-usage.ts, then produce a correct build. The check script must pass.",
+  "setup": {
+    "facts": [
+      { "key": "build-command", "value": "always run bun run codegen before bun run build — build alone silently ships a stale generated client", "pinned": true }
+    ]
+  },
+  "verifyCommand": "bun run check-artifact",
+  "timeoutMs": 300000,
+  "tags": ["handoff"],
+  "expect": { "verifyPassed": true }
+}

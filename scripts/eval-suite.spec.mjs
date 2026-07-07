@@ -11,8 +11,8 @@ import { fileURLToPath } from 'node:url';
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const checksDir = join(scriptDir, '..', 'eval', 'checks');
 
-// Import the loader under test.
-const { loadHiddenCheck } = await import('./lib/eval-suite.mjs');
+// Import the units under test.
+const { loadHiddenCheck, validateTask, renderMarkdownTable, buildReport } = await import('./lib/eval-suite.mjs');
 
 // Unique per-run task ids so we can drop real files into eval/checks and clean
 // them up, without colliding with the committed smoke-mock-echo check.
@@ -55,5 +55,71 @@ describe('loadHiddenCheck scoring integrity', () => {
     const fn = await loadHiddenCheck(taskId);
     expect((await fn({ sessionEvents: [{}] })).pass).toBe(true);
     expect((await fn({ sessionEvents: [] })).pass).toBe(false);
+  });
+});
+
+describe('validateTask (verify-less + informational)', () => {
+  const base = { id: 't', title: 'T', fixture: 'f', prompt: 'p', timeoutMs: 1000 };
+
+  test('accepts a task with no verifyCommand and defaults informational=false', () => {
+    const task = { ...base };
+    expect(() => validateTask(task, 't.json')).not.toThrow();
+    expect(task.informational).toBe(false);
+  });
+
+  test('honors informational=true', () => {
+    const task = { ...base, informational: true };
+    validateTask(task, 't.json');
+    expect(task.informational).toBe(true);
+  });
+
+  test('rejects a non-string verifyCommand', () => {
+    expect(() => validateTask({ ...base, verifyCommand: 42 }, 't.json')).toThrow(/verifyCommand must be a string/);
+  });
+
+  test('still requires the core fields', () => {
+    expect(() => validateTask({ title: 'x', fixture: 'f', prompt: 'p', timeoutMs: 1 }, 't.json')).toThrow(/missing required field/);
+  });
+});
+
+describe('renderMarkdownTable (info rows + null verify)', () => {
+  test("a verify-less row renders verify as '—'", () => {
+    const table = renderMarkdownTable([
+      { taskId: 'verifyless', pass: true, verifyPassed: null, hiddenPassed: true, durationMs: 1, rounds: 0, notes: [] },
+    ]);
+    // pass PASS, verify '—', hidden PASS
+    expect(table).toContain('| verifyless | PASS | — | PASS |');
+  });
+
+  test("an informational row is tagged and its pass shown as '—'", () => {
+    const table = renderMarkdownTable([
+      { taskId: 'ctrl', informational: true, pass: false, verifyPassed: false, hiddenPassed: false, durationMs: 1, rounds: 0, notes: [] },
+    ]);
+    expect(table).toContain('| ctrl (info) | — |');
+  });
+});
+
+describe('buildReport passRate excludes informational rows', () => {
+  test('a failing control row does not drag down the pass rate', () => {
+    const report = buildReport({
+      engine: 'mock',
+      model: 'm',
+      results: [
+        { taskId: 'a', pass: true },
+        { taskId: 'ctrl', informational: true, pass: false },
+      ],
+    });
+    // 1 graded task, 1 pass → 100%, the control excluded.
+    expect(report.passRate).toBe(1);
+    expect(report.results).toHaveLength(2); // still reported
+  });
+
+  test('a run of only informational rows yields passRate 0 (no graded denominator)', () => {
+    const report = buildReport({
+      engine: 'mock',
+      model: 'm',
+      results: [{ taskId: 'ctrl', informational: true, pass: false }],
+    });
+    expect(report.passRate).toBe(0);
   });
 });
