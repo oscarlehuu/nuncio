@@ -14,8 +14,29 @@ export const tasksDir = join(evalRoot, 'tasks');
 export const fixturesDir = join(evalRoot, 'fixtures');
 export const checksDir = join(evalRoot, 'checks');
 export const reportsDir = join(evalRoot, 'reports');
+export const baselinesDir = join(evalRoot, 'baselines');
 
 export const SUITE_VERSION = 1;
+
+// Note substrings that mark an INFRA failure — the run couldn't measure the task
+// (engine not installed, task never terminated, or a harness error), as opposed
+// to a legitimate task failure. A report with any of these is PARTIAL and must
+// not become a baseline or carry an evalScore stamp.
+const INFRA_NOTE_RE = /skipped: not installed|timeout after|infra error:/;
+
+/** A result row whose failure is an infra skip/timeout, not a graded outcome. */
+export function isInfraFailure(result) {
+  return (result?.notes ?? []).some((n) => INFRA_NOTE_RE.test(String(n)));
+}
+
+/**
+ * A report is COMPLETE when every row actually ran to a graded outcome — no
+ * infra skips or timeouts. Only a complete run may be frozen as a baseline or
+ * stamped with an evalScore (a partial run must never become the yardstick).
+ */
+export function isCompleteReport(report) {
+  return Array.isArray(report?.results) && report.results.every((r) => !isInfraFailure(r));
+}
 
 /** Load every task JSON under eval/tasks, sorted by id for stable ordering. */
 export async function loadTasks() {

@@ -18,7 +18,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findFreePort, startServer } from './lib/hermetic-stack.mjs';
 import {
+  baselinesDir,
   buildReport as buildReportBase,
+  isCompleteReport,
   loadFixtureSetup,
   loadHiddenCheck,
   loadTasks,
@@ -52,13 +54,15 @@ process.on('exit', () => {
 });
 
 function parseArgs(argv) {
-  const out = { tasks: null, engines: null, models: null };
+  const out = { tasks: null, engines: null, models: null, baseline: false, stampProfile: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const take = () => argv[(i += 1)];
     if (arg === '--tasks') out.tasks = split(take());
     else if (arg === '--engines') out.engines = split(take());
     else if (arg === '--models') out.models = split(take());
+    else if (arg === '--baseline') out.baseline = true;
+    else if (arg === '--stamp-profile') out.stampProfile = true;
   }
   return out;
 }
@@ -205,17 +209,47 @@ async function runOneTask(baseUrl, { task, provider, model }) {
 
 const row = (task, r) => ({ taskId: task.id, informational: task.informational === true, ...r });
 
-async function writeReport(report) {
+async function writeReport(report, stamp) {
   await mkdir(reportsDir, { recursive: true });
   const file = join(
     reportsDir,
-    `${reportStamp()}-${report.engine}-${slug(report.model)}-p${report.profileVersion}.json`,
+    `${stamp}-${report.engine}-${slug(report.model)}-p${report.profileVersion}.json`,
   );
   await writeFile(file, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
   return file;
 }
 
 const slug = (s) => String(s ?? 'default').replace(/[^a-z0-9]+/gi, '-');
+
+/** Freeze a complete report as the committed baseline for its (engine, model). */
+async function writeBaseline(report) {
+  await mkdir(baselinesDir, { recursive: true });
+  const file = join(baselinesDir, `${report.engine}-${slug(report.model)}.json`);
+  await writeFile(file, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  return file;
+}
+
+/**
+ * Produce the ready-to-paste evalScore stamp. The hermetic eval daemons are dead
+ * by now (by design — no live shared daemon), so instead of a settings write we
+ * emit a YAML block + the exact settings key for the founder to paste, and save a
+ * copy under eval/reports/. `at` comes from the run's own timestamp (the report
+ * stamp), never a fresh Date.now().
+ */
+async function writeStamp(report, stamp) {
+  const settingsKey = `NUNCIO_PROMPT_PROFILE_${report.engine.toUpperCase()}`;
+  const at = stamp; // the run timestamp from the report filename
+  const yaml = [
+    '# Paste under the profile document frontmatter (DB-override), settings key:',
+    `#   ${settingsKey}`,
+    `evalScore: { passRate: ${report.passRate}, suiteVersion: ${report.suiteVersion}, at: ${at} }`,
+    '',
+  ].join('\n');
+  await mkdir(reportsDir, { recursive: true });
+  const file = join(reportsDir, `${stamp}-stamp-${report.engine}.txt`);
+  await writeFile(file, yaml, 'utf8');
+  return { file, yaml, settingsKey };
+}
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -229,8 +263,16 @@ async function main() {
   // One hermetic daemon per (engine, task): the task's verifyCommand is a
   // boot-time env var (NUNCIO_VERIFY_COMMAND), so a fresh daemon per task is the
   // clean way to give each task its own verify check with zero shared state.
+  // Results accumulate per (engine, model) so each run produces ONE aggregated
+  // report — the unit baseline/compare operate on.
   const requestedEngines = args.engines ?? ['mock'];
-  let overallExit = 0;
+  const runStamp = reportStamp();
+  const perTarget = new Map(); // "engine model" -> { engine, model, results }
+  const targetOf = (engine, model) => {
+    const key = `${engine} ${model ?? 'default'}`;
+    if (!perTarget.has(key)) perTarget.set(key, { engine, model, results: [] });
+    return perTarget.get(key);
+  };
 
   for (const engine of requestedEngines) {
     for (const task of tasks) {
@@ -249,24 +291,48 @@ async function main() {
       try {
         const available = await fetchAvailableEngines(server.baseUrl);
         if (!available.has(engine)) {
-          const report = buildReport(engine, args.models?.[0] ?? null, [
+          targetOf(engine, args.models?.[0] ?? null).results.push(
             row(task, { pass: false, verifyPassed: false, hiddenPassed: false, durationMs: 0, rounds: 0, notes: ['skipped: not installed'] }),
-          ]);
-          await emit(report);
+          );
           continue;
         }
         const models = args.models ?? [available.get(engine)?.[0] ?? null];
         for (const model of models) {
           const result = await runOneTask(server.baseUrl, { task, provider: engine, model });
-          const report = buildReport(engine, model, [result]);
-          const file = await emit(report);
-          // Informational (control) rows are expected to fail and must not drive
-          // the exit code any more than they drive the pass rate.
-          if (!result.pass && result.informational !== true) overallExit = 1;
-          void file;
+          targetOf(engine, model).results.push(result);
         }
       } finally {
         await server.stop();
+      }
+    }
+  }
+
+  // Emit one aggregated report per (engine, model); baseline/stamp per target.
+  let overallExit = 0;
+  for (const { engine, model, results } of perTarget.values()) {
+    const report = buildReport(engine, model, results);
+    await emit(report, runStamp);
+    // Informational (control) rows are excluded from the exit code, just as they
+    // are from the pass rate.
+    if (results.some((r) => r.pass !== true && r.informational !== true)) overallExit = 1;
+
+    const complete = isCompleteReport(report);
+    if (args.baseline) {
+      if (!complete) {
+        console.error(`[eval] refusing --baseline for ${engine}/${report.model}: run had infra skips/timeouts (a partial run must not become the yardstick)`);
+        overallExit = 1;
+      } else {
+        const file = await writeBaseline(report);
+        console.log(`[eval] baseline written → ${file}`);
+      }
+    }
+    if (args.stampProfile) {
+      if (!complete) {
+        console.error(`[eval] refusing --stamp-profile for ${engine}/${report.model}: run had infra skips/timeouts`);
+        overallExit = 1;
+      } else {
+        const { file, yaml, settingsKey } = await writeStamp(report, runStamp);
+        console.log(`[eval] evalScore stamp for ${settingsKey} → ${file}\n${yaml}`);
       }
     }
   }
@@ -277,8 +343,8 @@ function buildReport(engine, model, results) {
   return buildReportBase({ engine, model, results, profileVersion: PROFILE_VERSION, notes: [PROFILE_NOTE] });
 }
 
-async function emit(report) {
-  const file = await writeReport(report);
+async function emit(report, stamp) {
+  const file = await writeReport(report, stamp);
   console.log(`\n## ${report.engine} / ${report.model} (suite v${report.suiteVersion}, profile p${report.profileVersion})`);
   console.log(renderMarkdownTable(report.results));
   console.log(`passRate: ${(report.passRate * 100).toFixed(0)}%  →  ${file}`);
