@@ -113,7 +113,8 @@ export function buildEnqueueTool(
         sourceSessionId: scope.sessionId,
       };
 
-      const defaults = deps.resolveSubagentDefaults(parent, explicitProvider || undefined);
+      // Shared resolution order: explicit provider > tag routing > defaults.
+      const resolved = await deps.resolveEngine(parent, explicitProvider || undefined, tag);
       const useWorktree = input.useWorktree === false ? false : true;
 
       // Depth + open-task caps are re-evaluated HERE — after all awaits, in the
@@ -135,8 +136,8 @@ export function buildEnqueueTool(
 
       const task = deps.enqueueTask({
         prompt,
-        provider: defaults.provider,
-        ...(defaults.model ? { model: defaults.model } : {}),
+        provider: resolved.provider,
+        ...(resolved.model ? { model: resolved.model } : {}),
         parentSessionId: scope.sessionId,
         role: 'subagent',
         contextBrief: brief,
@@ -145,14 +146,15 @@ export function buildEnqueueTool(
         ...(parent.projectPath ? { projectPath: parent.projectPath } : {}),
       });
 
+      // Report what was actually resolved and persisted on the row.
       const output = {
         taskId: task.id,
-        resolvedProvider: defaults.provider,
-        resolvedModel: defaults.model,
+        resolvedProvider: task.provider ?? resolved.provider,
+        resolvedModel: task.model ?? resolved.model,
         queuePosition: deps.queuePosition(task.id),
       };
       return {
-        content: [{ type: 'text', text: `Queued subagent task ${task.id} on ${defaults.provider} (position ${output.queuePosition}).` }],
+        content: [{ type: 'text', text: `Queued subagent task ${task.id} on ${output.resolvedProvider} (position ${output.queuePosition}).` }],
         structuredContent: output,
       };
     },

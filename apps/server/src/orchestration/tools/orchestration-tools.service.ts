@@ -1,4 +1,5 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
+import { AgentRegistry } from '../../agents/agents.registry';
 import type { AgentRuntimeTools } from '../../agents/tools/agent-runtime-tools.types';
 import type { SessionDto } from '../../sessions/domain/sessions.types';
 import { EventsRepository } from '../../sessions/persistence/events.repository';
@@ -7,6 +8,7 @@ import { resolveVerifyCommand } from '../../sessions/session-verifier';
 import { SettingsService } from '../../settings/settings.service';
 import { TasksRepository } from '../../tasks/tasks.repository';
 import { TASK_ENQUEUER, type TaskEnqueuer } from './task-enqueuer.token';
+import { resolveTaskEngine } from '../engine-routing';
 import { buildWorkspaceSnapshot } from '../workspace-snapshot';
 import { buildOrchestrationTools } from './orchestration-tools.factory';
 import type {
@@ -31,6 +33,7 @@ export class OrchestrationToolsService {
     private readonly tasksRepo: TasksRepository,
     @Optional() @Inject(TASK_ENQUEUER) private readonly enqueuer?: TaskEnqueuer,
     @Optional() private readonly settings?: SettingsService,
+    @Optional() private readonly agents?: AgentRegistry,
   ) {}
 
   private mode(): OrchestrationMode {
@@ -65,16 +68,21 @@ export class OrchestrationToolsService {
         const index = queued.findIndex((t) => t.id === taskId);
         return index >= 0 ? index + 1 : queued.length + 1;
       },
-      resolveSubagentDefaults: (parent, explicitProvider) => ({
-        provider:
-          explicitProvider ||
-          this.settings?.resolve('NUNCIO_SUBAGENT_PROVIDER')?.trim() ||
-          parent.provider,
-        model:
-          this.settings?.resolve('NUNCIO_SUBAGENT_MODEL')?.trim() ||
-          parent.model ||
-          null,
-      }),
+      resolveEngine: (parent, explicitProvider, tag) => {
+        const defaultProvider =
+          this.settings?.resolve('NUNCIO_SUBAGENT_PROVIDER')?.trim() || parent.provider;
+        const defaultModel = this.settings?.resolve('NUNCIO_SUBAGENT_MODEL')?.trim() || parent.model || null;
+        return resolveTaskEngine(
+          {
+            explicitProvider,
+            tag,
+            authorProvider: parent.provider,
+            defaultProvider,
+            defaultModel,
+          },
+          this.routingDeps(),
+        );
+      },
       buildWorkspaceSnapshot: async (parent) => {
         const cwd = parent.worktreePath ?? parent.workspace ?? parent.projectPath ?? null;
         if (!cwd) return null;
@@ -85,6 +93,15 @@ export class OrchestrationToolsService {
         if (!cwd) return null;
         return resolveVerifyCommand(cwd, this.settings?.resolve('NUNCIO_VERIFY_COMMAND'))?.display ?? null;
       },
+    };
+  }
+
+  /** Engine-routing deps (settings JSON + live provider availability). */
+  private routingDeps() {
+    return {
+      routingJson: this.settings?.resolve('NUNCIO_ENGINE_ROUTING'),
+      availableProviderIds: async () =>
+        this.agents ? (await this.agents.available()).map((p) => p.id) : [],
     };
   }
 }

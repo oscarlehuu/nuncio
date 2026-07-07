@@ -46,10 +46,22 @@ function makeDeps(over: Partial<OrchestrationToolDeps> = {}): {
     findTask: () => null,
     enqueueTask: (input) => {
       created.push(input);
-      return task({ id: 'new', prompt: input.prompt, contextBrief: input.contextBrief ?? null, tag: input.tag ?? null });
+      return task({
+        id: 'new',
+        prompt: input.prompt,
+        provider: input.provider ?? null,
+        model: input.model ?? null,
+        contextBrief: input.contextBrief ?? null,
+        tag: input.tag ?? null,
+      });
     },
     queuePosition: () => 3,
-    resolveSubagentDefaults: (parent, explicit) => ({ provider: explicit ?? parent.provider, model: parent.model }),
+    // Mirrors the shared resolution order: explicit > tag route > default.
+    resolveEngine: async (parent, explicit, tag) => {
+      if (explicit) return { provider: explicit, model: null };
+      if (tag === 'review') return { provider: 'codex', model: 'codex:m' };
+      return { provider: parent.provider, model: parent.model };
+    },
     buildWorkspaceSnapshot: async () => ({ branch: 'main', headSha: 'abc', baseBranch: 'main', dirtyFiles: [], diffStat: null }),
     resolveVerifyCommand: () => 'bun run test',
     ...over,
@@ -82,11 +94,19 @@ describe('nuncio_enqueue_task', () => {
     expect(created[0]!.provider).toBe('codex');
   });
 
-  it('persists the tag without routing on it', async () => {
-    const { deps, created } = makeDeps();
-    await buildEnqueueTool(deps, scope).execute({ prompt: 'p', brief: { goal: 'g' }, tag: 'review' });
+  it('routes by tag and persists the tag (C3): review → codex via resolveEngine', async () => {
+    const { deps, created } = makeDeps(); // stub routes review → codex
+    const res = await buildEnqueueTool(deps, scope).execute({ prompt: 'p', brief: { goal: 'g' }, tag: 'review' });
     expect(created[0]!.tag).toBe('review');
-    expect(created[0]!.provider).toBe('cursor'); // NOT routed by tag
+    expect(created[0]!.provider).toBe('codex'); // routed by tag
+    const sc = (res as { structuredContent: { resolvedProvider: string } }).structuredContent;
+    expect(sc.resolvedProvider).toBe('codex'); // output reflects the routed engine
+  });
+
+  it('explicit provider beats tag routing (resolution order)', async () => {
+    const { deps, created } = makeDeps();
+    await buildEnqueueTool(deps, scope).execute({ prompt: 'p', brief: { goal: 'g' }, tag: 'review', provider: 'pi' });
+    expect(created[0]!.provider).toBe('pi'); // explicit wins over the review→codex route
   });
 
   it('rejects an invalid tag', async () => {

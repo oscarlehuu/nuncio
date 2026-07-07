@@ -268,6 +268,15 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     ],
   },
   {
+    key: 'NUNCIO_ENGINE_ROUTING',
+    category: 'agents',
+    type: 'string',
+    label: 'Engine routing table',
+    description:
+      'JSON map of routing tag → { "provider": "…", "model": "…", "avoidAuthorProvider": true } that sends tagged tasks to a chosen engine — e.g. mechanical work to a cheap engine, review to a different engine than the author. Tags: mechanical, review, design, research. avoidAuthorProvider picks a different available engine than the delegating session. A miss, an unavailable engine, or malformed JSON falls through to the normal subagent defaults; an explicit provider always wins. Empty disables routing.',
+    envVar: 'NUNCIO_ENGINE_ROUTING',
+  },
+  {
     key: 'NUNCIO_DELEGATE_NOTIFY',
     category: 'agents',
     type: 'string',

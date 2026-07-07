@@ -34,10 +34,15 @@ export interface OrchestrationToolDeps {
   /** Number of QUEUED tasks ahead of a freshly-enqueued one (1-based position). */
   queuePosition(taskId: string): number;
   /** Resolve the effective provider/model for a subagent under a parent session. */
-  resolveSubagentDefaults(parent: SessionDto, explicitProvider?: string): {
+  /**
+   * Resolve the child engine via the shared order: explicit provider > tag
+   * routing > subagent defaults. Async because tag routing consults live
+   * provider availability.
+   */
+  resolveEngine(parent: SessionDto, explicitProvider?: string, tag?: string): Promise<{
     provider: string;
     model: string | null;
-  };
+  }>;
   /** A3 workspace snapshot for the parent, merged into an agent-authored brief. */
   buildWorkspaceSnapshot(parent: SessionDto): Promise<HandoffBrief['workspace']>;
   /** A2 verify-command resolution for the parent workspace. */
