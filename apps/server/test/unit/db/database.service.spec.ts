@@ -213,6 +213,90 @@ describe('DatabaseService schema + migration', () => {
     expect(row.model).toBeNull();
   });
 
+  it('creates the attention_items table + open-dedup unique index on a fresh DB', () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-attention-fresh-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
+
+    db = new DatabaseService();
+
+    const cols = db.db.prepare('PRAGMA table_info(attention_items)').all() as Array<{ name: string }>;
+    expect(cols.map((c) => c.name)).toEqual([
+      'id',
+      'kind',
+      'subject_id',
+      'project_path',
+      'severity',
+      'title',
+      'payload_json',
+      'status',
+      'acknowledged_at',
+      'created_at',
+      'updated_at',
+      'resolved_at',
+    ]);
+
+    // The partial UNIQUE index over open rows is what makes dedup DB-enforced: two
+    // OPEN rows for the same (kind, subject_id) must be rejected, but a resolved +
+    // an open row for the same condition must coexist.
+    const now = Date.now();
+    const insert = (id: string, status: string) =>
+      db!.db
+        .prepare(
+          `INSERT INTO attention_items
+             (id, kind, subject_id, project_path, severity, title, payload_json, status, created_at, updated_at)
+           VALUES (?, 'tripped-breaker', 'loop-1', NULL, 3, 't', NULL, ?, ?, ?)`,
+        )
+        .run(id, status, now, now);
+    insert('a', 'open');
+    expect(() => insert('b', 'open')).toThrow(); // second OPEN row rejected
+    expect(() => insert('c', 'resolved')).not.toThrow(); // resolved coexists with open
+  });
+
+  it('adds attention_items to a pre-existing DB that lacks it (migration-from-nothing)', () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-attention-migrate-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
+
+    // A DB from before rung 3 — has other tables but no attention_items.
+    const oldDb = new Database(join(dataDir, 'nuncio.db'));
+    oldDb.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'CREATED', prompt TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)");
+    oldDb.close();
+
+    db = new DatabaseService();
+    const tables = db.db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .all() as Array<{ name: string }>;
+    expect(tables.map((t) => t.name)).toContain('attention_items');
+  });
+
+  it('adds the project importance weight column (fresh + guarded ALTER)', () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-project-weight-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
+
+    // A pre-existing projects table from before the rung-3 weight column.
+    const oldDb = new Database(join(dataDir, 'nuncio.db'));
+    oldDb.exec(
+      `CREATE TABLE projects (
+        path TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        default_engine TEXT,
+        worktree_policy TEXT,
+        verify_command TEXT,
+        verify_auto_steer TEXT NOT NULL DEFAULT 'inherit',
+        verify_max_rounds INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+    );
+    oldDb.prepare("INSERT INTO projects (path, name, verify_auto_steer, created_at, updated_at) VALUES ('/p', 'p', 'inherit', 0, 0)").run();
+    oldDb.close();
+
+    db = new DatabaseService();
+    const cols = db.db.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>;
+    expect(cols.map((c) => c.name)).toContain('weight');
+    const row = db.db.prepare('SELECT weight FROM projects WHERE path = ?').get('/p') as { weight: number | null };
+    expect(row.weight).toBeNull(); // default applied by the repo, not the schema
+  });
+
   it('enables WAL journal mode', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-wal-'));
     process.env.NUNCIO_DATA_DIR = dataDir;

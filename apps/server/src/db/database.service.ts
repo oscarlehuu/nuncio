@@ -217,6 +217,7 @@ export class DatabaseService implements OnModuleDestroy {
         verify_command TEXT,
         verify_auto_steer TEXT NOT NULL DEFAULT 'inherit',
         verify_max_rounds INTEGER,
+        weight INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       )
@@ -283,6 +284,40 @@ export class DatabaseService implements OnModuleDestroy {
       )
     `);
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_loop_runs_loop ON loop_runs(loop_id, created_at)');
+
+    // Attention queue (rung 3, sub-phase A). ONE ranked queue of everything needing
+    // the founder. Deduped: a partial UNIQUE index over open rows guarantees at most
+    // one OPEN item per (kind, subject_id); resolved rows never block a re-trip.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS attention_items (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        subject_id TEXT NOT NULL,
+        project_path TEXT,
+        severity INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        payload_json TEXT,
+        status TEXT NOT NULL DEFAULT 'open',
+        acknowledged_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        resolved_at INTEGER
+      )
+    `);
+    this.db.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_attention_open_dedup
+         ON attention_items(kind, subject_id) WHERE status = 'open'`,
+    );
+    this.db.exec(
+      'CREATE INDEX IF NOT EXISTS idx_attention_status ON attention_items(status, severity)',
+    );
+
+    // Per-project importance weight (rung 3 ranking + fleet home). Guarded ALTER on
+    // a pre-existing projects table; default 1 (equal importance) applied by the repo.
+    const projectColumns = this.db.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>;
+    if (projectColumns.length > 0 && !projectColumns.some((c) => c.name === 'weight')) {
+      this.db.exec('ALTER TABLE projects ADD COLUMN weight INTEGER');
+    }
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS tasks (

@@ -1,0 +1,82 @@
+/**
+ * Attention queue (rung 3, sub-phase A). ONE ranked queue of everything needing
+ * the founder. Signals are COLLECTED from existing rungs-1/2 sources (no new
+ * session event types — ADR-007 additive); items are durable + deduped (one open
+ * item per condition) + reconciled on restart.
+ */
+
+/** The condition families the queue tracks. Unknown/legacy kinds rank last, never throw. */
+export type AttentionKind =
+  | 'permission'
+  | 'verify-dead'
+  | 'tripped-breaker'
+  | 'pr-review'
+  | 'anomaly';
+
+export type AttentionStatus = 'open' | 'resolved';
+
+/**
+ * Static severity buckets (decision #1 — NOT a learned score). Higher = more
+ * urgent. An unknown kind maps to 0 (ranks last).
+ */
+export const SEVERITY_BY_KIND: Readonly<Record<AttentionKind, number>> = {
+  permission: 5,
+  'verify-dead': 4,
+  'tripped-breaker': 3,
+  'pr-review': 2,
+  anomaly: 1,
+};
+
+export const UNKNOWN_SEVERITY = 0;
+
+/** A durable attention item — one row per open (kind, subjectId) condition. */
+export interface AttentionItemDto {
+  id: string;
+  kind: string;
+  /** The thing needing attention: sessionId | loopId | prKey | … */
+  subjectId: string;
+  /** For project-importance ranking + fleet grouping. Null when project-less. */
+  projectPath: string | null;
+  severity: number;
+  title: string;
+  /** Kind-specific detail (requestId, PR url, verify-tail pointer, …), or null. */
+  payload: Record<string, unknown> | null;
+  status: AttentionStatus;
+  /** Ack = "seen"; mutes the badge; does NOT resolve. Null until acked. */
+  acknowledgedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+  /** Set when status → resolved (auto or manual). */
+  resolvedAt: number | null;
+}
+
+/** A raised signal — what a collector calls `AttentionService.raise` with. */
+export interface RaiseSignal {
+  kind: string;
+  subjectId: string;
+  projectPath?: string | null;
+  title: string;
+  payload?: Record<string, unknown> | null;
+}
+
+/** Badge counts for the phone. `unacked` (open ∧ not acknowledged) is the badge source. */
+export interface AttentionCounts {
+  total: number;
+  unacked: number;
+  bySeverity: Record<string, number>;
+}
+
+export interface AttentionItemRow {
+  id: string;
+  kind: string;
+  subject_id: string;
+  project_path: string | null;
+  severity: number;
+  title: string;
+  payload_json: string | null;
+  status: string;
+  acknowledged_at: number | null;
+  created_at: number;
+  updated_at: number;
+  resolved_at: number | null;
+}
