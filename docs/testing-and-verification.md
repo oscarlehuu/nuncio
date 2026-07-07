@@ -113,5 +113,19 @@ Priority order when adding test depth (highest leverage first):
 5. Real-provider integration only for adapter seams that stubs cannot prove (auth discovery,
    cwd/tool binding, resume).
 
+## Interactive desktop smokes: engine/model cost rule
+
+Computer-use smokes on the Electron dev app (Codex or any driver) default to the **mock provider**
+(`NUNCIO_FORCE_MOCK=1`) — free and fast. When a scenario genuinely needs a real engine (adapter
+seams, real streaming), pick the **cheapest model**, never a flagship:
+
+- Cursor → `composer-2.5`
+- Pi → `claude-haiku-4.5`
+- Codex → the mini tier (smallest available codex model)
+
+Set it per session/loop via the model picker (or the loop's engine·model override) as part of the
+smoke setup. A smoke that burns a flagship-model turn to check a chip renders is a bug in the
+smoke, not a cost of doing business.
+
 Never: snapshot tests of whole components, tests that assert implementation details, or sleeps —
 use fake timers or event hooks.
