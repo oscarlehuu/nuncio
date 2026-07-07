@@ -16,8 +16,9 @@ vi.mock('../lib/api', async () => {
     deleteLoop: vi.fn(),
   };
 });
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
+import { toast } from 'sonner';
 import { LoopDetailView } from './loop-detail-view';
 import {
   deleteLoop,
@@ -65,8 +66,12 @@ describe('LoopDetailView', () => {
     vi.mocked(fetchLoop).mockReset().mockResolvedValue(loop());
     vi.mocked(updateLoop).mockReset().mockResolvedValue(loop());
     vi.mocked(fireLoop).mockReset().mockResolvedValue({
-      id: 'r1', loopId: 'l1', taskId: 't1', outcome: 'pending', verify: 'none', dayBucket: '2000-01-01', createdAt: 1,
+      fired: true,
+      run: { id: 'r1', loopId: 'l1', taskId: 't1', outcome: 'pending', verify: 'none', dayBucket: '2000-01-01', createdAt: 1 },
     });
+    vi.mocked(toast.info).mockReset();
+    vi.mocked(toast.success).mockReset();
+    vi.mocked(toast.error).mockReset();
     vi.mocked(deleteLoop).mockReset().mockResolvedValue(undefined);
   });
 
@@ -111,6 +116,25 @@ describe('LoopDetailView', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /run now/i })).toBeEnabled());
     await userEvent.click(screen.getByRole('button', { name: /run now/i }));
     expect(fireLoop).toHaveBeenCalledWith('l1');
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Run started'));
+  });
+
+  it('tells the truth when a fire is skipped for overlap (409)', async () => {
+    vi.mocked(fireLoop).mockResolvedValue({ fired: false, reason: 'overlap' });
+    renderDetail();
+    await waitFor(() => expect(screen.getByRole('button', { name: /run now/i })).toBeEnabled());
+    await userEvent.click(screen.getByRole('button', { name: /run now/i }));
+    await waitFor(() => expect(toast.info).toHaveBeenCalledWith('Previous run still in progress'));
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('tells the truth when a fire is skipped for budget (409)', async () => {
+    vi.mocked(fireLoop).mockResolvedValue({ fired: false, reason: 'budget' });
+    renderDetail();
+    await waitFor(() => expect(screen.getByRole('button', { name: /run now/i })).toBeEnabled());
+    await userEvent.click(screen.getByRole('button', { name: /run now/i }));
+    await waitFor(() => expect(toast.info).toHaveBeenCalledWith('Daily budget spent — resumes tomorrow'));
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it('Run now is disabled with a reason on a broken loop', async () => {

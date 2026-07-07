@@ -75,18 +75,26 @@ describe('runsToday', () => {
     expect(runsToday([run({ dayBucket: today, outcome: 'pending' })])).toBe(1);
   });
 
-  it('never counts budget-exhausted bookkeeping rows (no day-count inflation)', () => {
+  it('never counts budget-exhausted or skipped-overlap bookkeeping rows (no inflation)', () => {
     const today = localDayBucket();
-    // 24 consumed (ok/failed/pending) + bookkeeping should read 24, not 26.
+    // 24 consumed (ok/failed/pending) + bookkeeping should read 24, not more.
     const consumed = [
       ...Array.from({ length: 23 }, () => run({ dayBucket: today, outcome: 'ok' })),
       run({ dayBucket: today, outcome: 'pending' }),
     ];
     const bookkeeping = [
       run({ dayBucket: today, outcome: 'budget-exhausted' }),
+      run({ dayBucket: today, outcome: 'skipped-overlap' }),
       run({ dayBucket: today, outcome: 'resume' }),
     ];
     expect(runsToday([...consumed, ...bookkeeping])).toBe(24);
+  });
+
+  it('skipped-overlap is a valid outcome that neither counts nor breaks the streak', () => {
+    // Type-level: assigning it to LoopRunOutcome must compile; runtime: transparent.
+    const overlap: LoopRunDto = run({ outcome: 'skipped-overlap' });
+    expect(runsToday([overlap], overlap.createdAt)).toBe(0);
+    expect(failureStreak([run({ outcome: 'failed' }), overlap])).toBe(1);
   });
 });
 

@@ -565,7 +565,16 @@ export async function markTaskReviewed(id: string): Promise<TaskDto> {
 export type LoopStatus = 'active' | 'paused' | 'broken' | 'completed';
 // 'pending' is the in-flight state a run is born in (task enqueued, not yet
 // settled) — the most common outcome on an active loop, finalized to ok/failed.
-export type LoopRunOutcome = 'pending' | 'ok' | 'failed' | 'budget-exhausted' | 'resume';
+// 'budget-exhausted' and 'skipped-overlap' are bookkeeping markers a fire writes
+// when it does NOT enqueue (day budget spent / prior run still in flight); neither
+// consumes a budget slot (see CONSUMED_OUTCOMES in loop-schedule.ts).
+export type LoopRunOutcome =
+  | 'pending'
+  | 'ok'
+  | 'failed'
+  | 'budget-exhausted'
+  | 'skipped-overlap'
+  | 'resume';
 export type LoopRunVerify = 'green' | 'red' | 'none';
 export type ScheduleKind = 'cron' | 'heartbeat' | 'event';
 
@@ -695,11 +704,28 @@ export async function updateLoop(id: string, input: UpdateLoopInput): Promise<Lo
   return res.json();
 }
 
-/** Fire a loop run immediately. 4xx (with a reason) on broken/paused/completed loops. */
-export async function fireLoop(id: string): Promise<LoopRunDto> {
+/** Why an immediate fire did nothing: a run was already in flight, or today's budget is spent. */
+export type FireSkipReason = 'overlap' | 'budget';
+
+/**
+ * Result of POST /loops/:id/fire. 200 → the run started; 409 → the fire was
+ * skipped and `reason` says which guard tripped (so the UI shows the truth instead
+ * of a false "Run started"). Other non-2xx (a broken/paused/completed loop, network)
+ * still throw — the button is disabled for those, so hitting one is a real error.
+ */
+export type FireLoopResult =
+  | { fired: true; run: LoopRunDto }
+  | { fired: false; reason: FireSkipReason };
+
+export async function fireLoop(id: string): Promise<FireLoopResult> {
   const res = await apiFetch(`/api/loops/${encodeURIComponent(id)}/fire`, { method: 'POST' });
+  if (res.status === 409) {
+    const body = (await res.json().catch(() => null)) as { reason?: FireSkipReason } | null;
+    // Default to 'overlap' if the server omitted a reason — the safer "still working" read.
+    return { fired: false, reason: body?.reason === 'budget' ? 'budget' : 'overlap' };
+  }
   if (!res.ok) throw new Error(await loopErrorMessage(res, 'Failed to run loop'));
-  return res.json();
+  return { fired: true, run: await res.json() };
 }
 
 /** One run's full drill-down detail (GitHub-Actions-style run view). */

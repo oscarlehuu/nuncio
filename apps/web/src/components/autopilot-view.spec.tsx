@@ -182,12 +182,23 @@ describe('AutopilotView', () => {
   it('tolerates an unknown run outcome string in history (future bookkeeping marker)', async () => {
     vi.mocked(fetchLoops).mockResolvedValue([loop({ id: 'a', status: 'active' })]);
     vi.mocked(fetchLoopRuns).mockResolvedValue([
-      // A marker the client has not modeled yet — must not crash the history list.
-      { id: 'r1', loopId: 'a', taskId: null, outcome: 'skipped-overlap' as never, verify: 'none', dayBucket: '2000-01-01', createdAt: 1 },
+      // A marker the client has not modeled yet — humanized, must not crash the list.
+      { id: 'r1', loopId: 'a', taskId: null, outcome: 'reconciled-late' as never, verify: 'none', dayBucket: '2000-01-01', createdAt: 1 },
     ]);
     renderView();
     await waitFor(() => expect(screen.getByText('Triage new issues')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /show run history/i }));
-    expect(await screen.findByText('Skipped overlap')).toBeInTheDocument();
+    expect(await screen.findByText('Reconciled late')).toBeInTheDocument();
+  });
+
+  it('labels a skipped-overlap run explicitly (known bookkeeping marker)', async () => {
+    vi.mocked(fetchLoops).mockResolvedValue([loop({ id: 'a', status: 'active' })]);
+    vi.mocked(fetchLoopRuns).mockResolvedValue([
+      { id: 'r1', loopId: 'a', taskId: null, outcome: 'skipped-overlap', verify: 'none', dayBucket: '2000-01-01', createdAt: 1 },
+    ]);
+    renderView();
+    await waitFor(() => expect(screen.getByText('Triage new issues')).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: /show run history/i }));
+    expect(await screen.findByText(/a run was still in progress/i)).toBeInTheDocument();
   });
 });

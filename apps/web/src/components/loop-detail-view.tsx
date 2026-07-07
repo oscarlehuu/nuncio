@@ -145,7 +145,26 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
   const handleToggleActive = (next: boolean) =>
     run(() => (next ? resumeLoop(loop.id) : pauseLoop(loop.id)));
 
-  const handleFire = () => run(() => fireLoop(loop.id), 'Run started');
+  // A fire can be skipped server-side (409) without erroring — tell the truth
+  // instead of a false "Run started".
+  const handleFire = async () => {
+    setBusy(true);
+    try {
+      const result = await fireLoop(loop.id);
+      if (result.fired) {
+        toast.success('Run started');
+      } else if (result.reason === 'budget') {
+        toast.info('Daily budget spent — resumes tomorrow');
+      } else {
+        toast.info('Previous run still in progress');
+      }
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to run loop');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const doDelete = async () => {
     setConfirmDelete(false);

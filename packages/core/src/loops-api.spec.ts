@@ -107,11 +107,24 @@ describe('loops api client', () => {
     expect(JSON.parse(init.body)).toEqual({ goal: 'new goal', engine: null });
   });
 
-  it('fireLoop POSTs to /fire and surfaces the 4xx reason', async () => {
-    fetchMock.mockResolvedValue(jsonRes({ id: 'r9' }));
-    await fireLoop('l1');
+  it('fireLoop POSTs to /fire and returns the started run on 200', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ id: 'r9', outcome: 'pending' }));
+    const result = await fireLoop('l1');
     expect(fetchMock).toHaveBeenCalledWith('/api/loops/l1/fire', { method: 'POST' });
-    fetchMock.mockResolvedValue(jsonRes({ message: 'loop is paused' }, false, 409));
+    expect(result).toEqual({ fired: true, run: { id: 'r9', outcome: 'pending' } });
+  });
+
+  it('fireLoop reports a 409 skip with its reason (not an error)', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ reason: 'overlap' }, false, 409));
+    expect(await fireLoop('l1')).toEqual({ fired: false, reason: 'overlap' });
+    fetchMock.mockResolvedValue(jsonRes({ reason: 'budget' }, false, 409));
+    expect(await fireLoop('l1')).toEqual({ fired: false, reason: 'budget' });
+  });
+
+  it('fireLoop defaults a reason-less 409 to overlap, and throws on other errors', async () => {
+    fetchMock.mockResolvedValue(jsonRes({}, false, 409));
+    expect(await fireLoop('l1')).toEqual({ fired: false, reason: 'overlap' });
+    fetchMock.mockResolvedValue(jsonRes({ message: 'loop is paused' }, false, 400));
     await expect(fireLoop('l1')).rejects.toThrow('loop is paused');
   });
 

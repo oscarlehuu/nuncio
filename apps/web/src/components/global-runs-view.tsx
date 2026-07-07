@@ -17,6 +17,7 @@ const OUTCOME_LABEL: Record<string, { text: string; tone: string }> = {
   failed: { text: 'Failed', tone: 'text-destructive' },
   pending: { text: 'Running', tone: 'text-info' },
   'budget-exhausted': { text: 'Skipped', tone: 'text-muted-foreground' },
+  'skipped-overlap': { text: 'Skipped', tone: 'text-muted-foreground' },
   resume: { text: 'Resumed', tone: 'text-muted-foreground' },
 };
 

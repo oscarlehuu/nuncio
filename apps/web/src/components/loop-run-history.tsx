@@ -13,6 +13,7 @@ const OUTCOME_META: Record<string, { label: string; className: string }> = {
   ok: { label: 'Succeeded', className: 'text-foreground' },
   failed: { label: 'Failed', className: 'text-destructive' },
   'budget-exhausted': { label: 'Skipped — daily budget spent', className: 'text-muted-foreground' },
+  'skipped-overlap': { label: 'Skipped — a run was still in progress', className: 'text-muted-foreground' },
   resume: { label: 'Resumed by you', className: 'text-muted-foreground italic' },
 };
 
