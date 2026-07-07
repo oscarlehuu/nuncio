@@ -213,7 +213,7 @@ CREATE TABLE IF NOT EXISTS schedules (
   reboot" (pillar 4 failure) is impossible. Event schedules have `next_fire_at = NULL` (they fire on
   webhook arrival, not on the clock).
 
-### Cron spec v1 — FLAGGED founder decision
+### Cron spec v1 — LOCKED (founder, 2026-07-07): subset, no dependency
 
 **Recommendation: a small parsed subset, NO dependency** —
 `daily@HH:MM` · `every:<N>m` / `every:<N>h` · `<weekday>@HH:MM` (mon..sun). Rationale: cockpit-map's
@@ -224,7 +224,7 @@ computer, fully unit-testable. **Flagged:** the founder may prefer full crontab 
 dep — if so, swap the parser, the table/firing loop are unaffected. v1 is **timezone-naive**: `HH:MM`
 is the injected clock's local frame; DST transitions are a documented v1 limitation (not handled).
 
-### Missed-fire policy — FLAGGED founder decision
+### Missed-fire policy — LOCKED (founder, 2026-07-07): fire-once-on-boot with `missed` marker
 
 **Recommendation: fire-once-on-boot when missed.** If the daemon was down when a schedule's
 `next_fire_at` passed, on boot fire it exactly once (a maintenance loop should still run "tonight" even
