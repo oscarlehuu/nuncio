@@ -13,6 +13,7 @@ import {
   type LoopRunDto,
   type LoopStatsDto,
 } from '../lib/api';
+import type { ModelProvider } from '../lib/model-providers';
 import { LoopRow } from './loop-row';
 import { LoopDashboardHeader } from './loop-dashboard-header';
 import { LoopTemplates, type LoopTemplate } from './loop-templates';
@@ -29,6 +30,8 @@ import {
 
 interface AutopilotViewProps {
   onBack: () => void;
+  /** The /api/models catalog — feeds the create dialog's engine + model picker. */
+  providers: ModelProvider[];
 }
 
 /**
@@ -37,7 +40,7 @@ interface AutopilotViewProps {
  * Polls only while a loop is active or broken (a broken loop's streak can't move on
  * its own, but a paused/completed-only list is inert — no need to poll).
  */
-export function AutopilotView({ onBack }: AutopilotViewProps) {
+export function AutopilotView({ onBack, providers }: AutopilotViewProps) {
   const navigate = useNavigate();
   const [loops, setLoops] = useState<LoopDto[]>([]);
   const [runsByLoop, setRunsByLoop] = useState<Record<string, LoopRunDto[]>>({});
@@ -213,6 +216,7 @@ export function AutopilotView({ onBack }: AutopilotViewProps) {
         onOpenChange={setCreateOpen}
         onCreated={() => void refresh()}
         prefill={prefill}
+        providers={providers}
       />
 
       {/*

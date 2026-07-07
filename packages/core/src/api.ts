@@ -603,6 +603,8 @@ export interface LoopDto {
   projectPath: string | null;
   /** Per-loop engine override; null = inherit from the project's default engine. */
   engine?: string | null;
+  /** Per-loop model override; null = the resolved engine's default model. */
+  model?: string | null;
   status: LoopStatus;
   createdAt: number;
   updatedAt: number;
@@ -619,6 +621,8 @@ export interface CreateLoopInput {
   projectPath?: string;
   /** Per-loop engine override (provider id); null clears it. */
   engine?: string | null;
+  /** Per-loop model override; requires a resolvable engine; null = engine default. */
+  model?: string | null;
 }
 
 export interface LoopRunDto {
@@ -690,6 +694,8 @@ export interface UpdateLoopInput {
   goal?: string;
   /** null clears the per-loop engine override (inherit from project). */
   engine?: string | null;
+  /** null clears the per-loop model override (the resolved engine's default). */
+  model?: string | null;
   maxRunsPerDay?: number;
   stop?: StopCondition;
 }

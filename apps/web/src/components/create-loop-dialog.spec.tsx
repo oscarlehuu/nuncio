@@ -18,6 +18,15 @@ vi.mock('./project-picker', () => ({
 
 import { CreateLoopDialog } from './create-loop-dialog';
 import { createLoop, type LoopDto } from '../lib/api';
+import type { ModelProvider } from '../lib/model-providers';
+
+const PROVIDERS: ModelProvider[] = [
+  {
+    id: 'pi',
+    name: 'Pi',
+    groups: [{ id: 'g', name: 'g', models: [{ id: 'claude-fable-5', name: 'Fable 5' }] }],
+  },
+];
 
 const CREATED: LoopDto = {
   id: 'new',
@@ -77,6 +86,32 @@ describe('CreateLoopDialog', () => {
     await userEvent.click(screen.getByRole('button', { name: /create loop/i }));
     await waitFor(() => expect(createLoop).toHaveBeenCalled());
     expect(vi.mocked(createLoop).mock.calls[0]![0].schedule.spec).toBe('every:6h');
+  });
+
+  it('sends the picked engine + model in the create payload', async () => {
+    render(<CreateLoopDialog open onOpenChange={vi.fn()} onCreated={vi.fn()} providers={PROVIDERS} />);
+    await userEvent.type(screen.getByLabelText('Goal'), 'Nightly refactor');
+    await userEvent.click(
+      screen.getByRole('button', { name: /engine and model: inherit from project · default model/i }),
+    );
+    const piEngine = await screen.findByRole('menuitem', { name: /^pi$/i });
+    await userEvent.hover(piEngine);
+    await userEvent.click(await screen.findByRole('menuitem', { name: /fable 5/i }));
+    await userEvent.click(screen.getByRole('button', { name: /create loop/i }));
+    await waitFor(() => expect(createLoop).toHaveBeenCalled());
+    const payload = vi.mocked(createLoop).mock.calls[0]![0];
+    expect(payload.engine).toBe('pi');
+    expect(payload.model).toBe('claude-fable-5');
+  });
+
+  it('omits engine + model when left on inherit + default', async () => {
+    render(<CreateLoopDialog open onOpenChange={vi.fn()} onCreated={vi.fn()} providers={PROVIDERS} />);
+    await userEvent.type(screen.getByLabelText('Goal'), 'Nightly refactor');
+    await userEvent.click(screen.getByRole('button', { name: /create loop/i }));
+    await waitFor(() => expect(createLoop).toHaveBeenCalled());
+    const payload = vi.mocked(createLoop).mock.calls[0]![0];
+    expect(payload).not.toHaveProperty('engine');
+    expect(payload).not.toHaveProperty('model');
   });
 
   it('attaches a maxTotalRuns stop when selected', async () => {

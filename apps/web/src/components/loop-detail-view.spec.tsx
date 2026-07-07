@@ -28,6 +28,20 @@ import {
   updateLoop,
   type LoopDto,
 } from '../lib/api';
+import type { ModelProvider } from '../lib/model-providers';
+
+const PROVIDERS: ModelProvider[] = [
+  {
+    id: 'pi',
+    name: 'Pi',
+    groups: [{ id: 'g', name: 'g', models: [{ id: 'claude-fable-5', name: 'Fable 5' }] }],
+  },
+  {
+    id: 'cursor',
+    name: 'Cursor',
+    groups: [{ id: 'c', name: 'c', models: [{ id: 'cursor:composer-2.5', name: 'Composer 2.5' }] }],
+  },
+];
 
 function loop(partial: Partial<LoopDto> = {}): LoopDto {
   return {
@@ -43,6 +57,7 @@ function loop(partial: Partial<LoopDto> = {}): LoopDto {
     escalation: 'needs-attention',
     projectPath: '/repo',
     engine: partial.engine ?? null,
+    model: partial.model ?? null,
     status: partial.status ?? 'active',
     createdAt: 0,
     updatedAt: 0,
@@ -53,7 +68,7 @@ function renderDetail(loopId = 'l1') {
   return render(
     <MemoryRouter initialEntries={[`/autopilot/${loopId}`]}>
       <Routes>
-        <Route path="/autopilot/:loopId" element={<LoopDetailView providers={[{ id: 'pi', name: 'Pi' } as never]} />} />
+        <Route path="/autopilot/:loopId" element={<LoopDetailView providers={PROVIDERS} />} />
         <Route path="/autopilot" element={<div>list</div>} />
       </Routes>
     </MemoryRouter>,
@@ -142,6 +157,69 @@ describe('LoopDetailView', () => {
     renderDetail();
     await waitFor(() => expect(screen.getByRole('button', { name: /run now/i })).toBeDisabled());
     expect(screen.getByRole('button', { name: /run now/i })).toHaveAttribute('title', expect.stringMatching(/resume/i));
+  });
+
+  it('renders the current engine + model in the embedded control', async () => {
+    vi.mocked(fetchLoop).mockResolvedValue(loop({ engine: 'pi', model: 'claude-fable-5' }));
+    renderDetail();
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: /engine and model: pi · fable 5/i }),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  it('renders inherit + default when engine and model are null', async () => {
+    renderDetail();
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: /engine and model: inherit from project · default model/i }),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  it('renders an unknown/legacy model id raw without crashing', async () => {
+    vi.mocked(fetchLoop).mockResolvedValue(loop({ engine: 'pi', model: 'ghost-model-9' }));
+    renderDetail();
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: /engine and model: pi · ghost-model-9/i }),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  it('picking a different engine resets the model to the provider default', async () => {
+    vi.mocked(fetchLoop).mockResolvedValue(loop({ engine: 'pi', model: 'claude-fable-5' }));
+    renderDetail();
+    const trigger = await screen.findByRole('button', { name: /engine and model: pi · fable 5/i });
+    await userEvent.click(trigger);
+    const cursorEngine = await screen.findByRole('menuitem', { name: /^cursor$/i });
+    await userEvent.hover(cursorEngine);
+    await userEvent.click(await screen.findByRole('menuitem', { name: /provider default/i }));
+    expect(
+      await screen.findByRole('button', { name: /engine and model: cursor · default model/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('picking a model dirty-gates Save and PATCHes {engine, model}', async () => {
+    vi.mocked(fetchLoop).mockResolvedValue(loop({ engine: 'pi', model: null }));
+    renderDetail();
+    const trigger = await screen.findByRole('button', {
+      name: /engine and model: pi · default model/i,
+    });
+    const save = screen.getByRole('button', { name: 'Save' });
+    expect(save).toBeDisabled();
+    await userEvent.click(trigger);
+    const piEngine = await screen.findByRole('menuitem', { name: /^pi$/i });
+    await userEvent.hover(piEngine);
+    await userEvent.click(await screen.findByRole('menuitem', { name: /fable 5/i }));
+    expect(save).toBeEnabled();
+    await userEvent.click(save);
+    await waitFor(() => expect(updateLoop).toHaveBeenCalled());
+    expect(vi.mocked(updateLoop).mock.calls[0]![1]).toMatchObject({
+      engine: 'pi',
+      model: 'claude-fable-5',
+    });
   });
 
   it('deletes via the overflow menu after confirming', async () => {

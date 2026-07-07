@@ -9,6 +9,8 @@ import {
   type StopCondition,
 } from '../lib/api';
 import { buildScheduleSpec, formatScheduleSpec } from '@nuncio/core/loop-schedule';
+import type { ModelProvider } from '../lib/model-providers';
+import { LoopEngineModelPicker } from './loop-engine-model-picker';
 import { ProjectPicker } from './project-picker';
 import { ScheduleFields, type ScheduleMode } from './loop-schedule-fields';
 import { Button } from '@/components/ui/button';
@@ -52,9 +54,17 @@ interface CreateLoopDialogProps {
   onCreated: (loop: LoopDto) => void;
   /** Seed the form (e.g. from a template); applied each time the dialog opens. */
   prefill?: CreateLoopPrefill | null;
+  /** The /api/models catalog for the engine + model picker; defaults to empty. */
+  providers?: ModelProvider[];
 }
 
-export function CreateLoopDialog({ open, onOpenChange, onCreated, prefill }: CreateLoopDialogProps) {
+export function CreateLoopDialog({
+  open,
+  onOpenChange,
+  onCreated,
+  prefill,
+  providers = [],
+}: CreateLoopDialogProps) {
   const [goal, setGoal] = useState('');
   const [projectPath, setProjectPath] = useState<string>('');
   const [mode, setMode] = useState<ScheduleMode>('daily');
@@ -65,6 +75,8 @@ export function CreateLoopDialog({ open, onOpenChange, onCreated, prefill }: Cre
   const [maxRunsPerDay, setMaxRunsPerDay] = useState(DEFAULT_MAX_RUNS_PER_DAY);
   const [stopKind, setStopKind] = useState<StopKind>('standing');
   const [stopN, setStopN] = useState(5);
+  const [engine, setEngine] = useState<string | null>(null);
+  const [model, setModel] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const timeValid = mode === 'interval' || /^\d{1,2}:\d{2}$/.test(time);
@@ -86,6 +98,8 @@ export function CreateLoopDialog({ open, onOpenChange, onCreated, prefill }: Cre
     setMaxRunsPerDay(DEFAULT_MAX_RUNS_PER_DAY);
     setStopKind('standing');
     setStopN(5);
+    setEngine(null);
+    setModel(null);
   };
 
   // Seed the form from a template when the dialog opens with a prefill. Keyed on
@@ -133,6 +147,8 @@ export function CreateLoopDialog({ open, onOpenChange, onCreated, prefill }: Cre
       maxConsecutiveFailures: DEFAULT_MAX_CONSECUTIVE_FAILURES,
       stop: buildStop(),
       ...(projectPath ? { projectPath } : {}),
+      ...(engine !== null ? { engine } : {}),
+      ...(model !== null ? { model } : {}),
     };
     try {
       const loop = await createLoop(input);
@@ -209,6 +225,20 @@ export function CreateLoopDialog({ open, onOpenChange, onCreated, prefill }: Cre
                 {DEFAULT_MAX_CONSECUTIVE_FAILURES} in a row
               </div>
             </Field>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-ui font-medium text-foreground">Engine</span>
+            <LoopEngineModelPicker
+              compact
+              providers={providers}
+              engine={engine}
+              model={model}
+              onChange={(nextEngine, nextModel) => {
+                setEngine(nextEngine);
+                setModel(nextModel);
+              }}
+            />
           </div>
 
           <Field label="Stop condition">

@@ -13,7 +13,7 @@ export default function AutopilotRoutes({ providers }: { providers: ModelProvide
   const navigate = useNavigate();
   return (
     <Routes>
-      <Route index element={<AutopilotView onBack={() => navigate('/')} />} />
+      <Route index element={<AutopilotView onBack={() => navigate('/')} providers={providers} />} />
       <Route path="runs" element={<GlobalRunsView />} />
       <Route path=":loopId" element={<LoopDetailView providers={providers} />} />
       <Route path=":loopId/runs/:runId" element={<LoopRunDetailView />} />

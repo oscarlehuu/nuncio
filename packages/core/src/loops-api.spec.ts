@@ -71,6 +71,18 @@ describe('loops api client', () => {
     });
   });
 
+  it('createLoop posts the per-loop engine + model overrides', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ id: 'new' }));
+    await createLoop({
+      goal: 'nightly refactor',
+      schedule: { kind: 'cron', spec: 'daily@22:00' },
+      engine: 'pi',
+      model: 'claude-fable-5',
+    });
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(JSON.parse(init.body)).toMatchObject({ engine: 'pi', model: 'claude-fable-5' });
+  });
+
   it('createLoop surfaces the server error message', async () => {
     fetchMock.mockResolvedValue(jsonRes({ message: 'goal is required' }, false, 400));
     await expect(createLoop({ goal: '', schedule: { kind: 'cron', spec: 'daily@22:00' } })).rejects.toThrow(
@@ -105,6 +117,25 @@ describe('loops api client', () => {
     expect(url).toBe('/api/loops/l1');
     expect(init.method).toBe('PATCH');
     expect(JSON.parse(init.body)).toEqual({ goal: 'new goal', engine: null });
+  });
+
+  it('updateLoop PATCHes the per-loop model override (null clears it)', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ id: 'l1' }));
+    await updateLoop('l1', { model: 'claude-fable-5' });
+    let [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/loops/l1');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body)).toEqual({ model: 'claude-fable-5' });
+    await updateLoop('l1', { engine: null, model: null });
+    [url, init] = fetchMock.mock.calls[1]!;
+    expect(JSON.parse(init.body)).toEqual({ engine: null, model: null });
+  });
+
+  it('fetchLoop round-trips the per-loop model override', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ id: 'l9', engine: 'pi', model: 'claude-fable-5' }));
+    const loop = await fetchLoop('l9');
+    expect(loop.engine).toBe('pi');
+    expect(loop.model).toBe('claude-fable-5');
   });
 
   it('fireLoop POSTs to /fire and returns the started run on 200', async () => {

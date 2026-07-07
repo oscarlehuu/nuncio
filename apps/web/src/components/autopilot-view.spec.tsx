@@ -33,7 +33,7 @@ import {
   type LoopDto,
 } from '../lib/api';
 
-function renderView(ui: ReactElement = <AutopilotView onBack={vi.fn()} />) {
+function renderView(ui: ReactElement = <AutopilotView onBack={vi.fn()} providers={[]} />) {
   return render(<MemoryRouter>{ui}</MemoryRouter>);
 }
 

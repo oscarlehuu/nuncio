@@ -65,6 +65,7 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
   const [name, setName] = useState('');
   const [goal, setGoal] = useState('');
   const [engine, setEngine] = useState<string | null>(null);
+  const [model, setModel] = useState<string | null>(null);
   const [maxRuns, setMaxRuns] = useState(24);
   const seeded = useRef<string | null>(null);
 
@@ -74,6 +75,7 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
     setName(l.name ?? '');
     setGoal(l.goal);
     setEngine(l.engine ?? null);
+    setModel(l.model ?? null);
     setMaxRuns(l.maxRunsPerDay);
   }, []);
 
@@ -113,6 +115,7 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
     name.trim() !== (loop.name ?? '') ||
     goal.trim() !== loop.goal ||
     (engine ?? null) !== (loop.engine ?? null) ||
+    (model ?? null) !== (loop.model ?? null) ||
     maxRuns !== loop.maxRunsPerDay;
   const fireReason = fireDisabledReason(loop.status);
 
@@ -137,6 +140,7 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
           name: name.trim() || null,
           goal: goal.trim(),
           engine,
+          model,
           maxRunsPerDay: maxRuns,
         }),
       'Loop saved',
@@ -260,7 +264,11 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
               goal={goal}
               onGoalChange={setGoal}
               engine={engine}
-              onEngineChange={setEngine}
+              model={model}
+              onEngineModelChange={(nextEngine, nextModel) => {
+                setEngine(nextEngine);
+                setModel(nextModel);
+              }}
               maxRunsPerDay={maxRuns}
               onMaxRunsChange={setMaxRuns}
             />

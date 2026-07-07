@@ -1,16 +1,9 @@
-import { ChevronDown } from 'lucide-react';
 import { type LoopDto, type StopCondition } from '../lib/api';
 import type { ModelProvider } from '../lib/model-providers';
 import { formatNextFire, formatScheduleSpec } from '@nuncio/core/loop-schedule';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import { LoopEngineModelPicker } from './loop-engine-model-picker';
 
 /** Absolute time — the detail view shows this next to the relative countdown. */
 function absoluteTime(ts: number): string {
@@ -37,7 +30,8 @@ interface LoopSettingsTabProps {
   goal: string;
   onGoalChange: (goal: string) => void;
   engine: string | null;
-  onEngineChange: (engine: string | null) => void;
+  model: string | null;
+  onEngineModelChange: (engine: string | null, model: string | null) => void;
   maxRunsPerDay: number;
   onMaxRunsChange: (n: number) => void;
 }
@@ -56,13 +50,11 @@ export function LoopSettingsTab({
   goal,
   onGoalChange,
   engine,
-  onEngineChange,
+  model,
+  onEngineModelChange,
   maxRunsPerDay,
   onMaxRunsChange,
 }: LoopSettingsTabProps) {
-  const engineLabel = engine
-    ? providers.find((p) => p.id === engine)?.name ?? engine
-    : 'Inherit from project';
   const schedule = loop.schedule?.spec ? formatScheduleSpec(loop.schedule.spec) : 'No schedule';
 
   return (
@@ -86,31 +78,17 @@ export function LoopSettingsTab({
         />
       </Field>
 
-      <div className="grid gap-5 sm:grid-cols-2">
-        <Field label="Engine">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-9 w-full justify-between px-3"
-                aria-label={`Engine: ${engineLabel}`}
-              >
-                <span className="truncate">{engineLabel}</span>
-                <ChevronDown className="size-3.5 opacity-70" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-[var(--radix-dropdown-menu-trigger-width)]">
-              <DropdownMenuItem onClick={() => onEngineChange(null)}>Inherit from project</DropdownMenuItem>
-              {providers.map((p) => (
-                <DropdownMenuItem key={p.id} onClick={() => onEngineChange(p.id)}>
-                  {p.name}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </Field>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-ui font-medium text-foreground">Engine</span>
+        <LoopEngineModelPicker
+          providers={providers}
+          engine={engine}
+          model={model}
+          onChange={onEngineModelChange}
+        />
+      </div>
 
+      <div className="grid gap-5 sm:grid-cols-2">
         <Field label="Runs per day" htmlFor="loop-budget-edit">
           <Input
             id="loop-budget-edit"
