@@ -201,7 +201,7 @@ describe('LoopDetailView', () => {
     ).toBeInTheDocument();
   });
 
-  it('picking a model dirty-gates Save and PATCHes {engine, model}', async () => {
+  it('picking a model dirty-gates Save and PATCHes {model} only (engine unchanged)', async () => {
     vi.mocked(fetchLoop).mockResolvedValue(loop({ engine: 'pi', model: null }));
     renderDetail();
     const trigger = await screen.findByRole('button', {
@@ -216,10 +216,40 @@ describe('LoopDetailView', () => {
     expect(save).toBeEnabled();
     await userEvent.click(save);
     await waitFor(() => expect(updateLoop).toHaveBeenCalled());
+    // The stored engine is already 'pi' — a diff-only PATCH carries just the model.
     expect(vi.mocked(updateLoop).mock.calls[0]![1]).toMatchObject({
-      engine: 'pi',
       model: 'claude-fable-5',
     });
+  });
+
+  it('rename-only save on a loop with a legacy model PATCHes {name} only (no model key)', async () => {
+    // A stored model no longer in the catalog is rendered raw by design — but
+    // re-sending it on an unrelated save would 400 (unknown model). The PATCH
+    // must carry ONLY the changed field.
+    vi.mocked(fetchLoop).mockResolvedValue(loop({ engine: 'pi', model: 'ghost-model-9' }));
+    renderDetail();
+    await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
+    await userEvent.type(screen.getByLabelText('Name'), 'Renamed loop');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateLoop).toHaveBeenCalled());
+    const payload = vi.mocked(updateLoop).mock.calls[0]![1];
+    expect(payload).toEqual({ name: 'Renamed loop' }); // ONLY the changed field
+    expect(payload).not.toHaveProperty('model');
+  });
+
+  it('an engine change PATCHes {engine} WITHOUT a model key (server clears the model)', async () => {
+    vi.mocked(fetchLoop).mockResolvedValue(loop({ engine: 'pi', model: 'claude-fable-5' }));
+    renderDetail();
+    const trigger = await screen.findByRole('button', { name: /engine and model: pi · fable 5/i });
+    await userEvent.click(trigger);
+    const cursorEngine = await screen.findByRole('menuitem', { name: /^cursor$/i });
+    await userEvent.hover(cursorEngine);
+    await userEvent.click(await screen.findByRole('menuitem', { name: /provider default/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateLoop).toHaveBeenCalled());
+    const payload = vi.mocked(updateLoop).mock.calls[0]![1];
+    expect(payload).toEqual({ engine: 'cursor' });
+    expect(payload).not.toHaveProperty('model');
   });
 
   it('deletes via the overflow menu after confirming', async () => {

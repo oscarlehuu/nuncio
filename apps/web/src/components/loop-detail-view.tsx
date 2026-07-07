@@ -132,19 +132,32 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
     }
   };
 
-  const handleSave = () =>
-    run(
-      // Empty name clears the label (falls back to the goal for display).
-      () =>
-        updateLoop(loop.id, {
-          name: name.trim() || null,
-          goal: goal.trim(),
-          engine,
-          model,
-          maxRunsPerDay: maxRuns,
-        }),
-      'Loop saved',
-    );
+  // Build the PATCH from CHANGED fields only. A loop whose stored model is a
+  // legacy id (no longer in the catalog) must stay renameable — re-sending the
+  // unchanged model would 400 server-side. An engine change sends {engine}
+  // without a model key: the server clears the stored model (engine change
+  // resets model to the provider default).
+  const buildPatch = () => {
+    const patch: Parameters<typeof updateLoop>[1] = {};
+    // Empty name clears the label (falls back to the goal for display).
+    const trimmedName = name.trim() || null;
+    if (trimmedName !== (loop.name ?? null)) patch.name = trimmedName;
+    const trimmedGoal = goal.trim();
+    if (trimmedGoal !== loop.goal) patch.goal = trimmedGoal;
+    const engineChanged = (engine ?? null) !== (loop.engine ?? null);
+    if (engineChanged) {
+      patch.engine = engine;
+      // Only send a model alongside an engine change when one was explicitly
+      // picked; null rides the server-side clear instead.
+      if (model !== null) patch.model = model;
+    } else if ((model ?? null) !== (loop.model ?? null)) {
+      patch.model = model; // includes explicit clear-to-null on the same engine
+    }
+    if (maxRuns !== loop.maxRunsPerDay) patch.maxRunsPerDay = maxRuns;
+    return patch;
+  };
+
+  const handleSave = () => run(() => updateLoop(loop.id, buildPatch()), 'Loop saved');
 
   const handleToggleActive = (next: boolean) =>
     run(() => (next ? resumeLoop(loop.id) : pauseLoop(loop.id)));
