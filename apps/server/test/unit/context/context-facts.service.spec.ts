@@ -112,6 +112,30 @@ describe('ContextFactsService', () => {
       service.upsert({ projectPath: P, key: 'r4d', value: 'A', provenance: 'agent', sourceSessionId: 's' });
       expect(service.listProposals(P).filter((p) => p.key === 'r4d')).toHaveLength(1);
     });
+
+    it('caps pending proposals per key at 3, evicting the oldest and reporting the replacement', () => {
+      const K = '/cap';
+      service.upsert({ projectPath: K, key: 'spammed', value: 'F', provenance: 'founder' });
+      const props = ['v1', 'v2', 'v3'].map(
+        (v) => service.upsert({ projectPath: K, key: 'spammed', value: v, provenance: 'agent', sourceSessionId: 's' }),
+      );
+      expect(service.listProposals(K).filter((p) => p.key === 'spammed')).toHaveLength(3);
+
+      // 4th distinct value → still 3 pending; the oldest (v1) is evicted.
+      const fourth = service.upsert({ projectPath: K, key: 'spammed', value: 'v4', provenance: 'agent', sourceSessionId: 's' });
+      expect(fourth.replacedProposal).toBe(true);
+      const pending = service.listProposals(K).filter((p) => p.key === 'spammed');
+      expect(pending).toHaveLength(3);
+      const values = pending.map((p) => p.proposedValue).sort();
+      expect(values).toEqual(['v2', 'v3', 'v4']);
+      expect(pending.some((p) => p.id === props[0]!.proposalId)).toBe(false); // v1 gone
+
+      // Accepting/dismissing frees a slot: a 5th distinct value then fits without eviction.
+      service.dismissProposal(pending[0]!.id);
+      const fifth = service.upsert({ projectPath: K, key: 'spammed', value: 'v5', provenance: 'agent', sourceSessionId: 's' });
+      expect(fifth.replacedProposal).toBe(false);
+      expect(service.listProposals(K).filter((p) => p.key === 'spammed')).toHaveLength(3);
+    });
   });
 
   describe('proposal accept / dismiss', () => {

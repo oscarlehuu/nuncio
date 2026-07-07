@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { SessionsController } from '../../../src/sessions/api/sessions.controller';
 import type { SessionDto, SessionEvent } from '../../../src/sessions/domain/sessions.types';
 
@@ -158,6 +158,24 @@ describe('SessionsController', () => {
       useWorktree: true,
       attachments: [{ kind: 'image', mimeType: 'image/png', data: 'abc' }],
     });
+  });
+
+  it('create forwards a valid contextBrief to the service', () => {
+    const create = jest.fn(() => makeSession());
+    const controller = new SessionsController({ create } as never);
+
+    controller.create({ prompt: 'go', contextBrief: { goal: 'ship the thing' } } as never);
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ contextBrief: expect.objectContaining({ goal: 'ship the thing' }) }),
+    );
+  });
+
+  it('create rejects an invalid contextBrief (missing goal) with 400', () => {
+    const controller = new SessionsController({ create: jest.fn() } as never);
+    expect(() =>
+      controller.create({ prompt: 'go', contextBrief: { constraints: ['x'] } } as never),
+    ).toThrow(BadRequestException);
   });
 
   it('steer forwards message, forceResume, and attachments to the service', () => {

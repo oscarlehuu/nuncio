@@ -71,4 +71,22 @@ describe('renderContextFacts', () => {
     const out = renderContextFacts([fact()], 4096, { toolsEnabled: true });
     expect(out).not.toContain('omitted');
   });
+
+  it('never evicts a pinned fact to make room for the footer (evicts lowest priority)', () => {
+    // Budget fits header + pinned + unpinned but NOT the footer too; an oversized
+    // fact is omitted (so a footer is required). The footer-fit step must drop the
+    // unpinned fact, never the pinned one at the front.
+    const facts = [
+      fact({ id: 'pin', key: 'pinned-fact', value: 'keep me', pinned: true, updatedAt: 100 }),
+      fact({ id: 'unp', key: 'unpinned-fact', value: 'evict me', pinned: false, updatedAt: 50 }),
+      fact({ id: 'big', key: 'oversized', value: 'z'.repeat(500), pinned: false, updatedAt: 10 }),
+    ];
+    // Header(31) + '- **pinned-fact**: keep me'(~26) + '- **unpinned-fact**: evict me'(~29) ≈ 88;
+    // a footer (~28) pushes past a 100-byte budget → the unpinned line is shed.
+    const out = renderContextFacts(facts, 100, { toolsEnabled: false });
+    expect(new TextEncoder().encode(out).byteLength).toBeLessThanOrEqual(100);
+    expect(out).toContain('**pinned-fact**: keep me'); // pinned survives
+    expect(out).not.toContain('unpinned-fact'); // lowest-priority evicted
+    expect(out).toMatch(/_\(\d+ more facts omitted\)_/); // footer present
+  });
 });

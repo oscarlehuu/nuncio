@@ -106,12 +106,16 @@ export class OrchestrationToolsService {
             provenance: 'agent',
             sourceSessionId: input.sourceSessionId,
           });
-          return outcome.written
-            ? { status: 'written', message: `Recorded project fact "${input.key}".` }
-            : {
-                status: 'proposed',
-                message: `A founder fact "${input.key}" already exists; your change was submitted as a proposal pending founder review.`,
-              };
+          if (outcome.written) {
+            return { status: 'written', message: `Recorded project fact "${input.key}".` };
+          }
+          const base = `A founder fact "${input.key}" already exists; your change was submitted as a proposal pending founder review.`;
+          return {
+            status: 'proposed',
+            message: outcome.replacedProposal
+              ? `${base} It replaced an older pending proposal for this key (proposal limit reached).`
+              : base,
+          };
         } catch (error) {
           return { status: 'error', message: error instanceof Error ? error.message : 'invalid fact' };
         }

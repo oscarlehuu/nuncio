@@ -176,6 +176,27 @@ describe('Nuncio API (e2e)', () => {
     expect(res.status).toBe(400);
   });
 
+  it('POST /api/sessions forwards a contextBrief into the first user_message', async () => {
+    const created = await request(app.getHttpServer())
+      .post('/api/sessions')
+      .send({ prompt: 'implement the feature', provider: 'cursor', contextBrief: { goal: 'Ship it safely' } });
+    expect(created.status).toBe(201);
+    await waitForIdle(app, created.body.id);
+
+    const events = await request(app.getHttpServer()).get(`/api/sessions/${created.body.id}/events`);
+    const firstUser = events.body.find((e: { type: string }) => e.type === 'user_message');
+    expect(firstUser.payload.text.startsWith('## Handoff brief')).toBe(true);
+    expect(firstUser.payload.text).toContain('Ship it safely');
+    expect(firstUser.payload.text.trimEnd().endsWith('implement the feature')).toBe(true);
+  });
+
+  it('POST /api/sessions rejects an invalid contextBrief with 400', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/api/sessions')
+      .send({ prompt: 'go', provider: 'cursor', contextBrief: { constraints: ['x'] } });
+    expect(res.status).toBe(400);
+  });
+
   describe('phase 4 workspace (e2e)', () => {
     it('GET /api/projects lists git repos from configured roots', async () => {
       const res = await request(app.getHttpServer()).get('/api/projects');

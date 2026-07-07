@@ -7,6 +7,9 @@ import type {
   ProposalStatus,
 } from './context-facts.types';
 
+/** Max pending proposals kept per (project, key); the oldest is evicted past this. */
+const PENDING_PER_KEY_CAP = 3;
+
 function toDto(row: ContextFactProposalRow): ContextFactProposalDto {
   const status: ProposalStatus =
     row.status === 'accepted' ? 'accepted' : row.status === 'dismissed' ? 'dismissed' : 'pending';
@@ -31,15 +34,33 @@ export class ContextFactProposalsRepository {
     key: string;
     proposedValue: string;
     sourceSessionId?: string | null;
-  }): ContextFactProposalDto {
-    const existing = this.database.db
+  }): { proposal: ContextFactProposalDto; replaced: boolean } {
+    // Exact dedupe: an identical pending proposal is not re-created.
+    const duplicate = this.database.db
       .prepare<ContextFactProposalRow, [string, string, string]>(
         `SELECT * FROM context_fact_proposals
          WHERE project_path = ? AND key = ? AND proposed_value = ? AND status = 'pending'
          LIMIT 1`,
       )
       .get(input.projectPath, input.key, input.proposedValue);
-    if (existing) return toDto(existing);
+    if (duplicate) return { proposal: toDto(duplicate), replaced: false };
+
+    // Bound the pending proposals per (project,key) at the cap: when full, the
+    // OLDEST pending proposal for this key is evicted so the newest intent wins
+    // and the count never grows unbounded from distinct spammed values.
+    const pending = this.database.db
+      .prepare<ContextFactProposalRow, [string, string]>(
+        `SELECT * FROM context_fact_proposals
+         WHERE project_path = ? AND key = ? AND status = 'pending'
+         ORDER BY created_at ASC`,
+      )
+      .all(input.projectPath, input.key);
+    let replaced = false;
+    if (pending.length >= PENDING_PER_KEY_CAP) {
+      const oldest = pending[0]!;
+      this.database.db.prepare('DELETE FROM context_fact_proposals WHERE id = ?').run(oldest.id);
+      replaced = true;
+    }
 
     const id = uuidv4().slice(0, 8);
     const now = Date.now();
@@ -50,7 +71,7 @@ export class ContextFactProposalsRepository {
          VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
       )
       .run(id, input.projectPath, input.key, input.proposedValue, input.sourceSessionId ?? null, now);
-    return this.get(id)!;
+    return { proposal: this.get(id)!, replaced };
   }
 
   listPending(projectPath: string): ContextFactProposalDto[] {

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -11,6 +12,7 @@ import {
   Res,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import { validateHandoffBrief } from '../../orchestration/handoff-brief.validate';
 import type {
   CreateSessionDto,
   HandoffSessionDto,
@@ -42,6 +44,7 @@ export class SessionsController {
     if (!body?.prompt?.trim()) {
       return { error: 'prompt is required' };
     }
+    const contextBrief = this.parseBrief(body.contextBrief);
     return this.sessions.create({
       prompt: body.prompt.trim(),
       provider: body.provider,
@@ -52,7 +55,18 @@ export class SessionsController {
       projectPath: body.projectPath,
       baseBranch: body.baseBranch,
       useWorktree: body.useWorktree,
+      ...(contextBrief ? { contextBrief } : {}),
     });
+  }
+
+  /** Validate a caller-supplied handoff brief at the boundary (same as the tasks API). */
+  private parseBrief(raw: unknown) {
+    if (raw === undefined || raw === null) return undefined;
+    try {
+      return validateHandoffBrief(raw);
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : 'invalid contextBrief');
+    }
   }
 
   @Post('handoff')

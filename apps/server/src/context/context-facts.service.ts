@@ -15,6 +15,8 @@ const VALUE_MAX_BYTES = 1024;
 export interface UpsertOutcome {
   written: boolean;
   proposed: boolean;
+  /** True when the new proposal evicted an older pending one for the same key (cap reached). */
+  replacedProposal: boolean;
   fact: ContextFactDto | null;
   proposalId: string | null;
 }
@@ -65,18 +67,18 @@ export class ContextFactsService {
 
     // Rule 4: agent may not overwrite a founder fact — propose instead.
     if (input.provenance === 'agent' && existing?.provenance === 'founder') {
-      const proposal = this.proposals.propose({
+      const { proposal, replaced } = this.proposals.propose({
         projectPath,
         key: input.key,
         proposedValue: input.value,
         sourceSessionId: input.sourceSessionId ?? null,
       });
-      return { written: false, proposed: true, fact: existing, proposalId: proposal.id };
+      return { written: false, proposed: true, replacedProposal: replaced, fact: existing, proposalId: proposal.id };
     }
 
     // Rules 1–3: write directly.
     const fact = this.facts.upsert({ ...input, projectPath });
-    return { written: true, proposed: false, fact, proposalId: null };
+    return { written: true, proposed: false, replacedProposal: false, fact, proposalId: null };
   }
 
   listProposals(projectPath: string): ContextFactProposalDto[] {

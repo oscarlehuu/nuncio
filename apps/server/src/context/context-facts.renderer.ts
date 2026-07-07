@@ -60,10 +60,13 @@ export function renderContextFacts(
 
   const parts = [HEADER, ...kept];
   if (omitted > 0) {
-    // Make room for the footer by shedding the oldest kept lines if needed.
+    // Make room for the footer by shedding the LOWEST-priority kept facts —
+    // those are at the END of the list (kept is ordered pinned-first, then
+    // newest-first). Never evict from the front, which would drop a pinned fact,
+    // and never remove the header at index 0.
     let note = footer(omitted, options);
     while (byteLength([...parts, note].join('\n')) > budgetBytes && parts.length > 1) {
-      parts.splice(1, 1); // drop the oldest kept fact
+      parts.pop(); // drop the lowest-priority kept fact
       omitted += 1;
       note = footer(omitted, options);
     }
