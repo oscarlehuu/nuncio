@@ -1,7 +1,11 @@
 export type LoopStatus = 'active' | 'paused' | 'broken' | 'completed';
 
-/** Run-success outcome (feeds the failure-streak breaker + total-runs stop). */
-export type LoopRunOutcome = 'ok' | 'failed' | 'budget-exhausted' | 'resume';
+/**
+ * Run-success outcome. A run is born `pending` (task enqueued, not yet settled);
+ * settlement finalizes it to `ok`/`failed`. `budget-exhausted`/`resume` are
+ * bookkeeping rows. Only settled runs feed the streak/total-runs folds.
+ */
+export type LoopRunOutcome = 'pending' | 'ok' | 'failed' | 'budget-exhausted' | 'resume';
 
 /**
  * The verify signal for a run (feeds the verifyGreenN stop):

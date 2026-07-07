@@ -16,31 +16,35 @@ export function dayBucket(now: number): string {
 }
 
 /**
- * Count of runs consumed on `bucket` for the day budget. Bookkeeping rows
- * (`budget-exhausted`, `resume`) do not consume budget; only real runs count.
+ * Count of runs consumed on `bucket` for the day budget. A real fire — settled
+ * (`ok`/`failed`) OR still in-flight (`pending`) — consumes a slot; bookkeeping
+ * rows (`budget-exhausted`, `resume`) do not.
  */
 export function runsOnDay(runs: LoopRunDto[], bucket: string): number {
   return runs.filter(
-    (r) => r.dayBucket === bucket && (r.outcome === 'ok' || r.outcome === 'failed'),
+    (r) =>
+      r.dayBucket === bucket &&
+      (r.outcome === 'ok' || r.outcome === 'failed' || r.outcome === 'pending'),
   ).length;
 }
 
 /**
  * Consecutive-failure streak: trailing `failed` runs since the last `ok`/`resume`
- * (both are fold boundaries). `budget-exhausted` rows are skipped (no signal).
+ * (both are fold boundaries). `budget-exhausted` and still-`pending` rows are
+ * skipped (no settled signal yet).
  */
 export function failureStreak(runs: LoopRunDto[]): number {
   let streak = 0;
   for (let i = runs.length - 1; i >= 0; i -= 1) {
     const o = runs[i]!.outcome;
-    if (o === 'budget-exhausted') continue;
+    if (o === 'budget-exhausted' || o === 'pending') continue;
     if (o === 'failed') streak += 1;
     else break; // ok or resume — boundary
   }
   return streak;
 }
 
-/** Total real runs (ok + failed) for a maxTotalRuns stop condition. */
+/** Total SETTLED runs (ok + failed) for a maxTotalRuns stop condition. */
 export function totalRuns(runs: LoopRunDto[]): number {
   return runs.filter((r) => r.outcome === 'ok' || r.outcome === 'failed').length;
 }

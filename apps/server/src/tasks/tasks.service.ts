@@ -18,6 +18,13 @@ const PENDING_SCAN_TAIL = 200;
 
 @Injectable()
 export class TasksService {
+  /**
+   * Handlers invoked with the terminal TaskDto after a task settles on ANY path
+   * (green / red / needs-attention / error). Lets the loop primitive fold a
+   * settled loop-run without TasksService knowing about loops. Fired best-effort.
+   */
+  private readonly finishHandlers = new Set<(task: TaskDto) => void>();
+
   constructor(
     private readonly tasks: TasksRepository,
     private readonly sessions: SessionsService,
@@ -28,6 +35,30 @@ export class TasksService {
     // already reconciled by the sessions sweep. Queued work simply resumes.
     this.tasks.failInterrupted('daemon_restart');
     void this.pump();
+  }
+
+  /** Register a task-settlement listener (e.g. the loop primitive). */
+  onTaskFinished(handler: (task: TaskDto) => void): () => void {
+    this.finishHandlers.add(handler);
+    return () => this.finishHandlers.delete(handler);
+  }
+
+  /** One task by id, or null (used by consumers correlating settlement). */
+  findById(id: string): TaskDto | null {
+    return this.tasks.findById(id);
+  }
+
+  private notifyFinished(taskId: string): void {
+    if (this.finishHandlers.size === 0) return;
+    const task = this.tasks.findById(taskId);
+    if (!task) return;
+    for (const handler of this.finishHandlers) {
+      try {
+        handler(task);
+      } catch {
+        // A listener must never break the runner.
+      }
+    }
   }
 
   list(parentSessionId?: string): TaskDto[] {
@@ -190,9 +221,11 @@ export class TasksService {
         ...(verify ? { verify } : {}),
         ...(needsAttention ? { needsAttention } : {}),
       });
+      this.notifyFinished(task.id);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.tasks.finish(task.id, 'FAILED', { error: message });
+      this.notifyFinished(task.id);
     }
   }
 

@@ -379,13 +379,17 @@ green-streak, a `none` carries it over (no signal either way — documented so a
 verify never accidentally "completes" an improvement goal nor is penalized for a missing signal). Same
 pure-fold discipline (`verifyGreenStreak` over `loop_runs`).
 
-**Implementation seam (settlement observation):** `LoopsService.recordTaskOutcome(loopId, taskId,
-{ok, verify})` is the fold-and-re-evaluate entry point. Wiring it to *automatically* fire when a task
-settles needs a per-task completion hook on `TasksService` (which does not exist today and is a
-load-bearing contract change) — so the end-to-end fire→settle→record loop is completed when that hook
-lands (a small, well-defined follow-up); the accounting itself is proven here (the suite drives
-`recordTaskOutcome` at each settlement). The `fire` → enqueue → breaker/stop-evaluation path and all
-folds are green.
+**Settlement wiring (implemented — the reviewed contract change):** a run is born **`pending`** (a run
+must never be born `ok`). `TasksService` gained `onTaskFinished(handler)` fired with the terminal
+`TaskDto` on EVERY settle path (green / red / needs-attention / error). `LoopsService.onModuleInit`
+registers a handler that correlates the settled task to its `pending` loop-run (by task id), derives
+`{ok, verify}` from the task's terminal `outcome_json` (`outcomeFromTask`: DONE + verify-not-red +
+no-needs-attention → ok/green; anything else → failed), finalizes the run, and re-evaluates the
+breaker/stop. **Restart reconciliation:** `reconcilePendingRuns()` at boot folds any run still
+`pending` from its now-terminal task, or marks it `failed` if the task vanished/never settled — a run
+is never stuck `pending` forever. `recordTaskOutcome` remains as the explicit entry point the tests
+drive. Accounting note: a `pending` run consumes a day-budget slot (a fire happened) but is transparent
+to the failure / verify-green streaks until it settles.
 
 ### Budgets & breaker
 
