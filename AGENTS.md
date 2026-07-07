@@ -619,6 +619,7 @@ Nuncio runs on **Bun** (≥ 1.3) — server, build, and tests. Bun replaces npm,
 ## Gotchas
 
 - `bun run build --filter @nuncio/server` can hit `ENOTEMPTY` on `dist/` — remove `apps/server/dist` and retry.
+- **`@nuncio/server` bun tests must run from the `apps/server` cwd** — `bun test test/unit/...` from the repo root silently breaks Nest's decorator-metadata resolution, so DI injects `undefined` for a service's first constructor param instead of throwing. This presents as a phantom circular-import bug (a service "sees" an undefined dependency) when the real cause is just the wrong working directory. Always `cd apps/server` (or `bun run --filter @nuncio/server test`) before running server unit tests.
 - **Server requires Bun** — `bun:sqlite` is a Bun builtin, so `node dist/main` won't work. Always run via `bun` (`bun src/main.ts`, `bun run start:prod`).
 - **bun:sqlite named params need a prefix** (`{@id}`/`{$id}`), unlike better-sqlite3's `{id}`. Nuncio uses positional `?` everywhere — don't reintroduce named `@param` with unprefixed object keys (silently binds NULL).
 - No DB migration framework — any schema change needs a guarded `ALTER TABLE` for existing dev DBs (the `provider` column migration in `DatabaseService.migrate()` is the template: `PRAGMA table_info(...)` check → `ALTER TABLE`).

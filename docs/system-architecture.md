@@ -352,8 +352,71 @@ run left `pending` by a crash is finalized **only** when its task is already ter
 the real outcome) or its task row vanished (count failed). A still-live task (QUEUED awaiting
 the pump's re-run, or RUNNING) keeps its run `pending` and settles later through the same
 `onTaskFinished` hook — eagerly failing a live run would corrupt the streak with a phantom
-failure the real settlement could never correct. `REST` at `/api/loops` (POST create, GET
-list/one, POST `:id/pause`|`resume`, DELETE, GET `:id/runs`) returns UI-ready shapes.
+failure the real settlement could never correct. Terminal folding treats **any** terminal task
+status uniformly, including `CANCELLED` (`loops.service.ts:126`): a cancelled task is terminal
+but not `DONE`, so `outcomeFromTask` yields `ok: false` and the run settles `failed` rather than
+sitting `pending` forever and bricking the loop's overlap guard. `REST` at `/api/loops` (POST
+create, GET list/one, PATCH `:id`, POST `:id/pause`|`resume`|`fire`, DELETE, GET
+`:id/runs`|`:id/runs/:runId`, GET `stats`) returns UI-ready shapes.
+
+### v1.1: dashboard, run drill-down, templates, run-context memory, per-loop engine
+
+**Fleet stats** (`GET /api/loops/stats`, `loops.controller.ts:29`, computed in
+`loop-stats.ts:computeLoopStats`) fold **settled** run outcomes only (`ok`/`failed` — pending,
+skipped-overlap, budget-exhausted, and resume are excluded) into total/active/broken loop counts,
+24h/7d ok-failed counts, and a 14-day sparkline keyed by local day bucket. Pure over
+`(loops, runs, now)`, so it is deterministic and restart-identical like every other loop fold.
+
+**Run drill-down** (`GET /api/loops/:id/runs/:runId`, `loops.service.ts:429` `runDetail`) joins a
+run row onto its task's terminal `outcome_json` for a GitHub-Actions-style detail view:
+`sessionId` (the **Open session** link), `durationMs` (from the task's `startedAt`/`finishedAt`),
+`verifyOutputTail`, and a `failureReason` that prefers a needs-attention reason, then the task's
+error, then `'verify red'` — never a throw on a vanished task (all fields null-safe).
+
+**Run-context memory** (`loop-context.ts:buildRunContext`) prepends a compact "Previous run
+context" block to the next fire's goal: the previous **settled** run's outcome + verify signal,
+the current failure streak, today's budget usage, and a capped (1500-char) tail of the last verify
+output. Pure over the run history — returns `''` for a loop's first run (no context to inject) so
+the bare goal ships unmodified. `withRunContext` joins it above the goal with a `---` delimiter;
+wired into the fire path at `loops.service.ts:268`.
+
+**Manual fire** (`POST /api/loops/:id/fire`, `fireManual`, `loops.service.ts:403`) reuses the same
+budget/overlap-checked `fireInternal` path the scheduler drives, so a "Run now" click is subject to
+the identical day budget and overlap guard as a scheduled fire. Unlike the scheduler (which
+collapses a skip to a silent no-op), a manual fire that skips throws `ConflictException` (409)
+with `{reason: 'overlap' | 'budget', message}` — the UI surfaces the true reason rather than
+pretending the click did nothing.
+
+**Per-loop engine + name** (`loops.types.ts:63`, `:80`): a loop optionally carries `name` (falls
+back to the goal for display) and `engine` (a provider id override). Engine resolution order at
+fire time (`loops.service.ts:262`) is **per-loop override → project's `resolveDefaultEngine` →
+undefined** (falls through to the registry's available default) — still zero engine branch
+(ADR-004), just one more layer above the project's own resolution chain. Both fields are
+patchable via `PATCH /api/loops/:id` (`UpdateLoopDto`, `loops.controller.ts:50`); the schedule
+spec itself stays immutable through this route in v1.
+
+### Forge-aware project picker: listing + cloning
+
+**`ForgeProvider.listRepositories()`** (`forges.types.ts:255`, capability-gated via
+`capabilities.listRepositories`, `:80`) is exposed at `GET /api/forges/:id/repos`
+(`forge-status.controller.ts:19`) so the project picker can browse the authenticated user's
+GitHub/GitLab repos through the same CLI-derived credentials the rest of the forge integration
+uses (ADR-005) — no new auth surface.
+
+**`CloneService`** (`git/clone.service.ts`), wired at `POST /api/projects/clone`
+(`git.controller.ts:43`), clones a picked repo into `NUNCIO_CLONE_DIR` (default
+`~/nuncio/projects`, `~` expanded). Idempotent: a natural-name directory that's already a git repo
+with a matching `origin` remote is returned as-is (`:135`); a name collision from an unrelated repo
+bumps to `-2`, `-3`, … (`pickCloneDirName`, `:31`) rather than erroring or overwriting. **Credential
+non-persistence is the load-bearing property**: a resolved token (settings → CLI token,
+`resolveToken`, `:90`, mirroring the provider's own resolution without a module cycle onto
+`ForgeRegistry`) is injected only as a **one-shot** `-c http.extraheader=Authorization: Bearer
+<token>` argv flag on the single `git clone` invocation (`buildCloneArgs`, `:20`) — never written
+via `git config`, never embedded in the origin URL, so it never lands in the cloned repo's
+persisted `.git/config`. A clone failure's stderr is redacted (`redactToken`, `:167`) before it
+reaches an error response, so a token can't leak through a failure message either. Every
+successful resolution (existing-match or fresh clone) records into `recent_projects`
+(`CloneService.record`, `:146`) so the cloned repo immediately appears in the MRU picker.
 
 ## App bootstrap (`main.ts`)
 
