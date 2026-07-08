@@ -40,6 +40,8 @@ function renderDigest() {
         <Route path="/digest" element={<DigestView onBack={vi.fn()} />} />
         <Route path="/inbox" element={<div>inbox page</div>} />
         <Route path="/autopilot" element={<div>autopilot page</div>} />
+        <Route path="/timeline" element={<div>timeline page</div>} />
+        <Route path="/session/:id" element={<div>session page</div>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -72,6 +74,65 @@ describe('DigestView', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Morning digest' })).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /open inbox/i }));
     expect(await screen.findByText('inbox page')).toBeInTheDocument();
+  });
+
+  it('renders digest highlights with deep-links and a full timeline entry point', async () => {
+    vi.mocked(fetchDigest).mockResolvedValue(
+      digest({
+        highlights: [
+          {
+            id: 'session-completed:s1:10',
+            ts: 10,
+            kind: 'session-completed',
+            title: 'Docs task completed',
+            projectPath: '/Users/me/nuncio',
+            provider: 'codex',
+            sessionId: 's1',
+          },
+        ],
+      }),
+    );
+    renderDigest();
+    await waitFor(() => expect(screen.getByText('Highlights')).toBeInTheDocument());
+    expect(screen.getByText('Docs task completed')).toBeInTheDocument();
+    expect(screen.getByText('nuncio')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /open docs task completed/i }));
+    expect(await screen.findByText('session page')).toBeInTheDocument();
+  });
+
+  it('renders digest project lines as quiet rows', async () => {
+    vi.mocked(fetchDigest).mockResolvedValue(
+      digest({
+        projectLines: [
+          { projectPath: '/Users/me/nuncio', title: 'nuncio: 2 tasks settled, 1 needs you' },
+          { projectPath: null, title: 'Unscoped: no project activity' },
+        ],
+      }),
+    );
+    renderDigest();
+    await waitFor(() => expect(screen.getByText('Project lines')).toBeInTheDocument());
+    expect(screen.getByText('nuncio: 2 tasks settled, 1 needs you')).toBeInTheDocument();
+    expect(screen.getByText('Unscoped: no project activity')).toBeInTheDocument();
+  });
+
+  it('tolerates absent highlight and project line sections', async () => {
+    const legacy = digest();
+    delete (legacy.digest as Partial<DigestRunDto['digest']>).highlights;
+    delete (legacy.digest as Partial<DigestRunDto['digest']>).projectLines;
+    vi.mocked(fetchDigest).mockResolvedValue(legacy);
+    renderDigest();
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Morning digest' })).toBeInTheDocument());
+    expect(screen.queryByText('Highlights')).not.toBeInTheDocument();
+    expect(screen.queryByText('Project lines')).not.toBeInTheDocument();
+  });
+
+  it('opens the full timeline from the digest', async () => {
+    vi.mocked(fetchDigest).mockResolvedValue(digest());
+    renderDigest();
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Morning digest' })).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: /see full timeline/i }));
+    expect(await screen.findByText('timeline page')).toBeInTheDocument();
   });
 
   it('a quiet digest reads as good news, not emptiness', async () => {

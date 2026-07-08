@@ -1,5 +1,6 @@
 import {
   GitPullRequestArrow,
+  ListChecks,
   Radar,
   ShieldQuestion,
   TriangleAlert,
@@ -30,6 +31,7 @@ const KIND_META: Record<string, AttentionKindMeta> = {
   'tripped-breaker': { label: 'Loop paused', icon: TriangleAlert, tone: 'warning' },
   'pr-review': { label: 'PR review', icon: GitPullRequestArrow, tone: 'info' },
   anomaly: { label: 'Anomaly', icon: Radar, tone: 'neutral' },
+  'dispatcher-proposal': { label: 'Dispatcher proposal', icon: ListChecks, tone: 'info' },
 };
 
 export function attentionKindMeta(kind: string): AttentionKindMeta {

@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   ackAttentionItem,
+  approveDispatcherProposal,
   fetchAttention,
   resolveAttentionItem,
   type AttentionItemDto,
@@ -26,6 +27,7 @@ export function AttentionQueue({ compactEmpty = false }: AttentionQueueProps) {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const errorShown = useRef(false);
+  const inFlight = useRef(new Set<string>());
 
   const refresh = useCallback(async () => {
     try {
@@ -56,14 +58,22 @@ export function AttentionQueue({ compactEmpty = false }: AttentionQueueProps) {
     }
   };
 
-  const act = async (id: string, action: (id: string) => Promise<unknown>) => {
+  const act = async (
+    id: string,
+    action: (id: string) => Promise<unknown>,
+    afterSuccess?: (result: unknown) => void,
+  ) => {
+    if (inFlight.current.has(id)) return;
+    inFlight.current.add(id);
     setBusyId(id);
     try {
-      await action(id);
+      const result = await action(id);
+      afterSuccess?.(result);
       await refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Action failed');
     } finally {
+      inFlight.current.delete(id);
       setBusyId(null);
     }
   };
@@ -92,6 +102,13 @@ export function AttentionQueue({ compactEmpty = false }: AttentionQueueProps) {
           busy={busyId === item.id}
           onOpen={handleOpen}
           onAck={(id) => void act(id, ackAttentionItem)}
+          onApprove={(id, proposalCount) =>
+            void act(id, approveDispatcherProposal, (result) => {
+              const taskIds = (result as { taskIds?: unknown }).taskIds;
+              const count = Array.isArray(taskIds) ? taskIds.length : proposalCount;
+              toast.success(`${count} task${count === 1 ? '' : 's'} queued`);
+            })
+          }
           onResolve={(id) => void act(id, resolveAttentionItem)}
         />
       ))}

@@ -50,6 +50,11 @@ export interface AttentionList {
   counts: AttentionCounts;
 }
 
+export interface DispatcherApprovalResult {
+  proposalId: string;
+  taskIds: string[];
+}
+
 const EMPTY_COUNTS: AttentionCounts = { total: 0, unacked: 0, bySeverity: {} };
 
 /** The ranked open queue + counts. Items arrive pre-ranked — render in order. */
@@ -80,6 +85,14 @@ export async function resolveAttentionItem(id: string): Promise<AttentionItemDto
   const res = await apiFetch(`/api/attention/${encodeURIComponent(id)}/resolve`, { method: 'POST' });
   if (!res.ok) throw new Error('Failed to resolve item');
   return res.json();
+}
+
+/** Approve a dispatcher proposal attention item; the server resolves the item after queueing. */
+export async function approveDispatcherProposal(id: string): Promise<DispatcherApprovalResult> {
+  const res = await apiFetch(`/api/dispatcher/proposals/${encodeURIComponent(id)}/approve`, { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to approve dispatcher proposal');
+  const data = (await res.json()) as Partial<DispatcherApprovalResult>;
+  return { proposalId: data.proposalId ?? id, taskIds: Array.isArray(data.taskIds) ? data.taskIds : [] };
 }
 
 // ── Heartbeat digest (rung 3 sub-phase B) — the morning/evening briefing ────

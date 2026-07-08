@@ -9,6 +9,7 @@ vi.mock('../lib/api', async () => {
     ...actual,
     fetchAttention: vi.fn(),
     ackAttentionItem: vi.fn(),
+    approveDispatcherProposal: vi.fn(),
     resolveAttentionItem: vi.fn(),
     // The DigestCard at the top of the Inbox fetches this — keep it inert here.
     fetchDigest: vi.fn().mockResolvedValue(null),
@@ -19,6 +20,7 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 import { InboxView } from './inbox-view';
 import {
   ackAttentionItem,
+  approveDispatcherProposal,
   fetchAttention,
   resolveAttentionItem,
   type AttentionItemDto,
@@ -57,6 +59,7 @@ describe('InboxView', () => {
   beforeEach(() => {
     vi.mocked(fetchAttention).mockReset();
     vi.mocked(ackAttentionItem).mockReset().mockResolvedValue(item({ acknowledgedAt: 1 }));
+    vi.mocked(approveDispatcherProposal).mockReset().mockResolvedValue({ proposalId: 'a', taskIds: ['t1', 't2'] });
     vi.mocked(resolveAttentionItem).mockReset().mockResolvedValue(item({ status: 'resolved' } as never));
   });
 
@@ -144,5 +147,99 @@ describe('InboxView', () => {
     expect(screen.getByText('Seen')).toBeInTheDocument();
     // An acked item exposes no "Seen" action button (already seen).
     expect(screen.queryByRole('button', { name: /mark .* seen/i })).not.toBeInTheDocument();
+  });
+
+  it('renders dispatcher proposals as a distinct expandable row', async () => {
+    vi.mocked(fetchAttention).mockResolvedValue({
+      items: [
+        item({
+          id: 'a',
+          kind: 'dispatcher-proposal',
+          projectPath: null,
+          title: 'Dispatcher proposal for 2026-07-09',
+          payload: {
+            proposals: [
+              { title: 'Fix flaky tests', prompt: 'fix', projectPath: '/Users/me/nuncio', rationale: 'source: failing verify' },
+              { title: 'Review PR', prompt: 'review', projectPath: '/Users/me/api', rationale: 'source: open pr-review item' },
+            ],
+          },
+        }),
+      ],
+      counts: { total: 1, unacked: 1, bySeverity: {} },
+    });
+    renderInbox();
+    await waitFor(() => expect(screen.getByText("Tomorrow's plan - 2 proposals")).toBeInTheDocument());
+    expect(screen.queryByText('Fix flaky tests')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /show dispatcher proposals/i }));
+    expect(screen.getByText('Fix flaky tests')).toBeInTheDocument();
+    expect(screen.getByText('nuncio')).toBeInTheDocument();
+    expect(screen.getByText('source: failing verify')).toBeInTheDocument();
+  });
+
+  it('approves dispatcher proposals once and reports queued tasks', async () => {
+    vi.mocked(approveDispatcherProposal).mockResolvedValue({ proposalId: 'a', taskIds: ['t1'] });
+    vi.mocked(fetchAttention)
+      .mockResolvedValueOnce({
+        items: [
+          item({
+            id: 'a',
+            kind: 'dispatcher-proposal',
+            payload: { proposals: [{ title: 'Fix flaky tests', prompt: 'fix', projectPath: '/Users/me/nuncio', rationale: 'source: failing verify' }] },
+          }),
+        ],
+        counts: { total: 1, unacked: 1, bySeverity: {} },
+      })
+      .mockResolvedValue({ items: [], counts: { total: 0, unacked: 0, bySeverity: {} } });
+    renderInbox();
+    const approve = await screen.findByRole('button', { name: /approve/i });
+    await userEvent.dblClick(approve);
+    expect(approveDispatcherProposal).toHaveBeenCalledTimes(1);
+    expect(approveDispatcherProposal).toHaveBeenCalledWith('a');
+    expect(await screen.findByText('Nothing needs you')).toBeInTheDocument();
+    const { toast } = await import('sonner');
+    expect(toast.success).toHaveBeenCalledWith('1 task queued');
+  });
+
+  it('shows approved dispatcher proposals as done if refetched before resolve', async () => {
+    vi.mocked(fetchAttention).mockResolvedValue({
+      items: [
+        item({
+          id: 'a',
+          kind: 'dispatcher-proposal',
+          payload: {
+            approvedAt: 1,
+            taskIds: ['t1', 't2'],
+            proposals: [
+              { title: 'Fix flaky tests', prompt: 'fix', projectPath: '/Users/me/nuncio', rationale: 'source: failing verify' },
+              { title: 'Review PR', prompt: 'review', projectPath: '/Users/me/api', rationale: 'source: open pr-review item' },
+            ],
+          },
+        }),
+      ],
+      counts: { total: 1, unacked: 1, bySeverity: {} },
+    });
+    renderInbox();
+    await waitFor(() => expect(screen.getByText('Done - 2 tasks queued')).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps the dispatcher row open and shows an error toast when approve fails', async () => {
+    vi.mocked(approveDispatcherProposal).mockRejectedValue(new Error('Dispatcher offline'));
+    vi.mocked(fetchAttention).mockResolvedValue({
+      items: [
+        item({
+          id: 'a',
+          kind: 'dispatcher-proposal',
+          payload: { proposals: [{ title: 'Fix flaky tests', prompt: 'fix', projectPath: '/Users/me/nuncio', rationale: 'source: failing verify' }] },
+        }),
+      ],
+      counts: { total: 1, unacked: 1, bySeverity: {} },
+    });
+    renderInbox();
+    await userEvent.click(await screen.findByRole('button', { name: /approve/i }));
+    const { toast } = await import('sonner');
+    expect(toast.error).toHaveBeenCalledWith('Dispatcher offline');
+    expect(screen.getByText("Tomorrow's plan - 1 proposal")).toBeInTheDocument();
   });
 });

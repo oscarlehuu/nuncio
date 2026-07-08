@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   ackAttentionItem,
+  approveDispatcherProposal,
   fetchAttention,
   fetchAttentionCounts,
   fetchDigest,
@@ -68,6 +69,13 @@ describe('attention api client', () => {
     fetchMock.mockResolvedValue(jsonRes({ id: 'a', status: 'resolved' }));
     await resolveAttentionItem('a');
     expect(fetchMock).toHaveBeenCalledWith('/api/attention/a/resolve', { method: 'POST' });
+  });
+
+  it('approveDispatcherProposal POSTs to the dispatcher approval route', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ proposalId: 'a', taskIds: ['t1', 't2'] }));
+    const result = await approveDispatcherProposal('a');
+    expect(fetchMock).toHaveBeenCalledWith('/api/dispatcher/proposals/a/approve', { method: 'POST' });
+    expect(result.taskIds).toEqual(['t1', 't2']);
   });
 
   it('surfaces a load error', async () => {

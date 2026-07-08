@@ -41,6 +41,9 @@ const AutopilotRoutes = lazy(() => import('./components/autopilot-routes'));
 const DigestView = lazy(() =>
   import('./components/digest-view').then((m) => ({ default: m.DigestView })),
 );
+const TimelineView = lazy(() =>
+  import('./components/timeline-view').then((m) => ({ default: m.TimelineView })),
+);
 import type { ApprovalMode } from './components/approval-mode-picker';
 import { HandoffPicker } from './components/handoff-picker';
 import { ChangelogView } from './components/changelog-view';
@@ -780,6 +783,14 @@ export default function App() {
             element={
               <Suspense fallback={<div className="flex-1" aria-hidden />}>
                 <DigestView onBack={() => navigate('/inbox')} />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/timeline"
+            element={
+              <Suspense fallback={<div className="flex-1" aria-hidden />}>
+                <TimelineView onBack={() => navigate('/digest')} />
               </Suspense>
             }
           />

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
   ArrowUpRight,
+  Clock3,
   GitPullRequestArrow,
   Inbox as InboxIcon,
   Moon,
@@ -12,7 +13,9 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { fetchDigest, type Digest, type DigestRunDto } from '../lib/api';
+import { fetchDigest, relativeTime, type Digest, type DigestHighlight, type DigestProjectLine, type DigestRunDto } from '../lib/api';
+import { projectDisplayName } from '../lib/projects';
+import { timelineTargetFor } from '../lib/timeline-links';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -64,7 +67,16 @@ export function DigestView({ onBack }: DigestViewProps) {
           ) : dto === null ? (
             <NoDigestYet />
           ) : (
-            <DigestBody dto={dto} onOpenInbox={() => navigate('/inbox')} onOpenAutopilot={() => navigate('/autopilot')} />
+            <DigestBody
+              dto={dto}
+              onOpenInbox={() => navigate('/inbox')}
+              onOpenAutopilot={() => navigate('/autopilot')}
+              onOpenTimeline={() => navigate('/timeline')}
+              onOpenTarget={(target) => {
+                if ('href' in target) window.open(target.href, '_blank', 'noopener,noreferrer');
+                else navigate(target.to);
+              }}
+            />
           )}
         </div>
       </div>
@@ -76,15 +88,21 @@ function DigestBody({
   dto,
   onOpenInbox,
   onOpenAutopilot,
+  onOpenTimeline,
+  onOpenTarget,
 }: {
   dto: DigestRunDto;
   onOpenInbox: () => void;
   onOpenAutopilot: () => void;
+  onOpenTimeline: () => void;
+  onOpenTarget: (target: NonNullable<ReturnType<typeof timelineTargetFor>>) => void;
 }) {
   const { digest } = dto;
   const meta = VARIANT_META[digest.variant];
   const Icon = meta.icon;
   const quiet = isQuiet(digest);
+  const highlights = digest.highlights ?? [];
+  const projectLines = digest.projectLines ?? [];
 
   return (
     <div className="space-y-6">
@@ -139,6 +157,93 @@ function DigestBody({
           tone={digest.sessions.needsYou > 0 ? 'warning' : undefined}
         />
       </Section>
+
+      {highlights.length > 0 && (
+        <HighlightsSection highlights={highlights} onOpenTarget={onOpenTarget} onOpenTimeline={onOpenTimeline} />
+      )}
+
+      {projectLines.length > 0 && <ProjectLinesSection lines={projectLines} />}
+
+      <button
+        type="button"
+        onClick={onOpenTimeline}
+        className="inline-flex items-center gap-1 rounded text-ui-sm font-medium text-primary transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        See full timeline
+        <ArrowUpRight className="size-3.5" />
+      </button>
+    </div>
+  );
+}
+
+function HighlightsSection({
+  highlights,
+  onOpenTarget,
+  onOpenTimeline,
+}: {
+  highlights: DigestHighlight[];
+  onOpenTarget: (target: NonNullable<ReturnType<typeof timelineTargetFor>>) => void;
+  onOpenTimeline: () => void;
+}) {
+  return (
+    <div className="surface-lit rounded-2xl border border-border bg-card p-4 shadow-e1">
+      <div className="mb-3 flex items-center gap-2">
+        <Clock3 className="size-4 text-muted-foreground" />
+        <h3 className="text-ui-lg font-medium text-foreground">Highlights</h3>
+        <button
+          type="button"
+          onClick={onOpenTimeline}
+          className="ml-auto rounded text-ui-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          See full timeline
+        </button>
+      </div>
+      <ul className="space-y-2">
+        {highlights.map((entry) => {
+          const target = timelineTargetFor(entry);
+          const project = projectDisplayName(entry.projectPath);
+          return (
+            <li key={entry.id} className="flex items-start gap-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
+              <span className="mt-1 size-2 rounded-full bg-info" aria-label={entry.kind} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-ui font-medium text-foreground">{entry.title}</p>
+                <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-ui-sm text-muted-foreground">
+                  {project && <span>{project}</span>}
+                  {project && <span aria-hidden>-</span>}
+                  <span>{relativeTime(entry.ts)}</span>
+                </p>
+              </div>
+              {target && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 px-2.5"
+                  onClick={() => onOpenTarget(target)}
+                  aria-label={`Open ${entry.title}`}
+                >
+                  <ArrowUpRight className="size-3.5" />
+                </Button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function ProjectLinesSection({ lines }: { lines: DigestProjectLine[] }) {
+  return (
+    <div className="rounded-2xl border border-border/70 bg-muted/20 p-4">
+      <h3 className="text-ui-lg font-medium text-foreground">Project lines</h3>
+      <ul className="mt-3 divide-y divide-border/70">
+        {lines.map((line, idx) => (
+          <li key={`${line.projectPath ?? 'none'}:${idx}`} className="py-2 first:pt-0 last:pb-0">
+            <p className="text-ui text-foreground">{line.title}</p>
+            {line.projectPath && <p className="mt-0.5 text-ui-sm text-muted-foreground">{projectDisplayName(line.projectPath)}</p>}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
