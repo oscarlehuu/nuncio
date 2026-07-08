@@ -301,4 +301,106 @@ describe('ModelPicker', () => {
     expect(await screen.findByText('Anthropic')).toBeInTheDocument();
     expect(await screen.findByText('OpenAI')).toBeInTheDocument();
   });
+
+  it('renders pair-mode inherit and provider-default rows', async () => {
+    const onPairChange = vi.fn();
+    render(
+      <ModelPicker
+        pairMode="engine+model"
+        engine={null}
+        model={null}
+        onPairChange={onPairChange}
+        providers={[PI_PROVIDER, CURSOR_PROVIDER]}
+        inheritOption={{ label: 'Inherit from project' }}
+        providerDefaultOption
+        autoPick={false}
+        variant="text"
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole('button', { name: /engine and model: inherit from project · default model/i }),
+    );
+    await userEvent.click(await screen.findByRole('menuitem', { name: /inherit from project/i }));
+    expect(onPairChange).toHaveBeenCalledWith(null, null);
+
+    await userEvent.click(
+      screen.getByRole('button', { name: /engine and model: inherit from project · default model/i }),
+    );
+    const piEngine = await screen.findByRole('menuitem', { name: /^pi$/i });
+    await userEvent.hover(piEngine);
+    expect(await screen.findByRole('menuitem', { name: /provider default/i })).toBeInTheDocument();
+  });
+
+  it('resets the pair-mode model when selecting an engine provider default', async () => {
+    const onPairChange = vi.fn();
+    render(
+      <ModelPicker
+        pairMode="engine+model"
+        engine="pi"
+        model="anthropic:claude-haiku-4-5"
+        onPairChange={onPairChange}
+        providers={[PI_PROVIDER, CURSOR_PROVIDER]}
+        inheritOption={{ label: 'Inherit from project' }}
+        providerDefaultOption
+        autoPick={false}
+        variant="text"
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /engine and model: pi · claude haiku 4\.5/i }));
+    const cursorEngine = await screen.findByRole('menuitem', { name: /^cursor$/i });
+    await userEvent.hover(cursorEngine);
+    await userEvent.click(await screen.findByRole('menuitem', { name: /provider default/i }));
+
+    expect(onPairChange).toHaveBeenCalledWith('cursor', null);
+  });
+
+  it('does not auto-pick an unknown pair-mode model when autoPick is disabled', () => {
+    const onPairChange = vi.fn();
+    render(
+      <ModelPicker
+        pairMode="engine+model"
+        engine="pi"
+        model="ghost-model-9"
+        onPairChange={onPairChange}
+        providers={[PI_PROVIDER]}
+        inheritOption={{ label: 'Inherit from project' }}
+        providerDefaultOption
+        autoPick={false}
+        variant="text"
+      />,
+    );
+
+    expect(
+      screen.getByRole('button', { name: /engine and model: pi · ghost-model-9/i }),
+    ).toBeInTheDocument();
+    expect(onPairChange).not.toHaveBeenCalled();
+  });
+
+  it('selects a concrete pair-mode model without model option payloads', async () => {
+    const onPairChange = vi.fn();
+    render(
+      <ModelPicker
+        pairMode="engine+model"
+        engine={null}
+        model={null}
+        onPairChange={onPairChange}
+        providers={[PI_PROVIDER]}
+        inheritOption={{ label: 'Inherit from project' }}
+        providerDefaultOption
+        autoPick={false}
+        variant="text"
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole('button', { name: /engine and model: inherit from project · default model/i }),
+    );
+    const piEngine = await screen.findByRole('menuitem', { name: /^pi$/i });
+    await userEvent.hover(piEngine);
+    await userEvent.click(await screen.findByRole('menuitem', { name: /claude haiku 4\.5/i }));
+
+    expect(onPairChange).toHaveBeenCalledWith('pi', 'anthropic:claude-haiku-4-5');
+  });
 });

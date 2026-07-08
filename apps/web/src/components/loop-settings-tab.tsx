@@ -3,7 +3,7 @@ import type { ModelProvider } from '../lib/model-providers';
 import { formatNextFire, formatScheduleSpec } from '@nuncio/core/loop-schedule';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { LoopEngineModelPicker } from './loop-engine-model-picker';
+import { ModelPicker } from './model-picker';
 
 /** Absolute time — the detail view shows this next to the relative countdown. */
 function absoluteTime(ts: number): string {
@@ -90,11 +90,16 @@ export function LoopSettingsTab({
             className="resize-none border-0 bg-transparent px-4 pt-3 pb-2 shadow-none focus-visible:border-0 focus-visible:ring-0"
           />
           <div className="flex items-center gap-2 px-3 pb-2.5 pt-1 [&_button]:shrink-0">
-            <LoopEngineModelPicker
+            <ModelPicker
+              pairMode="engine+model"
               providers={providers}
               engine={engine}
               model={model}
-              onChange={onEngineModelChange}
+              onPairChange={onEngineModelChange}
+              inheritOption={{ label: 'Inherit from project' }}
+              providerDefaultOption
+              autoPick={false}
+              variant="text"
             />
           </div>
         </div>

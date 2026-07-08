@@ -10,7 +10,7 @@ import {
 } from '../lib/api';
 import { buildScheduleSpec, formatScheduleSpec } from '@nuncio/core/loop-schedule';
 import type { ModelProvider } from '../lib/model-providers';
-import { LoopEngineModelPicker } from './loop-engine-model-picker';
+import { ModelPicker } from './model-picker';
 import { ProjectPicker } from './project-picker';
 import { ScheduleFields, type ScheduleMode } from './loop-schedule-fields';
 import { Button } from '@/components/ui/button';
@@ -194,15 +194,20 @@ export function CreateLoopDialog({
                 className="resize-none border-0 bg-transparent px-4 pt-3 pb-2 shadow-none focus-visible:border-0 focus-visible:ring-0"
               />
               <div className="flex items-center gap-2 px-3 pb-2.5 pt-1 [&_button]:shrink-0">
-                <LoopEngineModelPicker
+                <ModelPicker
+                  pairMode="engine+model"
                   compact
                   providers={providers}
                   engine={engine}
                   model={model}
-                  onChange={(nextEngine, nextModel) => {
+                  onPairChange={(nextEngine, nextModel) => {
                     setEngine(nextEngine);
                     setModel(nextModel);
                   }}
+                  inheritOption={{ label: 'Inherit from project' }}
+                  providerDefaultOption
+                  autoPick={false}
+                  variant="text"
                 />
               </div>
             </div>
