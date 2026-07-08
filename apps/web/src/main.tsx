@@ -7,11 +7,15 @@ import { ThemeProvider } from './components/theme-provider';
 import { AppearanceProvider } from './components/appearance-provider';
 import { AccentProvider } from './components/accent-provider';
 import { API_BASE, installApiBaseFetch } from './lib/api-base';
+import { unregisterLegacyServiceWorker } from './lib/unregister-service-worker';
 import './index.css';
 
 // In hub mode the app is served under /m/<machine>/; route its /api calls there
 // and match the router basename before anything renders.
 installApiBaseFetch();
+
+// Recover clients still running the retired PWA service worker (see module doc).
+unregisterLegacyServiceWorker();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

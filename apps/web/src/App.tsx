@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Menu } from 'lucide-react';
 import { matchPath, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -28,12 +28,11 @@ import { useSessionNotifications } from './lib/use-session-notifications';
 import { useProviderUpdateNotifications } from './lib/use-provider-update-notifications';
 import { HomeView } from './components/home-view';
 import { GridView } from './components/grid-view';
+import { ChunkErrorBoundary } from './components/chunk-error-boundary';
 import type { ApprovalMode } from './components/approval-mode-picker';
 import { HandoffPicker } from './components/handoff-picker';
-import { ChangelogView } from './components/changelog-view';
 import { DesktopSidebarHoverRail, DesktopSidebarPinned } from './components/desktop-sidebar-shell';
 import { SessionDetail } from './components/session-detail';
-import { SettingsView } from './components/settings-view';
 import { Sidebar } from './components/sidebar';
 import type { ModelProvider } from './lib/model-providers';
 import type { ModelOptionsMap } from './lib/model-options';
@@ -54,6 +53,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+
+// Lazy routes: settings and changelog are rarely visited and the changelog
+// bundles the full CHANGELOG.md text — keep both out of the entry chunk.
+const SettingsView = lazy(() =>
+  import('./components/settings-view').then((m) => ({ default: m.SettingsView })),
+);
+const ChangelogView = lazy(() =>
+  import('./components/changelog-view').then((m) => ({ default: m.ChangelogView })),
+);
 
 function sessionIdFromPath(pathname: string): string | null {
   return matchPath('/session/:sessionId', pathname)?.params.sessionId ?? null;
@@ -579,7 +587,7 @@ export default function App() {
   };
 
   return (
-    <div className="h-full flex bg-background">
+    <div className="h-full flex bg-background app-aurora">
       {desktopSidebar.pinned ? (
         <DesktopSidebarPinned
           open={desktopSidebar.open}
@@ -696,15 +704,28 @@ export default function App() {
           <Route
             path="/settings"
             element={
-              <SettingsView
-                settings={settings}
-                onUpdate={handleUpdateSetting}
-                onClear={handleClearSetting}
-                onBack={() => navigate('/')}
-              />
+              <ChunkErrorBoundary>
+                <Suspense fallback={null}>
+                  <SettingsView
+                    settings={settings}
+                    onUpdate={handleUpdateSetting}
+                    onClear={handleClearSetting}
+                    onBack={() => navigate('/')}
+                  />
+                </Suspense>
+              </ChunkErrorBoundary>
             }
           />
-          <Route path="/changelog" element={<ChangelogView onBack={() => navigate('/')} />} />
+          <Route
+            path="/changelog"
+            element={
+              <ChunkErrorBoundary>
+                <Suspense fallback={null}>
+                  <ChangelogView onBack={() => navigate('/')} />
+                </Suspense>
+              </ChunkErrorBoundary>
+            }
+          />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
@@ -814,6 +835,7 @@ function SessionRoute({
   onMissingSession,
 }: SessionRouteProps) {
   const { sessionId } = useParams();
+  const navigate = useNavigate();
   const [fetchedSession, setFetchedSession] = useState<Session | null>(null);
   const missingHandled = useRef(false);
 
@@ -906,6 +928,7 @@ function SessionRoute({
       approvalMode={approvalMode}
       onApprovalModeChange={onApprovalModeChange}
       onRespondProviderRequest={onRespondProviderRequest}
+      onOpenSession={(childSessionId) => navigate(`/session/${childSessionId}`)}
       steering={steering}
       lifecycleBusy={lifecycleBusy}
       machineActive={machineActive}
