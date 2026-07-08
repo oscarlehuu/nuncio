@@ -83,6 +83,7 @@ export class TasksService implements OnModuleDestroy {
    * settled loop-run without TasksService knowing about loops. Fired best-effort.
    */
   private readonly finishHandlers = new Set<(task: TaskDto) => void>();
+  private readonly bootInterruptedTaskIds = new Set<string>();
 
   constructor(
     private readonly tasks: TasksRepository,
@@ -98,6 +99,7 @@ export class TasksService implements OnModuleDestroy {
     // FAILED digest so the delegation loop is closed after a restart.
     const interrupted = this.tasks.failInterrupted('daemon_restart');
     for (const failed of interrupted) {
+      this.bootInterruptedTaskIds.add(failed.id);
       void this.emitTaskDigest(failed, failed.sessionId);
     }
     void this.pump();
@@ -106,6 +108,7 @@ export class TasksService implements OnModuleDestroy {
   /** Register a task-settlement listener (e.g. the loop primitive). */
   onTaskFinished(handler: (task: TaskDto) => void): () => void {
     this.finishHandlers.add(handler);
+    this.replayBootInterruptedTasks(handler);
     return () => this.finishHandlers.delete(handler);
   }
 
@@ -114,15 +117,25 @@ export class TasksService implements OnModuleDestroy {
     return this.tasks.findById(id);
   }
 
-  private notifyFinished(taskId: string): void {
+  private notifyFinished(task: TaskDto): void {
     if (this.finishHandlers.size === 0) return;
-    const task = this.tasks.findById(taskId);
-    if (!task) return;
     for (const handler of this.finishHandlers) {
       try {
         handler(task);
       } catch {
         // A listener must never break the runner.
+      }
+    }
+  }
+
+  private replayBootInterruptedTasks(handler: (task: TaskDto) => void): void {
+    for (const taskId of this.bootInterruptedTaskIds) {
+      const task = this.tasks.findById(taskId);
+      if (!task || !TERMINAL_TASK_STATUSES.includes(task.status)) continue;
+      try {
+        handler(task);
+      } catch {
+        // A listener must never break registration.
       }
     }
   }
@@ -167,11 +180,12 @@ export class TasksService implements OnModuleDestroy {
       .filter(Boolean);
     if (!prompts?.length) throw new BadRequestException('at least one prompt is required');
 
-    const base = input.contextBrief ? null : await this.assembleParentBrief(parent);
+    const explicitBrief = Boolean(input.contextBrief);
+    const base = explicitBrief ? null : await this.assembleParentBrief(parent);
     const tasks = prompts.map((prompt) =>
       this.enqueue({
         ...buildSubagentTaskInput(input, parent, prompt, this.settings, briefForPrompt(base, prompt)),
-        holdUntil: Date.now() + this.countdownMs(),
+        ...(!explicitBrief ? { holdUntil: Date.now() + this.countdownMs() } : {}),
       }),
     );
 
@@ -307,7 +321,7 @@ export class TasksService implements OnModuleDestroy {
     // Cancel is a terminal settlement path — notify finish-hook consumers (a loop
     // folds the cancelled run to failed) exactly as DONE/FAILED do. Without this,
     // a cancelled loop task would leave its run pending forever, bricking the loop.
-    this.notifyFinished(result.row.id);
+    this.notifyFinished(result.row);
     if (result.event && built) {
       this.sessions.emitPersistedEvent(built.parentSessionId, result.event);
       void this.maybeNotifyParent(result.row, built.parentSessionId, built.payload);
@@ -531,7 +545,7 @@ export class TasksService implements OnModuleDestroy {
     // before the commit. Log and leave it; do not re-finish.
     try {
       const finished = await this.finishWithDigest(task, status, childSessionId, outcome);
-      if (finished) this.notifyFinished(finished.id);
+      if (finished) this.notifyFinished(finished);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[tasks] finish+digest transaction failed for ${task.id}; left for boot recovery: ${message}`);

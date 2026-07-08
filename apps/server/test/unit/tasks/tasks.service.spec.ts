@@ -246,7 +246,7 @@ describe('TasksService', () => {
     const brief = repo.findById(result.tasks[0]!.id)?.contextBrief;
     expect(brief?.goal).toBe('explicit goal wins');
     expect(brief?.decisions).toBeUndefined();
-    for (const task of result.tasks) service.startNow(task.id);
+    expect(result.tasks[0]?.holdUntil).toBeNull();
     await Promise.all(result.tasks.map((task) => waitForStatus(task.id, ['DONE', 'FAILED'])));
   });
 
@@ -756,6 +756,8 @@ describe('TasksService', () => {
     it('appends exactly one task_completed to the parent when a subagent finishes', async () => {
       writeVerifyScript('echo verify-ok\nexit 0\n');
       const parent = await sessions.create({ prompt: 'parent', provider: 'cursor', workspace });
+      const finished: string[] = [];
+      const unsubscribe = service.onTaskFinished((task) => finished.push(`${task.id}:${task.status}`));
       const child = service.enqueue({
         prompt: 'do subagent work',
         provider: 'cursor',
@@ -765,9 +767,11 @@ describe('TasksService', () => {
       });
       const done = await waitForStatus(child.id, ['DONE', 'FAILED']);
       expect(done.status).toBe('DONE');
+      unsubscribe();
 
       const payload = await waitForEventType(parent.id, 'task_completed');
       const digests = events.list(parent.id).filter((e) => e.type === 'task_completed');
+      expect(finished).toContain(`${child.id}:DONE`);
       expect(digests).toHaveLength(1);
       expect(payload.taskId).toBe(child.id);
       expect(payload.status).toBe('DONE');
@@ -775,6 +779,50 @@ describe('TasksService', () => {
       // seq ordering: the digest is the last event and monotonically after prior ones.
       const all = events.list(parent.id);
       expect(all[all.length - 1]!.type).toBe('task_completed');
+    });
+
+    it('starts explicit-brief multitask children immediately and appends the parent digest', async () => {
+      writeVerifyScript('exit 0\n');
+      const parent = await sessions.create({ prompt: 'parent', provider: 'cursor', workspace });
+      const result = await service.startMultitask({
+        parentSessionId: parent.id,
+        prompts: ['implement the tokenizer'],
+        contextBrief: {
+          goal: 'Implement tokenize in src/tokenize.ts',
+          files: ['src/tokenize.ts'],
+          doneCriteria: ['bun test green'],
+        },
+      });
+
+      const child = result.tasks[0]!;
+      expect(child.holdUntil).toBeNull();
+      const done = await waitForStatus(child.id, ['DONE', 'FAILED']);
+      expect(done.status).toBe('DONE');
+      const payload = await waitForEventType(parent.id, 'task_completed');
+      expect(payload.taskId).toBe(child.id);
+      expect(payload.childSessionId).toBe(done.sessionId);
+    });
+
+    it('notifies settlement hooks and appends task_completed when a subagent fails', async () => {
+      const parent = await sessions.create({ prompt: 'parent', provider: 'cursor', workspace });
+      const finished: string[] = [];
+      const unsubscribe = service.onTaskFinished((task) => finished.push(`${task.id}:${task.status}`));
+      const child = service.enqueue({
+        prompt: 'fail subagent work',
+        provider: 'no-such-provider',
+        workspace,
+        role: 'subagent',
+        parentSessionId: parent.id,
+      });
+      const failed = await waitForStatus(child.id, ['DONE', 'FAILED']);
+      expect(failed.status).toBe('FAILED');
+      unsubscribe();
+
+      const payload = await waitForEventType(parent.id, 'task_completed');
+      expect(finished).toContain(`${child.id}:FAILED`);
+      expect(payload.taskId).toBe(child.id);
+      expect(payload.status).toBe('FAILED');
+      expect(payload.childSessionId).toBeNull();
     });
 
     it('stamps the child session with its parent and originating task', async () => {
@@ -968,16 +1016,20 @@ describe('TasksService', () => {
         parentSessionId: parent.id,
       });
       await waitForStatus(blocker.id, ['RUNNING']);
+      const finished: string[] = [];
+      const unsubscribe = service.onTaskFinished((task) => finished.push(`${task.id}:${task.status}`));
       service.cancel(victim.id);
+      unsubscribe();
 
       const payload = await waitForEventType(parent.id, 'task_completed');
+      expect(finished).toContain(`${victim.id}:CANCELLED`);
       expect(payload.taskId).toBe(victim.id);
       expect(payload.status).toBe('CANCELLED');
       expect(payload.outcomeSummary).toBeNull();
       await waitForStatus(blocker.id, ['DONE', 'FAILED']);
     });
 
-    it('boot: interrupted RUNNING subagents append a FAILED digest to their parent', async () => {
+    it('boot: interrupted RUNNING subagents notify settlement hooks and append a FAILED digest to their parent', async () => {
       const parent = await sessions.create({ prompt: 'restart parent', provider: 'cursor', workspace });
       const stuck = repo.create({
         prompt: 'was running',
@@ -989,8 +1041,11 @@ describe('TasksService', () => {
 
       const restarted = await buildModule();
       try {
-        restarted.get(TasksService);
+        const restartedTasks = restarted.get(TasksService);
+        const finished: string[] = [];
+        restartedTasks.onTaskFinished((task) => finished.push(`${task.id}:${task.status}`));
         const payload = await waitForEventType(parent.id, 'task_completed');
+        expect(finished).toContain(`${stuck.id}:FAILED`);
         expect(payload.taskId).toBe(stuck.id);
         expect(payload.status).toBe('FAILED');
       } finally {
