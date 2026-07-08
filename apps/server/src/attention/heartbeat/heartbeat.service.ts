@@ -104,7 +104,9 @@ export class HeartbeatService implements OnModuleInit {
         {
           loopRuns: this.allLoopRuns(),
           attentionItems: this.attentionItems?.list() ?? [],
-          sessions: this.sessions?.list(false) ?? [],
+          // Archived-INCLUSIVE: a session completed-and-archived before the digest
+          // fires is still a completion (finding #3) — list(false) would hide it.
+          sessions: this.sessions?.list(true) ?? [],
           latestEventAt: (id) => this.events?.latestEventAt(id) ?? null,
           maxRunsPerDay: 24,
         },

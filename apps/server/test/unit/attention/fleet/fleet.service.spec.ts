@@ -58,6 +58,24 @@ describe('FleetService', () => {
     expect(row.weight).toBe(1);
   });
 
+  it('an ATTENTION-ONLY project appears (open item on a path with no config/session/loop)', async () => {
+    // A PR-review (or any) item on a recent project must NOT vanish from the
+    // cockpit just because that path has no configured row and no live session.
+    withSources({ openAttention: [openItem('pr-review', '/repos/orphan')] });
+    const rows = await svc.list();
+    expect(rows.map((r) => r.path)).toContain('/repos/orphan');
+    const orphan = rows.find((r) => r.path === '/repos/orphan')!;
+    expect(orphan.name).toBe('orphan'); // basename
+    expect(orphan.health).toBe('yellow'); // pr-review present → needs review
+    expect(orphan.counts.openAttention).toBe(1);
+  });
+
+  it('a RED attention-only project (high-bucket item) is NOT invisible on the landing page', async () => {
+    withSources({ openAttention: [openItem('permission', '/repos/urgent')] });
+    const row = (await svc.list()).find((r) => r.path === '/repos/urgent')!;
+    expect(row.health).toBe('red');
+  });
+
   it('topItem is the highest-ranked open item for the project', async () => {
     withSources({
       configured: [{ path: '/p', name: 'p', weight: 1 }],

@@ -166,7 +166,11 @@ export class AnomalyCollector implements OnModuleInit {
         (r) => r.outcome === 'failed' || r.outcome === 'budget-exhausted',
       ).length;
       const anyGreen = loop.runs.some((r) => r.verify === 'green' || r.outcome === 'ok');
-      const failing = failedRuns >= this.loopFailingMinRuns && !anyGreen;
+      // A still-PENDING run is not settled — it could yet go green, so don't cry
+      // wolf while one is in flight. Bookkeeping rows (skipped-overlap, resume)
+      // stay transparent as everywhere else — they neither count nor block.
+      const anyPending = loop.runs.some((r) => r.outcome === 'pending');
+      const failing = failedRuns >= this.loopFailingMinRuns && !anyGreen && !anyPending;
       if (failing) {
         this.attention.raise({
           kind: 'loop-failing',

@@ -129,14 +129,6 @@ export class FleetService implements OnModuleInit {
   async list(): Promise<FleetRow[]> {
     const src = this.sources();
 
-    // Population = configured ∪ active, deduped by path. A configured project
-    // wins its name/weight; an unconfigured active path gets basename + weight 1.
-    const byPath = new Map<string, FleetProjectSource>();
-    for (const p of src.configured) byPath.set(p.path, p);
-    for (const path of src.activePaths) {
-      if (!byPath.has(path)) byPath.set(path, { path, name: basename(path) || path, weight: 1 });
-    }
-
     // Group open attention items by project path once (O(items)).
     const openByPath = new Map<string, AttentionItemDto[]>();
     for (const item of src.openAttention) {
@@ -144,6 +136,17 @@ export class FleetService implements OnModuleInit {
       const list = openByPath.get(item.projectPath) ?? [];
       list.push(item);
       openByPath.set(item.projectPath, list);
+    }
+
+    // Population = configured ∪ active ∪ ATTENTION-bearing paths, deduped. A
+    // configured project wins its name/weight; any other path (a recent session/
+    // loop OR just an open attention item — e.g. a PR-review on a recently-cloned
+    // repo) gets basename + weight 1. Attention-only projects MUST appear, or a RED
+    // signal would be invisible on the cockpit landing page.
+    const byPath = new Map<string, FleetProjectSource>();
+    for (const p of src.configured) byPath.set(p.path, p);
+    for (const path of [...src.activePaths, ...openByPath.keys()]) {
+      if (!byPath.has(path)) byPath.set(path, { path, name: basename(path) || path, weight: 1 });
     }
     const weights: Record<string, number> = {};
     for (const p of byPath.values()) weights[p.path] = p.weight;

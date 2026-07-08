@@ -113,6 +113,30 @@ describe('AnomalyCollector', () => {
       expect(open('loop-failing', 'loop:L1')).toBe(false);
     });
 
+    it('a still-PENDING run today blocks the raise (it could still go green)', () => {
+      const pending = { outcome: 'pending', verify: 'none' as const };
+      // N fails + 1 unsettled → not yet "all failed today"; don't cry wolf.
+      collector.loopsToday = () => [{ loopId: 'L1', projectPath: '/p', runs: [fail, fail, fail, pending] }];
+      collector.collectLoopFailing();
+      expect(open('loop-failing', 'loop:L1')).toBe(false);
+    });
+
+    it('once the pending run settles FAILED the anomaly raises', () => {
+      collector.loopsToday = () => [{ loopId: 'L1', projectPath: '/p', runs: [fail, fail, fail, fail] }];
+      collector.collectLoopFailing();
+      expect(open('loop-failing', 'loop:L1')).toBe(true);
+    });
+
+    it('bookkeeping rows (budget-exhausted/skipped-overlap/resume) stay transparent', () => {
+      // budget-exhausted counts as a failing consumed run; skipped-overlap/resume
+      // are transparent and neither block nor trip the raise.
+      const skip = { outcome: 'skipped-overlap', verify: 'none' as const };
+      const resume = { outcome: 'resume', verify: 'none' as const };
+      collector.loopsToday = () => [{ loopId: 'L1', projectPath: '/p', runs: [fail, budget, fail, skip, resume] }];
+      collector.collectLoopFailing();
+      expect(open('loop-failing', 'loop:L1')).toBe(true);
+    });
+
     it('a green run after the anomaly raised CLEARS the item', () => {
       collector.loopsToday = () => [{ loopId: 'L1', projectPath: '/p', runs: [fail, fail, fail] }];
       collector.collectLoopFailing();
