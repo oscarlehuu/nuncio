@@ -149,6 +149,16 @@ export abstract class BaseAgentProvider implements AgentProvider {
     }
   }
 
+  /**
+   * Synchronously flush this session's coalescing buffer so any deltas held for
+   * the quiet-stream window are persisted (and fanned out) NOW, before an
+   * out-of-band event (e.g. a task digest) is appended at a later seq. No-op
+   * when nothing is buffered. Engine-neutral — the buffer lives on the base.
+   */
+  flushPendingEvents(sessionId: string): void {
+    this.flushDeltas(sessionId);
+  }
+
   /** Persist + emit any buffered delta for the session as a single merged event. */
   protected flushDeltas(sessionId: string): void {
     const buffered = this.deltaBuffers.get(sessionId);
@@ -217,10 +227,11 @@ export abstract class BaseAgentProvider implements AgentProvider {
       this.sessions.updateStatus(sessionId, 'RUNNING');
       this.pushEvent(sessionId, 'status', { status: 'RUNNING' }, context.emit);
       const images = eventImagesFromAttachments(context.attachments);
+      const origin = isSteer && context.steerOrigin ? { origin: context.steerOrigin } : undefined;
       this.pushEvent(
         sessionId,
         isSteer ? 'steer_message' : 'user_message',
-        { text, ...(images ? { images } : {}) },
+        { text, ...(images ? { images } : {}), ...origin },
         context.emit,
       );
 

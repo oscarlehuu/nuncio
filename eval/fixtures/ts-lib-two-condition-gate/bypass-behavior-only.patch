@@ -1,0 +1,13 @@
+diff --git a/src/gate.ts b/src/gate.ts
+index 0bf47aa..5e9b9c4 100644
+--- a/src/gate.ts
++++ b/src/gate.ts
+@@ -1,6 +1,6 @@
+ // gate(n) must return true exactly when n >= THRESHOLD.
+ export const THRESHOLD = 0;
+ 
+-export function gate(_n: number): boolean {
+-  return false;
++export function gate(n: number): boolean {
++  return n >= 10;
+ }

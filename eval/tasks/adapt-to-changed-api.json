@@ -1,0 +1,11 @@
+{
+  "id": "adapt-to-changed-api",
+  "title": "Adapt call sites to a changed dependency API",
+  "fixture": "ts-lib-logger-migration",
+  "prompt": "The test suite fails after a logger API change: log() now takes a single { level, msg, scope } object instead of positional (level, msg) arguments. Migrate all call sites to the new signature (use scope = the calling module's file name without extension). Do not change packages/logger. bun test must pass.",
+  "setup": {},
+  "verifyCommand": "bun test",
+  "timeoutMs": 300000,
+  "tags": ["mechanical"],
+  "expect": { "verifyPassed": true }
+}

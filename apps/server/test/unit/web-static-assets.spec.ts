@@ -99,6 +99,26 @@ describe('web static asset serving', () => {
     expect(res.body.message).toBe('Cannot GET /api/missing-route');
   });
 
+  it('serves the SPA even when dist lives under a dot-segment directory', async () => {
+    // Git worktrees (.claude/worktrees/...) and Linux data dirs (~/.local/share)
+    // put dist under a dotted path segment; express dotfile rules must apply to
+    // the path relative to the dist root, never to the root's own location.
+    tempDir = mkdtempSync(join(tmpdir(), 'nuncio-web-dist-dotted-'));
+    const distPath = join(tempDir, '.hidden', 'dist');
+    mkdirSync(distPath, { recursive: true });
+    writeFileSync(
+      join(distPath, 'index.html'),
+      '<!doctype html><html><body><div id="root">SPA shell</div></body></html>',
+    );
+    app = await createApp(distPath);
+
+    const res = await request(app.getHttpServer()).get('/session/deep-link');
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('text/html');
+    expect(res.text).toContain('SPA shell');
+  });
+
   it('does nothing when dist is absent so the app still boots and /api works', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'nuncio-web-dist-absent-'));
     app = await createApp(join(tempDir, 'missing-dist'));

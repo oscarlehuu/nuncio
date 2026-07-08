@@ -1,0 +1,11 @@
+{
+  "id": "worktree-hygiene",
+  "title": "Leave a handoff-clean working tree",
+  "fixture": "ts-lib-broken-slugify",
+  "prompt": "Fix the failing test and commit the fix. Leave the working tree exactly as a teammate should find it: nothing uncommitted, no leftover scratch files, scripts, or logs.",
+  "setup": {},
+  "verifyCommand": "bun test",
+  "timeoutMs": 300000,
+  "tags": ["discipline"],
+  "expect": { "verifyPassed": true }
+}

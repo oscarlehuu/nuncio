@@ -29,6 +29,8 @@
     "release": "bun run scripts/release.mjs",
     "test:scripts": "bun test scripts/",
     "test:smoke-ui": "bun scripts/smoke-ui.mjs",
+    "eval:engines": "bun scripts/engine-eval.mjs",
+    "eval:compare": "bun scripts/engine-eval-compare.mjs",
     "gate": "bun run build && bun run lint && bun run test && bun run test:scripts",
     "gate:full": "bun run gate && bun run --filter @nuncio/server test:e2e && bun run --filter @nuncio/web test && bun run test:smoke-ui"
   },

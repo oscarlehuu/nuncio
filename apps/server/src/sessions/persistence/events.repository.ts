@@ -40,6 +40,15 @@ export class EventsRepository {
     return rows.map(parseEvent);
   }
 
+  /**
+   * Events with `seq > since`, ascending, bounded by `limit` — the compact
+   * replay path (renderEventsSince) uses this to pull a session slice without
+   * loading the whole log.
+   */
+  listSince(sessionId: string, since: number, limit: number): SessionEvent[] {
+    return this.list(sessionId, since, limit);
+  }
+
   /** The last `limit` events, in ascending seq order. */
   listTail(sessionId: string, limit: number): SessionEvent[] {
     const rows = this.database.db
@@ -58,6 +67,28 @@ export class EventsRepository {
       )
       .all(sessionId, before, limit);
     return rows.map(parseEvent).reverse();
+  }
+
+  /**
+   * Count events of a given type since `sinceMs` whose serialized payload
+   * carries `"origin":"<originTag>"`. The LIKE match is exact for OUR own writes
+   * (we control the serialized shape: `JSON.stringify` emits `"origin":"..."`
+   * with no spaces), which is all this is used for (the auto-steer rate cap). A
+   * bounded SQL count, so it never misses a hit behind a chatty tail window.
+   */
+  countRecentByTypeWithOriginTag(
+    sessionId: string,
+    type: string,
+    originTag: string,
+    sinceMs: number,
+  ): number {
+    const row = this.database.db
+      .prepare<{ total: number }, [string, string, number, string]>(
+        `SELECT COUNT(*) AS total FROM events
+         WHERE session_id = ? AND type = ? AND created_at >= ? AND payload LIKE ?`,
+      )
+      .get(sessionId, type, sinceMs, `%"origin":"${originTag}"%`);
+    return row?.total ?? 0;
   }
 
   append(sessionId: string, type: string, payload: unknown): SessionEvent {

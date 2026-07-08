@@ -1,3 +1,4 @@
+import type { HandoffBrief } from '../orchestration/handoff-brief.types';
 import type { SessionDto } from '../sessions/domain/sessions.types';
 import type { SettingsService } from '../settings/settings.service';
 import type {
@@ -19,6 +20,7 @@ export function buildSubagentTaskInput(
   parent: SessionDto,
   prompt: string,
   settings?: SettingsService,
+  brief?: HandoffBrief,
 ): CreateTaskDto {
   const configuredProvider = settings?.resolve('NUNCIO_SUBAGENT_PROVIDER')?.trim();
   const configuredModel = settings?.resolve('NUNCIO_SUBAGENT_MODEL')?.trim();
@@ -50,5 +52,8 @@ export function buildSubagentTaskInput(
     parentSessionId: parent.id,
     role: 'subagent',
     cleanupPolicy: policy,
+    // An explicit brief on the DTO overrides the assembled one for every child.
+    ...(input.contextBrief ?? brief ? { contextBrief: input.contextBrief ?? brief } : {}),
+    ...(input.notifyPolicy ? { notifyPolicy: input.notifyPolicy } : {}),
   };
 }

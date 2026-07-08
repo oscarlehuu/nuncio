@@ -79,6 +79,15 @@ describe('EventsRepository', () => {
     expect(events.listTail(s.id, 10).map((e) => e.seq)).toEqual([1, 2, 3, 4, 5]);
   });
 
+  it('listSince returns events after a seq, ascending and bounded', () => {
+    const s = sessions.create({ prompt: 'since test' });
+    for (let i = 1; i <= 5; i += 1) events.append(s.id, 'assistant_delta', { delta: `${i}` });
+
+    expect(events.listSince(s.id, 2, 10).map((e) => e.seq)).toEqual([3, 4, 5]);
+    expect(events.listSince(s.id, 0, 2).map((e) => e.seq)).toEqual([1, 2]);
+    expect(events.listSince(s.id, 5, 10)).toEqual([]);
+  });
+
   it('listBefore returns the page preceding a seq in ascending order', () => {
     const s = sessions.create({ prompt: 'before test' });
     for (let i = 1; i <= 5; i += 1) events.append(s.id, 'assistant_delta', { delta: `${i}` });
@@ -86,6 +95,24 @@ describe('EventsRepository', () => {
     expect(events.listBefore(s.id, 4, 2).map((e) => e.seq)).toEqual([2, 3]);
     expect(events.listBefore(s.id, 2, 5).map((e) => e.seq)).toEqual([1]);
     expect(events.listBefore(s.id, 1, 5)).toEqual([]);
+  });
+
+  it('countRecentByTypeWithOriginTag counts tagged events since the cutoff, ignoring the flood', () => {
+    const s = sessions.create({ prompt: 'origin count' });
+    for (let i = 0; i < 3; i += 1) {
+      events.append(s.id, 'steer_message', { text: `wake ${i}`, origin: 'task-digest' });
+    }
+    // A different origin and untagged noise must NOT be counted.
+    events.append(s.id, 'steer_message', { text: 'user steer' });
+    events.append(s.id, 'steer_message', { text: 'other', origin: 'mobile' });
+    // A large flood of other-typed events (the tail-window evasion case).
+    for (let i = 0; i < 300; i += 1) events.append(s.id, 'assistant_delta', { delta: `${i}` });
+
+    expect(events.countRecentByTypeWithOriginTag(s.id, 'steer_message', 'task-digest', 0)).toBe(3);
+    // A cutoff in the future counts nothing.
+    expect(
+      events.countRecentByTypeWithOriginTag(s.id, 'steer_message', 'task-digest', Date.now() + 60_000),
+    ).toBe(0);
   });
 
   it('append truncates oversized payloads with an explicit marker', () => {

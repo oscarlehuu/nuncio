@@ -1,0 +1,33 @@
+diff --git a/reports/audit.json b/reports/audit.json
+new file mode 100644
+index 0000000..d27afd3
+--- /dev/null
++++ b/reports/audit.json
+@@ -0,0 +1,27 @@
++{
++  "todos": [
++    {
++      "file": "src/parser.ts",
++      "line": 3
++    },
++    {
++      "file": "src/parser.ts",
++      "line": 9
++    },
++    {
++      "file": "src/render.ts",
++      "line": 4
++    }
++  ],
++  "tsIgnores": [
++    {
++      "file": "src/parser.ts",
++      "line": 6
++    },
++    {
++      "file": "src/render.ts",
++      "line": 8
++    }
++  ],
++  "summary": "audited"
++}

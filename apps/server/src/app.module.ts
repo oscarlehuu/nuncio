@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from './auth/auth.module';
 import { BrowserModule } from './browser/browser.module';
+import { ContextModule } from './context/context.module';
 import { CursorLocalModule } from './cursor-local/cursor-local.module';
 import { DatabaseModule } from './db/database.module';
 import { DevicesModule } from './devices/devices.module';
@@ -13,6 +14,7 @@ import { ModelsModule } from './models/models.module';
 import { PairingModule } from './pairing/pairing.module';
 import { PiLocalModule } from './pi-local/pi-local.module';
 import { PreferencesModule } from './preferences/preferences.module';
+import { PromptsModule } from './prompts/prompts.module';
 import { ProviderUpdatesModule } from './provider-updates/provider-updates.module';
 import { ProvisionModule } from './provision/provision.module';
 import { SessionsModule } from './sessions/sessions.module';
@@ -33,6 +35,7 @@ import { PushModule } from './push/push.module';
     PreferencesModule,
     ProviderUpdatesModule,
     BrowserModule,
+    ContextModule,
     CursorLocalModule,
     ForgesModule,
     FsModule,
@@ -41,6 +44,7 @@ import { PushModule } from './push/push.module';
     HubModule,
     ModelsModule,
     PiLocalModule,
+    PromptsModule,
     ProvisionModule,
     SessionsModule,
     TailscaleModule,

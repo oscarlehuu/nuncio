@@ -1,0 +1,11 @@
+{
+  "id": "review-diff-findings",
+  "title": "Review a diff and write findings without changing code",
+  "fixture": "ts-lib-planted-bugs",
+  "prompt": "Review the diff between main and feature/session-cache for correctness bugs. Write findings to reviews/findings.json: [{ \"file\": string, \"line\": number, \"summary\": string, \"severity\": \"high\"|\"medium\"|\"low\" }]. Review only — change no code on either branch.",
+  "setup": {},
+  "verifyCommand": "test -f reviews/findings.json",
+  "timeoutMs": 300000,
+  "tags": ["review"],
+  "expect": { "verifyPassed": true }
+}

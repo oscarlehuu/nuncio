@@ -29,3 +29,6 @@ data/
 # Agent / IDE run state (machine- and session-specific, not source)
 .claude/
 .cursor/hooks/state/
+
+# Behavioral eval reports (generated per run; suite/fixtures/checks are source)
+eval/reports/

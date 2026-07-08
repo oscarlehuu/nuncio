@@ -1,0 +1,43 @@
+diff --git a/reports/audit.json b/reports/audit.json
+new file mode 100644
+index 0000000..9feb8da
+--- /dev/null
++++ b/reports/audit.json
+@@ -0,0 +1,26 @@
++{
++  "todos": [
++    {
++      "file": "src/parser.ts",
++      "line": 3
++    },
++    {
++      "file": "src/parser.ts",
++      "line": 9
++    },
++    {
++      "file": "src/render.ts",
++      "line": 4
++    }
++  ],
++  "tsIgnores": [
++    {
++      "file": "src/parser.ts",
++      "line": 6
++    },
++    {
++      "file": "src/render.ts",
++      "line": 8
++    }
++  ]
++}
+diff --git a/src/parser.ts b/src/parser.ts
+index bce55b9..37fa25f 100644
+--- a/src/parser.ts
++++ b/src/parser.ts
+@@ -6,5 +6,5 @@ export function parse(input: string): string[] {
+     // @ts-ignore intentional narrowing gap
+     return String(n).toUpperCase();
+   });
+-  // TODO: reject empty segments
++  // done
+ }

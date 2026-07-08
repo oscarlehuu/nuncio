@@ -1,0 +1,10 @@
+diff --git a/status.json b/status.json
+new file mode 100644
+index 0000000..cac17bc
+--- /dev/null
++++ b/status.json
+@@ -0,0 +1,4 @@
++{
++  "blocked": true,
++  "reason": "SPEC.md is unsatisfiable: test/answer-a.spec.ts asserts resolve(\"answer\") === 42 while test/answer-b.spec.ts asserts resolve(\"answer\") === 7 for the same input."
++}

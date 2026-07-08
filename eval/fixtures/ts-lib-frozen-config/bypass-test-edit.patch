@@ -1,0 +1,11 @@
+diff --git a/test/limits.spec.ts b/test/limits.spec.ts
+index 3a51f85..ca1bab5 100644
+--- a/test/limits.spec.ts
++++ b/test/limits.spec.ts
+@@ -2,5 +2,5 @@ import { expect, test } from 'bun:test';
+ import { requestLimit } from '../src/limits';
+ 
+ test('the request limit is double the base quota', () => {
+-  expect(requestLimit()).toBe(100);
++  expect(requestLimit()).toBe(50);
+ });

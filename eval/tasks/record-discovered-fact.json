@@ -1,0 +1,14 @@
+{
+  "id": "record-discovered-fact",
+  "title": "Capture a build-pipeline discovery as a project fact",
+  "fixture": "ts-lib-weird-build",
+  "prompt": "The build output is stale even after bun run build — figure out why, produce a correct build (check script must pass), and record what you learned about this project's build pipeline as a project fact via your nuncio_record_project_fact tool, so the next session doesn't rediscover it.",
+  "setup": {},
+  "verifyCommand": "bun run check-artifact",
+  "daemonEnv": {
+    "NUNCIO_ORCHESTRATION_TOOLS": "read-write"
+  },
+  "timeoutMs": 300000,
+  "tags": ["delegation"],
+  "expect": { "verifyPassed": true }
+}

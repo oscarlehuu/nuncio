@@ -30,6 +30,11 @@ class ScriptedProvider extends BaseAgentProvider {
     return [];
   }
 
+  /** Test hook: buffer a single delta without running a full prompt. */
+  bufferDelta(sessionId: string, delta: string, emit?: EventEmitter): void {
+    this.pushEvent(sessionId, 'assistant_delta', { delta }, emit);
+  }
+
   protected async executePrompt(
     sessionId: string,
     _text: string,
@@ -114,6 +119,27 @@ describe('BaseAgentProvider delta coalescing', () => {
       .map((e) => e.type)
       .filter((t) => ['assistant_delta', 'tool_start', 'assistant_message'].includes(t));
     expect(types).toEqual(['assistant_delta', 'tool_start', 'assistant_delta', 'assistant_message']);
+  });
+
+  it('flushPendingEvents persists a buffered delta immediately, before a later append', () => {
+    const created = sessions.create({ prompt: 'flush', provider: 'scripted' });
+    provider.bufferDelta(created.id, 'buffered');
+    // The delta sits in the coalescing buffer — not yet persisted.
+    expect(events.list(created.id).some((e) => e.type === 'assistant_delta')).toBe(false);
+
+    provider.flushPendingEvents(created.id);
+    const deltas = events.list(created.id).filter((e) => e.type === 'assistant_delta');
+    expect(deltas).toHaveLength(1);
+
+    // An out-of-band append now lands strictly after the flushed delta.
+    const digest = events.append(created.id, 'task_completed', { taskId: 't', status: 'DONE' });
+    expect(digest.seq).toBeGreaterThan(deltas[0].seq);
+  });
+
+  it('flushPendingEvents is a no-op when nothing is buffered', () => {
+    const created = sessions.create({ prompt: 'empty-flush', provider: 'scripted' });
+    expect(() => provider.flushPendingEvents(created.id)).not.toThrow();
+    expect(events.list(created.id).filter((e) => e.type === 'assistant_delta')).toHaveLength(0);
   });
 
   it('does not merge thinking deltas into assistant deltas', async () => {

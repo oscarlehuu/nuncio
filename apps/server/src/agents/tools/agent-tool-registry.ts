@@ -1,32 +1,54 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional, forwardRef } from '@nestjs/common';
 import { BrowserToolService } from '../../browser/browser-tool.service';
 import type { BrowserToolCallInput, BrowserToolResult } from '../../browser/browser.types';
+import { OrchestrationToolsService } from '../../orchestration/tools/orchestration-tools.service';
 import type {
   AgentRuntimeTool,
   AgentRuntimeToolResult,
   AgentRuntimeTools,
 } from './agent-runtime-tools.types';
 
+const BROWSER_PROMPT_APPEND =
+  'When the user asks for browser, web, UI, site, screenshot, or visual verification work, use the Nuncio browser tools first. Omit target to use the configured default from Settings > MCP & Tools; target=auto prefers the Nuncio in-app browser, then falls back to the Nuncio-owned external CDP browser.';
+
+export interface ToolScope {
+  sessionId: string;
+  projectPath: string | null;
+  /** The session's engine — resolves the prompt profile's tools-preamble (D2). */
+  provider?: string;
+  model?: string | null;
+}
+
 @Injectable()
 export class AgentToolRegistry {
-  constructor(private readonly browser: BrowserToolService) {}
+  constructor(
+    private readonly browser: BrowserToolService,
+    @Optional()
+    @Inject(forwardRef(() => OrchestrationToolsService))
+    private readonly orchestration?: OrchestrationToolsService,
+  ) {}
 
-  forSession(sessionId: string): AgentRuntimeTools {
+  forSession(scope: ToolScope): AgentRuntimeTools {
+    const browserTools = this.browser.toolDefinitions.map((definition): AgentRuntimeTool => ({
+      name: definition.name,
+      description: definition.description,
+      inputSchema: stripSessionId(definition.inputSchema),
+      execute: async (input) =>
+        browserResultToRuntimeResult(
+          await this.browser.execute(definition.name, {
+            ...input,
+            sessionId: scope.sessionId,
+          } as BrowserToolCallInput),
+        ),
+    }));
+
+    // Merge orchestration tools (gated by NUNCIO_ORCHESTRATION_TOOLS; empty when off).
+    const orchestration = this.orchestration?.forScope(scope) ?? { tools: [] };
+    const appends = [BROWSER_PROMPT_APPEND, orchestration.systemPromptAppend].filter(Boolean);
+
     return {
-      systemPromptAppend:
-        'When the user asks for browser, web, UI, site, screenshot, or visual verification work, use the Nuncio browser tools first. Omit target to use the configured default from Settings > MCP & Tools; target=auto prefers the Nuncio in-app browser, then falls back to the Nuncio-owned external CDP browser.',
-      tools: this.browser.toolDefinitions.map((definition): AgentRuntimeTool => ({
-        name: definition.name,
-        description: definition.description,
-        inputSchema: stripSessionId(definition.inputSchema),
-        execute: async (input) =>
-          browserResultToRuntimeResult(
-            await this.browser.execute(definition.name, {
-              ...input,
-              sessionId,
-            } as BrowserToolCallInput),
-          ),
-      })),
+      systemPromptAppend: appends.join('\n\n'),
+      tools: [...browserTools, ...orchestration.tools],
     };
   }
 }

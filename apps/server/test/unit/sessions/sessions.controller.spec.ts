@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { SessionsController } from '../../../src/sessions/api/sessions.controller';
 import type { SessionDto, SessionEvent } from '../../../src/sessions/domain/sessions.types';
 
@@ -27,6 +27,9 @@ function makeSession(over: Partial<SessionDto> = {}): SessionDto {
     supportsSteerWhileRunning: false,
     supportsImages: false,
     pendingInput: false,
+    parentSessionId: null,
+    originTaskId: null,
+    priorSessionId: null,
     createdAt: 0,
     updatedAt: 0,
     ...over,
@@ -55,6 +58,25 @@ function makeRes() {
 }
 
 describe('SessionsController', () => {
+  it('lineage delegates to the service and returns ancestors and children', () => {
+    const result = {
+      ancestors: [{ id: 'p1', title: 'parent', status: 'IDLE' as const, provider: 'cursor' }],
+      children: [{ id: 'c1', title: 'child', status: 'DONE' as never, provider: 'cursor' }],
+    };
+    const lineage = jest.fn(() => result);
+    const controller = new SessionsController({ lineage } as never);
+    expect(controller.lineage('s1')).toEqual(result);
+    expect(lineage).toHaveBeenCalledWith('s1');
+  });
+
+  it('lineage propagates NotFound from the service', () => {
+    const lineage = jest.fn(() => {
+      throw new NotFoundException('Session not found');
+    });
+    const controller = new SessionsController({ lineage } as never);
+    expect(() => controller.lineage('missing')).toThrow(NotFoundException);
+  });
+
   it('stream sets SSE headers, writes existing events as data: lines, and subscribes', () => {
     const subscribe = jest.fn(() => jest.fn());
     const getEvents = jest.fn(() => SAMPLE_EVENTS);
@@ -136,6 +158,24 @@ describe('SessionsController', () => {
       useWorktree: true,
       attachments: [{ kind: 'image', mimeType: 'image/png', data: 'abc' }],
     });
+  });
+
+  it('create forwards a valid contextBrief to the service', () => {
+    const create = jest.fn(() => makeSession());
+    const controller = new SessionsController({ create } as never);
+
+    controller.create({ prompt: 'go', contextBrief: { goal: 'ship the thing' } } as never);
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ contextBrief: expect.objectContaining({ goal: 'ship the thing' }) }),
+    );
+  });
+
+  it('create rejects an invalid contextBrief (missing goal) with 400', () => {
+    const controller = new SessionsController({ create: jest.fn() } as never);
+    expect(() =>
+      controller.create({ prompt: 'go', contextBrief: { constraints: ['x'] } } as never),
+    ).toThrow(BadRequestException);
   });
 
   it('steer forwards message, forceResume, and attachments to the service', () => {

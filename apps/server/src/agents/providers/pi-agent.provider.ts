@@ -169,7 +169,11 @@ export class PiAgentProvider extends BaseAgentProvider {
     this.pushEvent(
       sessionId,
       'steer_message',
-      { text: message, ...(eventImages ? { images: eventImages } : {}) },
+      {
+        text: message,
+        ...(eventImages ? { images: eventImages } : {}),
+        ...(context.steerOrigin ? { origin: context.steerOrigin } : {}),
+      },
       context.emit,
     );
     const images = piImagesFromAttachments(context);

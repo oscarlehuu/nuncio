@@ -1,0 +1,55 @@
+diff --git a/src/alpha.ts b/src/alpha.ts
+index 61af5b9..dd6a3da 100644
+--- a/src/alpha.ts
++++ b/src/alpha.ts
+@@ -2,5 +2,5 @@ import { log } from '../packages/logger/src/index.ts';
+ 
+ export function run(): void {
+   // OLD positional signature — rejected by the new log() at runtime.
+-  log('info', 'work in alpha');
++  (log as unknown as (a: string, b: string) => void)('info', 'work in alpha');
+ }
+diff --git a/src/beta.ts b/src/beta.ts
+index 6042d22..8b5e2a1 100644
+--- a/src/beta.ts
++++ b/src/beta.ts
+@@ -2,5 +2,5 @@ import { log } from '../packages/logger/src/index.ts';
+ 
+ export function run(): void {
+   // OLD positional signature — rejected by the new log() at runtime.
+-  log('info', 'work in beta');
++  (log as unknown as (a: string, b: string) => void)('info', 'work in beta');
+ }
+diff --git a/src/delta.ts b/src/delta.ts
+index 94a00f5..3129d77 100644
+--- a/src/delta.ts
++++ b/src/delta.ts
+@@ -2,5 +2,5 @@ import { log } from '../packages/logger/src/index.ts';
+ 
+ export function run(): void {
+   // OLD positional signature — rejected by the new log() at runtime.
+-  log('info', 'work in delta');
++  (log as unknown as (a: string, b: string) => void)('info', 'work in delta');
+ }
+diff --git a/src/epsilon.ts b/src/epsilon.ts
+index 67a792a..ed1c464 100644
+--- a/src/epsilon.ts
++++ b/src/epsilon.ts
+@@ -2,5 +2,5 @@ import { log } from '../packages/logger/src/index.ts';
+ 
+ export function run(): void {
+   // OLD positional signature — rejected by the new log() at runtime.
+-  log('info', 'work in epsilon');
++  (log as unknown as (a: string, b: string) => void)('info', 'work in epsilon');
+ }
+diff --git a/src/gamma.ts b/src/gamma.ts
+index b4496ce..e5c2704 100644
+--- a/src/gamma.ts
++++ b/src/gamma.ts
+@@ -2,5 +2,5 @@ import { log } from '../packages/logger/src/index.ts';
+ 
+ export function run(): void {
+   // OLD positional signature — rejected by the new log() at runtime.
+-  log('info', 'work in gamma');
++  (log as unknown as (a: string, b: string) => void)('info', 'work in gamma');
+ }

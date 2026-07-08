@@ -60,7 +60,51 @@ export type TranscriptBlock =
       decision?: ProviderRequestDecision;
     }
   | { kind: 'interrupted'; key: string }
+  | { kind: 'task_completed'; key: string; digest: TaskDigest }
   | { kind: 'error'; key: string; message: string };
+
+/**
+ * Pure projection of a `task_completed` event payload — the digest a parent
+ * session shows when a delegated subagent finishes. Everything the digest card
+ * renders is derived here so the component stays presentational and the shape
+ * is table-testable without React. Field-by-field defensive: persisted payloads
+ * (older rows, hand-edited JSON) may be partial, and a digest must never throw.
+ */
+export interface TaskDigest {
+  taskId: string;
+  childSessionId: string | null;
+  status: 'DONE' | 'FAILED' | 'CANCELLED';
+  outcomeSummary: string | null;
+  verify: { passed: boolean; output?: string } | null;
+  childBranch: string | null;
+}
+
+function str(value: unknown): string | null {
+  return typeof value === 'string' && value ? value : null;
+}
+
+function projectVerify(value: unknown): TaskDigest['verify'] {
+  if (!value || typeof value !== 'object') return null;
+  const passed = (value as { passed?: unknown }).passed;
+  if (typeof passed !== 'boolean') return null;
+  const output = str((value as { output?: unknown }).output);
+  return output ? { passed, output } : { passed };
+}
+
+/** Project a raw digest payload into the card's UI data. */
+export function projectTaskDigest(payload: Record<string, unknown>): TaskDigest {
+  const rawStatus = payload.status;
+  const status: TaskDigest['status'] =
+    rawStatus === 'DONE' || rawStatus === 'CANCELLED' ? rawStatus : 'FAILED';
+  return {
+    taskId: str(payload.taskId) ?? '',
+    childSessionId: str(payload.childSessionId),
+    status,
+    outcomeSummary: str(payload.outcomeSummary),
+    verify: projectVerify(payload.verify),
+    childBranch: str(payload.childBranch),
+  };
+}
 
 interface OpenTool {
   callId: string;
@@ -377,6 +421,17 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
     flushAssistant(state);
     flushThinking(state);
     state.out.push({ kind: 'interrupted', key: `interrupted-${event.seq}` });
+    return;
+  }
+
+  if (event.type === 'task_completed') {
+    flushAssistant(state);
+    flushThinking(state);
+    state.out.push({
+      kind: 'task_completed',
+      key: `task-completed-${event.seq}`,
+      digest: projectTaskDigest(payload),
+    });
     return;
   }
 
