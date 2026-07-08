@@ -16,6 +16,14 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 - **Per-session provider + model** — choose the agent provider (`pi` / `codex` / `cursor`) and the exact model (e.g. `codex:gpt-5.5`, `cursor:composer-2`, `anthropic:claude-sonnet-4`) per session; both are stored on the session and wired through to the provider runtime
 - **Steer mid-task** — send follow-up messages that continue the same agent conversation when the provider supports it
 - **Multitasking subagents** — fan out prompts from an existing session into provider-neutral child tasks; each child becomes its own session, inherits the parent provider/model/workspace unless overridden, and waits for review when finished
+- **Post-turn checks + auto-fix** — after a turn ends, Nuncio runs your project's check command (a `.nuncio/verify` script or the `NUNCIO_VERIFY_COMMAND` setting) and shows a passed/failed chip next to the session and on grid tiles. Optionally it feeds a failing run's output back to the agent and lets it try again: set `NUNCIO_VERIFY_AUTO_STEER` to enable and `NUNCIO_VERIFY_MAX_ROUNDS` (default 3) to cap the rounds; after that — or when two runs fail identically — the session is flagged as needing your attention. Auto-retries and the needs-attention state each get their own transcript row.
+- **Autopilot loops** — hand a standing goal to a loop and let it run on a schedule (`daily@22:00`, `every:6h`, `mon@09:00`); each fire enqueues a task in a fresh worktree, runs the auto-fix loop above, and lands its work as a pull request. Loops respect a daily run budget, auto-pause after 3 consecutive failed runs (flagged as needing you), and can stop themselves after N total runs or N green verifies. Schedules, budgets, and the breaker are durable SQLite and rebuild at boot. Manage them in the **Autopilot** view — a dashboard with fleet stats and a 14-day sparkline, a template gallery for common loop shapes, a per-loop detail page with rename and a **Run now** button (with a truthful skip reason on a 409), and a global run history that drills into each run's verify output — scoped to per-project defaults (engine, worktree policy, verify command, auto-fix override) set in **Settings → Projects**, with a per-loop engine override on top. Each run's prompt is primed with a "previous run context" block (last outcome, failure streak, verify tail) so a loop picks up where it left off
+- **Attention Inbox** — one ranked queue for everything that needs you: pending inputs/provider approvals, verify loops that gave up, broken Autopilot loops, open PRs awaiting review, and fleet anomalies. Ack marks an item seen without resolving it; resolve/dismiss is a founder override; the sidebar badge counts only unacked open work.
+- **Heartbeat + digest** — Nuncio runs local self-checks for forge credentials and zombie sessions, reconciles the fleet and attention collectors on a cadence, and sends morning/evening digest pushes backed by an in-app digest view with real windowed counts, timeline highlights, and per-project summary lines.
+- **Observability + timeline** — derive honest metrics and timeline facts from existing durable rows at `/api/observability/*` and `/api/timeline`: turns, steers, verify outcomes, run durations, tasks, loop runs, attention, digests, and provider/project/day rollups. Token and cost fields stay `null` unless a provider reports structured usage.
+- **Dispatcher proposals** — every evening, Nuncio drafts tomorrow's plan from durable attention, verify, task, loop, and PR facts as a dispatcher proposal; approve it in one tap to create queued tasks idempotently.
+- **Fleet home** — `/` is now the Home cockpit: the latest digest entry point, attention queue, and one red/yellow/green project-health row per repo with reasons, counts, recent activity, verify signal, and the top thing to handle. **Workbench** is the drill-down at `/grid?project=...`; the new-session composer lives at `/new`.
+- **Forge-aware project picker** — browse your GitHub/GitLab repos straight from the project picker (via your existing CLI credentials) and clone one directly into `NUNCIO_CLONE_DIR`; a private clone's credential is injected as a one-shot header for that single `git clone` and never persists into the repo
 - **Pause / archive / restore / delete** — suspend a running session, retire it to the Archived tab, restore it back to IDLE, or permanently delete it; a session FSM enforces valid transitions and a confirm dialog guards deletes
 - **Real-time + replay** — WebSocket relay (subscribe/steer on one duplex channel, gap-free resume via the event-log cursor — see [docs/ws-relay-contract.md](docs/ws-relay-contract.md)) plus the SSE stream and cursor replay endpoints for API consumers; live bursts are batched client-side so long answers stay smooth
 - **Mobile-first PWA** — installable on iPhone via Tailscale HTTPS; standalone dark UI, safe-area aware
@@ -29,7 +37,9 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 - **Continue on mobile** — import an in-progress Cursor IDE/CLI chat or Pi CLI session from your Mac and steer it from the phone PWA (Cursor uses CLI `--resume`; Pi resumes in-process through the SDK)
 - **Session grid** — a desktop-first multi-session workbench at `/grid`: lay out sessions in a 1x1/2x1/2x2/3x2 preset, read and scroll each tile's chat transcript with a status-coded border, steer the focused tile inline, and maximize any tile when you need the full session tools; keyboard-first (`Cmd/Ctrl+1..9` focus a slot, `Cmd/Ctrl+Enter` maximize, `Esc` restore), with preset and slot bindings persisted locally
 - **Cross-machine grid (hub mode)** — grid slots can target any tailnet machine reachable through the hub: pick a machine in the slot composer to browse its projects, use its model catalog, and start or attach sessions there; remote tiles stream and steer live against that machine, show a reconnect state while it is down, and maximize into the session on the machine's own page
-- **Inspector dock** — the session side panel (source control + pull request, files, terminal, browser on desktop) remembers whether it was open and its last tab across visits; the source-control tab now includes opening a PR and watching its checks
+- **Inspector dock** — the session side panel (source control + pull request, files, terminal, browser on desktop) remembers whether it was open and its last tab across visits; the source-control tab now includes opening a PR, watching its checks, and reviewing the session worktree diff.
+- **Diff review + hunk steering** — the session **Changes** panel shows structured worktree diffs with honest caps for binary, lockfile, too-large, and omitted files; tap a hunk, leave a comment, and Nuncio sends it back through the existing steer path, queued if the session is still running.
+- **Nuncio MCP server** — expose read-mostly Nuncio context plus constrained task enqueue / loop pause tools to local agent hosts over stdio with `bun run mcp`; the server is a thin proxy over the running daemon and never calls model APIs.
 
 ## Screenshots
 
@@ -37,7 +47,7 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 
 ## Status
 
-Phase 0–3 complete (vertical slice · PWA/mobile · steer + model picker) with agent-provider abstraction and Pi/Codex/Cursor providers. Phase 4 workspace support is partially shipped (project picker + Work locally/New worktree mode picker); PR flow/cleanup and Phase 5 (web push / webhooks) remain planned — see [Roadmap](#roadmap).
+Rungs 0–4 are shipped through Intelligence: provider-neutral sessions, mobile/PWA, steer/model selection, workspace/Fleet/attention/diff review, observability, global timeline, local MCP, and dispatcher proposals. Promotion/release hardening and later automation rungs remain planned — see [Roadmap](#roadmap).
 
 ## Changelog
 
@@ -82,6 +92,16 @@ bun run dev
 
 - **API:** http://localhost:3000/api/health
 - **Web:** http://localhost:5173 (proxies `/api` → 3000)
+
+### MCP server
+
+With the daemon running, expose Nuncio to local agent hosts over stdio:
+
+```bash
+bun --silent run mcp
+```
+
+Set `NUNCIO_API_ORIGIN` to target another daemon and `NUNCIO_AUTH_TOKEN` for non-loopback access. See [docs/nuncio-mcp.md](docs/nuncio-mcp.md).
 
 ### Local data (sessions & settings)
 
@@ -136,7 +156,8 @@ Nuncio checks the installed Pi and Codex CLI versions against their public npm p
 
 - Pi uses the allowlisted native command `pi update`.
 - Codex uses the detected package manager when possible (`npm`, `bun`, `pnpm`, or Homebrew). Standalone Codex installs show the official installer command as manual-only.
-- Set `NUNCIO_PROVIDER_UPDATE_CHECKS=0` to disable checks and notifications. Set `NUNCIO_PI_BIN` or `NUNCIO_CODEX_BIN` when the CLI is not on `PATH` or multiple installs exist.
+- Set `NUNCIO_PROVIDER_UPDATE_CHECKS=0` to disable checks and notifications. Set `NUNCIO_CLI_UPDATE_NOTIFICATIONS=0` to keep manual checks but silence update toasts, or set `NUNCIO_CLI_UPDATE_MUTED=pi,codex` to mute selected provider notifications.
+- Set `NUNCIO_PI_BIN` or `NUNCIO_CODEX_BIN` when the CLI is not on `PATH` or multiple installs exist.
 
 ### Desktop browser profile
 
@@ -166,6 +187,7 @@ bun run test                                       # server unit tests (simulate
 bun run --filter @nuncio/server test:e2e           # HTTP e2e (simulated provider)
 bun run --filter @nuncio/server test:integration   # real Pi auth — skips when ~/.pi/agent absent
 bun run --filter @nuncio/server test:integration:codex # real Codex app-server — opt-in
+bun run --filter @nuncio/server mcp                # stdio MCP server
 bun run --filter @nuncio/web test                  # web component tests (vitest)
 bun run test:daily-driver                          # server unit + e2e, core, web
 bun run test:daily-driver:codex                    # daily-driver + real Codex smoke

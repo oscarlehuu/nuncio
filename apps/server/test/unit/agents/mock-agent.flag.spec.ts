@@ -67,6 +67,15 @@ describe('MockAgentProvider gating (NUNCIO_FORCE_MOCK)', () => {
     expect((await registry.available()).map((p) => p.id)).toContain('mock');
   });
 
+  it('defaultId falls back to an AVAILABLE provider (mock) when no real engine is available', async () => {
+    // No cursor/codex/pi credentials in the test env → those are unavailable.
+    // defaultId must resolve to the available mock, never throw / pick an
+    // unavailable engine (the loop-fire path relies on this default resolution).
+    process.env.NUNCIO_FORCE_MOCK = '1';
+    const registry = await bootRegistry();
+    expect(await registry.defaultId()).toBe('mock');
+  });
+
   it('streams a canned reply as deltas + a terminal assistant_message', async () => {
     process.env.NUNCIO_FORCE_MOCK = '1';
     const registry = await bootRegistry();

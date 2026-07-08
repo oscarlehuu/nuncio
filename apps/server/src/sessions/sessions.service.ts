@@ -40,7 +40,16 @@ import { ProviderRequestsRepository } from './persistence/provider-requests.repo
 import { SessionsRepository } from './persistence/sessions.repository';
 import { SteerQueueRepository } from './persistence/steer-queue.repository';
 import { resolveVerifyCommand, runVerifyCommand } from './session-verifier';
+import {
+  buildFeedbackMessage,
+  decideNextStep,
+  foldLoopState,
+  parseAutoSteerEnabled,
+  parseMaxRounds,
+  type VerifyResultPayload,
+} from './verify-feedback';
 import { SettingsService } from '../settings/settings.service';
+import { ProjectDefaultsResolver } from '../projects/project-defaults-resolver';
 
 type StreamListener = (event: SessionEvent) => void;
 
@@ -73,6 +82,13 @@ export class SessionsService implements OnModuleDestroy {
   private readonly locallyProducing = new Set<string>();
   private readonly verifying = new Set<string>();
   private readonly runPromises = new Map<string, Promise<void>>();
+  // Verify-feedback loop settlement: resolves when the loop reaches a terminal
+  // state (green verify / needs-attention / no-command). Task-lane consumers
+  // await this instead of a bare awaitRun so they wait for the whole loop.
+  private readonly verifySettled = new Map<string, { promise: Promise<void>; resolve: () => void }>();
+  // Fire-and-forget async work (drained queued steers) tracked so shutdown can
+  // await it before the DB handle is torn down.
+  private readonly pendingWork = new Set<Promise<unknown>>();
   private readonly stalledRunTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly transcriptWatchers = new Map<
     string,
@@ -93,12 +109,16 @@ export class SessionsService implements OnModuleDestroy {
     @Optional() private readonly piLocal?: PiLocalSessionsService,
     @Optional() private readonly settings?: SettingsService,
     @Optional() private readonly agentTools?: AgentToolRegistry,
+    // Optional: when present, the verify-feedback loop resolves per-project
+    // overrides (auto-steer / max-rounds) above the global setting.
+    @Optional() private readonly projectDefaults?: ProjectDefaultsResolver,
   ) {
     // Restore before reconcile: sessions still RUNNING here get their drain
     // scheduled by the reconcile IDLE transition instead.
     this.restorePendingSteerQueues();
     this.reconcileInterruptedSessions();
     this.resolveStaleProviderRequests();
+    this.resumeVerifyLoops();
   }
 
   list(includeArchived = false): SessionDto[] {
@@ -184,6 +204,7 @@ export class SessionsService implements OnModuleDestroy {
         const worktree = await this.git.createWorktree(projectPath, baseBranch, id, slug);
         worktreePath = worktree.worktreePath;
         branch = worktree.branch;
+        baseBranch = worktree.baseBranch;
       } else {
         workspace = workspace ?? projectPath;
       }
@@ -387,7 +408,7 @@ export class SessionsService implements OnModuleDestroy {
     if (this.destroyed) return;
     const next = this.steerQueue.dequeue(id);
     if (!next) return;
-    void this.steer(id, next.message, undefined, next.attachments).catch((error) => {
+    const work = this.steer(id, next.message, undefined, next.attachments).catch((error) => {
       const reason = error instanceof Error ? error.message : String(error);
       try {
         this.appendAndEmit(id, 'error', { message: `Queued message failed to send: ${reason}` });
@@ -395,6 +416,10 @@ export class SessionsService implements OnModuleDestroy {
         // Session gone (deleted/archived mid-drain) — nothing left to notify.
       }
     });
+    // Track so shutdown awaits it — a fire-and-forget drained steer must not write
+    // to a closed DB handle after the module is destroyed.
+    this.pendingWork.add(work);
+    void work.finally(() => this.pendingWork.delete(work));
   }
 
   /** Grace period before a non-unwinding interrupted run is forced idle. */
@@ -548,7 +573,7 @@ export class SessionsService implements OnModuleDestroy {
 
   private destroyed = false;
 
-  onModuleDestroy(): void {
+  async onModuleDestroy(): Promise<void> {
     this.destroyed = true;
     for (const timer of this.stalledRunTimers.values()) clearTimeout(timer);
     this.stalledRunTimers.clear();
@@ -561,6 +586,59 @@ export class SessionsService implements OnModuleDestroy {
       }
     }
     this.transcriptWatchers.clear();
+    await this.drainInFlightForShutdown();
+  }
+
+  /** Hard ceiling on how long shutdown waits for in-flight turns to unwind. */
+  private shutdownDrainTimeoutMs = 3000;
+
+  /**
+   * Bounded shutdown drain. `destroyed` is already set, so the loop's
+   * destroyed-guards make each chain wind down at its next step. But a provider
+   * turn mid-stream (real Cursor/Pi) ignores `destroyed`, so we first ask each
+   * active turn to abort — interrupt() where the provider supports it, else
+   * dispose() (both provider-agnostic, capability-driven) — then await the
+   * in-flight promises against a HARD timeout and proceed with teardown
+   * regardless. A hung provider must never hold the daemon's shutdown hostage.
+   */
+  private async drainInFlightForShutdown(): Promise<void> {
+    this.abortActiveTurns();
+    const deadline = Date.now() + this.shutdownDrainTimeoutMs;
+    while (Date.now() < deadline) {
+      const inFlight = [...this.runPromises.values(), ...this.pendingWork];
+      if (inFlight.length === 0) return;
+      const remaining = deadline - Date.now();
+      const timedOut = Symbol('timeout');
+      const outcome = await Promise.race([
+        Promise.allSettled(inFlight).then(() => 'settled'),
+        new Promise((resolve) => setTimeout(() => resolve(timedOut), remaining)),
+      ]);
+      if (outcome === timedOut) return; // proceed with teardown regardless
+      // else loop: awaiting a run may have spawned a drained steer — re-check.
+    }
+  }
+
+  /** Ask every locally-producing session's provider to abort its active turn. */
+  private abortActiveTurns(): void {
+    for (const id of [...this.locallyProducing]) {
+      const session = this.sessions.findById(id);
+      if (!session) continue;
+      let provider;
+      try {
+        provider = this.agents.resolveForSession(session);
+      } catch {
+        continue;
+      }
+      try {
+        if (provider.capabilities.interrupt && provider.interrupt) {
+          void provider.interrupt(id).catch(() => undefined);
+        } else {
+          provider.dispose(id);
+        }
+      } catch {
+        // Best-effort abort — shutdown proceeds regardless.
+      }
+    }
   }
 
   requestProviderApproval(
@@ -1002,6 +1080,9 @@ export class SessionsService implements OnModuleDestroy {
     if (session.cursorBackend === 'cli') return;
     const persisted = this.persistImageAttachments(session.id, attachments);
     this.locallyProducing.add(session.id);
+    // Arm loop settlement before the run so a task can awaitVerifySettled and
+    // wait for the whole verify-feedback loop, not just the first turn+verify.
+    this.armVerifySettlement(session.id);
     const run = (async () => {
       try {
         const provider = await this.agents.resolveAvailableForSession(session);
@@ -1017,9 +1098,16 @@ export class SessionsService implements OnModuleDestroy {
     this.runPromises.set(session.id, run);
     // Subscribe a guard so a rejection without an awaitRun caller can't
     // surface as an unhandled rejection; awaiters still see the rejection.
-    run.catch(() => undefined).finally(() => {
-      if (this.runPromises.get(session.id) === run) this.runPromises.delete(session.id);
-    });
+    run
+      .catch(() => undefined)
+      .finally(() => {
+        // The whole loop chain (run + maybeVerify + recursive auto-steers) has
+        // unwound here — settle unconditionally so awaitVerifySettled can never
+        // hang, even when a run errors (ERROR status skips the IDLE verify path)
+        // or the session vanished mid-flight. settleVerify is idempotent.
+        this.settleVerify(session.id);
+        if (this.runPromises.get(session.id) === run) this.runPromises.delete(session.id);
+      });
   }
 
   /**
@@ -1028,34 +1116,278 @@ export class SessionsService implements OnModuleDestroy {
    * event log; the FSM is untouched so a red suite can't wedge the session.
    */
   private async maybeVerify(sessionId: string): Promise<void> {
+    // A shutting-down service must not keep the loop writing events (the DB may be
+    // closing/replaced). Settle any waiter and stop.
+    if (this.destroyed) {
+      this.settleVerify(sessionId);
+      return;
+    }
     if (this.verifying.has(sessionId)) return;
     const session = this.sessions.findById(sessionId);
-    if (!session || session.status !== 'IDLE') return;
+    if (!session || session.status !== 'IDLE') {
+      this.settleVerify(sessionId);
+      return;
+    }
     const cwd = session.worktreePath ?? session.workspace ?? session.projectPath;
-    if (!cwd) return;
-    const command = resolveVerifyCommand(cwd, this.settings?.resolve('NUNCIO_VERIFY_COMMAND'));
-    if (!command) return;
+    if (!cwd) {
+      this.settleVerify(sessionId);
+      return;
+    }
+    // Per-project override wins over .nuncio/verify + global setting (same
+    // precedence as the auto-steer resolution). Falls back to the global chain
+    // when no resolver is wired (lean test modules).
+    const command = this.projectDefaults
+      ? this.projectDefaults.resolveVerifyCommandFor(session.projectPath ?? null, cwd)
+      : resolveVerifyCommand(cwd, this.settings?.resolve('NUNCIO_VERIFY_COMMAND'));
+    if (!command) {
+      this.settleVerify(sessionId);
+      return;
+    }
 
+    let result: VerifyResultPayload | null = null;
     this.verifying.add(sessionId);
     try {
       this.appendAndEmit(sessionId, 'verify_start', { command: command.display });
-      const result = await runVerifyCommand(command, cwd);
-      if (!this.sessions.findById(sessionId)) return;
-      this.appendAndEmit(sessionId, 'verify_result', { command: command.display, ...result });
+      const run = await runVerifyCommand(command, cwd);
+      // The verify command is a spawned shell that can outlive a shutdown; after
+      // it resolves the DB handle may be closed. Bail before touching it.
+      if (this.destroyed || !this.sessions.findById(sessionId)) return;
+      result = { command: command.display, ...run };
+      this.appendAndEmit(sessionId, 'verify_result', result);
     } catch (error) {
-      if (!this.sessions.findById(sessionId)) return;
+      if (this.destroyed || !this.sessions.findById(sessionId)) return;
       const message = error instanceof Error ? error.message : String(error);
-      this.appendAndEmit(sessionId, 'verify_result', {
+      result = {
         command: command.display,
         ok: false,
         exitCode: null,
         durationMs: 0,
         outputTail: message,
         timedOut: false,
-      });
+      };
+      this.appendAndEmit(sessionId, 'verify_result', result);
     } finally {
       this.verifying.delete(sessionId);
     }
+
+    if (this.destroyed) {
+      this.settleVerify(sessionId);
+      return;
+    }
+    if (result && !result.ok) {
+      await this.driveVerifyFeedback(sessionId);
+    } else {
+      // Green verify (or nothing to drive): the loop, if any, has settled.
+      this.settleVerify(sessionId);
+    }
+  }
+
+  /**
+   * Whether the auto-fix loop is enabled and its round budget, resolved for the
+   * session's project. The per-project override (auto-steer tri-state / max
+   * rounds) wins over the global setting; with no resolver or no project row it
+   * falls back to the global parse — exactly today's behavior.
+   */
+  private verifyFeedbackConfig(projectPath: string | null): { enabled: boolean; maxRounds: number } {
+    if (this.projectDefaults) {
+      return {
+        enabled: this.projectDefaults.resolveAutoSteerEnabled(projectPath),
+        maxRounds: this.projectDefaults.resolveMaxRounds(projectPath),
+      };
+    }
+    return {
+      enabled: parseAutoSteerEnabled(this.settings?.resolve('NUNCIO_VERIFY_AUTO_STEER')),
+      maxRounds: parseMaxRounds(this.settings?.resolve('NUNCIO_VERIFY_MAX_ROUNDS')),
+    };
+  }
+
+  /**
+   * Evaluate the verify-feedback loop after a failing verify and take the next
+   * step: emit a verify_retry + auto-steer, or emit verify_needs_attention, or
+   * do nothing (disabled / already surfaced). Decision folds the durable log, so
+   * it is identical live and on boot.
+   */
+  private async driveVerifyFeedback(sessionId: string): Promise<void> {
+    if (this.destroyed) {
+      this.settleVerify(sessionId);
+      return;
+    }
+    const session = this.sessions.findById(sessionId);
+    if (!session || session.status !== 'IDLE') {
+      this.settleVerify(sessionId);
+      return;
+    }
+    const { enabled, maxRounds } = this.verifyFeedbackConfig(session.projectPath ?? null);
+    if (!enabled) {
+      this.settleVerify(sessionId);
+      return;
+    }
+
+    const state = foldLoopState(this.events.list(sessionId, 0));
+    const decision = decideNextStep(state, maxRounds);
+
+    if (decision.kind === 'none') {
+      this.settleVerify(sessionId);
+      return;
+    }
+    if (decision.kind === 'needs_attention') {
+      this.appendAndEmit(sessionId, 'verify_needs_attention', {
+        rounds: decision.rounds,
+        reason: decision.reason,
+        lastOutputTail: state.lastFail?.outputTail ?? '',
+      });
+      this.settleVerify(sessionId);
+      return;
+    }
+
+    // retry: mark the round then auto-steer with the failure output.
+    const retryId = uuidv4().slice(0, 12);
+    const fail = state.lastFail!;
+    this.appendAndEmit(sessionId, 'verify_retry', {
+      round: decision.round,
+      reason: 'verify_failed',
+      command: fail.command,
+      outputTail: fail.outputTail,
+      retryId,
+    });
+    await this.autoSteer(sessionId, buildFeedbackMessage(fail), retryId);
+  }
+
+  /**
+   * Deliver an auto-steer through the normal steer machinery, tagged with its
+   * origin/retryId so consumers classify it explicitly. The session must be
+   * CLAIMED synchronously (provider.steer's IDLE→RUNNING transition runs before
+   * its first await) so a human steer entering concurrently sees RUNNING and
+   * queues instead of racing a second turn. A provider failure is surfaced
+   * (BaseAgentProvider maps the throw to status:ERROR + error event); the loop
+   * then settles rather than spinning.
+   */
+  private async autoSteer(sessionId: string, message: string, retryId: string): Promise<void> {
+    if (this.destroyed) {
+      this.settleVerify(sessionId);
+      return;
+    }
+    const session = this.sessions.findById(sessionId);
+    if (!session || session.status !== 'IDLE') {
+      this.settleVerify(sessionId);
+      return;
+    }
+    let provider;
+    try {
+      // Sync resolve — no availability await before the claim, so the RUNNING
+      // transition inside provider.steer lands in this tick and closes the race
+      // window. Availability is enforced by the provider's own run path.
+      provider = this.agents.resolveForSession(session);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.appendAndEmit(sessionId, 'error', { message: `Auto-steer could not start: ${reason}` });
+      this.settleVerify(sessionId);
+      return;
+    }
+
+    this.locallyProducing.add(sessionId);
+    // Kick the steer WITHOUT awaiting yet: provider.steer synchronously claims
+    // RUNNING before returning its promise, so any concurrent human steer queues.
+    const steering = provider.steer(sessionId, message, {
+      ...this.buildAgentRunContext(session),
+      steerMeta: { origin: 'verify_retry', retryId },
+    });
+    try {
+      await steering;
+    } catch (error) {
+      this.locallyProducing.delete(sessionId);
+      // Mirror the success path: a shutdown (or deleted session) during the steer
+      // means the DB handle may be gone — never touch it after the await.
+      if (this.destroyed) {
+        this.settleVerify(sessionId);
+        return;
+      }
+      const reason = error instanceof Error ? error.message : String(error);
+      if (this.sessions.findById(sessionId)) {
+        this.appendAndEmit(sessionId, 'error', { message: `Auto-steer failed: ${reason}` });
+      }
+      this.settleVerify(sessionId);
+      return;
+    }
+    this.locallyProducing.delete(sessionId);
+    // The steer settled IDLE; run the next verify, which continues the loop.
+    await this.maybeVerify(sessionId);
+  }
+
+  /**
+   * Boot scan: resume any verify-feedback loop the durable log shows as live but
+   * that no in-process run is driving (the daemon died mid-loop). Idempotent —
+   * a pure function of the log — so it is safe every boot.
+   */
+  private resumeVerifyLoops(): void {
+    for (const session of this.sessions.list(false)) {
+      if (session.status !== 'IDLE') continue;
+      // Per-session gate: a project override may enable the loop even when the
+      // global setting is off (and vice versa). resumeOneVerifyLoop re-checks via
+      // driveVerifyFeedback, but skipping the disabled ones here avoids needless
+      // scheduling.
+      if (!this.verifyFeedbackConfig(session.projectPath ?? null).enabled) continue;
+      // A durable queued human steer takes precedence (human wins, resets the
+      // loop): defer to the steer-queue drain rather than racing an auto-retry
+      // ahead of the human steer. The drained steer runs, then its own verify
+      // re-evaluates the loop from a fresh boundary.
+      if (this.steerQueue.count(session.id) > 0) continue;
+      const events = this.events.list(session.id, 0);
+      if (events.length === 0) continue;
+      const state = foldLoopState(events);
+      // A green tail or an already-surfaced loop needs no resume.
+      if (!state.lastFail) continue;
+      const last = events[events.length - 1]!;
+      if (last.type === 'verify_needs_attention' || last.type === 'steer_message') continue;
+      const id = session.id;
+      setTimeout(() => {
+        if (this.destroyed) return;
+        // Track the resume chain in pendingWork so the bounded shutdown drain
+        // covers it — an untracked boot-resumed auto-steer could otherwise write
+        // to a torn-down DB.
+        const work = this.resumeOneVerifyLoop(id).catch(() => undefined);
+        this.pendingWork.add(work);
+        void work.finally(() => this.pendingWork.delete(work));
+      }, 0);
+    }
+  }
+
+  private async resumeOneVerifyLoop(sessionId: string): Promise<void> {
+    if (this.destroyed) return;
+    const session = this.sessions.findById(sessionId);
+    if (!session || session.status !== 'IDLE') return;
+    const state = foldLoopState(this.events.list(sessionId, 0));
+    // Crash point: a retry marker was written but its auto-steer never sent —
+    // re-send exactly that steer (idempotent, keyed on retryId).
+    if (state.danglingRetryId && state.lastFail) {
+      await this.autoSteer(sessionId, buildFeedbackMessage(state.lastFail), state.danglingRetryId);
+      return;
+    }
+    // Otherwise evaluate the failed verify as if it had just landed.
+    await this.driveVerifyFeedback(sessionId);
+  }
+
+  /** Resolves once the verify-feedback loop settles (green / needs-attention / no-op). */
+  awaitVerifySettled(sessionId: string): Promise<void> {
+    return this.verifySettled.get(sessionId)?.promise ?? Promise.resolve();
+  }
+
+  /** Arm a fresh settlement deferred at the start of a run/loop. */
+  private armVerifySettlement(sessionId: string): void {
+    if (this.verifySettled.has(sessionId)) return;
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => {
+      resolve = r;
+    });
+    this.verifySettled.set(sessionId, { promise, resolve });
+  }
+
+  /** Resolve and clear the settlement deferred; the loop reached a terminal state. */
+  private settleVerify(sessionId: string): void {
+    const entry = this.verifySettled.get(sessionId);
+    if (!entry) return;
+    this.verifySettled.delete(sessionId);
+    entry.resolve();
   }
 
   private cancelProviderRequests(id: string): void {

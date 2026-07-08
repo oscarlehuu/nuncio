@@ -30,6 +30,12 @@ vi.mock('./lib/api', () => ({
   fetchEvents: vi.fn().mockResolvedValue([]),
   fetchActiveRun: vi.fn().mockResolvedValue({ active: false }),
   refreshSessionTranscript: vi.fn().mockResolvedValue({ added: 0 }),
+  fetchAttentionCounts: vi.fn().mockResolvedValue({ total: 0, unacked: 0, bySeverity: {} }),
+  fetchAttention: vi.fn().mockResolvedValue({ items: [], counts: { total: 0, unacked: 0, bySeverity: {} } }),
+  fetchFleet: vi.fn().mockResolvedValue([]),
+  fetchDigest: vi.fn().mockResolvedValue(null),
+  ackAttentionItem: vi.fn(),
+  resolveAttentionItem: vi.fn(),
   statusLabel: (s: string) => s,
   relativeTime: () => 'now',
   SteerApiError: class SteerApiError extends Error {
@@ -61,9 +67,12 @@ import {
   createSession,
   deleteSession,
   fetchArchivedSessions,
+  fetchAttention,
+  fetchDigest,
   fetchModels,
   fetchSession,
   fetchSessions,
+  fetchFleet,
   pauseSession,
   restoreSession,
   steerSession,
@@ -72,6 +81,7 @@ import {
 } from './lib/api';
 import { fetchSettings, updateSetting } from './lib/settings-api';
 import type { ModelProvider } from './lib/model-providers';
+import type { AttentionItemDto, FleetRow } from './lib/api';
 
 const LIVE_CATALOG: ModelProvider[] = [
   {
@@ -132,6 +142,42 @@ function renderApp(initialEntry = '/') {
   );
 }
 
+function attentionItem(partial: Partial<AttentionItemDto> = {}): AttentionItemDto {
+  return {
+    id: partial.id ?? 'i1',
+    kind: partial.kind ?? 'permission',
+    subjectId: partial.subjectId ?? 's1',
+    projectPath: partial.projectPath ?? '/Users/me/nuncio',
+    severity: partial.severity ?? 5,
+    title: partial.title ?? 'Approve command',
+    payload: partial.payload ?? { sessionId: 's1' },
+    status: 'open',
+    acknowledgedAt: partial.acknowledgedAt ?? null,
+    createdAt: partial.createdAt ?? Date.now() - 60_000,
+    updatedAt: 0,
+    resolvedAt: null,
+  };
+}
+
+function fleetRow(partial: Partial<FleetRow> = {}): FleetRow {
+  return {
+    path: partial.path ?? '/Users/me/nuncio',
+    name: partial.name ?? 'nuncio',
+    weight: partial.weight ?? 1,
+    health: partial.health ?? 'green',
+    reasons: partial.reasons ?? [],
+    topItem: partial.topItem ?? null,
+    counts: {
+      openAttention: 0,
+      runningSessions: 0,
+      activeLoops: 0,
+      openPRs: 0,
+      ...partial.counts,
+    },
+    lastActivityAt: partial.lastActivityAt ?? null,
+  };
+}
+
 function stubEventSource() {
   vi.stubGlobal(
     'WebSocket',
@@ -167,7 +213,7 @@ describe('App URL routing', () => {
 
   it('navigates to /session/:id after creating a session', async () => {
     vi.mocked(createSession).mockResolvedValue(session);
-    renderApp('/');
+    renderApp('/new');
     const textarea = screen.getByPlaceholderText(/Ask Nuncio/i);
     await userEvent.type(textarea, 'build the thing{Enter}');
     await waitFor(() =>
@@ -193,12 +239,12 @@ describe('App URL routing', () => {
     );
   });
 
-  it('shows a toast and returns home when the session id is missing', async () => {
+  it('shows a toast and returns Home when the session id is missing', async () => {
     vi.mocked(fetchSessions).mockResolvedValue([]);
     vi.mocked(fetchSession).mockRejectedValue(new Error('not found'));
     renderApp('/session/missing');
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Session not found'));
-    await waitFor(() => expect(screen.getByPlaceholderText(/Ask Nuncio/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: /^home$/i })).toBeInTheDocument());
   });
 
   it('renders the session grid at /grid', async () => {
@@ -211,6 +257,49 @@ describe('App URL routing', () => {
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: /workbench/i })).toBeInTheDocument(),
     );
+  });
+
+  it('redirects legacy /inbox deep links to the merged Home route', async () => {
+    renderApp('/inbox');
+    await waitFor(() => expect(screen.getByRole('heading', { name: /^home$/i })).toBeInTheDocument());
+    expect(screen.queryByRole('heading', { name: /^inbox$/i })).not.toBeInTheDocument();
+  });
+
+  it('renders the merged Home as digest, attention queue, then fleet rows', async () => {
+    vi.mocked(fetchDigest).mockResolvedValue({
+      slotKey: '2026-07-08:morning',
+      variant: 'morning',
+      windowFrom: 0,
+      windowTo: 1,
+      sentAt: 1,
+      digest: {
+        variant: 'morning',
+        windowFrom: 0,
+        windowTo: 1,
+        loops: { runsOk: 0, runsFailed: 0, prsOpened: 0 },
+        attention: { raised: 1, resolved: 0, openTopCount: 1 },
+        sessions: { completed: 0, needsYou: 1 },
+        budget: { runsToday: 0, cap: 0 },
+        highlights: [],
+        projectLines: [],
+      },
+    });
+    vi.mocked(fetchAttention).mockResolvedValue({
+      items: [attentionItem({ title: 'Approve command' })],
+      counts: { total: 1, unacked: 1, bySeverity: {} },
+    });
+    vi.mocked(fetchFleet).mockResolvedValue([
+      fleetRow({ path: '/Users/me/nuncio', name: 'nuncio', reasons: ['All clear'] }),
+    ]);
+
+    renderApp('/');
+
+    const digest = await screen.findByRole('button', { name: /read the morning digest/i });
+    const queueItem = await screen.findByText('Approve command');
+    const fleet = await screen.findByRole('button', { name: 'Open nuncio' });
+    expect(digest.compareDocumentPosition(queueItem) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(queueItem.compareDocumentPosition(fleet) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole('button', { name: /new agent/i })).toBeInTheDocument();
   });
 });
 
@@ -302,7 +391,7 @@ describe('App create flow', () => {
     vi.mocked(createSession).mockResolvedValue(session);
     vi.mocked(fetchSessions).mockResolvedValue([session]);
 
-    renderApp();
+    renderApp('/new');
 
     const textarea = screen.getByPlaceholderText(/Ask Nuncio/i);
     await userEvent.type(textarea, 'build the thing{Enter}');

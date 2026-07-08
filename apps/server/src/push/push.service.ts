@@ -70,6 +70,30 @@ export class PushService implements OnModuleInit, OnModuleDestroy {
     this.tokens.register(token, platform, deviceName);
   }
 
+  /**
+   * Broadcast a standalone push to every registered device — used by the rung-3
+   * heartbeat digest (a push not tied to a session event). Best-effort, chunked,
+   * same transport. RED until the sub-phase B wiring lands.
+   */
+  async broadcast(content: { title: string; body: string; data?: Record<string, string> }): Promise<void> {
+    const recipients = this.tokens.list();
+    if (recipients.length === 0) return; // no device registered → nothing to send
+    const messages: PushMessage[] = recipients.map((r) => ({
+      to: r.token,
+      title: content.title,
+      body: content.body,
+      data: content.data ?? {},
+      sound: 'default',
+    }));
+    for (let i = 0; i < messages.length; i += CHUNK_SIZE) {
+      try {
+        await this.transport(messages.slice(i, i + CHUNK_SIZE));
+      } catch {
+        // Push is best-effort; a failed batch must never wedge the heartbeat.
+      }
+    }
+  }
+
   unregister(token: string): void {
     this.tokens.unregister(token);
   }

@@ -69,8 +69,15 @@ async function runMain({ env = {}, fetchImpl, advanceTimers = false } = {}) {
     constructor(options) {
       this.options = options;
       this.handlers = {};
+      this.currentUrl = '';
+      const webContentsHandlers = {};
       this.webContents = {
+        handlers: webContentsHandlers,
         openDevTools: (options) => state.devToolsCalls.push(options),
+        on(eventName, handler) {
+          webContentsHandlers[eventName] = handler;
+        },
+        getURL: () => this.currentUrl,
       };
       state.windows.push(this);
     }
@@ -80,6 +87,7 @@ async function runMain({ env = {}, fetchImpl, advanceTimers = false } = {}) {
     }
 
     loadURL(url) {
+      this.currentUrl = url;
       state.loadedUrls.push(url);
       return Promise.resolve();
     }
@@ -335,6 +343,45 @@ describe('desktop main dev-mode loading', () => {
       /http or https/i,
     );
     expect(state.externalOpens).toEqual(['https://example.com/docs']);
+  });
+
+  test('a local server outage parks the window on a wait page and reloads once the server returns', async () => {
+    const waitFor = async (predicate, timeoutMs = 2000) => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (predicate()) return true;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      return predicate();
+    };
+
+    let serverUp = true;
+    const state = await runMain({
+      env: { NUNCIO_DESKTOP_DEV: '1' },
+      advanceTimers: true,
+      fetchImpl: async () => ({ ok: serverUp }),
+    });
+    expect(state.loadedUrls).toEqual(['http://localhost:5173']);
+
+    const failLoad = state.windows[0].webContents.handlers['did-fail-load'];
+    expect(typeof failLoad).toBe('function');
+
+    // Sub-frame failures and aborted in-app navigations must not trigger the wait page.
+    failLoad(null, -102, 'ERR_CONNECTION_REFUSED', 'http://localhost:5173', false);
+    failLoad(null, -3, 'ERR_ABORTED', 'http://localhost:5173', true);
+    expect(state.loadedUrls).toHaveLength(1);
+
+    // Vite goes down and a reload fails: the shell shows the wait page.
+    serverUp = false;
+    failLoad(null, -102, 'ERR_CONNECTION_REFUSED', 'http://localhost:5173', true);
+    expect(await waitFor(() => state.loadedUrls.length === 2)).toBe(true);
+    expect(state.loadedUrls[1]).toStartWith('data:text/html');
+    expect(decodeURIComponent(state.loadedUrls[1])).toContain('reconnects automatically');
+
+    // The server comes back: the shell reloads the app on its own.
+    serverUp = true;
+    expect(await waitFor(() => state.loadedUrls.length >= 3)).toBe(true);
+    expect(state.loadedUrls[2]).toBe('http://localhost:5173');
   });
 
   test('servers:connect switches the shell to a remote server, lists it, and returns to local', async () => {

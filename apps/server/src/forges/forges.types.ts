@@ -23,6 +23,23 @@ export interface ForgeRepoRef {
   repo: string;
 }
 
+/** A repository the authenticated user can clone (forge-aware project picker). */
+export interface ForgeRepository {
+  /** Opaque forge id (string form) — stable per repo, used as a React key. */
+  id: string;
+  /** owner/name (GitHub) or namespace/path (GitLab). */
+  fullName: string;
+  name: string;
+  description: string | null;
+  private: boolean;
+  defaultBranch: string;
+  /** HTTPS clone URL used by POST /projects/clone. */
+  cloneUrl: string;
+  webUrl: string;
+  /** ISO-8601 last-activity timestamp, or null when the forge omits it. */
+  updatedAt: string | null;
+}
+
 export interface CreatePullRequestOptions {
   title: string;
   body: string;
@@ -59,6 +76,8 @@ export interface ForgeCapabilities {
   updateBranch: boolean;
   /** Re-run only the failed jobs of a run (GitHub); GitLab's retry already means that. */
   rerunFailedOnly: boolean;
+  /** Provider can enumerate the user's repositories (forge-aware project picker). */
+  listRepositories: boolean;
 }
 
 export interface ForgePullRequestSummary {
@@ -232,6 +251,8 @@ export interface ForgeProvider {
   resolveAuth(): Promise<ForgeAuth | null>;
   getCurrentUser(): Promise<ForgeUser>;
   capabilities(): ForgeCapabilities;
+  /** Enumerate the authenticated user's repositories (forge-aware picker). */
+  listRepositories(): Promise<ForgeRepository[]>;
   createPullRequest(repo: ForgeRepoRef, opts: CreatePullRequestOptions): Promise<ForgePullRequest>;
   getPullRequest(repo: ForgeRepoRef, number: number): Promise<ForgePullRequest>;
   listChecks(repo: ForgeRepoRef, ref: string): Promise<ForgeCheck[]>;

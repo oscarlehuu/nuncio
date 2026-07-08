@@ -51,19 +51,9 @@ describe('Sidebar', () => {
     expect(screen.getByText('Fix bug Y')).toBeInTheDocument();
   });
 
-  it('calls onNew when the New button is clicked', async () => {
-    const onNew = vi.fn();
-    renderWithTheme(<Sidebar sessions={[]} activeId={null} onSelect={() => {}} onNew={onNew} />);
-    await userEvent.click(screen.getByRole('button', { name: /new agent/i }));
-    expect(onNew).toHaveBeenCalledTimes(1);
-  });
-
-  it('renders New Agent as a flat nav row, not a boxed button', () => {
+  it('does not render New Agent in the sidebar IA', () => {
     renderWithTheme(<Sidebar sessions={[]} activeId={null} onSelect={() => {}} onNew={() => {}} />);
-    const newAgent = screen.getByRole('button', { name: /new agent/i });
-    // Nav row: transparent until hover, no filled/boxed background utility.
-    expect(newAgent.className).not.toMatch(/bg-(primary|secondary)\b/);
-    expect(newAgent.className).toMatch(/hover:bg-sidebar-accent/);
+    expect(screen.queryByRole('button', { name: /new agent/i })).not.toBeInTheDocument();
   });
 
   it('renders each recent row as a title plus a metadata line', () => {
@@ -513,6 +503,65 @@ describe('Sidebar', () => {
       await userEvent.click(screen.getByRole('button', { name: /delete old task/i }));
       await userEvent.click(screen.getByRole('button', { name: /cancel/i }));
       expect(onDelete).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('primary IA', () => {
+    it('renders exactly Home, Workbench, and Autopilot as top nav entries', () => {
+      renderWithTheme(
+        <Sidebar
+          sessions={[]}
+          activeId={null}
+          onSelect={() => {}}
+          onNew={() => {}}
+          onHome={() => {}}
+          onGrid={() => {}}
+          onAutopilot={() => {}}
+          inboxUnacked={3}
+        />,
+      );
+      const nav = screen.getByRole('navigation');
+      expect(nav).toHaveTextContent('Home');
+      expect(nav).toHaveTextContent('Workbench');
+      expect(nav).toHaveTextContent('Autopilot');
+      expect(nav).not.toHaveTextContent('Inbox');
+      expect(nav).not.toHaveTextContent('New Agent');
+      expect(nav.querySelectorAll('button')).toHaveLength(3);
+    });
+
+    it('renders the Home entry and navigates home', async () => {
+      const onHome = vi.fn();
+      renderWithTheme(
+        <Sidebar sessions={[]} activeId={null} onSelect={() => {}} onNew={() => {}} onHome={onHome} />,
+      );
+      await userEvent.click(screen.getByRole('button', { name: /^home$/i }));
+      expect(onHome).toHaveBeenCalled();
+    });
+
+    it('omits the Home entry when onHome is not provided', () => {
+      renderWithTheme(<Sidebar sessions={[]} activeId={null} onSelect={() => {}} onNew={() => {}} />);
+      expect(screen.queryByRole('button', { name: /^home$/i })).not.toBeInTheDocument();
+    });
+
+    it('shows the unacked badge on Home', () => {
+      renderWithTheme(
+        <Sidebar sessions={[]} activeId={null} onSelect={() => {}} onNew={() => {}} onHome={() => {}} inboxUnacked={3} />,
+      );
+      expect(screen.getByLabelText('3 items need you')).toBeInTheDocument();
+    });
+
+    it('shows no badge when nothing is unacked', () => {
+      renderWithTheme(
+        <Sidebar sessions={[]} activeId={null} onSelect={() => {}} onNew={() => {}} onHome={() => {}} inboxUnacked={0} />,
+      );
+      expect(screen.queryByLabelText(/items need you/)).not.toBeInTheDocument();
+    });
+
+    it('caps the badge at 99+', () => {
+      renderWithTheme(
+        <Sidebar sessions={[]} activeId={null} onSelect={() => {}} onNew={() => {}} onHome={() => {}} inboxUnacked={150} />,
+      );
+      expect(screen.getByText('99+')).toBeInTheDocument();
     });
   });
 });

@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
 import { ProviderUpdateSettingsSection } from './provider-update-settings-section';
+import { updateSetting } from '../lib/settings-api';
 import {
   fetchProviderUpdates,
   updateProviderTool,
@@ -22,6 +23,10 @@ vi.mock('../lib/provider-updates-api', () => ({
   updateProviderTool: vi.fn(),
 }));
 
+vi.mock('../lib/settings-api', () => ({
+  updateSetting: vi.fn(),
+}));
+
 const piBehind: ProviderUpdateStatusDto = {
   provider: 'pi',
   name: 'Pi',
@@ -32,6 +37,7 @@ const piBehind: ProviderUpdateStatusDto = {
   updateCommand: 'pi update',
   message: 'Pi has a newer CLI version available.',
   checkedAt: '2026-07-05T00:00:00.000Z',
+  muted: false,
 };
 
 const piCurrent: ProviderUpdateStatusDto = {
@@ -44,7 +50,7 @@ const piCurrent: ProviderUpdateStatusDto = {
 };
 
 function providerUpdates(providers: ProviderUpdateStatusDto[]): ProviderUpdatesDto {
-  return { enabled: true, providers };
+  return { enabled: true, notificationsEnabled: true, providers };
 }
 
 describe('ProviderUpdateSettingsSection', () => {
@@ -93,6 +99,7 @@ describe('ProviderUpdateSettingsSection', () => {
             'curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh',
           message: 'Codex has a newer CLI version available.',
           checkedAt: '2026-07-05T00:00:00.000Z',
+          muted: false,
         },
       ]),
     );
@@ -105,10 +112,61 @@ describe('ProviderUpdateSettingsSection', () => {
   });
 
   it('tells the user when provider update checks are disabled', async () => {
-    vi.mocked(fetchProviderUpdates).mockResolvedValue({ enabled: false, providers: [] });
+    vi.mocked(fetchProviderUpdates).mockResolvedValue({
+      enabled: false,
+      notificationsEnabled: false,
+      providers: [],
+    });
 
     render(<ProviderUpdateSettingsSection />);
 
     expect(await screen.findByText('Provider update checks are disabled.')).toBeInTheDocument();
+  });
+
+  it('shows failed provider update results as an error toast', async () => {
+    vi.mocked(fetchProviderUpdates).mockResolvedValue(providerUpdates([piBehind]));
+    vi.mocked(updateProviderTool).mockResolvedValue({
+      provider: 'pi',
+      status: 'failed',
+      message: 'Pi update exited with code 1.',
+      output: 'permission denied',
+      providerStatus: piBehind,
+    });
+
+    render(<ProviderUpdateSettingsSection />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Update' }));
+
+    await waitFor(() => expect(updateProviderTool).toHaveBeenCalledWith('pi'));
+    expect(toast.error).toHaveBeenCalledWith('Pi update exited with code 1.');
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('mutes one CLI notification without hiding the manual update action', async () => {
+    const mutedPi = { ...piBehind, muted: true };
+    vi.mocked(fetchProviderUpdates)
+      .mockResolvedValueOnce(providerUpdates([piBehind]))
+      .mockResolvedValueOnce(providerUpdates([mutedPi]));
+    vi.mocked(updateSetting).mockResolvedValue({
+      key: 'NUNCIO_CLI_UPDATE_MUTED',
+      category: 'advanced',
+      type: 'string',
+      label: 'Muted CLI update notifications',
+      description: 'Muted provider tools',
+      hasValue: true,
+      source: 'db',
+      value: 'pi',
+      readOnly: false,
+    });
+
+    render(<ProviderUpdateSettingsSection />);
+
+    expect(await screen.findByText('Pi CLI update available')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Update' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Mute Pi update notifications' }));
+
+    await waitFor(() => expect(updateSetting).toHaveBeenCalledWith('NUNCIO_CLI_UPDATE_MUTED', 'pi'));
+    await waitFor(() => expect(screen.getByText('Notifications muted')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Update' })).toBeInTheDocument();
   });
 });

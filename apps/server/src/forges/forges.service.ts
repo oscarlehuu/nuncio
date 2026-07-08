@@ -7,6 +7,7 @@ import type {
   ForgePullRequest,
   ForgePullRequestDetail,
   ForgeRepoRef,
+  ForgeRepository,
   ForgeStatusDto,
 } from './forges.types';
 
@@ -112,6 +113,20 @@ export class ForgesService {
       session.forgeProvider ?? this.providerIdForHost(remote.host),
     );
     await provider.addComment(this.repoRef(remote), session.pullRequestNumber, body);
+  }
+
+  /**
+   * Enumerate the authenticated user's repositories for the forge-aware picker.
+   * `getAvailable` throws a 4xx for an unknown OR unauthenticated forge — the UI
+   * renders that reason as disabled, never an auth prompt (ADR-005). A provider
+   * that cannot enumerate repos (capability off) is also a 4xx, not an empty list.
+   */
+  async listRepositories(id: string): Promise<ForgeRepository[]> {
+    const provider = await this.registry.getAvailable(id);
+    if (!provider.capabilities().listRepositories) {
+      throw new BadRequestException(`Forge provider ${id} cannot list repositories`);
+    }
+    return provider.listRepositories();
   }
 
   async listStatus(): Promise<ForgeStatusDto[]> {

@@ -9,6 +9,7 @@ import type {
   ForgePullRequestDetail,
   ForgePullRequestSummary,
   ForgeRepoRef,
+  ForgeRepository,
   ForgeReviewThread,
   ForgeStateFilter,
   MergePullRequestOptions,
@@ -41,6 +42,18 @@ interface GitlabMergeResponse {
   sha?: string | null;
 }
 
+interface GitlabProjectResponse {
+  id: number;
+  path_with_namespace: string;
+  path: string;
+  description?: string | null;
+  visibility?: string;
+  default_branch?: string | null;
+  http_url_to_repo: string;
+  web_url: string;
+  last_activity_at?: string | null;
+}
+
 @Injectable()
 export class GitlabForgeProvider extends GitlabForgeActions {
   constructor(settings: SettingsService) {
@@ -55,7 +68,27 @@ export class GitlabForgeProvider extends GitlabForgeActions {
       resolveThreads: true,
       updateBranch: true,
       rerunFailedOnly: false,
+      listRepositories: true,
     };
+  }
+
+  async listRepositories(): Promise<ForgeRepository[]> {
+    // Projects the user is a member of, most-recently-active first.
+    const data = await this.request<GitlabProjectResponse[]>(
+      `${this.resolveApiBase()}/projects?membership=true&order_by=last_activity_at&sort=desc&per_page=100`,
+      { headers: await this.authHeaders() },
+    );
+    return (data ?? []).map((project) => ({
+      id: String(project.id),
+      fullName: project.path_with_namespace,
+      name: project.path,
+      description: project.description ?? null,
+      private: project.visibility !== 'public',
+      defaultBranch: project.default_branch ?? 'main',
+      cloneUrl: project.http_url_to_repo,
+      webUrl: project.web_url,
+      updatedAt: project.last_activity_at ?? null,
+    }));
   }
 
   async listPullRequests(

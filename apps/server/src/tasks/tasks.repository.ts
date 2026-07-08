@@ -16,6 +16,19 @@ export class TasksRepository {
   constructor(private readonly database: DatabaseService) {}
 
   create(input: CreateTaskDto): TaskDto {
+    return this.createMany([input])[0]!;
+  }
+
+  createMany(inputs: CreateTaskDto[]): TaskDto[] {
+    const rows: TaskRow[] = [];
+    const tx = this.database.db.transaction(() => {
+      for (const input of inputs) rows.push(this.insert(input));
+    });
+    tx();
+    return rows.map(taskRowToDto);
+  }
+
+  private insert(input: CreateTaskDto): TaskRow {
     const now = Date.now();
     const row: TaskRow = {
       id: uuidv4().slice(0, 8),
@@ -53,7 +66,7 @@ export class TasksRepository {
         row.role, row.cleanup_policy, row.review_state, row.session_id, row.outcome_json,
         row.hold_until, row.created_at, row.updated_at, row.started_at, row.finished_at,
       );
-    return taskRowToDto(row);
+    return row;
   }
 
   list(): TaskDto[] {

@@ -7,6 +7,7 @@ import {
   createSession,
   deleteSession,
   fetchArchivedSessions,
+  fetchAttentionCounts,
   fetchModels,
   fetchSession,
   fetchSessions,
@@ -22,6 +23,7 @@ import {
   type Session,
 } from './lib/api';
 import { clearSetting, fetchSettings, updateSetting, type Setting } from './lib/settings-api';
+import { projectDisplayName } from './lib/projects';
 import { DETAIL_EVENT_TAIL, useSessionStream } from './lib/use-session-stream';
 import { useActiveRun } from './lib/use-active-run';
 import { useSessionNotifications } from './lib/use-session-notifications';
@@ -29,6 +31,9 @@ import { useProviderUpdateNotifications } from './lib/use-provider-update-notifi
 import { HomeView } from './components/home-view';
 import { GridView } from './components/grid-view';
 import { ChunkErrorBoundary } from './components/chunk-error-boundary';
+// Fleet is the landing surface — imported statically (lean, no heavy deps) so the
+// cockpit paints immediately without a lazy-chunk round-trip.
+import { FleetView } from './components/fleet-view';
 import type { ApprovalMode } from './components/approval-mode-picker';
 import { HandoffPicker } from './components/handoff-picker';
 import { DesktopSidebarHoverRail, DesktopSidebarPinned } from './components/desktop-sidebar-shell';
@@ -61,6 +66,16 @@ const SettingsView = lazy(() =>
 );
 const ChangelogView = lazy(() =>
   import('./components/changelog-view').then((m) => ({ default: m.ChangelogView })),
+);
+// The Autopilot surfaces (list + detail + runs) load as one lazy chunk so they
+// never weigh on the entry bundle.
+const AutopilotRoutes = lazy(() => import('./components/autopilot-routes'));
+// The heartbeat digest — a read-once briefing, lazy-loaded.
+const DigestView = lazy(() =>
+  import('./components/digest-view').then((m) => ({ default: m.DigestView })),
+);
+const TimelineView = lazy(() =>
+  import('./components/timeline-view').then((m) => ({ default: m.TimelineView })),
 );
 
 function sessionIdFromPath(pathname: string): string | null {
@@ -106,6 +121,11 @@ function applySessionTitle(
   return changed ? next : list;
 }
 
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+}
+
 export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -123,6 +143,7 @@ export default function App() {
   const [handoffInitialWorkspace, setHandoffInitialWorkspace] = useState<string | undefined>();
   const [forceSteerMessage, setForceSteerMessage] = useState<string | null>(null);
   const [settings, setSettings] = useState<Setting[]>([]);
+  const [inboxUnacked, setInboxUnacked] = useState(0);
   const [listsReady, setListsReady] = useState(false);
   const sessionsErrorShown = useRef(false);
   const archivedErrorShown = useRef(false);
@@ -171,37 +192,39 @@ export default function App() {
     }
   }, []);
 
+  // The Inbox badge rides the main 5s poll — the counts endpoint is cheap. Failure
+  // is silent (the badge just holds its last value; the Inbox itself surfaces errors).
+  const refreshInboxCounts = useCallback(async () => {
+    try {
+      const counts = await fetchAttentionCounts();
+      setInboxUnacked(counts.unacked);
+    } catch {
+      /* silent — keep the last known count */
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([refresh(), refreshArchived()]).finally(() => {
+    void Promise.all([refresh(), refreshArchived(), refreshInboxCounts()]).finally(() => {
       if (!cancelled) setListsReady(true);
     });
     const timer = setInterval(() => {
       void refresh();
       void refreshArchived();
+      void refreshInboxCounts();
     }, 5000);
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [refresh, refreshArchived]);
+  }, [refresh, refreshArchived, refreshInboxCounts]);
 
   useEffect(() => {
     void refreshModels();
   }, [refreshModels]);
 
-  // Land in the work, not a blank canvas: on first load (desktop, with sessions)
-  // open straight to the Workbench instead of the empty composer home. One-shot —
-  // it never yanks the user later, and "New Agent" (→ '/') still reaches the composer.
-  const initialLandingDone = useRef(false);
-  useEffect(() => {
-    if (initialLandingDone.current || !listsReady) return;
-    initialLandingDone.current = true;
-    const isDesktop = window.matchMedia('(min-width: 768px)').matches;
-    if (isDesktop && sessions.length > 0 && location.pathname === '/') {
-      navigate('/grid', { replace: true });
-    }
-  }, [listsReady, sessions.length, location.pathname, navigate]);
+  // '/' is now the Fleet cockpit — the landing IS the work, so the old
+  // land-in-the-grid redirect is retired.
 
   const reviewProviderUpdates = useCallback(() => navigate('/settings'), [navigate]);
 
@@ -221,10 +244,22 @@ export default function App() {
     [dismissTransientSidebar, navigate],
   );
 
+  // The composer moved off '/' (now the Fleet home) to '/new'.
   const handleNew = useCallback(() => {
-    navigate('/');
+    navigate('/new');
     dismissTransientSidebar();
   }, [dismissTransientSidebar, navigate]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== 'n' || (!event.metaKey && !event.ctrlKey)) return;
+      if (isEditableTarget(event.target)) return;
+      event.preventDefault();
+      handleNew();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [handleNew]);
 
   const handleCreate = async (
     prompt: string,
@@ -491,6 +526,16 @@ export default function App() {
     dismissTransientSidebar();
   }, [dismissTransientSidebar, navigate]);
 
+  const handleOpenHome = useCallback(() => {
+    navigate('/');
+    dismissTransientSidebar();
+  }, [dismissTransientSidebar, navigate]);
+
+  const handleOpenAutopilot = useCallback(() => {
+    navigate('/autopilot');
+    dismissTransientSidebar();
+  }, [dismissTransientSidebar, navigate]);
+
   const handleOpenSettings = useCallback(() => {
     navigate('/settings');
     dismissTransientSidebar();
@@ -572,13 +617,27 @@ export default function App() {
     [refresh, dismissTransientSidebar, navigate],
   );
 
+  // Workbench drill-down: `/grid?project=<path>` scopes the grid to one project;
+  // no param = the all-projects grid (the sidebar Workbench entry). Deep links to
+  // /session/:id and the bare /grid are untouched.
+  const gridProjectPath = new URLSearchParams(location.search).get('project');
+  const gridSessions = gridProjectPath
+    ? sessions.filter((s) => s.projectPath === gridProjectPath)
+    : sessions;
+  const gridProjectName = gridProjectPath
+    ? projectDisplayName(gridProjectPath) ?? gridProjectPath
+    : null;
+
   const sidebarProps = {
     sessions,
     archivedSessions,
     activeId,
     onSelect: handleSelect,
     onNew: handleNew,
+    onHome: handleOpenHome,
     onGrid: handleOpenGrid,
+    onAutopilot: handleOpenAutopilot,
+    inboxUnacked,
     onSettings: handleOpenSettings,
     onChangelog: handleOpenChangelog,
     onArchive: handleArchiveById,
@@ -621,6 +680,10 @@ export default function App() {
         <Routes>
           <Route
             path="/"
+            element={<FleetView onNew={handleNew} railOverlay={!desktopSidebar.pinned} />}
+          />
+          <Route
+            path="/new"
             element={
               <HomeView
                 sessionCount={sessions.length}
@@ -637,7 +700,8 @@ export default function App() {
             path="/grid"
             element={
               <GridView
-                sessions={sessions}
+                sessions={gridSessions}
+                projectFilterName={gridProjectName}
                 providers={providers}
                 approvalMode={approvalMode}
                 onApprovalModeChange={handleApprovalModeChange}
@@ -722,6 +786,37 @@ export default function App() {
               <ChunkErrorBoundary>
                 <Suspense fallback={null}>
                   <ChangelogView onBack={() => navigate('/')} />
+                </Suspense>
+              </ChunkErrorBoundary>
+            }
+          />
+          <Route
+            path="/autopilot/*"
+            element={
+              <ChunkErrorBoundary>
+                <Suspense fallback={<div className="flex-1" aria-hidden />}>
+                  <AutopilotRoutes providers={providers} />
+                </Suspense>
+              </ChunkErrorBoundary>
+            }
+          />
+          <Route path="/inbox" element={<Navigate to="/" replace />} />
+          <Route
+            path="/digest"
+            element={
+              <ChunkErrorBoundary>
+                <Suspense fallback={<div className="flex-1" aria-hidden />}>
+                  <DigestView onBack={() => navigate('/inbox')} />
+                </Suspense>
+              </ChunkErrorBoundary>
+            }
+          />
+          <Route
+            path="/timeline"
+            element={
+              <ChunkErrorBoundary>
+                <Suspense fallback={<div className="flex-1" aria-hidden />}>
+                  <TimelineView onBack={() => navigate('/digest')} />
                 </Suspense>
               </ChunkErrorBoundary>
             }

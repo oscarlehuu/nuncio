@@ -385,6 +385,49 @@ describe('buildTranscriptBlocks', () => {
     expect((blocks[0] as { text: string }).text).toBe('Here is the response.');
     expect(blocks[1].kind).toBe('thinking');
   });
+  it('builds a verify_retry into a compact verify-retry block', () => {
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'verify_result', { command: 'bun test', ok: false }),
+      ev(2, 'verify_retry', {
+        round: 2,
+        reason: 'verify_failed',
+        command: 'bun test',
+        outputTail: '1 failing',
+        retryId: 'r-1',
+      }),
+    ]);
+    expect(blocks).toContainEqual(
+      expect.objectContaining({ kind: 'verify_retry', round: 2, command: 'bun test' }),
+    );
+  });
+
+  it('builds a verify_needs_attention into a needs-attention block with reason and rounds', () => {
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'verify_needs_attention', {
+        rounds: 3,
+        reason: 'max_rounds',
+        lastOutputTail: 'still red',
+      }),
+    ]);
+    expect(blocks).toContainEqual(
+      expect.objectContaining({
+        kind: 'verify_needs_attention',
+        rounds: 3,
+        reason: 'max_rounds',
+      }),
+    );
+  });
+
+  it('keeps a stable key per verify row derived from event seq', () => {
+    const blocks = buildTranscriptBlocks([
+      ev(7, 'verify_retry', { round: 1, retryId: 'r-1' }),
+      ev(9, 'verify_needs_attention', { rounds: 3, reason: 'repeated_failure' }),
+    ]);
+    const retry = blocks.find((b) => b.kind === 'verify_retry');
+    const attention = blocks.find((b) => b.kind === 'verify_needs_attention');
+    expect(retry?.key).toBe('verify-retry-7');
+    expect(attention?.key).toBe('verify-attention-9');
+  });
 });
 
 describe('workingIndicatorLabel', () => {

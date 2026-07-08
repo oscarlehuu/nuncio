@@ -62,6 +62,7 @@ describe('RunDetail', () => {
       resolveThreads: true,
       updateBranch: true,
       rerunFailedOnly: true,
+      listRepositories: true,
     });
     vi.mocked(fetchForgeRunJobs).mockReset().mockResolvedValue([JOB]);
     vi.mocked(fetchForgeJobLog)

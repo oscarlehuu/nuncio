@@ -63,6 +63,11 @@ export class EventsRepository {
   append(sessionId: string, type: string, payload: unknown): SessionEvent {
     const now = Date.now();
     const stored = truncatePayload(payload, MAX_EVENT_PAYLOAD_BYTES).value;
+    // A turn that outlived shutdown must not write to a closed handle; return a
+    // synthetic (unpersisted, seq 0) event so callers/emitters don't blow up.
+    if (this.database.closed) {
+      return { seq: 0, type, payload: stored, createdAt: now };
+    }
     const next = this.database.db
       .prepare<{ seq: number }, [string]>('SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM events WHERE session_id = ?')
       .get(sessionId);
@@ -105,5 +110,16 @@ export class EventsRepository {
       .prepare<{ count: number }, [string]>('SELECT COUNT(*) AS count FROM events WHERE session_id = ?')
       .get(sessionId);
     return row?.count ?? 0;
+  }
+
+  /** Epoch-ms of the most recent event for a session, or null if it has none. */
+  latestEventAt(sessionId: string): number | null {
+    if (this.database.closed) return null;
+    const row = this.database.db
+      .prepare<{ at: number | null }, [string]>(
+        'SELECT MAX(created_at) AS at FROM events WHERE session_id = ?',
+      )
+      .get(sessionId);
+    return row?.at ?? null;
   }
 }

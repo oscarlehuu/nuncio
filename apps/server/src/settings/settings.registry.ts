@@ -181,9 +181,29 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     type: 'boolean',
     label: 'Provider update checks',
     description:
-      'Check Pi and Codex CLI versions against their public package registry and show optional update actions.',
+      'Check managed provider CLI versions against their public package registries and show optional update actions.',
     envVar: 'NUNCIO_PROVIDER_UPDATE_CHECKS',
     default: '1',
+  },
+  {
+    key: 'NUNCIO_CLI_UPDATE_NOTIFICATIONS',
+    category: 'advanced',
+    type: 'boolean',
+    label: 'CLI update notifications',
+    description:
+      'Show provider CLI update notifications. Manual update checks and Update actions remain available when this is off.',
+    envVar: 'NUNCIO_CLI_UPDATE_NOTIFICATIONS',
+    default: '1',
+  },
+  {
+    key: 'NUNCIO_CLI_UPDATE_MUTED',
+    category: 'advanced',
+    type: 'string',
+    label: 'Muted CLI update notifications',
+    description:
+      'Comma-separated provider CLI ids with muted update notifications, such as `pi,codex`. Manual updates still work.',
+    envVar: 'NUNCIO_CLI_UPDATE_MUTED',
+    default: '',
   },
   {
     key: 'NUNCIO_WORKSPACES_DIR',
@@ -193,6 +213,94 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     description: 'Parent directory for per-session git worktrees (created at <dir>/<sessionId>).',
     envVar: 'NUNCIO_WORKSPACES_DIR',
     default: '~/.nuncio/workspaces',
+  },
+  // ── Heartbeat (rung 3) — founder-tunable cadences. ───────────────────────
+  {
+    key: 'NUNCIO_HEARTBEAT_INFRA_SPEC',
+    category: 'advanced',
+    type: 'string',
+    label: 'Heartbeat: infra self-check cadence',
+    description:
+      'Schedule spec for the infra self-check (expiring credentials, zombie sessions). Default every 15 minutes.',
+    envVar: 'NUNCIO_HEARTBEAT_INFRA_SPEC',
+    default: 'every:15m',
+  },
+  {
+    key: 'NUNCIO_HEARTBEAT_RECONCILE_SPEC',
+    category: 'advanced',
+    type: 'string',
+    label: 'Heartbeat: fleet reconciliation cadence',
+    description:
+      'Schedule spec for the hourly fleet reconciliation (auto-resolve cleared attention, fold settled loop runs). Default every 60 minutes.',
+    envVar: 'NUNCIO_HEARTBEAT_RECONCILE_SPEC',
+    default: 'every:60m',
+  },
+  {
+    key: 'NUNCIO_HEARTBEAT_DIGEST_MORNING',
+    category: 'advanced',
+    type: 'string',
+    label: 'Heartbeat: morning digest time',
+    description: 'Daily time for the retrospective morning digest. Default 08:00.',
+    envVar: 'NUNCIO_HEARTBEAT_DIGEST_MORNING',
+    default: 'daily@08:00',
+  },
+  {
+    key: 'NUNCIO_HEARTBEAT_DIGEST_EVENING',
+    category: 'advanced',
+    type: 'string',
+    label: 'Heartbeat: evening digest time',
+    description: 'Daily time for the pre-flight evening digest. Default 20:00.',
+    envVar: 'NUNCIO_HEARTBEAT_DIGEST_EVENING',
+    default: 'daily@20:00',
+  },
+  {
+    key: 'NUNCIO_DISPATCHER_EVENING_SPEC',
+    category: 'advanced',
+    type: 'string',
+    label: 'Dispatcher: evening proposal time',
+    description: 'Daily time for deterministic dispatcher proposals. Default 20:05.',
+    envVar: 'NUNCIO_DISPATCHER_EVENING_SPEC',
+    default: 'daily@20:05',
+  },
+  {
+    key: 'NUNCIO_HEARTBEAT_ZOMBIE_AGE_MIN',
+    category: 'advanced',
+    type: 'string',
+    label: 'Heartbeat: zombie session threshold (minutes)',
+    description:
+      'A RUNNING session with no event for this many minutes is flagged as a zombie. Default 30.',
+    envVar: 'NUNCIO_HEARTBEAT_ZOMBIE_AGE_MIN',
+    default: '30',
+  },
+  {
+    key: 'NUNCIO_ANOMALY_EMPTY_DIFF_MIN',
+    category: 'advanced',
+    type: 'string',
+    label: 'Anomaly: empty-diff threshold (minutes)',
+    description:
+      'A session RUNNING this many minutes with no uncommitted changes is flagged as an anomaly (empty diff). Default 30.',
+    envVar: 'NUNCIO_ANOMALY_EMPTY_DIFF_MIN',
+    default: '30',
+  },
+  {
+    key: 'NUNCIO_ANOMALY_LOOP_FAILING_RUNS',
+    category: 'advanced',
+    type: 'string',
+    label: 'Anomaly: loop-failing run count',
+    description:
+      "A loop with this many of today's runs all failed/budget-exhausted and no green verify is flagged as failing. Default 3.",
+    envVar: 'NUNCIO_ANOMALY_LOOP_FAILING_RUNS',
+    default: '3',
+  },
+  {
+    key: 'NUNCIO_CLONE_DIR',
+    category: 'workspaces',
+    type: 'path',
+    label: 'Clone directory',
+    description:
+      'Parent directory where the forge-aware picker clones repositories (created at <dir>/<repo-name>). Default: ~/nuncio/projects.',
+    envVar: 'NUNCIO_CLONE_DIR',
+    default: '~/nuncio/projects',
   },
   {
     key: 'NUNCIO_TAILSCALE_AUTO_TRUST',
@@ -279,6 +387,26 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     description:
       'Shell command run in the session workspace after each turn; the result is annotated on the transcript (verify chip). A project-level .nuncio/verify script takes precedence. Empty disables verification.',
     envVar: 'NUNCIO_VERIFY_COMMAND',
+  },
+  {
+    key: 'NUNCIO_VERIFY_AUTO_STEER',
+    category: 'agents',
+    type: 'boolean',
+    label: 'Auto-fix failing verifies',
+    description:
+      'When a post-turn verify fails, automatically steer the session with the failure output so the agent fixes it, up to the max rounds below, then surface "needs you". Off by default.',
+    envVar: 'NUNCIO_VERIFY_AUTO_STEER',
+    default: '0',
+  },
+  {
+    key: 'NUNCIO_VERIFY_MAX_ROUNDS',
+    category: 'agents',
+    type: 'string',
+    label: 'Max auto-fix rounds',
+    description:
+      'How many times to auto-steer a failing verify before surfacing "needs you". Default 3. 0 surfaces immediately without auto-steering. Non-integer or negative values fall back to 3.',
+    envVar: 'NUNCIO_VERIFY_MAX_ROUNDS',
+    default: '3',
   },
   // ── MCP & Tools ─────────────────────────────────────────────────────────
   {

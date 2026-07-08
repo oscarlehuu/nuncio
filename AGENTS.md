@@ -23,7 +23,7 @@ Nuncio is a **self-hosted, Devin-style web app for delegating tasks to AI agents
 1. **Red — write the test first.** Add a `*.spec.ts` under `apps/server/test/unit/<domain>/` (grouped by domain, not co-located) that captures the desired behavior. Run it (`bun test test/unit/<domain>/…`) and confirm it fails for the *right* reason (a real assertion failure, not a compile/import error).
 2. **Green — implement the minimum** to make the test pass. No more, no less.
 3. **Refactor** under the safety of the passing test.
-4. **Gate:** the change is not done until the suite is green. Run **`bun run gate`** (build + lint + unit tests + `test:scripts`) as the minimum bar before you commit, and **`bun run gate:full`** (adds server e2e, web unit, and the real-browser smoke) before a promotion PR (dev→main). Don't move on, don't commit, don't open a PR on a red suite. **Never silence, skip, or weaken a failing test just to pass the build.**
+4. **Gate:** the change is not done until the suite is green. Run **`bun run gate`** (build + lint + all unit layers, including web + `test:scripts`) as the minimum bar before you commit, and **`bun run gate:full`** (adds server e2e and the real-browser smoke) before a promotion PR (dev→main). Don't move on, don't commit, don't open a PR on a red suite. **Never silence, skip, or weaken a failing test just to pass the build.**
 5. **Docs sync:** update `README.md` to match the shipped code — commands, API, architecture, status. If architecture or conventions shifted, update `AGENTS.md` too. A merged change with stale docs isn't done.
 6. **Changeset (release note) — mandatory for user-facing changes.** If the PR changes anything a user would notice (new feature, behavior shift, bug fix, UI change), add a changeset fragment before opening the PR:
    ```bash
@@ -143,6 +143,12 @@ When delegating work via Cursor's Task/subagent tooling, set the subagent model 
 
 After each implementation — and **before commit or PR** — run a **code review** pass (code-reviewer agent, Bugbot, or equivalent). Fix blockers; document warnings in the PR or lane report. **Tests green alone is not done** — review is part of the shipping gate.
 
+### Pre-PR ritual
+
+Before any PR to `dev`, run `bun run gate:full` and get a clean Codex xhigh review. Fix blockers before opening the PR; report any non-blocking warnings in the PR notes.
+
+Install the versioned git hooks once with `bun run setup-hooks`. The pre-push hook runs `bun run gate` before pushes to `dev` or `main`; emergency bypass is `NUNCIO_SKIP_GATE=1 git push ...` and must be called out afterward.
+
 ## Tech stack
 
 | Layer | Choice |
@@ -164,8 +170,9 @@ bun run dev          # server (3000) + web (5173) concurrently
 bun run build        # build server + web
 bun run test         # server unit (bun test test/unit/)
 bun run lint         # server tsc --noEmit + web oxlint
-bun run gate         # pre-commit gate: build + lint + unit tests + test:scripts (minimum bar before commit)
-bun run gate:full    # pre-promotion gate (dev→main): gate + server e2e + web unit + real-browser smoke
+bun run gate         # pre-commit gate: build + lint + all unit layers + test:scripts (minimum bar before commit)
+bun run gate:full    # pre-promotion gate (dev→main): gate + server e2e + real-browser smoke
+bun run setup-hooks  # install versioned git hooks for protected-branch pre-push gates
 bun run add-changeset patch "…"   # create a changeset fragment (preferred for agents)
 bun run check-changeset           # verify PR will pass CI changeset gate
 bun run changeset                 # interactive alternative for humans
@@ -619,6 +626,7 @@ Nuncio runs on **Bun** (≥ 1.3) — server, build, and tests. Bun replaces npm,
 ## Gotchas
 
 - `bun run build --filter @nuncio/server` can hit `ENOTEMPTY` on `dist/` — remove `apps/server/dist` and retry.
+- **`@nuncio/server` bun tests must run from the `apps/server` cwd** — `bun test test/unit/...` from the repo root silently breaks Nest's decorator-metadata resolution, so DI injects `undefined` for a service's first constructor param instead of throwing. This presents as a phantom circular-import bug (a service "sees" an undefined dependency) when the real cause is just the wrong working directory. Always `cd apps/server` (or `bun run --filter @nuncio/server test`) before running server unit tests.
 - **Server requires Bun** — `bun:sqlite` is a Bun builtin, so `node dist/main` won't work. Always run via `bun` (`bun src/main.ts`, `bun run start:prod`).
 - **bun:sqlite named params need a prefix** (`{@id}`/`{$id}`), unlike better-sqlite3's `{id}`. Nuncio uses positional `?` everywhere — don't reintroduce named `@param` with unprefixed object keys (silently binds NULL).
 - No DB migration framework — any schema change needs a guarded `ALTER TABLE` for existing dev DBs (the `provider` column migration in `DatabaseService.migrate()` is the template: `PRAGMA table_info(...)` check → `ALTER TABLE`).

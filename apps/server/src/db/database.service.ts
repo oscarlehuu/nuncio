@@ -72,6 +72,16 @@ export class DatabaseService implements OnModuleDestroy {
   readonly db: Database;
   /** Resolved data directory (exposed so other services can colocate files, e.g. the settings key). */
   readonly dataDir: string;
+  /**
+   * True once the connection is being/has been torn down. Repositories consult
+   * this to no-op instead of touching a closed handle: an in-flight agent turn
+   * can outlive shutdown (a provider that ignores abort past the bounded drain)
+   * and its continuation would otherwise write after close (SQLITE_MISUSE/IOERR).
+   */
+  private _closed = false;
+  get closed(): boolean {
+    return this._closed;
+  }
 
   constructor() {
     const dataDir = process.env.NUNCIO_DATA_DIR ?? join(process.cwd(), 'data');
@@ -84,6 +94,7 @@ export class DatabaseService implements OnModuleDestroy {
   }
 
   onModuleDestroy() {
+    this._closed = true;
     this.db.close();
   }
 
@@ -193,6 +204,144 @@ export class DatabaseService implements OnModuleDestroy {
         last_used_at INTEGER NOT NULL
       )
     `);
+
+    // Per-project CONFIG entity (rung 2). Keyed by normalized path; distinct from
+    // recent_projects (the MRU picker). project_path on sessions/tasks is a SOFT
+    // reference into this table — no FK, so an unconfigured path is valid.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS projects (
+        path TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        default_engine TEXT,
+        worktree_policy TEXT,
+        verify_command TEXT,
+        verify_auto_steer TEXT NOT NULL DEFAULT 'inherit',
+        verify_max_rounds INTEGER,
+        weight INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+
+    // Scheduler (rung 2 sub-phase B): durable cron/event/heartbeat triggers.
+    // next_fire_at is recomputed from spec + clock at boot (never in-memory truth).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS schedules (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        spec TEXT NOT NULL,
+        target_json TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        next_fire_at INTEGER,
+        last_fire_at INTEGER,
+        last_result TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+
+    // Loop primitive (rung 2 sub-phase C): standing tasks. A loop OWNS its
+    // schedule_id; budgets/breaker/stop are folded from loop_runs (restart-safe,
+    // no in-memory counters). Run history is KEPT on delete (founder-locked).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS loops (
+        id TEXT PRIMARY KEY,
+        name TEXT,
+        goal TEXT NOT NULL,
+        schedule_id TEXT NOT NULL,
+        max_runs_per_day INTEGER NOT NULL,
+        max_consecutive_failures INTEGER NOT NULL,
+        stop_json TEXT,
+        escalation TEXT NOT NULL,
+        project_path TEXT,
+        engine TEXT,
+        model TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+    // v1.1+ additive columns — guarded ALTERs for pre-existing loops tables.
+    const loopColumns = this.db.prepare('PRAGMA table_info(loops)').all() as Array<{ name: string }>;
+    if (!loopColumns.some((c) => c.name === 'engine')) {
+      this.db.exec('ALTER TABLE loops ADD COLUMN engine TEXT');
+    }
+    if (!loopColumns.some((c) => c.name === 'name')) {
+      this.db.exec('ALTER TABLE loops ADD COLUMN name TEXT');
+    }
+    if (!loopColumns.some((c) => c.name === 'model')) {
+      this.db.exec('ALTER TABLE loops ADD COLUMN model TEXT');
+    }
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS loop_runs (
+        id TEXT PRIMARY KEY,
+        loop_id TEXT NOT NULL,
+        task_id TEXT,
+        outcome TEXT NOT NULL,
+        verify TEXT NOT NULL DEFAULT 'none',
+        day_bucket TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    `);
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_loop_runs_loop ON loop_runs(loop_id, created_at)');
+
+    // Attention queue (rung 3, sub-phase A). ONE ranked queue of everything needing
+    // the founder. Deduped: a partial UNIQUE index over open rows guarantees at most
+    // one OPEN item per (kind, subject_id); resolved rows never block a re-trip.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS attention_items (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        subject_id TEXT NOT NULL,
+        project_path TEXT,
+        severity INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        payload_json TEXT,
+        status TEXT NOT NULL DEFAULT 'open',
+        acknowledged_at INTEGER,
+        suppress_reraise INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        resolved_at INTEGER
+      )
+    `);
+    this.db.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_attention_open_dedup
+         ON attention_items(kind, subject_id) WHERE status = 'open'`,
+    );
+    this.db.exec(
+      'CREATE INDEX IF NOT EXISTS idx_attention_status ON attention_items(status, severity)',
+    );
+    // A manual resolve of a still-live condition sets suppress_reraise=1 so a
+    // periodic sweep does not re-raise the founder's override; the sweep clears it
+    // back to 0 once the underlying condition is observed CLEAR, so a genuine
+    // re-trip legitimately produces a fresh item. Guarded ALTER for older DBs.
+    const attentionColumns = this.db.prepare('PRAGMA table_info(attention_items)').all() as Array<{ name: string }>;
+    if (!attentionColumns.some((c) => c.name === 'suppress_reraise')) {
+      this.db.exec('ALTER TABLE attention_items ADD COLUMN suppress_reraise INTEGER NOT NULL DEFAULT 0');
+    }
+
+    // Heartbeat digest markers (rung 3 sub-phase B). One row per SENT digest slot
+    // — the durable record behind not-double-sent-on-catch-up + the since-last
+    // window + the in-app read. slot_key = '<YYYY-MM-DD>:<morning|evening>'.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS digest_runs (
+        slot_key TEXT PRIMARY KEY,
+        variant TEXT NOT NULL,
+        sent_at INTEGER NOT NULL,
+        window_from INTEGER NOT NULL,
+        window_to INTEGER NOT NULL,
+        summary_json TEXT NOT NULL
+      )
+    `);
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_digest_runs_sent ON digest_runs(sent_at DESC)');
+
+    // Per-project importance weight (rung 3 ranking + fleet home). Guarded ALTER on
+    // a pre-existing projects table; default 1 (equal importance) applied by the repo.
+    const projectColumns = this.db.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>;
+    if (projectColumns.length > 0 && !projectColumns.some((c) => c.name === 'weight')) {
+      this.db.exec('ALTER TABLE projects ADD COLUMN weight INTEGER');
+    }
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS tasks (

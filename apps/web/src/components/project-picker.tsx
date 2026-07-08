@@ -20,6 +20,7 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { FolderBrowser } from './folder-browser';
+import { ProjectPickerForges } from './project-picker-forges';
 
 interface ProjectPickerProps {
   value?: string;
@@ -43,6 +44,7 @@ export function ProjectPicker({
   const [customPath, setCustomPath] = useState('');
   const [browserOpen, setBrowserOpen] = useState(false);
   const [recents, setRecents] = useState<RecentProject[]>([]);
+  const [search, setSearch] = useState('');
 
   useEffect(() => {
     setProjects([]);
@@ -137,7 +139,7 @@ export function ProjectPicker({
             </div>
           ) : (
             <Command>
-              <CommandInput placeholder="Search projects…" />
+              <CommandInput placeholder="Search projects…" value={search} onValueChange={setSearch} />
               <CommandList>
                 <CommandEmpty>No project found.</CommandEmpty>
                 {recents.length > 0 && (
@@ -175,6 +177,11 @@ export function ProjectPicker({
                       </CommandItem>
                     ))}
                   </CommandGroup>
+                )}
+                {/* Forge repo sections — clone a remote repo into a local path.
+                    Local machine only (a hub base browses another machine's FS). */}
+                {!apiBase && (
+                  <ProjectPickerForges query={search} onSelectPath={selectProject} active={open} />
                 )}
                 <CommandSeparator />
                 <CommandGroup>

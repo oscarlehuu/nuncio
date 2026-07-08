@@ -37,6 +37,12 @@ export class TasksService implements OnModuleDestroy {
   /** Single wake timer that re-runs the pump when the earliest hold expires. */
   private holdTimer: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
+  /**
+   * Handlers invoked with the terminal TaskDto after a task settles on ANY path
+   * (green / red / needs-attention / error). Lets the loop primitive fold a
+   * settled loop-run without TasksService knowing about loops. Fired best-effort.
+   */
+  private readonly finishHandlers = new Set<(task: TaskDto) => void>();
 
   constructor(
     private readonly tasks: TasksRepository,
@@ -48,6 +54,30 @@ export class TasksService implements OnModuleDestroy {
     // already reconciled by the sessions sweep. Queued work simply resumes.
     this.tasks.failInterrupted('daemon_restart');
     void this.pump();
+  }
+
+  /** Register a task-settlement listener (e.g. the loop primitive). */
+  onTaskFinished(handler: (task: TaskDto) => void): () => void {
+    this.finishHandlers.add(handler);
+    return () => this.finishHandlers.delete(handler);
+  }
+
+  /** One task by id, or null (used by consumers correlating settlement). */
+  findById(id: string): TaskDto | null {
+    return this.tasks.findById(id);
+  }
+
+  private notifyFinished(taskId: string): void {
+    if (this.finishHandlers.size === 0) return;
+    const task = this.tasks.findById(taskId);
+    if (!task) return;
+    for (const handler of this.finishHandlers) {
+      try {
+        handler(task);
+      } catch {
+        // A listener must never break the runner.
+      }
+    }
   }
 
   list(parentSessionId?: string): TaskDto[] {
@@ -64,11 +94,19 @@ export class TasksService implements OnModuleDestroy {
   }
 
   enqueue(input: CreateTaskDto): TaskDto {
-    const prompt = input.prompt?.trim();
-    if (!prompt) throw new BadRequestException('prompt is required');
-    const task = this.tasks.create({ ...input, prompt });
+    return this.enqueueMany([input])[0]!;
+  }
+
+  enqueueMany(inputs: CreateTaskDto[]): TaskDto[] {
+    if (inputs.length === 0) return [];
+    const normalized = inputs.map((input) => {
+      const prompt = input.prompt?.trim();
+      if (!prompt) throw new BadRequestException('prompt is required');
+      return { ...input, prompt };
+    });
+    const tasks = this.tasks.createMany(normalized);
     void this.pump();
-    return task;
+    return tasks;
   }
 
   startMultitask(input: StartMultitaskDto): StartMultitaskResultDto {
@@ -125,6 +163,10 @@ export class TasksService implements OnModuleDestroy {
     if (!cancelled) {
       throw new BadRequestException('Only queued tasks can be cancelled');
     }
+    // Cancel is a terminal settlement path — notify finish-hook consumers (a loop
+    // folds the cancelled run to failed) exactly as DONE/FAILED do. Without this,
+    // a cancelled loop task would leave its run pending forever, bricking the loop.
+    this.notifyFinished(cancelled.id);
     return cancelled;
   }
 
@@ -304,16 +346,24 @@ export class TasksService implements OnModuleDestroy {
       });
       this.tasks.attachSession(task.id, session.id);
       await this.sessions.awaitRun(session.id);
+      // Wait for the verify-feedback loop (if any) to settle — a task's outcome
+      // must reflect the loop's terminal verify (green / needs-attention), not the
+      // first red result the initial run produced.
+      await this.sessions.awaitVerifySettled(session.id);
 
       const final = this.sessions.get(session.id);
       const verify = this.lastVerifyResult(session.id);
+      const needsAttention = this.needsAttention(session.id);
       this.tasks.finish(task.id, final?.status === 'IDLE' ? 'DONE' : 'FAILED', {
         sessionStatus: final?.status ?? 'UNKNOWN',
         ...(verify ? { verify } : {}),
+        ...(needsAttention ? { needsAttention } : {}),
       });
+      this.notifyFinished(task.id);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.tasks.finish(task.id, 'FAILED', { error: message });
+      this.notifyFinished(task.id);
     }
   }
 
@@ -323,6 +373,21 @@ export class TasksService implements OnModuleDestroy {
       const event = tail[i];
       if (event?.type === 'verify_result') {
         return event.payload as Record<string, unknown>;
+      }
+    }
+    return null;
+  }
+
+  /** The verify-feedback needs-attention payload if the loop gave up, else null. */
+  private needsAttention(sessionId: string): Record<string, unknown> | null {
+    const tail = this.events.listTail(sessionId, PENDING_SCAN_TAIL);
+    for (let i = tail.length - 1; i >= 0; i -= 1) {
+      const event = tail[i];
+      if (event?.type === 'verify_needs_attention') {
+        return event.payload as Record<string, unknown>;
+      }
+      if (event?.type === 'verify_result' && (event.payload as { ok?: boolean }).ok === true) {
+        return null; // a later green verify cleared the needs-attention state
       }
     }
     return null;

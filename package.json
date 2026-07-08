@@ -14,6 +14,7 @@
   "scripts": {
     "dev": "concurrently -n server,web,desktop -c blue,green,magenta \"bun run --filter @nuncio/server dev\" \"bun run --filter @nuncio/web dev\" \"NUNCIO_DESKTOP_DEV=1 bun run --filter @nuncio/desktop dev\"",
     "dev:web": "concurrently -n server,web -c blue,green \"bun run --filter @nuncio/server dev\" \"bun run --filter @nuncio/web dev\"",
+    "mcp": "bun apps/server/src/mcp-stdio/main.ts",
     "build": "bun run --filter @nuncio/server build && bun run --filter @nuncio/web build",
     "build:landing": "bun run --filter @nuncio/landing build",
     "test": "bun run --filter @nuncio/server test && bun run --filter @nuncio/core test && bun run --filter @nuncio/mobile test",
@@ -22,6 +23,7 @@
     "lint": "bun run --filter @nuncio/server lint && bun run --filter @nuncio/web lint && bun run --filter @nuncio/core lint && bun run --filter @nuncio/core typecheck && bun run --filter @nuncio/mobile lint && bun run --filter @nuncio/mobile typecheck",
     "changeset": "changeset",
     "add-changeset": "bun run scripts/add-changeset.mjs",
+    "setup-hooks": "bun run scripts/setup-hooks.mjs",
     "check-changeset": "bun run scripts/check-changeset.mjs",
     "check-branch-flow": "bun run scripts/check-branch-flow.mjs",
     "version": "changeset version",
@@ -29,8 +31,8 @@
     "release": "bun run scripts/release.mjs",
     "test:scripts": "bun test scripts/",
     "test:smoke-ui": "bun scripts/smoke-ui.mjs",
-    "gate": "bun run build && bun run lint && bun run test && bun run test:scripts",
-    "gate:full": "bun run gate && bun run --filter @nuncio/server test:e2e && bun run --filter @nuncio/web test && bun run test:smoke-ui"
+    "gate": "bun run build && bun run lint && bun run test && bun run --filter @nuncio/web test && bun run test:scripts",
+    "gate:full": "bun run gate && bun run --filter @nuncio/server test:e2e && bun run test:smoke-ui"
   },
   "devDependencies": {
     "@changesets/changelog-github": "^0.7.0",

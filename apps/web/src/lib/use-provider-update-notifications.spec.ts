@@ -20,6 +20,7 @@ describe('useProviderUpdateNotifications', () => {
     vi.clearAllMocks();
     vi.mocked(fetchProviderUpdates).mockResolvedValue({
       enabled: true,
+      notificationsEnabled: true,
       providers: [
         {
           provider: 'pi',
@@ -31,6 +32,7 @@ describe('useProviderUpdateNotifications', () => {
           updateCommand: 'pi update',
           message: 'Pi has a newer CLI version available.',
           checkedAt: '2026-07-05T00:00:00.000Z',
+          muted: false,
         },
       ],
     });
@@ -78,7 +80,67 @@ describe('useProviderUpdateNotifications', () => {
   });
 
   it('stays quiet when update checks are disabled', async () => {
-    vi.mocked(fetchProviderUpdates).mockResolvedValue({ enabled: false, providers: [] });
+    vi.mocked(fetchProviderUpdates).mockResolvedValue({
+      enabled: false,
+      notificationsEnabled: false,
+      providers: [],
+    });
+
+    renderHook(() => useProviderUpdateNotifications(vi.fn()));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+
+    expect(toast.info).not.toHaveBeenCalled();
+  });
+
+  it('stays quiet when CLI update notifications are disabled globally', async () => {
+    vi.mocked(fetchProviderUpdates).mockResolvedValue({
+      enabled: true,
+      notificationsEnabled: false,
+      providers: [
+        {
+          provider: 'pi',
+          name: 'Pi',
+          currentVersion: '0.80.2',
+          latestVersion: '0.80.3',
+          status: 'behind_latest',
+          canUpdate: true,
+          updateCommand: 'pi update',
+          message: 'Pi has a newer CLI version available.',
+          checkedAt: '2026-07-05T00:00:00.000Z',
+          muted: false,
+        },
+      ],
+    });
+
+    renderHook(() => useProviderUpdateNotifications(vi.fn()));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+
+    expect(toast.info).not.toHaveBeenCalled();
+  });
+
+  it('stays quiet for muted CLI update providers', async () => {
+    vi.mocked(fetchProviderUpdates).mockResolvedValue({
+      enabled: true,
+      notificationsEnabled: true,
+      providers: [
+        {
+          provider: 'pi',
+          name: 'Pi',
+          currentVersion: '0.80.2',
+          latestVersion: '0.80.3',
+          status: 'behind_latest',
+          canUpdate: true,
+          updateCommand: 'pi update',
+          message: 'Pi has a newer CLI version available.',
+          checkedAt: '2026-07-05T00:00:00.000Z',
+          muted: true,
+        },
+      ],
+    });
 
     renderHook(() => useProviderUpdateNotifications(vi.fn()));
     await act(async () => {

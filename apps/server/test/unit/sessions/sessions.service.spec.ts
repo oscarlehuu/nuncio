@@ -402,6 +402,21 @@ describe('SessionsService lifecycle (phase 3)', () => {
       await waitForIdle(service, session.id);
     });
 
+    it('persists the resolved default base branch for worktree sessions when omitted', async () => {
+      const session = await service.create({
+        prompt: 'Fix diff review',
+        provider: 'cursor',
+        projectPath: repoPath,
+        useWorktree: true,
+      });
+
+      expect(session.baseBranch).toBe('main');
+      expect(session.worktreePath).toBe(join(workspacesDir, session.id));
+      expect(session.branch).toBe(`nuncio/${session.id}-fix-diff-review`);
+
+      await waitForIdle(service, session.id);
+    });
+
     it('does not persist a session when worktree creation fails', async () => {
       const before = service.list(true).length;
       await expect(

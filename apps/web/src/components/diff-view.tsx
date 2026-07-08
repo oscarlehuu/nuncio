@@ -1,10 +1,16 @@
+import type { ReactNode } from 'react';
 import { useMemo } from 'react';
 import { cn } from '@/lib/utils';
 import { useAppearancePreference } from './appearance-provider';
+import type { DiffHunk } from '../lib/api';
 
 interface DiffViewProps {
   /** Unified diff text: `diff --git` headers and/or `@@` hunks. */
-  diff: string;
+  diff?: string;
+  /** Structured hunks from the session diff endpoint. */
+  hunks?: DiffHunk[];
+  renderHunkAction?: (hunk: DiffHunk, index: number) => ReactNode;
+  renderHunkFooter?: (hunk: DiffHunk, index: number) => ReactNode;
   className?: string;
 }
 
@@ -53,11 +59,52 @@ const SYMBOL_LINE_CLASSES: Record<DiffLineKind, string> = {
   context: 'text-foreground/80',
 };
 
+function prefixStructuredLine(line: DiffHunk['lines'][number]): string {
+  if (line.kind === 'add') return `+${line.text}`;
+  if (line.kind === 'del') return `-${line.text}`;
+  return ` ${line.text}`;
+}
+
 /** Shared unified-diff renderer for local changes and forge PR files. */
-export function DiffView({ diff, className }: DiffViewProps) {
+export function DiffView({ diff = '', hunks, renderHunkAction, renderHunkFooter, className }: DiffViewProps) {
   const { diffMarkers } = useAppearancePreference();
   const lines = useMemo(() => parseDiffLines(diff), [diff]);
   const lineClasses = diffMarkers === 'symbol' ? SYMBOL_LINE_CLASSES : LINE_CLASSES;
+
+  if (hunks) {
+    if (hunks.length === 0) {
+      return (
+        <div className={cn('rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground', className)}>
+          No textual diff available.
+        </div>
+      );
+    }
+
+    return (
+      <div className={cn('flex flex-col gap-2', className)}>
+        {hunks.map((hunk, hunkIndex) => (
+          <section key={`${hunk.header}-${hunkIndex}`} className="overflow-hidden rounded-md border bg-muted/30">
+            <div className="flex min-h-10 items-center gap-2 border-b border-border/50 bg-info/5 px-2 py-1.5">
+              <code className="min-w-0 flex-1 truncate font-mono text-xs text-info">{hunk.header}</code>
+              {renderHunkAction?.(hunk, hunkIndex)}
+            </div>
+            <pre className="max-h-80 overflow-auto p-2 font-mono text-xs leading-5">
+              {hunk.lines.map((line, lineIndex) => {
+                const text = prefixStructuredLine(line);
+                const kind = line.kind === 'add' ? 'add' : line.kind === 'del' ? 'del' : 'context';
+                return (
+                  <div key={lineIndex} className={cn('whitespace-pre-wrap break-all px-1', lineClasses[kind])}>
+                    {text || ' '}
+                  </div>
+                );
+              })}
+            </pre>
+            {renderHunkFooter?.(hunk, hunkIndex)}
+          </section>
+        ))}
+      </div>
+    );
+  }
 
   if (lines.length === 0) {
     return (

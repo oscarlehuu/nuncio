@@ -599,3 +599,315 @@ export async function retryTask(id: string): Promise<TaskDto> {
   if (!res.ok) throw new Error('Failed to retry task');
   return res.json();
 }
+
+// ── Autopilot: loops + project config (rung 2) ──────────────────────────────
+// Loops are standing tasks fired on a schedule inside run-count budgets. The
+// server keeps these UI-ready so the phone/fleet surfaces render straight off.
+
+export type LoopStatus = 'active' | 'paused' | 'broken' | 'completed';
+// 'pending' is the in-flight state a run is born in (task enqueued, not yet
+// settled) — the most common outcome on an active loop, finalized to ok/failed.
+// 'budget-exhausted' and 'skipped-overlap' are bookkeeping markers a fire writes
+// when it does NOT enqueue (day budget spent / prior run still in flight); neither
+// consumes a budget slot (see CONSUMED_OUTCOMES in loop-schedule.ts).
+export type LoopRunOutcome =
+  | 'pending'
+  | 'ok'
+  | 'failed'
+  | 'budget-exhausted'
+  | 'skipped-overlap'
+  | 'resume';
+export type LoopRunVerify = 'green' | 'red' | 'none';
+export type ScheduleKind = 'cron' | 'heartbeat' | 'event';
+
+export type StopCondition =
+  | null
+  | { kind: 'maxTotalRuns'; n: number }
+  | { kind: 'verifyGreenN'; n: number };
+
+export interface LoopDto {
+  id: string;
+  /** Optional human label (v1.1); null = fall back to the goal for display. */
+  name: string | null;
+  goal: string;
+  scheduleId: string;
+  /**
+   * The human-displayable trigger, joined from the owned schedule row. Null (or
+   * absent) when the schedule row is missing/corrupt — render nothing, never crash.
+   */
+  schedule?: { kind: string; spec: string } | null;
+  /** Next fire time (epoch ms), joined from the schedule; null for event/none triggers. */
+  nextFireAt?: number | null;
+  maxRunsPerDay: number;
+  maxConsecutiveFailures: number;
+  stop: StopCondition;
+  escalation: string;
+  projectPath: string | null;
+  /** Per-loop engine override; null = inherit from the project's default engine. */
+  engine?: string | null;
+  /** Per-loop model override; null = the resolved engine's default model. */
+  model?: string | null;
+  status: LoopStatus;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CreateLoopInput {
+  /** Optional human label; null/omitted → displayed as the goal. */
+  name?: string | null;
+  goal: string;
+  schedule: { kind: ScheduleKind; spec: string };
+  maxRunsPerDay?: number;
+  maxConsecutiveFailures?: number;
+  stop?: StopCondition;
+  projectPath?: string;
+  /** Per-loop engine override (provider id); null clears it. */
+  engine?: string | null;
+  /** Per-loop model override; requires a resolvable engine; null = engine default. */
+  model?: string | null;
+}
+
+export interface LoopRunDto {
+  id: string;
+  loopId: string;
+  taskId: string | null;
+  outcome: LoopRunOutcome;
+  verify: LoopRunVerify;
+  dayBucket: string;
+  createdAt: number;
+}
+
+/** Locked founder defaults — surfaced so the create form pre-fills them. */
+export const DEFAULT_MAX_RUNS_PER_DAY = 24;
+export const DEFAULT_MAX_CONSECUTIVE_FAILURES = 3;
+
+export async function fetchLoops(): Promise<LoopDto[]> {
+  const res = await apiFetch('/api/loops');
+  if (!res.ok) throw new Error('Failed to load loops');
+  const data = (await res.json()) as { items?: LoopDto[] };
+  return data.items ?? [];
+}
+
+export async function fetchLoop(id: string): Promise<LoopDto> {
+  const res = await apiFetch(`/api/loops/${encodeURIComponent(id)}`);
+  if (!res.ok) throw new Error(`Failed to load loop (${res.status})`);
+  return res.json();
+}
+
+export async function createLoop(input: CreateLoopInput): Promise<LoopDto> {
+  const res = await apiFetch('/api/loops', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await loopErrorMessage(res, 'Failed to create loop'));
+  return res.json();
+}
+
+export async function pauseLoop(id: string): Promise<LoopDto> {
+  const res = await apiFetch(`/api/loops/${encodeURIComponent(id)}/pause`, { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to pause loop');
+  return res.json();
+}
+
+/** Resume a paused OR broken loop (broken = "fix + resume": re-enables + zeroes the streak). */
+export async function resumeLoop(id: string): Promise<LoopDto> {
+  const res = await apiFetch(`/api/loops/${encodeURIComponent(id)}/resume`, { method: 'POST' });
+  if (!res.ok) throw new Error(await loopErrorMessage(res, 'Failed to resume loop'));
+  return res.json();
+}
+
+export async function deleteLoop(id: string): Promise<void> {
+  const res = await apiFetch(`/api/loops/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('Failed to delete loop');
+}
+
+export async function fetchLoopRuns(id: string): Promise<LoopRunDto[]> {
+  const res = await apiFetch(`/api/loops/${encodeURIComponent(id)}/runs`);
+  if (!res.ok) throw new Error('Failed to load loop runs');
+  const data = (await res.json()) as { items?: LoopRunDto[] };
+  return data.items ?? [];
+}
+
+/** Editable loop fields (detail Settings tab). Patch semantics: omitted = unchanged. */
+export interface UpdateLoopInput {
+  /** null clears the label (display falls back to the goal). */
+  name?: string | null;
+  goal?: string;
+  /** null clears the per-loop engine override (inherit from project). */
+  engine?: string | null;
+  /** null clears the per-loop model override (the resolved engine's default). */
+  model?: string | null;
+  maxRunsPerDay?: number;
+  stop?: StopCondition;
+}
+
+export async function updateLoop(id: string, input: UpdateLoopInput): Promise<LoopDto> {
+  const res = await apiFetch(`/api/loops/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await loopErrorMessage(res, 'Failed to save loop'));
+  return res.json();
+}
+
+/** Why an immediate fire did nothing: a run was already in flight, or today's budget is spent. */
+export type FireSkipReason = 'overlap' | 'budget';
+
+/**
+ * Result of POST /loops/:id/fire. 200 → the run started; 409 → the fire was
+ * skipped and `reason` says which guard tripped (so the UI shows the truth instead
+ * of a false "Run started"). Other non-2xx (a broken/paused/completed loop, network)
+ * still throw — the button is disabled for those, so hitting one is a real error.
+ */
+export type FireLoopResult =
+  | { fired: true; run: LoopRunDto }
+  | { fired: false; reason: FireSkipReason };
+
+export async function fireLoop(id: string): Promise<FireLoopResult> {
+  const res = await apiFetch(`/api/loops/${encodeURIComponent(id)}/fire`, { method: 'POST' });
+  if (res.status === 409) {
+    const body = (await res.json().catch(() => null)) as { reason?: FireSkipReason } | null;
+    // Default to 'overlap' if the server omitted a reason — the safer "still working" read.
+    return { fired: false, reason: body?.reason === 'budget' ? 'budget' : 'overlap' };
+  }
+  if (!res.ok) throw new Error(await loopErrorMessage(res, 'Failed to run loop'));
+  return { fired: true, run: await res.json() };
+}
+
+/** One run's full drill-down detail (GitHub-Actions-style run view). */
+export interface LoopRunDetailDto extends LoopRunDto {
+  /** The session that executed this run — deep-link into its transcript. */
+  sessionId: string | null;
+  durationMs: number | null;
+  verifyOutputTail: string | null;
+  failureReason: string | null;
+  startedAt: number | null;
+  settledAt: number | null;
+}
+
+export async function fetchLoopRunDetail(
+  loopId: string,
+  runId: string,
+): Promise<LoopRunDetailDto> {
+  const res = await apiFetch(
+    `/api/loops/${encodeURIComponent(loopId)}/runs/${encodeURIComponent(runId)}`,
+  );
+  if (!res.ok) throw new Error(`Failed to load run (${res.status})`);
+  return res.json();
+}
+
+/** Fleet stats for the Autopilot dashboard header (counters + 14-day sparkline). */
+export interface LoopStatsDto {
+  total: number;
+  active: number;
+  broken: number;
+  successful7d: number;
+  failed7d: number;
+  successful24h: number;
+  failed24h: number;
+  sparkline: Array<{ day: string; ok: number; failed: number }>;
+}
+
+export async function fetchLoopStats(): Promise<LoopStatsDto> {
+  const res = await apiFetch('/api/loops/stats');
+  if (!res.ok) throw new Error('Failed to load loop stats');
+  return res.json();
+}
+
+async function loopErrorMessage(res: Response, fallback: string): Promise<string> {
+  const body = (await res.json().catch(() => null)) as { message?: string } | null;
+  return body?.message ?? fallback;
+}
+
+export type WorktreePolicy = 'always' | 'never' | 'optional';
+export type VerifyAutoSteer = 'on' | 'off' | 'inherit';
+
+export interface ProjectConfigDto {
+  path: string;
+  name: string;
+  defaultEngine: string | null;
+  worktreePolicy: WorktreePolicy | null;
+  verifyCommand: string | null;
+  verifyAutoSteer: VerifyAutoSteer;
+  verifyMaxRounds: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface UpsertProjectConfigInput {
+  path: string;
+  name?: string;
+  defaultEngine?: string | null;
+  worktreePolicy?: WorktreePolicy | null;
+  verifyCommand?: string | null;
+  verifyAutoSteer?: VerifyAutoSteer;
+  verifyMaxRounds?: number | null;
+}
+
+export async function fetchProjectConfigs(): Promise<ProjectConfigDto[]> {
+  const res = await apiFetch('/api/projects/config');
+  if (!res.ok) throw new Error('Failed to load project config');
+  const data = (await res.json()) as { items?: ProjectConfigDto[] };
+  return data.items ?? [];
+}
+
+export async function upsertProjectConfig(
+  input: UpsertProjectConfigInput,
+): Promise<ProjectConfigDto> {
+  const res = await apiFetch('/api/projects/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await loopErrorMessage(res, 'Failed to save project config'));
+  return res.json();
+}
+
+export async function deleteProjectConfig(path: string): Promise<void> {
+  const res = await apiFetch(`/api/projects/config?path=${encodeURIComponent(path)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error('Failed to delete project config');
+}
+
+// ── Forge repo browsing + clone (ProjectPicker forge sections) ──────────────
+// Forge connection status reuses the existing `fetchForgeStatus` / `ForgeStatusDto`
+// (forge-status-api.ts) — only repo listing + clone are new here.
+
+/** A repo on a connected forge, pickable into a clone. */
+export interface ForgeRepoDto {
+  id: string;
+  fullName: string;
+  name: string;
+  description: string | null;
+  private: boolean;
+  defaultBranch: string;
+  cloneUrl: string;
+  webUrl: string;
+  updatedAt: number | null;
+}
+
+export async function fetchForgeRepos(forgeId: string, query = ''): Promise<ForgeRepoDto[]> {
+  const params = query.trim() ? `?q=${encodeURIComponent(query.trim())}` : '';
+  const res = await apiFetch(`/api/forges/${encodeURIComponent(forgeId)}/repos${params}`);
+  if (!res.ok) throw new Error('Failed to load repositories');
+  const data = (await res.json()) as { items?: ForgeRepoDto[] };
+  return data.items ?? [];
+}
+
+/** Clone a forge repo locally; the returned path flows exactly like a picked local path. */
+export async function cloneForgeRepo(input: {
+  forgeId: string;
+  fullName: string;
+  cloneUrl: string;
+}): Promise<{ path: string }> {
+  const res = await apiFetch('/api/projects/clone', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await loopErrorMessage(res, 'Failed to clone repository'));
+  return res.json();
+}

@@ -23,6 +23,8 @@ import { chromium } from 'playwright-core';
 import { ensureWebBuild, findFreePort, repoRoot, startServer } from './smoke-ui-stack.mjs';
 
 const FORCE_BUILD = process.argv.includes('--build');
+const CHROME_EXECUTABLE = process.env.NUNCIO_SMOKE_CHROME_EXECUTABLE?.trim();
+const CHROME_CHANNEL = process.env.NUNCIO_SMOKE_CHROME_CHANNEL?.trim() || 'chrome';
 // Artifacts are screenshots only (*.png), which the repo .gitignore already
 // ignores globally — so this dir never shows up in git status.
 const ARTIFACTS_DIR = join(repoRoot, 'smoke-artifacts');
@@ -101,8 +103,14 @@ async function main() {
     createStep.detail = `id=${session.id}`;
 
     // 2) Launch system Chrome headless against the same-origin UI.
-    const browserStep = record('launch system Chrome (playwright-core channel=chrome)');
-    browser = await chromium.launch({ channel: 'chrome', headless: true });
+    const chromeTarget = CHROME_EXECUTABLE
+      ? `executable=${CHROME_EXECUTABLE}`
+      : `channel=${CHROME_CHANNEL}`;
+    const browserStep = record(`launch system Chrome (playwright-core ${chromeTarget})`);
+    browser = await chromium.launch({
+      ...(CHROME_EXECUTABLE ? { executablePath: CHROME_EXECUTABLE } : { channel: CHROME_CHANNEL }),
+      headless: true,
+    });
     const context = await browser.newContext({ baseURL: baseUrl });
     page = await context.newPage();
     browserStep.ok = true;

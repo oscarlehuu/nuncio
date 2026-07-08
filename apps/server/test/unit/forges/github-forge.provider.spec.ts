@@ -130,6 +130,68 @@ describe('GithubForgeProvider', () => {
     expect(headers.get('Accept')).toBe('application/vnd.github+json');
   });
 
+  it('capabilities reports listRepositories support', () => {
+    expect(provider.capabilities().listRepositories).toBe(true);
+  });
+
+  it('listRepositories maps GitHub repos to the picker shape (sorted by pushed)', async () => {
+    process.env.GITHUB_TOKEN = 'ghp_test_token';
+    const { fetchOverride, calls } = makeFetchStub([
+      {
+        id: 42,
+        full_name: 'octocat/hello-world',
+        name: 'hello-world',
+        description: 'my first repo',
+        private: false,
+        default_branch: 'main',
+        clone_url: 'https://github.com/octocat/hello-world.git',
+        html_url: 'https://github.com/octocat/hello-world',
+        pushed_at: '2026-07-01T12:00:00Z',
+      },
+      {
+        id: 7,
+        full_name: 'octocat/secret',
+        name: 'secret',
+        description: null,
+        private: true,
+        default_branch: 'trunk',
+        clone_url: 'https://github.com/octocat/secret.git',
+        html_url: 'https://github.com/octocat/secret',
+        pushed_at: null,
+      },
+    ]);
+    provider.fetchOverride = fetchOverride;
+
+    const repos = await provider.listRepositories();
+
+    expect(calls[0].url).toContain('/user/repos');
+    expect(calls[0].url).toContain('sort=pushed');
+    expect(repos).toEqual([
+      {
+        id: '42',
+        fullName: 'octocat/hello-world',
+        name: 'hello-world',
+        description: 'my first repo',
+        private: false,
+        defaultBranch: 'main',
+        cloneUrl: 'https://github.com/octocat/hello-world.git',
+        webUrl: 'https://github.com/octocat/hello-world',
+        updatedAt: '2026-07-01T12:00:00Z',
+      },
+      {
+        id: '7',
+        fullName: 'octocat/secret',
+        name: 'secret',
+        description: null,
+        private: true,
+        defaultBranch: 'trunk',
+        cloneUrl: 'https://github.com/octocat/secret.git',
+        webUrl: 'https://github.com/octocat/secret',
+        updatedAt: null,
+      },
+    ]);
+  });
+
   it('getCurrentUser returns name as null when GitHub omits it', async () => {
     process.env.GITHUB_TOKEN = 'ghp_test_token';
     const { fetchOverride } = makeFetchStub({ login: 'ghost', name: null });

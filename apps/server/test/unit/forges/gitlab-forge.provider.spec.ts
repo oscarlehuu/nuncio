@@ -72,6 +72,68 @@ describe('GitlabForgeProvider', () => {
     expect(await provider.isAvailable()).toBe(false);
   });
 
+  it('capabilities reports listRepositories support', () => {
+    expect(provider.capabilities().listRepositories).toBe(true);
+  });
+
+  it('listRepositories maps GitLab projects to the picker shape', async () => {
+    process.env.GITLAB_TOKEN = 'glpat-test-token';
+    const { fetchOverride, calls } = makeFetchStub([
+      {
+        id: 101,
+        path_with_namespace: 'tanuki/webapp',
+        path: 'webapp',
+        description: 'the web app',
+        visibility: 'private',
+        default_branch: 'main',
+        http_url_to_repo: 'https://gitlab.com/tanuki/webapp.git',
+        web_url: 'https://gitlab.com/tanuki/webapp',
+        last_activity_at: '2026-07-02T09:00:00Z',
+      },
+      {
+        id: 102,
+        path_with_namespace: 'tanuki/lib',
+        path: 'lib',
+        description: null,
+        visibility: 'public',
+        default_branch: null,
+        http_url_to_repo: 'https://gitlab.com/tanuki/lib.git',
+        web_url: 'https://gitlab.com/tanuki/lib',
+        last_activity_at: null,
+      },
+    ]);
+    provider.fetchOverride = fetchOverride;
+
+    const repos = await provider.listRepositories();
+
+    expect(calls[0].url).toContain('/projects');
+    expect(calls[0].url).toContain('membership=true');
+    expect(repos).toEqual([
+      {
+        id: '101',
+        fullName: 'tanuki/webapp',
+        name: 'webapp',
+        description: 'the web app',
+        private: true,
+        defaultBranch: 'main',
+        cloneUrl: 'https://gitlab.com/tanuki/webapp.git',
+        webUrl: 'https://gitlab.com/tanuki/webapp',
+        updatedAt: '2026-07-02T09:00:00Z',
+      },
+      {
+        id: '102',
+        fullName: 'tanuki/lib',
+        name: 'lib',
+        description: null,
+        private: false,
+        defaultBranch: 'main',
+        cloneUrl: 'https://gitlab.com/tanuki/lib.git',
+        webUrl: 'https://gitlab.com/tanuki/lib',
+        updatedAt: null,
+      },
+    ]);
+  });
+
   it('isAvailable returns true when GITLAB_TOKEN is set', async () => {
     process.env.GITLAB_TOKEN = 'glpat-test-token';
     expect(await provider.isAvailable()).toBe(true);

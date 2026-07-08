@@ -1,0 +1,197 @@
+import { useState } from 'react';
+import { ArrowUpRight, Check, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
+import { relativeTime, type AttentionItemDto } from '../lib/api';
+import {
+  attentionKindMeta,
+  openTargetFor,
+  TONE_ACCENT,
+  TONE_CHIP,
+  type OpenTarget,
+} from '../lib/attention-kind';
+import { projectDisplayName } from '../lib/projects';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
+
+interface AttentionRowProps {
+  item: AttentionItemDto;
+  busy?: boolean;
+  onOpen: (target: OpenTarget) => void;
+  onAck: (id: string) => void;
+  onApprove: (id: string, proposalCount: number) => void;
+  onResolve: (id: string) => void;
+}
+
+export function AttentionRow({ item, busy, onOpen, onAck, onApprove, onResolve }: AttentionRowProps) {
+  const meta = attentionKindMeta(item.kind);
+  const Icon = meta.icon;
+  const target = openTargetFor(item);
+  const acked = item.acknowledgedAt !== null;
+  const external = target !== null && 'href' in target;
+  const dispatcher = dispatcherPayload(item);
+  const isDispatcher = item.kind === 'dispatcher-proposal' && dispatcher.proposals.length > 0;
+  const approved = dispatcher.approvedAt !== null || dispatcher.taskIds.length > 0;
+  const project = isDispatcher ? null : projectDisplayName(item.projectPath);
+
+  return (
+    <li
+      className={cn(
+        'surface-lit relative flex flex-col gap-3 overflow-hidden rounded-xl border border-border bg-card pl-4 pr-3 py-3 shadow-e1 sm:flex-row sm:items-center',
+        acked && 'opacity-65',
+      )}
+    >
+      {/* Severity-tinted left accent — amber for the needs-you class, quiet for review. */}
+      <span className={cn('absolute inset-y-0 left-0 w-1', TONE_ACCENT[meta.tone])} aria-hidden />
+
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            className={cn(
+              'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-ui-sm font-medium',
+              TONE_CHIP[meta.tone],
+            )}
+          >
+            <Icon className="size-3 shrink-0" />
+            {meta.label}
+          </span>
+          {acked && <span className="text-ui-sm text-muted-foreground">Seen</span>}
+          {approved && <span className="text-ui-sm text-success">Done</span>}
+        </div>
+        {isDispatcher ? (
+          <DispatcherProposalSummary payload={dispatcher} />
+        ) : (
+          <p className="mt-1.5 text-ui-lg font-medium text-foreground">{item.title}</p>
+        )}
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-ui-sm text-muted-foreground">
+          {project && <span className="truncate">{project}</span>}
+          {project && <span aria-hidden>·</span>}
+          <span className="tabular-nums">{relativeTime(item.createdAt)}</span>
+        </div>
+      </div>
+
+      {/* Actions — always visible (no hover), tap-sized for phone. */}
+      <div className="flex shrink-0 items-center gap-1.5">
+        {!acked && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 gap-1.5 px-2.5"
+            disabled={busy}
+            onClick={() => onAck(item.id)}
+            aria-label={`Mark "${item.title}" seen`}
+          >
+            <Check className="size-3.5" />
+            <span className="hidden sm:inline">Seen</span>
+          </Button>
+        )}
+        {isDispatcher && !approved && (
+          <Button
+            size="sm"
+            className="h-8 gap-1.5 px-3"
+            disabled={busy}
+            onClick={() => onApprove(item.id, dispatcher.proposals.length)}
+            aria-label={`Approve ${dispatcher.proposals.length} dispatcher proposal${dispatcher.proposals.length === 1 ? '' : 's'}`}
+          >
+            Approve
+          </Button>
+        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 px-2.5 text-muted-foreground"
+          disabled={busy}
+          onClick={() => onResolve(item.id)}
+          aria-label={`Dismiss "${item.title}"`}
+        >
+          Dismiss
+        </Button>
+        {target && !isDispatcher && (
+          <Button
+            size="sm"
+            className="h-8 gap-1.5 px-3"
+            disabled={busy}
+            onClick={() => onOpen(target)}
+            aria-label={`Open "${item.title}"`}
+          >
+            Open
+            {external ? <ExternalLink className="size-3.5" /> : <ArrowUpRight className="size-3.5" />}
+          </Button>
+        )}
+      </div>
+    </li>
+  );
+}
+
+interface DispatcherProposal {
+  title: string;
+  projectPath: string | null;
+  rationale: string;
+}
+
+interface DispatcherPayload {
+  proposals: DispatcherProposal[];
+  approvedAt: number | null;
+  taskIds: string[];
+}
+
+function DispatcherProposalSummary({
+  payload,
+}: {
+  payload: DispatcherPayload;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const count = payload.proposals.length;
+  const done = payload.approvedAt !== null || payload.taskIds.length > 0;
+
+  return (
+    <div className="mt-1.5">
+      <button
+        type="button"
+        className="flex w-full min-w-0 items-center gap-1.5 rounded text-left text-ui-lg font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        aria-label={`${expanded ? 'Hide' : 'Show'} dispatcher proposals`}
+      >
+        {expanded ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
+        <span className="truncate">{done ? doneLabel(payload.taskIds.length || count) : `Tomorrow's plan - ${count} proposal${count === 1 ? '' : 's'}`}</span>
+      </button>
+      {expanded && (
+        <ul className="mt-3 space-y-2">
+          {payload.proposals.map((proposal, idx) => (
+            <li key={`${proposal.title}:${proposal.projectPath ?? 'none'}:${idx}`} className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
+              <p className="text-ui font-medium text-foreground">{proposal.title}</p>
+              <p className="mt-0.5 text-ui-sm text-muted-foreground">{projectDisplayName(proposal.projectPath) ?? 'No project'}</p>
+              <p className="mt-1 line-clamp-1 text-ui-sm text-muted-foreground">{proposal.rationale}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function doneLabel(taskCount: number): string {
+  return `Done - ${taskCount} task${taskCount === 1 ? '' : 's'} queued`;
+}
+
+function dispatcherPayload(item: AttentionItemDto): DispatcherPayload {
+  const raw = item.payload ?? {};
+  const proposals = Array.isArray(raw.proposals)
+    ? raw.proposals.flatMap((proposal): DispatcherProposal[] => {
+        if (!proposal || typeof proposal !== 'object') return [];
+        const p = proposal as Record<string, unknown>;
+        if (typeof p.title !== 'string') return [];
+        return [
+          {
+            title: p.title,
+            projectPath: typeof p.projectPath === 'string' ? p.projectPath : null,
+            rationale: typeof p.rationale === 'string' ? p.rationale : '',
+          },
+        ];
+      })
+    : [];
+  return {
+    proposals,
+    approvedAt: typeof raw.approvedAt === 'number' ? raw.approvedAt : null,
+    taskIds: Array.isArray(raw.taskIds) ? raw.taskIds.filter((id): id is string => typeof id === 'string') : [],
+  };
+}

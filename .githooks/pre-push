@@ -1,0 +1,24 @@
+#!/usr/bin/env sh
+set -eu
+
+if [ "${NUNCIO_SKIP_GATE:-}" = "1" ]; then
+  echo "NUNCIO_SKIP_GATE=1 set; skipping pre-push gate." >&2
+  exit 0
+fi
+
+should_gate=""
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  case "$remote_ref" in
+    refs/heads/dev|refs/heads/main)
+      should_gate="1"
+      ;;
+  esac
+done
+
+if [ -z "$should_gate" ]; then
+  exit 0
+fi
+
+echo "Running bun run gate before pushing dev/main." >&2
+echo "Set NUNCIO_SKIP_GATE=1 only for emergency bypasses." >&2
+bun run gate

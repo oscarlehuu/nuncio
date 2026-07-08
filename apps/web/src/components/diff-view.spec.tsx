@@ -40,4 +40,30 @@ describe('DiffView', () => {
     render(<DiffView diff="" />);
     expect(screen.getByText(/no textual diff/i)).toBeInTheDocument();
   });
+
+  it('renders structured hunks with an embedded hunk action', () => {
+    render(
+      <DiffView
+        hunks={[
+          {
+            header: '@@ -10,2 +10,3 @@',
+            oldStart: 10,
+            oldLines: 2,
+            newStart: 10,
+            newLines: 3,
+            lines: [
+              { kind: 'context', text: 'const a = 1;' },
+              { kind: 'del', text: 'return a;' },
+              { kind: 'add', text: 'return a + 1;' },
+            ],
+          },
+        ]}
+        renderHunkAction={() => <button type="button">Comment on hunk</button>}
+      />,
+    );
+
+    expect(screen.getByText('@@ -10,2 +10,3 @@')).toBeInTheDocument();
+    expect(screen.getByText('+return a + 1;')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /comment on hunk/i })).toBeInTheDocument();
+  });
 });

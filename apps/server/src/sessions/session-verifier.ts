@@ -8,7 +8,7 @@ export interface VerifyCommand {
   argv: string[];
   /** Human-readable form stored in the event payload. */
   display: string;
-  source: 'project-file' | 'setting';
+  source: 'project-config' | 'project-file' | 'setting';
 }
 
 export interface VerifyRunResult {

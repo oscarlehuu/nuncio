@@ -59,3 +59,35 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
           GITHUB_SHA: ${{ github.event.pull_request.head.sha }}
         run: bun run check-changeset
+
+  e2e-smoke:
+    name: e2e + smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Chrome
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Server e2e tests
+        run: bun run --filter @nuncio/server test:e2e
+
+      - name: Real-browser smoke
+        env:
+          NUNCIO_SMOKE_CHROME_EXECUTABLE: ${{ steps.setup-chrome.outputs.chrome-path }}
+        run: bun run test:smoke-ui --build

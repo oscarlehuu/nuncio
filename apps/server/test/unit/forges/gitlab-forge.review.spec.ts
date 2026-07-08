@@ -77,6 +77,7 @@ describe('GitlabForgeProvider — review/merge/issues surface', () => {
       resolveThreads: true,
       updateBranch: true,
       rerunFailedOnly: false,
+      listRepositories: true,
     });
   });
 

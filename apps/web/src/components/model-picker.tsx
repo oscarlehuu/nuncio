@@ -48,10 +48,7 @@ import {
 
 export { DEFAULT_MODEL_ID, DEFAULT_PROVIDER_ID } from '../lib/model-providers';
 
-interface ModelPickerProps {
-  value: string;
-  modelOptions?: ModelOptionsMap;
-  onChange: (modelId: string, providerId: string, modelOptions?: ModelOptionsMap) => void;
+interface BaseModelPickerProps {
   providers?: ModelProvider[];
   /** 'boxed' = composer toolbar chip; 'text' = borderless Cursor context label. */
   variant?: 'boxed' | 'text';
@@ -60,7 +57,30 @@ interface ModelPickerProps {
   onOpen?: () => void;
   /** Lock the trigger (e.g. while a model change for this row is in flight). */
   disabled?: boolean;
+  /** Prevent automatic fallback selection when callers need nullable/inherited model state. */
+  autoPick?: boolean;
 }
+
+interface ChatModelPickerProps extends BaseModelPickerProps {
+  pairMode?: never;
+  value: string;
+  modelOptions?: ModelOptionsMap;
+  onChange: (modelId: string, providerId: string, modelOptions?: ModelOptionsMap) => void;
+}
+
+interface PairModelPickerProps extends BaseModelPickerProps {
+  pairMode: 'engine+model';
+  /** Null engine means inherit the project's configured engine. */
+  engine: string | null;
+  /** Null model means use the selected/inherited provider default. */
+  model: string | null;
+  onPairChange: (engine: string | null, model: string | null) => void;
+  inheritOption?: { label: string };
+  providerDefaultOption?: boolean;
+  compact?: boolean;
+}
+
+type ModelPickerProps = ChatModelPickerProps | PairModelPickerProps;
 
 function SelectionCheck({ active }: { active: boolean }) {
   if (!active) return <span className="size-4 shrink-0" />;
@@ -358,7 +378,103 @@ function ModelRows({
   );
 }
 
-export function ModelPicker({ value, modelOptions, onChange, providers, variant = 'boxed', onOpen, disabled }: ModelPickerProps) {
+function PairModeModelPicker({
+  providers,
+  engine,
+  model,
+  onPairChange,
+  inheritOption,
+  providerDefaultOption,
+  variant = 'text',
+  compact,
+}: PairModelPickerProps) {
+  const catalog = normalizeModelCatalog(providers ?? []);
+  const [open, setOpen] = useState(false);
+  const lookup = modelById(catalog);
+  const engineLabel = engine ? catalog.find((p) => p.id === engine)?.name ?? engine : inheritOption?.label ?? 'Inherit';
+  const knownModel = model ? lookup[model] : undefined;
+  const modelLabel = model ? (knownModel ? prettyModelName(knownModel.name) : model) : 'default model';
+
+  const pickPair = (nextEngine: string | null, nextModel: string | null) => {
+    onPairChange(nextEngine, nextModel);
+    setOpen(false);
+  };
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen} modal={false}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="outline"
+          className={cn(
+            variant === 'text'
+              ? 'picker-trigger-text max-w-full'
+              : 'composer-picker-trigger h-8 gap-1.5 px-2.5 max-w-[300px]',
+            compact && 'h-6',
+          )}
+          aria-label={`Engine and model: ${engineLabel} · ${modelLabel}`}
+        >
+          {engine && (
+            <ProviderIcon providerId={engine} className="size-3.5 shrink-0 text-muted-foreground" />
+          )}
+          <span className="truncate text-ui-lg">
+            {engineLabel} · {modelLabel}
+          </span>
+          <ChevronDown className="size-3 opacity-70" data-icon="inline-end" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-[260px]">
+        {inheritOption && (
+          <>
+            <DropdownMenuItem onSelect={() => pickPair(null, null)} className="gap-2">
+              <SelectionCheck active={engine === null} />
+              <span className="truncate">{inheritOption.label}</span>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
+        {catalog.map((p) => {
+          const models = flattenProviders([p]);
+          const engineActive = engine === p.id;
+          return (
+            <DropdownMenuSub key={p.id}>
+              <DropdownMenuSubTrigger className="gap-2">
+                <SelectionCheck active={engineActive} />
+                <ProviderIcon providerId={p.id} className="size-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate">{p.name}</span>
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="max-h-[360px] w-[240px] overflow-y-auto">
+                {providerDefaultOption && (
+                  <DropdownMenuItem onSelect={() => pickPair(p.id, null)} className="gap-2">
+                    <SelectionCheck active={engineActive && model === null} />
+                    <span className="truncate">Provider default</span>
+                  </DropdownMenuItem>
+                )}
+                {providerDefaultOption && models.length > 0 && <DropdownMenuSeparator />}
+                {models.map((m) => (
+                  <DropdownMenuItem key={m.id} onSelect={() => pickPair(p.id, m.id)} className="gap-2">
+                    <SelectionCheck active={engineActive && model === m.id} />
+                    <span className="truncate">{prettyModelName(m.name)}</span>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function ChatModelPicker({
+  value,
+  modelOptions,
+  onChange,
+  providers,
+  variant = 'boxed',
+  onOpen,
+  disabled,
+  autoPick = true,
+}: ChatModelPickerProps) {
   const catalog = normalizeModelCatalog(providers ?? []);
   const [open, setOpen] = useState(false);
   const asText = variant === 'text';
@@ -366,12 +482,13 @@ export function ModelPicker({ value, modelOptions, onChange, providers, variant 
   const selected = lookup[value];
 
   useEffect(() => {
+    if (!autoPick) return;
     const lookupForProviders = modelById(catalog);
     if (!value || lookupForProviders[value]) return;
     const first = flattenProviders(catalog)[0];
     if (first) onChange(first.id, first.providerId, defaultOptionsForModel(first));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onChange, catalog, value]);
+  }, [autoPick, onChange, catalog, value]);
 
   const pick = (modelId: string, providerId: string, options?: ModelOptionsMap) => {
     const model = lookup[modelId];
@@ -485,4 +602,9 @@ export function ModelPicker({ value, modelOptions, onChange, providers, variant 
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+export function ModelPicker(props: ModelPickerProps) {
+  if (props.pairMode === 'engine+model') return <PairModeModelPicker {...props} />;
+  return <ChatModelPicker {...props} />;
 }

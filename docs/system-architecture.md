@@ -227,6 +227,80 @@ Session FSM: `CREATED → RUNNING → IDLE | ERROR | PAUSED`; `IDLE/PAUSED → R
 - **Attachments** are threaded through `POST /api/sessions` (create) and `POST /api/sessions/:id/steer` as `attachments?: AgentAttachment[]`, passed into `run`/`steer` via `AgentRunContext.attachments`.
 - **Body limit:** `main.ts` sets the Nest `json`/`urlencoded` body limit to `25mb` via `app.useBodyParser(...)` so base64 image attachments fit. Native Nest body-parser config is used (not `import 'express'`) because `express` is only a transitive dep and is not resolvable as a bare specifier under Bun's isolated module store.
 
+### Post-turn verifier and auto-fix loop
+
+After a local run or steer settles `IDLE`, `SessionsService.maybeVerify(sessionId)` (`sessions.service.ts:1073`) runs the session's check command — a `.nuncio/verify` script in the workspace, or the `NUNCIO_VERIFY_COMMAND` setting — inside the session's cwd and appends `verify_start` then `verify_result` (`{ command, ok, exitCode, durationMs, outputTail, timedOut }`). Verification annotates the transcript; it never blocks the FSM.
+
+When `NUNCIO_VERIFY_AUTO_STEER` is enabled, a failing `verify_result` drives an auto-fix loop off the tail of `maybeVerify`. The loop's whole state is **derived from the event log** (`verify-feedback.ts` — `foldLoopState` / `decideNextStep`), never a schema column, so it rebuilds exactly after a restart:
+
+- On a failing verify, `foldLoopState` folds the event tail since the last loop boundary (a green `verify_result`, a human — untagged — `steer_message`, or a prior `verify_needs_attention`) into a round count and the failing output tails. `decideNextStep` then either **retries** or **stops**.
+- A retry appends a `verify_retry` marker (`{ round, reason, command, outputTail, retryId }`), then auto-steers the same session with the failure output. That steer is tagged `{ origin: 'verify_retry', retryId }` on its `steer_message` so it is classified by explicit origin, not adjacency, and a boot rescan can idempotently re-send a `verify_retry` whose steer never followed. Because `steer` ends by calling `maybeVerify` again, the loop is self-driving through the existing machinery — no new scheduler, no new FSM state.
+- The loop **stops** and appends `verify_needs_attention` (`{ rounds, reason: 'max_rounds' | 'repeated_failure', lastOutputTail }`) after `NUNCIO_VERIFY_MAX_ROUNDS` rounds (default 3) or when the two most recent failures are byte-identical (no progress). It is emitted once and cleared implicitly by a later green `verify_result`. The web transcript renders `verify_retry` and `verify_needs_attention` as first-class rows.
+- **Boot resume:** `resumeVerifyLoops()` / `resumeOneVerifyLoop()` (`sessions.service.ts:1255`) re-fold each session on startup and re-send a dangling auto-steer that crashed between marker and delivery.
+- **Task settlement:** a task's outcome must reflect the loop's *terminal* verify, not the first failing one, so `TasksService` waits for the loop to settle and reads `lastVerifyResult` / the needs-attention payload (`tasks.service.ts:180`) before recording Done vs needs-you.
+
+## Rung 3 Attention System
+
+Rung 3 turns scattered "needs you" signals into one durable attention spine, then layers heartbeat, Fleet home, and session diff review on top. The surfaces are phone-first, but the implementation stays additive: collectors read existing session events, loop state, forge state, git state, and scheduler jobs.
+
+### Attention queue
+
+`attention_items` is created during guarded DB bootstrap with one open row per `(kind, subject_id)`, enforced by the partial unique index (`apps/server/src/db/database.service.ts:292`, `apps/server/src/db/database.service.ts:309`). The row carries `acknowledged_at` for "seen" and `suppress_reraise` for manual-founder overrides (`apps/server/src/db/database.service.ts:301`, `apps/server/src/db/database.service.ts:315`). A manual resolve sets suppression so a still-live condition is not immediately re-raised by the next sweep; `onConditionCleared` clears that marker and resolves any open row when the underlying condition is observed gone (`apps/server/src/attention/attention.service.ts:58`, `apps/server/src/attention/attention.service.ts:87`, `apps/server/src/attention/attention.service.ts:120`).
+
+Ranking is deterministic and derives severity from `kind` at rank time, not from the materialized column, so an old row sorts correctly after bucket changes without a data migration (`apps/server/src/attention/attention-ranking.ts:17`). The ordering is severity, project weight, age, and id (`apps/server/src/attention/attention-ranking.ts:22`). `AttentionService.list()` returns ranked open items plus badge counts; ack keeps the item open, resolve is terminal, and every mutation emits the fail-soft badge sink (`apps/server/src/attention/attention.service.ts:96`, `apps/server/src/attention/attention.service.ts:106`, `apps/server/src/attention/attention.service.ts:114`, `apps/server/src/attention/attention.service.ts:173`). The REST surface is `GET /attention`, `GET /attention/counts`, `POST /attention/:id/ack`, and `POST /attention/:id/resolve` (`apps/server/src/attention/attention.controller.ts:8`, `apps/server/src/attention/attention.controller.ts:17`).
+
+`AttentionCollectors` is the ingestion seam. Event-driven collectors subscribe through `registerSessionEventHook`, raise permission items for `user_input_requested` and provider approvals, clear them on the matching resolved events, and raise `verify-dead` on `verify_needs_attention` (`apps/server/src/attention/attention-collectors.ts:18`, `apps/server/src/attention/attention-collectors.ts:57`, `apps/server/src/attention/attention-collectors.ts:83`). Poll collectors run during sweeps: broken loops become `tripped-breaker`, open PRs become `pr-review`, closed PRs auto-clear, and `reconcileOpenItems()` probes open rows at the end (`apps/server/src/attention/attention-collectors.ts:111`, `apps/server/src/attention/attention-collectors.ts:127`, `apps/server/src/attention/attention-collectors.ts:153`, `apps/server/src/attention/attention-collectors.ts:180`). `registerSweep()` lets Fleet anomaly collectors ride the same cadence without editing the core attention collectors (`apps/server/src/attention/attention-collectors.ts:38`).
+
+### Heartbeat
+
+Heartbeat is four system scheduler jobs: infra every 15 minutes, fleet reconcile every 60 minutes, morning digest at 08:00, and evening digest at 20:00 by default (`apps/server/src/attention/heartbeat/heartbeat.service.ts:35`). `HeartbeatService` registers the system-fire handler and ensures exactly one schedule per job on boot, updating changed specs without duplicating rows (`apps/server/src/attention/heartbeat/heartbeat.service.ts:92`, `apps/server/src/attention/heartbeat/heartbeat.service.ts:288`). Dispatch is closed-guarded, timeout-bounded, and never throws into the scheduler; reconcile also re-runs the attention sweep so new broken loops and PRs appear without a restart (`apps/server/src/attention/heartbeat/heartbeat.service.ts:172`, `apps/server/src/attention/heartbeat/heartbeat.service.ts:195`).
+
+Layer 1 folds infra self-check results into the attention queue. Connected forge credentials are probed via provider `getCurrentUser`; absent credentials are ignored. RUNNING sessions whose last event is older than the zombie threshold raise `zombie-session`; a registered probe clears that item once the session is no longer stale and running (`apps/server/src/attention/heartbeat/heartbeat.service.ts:124`, `apps/server/src/attention/heartbeat/heartbeat.service.ts:158`, `apps/server/src/attention/heartbeat/infra-checks.ts:24`, `apps/server/src/attention/heartbeat/infra-checks.ts:62`, `apps/server/src/attention/heartbeat/infra-checks.ts:82`).
+
+Layer 3 builds a real digest from existing durable rows, stores one `digest_runs` marker per slot, and only then sends a push (`apps/server/src/db/database.service.ts:324`, `apps/server/src/attention/heartbeat/heartbeat.service.ts:243`, `apps/server/src/attention/heartbeat/heartbeat.service.ts:260`). `DigestRepository.markSent()` is idempotent on `slot_key`, so missed-fire catch-up cannot double-send (`apps/server/src/attention/heartbeat/digest.repository.ts:16`, `apps/server/src/attention/heartbeat/digest.repository.ts:31`). The in-app endpoint reads the latest or named slot from the same store (`apps/server/src/attention/heartbeat/heartbeat.controller.ts:4`, `apps/server/src/attention/heartbeat/heartbeat.controller.ts:16`).
+
+### Fleet home and anomalies
+
+Fleet is derived on demand, not materialized. `GET /fleet` returns one ordered row per configured, recently active, or attention-bearing project (`apps/server/src/attention/fleet/fleet.controller.ts:4`, `apps/server/src/attention/fleet/fleet.service.ts:34`, `apps/server/src/attention/fleet/fleet.service.ts:141`). Each row folds open attention, running sessions, active loops, open PR count, last settled verify signal, last activity, and `topItem`; health is red for high-severity open attention, yellow for lower open attention, and green when clear (`apps/server/src/attention/fleet/fleet.ts:15`, `apps/server/src/attention/fleet/fleet.service.ts:160`). Ordering is health, project weight, last activity, then path (`apps/server/src/attention/fleet/fleet.ts:64`).
+
+The two v1 anomaly collectors are also just attention raisers with clear paths. `session-empty-diff` inspects RUNNING sessions over the threshold and calls `GitService.hasChanges()`; a non-repo path or git failure is treated as no changes and never throws (`apps/server/src/attention/fleet/anomaly-collector.ts:34`, `apps/server/src/attention/fleet/anomaly-collector.ts:67`, `apps/server/src/attention/fleet/anomaly-collector.ts:121`, `apps/server/src/git/git.service.ts:333`). `loop-failing` waits for at least N failed or budget-exhausted runs today, no green verify, and no pending run before raising; a green run, rollover, deletion, or pending work clears/suppresses the item (`apps/server/src/attention/fleet/anomaly-collector.ts:153`). The web app routes `/` to Fleet, `/new` to the composer, and `/grid?project=<path>` to the Workbench drill-down (`apps/web/src/App.tsx:603`, `apps/web/src/App.tsx:665`).
+
+### Session diff review
+
+Session diff review is worktree/cwd only. `GET /sessions/:id/diff` resolves the session's `worktreePath`, `workspace`, or `projectPath`; generated worktrees diff against their merge-base with the persisted/recovered base branch, while work-local sessions ignore `baseBranch` metadata and show only uncommitted work vs `HEAD` (`apps/server/src/sessions/diff/session-diff.controller.ts:8`, `apps/server/src/sessions/diff/session-diff.service.ts:48`, `apps/server/src/sessions/diff/session-diff.service.ts:61`). The parser splits by `diff --git`, extracts per-file status, additions/deletions, and hunks, collapses binaries, lockfiles, and too-large files, and reports `omittedFiles` when the hard total cap or raw git cap drops content (`apps/server/src/sessions/diff/diff-parse.ts:21`, `apps/server/src/sessions/diff/diff-parse.ts:33`, `apps/server/src/sessions/diff/diff-parse.ts:74`, `apps/server/src/sessions/diff/diff-parse.ts:130`; shape in `apps/server/src/sessions/diff/session-diff.types.ts:43`).
+
+`POST /sessions/:id/diff/comment` validates the path is inside the session git root, builds a delimited `Re: path:line` steer body with capped hunk text, and sends it through `SessionsService.steer`; if the session is already running, the existing steer queue handles delivery (`apps/server/src/sessions/diff/session-diff.controller.ts:23`, `apps/server/src/sessions/diff/session-diff.service.ts:76`, `apps/server/src/sessions/diff/diff-comment.ts:4`, `apps/server/src/sessions/diff/diff-comment.ts:22`). The web Changes panel fetches the structured diff, shows omitted-file warnings, keeps collapsed rows locked, and posts hunk comments with a queued-delivery toast for RUNNING sessions (`apps/web/src/components/session-changes-panel.tsx:31`, `apps/web/src/components/session-changes-panel.tsx:67`, `apps/web/src/components/session-changes-panel.tsx:125`).
+
+## Rung 4 Intelligence
+
+Rung 4 adds read-only intelligence folds, a global timeline, a local MCP server, and deterministic dispatcher proposals. It stays inside the existing durable fact model: sessions, events, tasks, loop runs, attention rows, digest runs, schedules, and project defaults. No source in this rung estimates usage or lets Nuncio call model APIs directly.
+
+### Observability folds
+
+Observability is derive-on-demand. `emptyObservabilityMetrics()` initializes usage as `inputTokens`, `outputTokens`, `totalTokens`, and `costUsd` all `null`, with `source: 'unavailable'`; those fields remain unknown until a provider emits structured usage (`apps/server/src/observability/observability-metrics.ts:18`, `apps/server/src/observability/observability-metrics.ts:28`). The main fold counts only durable facts: sessions/tasks/loop runs by created time, session events for turns, steers, verify results, status-event durations, and current/resolved attention rows (`apps/server/src/observability/observability-metrics.ts:38`, `apps/server/src/observability/observability-metrics.ts:49`, `apps/server/src/observability/observability-metrics.ts:84`, `apps/server/src/observability/observability-metrics.ts:110`). Rollups are pure filters over the same sources by provider, project, or day, with `unassigned` and `unknown` buckets instead of throwing on missing metadata (`apps/server/src/observability/observability-rollups.ts:11`, `apps/server/src/observability/observability-rollups.ts:31`, `apps/server/src/observability/observability-rollups.ts:50`).
+
+The REST surface is `GET /api/observability/summary`, `/sessions/:id`, `/rollups`, and `/timeline`; `/api/timeline` is the phone-first feed wrapper that returns entries plus pagination metadata (`apps/server/src/observability/observability.controller.ts:5`, `apps/server/src/observability/observability.controller.ts:32`, `apps/server/src/observability/observability.controller.ts:45`).
+
+### Timeline and digest
+
+`buildGlobalTimeline()` merges session, task, loop-run, attention, and digest facts into UI-ready entries, then applies `[from,to)`, `before`, provider, and project filters before sorting (`apps/server/src/observability/observability-timeline.ts:12`, `apps/server/src/observability/observability-timeline.ts:19`, `apps/server/src/observability/observability-timeline.ts:34`). Equal timestamps are stable: entries sort by timestamp, significance, then id, and pagination extends a page to include every entry sharing the boundary timestamp so a cursor cannot split ties (`apps/server/src/observability/observability-timeline-significance.ts:22`, `apps/server/src/observability/observability-timeline.ts:203`). Loop-run timeline rows use the linked task's `finishedAt` as the settled timestamp, falling back to the run creation time only for missing legacy task rows (`apps/server/src/observability/observability-timeline.ts:126`).
+
+Digest enrichment is additive. `HeartbeatService.digestInput()` gathers the existing digest counts, then passes timeline entries and project rollups from the observability folds into `buildDigest()` (`apps/server/src/attention/heartbeat/heartbeat.service.ts:269`, `apps/server/src/attention/heartbeat/heartbeat.service.ts:285`). `buildDigest()` carries those as `highlights` and `projectLines`; highlights sort by timeline significance then recency, and project lines render one compact row per project with real run, green-verify, and needs-you counts (`apps/server/src/attention/heartbeat/digest.ts:37`, `apps/server/src/attention/heartbeat/digest.ts:62`, `apps/server/src/attention/heartbeat/digest.ts:94`, `apps/server/src/attention/heartbeat/digest.ts:116`). Home shows the digest card, attention queue, and Fleet rows on one cockpit page (`apps/web/src/components/fleet-view.tsx:20`, `apps/web/src/components/fleet-view.tsx:88`), and `/timeline` renders the paginated feed (`apps/web/src/components/timeline-view.tsx:25`, `apps/web/src/components/timeline-view.tsx:84`).
+
+### Nuncio MCP stdio
+
+`bun run mcp` starts a stdio tool server that points at the already-running daemon through `NUNCIO_API_ORIGIN` and optional `NUNCIO_AUTH_TOKEN`; it does not boot Nest, open SQLite, or start a provider runtime (`apps/server/src/mcp-stdio/main.ts:4`). The HTTP client is a thin JSON wrapper over the daemon API and adds the Bearer header only when a token is configured (`apps/server/src/mcp-stdio/http-client.ts:29`, `apps/server/src/mcp-stdio/http-client.ts:35`).
+
+The tool list is exactly eight tools: session list/read, timeline, attention, fleet, loops, enqueue task, and pause loop (`apps/server/src/mcp-stdio/tool-definitions.ts:6`). Mutation authority is guarded by metadata: only `nuncio_enqueue_task` and `nuncio_pause_loop` have `mutation: true`, and `MUTATION_TOOL_NAMES` is derived from that list (`apps/server/src/mcp-stdio/tool-definitions.ts:63`, `apps/server/src/mcp-stdio/tool-definitions.ts:83`, `apps/server/src/mcp-stdio/tool-definitions.ts:98`). Runtime dispatch routes reads to existing REST endpoints; enqueue trims and validates a prompt before `POST /api/tasks`, and pause calls `POST /api/loops/:id/pause` (`apps/server/src/mcp-stdio/runtime.ts:37`, `apps/server/src/mcp-stdio/runtime.ts:75`, `apps/server/src/mcp-stdio/runtime.ts:94`).
+
+### Dispatcher v1
+
+Dispatcher v1 is deterministic. Its rule fold reads open attention, loops, loop runs, sessions/events, tasks, project defaults, and project weights, then emits up to five proposals sorted by severity, project weight, and age (`apps/server/src/dispatcher/dispatcher-rules.ts:33`, `apps/server/src/dispatcher/dispatcher-rules.ts:53`, `apps/server/src/dispatcher/dispatcher-rules.ts:108`). Inputs cover open unacked attention, broken loops, stale PR review items, sessions with uncleared `verify_needs_attention`, yesterday failed loop runs, yesterday failed tasks, queued task starvation, and running task starvation (`apps/server/src/dispatcher/dispatcher-rules.ts:71`, `apps/server/src/dispatcher/dispatcher-rules.ts:85`, `apps/server/src/dispatcher/dispatcher-rules.ts:89`, `apps/server/src/dispatcher/dispatcher-rules.ts:95`, `apps/server/src/dispatcher/dispatcher-rules.ts:96`). It dedupes against other open dispatcher proposals and active queued/running tasks using stable subject aliases and task keys (`apps/server/src/dispatcher/dispatcher-rules.ts:62`, `apps/server/src/dispatcher/dispatcher-rules.ts:335`, `apps/server/src/dispatcher/dispatcher-rules.ts:367`).
+
+The service registers one scheduler system job, `dispatcher-evening`, with setting `NUNCIO_DISPATCHER_EVENING_SPEC` and default `daily@20:05` (`apps/server/src/dispatcher/dispatcher.service.ts:24`, `apps/server/src/dispatcher/dispatcher.service.ts:52`, `apps/server/src/dispatcher/dispatcher.service.ts:112`). A non-empty draft becomes one `dispatcher-proposal` attention row with subject `dispatch:<local-day>` and proposals in the payload (`apps/server/src/dispatcher/dispatcher.service.ts:60`, `apps/server/src/dispatcher/dispatcher.service.ts:69`). Manual dogfood and approval are `POST /api/dispatcher/draft-now` and `POST /api/dispatcher/proposals/:id/approve` (`apps/server/src/dispatcher/dispatcher.controller.ts:4`, `apps/server/src/dispatcher/dispatcher.controller.ts:8`, `apps/server/src/dispatcher/dispatcher.controller.ts:13`).
+
+Approval is idempotent. If `payload.taskIds` already exists, `approve()` returns those ids and does not enqueue. Otherwise it reuses matching active queued/running tasks, enqueues only missing proposals through the existing task service, writes `approvedAt` and `taskIds` to the attention payload, then resolves the item (`apps/server/src/dispatcher/dispatcher.service.ts:78`, `apps/server/src/dispatcher/dispatcher.service.ts:83`, `apps/server/src/dispatcher/dispatcher.service.ts:87`, `apps/server/src/dispatcher/dispatcher.service.ts:103`, `apps/server/src/dispatcher/dispatcher.service.ts:107`).
+
 ## Task queue and multitasking subagents
 
 `apps/server/src/tasks/` owns the durable task queue. Standalone tasks and child
@@ -260,6 +334,151 @@ marks a terminal child task reviewed; automatic destructive cleanup is not run
 from this state yet. Future cleanup workers should key off `role`,
 `review_state`, and `cleanup_policy` rather than inferring intent from `DONE`
 alone.
+
+## Autopilot: projects, scheduler, loops (rung 2)
+
+Autopilot turns the task lane into a standing-work engine: a **loop** is a durable
+goal that a **scheduler** fires on a cadence, each fire enqueuing a task scoped to a
+first-class **project**. All three tables are guarded `CREATE TABLE IF NOT EXISTS`
+in `DatabaseService.migrate()` (`database.service.ts:212`, `:228`, `:246`, `:261`) —
+config and run-history, never event-logged, so a fresh module reads the same rows and
+every counter is a pure fold that rebuilds identically after a restart.
+
+### Project entity (`apps/server/src/projects/`)
+
+`projects` is a config record keyed by absolute path — the same key sessions and tasks
+already carry as `project_path`, held as a **soft reference** (no FK), so a session
+whose project has no config row still resolves to global defaults. `ProjectsRepository`
+upserts by path with patch semantics (an omitted field is unchanged; an explicit empty
+string clears an override). `ProjectDefaultsResolver` (`project-defaults-resolver.ts`)
+layers the project override **above** the existing global chain as a pure fold over
+`(row | null, settings)`: `resolveVerifyCommand` slots the project override above the
+`.nuncio/verify` → `NUNCIO_VERIFY_COMMAND` chain (`:40`), `resolveDefaultEngine` resolves
+through the `AgentRegistry` so an unknown engine is stored but reported unavailable with
+no engine branch (`:77`), and `resolveWorktreePolicy` falls through to `optional` (`:72`).
+The v1 record also carries `verifyAutoSteer` (tri-state) and `verifyMaxRounds`, so the
+auto-fix loop can resolve per-project overrides above the global setting. `REST` lives at
+`/api/projects/config` (GET list/one, PUT upsert, DELETE by `?path=`).
+
+### Scheduler (`apps/server/src/scheduler/`)
+
+A daemon-resident, restart-safe firing loop. `schedules` rows hold a `kind`
+(`cron` | `heartbeat` | `event`), a `spec`, a `target_json`, and `next_fire_at`. The
+cron spec is a v1 subset parsed with **no dependency** (`schedule-spec.ts`) —
+`daily@HH:MM`, `every:<N>m|h`, `<weekday>@HH:MM` (mon..sun) — timezone-naive in the
+injected clock's local frame. A settable `Clock` seam makes next-fire, due, and
+missed-fire deterministic in tests with zero real sleeps.
+
+`scanDue()` (`scheduler.service.ts:99`) selects enabled clock schedules with
+`next_fire_at <= now`, fires each, and advances it — all writes applied **synchronously**
+so a scan leaves a coherent next-fire (`:150`). Two safety rules: an in-flight prior
+fire of the *same* schedule is skipped `skipped-overlap` and advanced (`:105`), and every
+fire flows through `TasksService`, so `NUNCIO_TASK_CONCURRENCY` caps total parallelism —
+the scheduler adds none of its own. **Restart is the heart:** at boot, `next_fire_at` is
+recomputed from `spec` + clock for every enabled schedule (`:76`); a slot missed while the
+daemon was down fires **once** on the first scan with `last_result = 'missed'` if it passed
+recently, else it recomputes forward (`:90`). Event schedules carry no clock state — they
+fire on webhook arrival (dedup owned by the webhook path, never re-deduped here).
+
+The **target is a seam, not just a task** (`:168`): `target_json` is
+`{kind:'task', template}` today and `{kind:'loop', loopId}` once loops land, both flowing
+through the same enqueue path — no schema change to add the loop target.
+
+### Loop primitive (`apps/server/src/loops/`)
+
+A loop is the 5-field record `{goal, trigger, budget, stop, escalation}` mapped to `loops`
++ `loop_runs`. The loop **owns** its schedule (holds `schedule_id`; deleting the loop
+deletes the schedule — no orphan trigger). At create, `LoopsService.create` writes the
+loop, then a `{kind:'loop', loopId}` schedule targeting it (`loops.service.ts:151`), closing
+the scheduler's target seam.
+
+**A loop run IS a task, and all accounting is derived from durable `loop_runs` rows** — no
+in-memory counters. A fire (`fire()`) checks today's budget from the rows, then enqueues a
+task with `useWorktree: true` **forced** (a loop never runs in place, regardless of the
+project's worktree policy) and the project's resolved engine (`:209`), and writes a run row
+**born `pending`** (`:223`). Budget-exhausted and manual-`resume` rows are bookkeeping the
+folds treat as transparent; a day's consumed count and the failure streak are pure folds
+over the run rows (`loop-accounting.ts`).
+
+Settlement is wired through a real hook, not polling. `TasksService.onTaskFinished`
+(`tasks.service.ts:41`) fires when any task settles; `LoopsService` subscribes at
+`onModuleInit` (`loops.service.ts:69`) and `onTaskSettled` folds the terminal task into its
+matching `pending` run by task id — `ok`/`failed` + the tri-state verify signal — then
+re-evaluates the breaker and stop (`:76`). The breaker trips to `broken` after
+`maxConsecutiveFailures` (default 3), disables the schedule, and surfaces the needs-attention
+signal (rung-1 vocabulary); a manual **resume** re-enables the schedule and writes a `resume`
+row that zeroes the streak fold. Stops: `null` (standing), `maxTotalRuns`, or `verifyGreenN`.
+
+**Boot reconciliation of pending runs** (`reconcilePendingRuns`, `loops.service.ts:95`): a
+run left `pending` by a crash is finalized **only** when its task is already terminal (fold
+the real outcome) or its task row vanished (count failed). A still-live task (QUEUED awaiting
+the pump's re-run, or RUNNING) keeps its run `pending` and settles later through the same
+`onTaskFinished` hook — eagerly failing a live run would corrupt the streak with a phantom
+failure the real settlement could never correct. Terminal folding treats **any** terminal task
+status uniformly, including `CANCELLED` (`loops.service.ts:126`): a cancelled task is terminal
+but not `DONE`, so `outcomeFromTask` yields `ok: false` and the run settles `failed` rather than
+sitting `pending` forever and bricking the loop's overlap guard. `REST` at `/api/loops` (POST
+create, GET list/one, PATCH `:id`, POST `:id/pause`|`resume`|`fire`, DELETE, GET
+`:id/runs`|`:id/runs/:runId`, GET `stats`) returns UI-ready shapes.
+
+### v1.1: dashboard, run drill-down, templates, run-context memory, per-loop engine
+
+**Fleet stats** (`GET /api/loops/stats`, `loops.controller.ts:29`, computed in
+`loop-stats.ts:computeLoopStats`) fold **settled** run outcomes only (`ok`/`failed` — pending,
+skipped-overlap, budget-exhausted, and resume are excluded) into total/active/broken loop counts,
+24h/7d ok-failed counts, and a 14-day sparkline keyed by local day bucket. Pure over
+`(loops, runs, now)`, so it is deterministic and restart-identical like every other loop fold.
+
+**Run drill-down** (`GET /api/loops/:id/runs/:runId`, `loops.service.ts:429` `runDetail`) joins a
+run row onto its task's terminal `outcome_json` for a GitHub-Actions-style detail view:
+`sessionId` (the **Open session** link), `durationMs` (from the task's `startedAt`/`finishedAt`),
+`verifyOutputTail`, and a `failureReason` that prefers a needs-attention reason, then the task's
+error, then `'verify red'` — never a throw on a vanished task (all fields null-safe).
+
+**Run-context memory** (`loop-context.ts:buildRunContext`) prepends a compact "Previous run
+context" block to the next fire's goal: the previous **settled** run's outcome + verify signal,
+the current failure streak, today's budget usage, and a capped (1500-char) tail of the last verify
+output. Pure over the run history — returns `''` for a loop's first run (no context to inject) so
+the bare goal ships unmodified. `withRunContext` joins it above the goal with a `---` delimiter;
+wired into the fire path at `loops.service.ts:268`.
+
+**Manual fire** (`POST /api/loops/:id/fire`, `fireManual`, `loops.service.ts:403`) reuses the same
+budget/overlap-checked `fireInternal` path the scheduler drives, so a "Run now" click is subject to
+the identical day budget and overlap guard as a scheduled fire. Unlike the scheduler (which
+collapses a skip to a silent no-op), a manual fire that skips throws `ConflictException` (409)
+with `{reason: 'overlap' | 'budget', message}` — the UI surfaces the true reason rather than
+pretending the click did nothing.
+
+**Per-loop engine + name** (`loops.types.ts:63`, `:80`): a loop optionally carries `name` (falls
+back to the goal for display) and `engine` (a provider id override). Engine resolution order at
+fire time (`loops.service.ts:262`) is **per-loop override → project's `resolveDefaultEngine` →
+undefined** (falls through to the registry's available default) — still zero engine branch
+(ADR-004), just one more layer above the project's own resolution chain. Both fields are
+patchable via `PATCH /api/loops/:id` (`UpdateLoopDto`, `loops.controller.ts:50`); the schedule
+spec itself stays immutable through this route in v1.
+
+### Forge-aware project picker: listing + cloning
+
+**`ForgeProvider.listRepositories()`** (`forges.types.ts:255`, capability-gated via
+`capabilities.listRepositories`, `:80`) is exposed at `GET /api/forges/:id/repos`
+(`forge-status.controller.ts:19`) so the project picker can browse the authenticated user's
+GitHub/GitLab repos through the same CLI-derived credentials the rest of the forge integration
+uses (ADR-005) — no new auth surface.
+
+**`CloneService`** (`git/clone.service.ts`), wired at `POST /api/projects/clone`
+(`git.controller.ts:43`), clones a picked repo into `NUNCIO_CLONE_DIR` (default
+`~/nuncio/projects`, `~` expanded). Idempotent: a natural-name directory that's already a git repo
+with a matching `origin` remote is returned as-is (`:135`); a name collision from an unrelated repo
+bumps to `-2`, `-3`, … (`pickCloneDirName`, `:31`) rather than erroring or overwriting. **Credential
+non-persistence is the load-bearing property**: a resolved token (settings → CLI token,
+`resolveToken`, `:90`, mirroring the provider's own resolution without a module cycle onto
+`ForgeRegistry`) is injected only as a **one-shot** `-c http.extraheader=Authorization: Bearer
+<token>` argv flag on the single `git clone` invocation (`buildCloneArgs`, `:20`) — never written
+via `git config`, never embedded in the origin URL, so it never lands in the cloned repo's
+persisted `.git/config`. A clone failure's stderr is redacted (`redactToken`, `:167`) before it
+reaches an error response, so a token can't leak through a failure message either. Every
+successful resolution (existing-match or fresh clone) records into `recent_projects`
+(`CloneService.record`, `:146`) so the cloned repo immediately appears in the MRU picker.
 
 ## App bootstrap (`main.ts`)
 
@@ -1020,7 +1239,7 @@ When `path` is supplied, `diff()` returns only that file's diff. **SECURITY-SENS
 - **Strict validation first** (`validateGitPath`, throws `BadRequestException('Invalid path')`): reject when the trimmed path is empty, starts with `-` (option injection), starts with `/` (absolute), contains a `..` segment (split on `/`), or contains a NUL. POSIX paths only.
 - **Tracked file** (`diffPath`): `git diff HEAD -- <path>` when `HEAD` exists, else `git diff -- <path>` (unborn branch). The literal `--` **always** precedes `<path>` so it is a pathspec, never a flag.
 - **Untracked file:** the tracked diff is empty, so `diffPath` confirms untracked via `git status --porcelain -- <path>` (`?? ` prefix), then synthesizes an add-diff with `git diff --no-index -- /dev/null <path>`. **`--no-index` can read arbitrary files**, so this branch runs ONLY after (a) strict validation and (b) confirming `realpathSync.native(resolve(repoRoot, path))` is inside `repoRoot` (`isInsideRepo`); otherwise `BadRequestException`. `--no-index` exits `1` when differences exist — `gitAllowExit(..., [0, 1])` treats exit `1` as success and only `>1` as error.
-- Output goes through `truncateDiff` (200 KB cap). Whole-repo behavior (no `path`) is unchanged.
+- Output goes through `truncateDiff` (200 KB cap). Whole-repo diffs expand untracked directories with `git status -uall` before synthesizing add-diffs, so files such as `src/new-feature/index.ts` appear instead of a skipped `?? src/` directory row.
 
 **NEVER** pass a user path to `git diff` without `validateGitPath` + `--` pathspec, and NEVER reach `--no-index` before the repoRoot-containment check.
 

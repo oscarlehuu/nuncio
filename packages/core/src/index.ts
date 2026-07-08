@@ -1,7 +1,9 @@
 export * from './api';
+export * from './attention-api';
 export * from './cursor-context';
 export * from './derive-pending-user-input';
 export * from './design-tokens';
+export * from './fleet-api';
 export * from './forge-status-api';
 export * from './handoff-api';
 export * from './handoff-session-groups';
@@ -17,3 +19,4 @@ export * from './tool-summary';
 export * from './transcript-build-blocks';
 export * from './user-input.types';
 export * from './session-relay-client';
+export * from './session-diff-api';

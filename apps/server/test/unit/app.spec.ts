@@ -76,6 +76,13 @@ describe('Nuncio API', () => {
     expect(res.body.status).toBe('ok');
   });
 
+  it('GET /api/timeline returns the global timeline feed', async () => {
+    const res = await request(app.getHttpServer()).get('/api/timeline?limit=5');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.entries)).toBe(true);
+    expect(res.body.entries.length).toBeLessThanOrEqual(5);
+  });
+
   it('POST /api/sessions creates a session', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/sessions')

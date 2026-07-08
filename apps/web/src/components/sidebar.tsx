@@ -4,9 +4,10 @@ import {
   ChevronDown,
   ChevronRight,
   FolderGit2,
+  House,
   LayoutGrid,
   MessageSquare,
-  Plus,
+  Repeat,
   RotateCcw,
   Search,
   Settings,
@@ -56,8 +57,14 @@ interface SidebarProps {
   activeId: string | null;
   onSelect: (id: string | null) => void;
   onNew: () => void;
+  /** Fleet — the cockpit landing (rung 3 home). */
+  onHome?: () => void;
   /** Desktop multi-session workbench (the unified grid). */
   onGrid?: () => void;
+  /** Autopilot — the loops fleet (rung 2). */
+  onAutopilot?: () => void;
+  /** Unacked attention count for the Home badge; 0 = no badge. */
+  inboxUnacked?: number;
   onSettings?: () => void;
   onChangelog?: () => void;
   onArchive?: (id: string) => void | Promise<void>;
@@ -72,8 +79,10 @@ export function Sidebar({
   archivedSessions = [],
   activeId,
   onSelect,
-  onNew,
+  onHome,
   onGrid,
+  onAutopilot,
+  inboxUnacked = 0,
   onSettings,
   onChangelog,
   onArchive,
@@ -139,25 +148,42 @@ export function Sidebar({
         </div>
         <MachineSwitcher />
         <nav className="mt-2.5 flex flex-col gap-px">
-          <button
-            type="button"
-            onClick={onNew}
-            className="group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-lg text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 active:scale-[0.99]"
-          >
-            <Plus className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
-            <span className="flex-1">New Agent</span>
-            <kbd className="hidden shrink-0 items-center gap-0.5 rounded border border-sidebar-border/70 px-1 font-mono text-ui-xs text-muted-foreground md:inline-flex">
-              ⌘N
-            </kbd>
-          </button>
+          {onHome ? (
+            <button
+              type="button"
+              onClick={onHome}
+              className="group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-lg text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 active:scale-[0.99]"
+            >
+              <House className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
+              <span className="flex-1">Home</span>
+              {inboxUnacked > 0 && (
+                <span
+                  aria-label={`${inboxUnacked} items need you`}
+                  className="inline-flex min-w-[1.25rem] shrink-0 items-center justify-center rounded-full bg-warning/15 px-1.5 text-ui-xs font-semibold text-warning tabular-nums"
+                >
+                  {inboxUnacked > 99 ? '99+' : inboxUnacked}
+                </span>
+              )}
+            </button>
+          ) : null}
           {onGrid ? (
             <button
               type="button"
               onClick={onGrid}
-              className="group hidden w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-lg text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 active:scale-[0.99] md:flex"
+              className="group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-lg text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 active:scale-[0.99]"
             >
               <LayoutGrid className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
               <span className="flex-1">Workbench</span>
+            </button>
+          ) : null}
+          {onAutopilot ? (
+            <button
+              type="button"
+              onClick={onAutopilot}
+              className="group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-lg text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 active:scale-[0.99]"
+            >
+              <Repeat className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
+              <span className="flex-1">Autopilot</span>
             </button>
           ) : null}
         </nav>

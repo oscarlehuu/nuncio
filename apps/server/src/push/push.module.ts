@@ -6,5 +6,6 @@ import { PushService } from './push.service';
 @Module({
   controllers: [PushController],
   providers: [PushRepository, PushService],
+  exports: [PushService],
 })
 export class PushModule {}

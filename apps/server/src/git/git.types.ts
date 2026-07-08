@@ -14,6 +14,7 @@ export interface BranchDto {
 export interface WorktreeResult {
   worktreePath: string;
   branch: string;
+  baseBranch: string;
 }
 
 export interface GitFileChange {

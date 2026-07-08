@@ -135,6 +135,14 @@ function validateGitPath(path: string): string {
   return trimmed;
 }
 
+function validateGitRevision(revision: string): string {
+  const trimmed = revision.trim();
+  if (!trimmed || trimmed.startsWith('-') || trimmed.includes('\0')) {
+    throw new BadRequestException('Invalid base ref');
+  }
+  return trimmed;
+}
+
 function truncateDiff(diff: string): GitDiffDto {
   const maxDiffChars = 200_000;
   if (diff.length <= maxDiffChars) {
@@ -315,7 +323,7 @@ export class GitService {
       throw new BadRequestException(`Failed to create worktree: ${message}`);
     }
 
-    return { worktreePath, branch };
+    return { worktreePath, branch, baseBranch: resolvedBase };
   }
 
   private async resolveDefaultBranch(repoRoot: string): Promise<string> {
@@ -328,6 +336,23 @@ export class GitService {
       // fall through to 'main' as a last resort
     }
     return 'main';
+  }
+
+  /**
+   * Cheap dirty-check for the rung-3 empty-diff anomaly (sub-phase C): a bare
+   * `git status --porcelain` (no branch header, no numstat) — any non-empty line
+   * means uncommitted work exists. Much lighter than {@link status}, so it is safe
+   * to run per RUNNING session on the heartbeat sweep. A non-repo path → false
+   * (nothing to change), never a throw.
+   */
+  async hasChanges(path: string): Promise<boolean> {
+    try {
+      const repoRoot = await this.resolveRepoRoot(path);
+      const output = await git(['status', '--porcelain'], repoRoot);
+      return output.trim().length > 0;
+    } catch {
+      return false;
+    }
   }
 
   async status(path: string): Promise<GitStatusDto> {
@@ -401,18 +426,51 @@ export class GitService {
     if (options.staged === true) {
       args.push('--staged');
     } else if (options.base?.trim()) {
-      const base = options.base.trim();
-      // Guard against option injection (e.g. `--output=`): a `base` beginning with
-      // `-` would be parsed as a git flag, not a revision. Reject it and pin the
-      // value as a revision with a trailing `--`.
-      if (base.startsWith('-')) {
-        throw new BadRequestException('Invalid base ref');
-      }
+      // Guard against option injection (e.g. `--output=`): a base beginning with
+      // `-` would be parsed as a git flag, not a revision.
+      const base = validateGitRevision(options.base);
       args.push(base, '--');
     }
 
-    const output = await git(args, repoRoot);
+    let output = await git(args, repoRoot);
+    if (options.staged !== true) {
+      const untracked = await this.diffUntrackedFiles(repoRoot);
+      output = [output, untracked].filter(Boolean).join('\n');
+    }
     return truncateDiff(output);
+  }
+
+  private async diffUntrackedFiles(repoRoot: string): Promise<string> {
+    const status = await git(['status', '--porcelain=v1', '-uall'], repoRoot).catch(() => '');
+    const diffs: string[] = [];
+
+    for (const line of status.split('\n')) {
+      if (!line.startsWith('?? ')) continue;
+      const path = line.slice(3).trim();
+      if (!path || path.endsWith('/')) continue;
+
+      const candidate = resolve(repoRoot, path);
+      let real: string;
+      try {
+        real = realpathSync.native(candidate);
+      } catch {
+        continue;
+      }
+      if (!isInsideRepo(repoRoot, real) || !statSync(real).isFile()) continue;
+      diffs.push(await gitAllowExit(['diff', '--no-index', '--', '/dev/null', path], repoRoot, [0, 1]));
+    }
+
+    return diffs.filter(Boolean).join('\n');
+  }
+
+  async resolveWorktreeDiffBase(path: string, baseBranch?: string | null): Promise<string | null> {
+    const repoRoot = await this.resolveRepoRoot(path);
+    const base = validateGitRevision(baseBranch?.trim() || (await this.resolveDefaultBranch(repoRoot)));
+    try {
+      return await git(['merge-base', 'HEAD', base], repoRoot);
+    } catch {
+      return base;
+    }
   }
 
   private async diffPath(repoRoot: string, path: string): Promise<string> {
