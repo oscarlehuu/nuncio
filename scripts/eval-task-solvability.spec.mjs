@@ -27,11 +27,23 @@ const checksDir = join(repoRoot, 'eval', 'checks');
 function sh(dir, cmd) {
   return spawnSync('sh', ['-c', cmd], { cwd: dir, encoding: 'utf8', stdio: 'pipe' });
 }
+// Identity/config guards forced onto EVERY scripted git call. CI runners have no
+// global gitconfig, so a bare `git commit` fails with "Author identity unknown";
+// these flags make the scripted engine-simulation commits self-sufficient (and
+// are harmless on read-only git). They mirror the deterministic-git fixture
+// hardening so committed SHAs still match the pins.
+const GIT_GUARDS = [
+  '-c', 'user.name=Eval Fixture',
+  '-c', 'user.email=eval@nuncio.local',
+  '-c', 'commit.gpgsign=false',
+  '-c', 'tag.gpgsign=false',
+  '-c', 'core.hooksPath=',
+];
 function git(dir, args) {
-  return spawnSync('git', args, { cwd: dir, encoding: 'utf8', stdio: 'pipe' });
+  return spawnSync('git', [...GIT_GUARDS, ...args], { cwd: dir, encoding: 'utf8', stdio: 'pipe' });
 }
 function applyPatch(dir, patchPath) {
-  const res = spawnSync('git', ['apply', patchPath], { cwd: dir, encoding: 'utf8', stdio: 'pipe' });
+  const res = spawnSync('git', [...GIT_GUARDS, 'apply', patchPath], { cwd: dir, encoding: 'utf8', stdio: 'pipe' });
   if (res.status !== 0) throw new Error(`git apply ${patchPath} failed: ${res.stderr}`);
 }
 
