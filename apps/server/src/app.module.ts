@@ -13,6 +13,7 @@ import { HealthModule } from './health/health.module';
 import { HubModule } from './hub/hub.module';
 import { LoopsModule } from './loops/loops.module';
 import { ModelsModule } from './models/models.module';
+import { ObservabilityModule } from './observability/observability.module';
 import { PiLocalModule } from './pi-local/pi-local.module';
 import { PreferencesModule } from './preferences/preferences.module';
 import { ProviderUpdatesModule } from './provider-updates/provider-updates.module';
@@ -52,6 +53,7 @@ import { PushModule } from './push/push.module';
     TailscaleModule,
     TasksModule,
     TerminalModule,
+    ObservabilityModule,
   ],
 })
 export class AppModule {}

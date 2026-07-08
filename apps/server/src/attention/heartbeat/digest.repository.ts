@@ -90,4 +90,12 @@ export class DigestRepository {
       .get(slotKey) as DigestRunRow | undefined;
     return row ? rowToDto(row) : null;
   }
+
+  list(): DigestRunDto[] {
+    if (this.database.closed) return [];
+    const rows = this.database.db
+      .prepare('SELECT * FROM digest_runs ORDER BY sent_at ASC')
+      .all() as DigestRunRow[];
+    return rows.map(rowToDto);
+  }
 }

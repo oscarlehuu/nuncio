@@ -32,6 +32,6 @@ import { InfraChecks } from './infra-checks';
   ],
   controllers: [HeartbeatController],
   providers: [HeartbeatService, InfraChecks, DigestRepository],
-  exports: [HeartbeatService],
+  exports: [HeartbeatService, DigestRepository],
 })
 export class HeartbeatModule {}

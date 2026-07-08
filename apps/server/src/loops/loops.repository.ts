@@ -193,4 +193,12 @@ export class LoopsRepository {
       .all(loopId)
       .map(runRowToDto);
   }
+
+  listAllRuns(): LoopRunDto[] {
+    if (this.database.closed) return [];
+    return this.database.db
+      .prepare<LoopRunRow, []>('SELECT * FROM loop_runs ORDER BY created_at ASC')
+      .all()
+      .map(runRowToDto);
+  }
 }

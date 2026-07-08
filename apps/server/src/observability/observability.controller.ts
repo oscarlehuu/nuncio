@@ -7,35 +7,35 @@ export class ObservabilityController {
   constructor(private readonly observability: ObservabilityService) {}
 
   @Get('summary')
-  summary(@Query('from') _from?: string, @Query('to') _to?: string) {
-    return this.observability.summary();
+  summary(@Query('from') from?: string, @Query('to') to?: string) {
+    return this.observability.summary(from, to);
   }
 
   @Get('sessions/:id')
   session(
     @Param('id') id: string,
-    @Query('from') _from?: string,
-    @Query('to') _to?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
   ) {
-    return this.observability.session(id);
+    return this.observability.session(id, from, to);
   }
 
   @Get('rollups')
   rollups(
-    @Query('dimension') _dimension?: RollupDimension,
-    @Query('from') _from?: string,
-    @Query('to') _to?: string,
+    @Query('dimension') dimension?: RollupDimension,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
   ) {
-    return this.observability.rollups();
+    return this.observability.rollups(dimension, from, to);
   }
 
   @Get('timeline')
   timeline(
-    @Query('from') _from?: string,
-    @Query('to') _to?: string,
-    @Query('projectPath') _projectPath?: string,
-    @Query('provider') _provider?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('projectPath') projectPath?: string,
+    @Query('provider') provider?: string,
   ) {
-    return this.observability.timeline();
+    return this.observability.timeline({ from, to, projectPath, provider });
   }
 }
