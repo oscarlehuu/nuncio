@@ -1,4 +1,6 @@
-import type { Digest, DigestPushContent, DigestVariant } from './heartbeat.types';
+import type { ObservabilityRollupDto, TimelineEntryDto } from '../../observability/observability.types';
+import { timelineSignificance } from '../../observability/observability-timeline-significance';
+import type { Digest, DigestHighlight, DigestProjectLine, DigestPushContent, DigestVariant } from './heartbeat.types';
 
 /** Raw inputs buildDigest folds — all sourced from existing durable rows. */
 export interface DigestInput {
@@ -17,6 +19,11 @@ export interface DigestInput {
   /** Today's loop-run budget usage (snapshot). */
   runsToday: number;
   cap: number;
+  /** Global timeline facts already folded by observability for this window. */
+  timelineEntries?: TimelineEntryDto[];
+  /** Project rollups already folded by observability for this window. */
+  projectRollups?: ObservabilityRollupDto[];
+  highlightLimit?: number;
 }
 
 /**
@@ -52,6 +59,8 @@ export function buildDigest(
       needsYou: input.sessionsNeedsYou,
     },
     budget: { runsToday: input.runsToday, cap: input.cap },
+    highlights: digestHighlights(input.timelineEntries ?? [], input.highlightLimit ?? 5),
+    projectLines: digestProjectLines(input.projectRollups ?? []),
   };
 }
 
@@ -80,4 +89,48 @@ export function digestPushContent(digest: Digest, slotKey: string): DigestPushCo
 /** A push body is a pointer, not the whole digest — keep it short. */
 function clamp(body: string, max = 178): string {
   return body.length <= max ? body : `${body.slice(0, max - 1)}…`;
+}
+
+function digestHighlights(entries: TimelineEntryDto[], limit: number): DigestHighlight[] {
+  return [...entries]
+    .sort((a, b) => timelineSignificance(b.kind) - timelineSignificance(a.kind) || b.ts - a.ts || a.id.localeCompare(b.id))
+    .slice(0, Math.max(0, limit))
+    .map((entry) => ({
+      id: entry.id,
+      ts: entry.ts,
+      kind: entry.kind,
+      title: entry.title,
+      projectPath: entry.projectPath,
+      provider: entry.provider,
+      ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
+      ...(entry.taskId ? { taskId: entry.taskId } : {}),
+      ...(entry.loopId ? { loopId: entry.loopId } : {}),
+      ...(entry.attentionId ? { attentionId: entry.attentionId } : {}),
+      ...(entry.prUrl ? { prUrl: entry.prUrl } : {}),
+      ...(entry.outcome ? { outcome: entry.outcome } : {}),
+      ...(entry.verify ? { verify: entry.verify } : {}),
+      ...(entry.severity !== undefined ? { severity: entry.severity } : {}),
+    }));
+}
+
+function digestProjectLines(rollups: ObservabilityRollupDto[]): DigestProjectLine[] {
+  return rollups
+    .filter((rollup) => rollup.dimension === 'project')
+    .filter((rollup) =>
+      rollup.metrics.loops.total > 0 || (rollup.metrics.verify.passed ?? 0) > 0 || rollup.metrics.attention.open > 0,
+    )
+    .map((rollup) => {
+      const runs = rollup.metrics.loops.total;
+      const green = rollup.metrics.verify.passed ?? 0;
+      const needsYou = rollup.metrics.attention.open;
+      return {
+        projectPath: rollup.key === 'unassigned' ? null : rollup.key,
+        title: `${projectLabel(rollup.key)}: ${runs} runs, ${green} green, ${needsYou} needs you`,
+      };
+    });
+}
+
+function projectLabel(projectPath: string): string {
+  if (projectPath === 'unassigned') return 'unassigned';
+  return projectPath.split('/').filter(Boolean).at(-1) || projectPath;
 }

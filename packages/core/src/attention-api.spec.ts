@@ -100,6 +100,8 @@ describe('digest api client', () => {
       attention: { raised: 4, resolved: 2, openTopCount: 1 },
       sessions: { completed: 5, needsYou: 1 },
       budget: { runsToday: 6, cap: 24 },
+      highlights: [],
+      projectLines: [],
     },
   };
 
@@ -128,6 +130,8 @@ describe('digest api client', () => {
     const dto = await fetchDigest();
     expect(dto?.digest.loops).toEqual({ runsOk: 0, runsFailed: 0, prsOpened: 0 });
     expect(dto?.digest.budget.cap).toBe(0);
+    expect(dto?.digest.highlights).toEqual([]);
+    expect(dto?.digest.projectLines).toEqual([]);
     expect(dto?.variant).toBe('evening');
   });
 });

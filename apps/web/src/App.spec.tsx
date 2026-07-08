@@ -280,6 +280,8 @@ describe('App URL routing', () => {
         attention: { raised: 1, resolved: 0, openTopCount: 1 },
         sessions: { completed: 0, needsYou: 1 },
         budget: { runsToday: 0, cap: 0 },
+        highlights: [],
+        projectLines: [],
       },
     });
     vi.mocked(fetchAttention).mockResolvedValue({

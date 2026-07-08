@@ -33,9 +33,28 @@ export class ObservabilityController {
   timeline(
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('before') before?: string,
+    @Query('limit') limit?: string,
     @Query('projectPath') projectPath?: string,
     @Query('provider') provider?: string,
   ) {
-    return this.observability.timeline({ from, to, projectPath, provider });
+    return this.observability.timeline({ from, to, before, limit, projectPath, provider }).entries;
+  }
+}
+
+@Controller('timeline')
+export class TimelineController {
+  constructor(private readonly observability: ObservabilityService) {}
+
+  @Get()
+  timeline(
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('before') before?: string,
+    @Query('limit') limit?: string,
+    @Query('projectPath') projectPath?: string,
+    @Query('provider') provider?: string,
+  ) {
+    return this.observability.timeline({ from, to, before, limit, projectPath, provider });
   }
 }

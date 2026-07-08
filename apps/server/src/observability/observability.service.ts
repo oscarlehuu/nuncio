@@ -18,7 +18,7 @@ import type {
   ObservabilitySources,
   RollupDimension,
   SessionObservabilityDto,
-  TimelineEntryDto,
+  TimelineFeedDto,
 } from './observability.types';
 
 @Injectable()
@@ -52,16 +52,21 @@ export class ObservabilityService {
   timeline(input: {
     from?: string;
     to?: string;
+    before?: string;
+    limit?: string;
     projectPath?: string;
     provider?: string;
-  } = {}): TimelineEntryDto[] {
+  } = {}): TimelineFeedDto {
     const now = this.clock.now();
-    return buildGlobalTimeline(this.sources(), {
-      window: this.window(input.from, input.to, now),
+    const entries = buildGlobalTimeline(this.sources(), {
+      window: this.timelineWindow(input.from, input.to, now),
       now,
+      ...(parseNumber(input.before) !== null ? { before: parseNumber(input.before)! } : {}),
+      ...(parseLimit(input.limit) !== null ? { limit: parseLimit(input.limit)! } : {}),
       ...(input.projectPath?.trim() ? { projectPath: input.projectPath.trim() } : {}),
       ...(input.provider?.trim() ? { provider: input.provider.trim() } : {}),
     });
+    return { entries, nextBefore: entries.at(-1)?.ts ?? null };
   }
 
   private sources(): ObservabilitySources {
@@ -86,10 +91,25 @@ export class ObservabilityService {
       to: parsedTo ?? now + 1,
     };
   }
+
+  private timelineWindow(from: string | undefined, to: string | undefined, now: number): { from: number; to: number } {
+    const parsedFrom = parseNumber(from);
+    const parsedTo = parseNumber(to);
+    const lastDigest = this.digests.latest();
+    return {
+      from: parsedFrom ?? lastDigest?.windowTo ?? now - 24 * 60 * 60_000,
+      to: parsedTo ?? now + 1,
+    };
+  }
 }
 
 function parseNumber(value: string | undefined): number | null {
   if (value === undefined || value.trim() === '') return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseLimit(value: string | undefined): number | null {
+  const parsed = parseNumber(value);
+  return parsed === null ? null : Math.trunc(parsed);
 }

@@ -62,16 +62,23 @@ export interface ObservabilityRollupDto {
 }
 
 export type TimelineKind =
-  | 'session'
-  | 'task'
-  | 'loop-run'
-  | 'attention'
-  | 'digest'
-  | 'verify'
-  | 'steer';
+  | 'session-started'
+  | 'session-completed'
+  | 'session-needs-you'
+  | 'loop-run-settled'
+  | 'breaker-tripped'
+  | 'breaker-resumed'
+  | 'attention-raised'
+  | 'attention-resolved'
+  | 'task-done'
+  | 'task-failed'
+  | 'pr-opened-detected'
+  | 'digest-sent';
 
 export interface TimelineEntryDto {
   id: string;
+  ts: number;
+  /** Back-compat alias for Sub-phase A consumers. Prefer `ts`. */
   at: number;
   kind: TimelineKind;
   title: string;
@@ -80,7 +87,16 @@ export interface TimelineEntryDto {
   sessionId?: string;
   taskId?: string;
   loopId?: string;
+  attentionId?: string;
+  prUrl?: string;
+  outcome?: string;
+  verify?: string;
   severity?: number;
+}
+
+export interface TimelineFeedDto {
+  entries: TimelineEntryDto[];
+  nextBefore: number | null;
 }
 
 export interface ObservabilitySources {
@@ -100,4 +116,6 @@ export interface ObservabilityQuery {
 export interface TimelineQuery extends ObservabilityQuery {
   provider?: string;
   projectPath?: string;
+  before?: number;
+  limit?: number;
 }

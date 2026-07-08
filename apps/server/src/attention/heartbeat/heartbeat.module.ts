@@ -7,6 +7,7 @@ import { PushModule } from '../../push/push.module';
 import { SchedulerModule } from '../../scheduler/scheduler.module';
 import { SessionsPersistenceModule } from '../../sessions/sessions.persistence.module';
 import { SettingsModule } from '../../settings/settings.module';
+import { TasksModule } from '../../tasks/tasks.module';
 import { DigestRepository } from './digest.repository';
 import { HeartbeatController } from './heartbeat.controller';
 import { HeartbeatService } from './heartbeat.service';
@@ -29,6 +30,7 @@ import { InfraChecks } from './infra-checks';
     PushModule,
     ForgesModule,
     SessionsPersistenceModule,
+    TasksModule,
   ],
   controllers: [HeartbeatController],
   providers: [HeartbeatService, InfraChecks, DigestRepository],

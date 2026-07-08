@@ -4,7 +4,7 @@ import { HeartbeatModule } from '../attention/heartbeat/heartbeat.module';
 import { LoopsModule } from '../loops/loops.module';
 import { SessionsPersistenceModule } from '../sessions/sessions.persistence.module';
 import { TasksModule } from '../tasks/tasks.module';
-import { ObservabilityController } from './observability.controller';
+import { ObservabilityController, TimelineController } from './observability.controller';
 import { ObservabilityService } from './observability.service';
 
 @Module({
@@ -15,7 +15,7 @@ import { ObservabilityService } from './observability.service';
     AttentionModule,
     HeartbeatModule,
   ],
-  controllers: [ObservabilityController],
+  controllers: [ObservabilityController, TimelineController],
   providers: [ObservabilityService],
   exports: [ObservabilityService],
 })

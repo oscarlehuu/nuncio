@@ -5,32 +5,24 @@ import type { AttentionItemDto } from '../../../src/attention/attention.types';
 import type { DigestRunDto } from '../../../src/attention/heartbeat/heartbeat.types';
 import type { LoopRunDto } from '../../../src/loops/loops.types';
 import type { SessionDto, SessionEvent } from '../../../src/sessions/domain/sessions.types';
-import type { TaskDto } from '../../../src/tasks/tasks.types';
+import type { TaskDto, TaskStatus } from '../../../src/tasks/tasks.types';
 
-function minimalSources(input: Partial<ObservabilitySources>): ObservabilitySources {
-  return {
-    sessions: [],
-    eventsBySession: {},
-    tasks: [],
-    loopRuns: [],
-    attentionItems: [],
-    digestRuns: [],
-    ...input,
-  };
+function sources(input: Partial<ObservabilitySources>): ObservabilitySources {
+  return { sessions: [], eventsBySession: {}, tasks: [], loopRuns: [], attentionItems: [], digestRuns: [], ...input };
 }
 
-function session(id: string, provider = 'pi', projectPath: string | null = '/repo/a'): SessionDto {
+function session(overrides: Partial<SessionDto> & { id: string }): SessionDto {
   return {
-    id,
-    title: id,
-    status: 'IDLE',
-    provider,
+    id: overrides.id,
+    title: overrides.title ?? overrides.id,
+    status: overrides.status ?? 'IDLE',
+    provider: overrides.provider ?? 'pi',
     model: null,
     modelOptions: null,
     workspace: null,
     prompt: 'p',
     preview: null,
-    projectPath,
+    projectPath: overrides.projectPath ?? '/repo/a',
     baseBranch: null,
     worktreePath: null,
     branch: null,
@@ -40,29 +32,29 @@ function session(id: string, provider = 'pi', projectPath: string | null = '/rep
     cursorBackend: null,
     cursorChatId: null,
     forgeProvider: null,
-    pullRequestUrl: null,
-    pullRequestNumber: null,
-    pullRequestState: null,
-    forgeStatus: 'none',
+    pullRequestUrl: overrides.pullRequestUrl ?? null,
+    pullRequestNumber: overrides.pullRequestNumber ?? null,
+    pullRequestState: overrides.pullRequestState ?? null,
+    forgeStatus: overrides.forgeStatus ?? 'none',
     supportsInteraction: false,
     supportsInterrupt: false,
     supportsSteerWhileRunning: false,
     supportsImages: false,
-    pendingInput: false,
-    createdAt: 10,
-    updatedAt: 10,
+    pendingInput: overrides.pendingInput ?? false,
+    createdAt: overrides.createdAt ?? 10,
+    updatedAt: overrides.updatedAt ?? overrides.createdAt ?? 10,
   };
 }
 
-function task(id: string, projectPath = '/repo/a', provider = 'pi'): TaskDto {
+function task(overrides: Partial<TaskDto> & { id: string; status?: TaskStatus }): TaskDto {
   return {
-    id,
-    prompt: 'p',
-    status: 'DONE',
-    provider,
+    id: overrides.id,
+    prompt: overrides.prompt ?? 'queued work',
+    status: overrides.status ?? 'DONE',
+    provider: overrides.provider ?? 'pi',
     model: null,
     modelOptions: null,
-    projectPath,
+    projectPath: overrides.projectPath ?? '/repo/a',
     baseBranch: null,
     useWorktree: true,
     workspace: null,
@@ -70,42 +62,42 @@ function task(id: string, projectPath = '/repo/a', provider = 'pi'): TaskDto {
     role: 'standalone',
     cleanupPolicy: null,
     reviewState: null,
-    sessionId: null,
-    outcome: null,
-    createdAt: 20,
-    updatedAt: 20,
-    startedAt: 20,
-    finishedAt: 30,
+    sessionId: overrides.sessionId ?? null,
+    outcome: overrides.outcome ?? null,
+    createdAt: overrides.createdAt ?? 20,
+    updatedAt: overrides.updatedAt ?? 20,
+    startedAt: overrides.startedAt ?? 20,
+    finishedAt: overrides.finishedAt ?? 30,
   };
 }
 
-function attention(id: string, at: number, projectPath = '/repo/a'): AttentionItemDto {
+function attention(overrides: Partial<AttentionItemDto> & { id: string; createdAt: number }): AttentionItemDto {
   return {
-    id,
-    kind: 'verify-dead',
-    subjectId: `session:${id}`,
-    projectPath,
-    severity: 5,
-    title: 'Needs verify help',
-    payload: { sessionId: id },
-    status: 'open',
+    id: overrides.id,
+    kind: overrides.kind ?? 'verify-dead',
+    subjectId: overrides.subjectId ?? `session:${overrides.id}`,
+    projectPath: overrides.projectPath ?? '/repo/a',
+    severity: overrides.severity ?? 5,
+    title: overrides.title ?? 'Needs verify help',
+    payload: overrides.payload ?? { sessionId: overrides.id },
+    status: overrides.status ?? 'open',
     acknowledgedAt: null,
     suppressReraise: false,
-    createdAt: at,
-    updatedAt: at,
-    resolvedAt: null,
+    createdAt: overrides.createdAt,
+    updatedAt: overrides.updatedAt ?? overrides.createdAt,
+    resolvedAt: overrides.resolvedAt ?? null,
   };
 }
 
-function loopRun(id: string, at: number): LoopRunDto {
+function loopRun(overrides: Partial<LoopRunDto> & { id: string; createdAt: number }): LoopRunDto {
   return {
-    id,
-    loopId: 'loop-1',
-    taskId: 'task-1',
-    outcome: 'failed',
-    verify: 'red',
+    id: overrides.id,
+    loopId: overrides.loopId ?? 'loop-1',
+    taskId: overrides.taskId ?? 'task-1',
+    outcome: overrides.outcome ?? 'failed',
+    verify: overrides.verify ?? 'red',
     dayBucket: '2026-07-08',
-    createdAt: at,
+    createdAt: overrides.createdAt,
   };
 }
 
@@ -124,6 +116,8 @@ function digest(slotKey: string, at: number): DigestRunDto {
       attention: { raised: 1, resolved: 0, openTopCount: 1 },
       sessions: { completed: 0, needsYou: 1 },
       budget: { runsToday: 1, cap: 24 },
+      highlights: [],
+      projectLines: [],
     },
   };
 }
@@ -133,55 +127,131 @@ function event(seq: number, type: string, createdAt: number, payload: unknown = 
 }
 
 describe('global observability timeline', () => {
-  it('orders session, task, loop, attention, digest, verify, and steer facts by time', () => {
-    const sources = minimalSources({
-      sessions: [session('s1')],
-      tasks: [task('task-1')],
-      loopRuns: [loopRun('run-1', 40)],
-      attentionItems: [attention('a1', 50)],
-      digestRuns: [digest('2026-07-08:evening', 60)],
-      eventsBySession: {
-        s1: [
-          event(1, 'steer_message', 70, { text: 'please fix' }),
-          event(2, 'verify_result', 80, { ok: false }),
-        ],
-      },
-    });
+  it('merges all durable facts into a newest-first feed', () => {
+    const result = buildGlobalTimeline(
+      sources({
+        sessions: [session({ id: 's1', createdAt: 10 })],
+        tasks: [task({ id: 'task-1', status: 'DONE', finishedAt: 20 })],
+        loopRuns: [loopRun({ id: 'run-1', createdAt: 30 })],
+        attentionItems: [attention({ id: 'a1', createdAt: 40 })],
+        digestRuns: [digest('2026-07-08:evening', 50)],
+        eventsBySession: {
+          s1: [
+            event(1, 'status', 60, { status: 'IDLE' }),
+            event(2, 'verify_needs_attention', 70, { reason: 'max_rounds' }),
+          ],
+        },
+      }),
+      { window: { from: 0, to: 100 }, now: 100 },
+    );
 
-    expect(buildGlobalTimeline(sources, { window: { from: 0, to: 100 }, now: 100 }).map((e) => e.kind))
-      .toEqual(['session', 'task', 'loop-run', 'attention', 'digest', 'steer', 'verify']);
+    expect(result.map((e) => e.kind)).toEqual([
+      'session-needs-you',
+      'session-completed',
+      'digest-sent',
+      'attention-raised',
+      'loop-run-settled',
+      'task-done',
+      'session-started',
+    ]);
+    expect(result[0]).toMatchObject({ ts: 70, sessionId: 's1', projectPath: '/repo/a' });
   });
 
-  it('filters timeline by provider and project', () => {
-    const sources = minimalSources({
+  it('uses inclusive-from exclusive-to window boundaries', () => {
+    const result = buildGlobalTimeline(
+      sources({
+        sessions: [
+          session({ id: 'included', createdAt: 100 }),
+          session({ id: 'excluded', createdAt: 200 }),
+        ],
+      }),
+      { window: { from: 100, to: 200 }, now: 200 },
+    );
+
+    expect(result.map((e) => e.sessionId)).toEqual(['included']);
+  });
+
+  it('paginates with a stable exclusive before timestamp', () => {
+    const input = sources({
       sessions: [
-        session('pi-1', 'pi', '/repo/a'),
-        session('cursor-1', 'cursor', '/repo/b'),
-      ],
-      tasks: [
-        task('task-a', '/repo/a', 'pi'),
-        task('task-b', '/repo/b', 'cursor'),
+        session({ id: 'old', createdAt: 10 }),
+        session({ id: 'middle', createdAt: 20 }),
+        session({ id: 'new', createdAt: 30 }),
       ],
     });
 
-    const result = buildGlobalTimeline(sources, {
+    const first = buildGlobalTimeline(input, { window: { from: 0, to: 100 }, now: 100, limit: 2 });
+    const second = buildGlobalTimeline(input, {
       window: { from: 0, to: 100 },
       now: 100,
-      provider: 'cursor',
-      projectPath: '/repo/b',
+      before: first.at(-1)?.ts,
+      limit: 2,
     });
-    expect(result.every((entry) => entry.provider === 'cursor' || entry.provider === null)).toBe(true);
-    expect(result.every((entry) => entry.projectPath === '/repo/b' || entry.projectPath === null)).toBe(true);
+
+    expect(first.map((e) => e.sessionId)).toEqual(['new', 'middle']);
+    expect(second.map((e) => e.sessionId)).toEqual(['old']);
+    expect(buildGlobalTimeline(input, { window: { from: 0, to: 100 }, now: 100, limit: 2 })).toEqual(first);
   });
 
-  it('unknown provider and missing project are tolerated', () => {
-    const sources = minimalSources({
-      sessions: [session('mystery', 'unknown-provider', null)],
-      eventsBySession: { mystery: [event(1, 'user_message', 10, { text: 'hi' })] },
-    });
+  it('returns an empty feed for an empty window', () => {
+    const result = buildGlobalTimeline(
+      sources({ sessions: [session({ id: 's1', createdAt: 10 })] }),
+      { window: { from: 100, to: 200 }, now: 200 },
+    );
 
-    expect(() =>
-      buildGlobalTimeline(sources, { window: { from: 0, to: 100 }, now: 100 }),
-    ).not.toThrow();
+    expect(result).toEqual([]);
+  });
+
+  it('tolerates unknown event and attention kinds without inventing new event types', () => {
+    const result = buildGlobalTimeline(
+      sources({
+        sessions: [session({ id: 's1', createdAt: 10 })],
+        attentionItems: [attention({ id: 'legacy', kind: 'legacy-kind', createdAt: 20 })],
+        eventsBySession: { s1: [event(1, 'legacy_event', 30, { ok: true })] },
+      }),
+      { window: { from: 0, to: 100 }, now: 100 },
+    );
+
+    expect(result.map((e) => e.kind)).toEqual(['attention-raised', 'session-started']);
+  });
+
+  it('shapes action-specific facts with deep-link ids', () => {
+    const result = buildGlobalTimeline(
+      sources({
+        sessions: [
+          session({
+            id: 's1',
+            createdAt: 10,
+            updatedAt: 80,
+            pullRequestUrl: 'https://forge.local/pr/1',
+            pullRequestNumber: 1,
+            pullRequestState: 'open',
+          }),
+        ],
+        tasks: [
+          task({ id: 'done', status: 'DONE', finishedAt: 20, sessionId: 's1' }),
+          task({ id: 'failed', status: 'FAILED', finishedAt: 30 }),
+        ],
+        loopRuns: [loopRun({ id: 'run-1', outcome: 'ok', verify: 'green', createdAt: 40 })],
+        attentionItems: [
+          attention({ id: 'breaker', kind: 'tripped-breaker', subjectId: 'loop-1', createdAt: 50, resolvedAt: 60 }),
+          attention({ id: 'plain', kind: 'verify-dead', createdAt: 70, resolvedAt: 75 }),
+        ],
+      }),
+      { window: { from: 0, to: 100 }, now: 100 },
+    );
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'pr-opened-detected', sessionId: 's1', prUrl: 'https://forge.local/pr/1' }),
+        expect.objectContaining({ kind: 'task-done', taskId: 'done', sessionId: 's1' }),
+        expect.objectContaining({ kind: 'task-failed', taskId: 'failed' }),
+        expect.objectContaining({ kind: 'loop-run-settled', loopId: 'loop-1', outcome: 'ok', verify: 'green' }),
+        expect.objectContaining({ kind: 'breaker-tripped', loopId: 'loop-1', attentionId: 'breaker' }),
+        expect.objectContaining({ kind: 'breaker-resumed', loopId: 'loop-1', attentionId: 'breaker' }),
+        expect.objectContaining({ kind: 'attention-raised', attentionId: 'plain' }),
+        expect.objectContaining({ kind: 'attention-resolved', attentionId: 'plain' }),
+      ]),
+    );
   });
 });

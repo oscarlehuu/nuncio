@@ -127,3 +127,64 @@ Sub-phase A uses **derive-on-demand only**. No new table, no migration, no new e
 1. Approve `dispatcher-proposal` as an attention kind, or prefer a separate `proposals` table from day one?
 2. Should HTTP MCP ship in sub-phase C v1, or stdio-only first?
 3. What exact evening dispatcher default time: `20:05` local OK?
+
+# Sub-Phase B Design — Global Timeline + Digest Enrichment
+
+## Global Timeline Contract
+
+`GET /api/timeline?from=&to=&before=&limit=` is the phone-first shortcut for the
+"what happened while I slept" view. `GET /api/observability/timeline` remains as
+the observability namespace alias and accepts the same query. The fold derives
+entries from existing durable rows only: sessions, session events, tasks,
+loop_runs, attention_items, and digest_runs. It adds no event types and no
+storage. Default window is since the most recent digest window boundary; if no
+digest exists, use the last 24 hours from injected `now`.
+
+Each entry is a UI-ready one-liner:
+
+`{ id, ts, kind, title, projectPath, provider, sessionId?, taskId?, loopId?, attentionId?, prUrl?, outcome?, verify?, severity? }`
+
+Kinds are concrete facts, not source tables:
+
+- `session-started`, `session-completed`, `session-needs-you`
+- `loop-run-settled`, `breaker-tripped`, `breaker-resumed`
+- `attention-raised`, `attention-resolved`
+- `task-done`, `task-failed`
+- `pr-opened-detected`
+
+Ordering is newest first for REST. Pagination uses `before` as an exclusive
+timestamp cursor and `limit` capped server-side. Equal timestamps sort by
+significance, then stable id, so repeated requests cannot reshuffle the feed.
+Window semantics stay `[from, to)`.
+
+## Digest Enrichment
+
+`buildDigest()` gets additive sections:
+
+- `highlights`: top N timeline entries in the digest window, sorted by simple
+  significance first, then newest. Significance order: needs-you > breaker >
+  failures > completions > neutral.
+- `projectLines`: one line per project from observability rollups, e.g.
+  `nuncio: 6 runs, 5 green, 1 needs you`.
+
+The heartbeat service supplies both from the observability A folds. It must not
+recount verify/task/attention facts locally beyond formatting the existing
+rollup output.
+
+## Red Suite
+
+- Timeline fold: merge ordering, `[from,to)` boundaries, `before` pagination
+  stability, empty window, unknown-kind tolerance, per-kind shaping.
+- Timeline REST: `/api/timeline` is wired through AppModule and accepts default
+  window + pagination query.
+- Digest enrichment: highlight significance order, per-project one-liners,
+  empty world stays honest zeros/empty arrays.
+- Restart determinism: same durable rows produce the same timeline and digest
+  enrichment after rebuilding sources.
+
+## Web Follow-up
+
+Verified `packages/core/src/attention-api.ts` normalizes missing legacy digest
+sections and `apps/web/src/components/digest-view.tsx` reads only known fields.
+Additive `highlights` and `projectLines` will not break the current view, but
+they are not rendered until a web round adds those sections.

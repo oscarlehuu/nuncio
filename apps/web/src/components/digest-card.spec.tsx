@@ -25,6 +25,8 @@ function dto(variant: 'morning' | 'evening'): DigestRunDto {
       attention: { raised: 0, resolved: 0, openTopCount: 0 },
       sessions: { completed: 0, needsYou: 0 },
       budget: { runsToday: 0, cap: 24 },
+      highlights: [],
+      projectLines: [],
     },
   };
 }

@@ -27,6 +27,8 @@ function digest(partial: Partial<DigestRunDto['digest']> = {}, variant: 'morning
       attention: { raised: 4, resolved: 2, openTopCount: 1, ...partial.attention },
       sessions: { completed: 5, needsYou: 1, ...partial.sessions },
       budget: { runsToday: 6, cap: 24, ...partial.budget },
+      highlights: partial.highlights ?? [],
+      projectLines: partial.projectLines ?? [],
     },
   };
 }

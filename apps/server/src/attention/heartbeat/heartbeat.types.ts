@@ -45,6 +45,30 @@ export interface Digest {
   attention: { raised: number; resolved: number; openTopCount: number };
   sessions: { completed: number; needsYou: number };
   budget: { runsToday: number; cap: number };
+  highlights: DigestHighlight[];
+  projectLines: DigestProjectLine[];
+}
+
+export interface DigestHighlight {
+  id: string;
+  ts: number;
+  kind: string;
+  title: string;
+  projectPath: string | null;
+  provider: string | null;
+  sessionId?: string;
+  taskId?: string;
+  loopId?: string;
+  attentionId?: string;
+  prUrl?: string;
+  outcome?: string;
+  verify?: string;
+  severity?: number;
+}
+
+export interface DigestProjectLine {
+  projectPath: string | null;
+  title: string;
 }
 
 /** Push payload for the digest (short, phone-first). */

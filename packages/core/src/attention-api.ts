@@ -95,6 +95,30 @@ export interface Digest {
   attention: { raised: number; resolved: number; openTopCount: number };
   sessions: { completed: number; needsYou: number };
   budget: { runsToday: number; cap: number };
+  highlights: DigestHighlight[];
+  projectLines: DigestProjectLine[];
+}
+
+export interface DigestHighlight {
+  id: string;
+  ts: number;
+  kind: string;
+  title: string;
+  projectPath: string | null;
+  provider: string | null;
+  sessionId?: string;
+  taskId?: string;
+  loopId?: string;
+  attentionId?: string;
+  prUrl?: string;
+  outcome?: string;
+  verify?: string;
+  severity?: number;
+}
+
+export interface DigestProjectLine {
+  projectPath: string | null;
+  title: string;
 }
 
 /** A sent digest slot — `slotKey = '<YYYY-MM-DD>:<morning|evening>'`. */
@@ -113,6 +137,8 @@ const ZERO_SECTIONS = {
   attention: { raised: 0, resolved: 0, openTopCount: 0 },
   sessions: { completed: 0, needsYou: 0 },
   budget: { runsToday: 0, cap: 0 },
+  highlights: [] as DigestHighlight[],
+  projectLines: [] as DigestProjectLine[],
 };
 
 function normalizeDigest(raw: Partial<Digest> & { variant?: DigestVariant }): Digest {
@@ -124,6 +150,8 @@ function normalizeDigest(raw: Partial<Digest> & { variant?: DigestVariant }): Di
     attention: { ...ZERO_SECTIONS.attention, ...raw.attention },
     sessions: { ...ZERO_SECTIONS.sessions, ...raw.sessions },
     budget: { ...ZERO_SECTIONS.budget, ...raw.budget },
+    highlights: Array.isArray(raw.highlights) ? raw.highlights : ZERO_SECTIONS.highlights,
+    projectLines: Array.isArray(raw.projectLines) ? raw.projectLines : ZERO_SECTIONS.projectLines,
   };
 }
 

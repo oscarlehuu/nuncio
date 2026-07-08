@@ -7,9 +7,12 @@ import { DatabaseService } from '../../db/database.service';
 import { ForgeRegistry } from '../../forges/forges.registry';
 import { SessionsRepository } from '../../sessions/persistence/sessions.repository';
 import { EventsRepository } from '../../sessions/persistence/events.repository';
+import { TasksService } from '../../tasks/tasks.service';
 import { AttentionService } from '../attention.service';
 import { AttentionRepository } from '../attention.repository';
 import { AttentionCollectors } from '../attention-collectors';
+import { buildGlobalTimeline, foldObservabilityRollups } from '../../observability/observability-folds';
+import type { ObservabilitySources } from '../../observability/observability.types';
 import type { Clock } from '../../scheduler/scheduler.types';
 import { DigestRepository } from './digest.repository';
 import { InfraChecks } from './infra-checks';
@@ -85,6 +88,7 @@ export class HeartbeatService implements OnModuleInit {
     @Optional() private readonly forges?: ForgeRegistry,
     @Optional() private readonly sessions?: SessionsRepository,
     @Optional() private readonly events?: EventsRepository,
+    @Optional() private readonly tasks?: TasksService,
     @Optional() private readonly collectors?: AttentionCollectors,
     @Optional() private readonly attentionItems?: AttentionRepository,
   ) {}
@@ -265,6 +269,8 @@ export class HeartbeatService implements OnModuleInit {
   private digestInput(windowFrom: number, windowTo: number): DigestInput {
     const c = this.gatherDigestCounts(windowFrom, windowTo);
     const openTopCount = this.attention?.list().counts.total ?? 0;
+    const observabilitySources = this.observabilitySources();
+    const observabilityQuery = { window: { from: windowFrom, to: windowTo }, now: windowTo };
     return {
       runsOk: c.runsOk,
       runsFailed: c.runsFailed,
@@ -276,6 +282,22 @@ export class HeartbeatService implements OnModuleInit {
       sessionsNeedsYou: c.sessionsNeedsYou,
       runsToday: c.runsToday,
       cap: c.cap,
+      timelineEntries: buildGlobalTimeline(observabilitySources, { ...observabilityQuery, limit: 100 }),
+      projectRollups: foldObservabilityRollups(observabilitySources, observabilityQuery, 'project'),
+    };
+  }
+
+  private observabilitySources(): ObservabilitySources {
+    const sessions = this.sessions?.list(true) ?? [];
+    return {
+      sessions,
+      eventsBySession: Object.fromEntries(
+        sessions.map((session) => [session.id, this.events?.list(session.id) ?? []]),
+      ),
+      tasks: this.tasks?.list() ?? [],
+      loopRuns: this.allLoopRuns(),
+      attentionItems: this.attentionItems?.list() ?? [],
+      digestRuns: this.digests?.list() ?? [],
     };
   }
 

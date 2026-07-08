@@ -21,6 +21,8 @@ function digest(over: Partial<Digest> = {}): Digest {
     attention: over.attention ?? { raised: 0, resolved: 0, openTopCount: 0 },
     sessions: over.sessions ?? { completed: 0, needsYou: 0 },
     budget: over.budget ?? { runsToday: 0, cap: 24 },
+    highlights: over.highlights ?? [],
+    projectLines: over.projectLines ?? [],
   };
 }
 
