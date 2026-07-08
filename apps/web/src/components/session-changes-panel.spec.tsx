@@ -109,6 +109,30 @@ describe('SessionChangesPanel', () => {
     expect(screen.queryByRole('button', { name: /bun\.lock/i })).toBeNull();
   });
 
+  it('renders an added empty file as a quiet non-expandable row', async () => {
+    vi.mocked(fetchSessionDiff).mockResolvedValueOnce({
+      files: [
+        {
+          path: 'apps/web/src/empty-marker.ts',
+          oldPath: null,
+          status: 'added',
+          additions: 0,
+          deletions: 0,
+          hunks: [],
+        },
+      ],
+      truncated: false,
+      omittedFiles: 0,
+    });
+
+    render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+    expect(await screen.findByText('apps/web/src/empty-marker.ts')).toBeInTheDocument();
+    expect(screen.getByText('Empty file')).toBeInTheDocument();
+    expect(screen.queryByText('Diff unavailable')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /empty-marker/i })).not.toBeInTheDocument();
+  });
+
   it('sends an inline hunk comment and confirms without duplicating transcript text', async () => {
     render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
 

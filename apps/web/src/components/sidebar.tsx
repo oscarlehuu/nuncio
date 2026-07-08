@@ -4,12 +4,10 @@ import {
   ChevronDown,
   ChevronRight,
   FolderGit2,
+  House,
   LayoutGrid,
-  Inbox,
   MessageSquare,
-  Plus,
   Repeat,
-  Ship,
   RotateCcw,
   Search,
   Settings,
@@ -65,9 +63,7 @@ interface SidebarProps {
   onGrid?: () => void;
   /** Autopilot — the loops fleet (rung 2). */
   onAutopilot?: () => void;
-  /** Inbox — the attention queue (rung 3). */
-  onInbox?: () => void;
-  /** Unacked attention count for the Inbox badge; 0 = no badge. */
+  /** Unacked attention count for the Home badge; 0 = no badge. */
   inboxUnacked?: number;
   onSettings?: () => void;
   onChangelog?: () => void;
@@ -83,11 +79,9 @@ export function Sidebar({
   archivedSessions = [],
   activeId,
   onSelect,
-  onNew,
   onHome,
   onGrid,
   onAutopilot,
-  onInbox,
   inboxUnacked = 0,
   onSettings,
   onChangelog,
@@ -160,26 +154,23 @@ export function Sidebar({
               onClick={onHome}
               className="group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-lg text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 active:scale-[0.99]"
             >
-              <Ship className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
-              <span className="flex-1">Fleet</span>
+              <House className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
+              <span className="flex-1">Home</span>
+              {inboxUnacked > 0 && (
+                <span
+                  aria-label={`${inboxUnacked} items need you`}
+                  className="inline-flex min-w-[1.25rem] shrink-0 items-center justify-center rounded-full bg-warning/15 px-1.5 text-ui-xs font-semibold text-warning tabular-nums"
+                >
+                  {inboxUnacked > 99 ? '99+' : inboxUnacked}
+                </span>
+              )}
             </button>
           ) : null}
-          <button
-            type="button"
-            onClick={onNew}
-            className="group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-lg text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 active:scale-[0.99]"
-          >
-            <Plus className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
-            <span className="flex-1">New Agent</span>
-            <kbd className="hidden shrink-0 items-center gap-0.5 rounded border border-sidebar-border/70 px-1 font-mono text-ui-xs text-muted-foreground md:inline-flex">
-              ⌘N
-            </kbd>
-          </button>
           {onGrid ? (
             <button
               type="button"
               onClick={onGrid}
-              className="group hidden w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-lg text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 active:scale-[0.99] md:flex"
+              className="group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-lg text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 active:scale-[0.99]"
             >
               <LayoutGrid className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
               <span className="flex-1">Workbench</span>
@@ -193,24 +184,6 @@ export function Sidebar({
             >
               <Repeat className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
               <span className="flex-1">Autopilot</span>
-            </button>
-          ) : null}
-          {onInbox ? (
-            <button
-              type="button"
-              onClick={onInbox}
-              className="group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-lg text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 active:scale-[0.99]"
-            >
-              <Inbox className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
-              <span className="flex-1">Inbox</span>
-              {inboxUnacked > 0 && (
-                <span
-                  aria-label={`${inboxUnacked} items need you`}
-                  className="inline-flex min-w-[1.25rem] shrink-0 items-center justify-center rounded-full bg-warning/15 px-1.5 text-ui-xs font-semibold text-warning tabular-nums"
-                >
-                  {inboxUnacked > 99 ? '99+' : inboxUnacked}
-                </span>
-              )}
             </button>
           ) : null}
         </nav>

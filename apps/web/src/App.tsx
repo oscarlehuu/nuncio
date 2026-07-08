@@ -37,10 +37,6 @@ import { FleetView } from './components/fleet-view';
 // The Autopilot surfaces (list + detail + runs) load as one lazy chunk so they
 // never weigh on the entry bundle.
 const AutopilotRoutes = lazy(() => import('./components/autopilot-routes'));
-// The Inbox (attention queue) loads lazily too.
-const InboxView = lazy(() =>
-  import('./components/inbox-view').then((m) => ({ default: m.InboxView })),
-);
 // The heartbeat digest — a read-once briefing, lazy-loaded.
 const DigestView = lazy(() =>
   import('./components/digest-view').then((m) => ({ default: m.DigestView })),
@@ -113,6 +109,11 @@ function applySessionTitle(
     return { ...session, title, updatedAt };
   });
   return changed ? next : list;
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
 }
 
 export default function App() {
@@ -238,6 +239,17 @@ export default function App() {
     navigate('/new');
     dismissTransientSidebar();
   }, [dismissTransientSidebar, navigate]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== 'n' || (!event.metaKey && !event.ctrlKey)) return;
+      if (isEditableTarget(event.target)) return;
+      event.preventDefault();
+      handleNew();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [handleNew]);
 
   const handleCreate = async (
     prompt: string,
@@ -514,11 +526,6 @@ export default function App() {
     dismissTransientSidebar();
   }, [dismissTransientSidebar, navigate]);
 
-  const handleOpenInbox = useCallback(() => {
-    navigate('/inbox');
-    dismissTransientSidebar();
-  }, [dismissTransientSidebar, navigate]);
-
   const handleOpenSettings = useCallback(() => {
     navigate('/settings');
     dismissTransientSidebar();
@@ -620,7 +627,6 @@ export default function App() {
     onHome: handleOpenHome,
     onGrid: handleOpenGrid,
     onAutopilot: handleOpenAutopilot,
-    onInbox: handleOpenInbox,
     inboxUnacked,
     onSettings: handleOpenSettings,
     onChangelog: handleOpenChangelog,
@@ -765,14 +771,7 @@ export default function App() {
               </Suspense>
             }
           />
-          <Route
-            path="/inbox"
-            element={
-              <Suspense fallback={<div className="flex-1" aria-hidden />}>
-                <InboxView onBack={() => navigate('/')} />
-              </Suspense>
-            }
-          />
+          <Route path="/inbox" element={<Navigate to="/" replace />} />
           <Route
             path="/digest"
             element={

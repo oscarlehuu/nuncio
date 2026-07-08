@@ -21,5 +21,13 @@ export function collapsedLabel(file: DiffFile): string {
   if (file.collapsed === 'binary' || file.status === 'binary') return 'Binary file';
   if (file.collapsed === 'lockfile') return 'Lockfile collapsed';
   if (file.collapsed === 'too-large') return 'Diff too large';
+  if (
+    file.status === 'added' &&
+    file.additions === 0 &&
+    file.deletions === 0 &&
+    file.hunks.length === 0
+  ) {
+    return 'Empty file';
+  }
   return 'Diff unavailable';
 }

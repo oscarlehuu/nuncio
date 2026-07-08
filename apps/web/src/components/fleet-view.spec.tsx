@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
+import { MemoryRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../lib/api', async () => {
@@ -36,12 +36,28 @@ function LocationProbe() {
   return <div data-testid="loc">{loc.pathname + loc.search}</div>;
 }
 
+function BackButton() {
+  const navigate = useNavigate();
+  return <button type="button" onClick={() => navigate(-1)}>Back</button>;
+}
+
 function renderFleet(onNew = vi.fn()) {
   return render(
     <MemoryRouter initialEntries={['/']}>
       <Routes>
         <Route path="/" element={<><FleetView onNew={onNew} /><LocationProbe /></>} />
         <Route path="*" element={<LocationProbe />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+function renderFleetWithHistory(onNew = vi.fn()) {
+  return render(
+    <MemoryRouter initialEntries={['/']} initialIndex={0}>
+      <Routes>
+        <Route path="/" element={<><FleetView onNew={onNew} /><LocationProbe /></>} />
+        <Route path="/grid" element={<><BackButton /><LocationProbe /></>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -93,6 +109,17 @@ describe('FleetView', () => {
     await waitFor(() => expect(screen.getByText('nuncio')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: 'Open nuncio' }));
     expect(screen.getByTestId('loc').textContent).toBe('/grid?project=%2FUsers%2Fme%2Fnuncio');
+  });
+
+  it('pushes project drill-down so browser back returns to Home', async () => {
+    vi.mocked(fetchFleet).mockResolvedValue([row({ path: '/Users/me/nuncio', name: 'nuncio' })]);
+    renderFleetWithHistory();
+    await waitFor(() => expect(screen.getByText('nuncio')).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'Open nuncio' }));
+    expect(screen.getByTestId('loc').textContent).toBe('/grid?project=%2FUsers%2Fme%2Fnuncio');
+
+    await userEvent.click(screen.getByRole('button', { name: /^back$/i }));
+    expect(screen.getByTestId('loc').textContent).toBe('/');
   });
 
   it('a red row surfaces the top item Open action, deep-linking to the subject', async () => {

@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { Plus, Ship } from 'lucide-react';
 import { toast } from 'sonner';
 import { fetchFleet, type FleetRow as FleetRowDto } from '../lib/api';
+import { AttentionQueue } from './attention-queue';
+import { DigestCard } from './digest-card';
 import { FleetRow } from './fleet-row';
 import { openTargetFor } from '../lib/attention-kind';
 import { Button } from '@/components/ui/button';
@@ -13,10 +15,8 @@ interface FleetViewProps {
 }
 
 /**
- * Fleet — the cockpit landing. One row per project, ordered by the server (red
- * first → weight → activity), so the founder knows in two seconds which ship needs
- * the captain. Rows render in the order received (no client re-sort). Polls while
- * mounted so health flips as conditions change. Lean by design — the landing chunk.
+ * Home cockpit. Attention items and fleet rows share the page but stay at
+ * different altitudes: queue item first, project rollup second.
  */
 export function FleetView({ onNew }: FleetViewProps) {
   const navigate = useNavigate();
@@ -44,7 +44,8 @@ export function FleetView({ onNew }: FleetViewProps) {
     return () => clearInterval(timer);
   }, [refresh]);
 
-  const openProject = (row: FleetRowDto) => navigate(`/grid?project=${encodeURIComponent(row.path)}`);
+  const openProject = (row: FleetRowDto) =>
+    navigate(`/grid?project=${encodeURIComponent(row.path)}`, { replace: false });
 
   const openTopItem = (row: FleetRowDto) => {
     if (!row.topItem) return;
@@ -61,37 +62,56 @@ export function FleetView({ onNew }: FleetViewProps) {
   return (
     <section className="flex-1 flex flex-col min-h-0 overflow-hidden bg-background">
       <header className="flex items-center gap-2 px-4 py-3 border-b border-border sticky top-0 bg-background/80 backdrop-blur z-10">
-        <h1 className="text-lg font-semibold tracking-tight">Fleet</h1>
+        <h1 className="text-lg font-semibold tracking-tight">Home</h1>
         <div className="ml-auto">
           <Button size="sm" className="gap-1.5" onClick={onNew}>
             <Plus className="size-4" />
-            <span className="hidden sm:inline">New agent</span>
+            <span>New agent</span>
+            <kbd
+              aria-hidden
+              className="hidden rounded border border-primary-foreground/30 px-1 font-mono text-[0.65rem] sm:inline"
+            >
+              ⌘N
+            </kbd>
           </Button>
         </div>
       </header>
 
       <div className="flex-1 overflow-y-auto px-4 py-6">
-        <div className="mx-auto w-full max-w-[720px]">
-          {loading ? (
-            <ul className="flex flex-col gap-3" aria-hidden>
-              {[0, 1, 2].map((i) => (
-                <li key={i} className="h-[84px] rounded-xl border border-border bg-card shadow-e1 animate-pulse" />
-              ))}
-            </ul>
-          ) : rows.length === 0 ? (
-            <EmptyState onNew={onNew} />
-          ) : (
-            <ul className="flex flex-col gap-3">
-              {rows.map((row) => (
-                <FleetRow
-                  key={row.path}
-                  row={row}
-                  onOpen={() => openProject(row)}
-                  onOpenTopItem={() => openTopItem(row)}
-                />
-              ))}
-            </ul>
-          )}
+        <div className="mx-auto flex w-full max-w-[720px] flex-col gap-6">
+          <DigestCard onOpen={() => navigate('/digest')} />
+          <AttentionQueue compactEmpty />
+          <section aria-labelledby="fleet-section-title" className="flex flex-col gap-3">
+            <h2
+              id="fleet-section-title"
+              className="text-ui-sm font-medium uppercase tracking-[0.08em] text-muted-foreground"
+            >
+              Fleet
+            </h2>
+            {loading ? (
+              <ul className="flex flex-col gap-3" aria-hidden>
+                {[0, 1, 2].map((i) => (
+                  <li
+                    key={i}
+                    className="h-[84px] rounded-xl border border-border bg-card shadow-e1 animate-pulse"
+                  />
+                ))}
+              </ul>
+            ) : rows.length === 0 ? (
+              <EmptyState onNew={onNew} />
+            ) : (
+              <ul className="flex flex-col gap-3">
+                {rows.map((row) => (
+                  <FleetRow
+                    key={row.path}
+                    row={row}
+                    onOpen={() => openProject(row)}
+                    onOpenTopItem={() => openTopItem(row)}
+                  />
+                ))}
+              </ul>
+            )}
+          </section>
         </div>
       </div>
     </section>
