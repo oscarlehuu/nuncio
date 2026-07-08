@@ -75,6 +75,14 @@ describe('FleetView', () => {
     expect(screen.getByRole('button', { name: /start your first agent/i })).toBeInTheDocument();
   });
 
+  it('keeps the Home heading clear of the floating navigation button', async () => {
+    vi.mocked(fetchFleet).mockResolvedValue([]);
+    renderFleet();
+    const header = (await screen.findByRole('heading', { name: 'Home' })).closest('header');
+    expect(header).toHaveClass('pl-16');
+    expect(header).toHaveClass('md:pl-16');
+  });
+
   it('renders rows in the order the server returned (red first, no re-sort)', async () => {
     vi.mocked(fetchFleet).mockResolvedValue([
       row({ path: '/a', name: 'alpha', health: 'red', reasons: ['1 need you'] }),

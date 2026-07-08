@@ -8,17 +8,20 @@ import { DigestCard } from './digest-card';
 import { FleetRow } from './fleet-row';
 import { openTargetFor } from '../lib/attention-kind';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 interface FleetViewProps {
   /** Start a new agent (the composer moved off '/'). */
   onNew: () => void;
+  /** True when the unpinned desktop sidebar rail overlays the content's left edge. */
+  railOverlay?: boolean;
 }
 
 /**
  * Home cockpit. Attention items and fleet rows share the page but stay at
  * different altitudes: queue item first, project rollup second.
  */
-export function FleetView({ onNew }: FleetViewProps) {
+export function FleetView({ onNew, railOverlay = true }: FleetViewProps) {
   const navigate = useNavigate();
   const [rows, setRows] = useState<FleetRowDto[]>([]);
   const [loading, setLoading] = useState(true);
@@ -61,7 +64,12 @@ export function FleetView({ onNew }: FleetViewProps) {
 
   return (
     <section className="flex-1 flex flex-col min-h-0 overflow-hidden bg-background">
-      <header className="flex items-center gap-2 px-4 py-3 border-b border-border sticky top-0 bg-background/80 backdrop-blur z-10">
+      <header
+        className={cn(
+          'flex items-center gap-2 px-4 py-3 pl-16 border-b border-border sticky top-0 bg-background/80 backdrop-blur z-10 md:pl-4',
+          railOverlay && 'md:pl-16',
+        )}
+      >
         <h1 className="text-lg font-semibold tracking-tight">Home</h1>
         <div className="ml-auto">
           <Button size="sm" className="gap-1.5" onClick={onNew}>

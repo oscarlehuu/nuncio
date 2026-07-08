@@ -33,7 +33,7 @@ export function FleetRow({ row, onOpen, onOpenTopItem }: FleetRowProps) {
   const showTopAction = row.health === 'red' && row.topItem !== null && onOpenTopItem;
 
   return (
-    <li className="surface-lit relative flex items-center gap-3 overflow-hidden rounded-xl border border-border bg-card pl-4 pr-3 py-3 shadow-e1">
+    <li className="surface-lit relative flex cursor-pointer items-center gap-3 overflow-hidden rounded-xl border border-border bg-card pl-4 pr-3 py-3 shadow-e1">
       {/* Health-tinted left accent — the two-second glance. */}
       <span className={cn('absolute inset-y-0 left-0 w-1', HEALTH_ACCENT[row.health])} aria-hidden />
 
@@ -41,8 +41,10 @@ export function FleetRow({ row, onOpen, onOpenTopItem }: FleetRowProps) {
         type="button"
         onClick={onOpen}
         aria-label={`Open ${row.name}`}
-        className="flex min-w-0 flex-1 flex-col gap-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
-      >
+        className="absolute inset-0 z-10 rounded-xl border-0 bg-transparent p-0 text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+      />
+
+      <div data-fleet-row-label className="relative z-0 flex min-w-0 flex-1 select-none flex-col gap-1">
         <div className="flex items-center gap-2">
           <span className={cn('size-2 shrink-0 rounded-full', HEALTH_DOT[row.health])} aria-hidden />
           <span className="truncate text-ui-lg font-semibold text-foreground">{row.name}</span>
@@ -78,14 +80,17 @@ export function FleetRow({ row, onOpen, onOpenTopItem }: FleetRowProps) {
             <span className="tabular-nums">{relativeTime(row.lastActivityAt)}</span>
           )}
         </div>
-      </button>
+      </div>
 
       {showTopAction && (
         <button
           type="button"
-          onClick={onOpenTopItem}
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenTopItem();
+          }}
           aria-label={`Open ${row.topItem!.title}`}
-          className="shrink-0 inline-flex items-center gap-1 rounded-md border border-warning/40 bg-warning/10 px-2.5 py-1.5 text-ui-sm font-medium text-warning transition-colors hover:bg-warning/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-95"
+          className="relative z-20 shrink-0 inline-flex items-center gap-1 rounded-md border border-warning/40 bg-warning/10 px-2.5 py-1.5 text-ui-sm font-medium text-warning transition-colors hover:bg-warning/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-95"
         >
           Open
           <ArrowUpRight className="size-3.5" />
