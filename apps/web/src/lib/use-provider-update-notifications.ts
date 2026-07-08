@@ -14,10 +14,10 @@ export function useProviderUpdateNotifications(onReviewUpdates: () => void) {
     const check = async () => {
       try {
         const updates = await fetchProviderUpdates();
-        if (cancelled || !updates.enabled) return;
+        if (cancelled || !updates.enabled || !updates.notificationsEnabled) return;
 
         const outdated = updates.providers.filter(
-          (provider) => provider.status === 'behind_latest',
+          (provider) => provider.status === 'behind_latest' && !provider.muted,
         );
         if (outdated.length === 0) return;
 

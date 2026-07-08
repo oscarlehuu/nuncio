@@ -17,7 +17,11 @@ vi.mock('../lib/forge-status-api', () => ({
 }));
 
 vi.mock('../lib/provider-updates-api', () => ({
-  fetchProviderUpdates: vi.fn().mockResolvedValue({ enabled: true, providers: [] }),
+  fetchProviderUpdates: vi.fn().mockResolvedValue({
+    enabled: true,
+    notificationsEnabled: true,
+    providers: [],
+  }),
   updateProviderTool: vi.fn(),
 }));
 
@@ -496,5 +500,26 @@ describe('SettingsView', () => {
     expect(toggle).toHaveAttribute('aria-checked', 'false');
     await userEvent.click(toggle);
     await waitFor(() => expect(onUpdate).toHaveBeenCalledWith('NUNCIO_TELEMETRY', '1'));
+  });
+
+  it('renders the global CLI update notification setting in Advanced', async () => {
+    const settings = [
+      makeSetting({
+        key: 'NUNCIO_CLI_UPDATE_NOTIFICATIONS',
+        category: 'advanced',
+        providerId: undefined,
+        type: 'boolean',
+        label: 'CLI update notifications',
+        description: 'Show toast notifications when Pi or Codex CLI updates are available.',
+        hasValue: true,
+        value: '1',
+      }),
+    ];
+    renderWithTheme(
+      <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    await goToSection('Advanced');
+
+    expect(screen.getByRole('switch', { name: 'CLI update notifications' })).toBeInTheDocument();
   });
 });

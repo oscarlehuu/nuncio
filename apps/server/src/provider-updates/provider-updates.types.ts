@@ -12,10 +12,12 @@ export interface ProviderUpdateStatusDto {
   updateCommand: string | null;
   message: string | null;
   checkedAt: string;
+  muted: boolean;
 }
 
 export interface ProviderUpdatesDto {
   enabled: boolean;
+  notificationsEnabled: boolean;
   providers: ProviderUpdateStatusDto[];
 }
 

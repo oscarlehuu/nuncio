@@ -12,6 +12,7 @@ import {
   compareVersions,
   parseCliVersion,
   settingEnabled,
+  type ProviderToolUpdateDefinition,
   type UpdateAction,
 } from './provider-update-helpers';
 import type {
@@ -21,7 +22,7 @@ import type {
   ProviderUpdatesDto,
 } from './provider-updates.types';
 
-interface ProviderToolDefinition {
+interface ProviderToolDefinition extends ProviderToolUpdateDefinition {
   provider: ProviderToolId;
   name: string;
   packageName: string;
@@ -38,6 +39,7 @@ const PROVIDER_TOOLS: ProviderToolDefinition[] = [
     packageName: '@earendil-works/pi-coding-agent',
     binarySetting: 'NUNCIO_PI_BIN',
     defaultBinary: 'pi',
+    nativeUpdateArgs: ['update'],
   },
   {
     provider: 'codex',
@@ -45,6 +47,10 @@ const PROVIDER_TOOLS: ProviderToolDefinition[] = [
     packageName: '@openai/codex',
     binarySetting: 'NUNCIO_CODEX_BIN',
     defaultBinary: 'codex',
+    nativeUpdateArgs: ['update'],
+    standalonePathMarkers: ['/.codex/packages/standalone/'],
+    homebrewName: 'codex',
+    homebrewKind: 'cask',
   },
 ];
 
@@ -60,9 +66,18 @@ export class ProviderUpdatesService {
   constructor(private readonly settings: SettingsService) {}
 
   async list(): Promise<ProviderUpdatesDto> {
-    if (!this.updateChecksEnabled()) return { enabled: false, providers: [] };
-    const providers = await Promise.all(PROVIDER_TOOLS.map((definition) => this.check(definition)));
-    return { enabled: true, providers };
+    if (!this.updateChecksEnabled()) {
+      return { enabled: false, notificationsEnabled: false, providers: [] };
+    }
+    const mutedProviders = this.mutedProviders();
+    const providers = await Promise.all(
+      PROVIDER_TOOLS.map((definition) => this.check(definition, mutedProviders)),
+    );
+    return {
+      enabled: true,
+      notificationsEnabled: this.updateNotificationsEnabled(),
+      providers,
+    };
   }
 
   async update(provider: ProviderToolId): Promise<ProviderUpdateRunResultDto> {
@@ -106,7 +121,10 @@ export class ProviderUpdatesService {
     };
   }
 
-  private async check(definition: ProviderToolDefinition): Promise<ProviderUpdateStatusDto> {
+  private async check(
+    definition: ProviderToolDefinition,
+    mutedProviders = this.mutedProviders(),
+  ): Promise<ProviderUpdateStatusDto> {
     const checkedAt = new Date().toISOString();
     const binaryPath = this.binaryPathFor(definition);
     const versionResult = await this.commandRunner(binaryPath, ['--version'], {
@@ -137,11 +155,26 @@ export class ProviderUpdatesService {
       updateCommand: status === 'behind_latest' ? updateTarget.updateCommand : null,
       message: messageForStatus(definition.name, status, versionResult),
       checkedAt,
+      muted: mutedProviders.has(definition.provider),
     };
   }
 
   private updateChecksEnabled(): boolean {
     return settingEnabled(this.settings.resolve('NUNCIO_PROVIDER_UPDATE_CHECKS'));
+  }
+
+  private updateNotificationsEnabled(): boolean {
+    return settingEnabled(this.settings.resolve('NUNCIO_CLI_UPDATE_NOTIFICATIONS'));
+  }
+
+  private mutedProviders(): Set<ProviderToolId> {
+    const raw = this.settings.resolve('NUNCIO_CLI_UPDATE_MUTED') ?? '';
+    return new Set(
+      raw
+        .split(',')
+        .map((part) => part.trim().toLowerCase())
+        .filter((part): part is ProviderToolId => part === 'pi' || part === 'codex'),
+    );
   }
 
   private getDefinition(provider: ProviderToolId): ProviderToolDefinition {
@@ -166,7 +199,7 @@ export class ProviderUpdatesService {
   private updateTargetFor(definition: ProviderToolDefinition) {
     const binaryPath = this.binaryPathFor(definition);
     return buildUpdateTarget(
-      definition.provider,
+      definition,
       binaryPath,
       this.realCommandPathResolver(binaryPath),
     );

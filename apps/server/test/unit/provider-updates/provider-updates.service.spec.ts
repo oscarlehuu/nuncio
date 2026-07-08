@@ -28,6 +28,7 @@ describe('ProviderUpdatesService', () => {
     });
     service.latestVersionResolver = async (packageName) =>
       packageName === '@openai/codex' ? '0.142.5' : '0.80.3';
+    service.realCommandPathResolver = () => null;
 
     const result = await service.list();
 
@@ -61,7 +62,7 @@ describe('ProviderUpdatesService', () => {
       return '9.9.9';
     };
 
-    await expect(service.list()).resolves.toEqual({ enabled: false, providers: [] });
+    await expect(service.list()).resolves.toEqual({ enabled: false, notificationsEnabled: false, providers: [] });
     expect(commandCalls).toBe(0);
     expect(registryCalls).toBe(0);
   });
@@ -75,10 +76,41 @@ describe('ProviderUpdatesService', () => {
       return { status: 0, stdout: calls.length > 2 ? '0.80.3' : '0.80.2', stderr: '' };
     };
     service.latestVersionResolver = async () => '0.80.3';
+    service.realCommandPathResolver = () => null;
 
     const result = await service.update('pi');
 
     expect(calls.some((call) => call.command === 'pi' && call.args[0] === 'update')).toBe(true);
+    expect(result.status).toBe('succeeded');
+  });
+
+  it('uses npm to update Pi when the installed CLI is npm global', async () => {
+    const service = serviceWith({ NUNCIO_PI_BIN: 'pi' });
+    service.realCommandPathResolver = () =>
+      '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js';
+    const calls: Array<{ command: string; args: string[] }> = [];
+    let piVersion = '0.80.2';
+    service.commandRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === 'npm') {
+        piVersion = '0.80.3';
+        return { status: 0, stdout: 'updated', stderr: '' };
+      }
+      return { status: 0, stdout: command === 'pi' ? piVersion : 'codex-cli 0.142.5', stderr: '' };
+    };
+    service.latestVersionResolver = async () => '0.80.3';
+
+    const before = (await service.list()).providers.find((provider) => provider.provider === 'pi');
+    const result = await service.update('pi');
+
+    expect(before).toMatchObject({
+      status: 'behind_latest',
+      canUpdate: true,
+      updateCommand: 'npm install -g @earendil-works/pi-coding-agent@latest',
+    });
+    expect(calls.some((call) => call.command === 'npm' && call.args.includes('@earendil-works/pi-coding-agent@latest'))).toBe(
+      true,
+    );
     expect(result.status).toBe('succeeded');
   });
 
@@ -98,19 +130,64 @@ describe('ProviderUpdatesService', () => {
     });
   });
 
-  it('shows the official Codex installer command as manual-only for standalone installs', async () => {
+  it('uses the Codex native update command for standalone installs', async () => {
     const service = serviceWith({ NUNCIO_CODEX_BIN: '/Users/test/.local/bin/codex' });
-    service.realCommandPathResolver = () => '/Users/test/.local/bin/codex';
-    service.commandRunner = async () => ({ status: 0, stdout: 'codex-cli 0.141.0', stderr: '' });
+    service.realCommandPathResolver = () =>
+      '/Users/test/.codex/packages/standalone/current/bin/codex';
+    const calls: Array<{ command: string; args: string[] }> = [];
+    let codexVersion = '0.141.0';
+    service.commandRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args[0] === 'update') {
+        codexVersion = '0.142.5';
+        return { status: 0, stdout: 'updated', stderr: '' };
+      }
+      return {
+        status: 0,
+        stdout: command.includes('codex') ? `codex-cli ${codexVersion}` : '0.80.3',
+        stderr: '',
+      };
+    };
     service.latestVersionResolver = async () => '0.142.5';
 
     const status = (await service.list()).providers.find((provider) => provider.provider === 'codex');
+    const result = await service.update('codex');
 
     expect(status).toMatchObject({
       status: 'behind_latest',
-      canUpdate: false,
+      canUpdate: true,
+      updateCommand: '/Users/test/.local/bin/codex update',
     });
-    expect(status?.updateCommand).toContain('https://chatgpt.com/codex/install.sh');
-    expect(status?.updateCommand).toContain('CODEX_NON_INTERACTIVE=1');
+    expect(calls.some((call) => call.command === '/Users/test/.local/bin/codex' && call.args[0] === 'update')).toBe(
+      true,
+    );
+    expect(result.status).toBe('succeeded');
+  });
+
+  it('reports notification mute state without hiding manual update metadata', async () => {
+    const service = serviceWith({
+      NUNCIO_CLI_UPDATE_NOTIFICATIONS: '0',
+      NUNCIO_CLI_UPDATE_MUTED: 'pi',
+      NUNCIO_PI_BIN: 'pi',
+    });
+    service.commandRunner = async (command) => ({
+      status: 0,
+      stdout: command === 'pi' ? '0.80.2' : 'codex-cli 0.141.0',
+      stderr: '',
+    });
+    service.latestVersionResolver = async (packageName) =>
+      packageName === '@openai/codex' ? '0.142.5' : '0.80.3';
+
+    const result = await service.list();
+    const pi = result.providers.find((provider) => provider.provider === 'pi');
+
+    expect(result.notificationsEnabled).toBe(false);
+    expect(pi).toMatchObject({
+      status: 'behind_latest',
+      muted: true,
+      currentVersion: '0.80.2',
+      latestVersion: '0.80.3',
+      canUpdate: true,
+    });
   });
 });

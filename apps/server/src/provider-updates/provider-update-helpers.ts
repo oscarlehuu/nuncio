@@ -1,5 +1,6 @@
-import { dirname } from 'node:path';
 import type { ProviderToolId } from './provider-updates.types';
+
+export type InstallMethod = 'npm' | 'bun' | 'pnpm' | 'homebrew' | 'standalone' | 'unknown';
 
 export interface UpdateAction {
   command: string;
@@ -11,6 +12,15 @@ export interface UpdateTarget {
   canUpdate: boolean;
   updateCommand: string | null;
   action?: UpdateAction;
+}
+
+export interface ProviderToolUpdateDefinition {
+  provider: ProviderToolId;
+  packageName: string;
+  nativeUpdateArgs?: string[];
+  standalonePathMarkers?: string[];
+  homebrewName?: string;
+  homebrewKind?: 'formula' | 'cask';
 }
 
 interface Semver {
@@ -61,15 +71,23 @@ export function shellJoin(parts: string[]): string {
 }
 
 export function buildUpdateTarget(
-  provider: ProviderToolId,
+  definition: ProviderToolUpdateDefinition,
   binaryPath: string,
   realCommandPath: string | null,
 ): UpdateTarget {
-  if (provider === 'pi') {
-    const action = makeAction(binaryPath, ['update']);
+  const installMethod = detectInstallMethod(realCommandPath ?? binaryPath, definition);
+  const packageSpec = `${definition.packageName}@latest`;
+  const packageManagerTarget = packageManagerUpdateTarget(installMethod, packageSpec);
+  if (packageManagerTarget) return packageManagerTarget;
+  if (installMethod === 'homebrew') return homebrewUpdateTarget(definition);
+  if (definition.nativeUpdateArgs) {
+    const action = makeAction(binaryPath, definition.nativeUpdateArgs);
     return { canUpdate: true, updateCommand: action.command, action };
   }
-  return buildCodexUpdateTarget(binaryPath, realCommandPath);
+  return {
+    canUpdate: false,
+    updateCommand: `Install ${packageSpec} manually.`,
+  };
 }
 
 function normalizeVersion(version: string): string {
@@ -106,32 +124,36 @@ function makeAction(executable: string, args: string[]): UpdateAction {
   return { command: shellJoin([executable, ...args]), executable, args };
 }
 
-function buildCodexUpdateTarget(binaryPath: string, realCommandPath: string | null): UpdateTarget {
-  const installSource = detectInstallSource(realCommandPath ?? binaryPath);
-  if (installSource === 'npm') {
-    const action = makeAction('npm', ['install', '-g', '@openai/codex@latest']);
-    return { canUpdate: true, updateCommand: action.command, action };
-  }
-  if (installSource === 'bun') {
-    const action = makeAction('bun', ['i', '-g', '@openai/codex@latest']);
-    return { canUpdate: true, updateCommand: action.command, action };
-  }
-  if (installSource === 'pnpm') {
-    const action = makeAction('pnpm', ['add', '-g', '@openai/codex@latest']);
-    return { canUpdate: true, updateCommand: action.command, action };
-  }
-  if (installSource === 'homebrew') {
-    const action = makeAction('brew', ['upgrade', '--cask', 'codex']);
-    return { canUpdate: true, updateCommand: action.command, action };
-  }
-  return {
-    canUpdate: false,
-    updateCommand: codexStandaloneInstallCommand(binaryPath),
-  };
+function packageManagerUpdateTarget(
+  installMethod: InstallMethod,
+  packageSpec: string,
+): UpdateTarget | null {
+  if (installMethod === 'npm') return target('npm', ['install', '-g', packageSpec]);
+  if (installMethod === 'bun') return target('bun', ['i', '-g', packageSpec]);
+  if (installMethod === 'pnpm') return target('pnpm', ['add', '-g', packageSpec]);
+  return null;
 }
 
-function detectInstallSource(commandPath: string): 'npm' | 'bun' | 'pnpm' | 'homebrew' | 'unknown' {
+function homebrewUpdateTarget(definition: ProviderToolUpdateDefinition): UpdateTarget {
+  const args = ['upgrade'];
+  if (definition.homebrewKind === 'cask') args.push('--cask');
+  args.push(definition.homebrewName ?? definition.provider);
+  return target('brew', args);
+}
+
+function target(executable: string, args: string[]): UpdateTarget {
+  const action = makeAction(executable, args);
+  return { canUpdate: true, updateCommand: action.command, action };
+}
+
+export function detectInstallMethod(
+  commandPath: string,
+  definition: ProviderToolUpdateDefinition,
+): InstallMethod {
   const normalized = commandPath.replaceAll('\\', '/').toLowerCase();
+  if (definition.standalonePathMarkers?.some((marker) => normalized.includes(marker.toLowerCase()))) {
+    return 'standalone';
+  }
   if (normalized.includes('/.bun/bin/')) return 'bun';
   if (
     normalized.includes('/.local/share/pnpm/') ||
@@ -158,14 +180,6 @@ function detectInstallSource(commandPath: string): 'npm' | 'bun' | 'pnpm' | 'hom
     return 'homebrew';
   }
   return 'unknown';
-}
-
-function codexStandaloneInstallCommand(binaryPath: string): string {
-  const installEnv = ['CODEX_NON_INTERACTIVE=1'];
-  if (binaryPath.includes('/') || binaryPath.includes('\\')) {
-    installEnv.push(`CODEX_INSTALL_DIR=${shellQuote(dirname(binaryPath))}`);
-  }
-  return `curl -fsSL https://chatgpt.com/codex/install.sh | ${installEnv.join(' ')} sh`;
 }
 
 function shellQuote(value: string): string {

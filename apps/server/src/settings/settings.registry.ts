@@ -181,9 +181,29 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     type: 'boolean',
     label: 'Provider update checks',
     description:
-      'Check Pi and Codex CLI versions against their public package registry and show optional update actions.',
+      'Check managed provider CLI versions against their public package registries and show optional update actions.',
     envVar: 'NUNCIO_PROVIDER_UPDATE_CHECKS',
     default: '1',
+  },
+  {
+    key: 'NUNCIO_CLI_UPDATE_NOTIFICATIONS',
+    category: 'advanced',
+    type: 'boolean',
+    label: 'CLI update notifications',
+    description:
+      'Show provider CLI update notifications. Manual update checks and Update actions remain available when this is off.',
+    envVar: 'NUNCIO_CLI_UPDATE_NOTIFICATIONS',
+    default: '1',
+  },
+  {
+    key: 'NUNCIO_CLI_UPDATE_MUTED',
+    category: 'advanced',
+    type: 'string',
+    label: 'Muted CLI update notifications',
+    description:
+      'Comma-separated provider CLI ids with muted update notifications, such as `pi,codex`. Manual updates still work.',
+    envVar: 'NUNCIO_CLI_UPDATE_MUTED',
+    default: '',
   },
   {
     key: 'NUNCIO_WORKSPACES_DIR',
