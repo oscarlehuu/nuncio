@@ -601,3 +601,154 @@ Flagged genuine picks: **C2's HIGH_THRESHOLD** (is a stalled-loop breaker "red" 
 tripped-breaker in red because a broken loop stops shipping) and **C3's cost ceiling** (git-status per
 running session is fine at personal scale; revisit if concurrency grows). Everything else follows the
 locked constraints.
+
+---
+
+# Sub-phase D design — diff review + comment-to-steer
+
+**Status:** Design + red suite (2026-07-08). The LAST rung-3 piece. **Locked constraint (#7): v1 =
+WORKTREE diffs only** — a session/task's working directory vs its base (forge PR diffs OUT). The
+product moment: the founder on the phone opens a session's diff, reads a hunk, taps it, types "this
+helper already exists in utils/x.ts — use it", and that becomes a **steer carrying file:line + hunk
+context** into the running/idle session via the rung-1 path. **The phone test rules.**
+
+## What already exists (scout — REUSE per the standing rule, don't rebuild)
+
+| Need | Source (already in-repo) |
+|------|--------------------------|
+| Raw worktree diff (base + path + staged, traversal guards, untracked handling) | `GitService.diff()` (`git.service.ts:405`) — returns raw unified text (`GitDiffDto`) |
+| Session-scoped git surface | `GET /sessions/:id/git/diff` + `git-session.controller.ts` (already resolves the session git dir: worktreePath → workspace → projectPath) |
+| Session base / branch | `SessionDto.baseBranch` / `worktreePath` / `branch` (worktree created `-b branch <base>`) |
+| Structured per-file diff SHAPE | `ForgeFileDiff` (`forges.types.ts`) — `{path, oldPath, status, additions, deletions, patch}` — mirror it |
+| Steer path (running → queued) | `SessionsService.steer(id, message)` (`sessions.service.ts:299`) — plain text, rung-1 semantics |
+| Web diff render | `diff-view.tsx` `parseDiffLines()` + `review-changes.tsx` per-file loader + `forge/pr-files.tsx` — Lucia reuses these |
+
+**Design consequence:** the server side of sub-phase D is TWO small things — (1) a **structured-diff
+fold** over `GitService.diff()`'s raw output (base derived per session type), and (2) a **comment-to-
+steer builder** that assembles a delimited `file:line + capped hunk + comment` text and hands it to the
+EXISTING `steer()`. No new git plumbing, no new steer path, **no new event types**.
+
+## Design questions — resolved (proposed; flag genuine can't-picks)
+
+### Q1 — Diff source & structured shape
+**Reuse `GitService.diff()` as the RAW source** (it already has base support, path-traversal guards,
+and untracked-file handling). Add a **pure `parseUnifiedDiff(raw)`** fold → structured:
+```
+SessionDiff = { files: DiffFile[], truncated: boolean, omittedFiles: number }
+DiffFile = {
+  path, oldPath: string | null,
+  status: 'added' | 'modified' | 'removed' | 'renamed' | 'binary',
+  additions, deletions,
+  hunks: DiffHunk[],           // [] for binary / collapsed / omitted
+  collapsed?: 'binary' | 'lockfile' | 'too-large',   // why hunks are withheld
+}
+DiffHunk = { header, oldStart, oldLines, newStart, newLines, lines: DiffLine[] }
+DiffLine = { kind: 'add'|'del'|'context', text }
+```
+This mirrors `ForgeFileDiff` so the web's existing renderers slot in. **Base derivation (honest,
+derivable today):**
+- **Worktree session** (`baseBranch` set) → `git diff <baseBranch>` from the worktree = the FULL
+  session delta (committed + uncommitted vs the branch-point). The worktree was created `-b branch
+  <base>`, so this is exactly "what this session changed."
+- **Plain cwd session** (no `baseBranch`) → the **v1 floor: uncommitted-changes diff** (`git diff
+  HEAD` + untracked), which is what `GitService.diff()` already returns with no base.
+
+`FleetService` route: `GET /sessions/:id/diff` → `SessionDiff`. (The existing `/sessions/:id/git/diff`
+returns RAW text; the new route returns the STRUCTURED fold — additive, doesn't touch the old one.)
+
+### Q2 — Comment-to-steer payload
+A pure `buildDiffCommentSteer({ path, startLine, endLine, hunk, comment })` → a delimited text block:
+```
+Re: <path>:<startLine>-<endLine>
+
+```diff
+<the hunk text, capped>
+```
+
+<the founder's comment>
+```
+This text rides the EXISTING `SessionsService.steer(id, message)` — running → queued, IDLE → direct,
+rung-1 semantics UNTOUCHED. **No new event type:** `steer_message` already carries text. Recommend
+**omitting** a `origin:'diff-comment'` meta tag in v1 — the delimited "Re: path:line" header already
+makes the origin obvious in the transcript, and the steer payload is plain text by contract. FLAG: if
+the web wants to render diff-comment steers with a distinct chip, add an *additive* `origin` field on
+the steer DTO (not the event) — a small, reversible follow-up, not v1.
+
+### Q3 — Size / safety (caps, binary, lockfiles, traversal)
+- **Per-file hunk cap:** a file whose hunks exceed `MAX_FILE_DIFF_LINES` (v1: 2000) is `collapsed:
+  'too-large'` (listed with additions/deletions, hunks withheld) — an honest MARKER, never a silent
+  drop.
+- **Hard total cap:** across the whole diff, a `MAX_TOTAL_DIFF_BYTES` (v1: ~1 MB) ceiling — remaining
+  files are dropped and counted in `omittedFiles` + `truncated: true`.
+- **Binary:** `status: 'binary'`, `hunks: []`, `collapsed: 'binary'` — never inlined, not counted
+  against the text cap.
+- **Lockfiles** (`package-lock.json`, `bun.lock`, `yarn.lock`, `pnpm-lock.yaml`, `Cargo.lock`,
+  `*.lock`): `collapsed: 'lockfile'` by default (present in the list with counts, hunks withheld) —
+  they blow the phone view and are rarely reviewed by hand.
+- **Path traversal:** a hunk-comment `path` is validated inside the session cwd boundary (reuse
+  `GitService`'s `validateGitPath` / `isInsideRepo` guards); an escape → 4xx.
+- **Non-git cwd** → clean empty `{files: []}`, never a throw (tolerate).
+
+### Q4 — Refresh semantics
+**v1 = fetch-on-open + manual refresh.** `GET /sessions/:id/diff` is a snapshot; the phone re-GETs to
+refresh. A RUNNING session's diff changes under you — that is honest (the snapshot is timestamped);
+**live-diff streaming is out of scope** (a rung-4 nicety). Recommend a small "refreshed at HH:MM +
+pull to refresh" affordance (web, Lucia).
+
+## Architecture (design)
+
+- **`parseUnifiedDiff(raw)`** / **`capDiff(files)`** — pure folds (`apps/server/src/sessions/diff/
+  diff-parse.ts`), table-testable.
+- **`SessionDiffService.diff(sessionId)`** — resolve git dir + base (per session type), call
+  `GitService.diff`, parse + cap.
+- **`buildDiffCommentSteer(...)`** — pure steer-text builder (`diff-comment.ts`).
+- **`SessionDiffController`** — `GET /sessions/:id/diff` (structured) + `POST /sessions/:id/diff/
+  comment` (body `{path, startLine, endLine, hunk, comment}` → builds the steer text → calls
+  `SessionsService.steer`).
+
+## Restart / replay story (ADR-006)
+
+Nothing new is persisted — a diff is derived on demand from the working tree, and a comment-to-steer
+becomes an ordinary steer through the existing (durable, queue-backed) rung-1 path. A restart loses
+nothing: re-GET the diff, and any queued steer already lives in the steer queue.
+
+## Direction-test walk (D)
+
+- **Phone test** — `GET /sessions/:id/diff` returns ready-to-render structured hunks (the web reuses
+  its diff renderer); tap a hunk → `POST .../comment` → a steer lands in the session. THE killer
+  feature of the rung, phone-first.
+- **Engine test** — git-only, provider-neutral; the steer rides the same path every engine uses.
+- **Forge test** — N/A for v1 (worktree diffs only, forge PR diffs OUT — locked).
+- **Restart test** — diff derived on demand; steer is durable via the rung-1 queue.
+- **Self-host test** — pure local git; zero cloud dependency.
+
+## Red suite for sub-phase D
+
+Edge-case-first, deterministic (FIXTURE repos in temp dirs — the git module's spec pattern), neutral
+`TODO:` skeletons. Full ledger: `.claude/maestro/rung3-attention/edge-cases-D.md` (34 rows). Test
+files:
+- `sessions/diff/diff-parse.spec.ts` — unified→structured: modified/added/removed/renamed/binary/
+  untracked, multi-file, multi-hunk, empty; hunk header line ranges.
+- `sessions/diff/diff-cap.spec.ts` — per-file line cap + marker, hard total cap + omittedFiles,
+  lockfile collapse, binary not counted, every omission labeled.
+- `sessions/diff/diff-comment.spec.ts` — steer-text builder: delimited file:line + capped hunk +
+  comment; empty-comment reject; hunk truncation marker.
+- `sessions/diff/session-diff.service.spec.ts` — base derivation (worktree vs plain cwd, over fixture
+  repos), git-dir resolution, non-git tolerance, bad-base reject.
+- `sessions/diff/session-diff.controller.spec.ts` — GET structured + POST comment → steer (running→
+  queued via a spy SessionsService); traversal reject; empty-comment 4xx.
+- `sessions` (assert) — the steer path is unchanged; NO new SessionEventType (ADR-007 guard).
+
+## Founder decisions (status — proposed, not yet locked)
+
+| # | Decision | Recommendation |
+|---|----------|----------------|
+| D1 | Diff scope v1 | **Worktree only** (LOCKED #7) |
+| D2 | Base derivation | **baseBranch when set (worktree), else uncommitted HEAD diff (plain cwd)** |
+| D3 | Steer origin meta | **Omit in v1** — the "Re: path:line" header shows origin; add an additive DTO field only if the web wants a distinct chip |
+| D4 | Caps | **per-file 2000 lines → too-large; ~1MB total → omittedFiles; lockfiles collapsed; binary never inlined** |
+| D5 | Refresh | **fetch-on-open + manual refresh** (no live stream) |
+
+Flagged genuine picks: **D3 (origin meta in/out)** and **D4's exact cap numbers** (2000 lines / 1 MB
+are conservative phone-friendly defaults; tune with real usage). Everything else follows the locked
+worktree-only constraint and rung-1 steer semantics.
