@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AttentionModule } from './attention/attention.module';
 import { HeartbeatModule } from './attention/heartbeat/heartbeat.module';
+import { FleetModule } from './attention/fleet/fleet.module';
 import { AuthModule } from './auth/auth.module';
 import { BrowserModule } from './browser/browser.module';
 import { CursorLocalModule } from './cursor-local/cursor-local.module';
@@ -30,6 +31,7 @@ import { PushModule } from './push/push.module';
     DatabaseModule,
     AttentionModule,
     HeartbeatModule,
+    FleetModule,
     AuthModule,
     SettingsModule,
     PreferencesModule,

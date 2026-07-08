@@ -244,6 +244,26 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     default: '30',
   },
   {
+    key: 'NUNCIO_ANOMALY_EMPTY_DIFF_MIN',
+    category: 'advanced',
+    type: 'string',
+    label: 'Anomaly: empty-diff threshold (minutes)',
+    description:
+      'A session RUNNING this many minutes with no uncommitted changes is flagged as an anomaly (empty diff). Default 30.',
+    envVar: 'NUNCIO_ANOMALY_EMPTY_DIFF_MIN',
+    default: '30',
+  },
+  {
+    key: 'NUNCIO_ANOMALY_LOOP_FAILING_RUNS',
+    category: 'advanced',
+    type: 'string',
+    label: 'Anomaly: loop-failing run count',
+    description:
+      "A loop with this many of today's runs all failed/budget-exhausted and no green verify is flagged as failing. Default 3.",
+    envVar: 'NUNCIO_ANOMALY_LOOP_FAILING_RUNS',
+    default: '3',
+  },
+  {
     key: 'NUNCIO_CLONE_DIR',
     category: 'workspaces',
     type: 'path',

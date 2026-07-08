@@ -35,6 +35,17 @@ const RESOLVED_EVENTS = new Set(['user_input_resolved', 'provider_request_resolv
 export class AttentionCollectors implements OnModuleInit {
   private unsubscribe?: () => void;
 
+  /**
+   * Extra poll-collectors that ride the same sweep cadence (rung-3 sub-phase C
+   * anomaly heuristics register here) — keeps A's core decoupled from C while the
+   * anomalies still run every sweep with their own raise+clear paths.
+   */
+  private readonly extraSweeps = new Set<() => Promise<void>>();
+  registerSweep(sweep: () => Promise<void>): () => void {
+    this.extraSweeps.add(sweep);
+    return () => this.extraSweeps.delete(sweep);
+  }
+
   constructor(
     private readonly attention: AttentionService,
     @Optional() private readonly loops?: LoopsService,
@@ -105,6 +116,11 @@ export class AttentionCollectors implements OnModuleInit {
   async sweep(): Promise<void> {
     this.collectBrokenLoops();
     await this.collectPullRequests();
+    // Registered extra collectors (sub-phase C anomalies) — each is best-effort so
+    // one failing sweep never blocks the others or the reconcile.
+    for (const extra of this.extraSweeps) {
+      await extra().catch(() => {});
+    }
     this.attention.reconcileOpenItems();
   }
 
