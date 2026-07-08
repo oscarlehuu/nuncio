@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import type { DiffCommentInput } from './session-diff.types';
 
 /** Cap the hunk text embedded in a steer message (a steer is a pointer, not a dump). */
@@ -16,10 +17,20 @@ export const MAX_STEER_HUNK_CHARS = 2000;
  *
  *   <comment>
  *
- * Rejects an empty comment at the boundary. RED until implemented — neutral TODO
- * so the reject/format tests don't false-green.
+ * Rejects an empty comment at the boundary.
  */
 export function buildDiffCommentSteer(input: DiffCommentInput): string {
-  throw new Error('TODO: buildDiffCommentSteer not implemented');
-  void input;
+  const comment = input.comment?.trim() ?? '';
+  if (!comment) throw new BadRequestException('comment is required');
+
+  const path = input.path.trim();
+  const range = input.startLine === input.endLine ? `${input.startLine}` : `${input.startLine}-${input.endLine}`;
+  const hunk = capHunk(input.hunk ?? '');
+
+  return `Re: ${path}:${range}\n\n\`\`\`diff\n${hunk}\n\`\`\`\n\n${comment}`;
+}
+
+function capHunk(hunk: string): string {
+  if (hunk.length <= MAX_STEER_HUNK_CHARS) return hunk.trimEnd();
+  return `${hunk.slice(0, MAX_STEER_HUNK_CHARS).trimEnd()}\n... truncated ...`;
 }

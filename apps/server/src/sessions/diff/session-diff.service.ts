@@ -1,5 +1,10 @@
-import { Injectable, Optional } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
+import { realpathSync } from 'node:fs';
+import { resolve, sep } from 'node:path';
 import { GitService } from '../../git/git.service';
+import { SessionsService } from '../sessions.service';
+import { buildDiffCommentSteer } from './diff-comment';
+import { capDiff, parseUnifiedDiff } from './diff-parse';
 import type { DiffCommentInput, SessionDiff } from './session-diff.types';
 
 /** The git dir + base a session's diff is computed against. */
@@ -20,7 +25,7 @@ export interface SessionGitTarget {
  * RED until implemented — neutral TODO throws, no false greens.
  */
 @Injectable()
-export class SessionDiffService {
+export class SessionDiffService implements OnModuleInit {
   /**
    * Seam: resolve a session id → its git dir + base. Bound in onModuleInit to read
    * the SessionDto (worktreePath/baseBranch); tests drive it over a fixture repo.
@@ -35,12 +40,37 @@ export class SessionDiffService {
     throw new Error('TODO: SessionDiffService.steer seam not bound');
   };
 
-  constructor(@Optional() private readonly git?: GitService) {}
+  constructor(
+    @Optional() private readonly git?: GitService,
+    @Optional() private readonly sessions?: SessionsService,
+  ) {}
+
+  onModuleInit(): void {
+    if (this.sessions) {
+      this.resolveTarget = (sessionId) => {
+        const session = this.sessions!.get(sessionId);
+        if (!session) throw new NotFoundException('Session not found');
+        const gitDir = session.worktreePath ?? session.workspace ?? session.projectPath;
+        if (!gitDir) throw new BadRequestException('Session has no git working directory');
+        return { gitDir, base: session.baseBranch?.trim() || null };
+      };
+      this.steer = (sessionId, message) => this.sessions!.steer(sessionId, message);
+    }
+  }
 
   /** Structured, capped worktree diff for a session (base derived per type). */
   async diff(sessionId: string): Promise<SessionDiff> {
-    throw new Error('TODO: SessionDiffService.diff not implemented');
-    void sessionId;
+    if (!this.git) throw new Error('GitService is not available');
+    const target = this.resolveTarget(sessionId);
+    try {
+      const raw = await this.git.diff(target.gitDir, { base: target.base ?? undefined });
+      return capDiff(parseUnifiedDiff(raw.diff));
+    } catch (error) {
+      if (error instanceof BadRequestException && String(error.message).startsWith('Not a git repository')) {
+        return { files: [], truncated: false, omittedFiles: 0 };
+      }
+      throw error;
+    }
   }
 
   /**
@@ -49,8 +79,27 @@ export class SessionDiffService {
    * → queued, rung-1 semantics). Returns the updated session.
    */
   async comment(sessionId: string, input: DiffCommentInput): Promise<unknown> {
-    throw new Error('TODO: SessionDiffService.comment not implemented');
-    void sessionId;
-    void input;
+    const target = this.resolveTarget(sessionId);
+    validateRelativePath(target.gitDir, input.path);
+    return this.steer(sessionId, buildDiffCommentSteer(input));
+  }
+}
+
+function validateRelativePath(root: string, path: string): void {
+  const trimmed = path.trim();
+  if (
+    !trimmed ||
+    trimmed.startsWith('-') ||
+    trimmed.startsWith('/') ||
+    trimmed.includes('\0') ||
+    trimmed.split('/').includes('..')
+  ) {
+    throw new BadRequestException('Invalid path');
+  }
+
+  const repoRoot = realpathSync.native(root);
+  const candidate = resolve(repoRoot, trimmed);
+  if (candidate !== repoRoot && !candidate.startsWith(`${repoRoot}${sep}`)) {
+    throw new BadRequestException('Invalid path');
   }
 }

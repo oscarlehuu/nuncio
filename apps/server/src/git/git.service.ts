@@ -428,8 +428,35 @@ export class GitService {
       args.push(base, '--');
     }
 
-    const output = await git(args, repoRoot);
+    let output = await git(args, repoRoot);
+    if (options.staged !== true) {
+      const untracked = await this.diffUntrackedFiles(repoRoot);
+      output = [output, untracked].filter(Boolean).join('\n');
+    }
     return truncateDiff(output);
+  }
+
+  private async diffUntrackedFiles(repoRoot: string): Promise<string> {
+    const status = await git(['status', '--porcelain=v1'], repoRoot).catch(() => '');
+    const diffs: string[] = [];
+
+    for (const line of status.split('\n')) {
+      if (!line.startsWith('?? ')) continue;
+      const path = line.slice(3).trim();
+      if (!path || path.endsWith('/')) continue;
+
+      const candidate = resolve(repoRoot, path);
+      let real: string;
+      try {
+        real = realpathSync.native(candidate);
+      } catch {
+        continue;
+      }
+      if (!isInsideRepo(repoRoot, real) || !statSync(real).isFile()) continue;
+      diffs.push(await gitAllowExit(['diff', '--no-index', '--', '/dev/null', path], repoRoot, [0, 1]));
+    }
+
+    return diffs.filter(Boolean).join('\n');
   }
 
   private async diffPath(repoRoot: string, path: string): Promise<string> {
