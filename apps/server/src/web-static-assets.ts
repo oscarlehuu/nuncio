@@ -43,7 +43,10 @@ export function configureWebAppServing(
     if (isApiRequest(req) || (req.method !== 'GET' && req.method !== 'HEAD')) {
       return next();
     }
-    return res.sendFile(indexPath);
+    // Pass root so the dotfile check applies to 'index.html' only — an absolute
+    // path would be rejected whenever the dist dir sits under a dot segment
+    // (git worktrees in .claude/, ~/.local/share on Linux).
+    return res.sendFile('index.html', { root: rootPath });
   });
 
   return true;

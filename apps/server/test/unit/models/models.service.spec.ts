@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AgentsModule } from '../../../src/agents/agents.module';
+import { ClaudeAgentProvider } from '../../../src/agents/providers/claude-agent.provider';
 import { CodexAgentProvider } from '../../../src/agents/providers/codex-agent.provider';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { ModelsService } from '../../../src/models/models.service';
@@ -31,6 +32,14 @@ describe('ModelsService', () => {
       .useValue({
         id: 'codex',
         name: 'Codex',
+        isAvailable: async () => false,
+        listModels: async () => [],
+        dispose: () => undefined,
+      })
+      .overrideProvider(ClaudeAgentProvider)
+      .useValue({
+        id: 'claude',
+        name: 'Claude',
         isAvailable: async () => false,
         listModels: async () => [],
         dispose: () => undefined,

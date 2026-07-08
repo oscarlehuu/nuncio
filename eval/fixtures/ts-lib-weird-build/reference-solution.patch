@@ -1,0 +1,12 @@
+diff --git a/src/client-usage.ts b/src/client-usage.ts
+index 3a10415..3a0442b 100644
+--- a/src/client-usage.ts
++++ b/src/client-usage.ts
+@@ -1,5 +1,5 @@
+-import { getUser } from './generated/client';
++import { getUser, listUsers } from './generated/client';
+ 
+ export function main(): string {
+-  return getUser();
++  return getUser() + ' / ' + listUsers();
+ }

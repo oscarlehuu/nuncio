@@ -1,0 +1,11 @@
+{
+  "id": "implement-function-from-spec",
+  "title": "Implement a function from its written spec",
+  "fixture": "ts-lib-interval-merge",
+  "prompt": "Implement mergeIntervals per the spec in its doc comment. The existing tests are not exhaustive — the spec is the contract. Make bun test pass.",
+  "setup": {},
+  "verifyCommand": "bun test",
+  "timeoutMs": 300000,
+  "tags": ["mechanical"],
+  "expect": { "verifyPassed": true }
+}

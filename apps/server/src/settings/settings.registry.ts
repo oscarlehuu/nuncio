@@ -124,6 +124,43 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
       'Optional CODEX_HOME override for Codex app-server. Leave unset to use the same Codex login as the CLI/app.',
     envVar: 'NUNCIO_CODEX_HOME',
   },
+  {
+    key: 'ANTHROPIC_API_KEY',
+    category: 'provider',
+    providerId: 'claude',
+    type: 'secret',
+    label: 'Anthropic API key',
+    description:
+      'API key for the `claude` provider (distribution path). Optional when the SDK-bundled Claude CLI is already logged in via subscription; set it to run without that login.',
+    envVar: 'ANTHROPIC_API_KEY',
+  },
+  {
+    key: 'NUNCIO_CLAUDE_BIN',
+    category: 'provider',
+    providerId: 'claude',
+    type: 'path',
+    label: 'Claude CLI binary',
+    description:
+      'Path to a `claude` CLI binary used for the auth probe and by the SDK. Leave unset to use the binary bundled with the Claude Agent SDK.',
+    envVar: 'NUNCIO_CLAUDE_BIN',
+  },
+  {
+    key: 'NUNCIO_CLAUDE_PERMISSION_MODE',
+    category: 'provider',
+    providerId: 'claude',
+    type: 'string',
+    label: 'Claude permission mode',
+    description:
+      'How the `claude` provider gates tool use. acceptEdits (default) auto-approves file edits and routes Bash/web/etc. through nuncio approval cards; default asks for everything; plan is read-only planning; bypassPermissions runs every tool without asking.',
+    envVar: 'NUNCIO_CLAUDE_PERMISSION_MODE',
+    default: 'acceptEdits',
+    options: [
+      { value: 'acceptEdits', label: 'Accept edits', description: 'Auto-approve file edits; ask for the rest.' },
+      { value: 'default', label: 'Ask every time', description: 'Route every privileged tool through an approval card.' },
+      { value: 'plan', label: 'Plan only', description: 'Read-only planning; no edits or commands.' },
+      { value: 'bypassPermissions', label: 'Bypass', description: 'Run every tool without asking (trusted workspaces only).' },
+    ],
+  },
   // ── Provider behavioral ──────────────────────────────────────────────────
   {
     key: 'NUNCIO_CURSOR_CWD',
@@ -378,6 +415,109 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
       'Metadata for subagent workspace cleanup: immediate cleanup after review now, with snapshot later reserved for durable review artifacts.',
     envVar: 'NUNCIO_SUBAGENT_CLEANUP_POLICY',
     default: 'after-review',
+  },
+  {
+    key: 'NUNCIO_ORCHESTRATION_TOOLS',
+    category: 'agents',
+    type: 'string',
+    label: 'Orchestration tools',
+    description:
+      'Whether a running engine can observe the session fleet and delegate work via the nuncio_* tools. off exposes nothing; read adds read-only observation tools; read-write also lets the engine enqueue subagent tasks. Same-machine, same-founder — these govern context hygiene, not multi-tenant security.',
+    envVar: 'NUNCIO_ORCHESTRATION_TOOLS',
+    default: 'off',
+    options: [
+      { value: 'off', label: 'Off', description: 'No orchestration tools are exposed to engines.' },
+      { value: 'read', label: 'Read-only', description: 'Engines can list and read sessions and task results.' },
+      { value: 'read-write', label: 'Read-write', description: 'Engines can also enqueue subagent tasks.' },
+    ],
+  },
+  {
+    key: 'NUNCIO_ENGINE_ROUTING',
+    category: 'agents',
+    type: 'string',
+    label: 'Engine routing table',
+    description:
+      'JSON map of routing tag → { "provider": "…", "model": "…", "avoidAuthorProvider": true } that sends tagged tasks to a chosen engine — e.g. mechanical work to a cheap engine, review to a different engine than the author. Tags: mechanical, review, design, research. avoidAuthorProvider picks a different available engine than the delegating session. A miss, an unavailable engine, or malformed JSON falls through to the normal subagent defaults; an explicit provider always wins. Empty disables routing.',
+    envVar: 'NUNCIO_ENGINE_ROUTING',
+  },
+  {
+    key: 'NUNCIO_DELEGATE_NOTIFY',
+    category: 'agents',
+    type: 'string',
+    label: 'Delegate notify policy',
+    description:
+      'How a parent session is notified when one of its delegated subagent tasks finishes. event-only appends a digest to the transcript; steer additionally wakes an idle parent with the digest so it can continue autonomously. Per-task override wins over this default.',
+    envVar: 'NUNCIO_DELEGATE_NOTIFY',
+    default: 'event-only',
+    options: [
+      { value: 'event-only', label: 'Event only', description: 'Append the digest to the parent transcript; never wake the parent.' },
+      { value: 'steer', label: 'Auto-steer', description: 'Wake an idle parent with the digest (subject to depth and rate guards).' },
+    ],
+  },
+  {
+    key: 'NUNCIO_CONTEXT_FACTS_INJECT',
+    category: 'agents',
+    type: 'string',
+    label: 'Inject project facts',
+    description:
+      'When on, a new session on a project starts already knowing that project\'s curated facts (build commands, gotchas, standing decisions) injected into its first prompt within a byte budget. Set to off as a global kill-switch.',
+    envVar: 'NUNCIO_CONTEXT_FACTS_INJECT',
+    default: 'on',
+    options: [
+      { value: 'on', label: 'On', description: 'Inject project facts into new sessions.' },
+      { value: 'off', label: 'Off', description: 'Never inject project facts.' },
+    ],
+  },
+  {
+    key: 'NUNCIO_CONTEXT_FACTS_MAX_BYTES',
+    category: 'agents',
+    type: 'string',
+    label: 'Project facts budget (bytes)',
+    description:
+      'Maximum bytes of project facts injected into a new session preamble. Facts beyond the budget are omitted (with a note), never truncated mid-fact.',
+    envVar: 'NUNCIO_CONTEXT_FACTS_MAX_BYTES',
+    default: '4096',
+  },
+  {
+    key: 'NUNCIO_CONTEXT_FILE_POLICY',
+    category: 'agents',
+    type: 'string',
+    label: 'Context-file policy',
+    description:
+      'Whether nuncio materializes the engine\'s native context file (e.g. CLAUDE.local.md, from the prompt profile) into a session worktree, containing the current project facts. worktree-local writes only into the worktree and .git/info/exclude (never a repo-owned file, never an existing one); none writes nothing. Facts still arrive via the session preamble regardless — the file is engine-idiomatic reinforcement, not the guarantee.',
+    envVar: 'NUNCIO_CONTEXT_FILE_POLICY',
+    default: 'none',
+    options: [
+      { value: 'none', label: 'None', description: 'Never write a context file.' },
+      { value: 'worktree-local', label: 'Worktree-local', description: 'Write the engine context file into the session worktree only.' },
+    ],
+  },
+  {
+    key: 'NUNCIO_PROMPT_PROFILE_PI',
+    category: 'agents',
+    type: 'string',
+    label: 'Prompt profile override (Pi)',
+    description:
+      'A full prompt-profile document (markdown with YAML frontmatter + named ## sections: brief-wrapper, facts-wrapper, digest-wrapper, tools-preamble, idioms) that overrides the repo profile for the Pi engine. See apps/server/prompt-profiles/README.md for the format. Empty uses the repo profile / pass-through default.',
+    envVar: 'NUNCIO_PROMPT_PROFILE_PI',
+  },
+  {
+    key: 'NUNCIO_PROMPT_PROFILE_CURSOR',
+    category: 'agents',
+    type: 'string',
+    label: 'Prompt profile override (Cursor)',
+    description:
+      'Full prompt-profile document overriding the repo profile for the Cursor engine (same format as the Pi override; see prompt-profiles/README.md).',
+    envVar: 'NUNCIO_PROMPT_PROFILE_CURSOR',
+  },
+  {
+    key: 'NUNCIO_PROMPT_PROFILE_CODEX',
+    category: 'agents',
+    type: 'string',
+    label: 'Prompt profile override (Codex)',
+    description:
+      'Full prompt-profile document overriding the repo profile for the Codex engine (same format as the Pi override; see prompt-profiles/README.md).',
+    envVar: 'NUNCIO_PROMPT_PROFILE_CODEX',
   },
   {
     key: 'NUNCIO_VERIFY_COMMAND',

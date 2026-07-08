@@ -1,0 +1,11 @@
+{
+  "id": "self-correct-on-verify-fail",
+  "title": "Self-correct using the verify script's failure output",
+  "fixture": "ts-lib-two-condition-gate",
+  "prompt": "Make src/gate.ts pass the project's verify script. Its failure output is authoritative — read it carefully.",
+  "setup": {},
+  "verifyCommand": "bun run verify-gate",
+  "timeoutMs": 300000,
+  "tags": ["verify-loop"],
+  "expect": { "verifyPassed": true }
+}

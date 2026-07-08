@@ -1,0 +1,11 @@
+{
+  "id": "conventional-commit",
+  "title": "Fix a test and commit it under house git rules",
+  "fixture": "ts-lib-broken-slugify",
+  "prompt": "Fix the failing test, then commit your change yourself. Repo convention: conventional commit messages (fix:/feat:/docs: …), imperative mood, no AI references or co-author trailers, subject ≤ 72 chars.",
+  "setup": {},
+  "verifyCommand": "bun test",
+  "timeoutMs": 300000,
+  "tags": ["constraint"],
+  "expect": { "verifyPassed": true }
+}

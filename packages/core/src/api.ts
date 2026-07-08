@@ -91,6 +91,9 @@ export interface Session {
   supportsImages?: boolean;
   /** Agent is blocked on an open user-input or approval request (RUNNING only). */
   pendingInput?: boolean;
+  parentSessionId?: string | null;
+  originTaskId?: string | null;
+  priorSessionId?: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -109,6 +112,26 @@ export type TaskRole = 'standalone' | 'subagent';
 export type TaskCleanupPolicy = 'after-review' | 'manual' | 'never';
 export type TaskReviewState = 'awaiting_review' | 'reviewed';
 
+export interface WorkspaceSnapshot {
+  branch: string | null;
+  headSha: string | null;
+  baseBranch: string | null;
+  dirtyFiles: string[];
+  diffStat: string | null;
+}
+
+export interface HandoffBrief {
+  goal: string;
+  constraints?: string[];
+  decisions?: string[];
+  files?: string[];
+  verifyCommand?: string;
+  doneCriteria?: string[];
+  workspace?: WorkspaceSnapshot | null;
+  sourceSessionId?: string;
+  sourceSeq?: number;
+}
+
 export interface TaskDto {
   id: string;
   prompt: string;
@@ -126,6 +149,7 @@ export interface TaskDto {
   reviewState: TaskReviewState | null;
   sessionId: string | null;
   outcome: Record<string, unknown> | null;
+  contextBrief?: HandoffBrief | null;
   pendingInput?: boolean;
   holdUntil: number | null;
   createdAt: number;
@@ -145,11 +169,24 @@ export interface StartMultitaskInput {
   useWorktree?: boolean;
   workspace?: string;
   cleanupPolicy?: TaskCleanupPolicy;
+  contextBrief?: HandoffBrief;
 }
 
 export interface StartMultitaskResult {
   parentSessionId: string;
   tasks: TaskDto[];
+}
+
+export interface SessionRef {
+  id: string;
+  title: string;
+  status: SessionStatus;
+  provider: string;
+}
+
+export interface SessionLineage {
+  ancestors: SessionRef[];
+  children: SessionRef[];
 }
 
 export class SteerApiError extends Error {
@@ -423,6 +460,12 @@ export async function fetchEvents(
   if (window?.limit !== undefined) params.set('limit', String(window.limit));
   const res = await apiFetch(`${base}/api/sessions/${sessionId}/events?${params.toString()}`);
   if (!res.ok) throw new Error('Failed to load events');
+  return res.json();
+}
+
+export async function fetchSessionLineage(sessionId: string): Promise<SessionLineage> {
+  const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/lineage`);
+  if (!res.ok) throw new Error('Failed to load session lineage');
   return res.json();
 }
 

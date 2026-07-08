@@ -67,6 +67,8 @@ export interface AgentRunContext {
    * A human steer leaves this undefined.
    */
   steerMeta?: Record<string, unknown>;
+  /** Provenance stamped onto the emitted steer_message (e.g. 'task-digest'). */
+  steerOrigin?: string;
   /** Provider-agnostic approval hook for SDK/tool requests that need a user decision. */
   requestProviderApproval?: (request: ProviderRequestInput) => Promise<ProviderRequestResult>;
   /** Session-bound runtime tools that providers adapt into SDK-native tool contracts. */
@@ -89,6 +91,12 @@ export interface AgentProvider {
   interrupt?(sessionId: string): Promise<void>;
   setModel?(sessionId: string, model: string, options?: ModelOptionsMap | null): Promise<void>;
   dispose(sessionId: string): void;
+  /**
+   * Synchronously flush any coalesced/buffered events for the session so they
+   * reach the log before an externally-appended event is written at a later seq.
+   * No-op when nothing is buffered.
+   */
+  flushPendingEvents?(sessionId: string): void;
   /** Whether this provider can respond to live interactive tool prompts (e.g. AskQuestion). */
   supportsInteraction?(): boolean;
   /** Submit answers for a pending interactive tool prompt. Live path only — historical imports skip this. */

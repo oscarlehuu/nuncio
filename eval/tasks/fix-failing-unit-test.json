@@ -1,0 +1,11 @@
+{
+  "id": "fix-failing-unit-test",
+  "title": "Fix a failing unit test without breaking siblings",
+  "fixture": "ts-lib-broken-slugify",
+  "prompt": "The test suite has one failing test. Find the cause, fix the source (not the test), and make the whole suite pass. Run the tests to confirm before finishing.",
+  "setup": {},
+  "verifyCommand": "bun test",
+  "timeoutMs": 300000,
+  "tags": ["mechanical"],
+  "expect": { "verifyPassed": true }
+}

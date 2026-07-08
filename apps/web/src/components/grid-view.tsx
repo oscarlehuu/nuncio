@@ -46,6 +46,7 @@ interface GridViewProps {
   onRestore: (id: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
   onRename: (id: string, title: string) => Promise<void>;
+  onOpenSession?: (id: string) => void;
   onSessionStatus?: (id: string, status: SessionStatus, createdAt: number) => void;
   onSessionTitle?: (id: string, title: string, createdAt: number) => void;
   onCreate: (
@@ -67,7 +68,7 @@ interface GridViewProps {
 }
 
 export function GridView(props: GridViewProps) {
-  const { sessions, providers } = props;
+  const { sessions, providers, onOpenSession } = props;
   // The server preferences store is the durable source of truth (survives app
   // updates + origin changes); localStorage is an instant-load cache. Init from the
   // cache synchronously, then let the server override on mount if it has a layout.
@@ -89,6 +90,16 @@ export function GridView(props: GridViewProps) {
   // Restore plays the shrink-back animation first; MaximizeTransition calls
   // handleMaximizeExited when it finishes, which is what actually unmounts.
   const requestRestore = useCallback(() => setClosing(true), []);
+  const openSession = useCallback(
+    (id: string) => {
+      if (onOpenSession) {
+        onOpenSession(id);
+        return;
+      }
+      window.location.assign(`/session/${id}`);
+    },
+    [onOpenSession],
+  );
 
   const handleMaximizeExited = useCallback(() => {
     const slot = maximizedSlot;
@@ -254,6 +265,7 @@ export function GridView(props: GridViewProps) {
               onRename={props.onRename}
               onSessionStatus={props.onSessionStatus}
               onSessionTitle={props.onSessionTitle}
+              onOpenSession={openSession}
               steering={props.steering}
               lifecycleBusy={props.lifecycleBusy}
               onRestoreGrid={requestRestore}
@@ -445,6 +457,7 @@ interface MaximizedSessionProps {
   onRename: (id: string, title: string) => Promise<void>;
   onSessionStatus?: (id: string, status: SessionStatus, createdAt: number) => void;
   onSessionTitle?: (id: string, title: string, createdAt: number) => void;
+  onOpenSession: (id: string) => void;
   steering?: boolean;
   lifecycleBusy?: boolean;
   onRestoreGrid: () => void;
@@ -464,6 +477,7 @@ function MaximizedSession({
   onRename,
   onSessionStatus,
   onSessionTitle,
+  onOpenSession,
   steering,
   lifecycleBusy,
   onRestoreGrid,
@@ -519,6 +533,7 @@ function MaximizedSession({
         onRestore={onRestore}
         onDelete={onDelete}
         onRename={onRename}
+        onOpenSession={onOpenSession}
         approvalMode={approvalMode}
         onApprovalModeChange={onApprovalModeChange}
         onRespondProviderRequest={onRespondProviderRequest}

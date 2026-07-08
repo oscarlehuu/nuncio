@@ -1,0 +1,35 @@
+diff --git a/src/merge-intervals.ts b/src/merge-intervals.ts
+index a3c859c..2271c09 100644
+--- a/src/merge-intervals.ts
++++ b/src/merge-intervals.ts
+@@ -2,16 +2,19 @@ export type Interval = [start: number, end: number];
+ 
+ /**
+  * Merge overlapping intervals.
+- *
+- * Contract:
+- *  - Each interval is [start, end] with start <= end.
+- *  - Overlapping intervals merge into one spanning [min start, max end].
+- *  - ADJACENT intervals merge too: if end === next.start they become one.
+- *  - Input may be unsorted; sort internally.
+- *  - Empty input returns an empty array.
+- *  - The input array and its interval tuples MUST NOT be mutated.
+- *  - Output is sorted ascending by start.
+  */
+-export function mergeIntervals(_intervals: Interval[]): Interval[] {
+-  throw new Error('not implemented');
++export function mergeIntervals(intervals: Interval[]): Interval[] {
++  if (intervals.length === 0) return [];
++  const sorted = intervals.map((i) => [i[0], i[1]] as Interval).slice().sort((a, b) => a[0] - b[0]);
++  const out: Interval[] = [[sorted[0][0], sorted[0][1]]];
++  for (let k = 1; k < sorted.length; k += 1) {
++    const last = out[out.length - 1];
++    const cur = sorted[k];
++    if (cur[0] <= last[1]) {
++      last[1] = Math.max(last[1], cur[1]);
++    } else {
++      out.push([cur[0], cur[1]]);
++    }
++  }
++  return out;
+ }

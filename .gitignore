@@ -1,9 +1,11 @@
-# Screenshots (kept locally, not in repo) — except in assets/ and web public icons
+# Screenshots (kept locally, not in repo) — except in assets/, web public icons,
+# and desktop build assets (tray/menu-bar icons ship with the packaged app)
 *.jpg
 *.png
 !assets/*.jpg
 !assets/*.png
 !apps/web/public/**/*.png
+!apps/desktop/build/*.png
 
 # OS
 .DS_Store
@@ -27,3 +29,6 @@ data/
 # Agent / IDE run state (machine- and session-specific, not source)
 .claude/
 .cursor/hooks/state/
+
+# Behavioral eval reports (generated per run; suite/fixtures/checks are source)
+eval/reports/

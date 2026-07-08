@@ -1,0 +1,16 @@
+diff --git a/src/highlight.ts b/src/highlight.ts
+index 9422e49..8f0cfe8 100644
+--- a/src/highlight.ts
++++ b/src/highlight.ts
+@@ -1,7 +1,7 @@
+ import { tokenize } from './tokenize';
+ 
+-/** Wrap every word token in brackets (see SPEC.md). NOT IMPLEMENTED. */
+-export function highlight(_input: string): string {
+-  void tokenize;
+-  throw new Error('not implemented');
++export function highlight(input: string): string {
++  return tokenize(input)
++    .map((t) => (t.type === 'word' ? `[${t.value}]` : t.value))
++    .join('');
+ }

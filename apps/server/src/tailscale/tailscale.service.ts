@@ -5,6 +5,8 @@ import type { TailscalePeerDto, TailscaleStatusDto } from './tailscale.types';
 export const TAILSCALE_AUTO_TRUST_KEY = 'NUNCIO_TAILSCALE_AUTO_TRUST';
 
 const CLI_TIMEOUT_MS = 3_000;
+// First `serve` may provision an HTTPS cert; give serve/funnel a longer budget.
+const SERVE_TIMEOUT_MS = 10_000;
 const WHOIS_TTL_MS = 60_000;
 
 const BIN_CANDIDATES = [
@@ -30,20 +32,84 @@ export function isTailscaleAddress(addr: string): boolean {
   return addr.toLowerCase().startsWith('fd7a:115c:a1e0');
 }
 
-export type ExecResult = { ok: boolean; stdout: string };
-export type ExecFn = (argv: string[]) => Promise<ExecResult>;
+export type ExecResult = { ok: boolean; stdout: string; stderr?: string };
+export type ExecFn = (argv: string[], timeoutMs?: number) => Promise<ExecResult>;
 
-async function defaultExec(argv: string[]): Promise<ExecResult> {
+// A hung CLI must never pin an HTTP request: the deadline resolves regardless of
+// process state, so no read/exit await can dangle. On timeout we escalate SIGTERM
+// then SIGKILL rather than leaking the subprocess.
+const KILL_GRACE_MS = 500;
+
+export async function defaultExec(argv: string[], timeoutMs = CLI_TIMEOUT_MS): Promise<ExecResult> {
+  let spawned: ReturnType<typeof spawnPipe>;
   try {
-    const proc = Bun.spawn(argv, { stdout: 'pipe', stderr: 'ignore', stdin: 'ignore' });
-    const timer = setTimeout(() => proc.kill(), CLI_TIMEOUT_MS);
-    const stdout = await new Response(proc.stdout).text();
-    const code = await proc.exited;
-    clearTimeout(timer);
-    return { ok: code === 0, stdout };
+    spawned = spawnPipe(argv);
   } catch {
-    return { ok: false, stdout: '' };
+    // spawn itself failed (missing binary, permission) — treat as a failed run.
+    return { ok: false, stdout: '', stderr: '' };
   }
+
+  try {
+    const work: Promise<ExecResult> = (async () => {
+      const [stdout, stderr] = await Promise.all([
+        new Response(spawned.stdout).text(),
+        new Response(spawned.stderr).text(),
+      ]);
+      const code = await spawned.exited;
+      return { ok: code === 0, stdout, stderr };
+    })();
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<ExecResult>((resolve) => {
+      timer = setTimeout(() => {
+        // SIGTERM, brief grace, then SIGKILL — do not await the process; resolve now.
+        // The grace timer is unref'd so an already-doomed child never keeps the
+        // process alive after the caller has its result.
+        killQuietly(spawned);
+        const killTimer = setTimeout(() => killQuietly(spawned, 'SIGKILL'), KILL_GRACE_MS);
+        killTimer.unref?.();
+        resolve({ ok: false, stdout: '', stderr: '' });
+      }, timeoutMs);
+    });
+
+    const result = await Promise.race([work, deadline]);
+    clearTimeout(timer);
+    return result;
+  } catch {
+    killQuietly(spawned, 'SIGKILL');
+    return { ok: false, stdout: '', stderr: '' };
+  }
+}
+
+/** Spawn with piped stdout/stderr; kept separate so its return type narrows the streams. */
+function spawnPipe(argv: string[]) {
+  return Bun.spawn(argv, { stdout: 'pipe', stderr: 'pipe', stdin: 'ignore' });
+}
+
+function killQuietly(proc: ReturnType<typeof spawnPipe>, signal?: NodeJS.Signals): void {
+  try {
+    proc.kill(signal);
+  } catch {
+    // process may already have exited
+  }
+}
+
+export type ServeResult = boolean;
+export type FunnelResult = { ok: true } | { ok: false; reason: 'acl' | 'error' };
+
+/** Tailscale prints an ACL/permission denial when Funnel isn't enabled for the node. */
+function isFunnelAclDenial(stderr: string): boolean {
+  const text = stderr.toLowerCase();
+  if (!text.includes('funnel')) return false;
+  return (
+    text.includes('not allowed') ||
+    text.includes('not permitted') ||
+    text.includes('denied') ||
+    text.includes('acl') ||
+    text.includes('not enabled') ||
+    text.includes('does not have') ||
+    text.includes('requires the following')
+  );
 }
 
 interface RawNode {
@@ -159,6 +225,44 @@ export class TailscaleService {
 
     const peerUserId = await this.whoisUserId(bin, addr);
     return peerUserId !== null && peerUserId === selfUserId;
+  }
+
+  /**
+   * `tailscale serve --bg <port>` — maps tailnet HTTPS (443) to the local port so
+   * the MagicDNS name reaches this server. Idempotent (the CLI upserts the config).
+   * Only ever called from an explicit pairing action, never at boot. Degrades to
+   * false when the CLI is missing or the command fails; never throws.
+   */
+  async enableServe(port: number): Promise<ServeResult> {
+    const bin = await this.resolveBin();
+    if (!bin) return false;
+    const result = await this.exec([bin, 'serve', '--bg', String(port)], SERVE_TIMEOUT_MS);
+    if (!result.ok) {
+      this.logCliFailure('serve', result.stderr);
+    }
+    return result.ok;
+  }
+
+  /**
+   * `tailscale funnel --bg <port>` — exposes the serve mapping to the public
+   * internet over HTTPS. Rides the serve config (same hostname, no new URL).
+   * Idempotent. Distinguishes an ACL denial (Funnel disabled for this node/tailnet)
+   * from any other failure — an older CLI without the `funnel` subcommand is a
+   * generic error. Only called from an explicit pairing action, never at boot.
+   */
+  async enableFunnel(port: number): Promise<FunnelResult> {
+    const bin = await this.resolveBin();
+    if (!bin) return { ok: false, reason: 'error' };
+    const result = await this.exec([bin, 'funnel', '--bg', String(port)], SERVE_TIMEOUT_MS);
+    if (result.ok) return { ok: true };
+    const stderr = result.stderr ?? '';
+    this.logCliFailure('funnel', stderr);
+    return { ok: false, reason: isFunnelAclDenial(stderr) ? 'acl' : 'error' };
+  }
+
+  private logCliFailure(command: string, stderr: string | undefined): void {
+    const detail = (stderr ?? '').trim();
+    console.warn(`[tailscale] ${command} failed${detail ? `: ${detail.split('\n')[0]}` : ''}`);
   }
 
   private resolveBin(): Promise<string | null> {

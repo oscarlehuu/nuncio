@@ -20,6 +20,7 @@ import {
   VerifyRetryRow,
 } from './transcript-blocks/verify-rows';
 import { ProviderRequestCard } from './provider-request-card';
+import { TaskDigestCard } from './transcript-blocks/task-digest-card';
 import {
   AssistantBubble,
   ErrorBlock,
@@ -41,6 +42,8 @@ interface TranscriptProps {
     decision: ProviderRequestDecision,
   ) => void | Promise<void>;
   onLinkClick?: MarkdownLinkClickHandler;
+  /** Navigate to a child session from a delegation digest card's "Open session". */
+  onOpenSession?: (sessionId: string) => void;
   /** Provider id (pi/codex/cursor…) — branded glyph shown as the assistant avatar. */
   provider?: string;
   /** Opt into the roomy focused-chat layout: assistant avatar gutter + turn rhythm.
@@ -218,6 +221,7 @@ interface RenderItemViewProps {
   respondingRequestId?: string | null;
   onRespondProviderRequest?: TranscriptProps['onRespondProviderRequest'];
   onLinkClick?: MarkdownLinkClickHandler;
+  onOpenSession?: (sessionId: string) => void;
 }
 
 /** requestId this item cares about, when it renders interactive state. */
@@ -238,6 +242,7 @@ function RenderItemView({
   respondingRequestId,
   onRespondProviderRequest,
   onLinkClick,
+  onOpenSession,
 }: RenderItemViewProps) {
   if (item.type === 'tool-group') {
     return <ToolGroup tools={item.tools} />;
@@ -332,6 +337,8 @@ function RenderItemView({
           {...(block.lastOutputTail ? { lastOutputTail: block.lastOutputTail } : {})}
         />
       );
+    case 'task_completed':
+      return <TaskDigestCard digest={block.digest} onOpenSession={onOpenSession} />;
     case 'error':
       return <ErrorRow message={block.message} />;
     default: {
@@ -355,6 +362,7 @@ const MemoRenderItemView = memo(RenderItemView, (prev, next) => {
   if (prev.streaming !== next.streaming) return false;
   if (prev.onRespondProviderRequest !== next.onRespondProviderRequest) return false;
   if (prev.onLinkClick !== next.onLinkClick) return false;
+  if (prev.onOpenSession !== next.onOpenSession) return false;
   const requestId = itemRequestId(next.item);
   if (requestId) {
     const wasPending = prev.pendingRequestIds?.has(requestId) ?? false;
@@ -376,6 +384,7 @@ export const Transcript = memo(function Transcript({
   respondingRequestId,
   onRespondProviderRequest,
   onLinkClick,
+  onOpenSession,
   provider,
   showAvatar = false,
 }: TranscriptProps) {
@@ -416,6 +425,7 @@ export const Transcript = memo(function Transcript({
             respondingRequestId={respondingRequestId}
             onRespondProviderRequest={onRespondProviderRequest}
             onLinkClick={onLinkClick}
+            onOpenSession={onOpenSession}
           />
         );
         const isUser = isUserItem(item);

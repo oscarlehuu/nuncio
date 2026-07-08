@@ -18,6 +18,10 @@ contextBridge.exposeInMainWorld('nuncioDesktop', {
     list: () => ipcRenderer.invoke('servers:list'),
     connect: (target) => ipcRenderer.invoke('servers:connect', target),
   },
+  shell: {
+    getSettings: () => ipcRenderer.invoke('shell:get-settings'),
+    setSettings: (payload) => ipcRenderer.invoke('shell:set-settings', payload),
+  },
   terminal: {
     create: (payload) => ipcRenderer.invoke('terminal:create', payload),
     write: (id, data) => ipcRenderer.invoke('terminal:write', id, data),

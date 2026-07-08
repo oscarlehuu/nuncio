@@ -5,9 +5,10 @@ import { AgentRegistry } from './agents/agents.registry';
 import { configureWebAppServing } from './web-static-assets';
 import { TerminalService } from './terminal/terminal.service';
 import { attachTerminalWebSocketServer } from './terminal/terminal.ws';
-import { attachSessionsWebSocketServer } from './sessions/api/sessions.ws';
+import { attachSessionsWebSocketServer, broadcastNotice } from './sessions/api/sessions.ws';
 import { SessionsService } from './sessions/sessions.service';
 import { AuthTokenService } from './auth/auth-token.service';
+import { DevicesService } from './devices/devices.service';
 import { TailscaleService } from './tailscale/tailscale.service';
 import { HubService } from './hub/hub.service';
 import { HubRegistryService } from './hub/hub-registry.service';
@@ -71,12 +72,27 @@ async function bootstrap() {
   );
   configureWebAppServing(app);
 
+  // Captured once the sessions relay attaches (after listen). The shutdown
+  // handler broadcasts a farewell over it so connected phones flip to offline
+  // immediately instead of waiting out the heartbeat timeout.
+  let sessionsWss: import('ws').WebSocketServer | undefined;
+
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) {
       return;
     }
     shuttingDown = true;
+
+    // Fire-and-forget: tell live clients the server is going away before the
+    // socket dies under them. Never block or fail shutdown on this.
+    if (sessionsWss) {
+      try {
+        broadcastNotice(sessionsWss, 'server_shutdown');
+      } catch {
+        // Best-effort only — a broadcast failure must not stall teardown.
+      }
+    }
 
     try {
       const registry = app.get(AgentRegistry);
@@ -98,6 +114,7 @@ async function bootstrap() {
 
   await app.listen(process.env.PORT ?? 3000);
   const authTokens = app.get(AuthTokenService);
+  const devices = app.get(DevicesService);
   const httpServer = app.getHttpServer();
   // Hub WS proxy first: it only claims /m/<machine>/api/terminal and
   // /m/<machine>/api/sessions/ws upgrades and ignores the rest, so the local
@@ -114,12 +131,14 @@ async function bootstrap() {
     app.get(TerminalService),
     authTokens,
     app.get(TailscaleService),
+    devices,
   );
-  attachSessionsWebSocketServer(
+  sessionsWss = attachSessionsWebSocketServer(
     httpServer,
     app.get(SessionsService),
     authTokens,
     app.get(TailscaleService),
+    devices,
   );
   console.log(
     `[auth] loopback clients need no token; remote clients authenticate with: ${authTokens.token} (source: ${authTokens.source})`,

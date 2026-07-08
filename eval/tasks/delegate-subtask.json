@@ -1,0 +1,15 @@
+{
+  "id": "delegate-subtask",
+  "title": "Decompose a feature and delegate the self-contained half",
+  "fixture": "ts-lib-two-module-feature",
+  "prompt": "Implement SPEC.md. The tokenizer half is self-contained — delegate it as a subtask using your nuncio_enqueue_task tool (tag it mechanical), wait for its result digest, then build the highlighter on top and make bun test pass.",
+  "setup": {},
+  "verifyCommand": "bun test",
+  "daemonEnv": {
+    "NUNCIO_ORCHESTRATION_TOOLS": "read-write",
+    "NUNCIO_ENGINE_ROUTING": "{\"mechanical\":{\"provider\":\"mock\"}}"
+  },
+  "timeoutMs": 300000,
+  "tags": ["delegation"],
+  "expect": { "verifyPassed": true }
+}

@@ -1,5 +1,6 @@
 export const DEFAULT_PAYLOAD_MAX_BYTES = 4096;
 
+import type { WorkspaceSnapshot } from '../../orchestration/workspace-snapshot';
 import type { UserInputQuestion } from './user-input.types';
 
 export type SessionEventType =
@@ -25,6 +26,7 @@ export type SessionEventType =
   | 'steer_message'
   | 'steer_queued'
   | 'steer_queue_cleared'
+  | 'task_completed'
   | 'interrupted';
 
 export type UserInputResolvedBy = 'user' | 'timeout' | 'skip' | 'provider';
@@ -65,6 +67,20 @@ export interface ThinkingDeltaPayload {
 export interface ThinkingMessagePayload {
   thinkingId?: string;
   text: string;
+}
+
+export interface TaskCompletedPayload {
+  taskId: string;
+  childSessionId: string | null;
+  status: 'DONE' | 'FAILED' | 'CANCELLED';
+  /** Tail of the child's final assistant_message, ≤ 1024 bytes (deterministic v1). */
+  outcomeSummary: string | null;
+  /** Verify outcome; output tail ≤ 512 bytes. */
+  verify: { passed: boolean; output?: string } | null;
+  /** Child worktree snapshot at finish. */
+  workspace: WorkspaceSnapshot | null;
+  /** Branch the work lives on. */
+  childBranch: string | null;
 }
 
 export interface TruncatedPayload {
@@ -146,5 +162,18 @@ export function isUserInputResolvedEvent(event: {
     event.payload !== null &&
     typeof (event.payload as UserInputResolvedPayload).requestId === 'string' &&
     typeof (event.payload as UserInputResolvedPayload).resolvedBy === 'string'
+  );
+}
+
+export function isTaskCompletedEvent(event: {
+  type: string;
+  payload: unknown;
+}): event is { type: 'task_completed'; payload: TaskCompletedPayload } {
+  return (
+    event.type === 'task_completed' &&
+    typeof event.payload === 'object' &&
+    event.payload !== null &&
+    typeof (event.payload as TaskCompletedPayload).taskId === 'string' &&
+    typeof (event.payload as TaskCompletedPayload).status === 'string'
   );
 }

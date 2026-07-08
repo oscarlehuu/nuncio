@@ -8,11 +8,15 @@ interface SteerQueueRow {
   message: string;
   attachments_json: string | null;
   created_at: number;
+  claimed_at: number | null;
+  origin: string | null;
 }
 
 export interface QueuedSteer {
   message: string;
   attachments?: AgentAttachment[];
+  /** Provenance (e.g. 'task-digest') stamped onto the delivered steer_message. */
+  origin?: string;
 }
 
 function parseAttachments(raw: string | null): AgentAttachment[] | undefined {
@@ -30,46 +34,133 @@ function parseAttachments(raw: string | null): AgentAttachment[] | undefined {
 export class SteerQueueRepository {
   constructor(private readonly database: DatabaseService) {}
 
-  enqueue(sessionId: string, message: string, attachments?: AgentAttachment[]): void {
+  enqueue(sessionId: string, message: string, attachments?: AgentAttachment[], origin?: string): void {
     this.database.db
       .prepare(
-        `INSERT INTO steer_queue (session_id, message, attachments_json, created_at)
-         VALUES (?, ?, ?, ?)`,
+        `INSERT INTO steer_queue (session_id, message, attachments_json, created_at, origin)
+         VALUES (?, ?, ?, ?, ?)`,
       )
       .run(
         sessionId,
         message,
         attachments && attachments.length > 0 ? JSON.stringify(attachments) : null,
         Date.now(),
+        origin ?? null,
       );
   }
 
-  /** Pop the oldest queued steer for the session; null when the queue is empty. */
+  /**
+   * Read the oldest UNCLAIMED queued steer WITH its id, without deleting it.
+   * Lets the drain decide (deliver vs. transactionally skip a task-digest wake
+   * on ERROR/PAUSED) before the row leaves the queue. Claimed rows are leased to
+   * an in-flight fan-out and stay invisible.
+   */
+  peekNext(sessionId: string): (QueuedSteer & { id: number }) | null {
+    const row = this.database.db
+      .prepare<SteerQueueRow, [string]>(
+        'SELECT * FROM steer_queue WHERE session_id = ? AND claimed_at IS NULL ORDER BY id ASC LIMIT 1',
+      )
+      .get(sessionId);
+    if (!row) return null;
+    const attachments = parseAttachments(row.attachments_json);
+    return {
+      id: row.id,
+      message: row.message,
+      ...(attachments ? { attachments } : {}),
+      ...(row.origin ? { origin: row.origin } : {}),
+    };
+  }
+
+  /** Delete a single row by id (no-op if already gone). */
+  deleteById(id: number): void {
+    this.database.db.prepare('DELETE FROM steer_queue WHERE id = ?').run(id);
+  }
+
+  /**
+   * Run `fn` in one SQLite transaction. Exposed so a caller can bundle a steer
+   * row delete with another same-db write (e.g. a suppression event) atomically.
+   */
+  transaction<T>(fn: () => T): T {
+    return this.database.transaction(fn);
+  }
+
+  /**
+   * Pop the oldest UNCLAIMED queued steer for the session; null when none are
+   * available. Claimed rows are leased to an in-flight multitask fan-out and
+   * are invisible to the normal settle-drain so a message is never delivered
+   * twice.
+   */
   dequeue(sessionId: string): QueuedSteer | null {
     const row = this.database.db
       .prepare<SteerQueueRow, [string]>(
-        'SELECT * FROM steer_queue WHERE session_id = ? ORDER BY id ASC LIMIT 1',
+        'SELECT * FROM steer_queue WHERE session_id = ? AND claimed_at IS NULL ORDER BY id ASC LIMIT 1',
       )
       .get(sessionId);
     if (!row) return null;
     this.database.db.prepare('DELETE FROM steer_queue WHERE id = ?').run(row.id);
     const attachments = parseAttachments(row.attachments_json);
-    return { message: row.message, ...(attachments ? { attachments } : {}) };
+    return {
+      message: row.message,
+      ...(attachments ? { attachments } : {}),
+      ...(row.origin ? { origin: row.origin } : {}),
+    };
   }
 
-  /** Pop every queued steer for the session in FIFO order, emptying the queue. */
-  drainAll(sessionId: string): QueuedSteer[] {
+  /**
+   * Atomically claim (lease) every currently-unclaimed row for the session and
+   * return the claimed rows with ids, in FIFO order. A claim hides the rows
+   * from the normal settle-drain, so a multitask fan-out can do async work
+   * without the same messages being delivered again. The caller must later
+   * delete the claimed ids (success) or release them (failure). Synchronous.
+   */
+  claimAll(sessionId: string): Array<QueuedSteer & { id: number }> {
+    const now = Date.now();
+    // Auto-steer wakes (origin 'task-digest') are NOT user work items — a
+    // multitask fan-out must not convert a queued digest into a child prompt,
+    // so they are left unclaimed for the normal settle-drain.
     const rows = this.database.db
-      .prepare<SteerQueueRow, [string]>(
-        'SELECT * FROM steer_queue WHERE session_id = ? ORDER BY id ASC',
+      .prepare<SteerQueueRow, [number, string]>(
+        `UPDATE steer_queue SET claimed_at = ?
+         WHERE session_id = ? AND claimed_at IS NULL AND (origin IS NULL OR origin != 'task-digest')
+         RETURNING *`,
       )
-      .all(sessionId);
-    if (rows.length === 0) return [];
-    this.database.db.prepare('DELETE FROM steer_queue WHERE session_id = ?').run(sessionId);
+      .all(now, sessionId)
+      .sort((a, b) => a.id - b.id);
     return rows.map((row) => {
       const attachments = parseAttachments(row.attachments_json);
-      return { message: row.message, ...(attachments ? { attachments } : {}) };
+      return { id: row.id, message: row.message, ...(attachments ? { attachments } : {}) };
     });
+  }
+
+  /** Release a claim on the given ids, returning them to normal delivery. */
+  releaseByIds(ids: number[]): void {
+    if (ids.length === 0) return;
+    const placeholders = ids.map(() => '?').join(', ');
+    this.database.db
+      .prepare(`UPDATE steer_queue SET claimed_at = NULL WHERE id IN (${placeholders})`)
+      .run(...ids);
+  }
+
+  /** Boot recovery: a crash can leave rows leased forever — claims never outlive a process. */
+  releaseAllClaims(): void {
+    this.database.db.prepare('UPDATE steer_queue SET claimed_at = NULL WHERE claimed_at IS NOT NULL').run();
+  }
+
+  /** Delete exactly the given row ids (no-op on an empty list). */
+  deleteByIds(ids: number[]): void {
+    if (ids.length === 0) return;
+    const placeholders = ids.map(() => '?').join(', ');
+    this.database.db.prepare(`DELETE FROM steer_queue WHERE id IN (${placeholders})`).run(...ids);
+  }
+
+  /** Pending rows for the session carrying the given origin (e.g. queued auto-steer wakes). */
+  countByOrigin(sessionId: string, origin: string): number {
+    const row = this.database.db
+      .prepare<{ total: number }, [string, string]>(
+        'SELECT COUNT(*) AS total FROM steer_queue WHERE session_id = ? AND origin = ?',
+      )
+      .get(sessionId, origin);
+    return row?.total ?? 0;
   }
 
   count(sessionId: string): number {

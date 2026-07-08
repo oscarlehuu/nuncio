@@ -1,5 +1,6 @@
 import type { AgentAttachment } from '../../agents/agents.types';
 import type { ModelOptionsMap } from '../../models/model-options.types';
+import type { HandoffBrief } from '../../orchestration/handoff-brief.types';
 
 export type SessionStatus =
   | 'CREATED'
@@ -33,6 +34,9 @@ export interface SessionRow {
   pull_request_number: number | string | null;
   pull_request_state: string | null;
   forge_status: string | null;
+  parent_session_id: string | null;
+  origin_task_id: string | null;
+  prior_session_id: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -123,8 +127,25 @@ export interface SessionDto {
   supportsImages: boolean;
   /** Agent is blocked on an open user-input or approval request (RUNNING only). */
   pendingInput: boolean;
+  /** Lineage: tree parent, the task that spawned this session, and linear-chain predecessor. */
+  parentSessionId?: string | null;
+  originTaskId?: string | null;
+  priorSessionId?: string | null;
   createdAt: number;
   updatedAt: number;
+}
+
+/** Compact session reference used by the lineage endpoint. */
+export interface SessionRefDto {
+  id: string;
+  title: string;
+  status: SessionStatus;
+  provider: string;
+}
+
+export interface SessionLineageDto {
+  ancestors: SessionRefDto[];
+  children: SessionRefDto[];
 }
 
 export type HandoffSessionDto =
@@ -133,12 +154,15 @@ export type HandoffSessionDto =
       piSessionPath?: never;
       workspace: string;
       title?: string;
+      /** The nuncio session this handoff continues (linear chain predecessor). */
+      priorSessionId?: string;
     }
   | {
       piSessionPath: string;
       cursorChatId?: never;
       workspace: string;
       title?: string;
+      priorSessionId?: string;
     };
 
 export interface CreateSessionDto {
@@ -159,6 +183,11 @@ export interface CreateSessionDto {
   providerState?: Record<string, unknown> | null;
   cursorBackend?: 'sdk' | 'cli' | null;
   cursorChatId?: string | null;
+  /** Lineage: the parent session and originating task (set by the task runner, not the public API). */
+  parentSessionId?: string;
+  originTaskId?: string;
+  /** Handoff brief to prepend to the first prompt (subagent spawn); composed with project facts. */
+  contextBrief?: HandoffBrief;
 }
 
 export interface SteerSessionDto {

@@ -8,6 +8,7 @@ import { INSPECTOR_PREFERENCE_STORAGE_KEY } from '../lib/inspector-preference';
 import {
   fetchSessionDiff,
   fetchChildTasks,
+  fetchSessionLineage,
   startMultitask,
   startMultitaskFromQueue,
   markTaskReviewed,
@@ -91,6 +92,7 @@ vi.mock('../lib/api', async () => {
     pushSession: vi.fn(),
     openPullRequest: vi.fn(),
     fetchChildTasks: vi.fn(async () => []),
+    fetchSessionLineage: vi.fn(async () => ({ ancestors: [], children: [] })),
     startMultitask: vi.fn(async () => ({ parentSessionId: 's1', tasks: [] })),
     startMultitaskFromQueue: vi.fn(async () => ({ parentSessionId: 's1', tasks: [] })),
     markTaskReviewed: vi.fn(async () => ({})),
@@ -188,6 +190,7 @@ describe('SessionDetail', () => {
     // The inspector dock persists open/tab state per device; isolate tests.
     localStorage.clear();
     vi.clearAllMocks();
+    vi.mocked(fetchSessionLineage).mockResolvedValue({ ancestors: [], children: [] });
     MockWebSocket.instances.length = 0;
   });
 
@@ -1105,6 +1108,96 @@ describe('SessionDetail', () => {
       expect(await screen.findByTestId('subagents-panel')).toBeInTheDocument();
       expect(screen.getByText('Investigate the flaky test')).toBeInTheDocument();
       expect(screen.getByText('Running')).toBeInTheDocument();
+    });
+
+    it('shows a read-only handoff brief disclosure for child tasks', async () => {
+      vi.mocked(fetchChildTasks).mockResolvedValueOnce([
+        makeTask({
+          prompt: 'Wire the digest UI',
+          contextBrief: {
+            goal: 'Ship the parent digest card',
+            constraints: ['Reuse existing tokens'],
+            decisions: ['Keep lineage flat'],
+            files: ['apps/web/src/components/session-detail.tsx'],
+            doneCriteria: ['Digest link opens the child session'],
+            verifyCommand: 'bun run test:smoke-ui',
+          },
+        }),
+      ]);
+      await renderDetail({ status: 'RUNNING' });
+
+      await screen.findByTestId('subagents-panel');
+      await userEvent.click(screen.getByText('Handoff brief'));
+
+      expect(screen.getByText('Ship the parent digest card')).toBeVisible();
+      expect(screen.getByText('Reuse existing tokens')).toBeVisible();
+      expect(screen.getByText('Keep lineage flat')).toBeVisible();
+      expect(screen.getByText('apps/web/src/components/session-detail.tsx')).toBeVisible();
+      expect(screen.getByText('Digest link opens the child session')).toBeVisible();
+      expect(screen.getByText('bun run test:smoke-ui')).toBeVisible();
+    });
+
+    it('renders task completion digests with collapsed outcome and child navigation', async () => {
+      const onOpenSession = vi.fn();
+      await renderDetail(
+        { status: 'IDLE' },
+        [
+          {
+            seq: 1,
+            type: 'task_completed',
+            payload: {
+              taskId: 'task-1',
+              childSessionId: 'child-1',
+              status: 'DONE',
+              outcomeSummary: 'Digest finished cleanly',
+              verify: { passed: true, output: 'ok' },
+              workspace: null,
+              childBranch: 'feat/delegation-digest',
+            },
+            createdAt: 1,
+          },
+        ],
+        undefined,
+        { onOpenSession },
+      );
+
+      expect(screen.getByTestId('task-digest-card')).toHaveTextContent('Done');
+      expect(screen.getByLabelText('Checks passed')).toBeInTheDocument();
+      expect(screen.getByText('feat/delegation-digest')).toBeInTheDocument();
+      expect(screen.queryByText('Digest finished cleanly')).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: /show outcome/i }));
+      expect(screen.getByText('Digest finished cleanly')).toBeVisible();
+
+      await userEvent.click(screen.getByRole('link', { name: /open session/i }));
+      expect(onOpenSession).toHaveBeenCalledWith('child-1');
+    });
+
+    it('renders flat lineage chips and opens related sessions', async () => {
+      const onOpenSession = vi.fn();
+      vi.mocked(fetchSessionLineage).mockResolvedValueOnce({
+        ancestors: [{ id: 'parent-1', title: 'Parent task', status: 'IDLE', provider: 'pi' }],
+        children: [
+          { id: 'child-1', title: 'Child one', status: 'IDLE', provider: 'mock' },
+          { id: 'child-2', title: 'Child two', status: 'RUNNING', provider: 'mock' },
+        ],
+      });
+      await renderDetail(
+        { id: 'child-current', parentSessionId: 'parent-1' },
+        NO_EVENTS,
+        undefined,
+        { onOpenSession },
+      );
+
+      const parentChip = await screen.findByTestId('lineage-parent-chip');
+      expect(parentChip).toHaveTextContent('from Parent task');
+      await userEvent.click(parentChip);
+      expect(onOpenSession).toHaveBeenCalledWith('parent-1');
+
+      await userEvent.click(screen.getByTestId('lineage-children-chip'));
+      expect(await screen.findByText('Child one')).toBeVisible();
+      await userEvent.click(screen.getByText('Child two'));
+      expect(onOpenSession).toHaveBeenCalledWith('child-2');
     });
 
     it('Review done marks the task reviewed and refreshes the list', async () => {

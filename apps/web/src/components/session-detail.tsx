@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Archive, ArrowRightLeft, Check, Ellipsis, FolderGit2, FolderTree, GitBranch, Globe2, PanelRightClose, PanelRightOpen, Pause, Pencil, RotateCcw, Send, Square, SquareTerminal, Trash2, X } from 'lucide-react';
+import { Archive, ArrowRightLeft, Check, Ellipsis, FolderGit2, FolderTree, GitBranch, Globe2, PanelRightClose, PanelRightOpen, Pause, Pencil, RotateCcw, Send, Square, SquareTerminal, Trash2, Users, X } from 'lucide-react';
 import { toast } from 'sonner';
 import type { MessageAttachment, ProviderRequestDecision, Session, SessionEvent, TaskDto } from '../lib/api';
 import {
@@ -7,6 +7,7 @@ import {
   interactionErrorMessage,
   respondInteraction,
   fetchChildTasks,
+  fetchSessionLineage,
   startMultitask,
   startMultitaskFromQueue,
   markTaskReviewed,
@@ -14,6 +15,7 @@ import {
   retryTask,
   updateTask,
   startTaskNow,
+  type SessionLineage,
 } from '../lib/api';
 import type { ModelOptionsMap } from '../lib/model-options';
 import { DEFAULT_HOLD_SECONDS, holdSecondsRemaining } from '../lib/subagent-hold';
@@ -73,6 +75,11 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
 
 export { Transcript, buildMessages } from './session-transcript';
 
@@ -97,6 +104,8 @@ interface SessionDetailProps {
   onDelete?: (id: string) => void | Promise<void>;
   /** Rename the session. */
   onRename?: (id: string, title: string) => void | Promise<void>;
+  /** Navigate to a related session from lineage, digest, or subagent UI. */
+  onOpenSession?: (id: string) => void;
   /** Open Continue on mobile picker (SDK Cursor sessions only). */
   onContinueOnMobile?: () => void;
   /** Cursor IDE may still be running this CLI handoff chat on the host. */
@@ -120,8 +129,79 @@ interface SessionDetailProps {
   /** Focus the composer when the view opens / the session changes (desktop only),
    *  so the user can type straight away. */
   autoFocusComposer?: boolean;
-  /** Navigate to a child subagent's own session from the subagents panel. */
-  onOpenSession?: (sessionId: string) => void;
+}
+
+type SessionRef = SessionLineage['children'][number];
+
+function lineageStatusDot(status: SessionRef['status']) {
+  if (status === 'RUNNING') return 'bg-info animate-pulse';
+  if (status === 'ERROR') return 'bg-destructive';
+  if (status === 'IDLE') return 'bg-success';
+  return 'bg-muted-foreground/50';
+}
+
+function LineageChips({
+  parent,
+  childSessions,
+  onOpenSession,
+}: {
+  parent: SessionRef | null;
+  childSessions: SessionRef[];
+  onOpenSession?: (id: string) => void;
+}) {
+  if (!parent && childSessions.length === 0) return null;
+  return (
+    <div className="ml-2 flex min-w-0 items-center gap-1.5" data-testid="lineage-chips">
+      {parent && (
+        <button
+          type="button"
+          data-testid="lineage-parent-chip"
+          onClick={() => onOpenSession?.(parent.id)}
+          className="inline-flex max-w-[180px] items-center gap-1 rounded-md border border-border/60 bg-card px-2 py-0.5 text-ui-sm text-muted-foreground shadow-e0 transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          title={`From ${parent.title}`}
+        >
+          <span aria-hidden>↳</span>
+          <span className="truncate">from {parent.title}</span>
+        </button>
+      )}
+
+      {childSessions.length > 0 && (
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              data-testid="lineage-children-chip"
+              className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-card px-2 py-0.5 text-ui-sm text-muted-foreground shadow-e0 transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Users className="size-3" aria-hidden />
+              {childSessions.length} {childSessions.length === 1 ? 'subagent' : 'subagents'}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="center" className="w-72 p-2" data-testid="lineage-children-popover">
+            <div className="px-2 pb-1 text-ui-sm font-medium text-foreground">Subagents</div>
+            <ul className="max-h-72 overflow-y-auto">
+              {childSessions.map((child) => (
+                <li key={child.id}>
+                  <button
+                    type="button"
+                    onClick={() => onOpenSession?.(child.id)}
+                    className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-sm hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <span
+                      className={`size-1.5 shrink-0 rounded-full ${lineageStatusDot(child.status)}`}
+                      aria-hidden
+                    />
+                    <span className="min-w-0 flex-1 truncate">{child.title}</span>
+                    <span className="shrink-0 text-muted-foreground">{child.provider}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </PopoverContent>
+        </Popover>
+      )}
+    </div>
+  );
 }
 
 export function SessionDetail({
@@ -135,6 +215,7 @@ export function SessionDetail({
   onRestore,
   onDelete,
   onRename,
+  onOpenSession,
   onContinueOnMobile,
   machineActive = false,
   approvalMode = 'full-access',
@@ -146,7 +227,6 @@ export function SessionDetail({
   hasEarlier = false,
   onLoadEarlier,
   autoFocusComposer = false,
-  onOpenSession,
 }: SessionDetailProps) {
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [steerText, setSteerText] = useState('');
@@ -162,6 +242,7 @@ export function SessionDetail({
   // task's live holdUntil without re-creating the handlers on every poll).
   const childTasksRef = useRef<TaskDto[]>([]);
   childTasksRef.current = childTasks;
+  const [lineage, setLineage] = useState<SessionLineage | null>(null);
 
   const workingDir = session.worktreePath ?? session.workspace ?? session.projectPath ?? undefined;
   const hasGitContext = !!(session.worktreePath || session.branch || session.projectPath);
@@ -281,6 +362,14 @@ export function SessionDetail({
     }
   }, [session.id]);
 
+  const refreshLineage = useCallback(async () => {
+    try {
+      setLineage(await fetchSessionLineage(session.id));
+    } catch {
+      setLineage(null);
+    }
+  }, [session.id]);
+
   useEffect(() => {
     activeSessionIdRef.current = session.id;
     setChildTasks([]);
@@ -306,6 +395,11 @@ export function SessionDetail({
     }, 4000);
     return () => clearInterval(id);
   }, [hasActiveChildTasks, refreshChildTasks]);
+
+  useEffect(() => {
+    setLineage(null);
+    void refreshLineage();
+  }, [refreshLineage]);
 
   const submitSteer = async (
     text: string,
@@ -335,6 +429,7 @@ export function SessionDetail({
         prompts: [prompt],
       });
       await refreshChildTasks();
+      await refreshLineage();
     } catch (error) {
       setSteerText((current) => (current.trim() ? current : restoreText));
       toast.error(error instanceof Error ? error.message : 'Failed to start multitasking');
@@ -349,6 +444,7 @@ export function SessionDetail({
     try {
       await startMultitaskFromQueue(session.id);
       await refreshChildTasks();
+      await refreshLineage();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to start multitasking');
     } finally {
@@ -505,6 +601,11 @@ export function SessionDetail({
     return false;
   }, [workingDir]);
 
+  const parentRef = session.parentSessionId
+    ? (lineage?.ancestors.find((item) => item.id === session.parentSessionId) ?? lineage?.ancestors[0] ?? null)
+    : null;
+  const childRefs = lineage?.children ?? [];
+
   return (
     <section className="flex-1 flex min-h-0">
       <TooltipProvider>
@@ -575,6 +676,11 @@ export function SessionDetail({
           <span className="ml-2">
             <VerifyChip status={verifyStatus} />
           </span>
+          <LineageChips
+            parent={parentRef}
+            childSessions={childRefs}
+            onOpenSession={onOpenSession}
+          />
         </div>
 
         <div className="absolute right-4 md:right-5 top-1/2 -translate-y-1/2 flex items-center gap-1">
@@ -699,6 +805,7 @@ export function SessionDetail({
               onRespondProviderRequest ? handleRespondProviderRequest : undefined
             }
             onLinkClick={handleTranscriptLinkClick}
+            onOpenSession={onOpenSession}
           />
         </div>
       </div>

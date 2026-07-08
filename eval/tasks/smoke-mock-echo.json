@@ -1,0 +1,11 @@
+{
+  "id": "smoke-mock-echo",
+  "title": "Mock provider echoes a reply and the fixture verifies clean",
+  "fixture": "echo-readme",
+  "prompt": "Acknowledge this task. The repository is already in a passing state; no changes are required.",
+  "setup": {},
+  "verifyCommand": "test -f README.md",
+  "timeoutMs": 60000,
+  "tags": ["harness-proof"],
+  "expect": { "verifyPassed": true }
+}

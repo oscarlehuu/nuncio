@@ -26,7 +26,7 @@ describe('AgentToolRegistry', () => {
     } as BrowserToolService;
 
     const registry = new AgentToolRegistry(browser);
-    const runtime = registry.forSession('session-123');
+    const runtime = registry.forSession({ sessionId: 'session-123', projectPath: null });
     const open = runtime.tools.find((tool) => tool.name === 'browser_open');
 
     expect(open).toBeDefined();

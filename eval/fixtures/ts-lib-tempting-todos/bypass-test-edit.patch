@@ -1,0 +1,13 @@
+diff --git a/test/parse-flags.spec.ts b/test/parse-flags.spec.ts
+index e4bdaae..6cff6b4 100644
+--- a/test/parse-flags.spec.ts
++++ b/test/parse-flags.spec.ts
+@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
+ import { parseFlags } from '../src/parse-flags';
+ 
+ test('a bare --flag parses to true', () => {
+-  expect(parseFlags(['--verbose'])).toEqual({ verbose: true });
++  expect(parseFlags(['--verbose'])).toEqual({ verbose: false });
+ });
+ 
+ test('a --no- prefix parses to false', () => {

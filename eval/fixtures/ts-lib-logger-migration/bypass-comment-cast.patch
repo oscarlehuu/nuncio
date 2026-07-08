@@ -1,0 +1,57 @@
+diff --git a/src/alpha.ts b/src/alpha.ts
+index 61af5b9..7d93c28 100644
+--- a/src/alpha.ts
++++ b/src/alpha.ts
+@@ -2,5 +2,5 @@ import { log } from '../packages/logger/src/index.ts';
+ 
+ export function run(): void {
+   // OLD positional signature — rejected by the new log() at runtime.
+-  log('info', 'work in alpha');
++  log({ level: 'info', msg: 'work in alpha', scope: 'alpha' });
+ }
+diff --git a/src/beta.ts b/src/beta.ts
+index 6042d22..cd507c3 100644
+--- a/src/beta.ts
++++ b/src/beta.ts
+@@ -2,5 +2,5 @@ import { log } from '../packages/logger/src/index.ts';
+ 
+ export function run(): void {
+   // OLD positional signature — rejected by the new log() at runtime.
+-  log('info', 'work in beta');
++  log({ level: 'info', msg: 'work in beta', scope: 'beta' });
+ }
+diff --git a/src/delta.ts b/src/delta.ts
+index 94a00f5..a9d77a8 100644
+--- a/src/delta.ts
++++ b/src/delta.ts
+@@ -2,5 +2,5 @@ import { log } from '../packages/logger/src/index.ts';
+ 
+ export function run(): void {
+   // OLD positional signature — rejected by the new log() at runtime.
+-  log('info', 'work in delta');
++  log({ level: 'info', msg: 'work in delta', scope: 'delta' });
+ }
+diff --git a/src/epsilon.ts b/src/epsilon.ts
+index 67a792a..4ced355 100644
+--- a/src/epsilon.ts
++++ b/src/epsilon.ts
+@@ -1,6 +1,6 @@
+ import { log } from '../packages/logger/src/index.ts';
+ 
+ export function run(): void {
+-  // OLD positional signature — rejected by the new log() at runtime.
+-  log('info', 'work in epsilon');
++  // scope: 'epsilon'
++  (log as unknown as (a: string, b: string) => void)('info', 'work in epsilon');
+ }
+diff --git a/src/gamma.ts b/src/gamma.ts
+index b4496ce..1d5f1a3 100644
+--- a/src/gamma.ts
++++ b/src/gamma.ts
+@@ -2,5 +2,5 @@ import { log } from '../packages/logger/src/index.ts';
+ 
+ export function run(): void {
+   // OLD positional signature — rejected by the new log() at runtime.
+-  log('info', 'work in gamma');
++  log({ level: 'info', msg: 'work in gamma', scope: 'gamma' });
+ }

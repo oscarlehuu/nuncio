@@ -1,5 +1,10 @@
 import type { ModelOptionsMap } from '../models/model-options.types';
-import type { TaskDto, TaskRow } from './tasks.types';
+import type { HandoffBrief } from '../orchestration/handoff-brief.types';
+import { NOTIFY_POLICIES, type NotifyPolicy, type TaskDto, type TaskRow } from './tasks.types';
+
+function parseNotifyPolicy(value: string | null): NotifyPolicy | null {
+  return NOTIFY_POLICIES.includes(value as NotifyPolicy) ? (value as NotifyPolicy) : null;
+}
 
 function parseJson<T>(value: string | null): T | null {
   if (!value) return null;
@@ -28,6 +33,9 @@ export function taskRowToDto(row: TaskRow): TaskDto {
     reviewState: row.review_state,
     sessionId: row.session_id,
     outcome: parseJson<Record<string, unknown>>(row.outcome_json),
+    contextBrief: parseJson<HandoffBrief>(row.context_json),
+    notifyPolicy: parseNotifyPolicy(row.notify_policy),
+    tag: row.tag,
     holdUntil: row.hold_until,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

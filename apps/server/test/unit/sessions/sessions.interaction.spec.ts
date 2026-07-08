@@ -32,6 +32,9 @@ function makeSession(overrides: Partial<SessionDto> = {}): SessionDto {
     supportsSteerWhileRunning: false,
     supportsImages: false,
     pendingInput: false,
+    parentSessionId: null,
+    originTaskId: null,
+    priorSessionId: null,
     createdAt: 1,
     updatedAt: 1,
     ...overrides,
@@ -56,6 +59,7 @@ describe('SessionsService interaction', () => {
 
   const steerQueue = {
     sessionIdsWithPending: jest.fn().mockReturnValue([]),
+    releaseAllClaims: jest.fn(),
   } as unknown as SteerQueueRepository;
 
   const service = new SessionsService(

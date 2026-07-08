@@ -1,0 +1,30 @@
+diff --git a/src/tokenize.ts b/src/tokenize.ts
+index 6dd17ba..bda0a65 100644
+--- a/src/tokenize.ts
++++ b/src/tokenize.ts
+@@ -3,7 +3,22 @@ export interface Token {
+   value: string;
+ }
+ 
+-/** Split input into word / space / punct tokens (see SPEC.md). NOT IMPLEMENTED. */
+-export function tokenize(_input: string): Token[] {
+-  throw new Error('not implemented');
++export function tokenize(input: string): Token[] {
++  const tokens: Token[] = [];
++  let i = 0;
++  const cls = (ch: string): Token['type'] =>
++    /[A-Za-z0-9]/.test(ch) ? 'word' : /\s/.test(ch) ? 'space' : 'punct';
++  while (i < input.length) {
++    const type = cls(input[i]);
++    if (type === 'punct') {
++      tokens.push({ type, value: input[i] });
++      i += 1;
++      continue;
++    }
++    let j = i + 1;
++    while (j < input.length && cls(input[j]) === type) j += 1;
++    tokens.push({ type, value: input.slice(i, j) });
++    i = j;
++  }
++  return tokens;
+ }

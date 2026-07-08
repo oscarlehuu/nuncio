@@ -65,6 +65,18 @@ export interface NuncioDesktopBrowserApi {
   hide: (id: string) => Promise<unknown> | void;
 }
 
+export interface NuncioDesktopShellSettings {
+  /** Closing the window hides it to the menu-bar/tray instead of quitting. */
+  closeToTray: boolean;
+}
+
+export interface NuncioDesktopShellApi {
+  getSettings: () => Promise<NuncioDesktopShellSettings>;
+  setSettings: (
+    settings: Partial<NuncioDesktopShellSettings>,
+  ) => Promise<NuncioDesktopShellSettings>;
+}
+
 // The polled session list now carries a server-derived `pendingInput` flag, so
 // a 'needs-input' desktop notification could be fired here by watching that flag
 // flip false→true — left out for now to keep notification behavior unchanged.
@@ -150,6 +162,7 @@ declare global {
       };
       servers?: NuncioDesktopServersApi;
       terminal?: NuncioDesktopTerminalApi;
+      shell?: NuncioDesktopShellApi;
     };
   }
 }

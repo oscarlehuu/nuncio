@@ -22,6 +22,7 @@ import { ProviderIcon } from './provider-icon';
 import { fetchForgeStatus, type ForgeStatusDto } from '../lib/forge-status-api';
 import { AppearanceSettingsSection } from './appearance-settings-section';
 import { ProjectsSettingsSection } from './projects-settings-section';
+import { GeneralSettingsSection } from './general-settings-section';
 import { RemoteAccessSettingsSection } from './remote-access-settings-section';
 import { ProviderUpdateSettingsSection } from './provider-update-settings-section';
 import { SubagentModelsSettingsSection } from './subagent-models-settings-section';
@@ -65,6 +66,21 @@ const SECTION_NAV_ITEMS: ReadonlyArray<SettingsSectionNavItem & { id: SettingsSe
   { id: 'remote-access', label: 'Remote access', icon: Network },
   { id: 'advanced', label: 'Advanced', icon: Wrench },
 ];
+
+const VALID_SECTION_IDS = new Set<SettingsSectionId>(SECTION_NAV_ITEMS.map((item) => item.id));
+
+/**
+ * Initial pane, honoring a `?section=<id>` deep-link so an external entry point
+ * (the desktop tray's "Pair mobile device") can land straight on Remote access.
+ * An absent or unknown value falls back to Appearance — the default landing.
+ */
+function initialSection(): SettingsSectionId {
+  if (typeof window === 'undefined') return 'appearance';
+  const requested = new URLSearchParams(window.location.search).get('section');
+  return requested && VALID_SECTION_IDS.has(requested as SettingsSectionId)
+    ? (requested as SettingsSectionId)
+    : 'appearance';
+}
 
 const PROVIDER_METAS: Record<string, ProviderMetaInfo> = {
   cursor: {
@@ -113,7 +129,7 @@ function matchesQuery(text: string | null | undefined, query: string): boolean {
 export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsViewProps) {
   const [forgeStatus, setForgeStatus] = useState<ForgeStatusDto[]>([]);
   const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({});
-  const [activeSection, setActiveSection] = useState<SettingsSectionId>('appearance');
+  const [activeSection, setActiveSection] = useState<SettingsSectionId>(initialSection);
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
@@ -297,9 +313,18 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
   const renderSearchResults = () => {
     const query = searchQuery.trim().toLowerCase();
     const resultSections: ReactNode[] = [];
-    const remoteAccessMatches = ['remote access', 'access token', 'tailscale', 'tailnet', 'trust'].some((term) =>
-      term.includes(query),
-    );
+    const remoteAccessMatches = [
+      'remote access',
+      'access token',
+      'tailscale',
+      'tailnet',
+      'trust',
+      'pair',
+      'device',
+      'qr',
+      'mobile',
+      'phone',
+    ].some((term) => term.includes(query));
 
     const providerResult = renderProviderGroup('Providers', ['cursor', 'pi', 'codex'], false, query);
     const sourceResult = renderProviderGroup('Source control', ['github', 'gitlab'], false, query);
@@ -368,7 +393,12 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
     if (searchQuery.trim()) return renderSearchResults();
     switch (activeSection) {
       case 'general':
-        return renderSettingGroup('General', general, 'No general settings are available.');
+        return (
+          <div className="space-y-6">
+            <GeneralSettingsSection />
+            {renderSettingGroup('General', general, 'No general settings are available.')}
+          </div>
+        );
       case 'appearance':
         return <AppearanceSettingsSection />;
       case 'providers':

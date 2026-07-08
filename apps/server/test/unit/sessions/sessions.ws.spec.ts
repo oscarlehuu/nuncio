@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { WebSocket as WsClient, WebSocketServer } from 'ws';
 import {
   attachSessionsWebSocketServer,
+  broadcastNotice,
   SESSIONS_WS_PATH,
   type SessionRelayService,
   type SessionsWsOptions,
@@ -91,10 +93,20 @@ function connect(port: number): Promise<TestClient> {
 }
 
 let server: Server | null = null;
+// Captured from attachSessionsWebSocketServer so the broadcastNotice end-to-end
+// test can fire over the live server's real client set.
+let sessionsWssForTest: WebSocketServer | null = null;
 
 function startServer(fake: SessionRelayService, options?: SessionsWsOptions): Promise<number> {
   server = createServer();
-  attachSessionsWebSocketServer(server, fake, undefined, undefined, options);
+  sessionsWssForTest = attachSessionsWebSocketServer(
+    server,
+    fake,
+    undefined,
+    undefined,
+    undefined,
+    options,
+  );
   return new Promise((resolve) => {
     server!.listen(0, '127.0.0.1', () => {
       resolve((server!.address() as AddressInfo).port);
@@ -105,6 +117,7 @@ function startServer(fake: SessionRelayService, options?: SessionsWsOptions): Pr
 afterEach(() => {
   server?.close();
   server = null;
+  sessionsWssForTest = null;
 });
 
 describe('sessions WS relay', () => {
@@ -321,5 +334,104 @@ describe('sessions WS relay', () => {
     await client.waitFor(() => client.responses.length === 1);
     expect(client.responses[0].error?.code).toBe(400);
     await client.close();
+  });
+});
+
+/** Minimal WebSocket-shaped stub for exercising broadcastNotice in isolation. */
+function fakeSocket(readyState: number) {
+  const sent: string[] = [];
+  return {
+    sent,
+    socket: {
+      readyState,
+      send: (data: string) => {
+        sent.push(data);
+      },
+    } as unknown as WsClient,
+  };
+}
+
+describe('broadcastNotice', () => {
+  it('is a no-op on an empty client set', () => {
+    const wss = { clients: new Set<WsClient>() } as unknown as WebSocketServer;
+    expect(() => broadcastNotice(wss, 'server_shutdown')).not.toThrow();
+  });
+
+  it('sends the exact { notice } frame only to OPEN sockets', () => {
+    const open = fakeSocket(WsClient.OPEN);
+    const connecting = fakeSocket(WsClient.CONNECTING);
+    const closing = fakeSocket(WsClient.CLOSING);
+    const closed = fakeSocket(WsClient.CLOSED);
+    const wss = {
+      clients: new Set([open.socket, connecting.socket, closing.socket, closed.socket]),
+    } as unknown as WebSocketServer;
+
+    broadcastNotice(wss, 'server_shutdown');
+
+    // Only the OPEN socket received anything, and the frame is exactly the
+    // frozen farewell shape — no id, no channel, no extra keys.
+    expect(open.sent).toHaveLength(1);
+    expect(JSON.parse(open.sent[0])).toEqual({ notice: 'server_shutdown' });
+    expect(connecting.sent).toHaveLength(0);
+    expect(closing.sent).toHaveLength(0);
+    expect(closed.sent).toHaveLength(0);
+  });
+
+  it('passes the notice value through verbatim', () => {
+    const open = fakeSocket(WsClient.OPEN);
+    const wss = { clients: new Set([open.socket]) } as unknown as WebSocketServer;
+    broadcastNotice(wss, 'something_else');
+    expect(JSON.parse(open.sent[0])).toEqual({ notice: 'something_else' });
+  });
+
+  it('keeps notifying the rest when one OPEN socket throws on send', () => {
+    const throwing = {
+      readyState: WsClient.OPEN,
+      send: () => {
+        throw new Error('socket is half-dead');
+      },
+    } as unknown as WsClient;
+    const healthy = fakeSocket(WsClient.OPEN);
+    const wss = {
+      clients: new Set([throwing, healthy.socket]),
+    } as unknown as WebSocketServer;
+
+    expect(() => broadcastNotice(wss, 'server_shutdown')).not.toThrow();
+    // The throwing socket must not abort delivery to the healthy one.
+    expect(JSON.parse(healthy.sent[0])).toEqual({ notice: 'server_shutdown' });
+  });
+
+  it('delivers over a real OPEN socket end to end', async () => {
+    const fake = makeFakeSessions();
+    const port = await startServer(fake);
+    const received: unknown[] = [];
+    const ws = new WsClient(`ws://127.0.0.1:${port}${SESSIONS_WS_PATH}`);
+    ws.on('message', (raw) => received.push(JSON.parse(raw.toString('utf8'))));
+    await new Promise<void>((resolve, reject) => {
+      ws.on('open', () => resolve());
+      ws.on('error', reject);
+    });
+
+    // The server under test is the same wss the relay attached; reach it via the
+    // module helper against the live server's client set.
+    const address = server!.address() as AddressInfo;
+    expect(address.port).toBe(port);
+    // Give the server a tick to register the connection in wss.clients.
+    await new Promise((r) => setTimeout(r, 20));
+    broadcastNotice(sessionsWssForTest!, 'server_shutdown');
+
+    await new Promise<void>((resolve, reject) => {
+      const started = Date.now();
+      const tick = () => {
+        if (received.some((m) => (m as { notice?: string }).notice === 'server_shutdown')) {
+          return resolve();
+        }
+        if (Date.now() - started > 2000) return reject(new Error('no farewell received'));
+        setTimeout(tick, 10);
+      };
+      tick();
+    });
+
+    ws.close();
   });
 });

@@ -1,0 +1,52 @@
+diff --git a/src/middleware/rate-limit.ts b/src/middleware/rate-limit.ts
+index f446344..647dd7a 100644
+--- a/src/middleware/rate-limit.ts
++++ b/src/middleware/rate-limit.ts
+@@ -1,23 +1,24 @@
+ export interface RateLimitOptions {
+-  /** Max requests allowed within the window. */
+   limit: number;
+-  /** Window length in milliseconds. */
+   windowMs: number;
+ }
+ 
+ export interface RateLimiter {
+-  /** Returns true if the request from `key` is allowed, false if limited. */
+   allow(key: string, now: number): boolean;
+ }
+ 
+-/**
+- * Create a fixed-window rate limiter: each key gets `limit` requests per
+- * `windowMs` window; the window resets when `now` crosses into the next window.
+- * NOT YET IMPLEMENTED — currently allows every request.
+- */
+-export function createRateLimiter(_options: RateLimitOptions): RateLimiter {
++/** Sliding-window limiter (VIOLATES the brief's fixed-window decision). */
++export function createRateLimiter(options: RateLimitOptions): RateLimiter {
++  const hits = new Map<string, number[]>();
+   return {
+-    allow(_key: string, _now: number): boolean {
++    allow(key: string, now: number): boolean {
++      const arr = (hits.get(key) ?? []).filter((t) => t > now - options.windowMs);
++      if (arr.length >= options.limit) {
++        hits.set(key, arr);
++        return false;
++      }
++      arr.push(now);
++      hits.set(key, arr);
+       return true;
+     },
+   };
+diff --git a/test/rate-limit.spec.ts b/test/rate-limit.spec.ts
+index 484c39a..f5bcef3 100644
+--- a/test/rate-limit.spec.ts
++++ b/test/rate-limit.spec.ts
+@@ -1,7 +1,7 @@
+ import { describe, expect, test } from 'bun:test';
+ import { createRateLimiter } from '../src/middleware/rate-limit';
+ 
+-describe.skip('fixed-window rate limiter', () => {
++describe('fixed-window rate limiter', () => {
+   test('allows up to the limit within a window', () => {
+     const rl = createRateLimiter({ limit: 3, windowMs: 1000 });
+     expect(rl.allow('a', 0)).toBe(true);

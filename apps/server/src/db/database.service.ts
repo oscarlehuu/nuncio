@@ -64,6 +64,17 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS devices (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  platform TEXT,
+  secret_hash TEXT NOT NULL,
+  prev_secret_hash TEXT,
+  created_at INTEGER NOT NULL,
+  last_seen_at INTEGER,
+  revoked_at INTEGER
+);
 `;
 
 @Global()
@@ -96,6 +107,15 @@ export class DatabaseService implements OnModuleDestroy {
   onModuleDestroy() {
     this._closed = true;
     this.db.close();
+  }
+
+  /**
+   * Run `fn` inside a single SQLite transaction: it commits if `fn` returns and
+   * rolls back every write if `fn` throws. Use for multi-statement invariants
+   * that must be all-or-nothing (e.g. batch inserts plus a queue delete).
+   */
+  transaction<T>(fn: () => T): T {
+    return this.db.transaction(fn)();
   }
 
   private migrate(): void {
@@ -147,6 +167,16 @@ export class DatabaseService implements OnModuleDestroy {
         this.db.exec(`ALTER TABLE sessions ADD COLUMN ${column} TEXT`);
       }
     }
+
+    // Session lineage: tree parentage (parent_session_id / origin_task_id) and
+    // linear handoff chains (prior_session_id, e.g. a mobile-continued session).
+    const lineageColumns = ['parent_session_id', 'origin_task_id', 'prior_session_id'] as const;
+    for (const column of lineageColumns) {
+      if (!sessionColumns.some((entry) => entry.name === column)) {
+        this.db.exec(`ALTER TABLE sessions ADD COLUMN ${column} TEXT`);
+      }
+    }
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id)');
 
     const forgeColumns = [
       ['forge_provider', 'TEXT'],
@@ -384,6 +414,9 @@ export class DatabaseService implements OnModuleDestroy {
       ['cleanup_policy', 'TEXT'],
       ['review_state', 'TEXT'],
       ['hold_until', 'INTEGER'],
+      ['context_json', 'TEXT'],
+      ['notify_policy', 'TEXT'],
+      ['tag', 'TEXT'],
     ] as const;
 
     for (const [column, type] of taskColumnDefinitions) {
@@ -422,12 +455,64 @@ export class DatabaseService implements OnModuleDestroy {
       ON steer_queue(session_id, id)
     `);
 
+    const steerQueueColumns = this.db
+      .prepare('PRAGMA table_info(steer_queue)')
+      .all() as Array<{ name: string }>;
+    if (!steerQueueColumns.some((column) => column.name === 'claimed_at')) {
+      // A non-null claim leases a row to an in-flight multitask fan-out so the
+      // normal settle-drain skips it; cleared unconditionally at daemon boot.
+      this.db.exec('ALTER TABLE steer_queue ADD COLUMN claimed_at INTEGER');
+    }
+    if (!steerQueueColumns.some((column) => column.name === 'origin')) {
+      // Provenance carried to the delivered steer_message (e.g. 'task-digest')
+      // so the auto-steer rate cap can count queued-then-drained wakes.
+      this.db.exec('ALTER TABLE steer_queue ADD COLUMN origin TEXT');
+    }
+
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS preferences (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
         updated_at INTEGER NOT NULL
       )
+    `);
+
+    // Durable, per-project curated facts every engine can read. No expires_at —
+    // facts are curated, not cached; staleness is handled by founder deletion.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS context_facts (
+        id TEXT PRIMARY KEY,
+        project_path TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        provenance TEXT NOT NULL,
+        source_session_id TEXT,
+        pinned INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(project_path, key)
+      )
+    `);
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_context_facts_project
+      ON context_facts(project_path, updated_at)
+    `);
+
+    // Agent-proposed changes to a founder fact land here for founder review.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS context_fact_proposals (
+        id TEXT PRIMARY KEY,
+        project_path TEXT NOT NULL,
+        key TEXT NOT NULL,
+        proposed_value TEXT NOT NULL,
+        source_session_id TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at INTEGER NOT NULL
+      )
+    `);
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_context_fact_proposals_project
+      ON context_fact_proposals(project_path, status)
     `);
   }
 }

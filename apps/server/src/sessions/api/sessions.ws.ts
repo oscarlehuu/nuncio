@@ -1,7 +1,9 @@
 import type { Server } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { TokenValidator } from '../../auth/auth-request';
-import { isAuthorizedUpgrade, type RemoteTrust } from '../../auth/upgrade-auth';
+import type { RevocableDeviceValidator } from '../../auth/device-token';
+import { DeviceSocketRegistry } from '../../auth/device-socket-registry';
+import { authorizeUpgrade, type RemoteTrust } from '../../auth/upgrade-auth';
 import type { SessionEvent } from '../domain/sessions.types';
 
 export const SESSIONS_WS_PATH = '/api/sessions/ws';
@@ -53,16 +55,49 @@ function send(ws: WebSocket, payload: unknown): void {
   }
 }
 
+/**
+ * Fire a one-shot `{ notice }` frame to every OPEN socket. Used on shutdown so
+ * connected clients (phones on the relay) learn the server is going away and
+ * flip to "offline" instantly instead of waiting out the heartbeat timeout.
+ * Additive to the v1 relay envelope — clients ignore unknown top-level keys.
+ * Best-effort per socket: a send that throws on one half-dead connection must
+ * not stop the frame reaching the others, and it must never delay teardown.
+ */
+export function broadcastNotice(wss: WebSocketServer, notice: string): void {
+  const frame = JSON.stringify({ notice });
+  for (const client of wss.clients) {
+    if (client.readyState !== WebSocket.OPEN) continue;
+    try {
+      client.send(frame);
+    } catch {
+      // A socket can die between the state check and the write; skip it and
+      // keep notifying the rest.
+    }
+  }
+}
+
 export function attachSessionsWebSocketServer(
   httpServer: Server,
   sessions: SessionRelayService,
   authTokens?: TokenValidator,
   trust?: RemoteTrust,
+  devices?: RevocableDeviceValidator,
   options?: SessionsWsOptions,
 ): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
   const maxBuffered = options?.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES;
   const bufferedAmount = options?.getBufferedAmount ?? ((socket: WebSocket) => socket.bufferedAmount);
+
+  // Revocation must sever the live sockets a device opened, not just block future
+  // upgrades; the registry maps each device to its open sockets for that purpose.
+  const deviceSockets = new DeviceSocketRegistry();
+  const unsubscribeRevoke = devices?.onRevoke((deviceId) => deviceSockets.closeForDevice(deviceId));
+  if (unsubscribeRevoke) {
+    wss.on('close', unsubscribeRevoke);
+  }
+  // deviceId of the connection currently being handed to 'connection', keyed by
+  // socket so the connection handler can tag it for revocation.
+  const pendingDeviceId = new WeakMap<WebSocket, string>();
 
   httpServer.on('upgrade', (req, socket, head) => {
     const path = new URL(req.url ?? '/', 'http://localhost').pathname;
@@ -71,13 +106,16 @@ export function attachSessionsWebSocketServer(
     }
 
     const remoteAddress = (socket as unknown as { remoteAddress?: string }).remoteAddress;
-    void isAuthorizedUpgrade({ headers: req.headers, socket: { remoteAddress } }, authTokens, trust)
-      .then((authorized) => {
-        if (!authorized) {
+    void authorizeUpgrade({ headers: req.headers, socket: { remoteAddress } }, authTokens, trust, devices)
+      .then((authz) => {
+        if (!authz.authorized) {
           socket.destroy();
           return;
         }
         wss.handleUpgrade(req, socket, head, (ws) => {
+          if (authz.deviceId) {
+            pendingDeviceId.set(ws, authz.deviceId);
+          }
           wss.emit('connection', ws, req);
         });
       })
@@ -91,8 +129,15 @@ export function attachSessionsWebSocketServer(
       if (ws.readyState === WebSocket.OPEN) ws.ping();
     }, 15000);
 
+    const deviceId = pendingDeviceId.get(ws);
+    if (deviceId) {
+      pendingDeviceId.delete(ws);
+      deviceSockets.add(deviceId, ws);
+    }
+
     const teardown = () => {
       clearInterval(heartbeat);
+      if (deviceId) deviceSockets.remove(deviceId, ws);
       for (const unsubscribe of subscriptions.values()) unsubscribe();
       subscriptions.clear();
     };

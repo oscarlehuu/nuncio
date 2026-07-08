@@ -18,11 +18,18 @@ import { MediaStore } from './media.store';
 import { CursorLocalSessionsService } from '../cursor-local/cursor-local-sessions.service';
 import { turnsToSessionEvents } from '../cursor-local/cursor-transcript-hydrate';
 import { readCursorChatMetadata } from '../cursor-local/cursor-chat-store';
+import { ContextFactsService } from '../context/context-facts.service';
+import { renderContextFacts } from '../context/context-facts.renderer';
+import { materializeContextFile } from '../context/context-file.materializer';
 import { GitService } from '../git/git.service';
 import type { ModelOptionsMap } from '../models/model-options.types';
+import { renderHandoffBrief } from '../orchestration/handoff-brief.renderer';
+import { composeSessionPreamble } from '../orchestration/session-preamble';
+import { PromptProfileService } from '../prompts/prompt-profile.service';
 import { PiLocalSessionsService } from '../pi-local/pi-local-sessions.service';
 import { canTransition } from './domain/sessions.fsm';
 import { deriveHasPendingInput } from './domain/derive-pending-input';
+import type { SessionEventType } from './domain/events.types';
 import type {
   CreateSessionDto,
   HandoffSessionDto,
@@ -32,6 +39,8 @@ import type {
   RespondInteractionDto,
   SessionDto,
   SessionEvent,
+  SessionLineageDto,
+  SessionRefDto,
   SessionStatus,
 } from './domain/sessions.types';
 import { isCursorCliRecentlyActive } from '../agents/providers/cursor-cli.active-run';
@@ -58,6 +67,13 @@ const DEFAULT_BACKFILL_LIMIT = 200;
 /** Trailing events scanned to decide whether a run is blocked on your input. */
 const PENDING_SCAN_TAIL = 200;
 const DEFAULT_STALLED_RUN_FORCE_IDLE_MS = 30 * 60 * 1000;
+
+/** Ancestor walk depth cap — bounds cost and survives a manufactured cycle. */
+const ANCESTOR_WALK_CAP = 10;
+
+function toSessionRef(session: SessionDto): SessionRefDto {
+  return { id: session.id, title: session.title, status: session.status, provider: session.provider };
+}
 
 function resolveStalledRunForceIdleMs(): number {
   const raw = process.env.NUNCIO_STALLED_RUN_FORCE_IDLE_MS;
@@ -92,7 +108,12 @@ export class SessionsService implements OnModuleDestroy {
   private readonly stalledRunTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly transcriptWatchers = new Map<
     string,
-    { watcher: FSWatcher; count: number; debounce?: ReturnType<typeof setTimeout> }
+    {
+      count: number;
+      watcher?: FSWatcher;
+      debounce?: ReturnType<typeof setTimeout>;
+      poller?: ReturnType<typeof setInterval>;
+    }
   >();
   private stalledRunForceIdleMs = resolveStalledRunForceIdleMs();
 
@@ -112,7 +133,13 @@ export class SessionsService implements OnModuleDestroy {
     // Optional: when present, the verify-feedback loop resolves per-project
     // overrides (auto-steer / max-rounds) above the global setting.
     @Optional() private readonly projectDefaults?: ProjectDefaultsResolver,
+    @Optional() private readonly contextFacts?: ContextFactsService,
+    @Optional() private readonly profiles?: PromptProfileService,
   ) {
+    // A crash mid-fan-out can leave steer rows leased forever; a claim must
+    // never outlive the process that took it. Release before restore so the
+    // orphaned rows re-enter normal delivery.
+    this.steerQueue.releaseAllClaims();
     // Restore before reconcile: sessions still RUNNING here get their drain
     // scheduled by the reconcile IDLE transition instead.
     this.restorePendingSteerQueues();
@@ -194,6 +221,10 @@ export class SessionsService implements OnModuleDestroy {
     let worktreePath: string | undefined;
     let branch: string | undefined;
 
+    // Resolve the engine profile ONCE here (ADR-004: adapters get finished
+    // strings). It drives both the preamble wrappers and the B4 context file.
+    const profile = this.profiles?.resolve(providerId, input.model);
+
     if (input.projectPath?.trim()) {
       projectPath = input.projectPath.trim();
       await this.git.listBranches(projectPath);
@@ -210,9 +241,20 @@ export class SessionsService implements OnModuleDestroy {
       }
     }
 
+    // The single choke point for the first prompt: handoff brief → project
+    // facts → the user's prompt. Both this path and TasksService.execute() (via
+    // input.contextBrief) compose here, so the order is guaranteed in one place.
+    const prompt = composeSessionPreamble({
+      ...(input.contextBrief ? { brief: renderHandoffBrief(input.contextBrief) } : {}),
+      ...(projectPath ? { facts: this.renderProjectFacts(projectPath, id) } : {}),
+      prompt: input.prompt,
+      ...(profile ? { profile } : {}),
+    });
+
     const session = this.sessions.create({
       ...input,
       id,
+      prompt,
       provider: providerId,
       workspace,
       projectPath,
@@ -221,16 +263,85 @@ export class SessionsService implements OnModuleDestroy {
       branch,
       cursorBackend: 'sdk',
     });
+    // B4: materialize the engine's native context file into the worktree now
+    // that the session row exists (so a skip note can be recorded). Opt-in per
+    // project; the preamble injection above is the guarantee, this reinforces it.
+    if (worktreePath && projectPath) {
+      this.materializeWorktreeContextFile(worktreePath, projectPath, profile?.contextFileName, session.id);
+    }
     void this.startRun(session, input.attachments);
     return this.enrichSession(session);
+  }
+
+  /**
+   * Render the project's facts for injection, or '' when disabled / empty. The
+   * kill-switch and byte budget come from settings; the omission footer points
+   * at the context tools only when orchestration tools are enabled.
+   */
+  private renderProjectFacts(projectPath: string, sessionId: string): string {
+    if (!this.contextFacts) return '';
+    if (this.settings?.resolve('NUNCIO_CONTEXT_FACTS_INJECT') === 'off') return '';
+    if (this.contextFacts.count(projectPath) === 0) return '';
+    const budgetRaw = Number(this.settings?.resolve('NUNCIO_CONTEXT_FACTS_MAX_BYTES'));
+    const budget = Number.isInteger(budgetRaw) && budgetRaw > 0 ? budgetRaw : 4096;
+    const facts = this.contextFacts.listPinnedFirst(projectPath, 200);
+    const toolsEnabled = this.orchestrationToolsEnabled();
+    return renderContextFacts(facts, budget, { toolsEnabled });
+  }
+
+  /** True when orchestration read/read-write tools are enabled for sessions. */
+  private orchestrationToolsEnabled(): boolean {
+    const mode = this.settings?.resolve('NUNCIO_ORCHESTRATION_TOOLS');
+    return mode === 'read' || mode === 'read-write';
+  }
+
+  /**
+   * B4: write the engine's native context file into a fresh worktree when the
+   * project's policy opts in and the profile names one. Best-effort — a failure
+   * (or a skipped existing file) never blocks session creation; a skip is noted
+   * on the transcript. The rendered facts here are NOT gated by the preamble
+   * inject kill-switch: the file and the preamble are independent channels.
+   */
+  private materializeWorktreeContextFile(
+    worktreePath: string,
+    projectPath: string,
+    contextFileName: string | undefined,
+    sessionId: string,
+  ): void {
+    const policy = this.settings?.resolve('NUNCIO_CONTEXT_FILE_POLICY') === 'worktree-local'
+      ? 'worktree-local'
+      : 'none';
+    if (policy !== 'worktree-local' || !contextFileName) return;
+    try {
+      const budgetRaw = Number(this.settings?.resolve('NUNCIO_CONTEXT_FACTS_MAX_BYTES'));
+      const budget = Number.isInteger(budgetRaw) && budgetRaw > 0 ? budgetRaw : 4096;
+      const facts = this.contextFacts?.listPinnedFirst(projectPath, 200) ?? [];
+      const factsBlock = renderContextFacts(facts, budget, { toolsEnabled: this.orchestrationToolsEnabled() });
+      const result = materializeContextFile(worktreePath, { policy, contextFileName, factsBlock });
+      if (result.skipped) {
+        this.appendAndEmit(sessionId, 'status', {
+          note: `Context file "${contextFileName}" already exists in the worktree; nuncio left it untouched.`,
+        });
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.warn(`[sessions] context-file materialization failed for ${sessionId}: ${reason}`);
+    }
   }
 
   async handoff(input: HandoffSessionDto): Promise<SessionDto> {
     const workspace = input.workspace?.trim();
     if (!workspace) throw new BadRequestException('workspace is required');
 
+    // A prior session links the successor into a linear handoff chain, but only
+    // when that predecessor actually exists (a stale/foreign id is ignored).
+    const priorSessionId =
+      input.priorSessionId && this.sessions.findById(input.priorSessionId)
+        ? input.priorSessionId
+        : undefined;
+
     if ('piSessionPath' in input) {
-      return this.handoffPi(input.piSessionPath, workspace, input.title);
+      return this.handoffPi(input.piSessionPath, workspace, input.title, priorSessionId);
     }
 
     const chatId = input.cursorChatId?.trim();
@@ -255,6 +366,7 @@ export class SessionsService implements OnModuleDestroy {
       model,
       projectPath: cursorMeta.repoPath ?? workspace,
       branch: cursorMeta.branch ?? null,
+      priorSessionId,
     });
     this.hydrateIfNeeded(session);
     const refreshed = this.sessions.findById(session.id)!;
@@ -265,6 +377,7 @@ export class SessionsService implements OnModuleDestroy {
     piSessionPath: string | undefined,
     workspace: string,
     requestedTitle?: string,
+    priorSessionId?: string,
   ): Promise<SessionDto> {
     const path = piSessionPath?.trim();
     if (!path) throw new BadRequestException('piSessionPath is required');
@@ -291,6 +404,7 @@ export class SessionsService implements OnModuleDestroy {
       modelOptions: meta.thinkingLevel ? { thinkingLevel: meta.thinkingLevel } : null,
       projectPath: workspace,
       branch,
+      priorSessionId,
     });
     this.hydrateIfNeeded(session);
     const refreshed = this.sessions.findById(session.id)!;
@@ -302,6 +416,7 @@ export class SessionsService implements OnModuleDestroy {
     message: string,
     forceResume?: boolean,
     attachments?: AgentAttachment[],
+    origin?: string,
   ): Promise<SessionDto> {
     this.requireSession(id);
     const trimmed = message?.trim() ?? '';
@@ -313,8 +428,8 @@ export class SessionsService implements OnModuleDestroy {
 
     const current = this.requireSession(id);
     if (current.status === 'RUNNING') {
-      const handled = await this.steerRunning(current, trimmed, persisted);
-      if (!handled) this.enqueueSteer(id, trimmed, persisted);
+      const handled = await this.steerRunning(current, trimmed, persisted, origin);
+      if (!handled) this.enqueueSteer(id, trimmed, persisted, origin);
       return this.requireSession(id);
     }
     if (!canTransition(current.status, 'RUNNING')) {
@@ -331,6 +446,7 @@ export class SessionsService implements OnModuleDestroy {
         ...this.buildAgentRunContext(current),
         attachments: persisted,
         forceResume: forceResume === true,
+        ...(origin ? { steerOrigin: origin } : {}),
       });
     } finally {
       this.locallyProducing.delete(id);
@@ -367,6 +483,7 @@ export class SessionsService implements OnModuleDestroy {
     session: SessionDto,
     message: string,
     attachments?: AgentAttachment[],
+    origin?: string,
   ): Promise<boolean> {
     const provider = this.agents.resolveForSession(session);
     if (!provider.capabilities.steerWhileRunning || !provider.steerMidRun) return false;
@@ -375,30 +492,150 @@ export class SessionsService implements OnModuleDestroy {
       return await provider.steerMidRun(session.id, message, {
         ...this.buildAgentRunContext(session),
         attachments,
+        ...(origin ? { steerOrigin: origin } : {}),
       });
     } finally {
       this.locallyProducing.delete(session.id);
     }
   }
 
-  private enqueueSteer(id: string, message: string, attachments?: AgentAttachment[]): void {
-    this.steerQueue.enqueue(id, message, attachments);
+  private enqueueSteer(
+    id: string,
+    message: string,
+    attachments?: AgentAttachment[],
+    origin?: string,
+  ): void {
+    this.steerQueue.enqueue(id, message, attachments, origin);
     this.appendAndEmit(id, 'steer_queued', { text: message });
   }
 
+
   /**
-   * Empty the pending steer queue and return the queued prompt texts, so the
-   * caller can hand them to parallel subagents instead of delivering them
-   * sequentially. Emits `steer_queue_cleared` so live clients drop the queued
-   * placeholders. Any image attachments on a queued steer are not carried over —
-   * multitasking is text-only. Returns [] when nothing was queued.
+   * Claim (lease) the queued steers for a multitask fan-out. Claimed rows are
+   * hidden from the normal settle-drain, so the same messages can never be
+   * delivered a second time while the fan-out does async work. The caller must
+   * later {@link finalizeDrainedSteers} (success) or {@link releaseClaimedSteers}
+   * (failure) with the returned ids.
    */
-  drainSteerQueueForMultitask(id: string): string[] {
+  claimSteerQueueForMultitask(id: string): Array<{ id: number; message: string }> {
     this.requireSession(id);
-    const drained = this.steerQueue.drainAll(id);
-    if (drained.length === 0) return [];
+    return this.steerQueue.claimAll(id).map((steer) => ({ id: steer.id, message: steer.message }));
+  }
+
+  /** Return claimed rows to normal delivery (fan-out aborted before consuming them). */
+  releaseClaimedSteers(steerIds: number[]): void {
+    this.steerQueue.releaseByIds(steerIds);
+  }
+
+  /**
+   * Tell live clients the queued placeholders were consumed by a fan-out. The
+   * rows themselves are deleted inside the caller's transaction; this only
+   * emits the projection event (empty payload — the web client drops queued
+   * placeholder blocks on this signal regardless of payload).
+   */
+  emitSteerQueueCleared(id: string): void {
     this.appendAndEmit(id, 'steer_queue_cleared', {});
-    return drained.map((steer) => steer.message);
+  }
+
+  /** Direct handle to the steer-queue repository for a caller-owned transaction. */
+  get steerQueueRepository(): SteerQueueRepository {
+    return this.steerQueue;
+  }
+
+  /**
+   * Walk a session's lineage: ancestors up the `parentSessionId` chain (capped
+   * at 10, cycle-safe via a visited set) and its direct tree children (oldest
+   * first). Throws NotFound when the session itself does not exist.
+   */
+  lineage(id: string): SessionLineageDto {
+    const session = this.sessions.findById(id);
+    if (!session) throw new NotFoundException('Session not found');
+
+    const ancestors: SessionRefDto[] = [];
+    const visited = new Set<string>([id]);
+    let cursor = session.parentSessionId;
+    while (cursor && ancestors.length < ANCESTOR_WALK_CAP && !visited.has(cursor)) {
+      visited.add(cursor);
+      const parent = this.sessions.findById(cursor);
+      if (!parent) break;
+      ancestors.push(toSessionRef(parent));
+      cursor = parent.parentSessionId;
+    }
+
+    const children = this.sessions.childrenOf(id).map(toSessionRef);
+    return { ancestors, children };
+  }
+
+  /**
+   * Flush a RUNNING parent's provider-buffered deltas as their own independent,
+   * committed write, so they land at an earlier seq than a later orchestration
+   * event. MUST be called BEFORE opening any transaction that appends such an
+   * event — the flush appends AND emits its delta synchronously, and a delta is
+   * a legitimate event regardless of whether that later transaction commits.
+   * No-op for non-RUNNING sessions or a missing/unavailable provider.
+   */
+  flushParentBuffer(sessionId: string): void {
+    const session = this.sessions.findById(sessionId);
+    if (!session || session.status !== 'RUNNING') return;
+    try {
+      this.agents.resolveForSession(session).flushPendingEvents?.(sessionId);
+    } catch {
+      // A missing/unavailable provider must never block a digest append.
+    }
+  }
+
+  /**
+   * Persist an orchestration-authored event WITHOUT flushing or fanning out, so
+   * a caller can wrap it in a transaction alongside other writes and emit only
+   * after the commit. The caller is responsible for calling flushParentBuffer
+   * BEFORE the transaction — flushing here would append+emit a delta that a
+   * transaction rollback could then erase from persistence but not from clients.
+   * Returns null when the session no longer exists.
+   */
+  persistOrchestrationEvent(
+    sessionId: string,
+    type: SessionEventType,
+    payload: unknown,
+  ): SessionEvent | null {
+    if (!this.sessions.findById(sessionId)) return null;
+    return this.events.append(sessionId, type, payload);
+  }
+
+  /** Fan a previously-persisted event out to live subscribers. */
+  emitPersistedEvent(sessionId: string, event: SessionEvent): void {
+    this.emit(sessionId, event);
+  }
+
+  /**
+   * Append an orchestration-authored event (e.g. a subagent digest) to a
+   * session's log through the same persist+fanout path run events take, so live
+   * subscribers update without a reload. Flushes the parent's provider buffer
+   * first so a buffered delta cannot overtake this event. Annotate-don't-block:
+   * the session FSM is untouched. Returns null when the session no longer
+   * exists; never throws — digest delivery must never destabilize its producer.
+   */
+  appendOrchestrationEvent(
+    sessionId: string,
+    type: SessionEventType,
+    payload: unknown,
+  ): SessionEvent | null {
+    this.flushParentBuffer(sessionId);
+    const event = this.persistOrchestrationEvent(sessionId, type, payload);
+    if (event) this.emit(sessionId, event);
+    return event;
+  }
+
+  /**
+   * Schedule a settle-drain for a session out-of-band — used after releasing a
+   * steer claim that a fan-out never consumed, so freed messages don't sit
+   * undelivered until an unrelated trigger. No-ops unless the session is IDLE:
+   * a RUNNING session drains on its own next settle, and PAUSED/ERROR must not
+   * be force-fed. Reuses the same drain mechanism status transitions use.
+   */
+  scheduleSteerDrain(id: string): void {
+    if (this.destroyed) return;
+    if (this.sessions.findById(id)?.status !== 'IDLE') return;
+    setTimeout(() => this.drainSteerQueue(id), 0);
   }
 
   /** Deliver the next queued steer once the foreground run has settled. */
@@ -406,9 +643,39 @@ export class SessionsService implements OnModuleDestroy {
     // Drain timers can outlive the service; after shutdown the database is
     // closed, so touching the queue would throw from a detached timer.
     if (this.destroyed) return;
-    const next = this.steerQueue.dequeue(id);
+
+    // Skip any leading task-digest wakes that must not restart an ERROR/PAUSED
+    // session, then deliver the first eligible row. Skipping is atomic (row
+    // delete + suppression note commit together) so a crash mid-skip never
+    // swallows a wake, and the loop ensures a user steer queued behind skipped
+    // wakes is not pinned.
+    let next = this.steerQueue.peekNext(id);
+    while (next) {
+      if (next.origin === 'task-digest') {
+        const status = this.sessions.findById(id)?.status;
+        if (status === 'ERROR' || status === 'PAUSED') {
+          try {
+            this.skipQueuedDigestWake(id, next.id, status);
+          } catch (error) {
+            // Atomic skip failed (both-or-neither): the row is still queued.
+            // Stop this pass rather than spin; a later drain retries it.
+            const reason = error instanceof Error ? error.message : String(error);
+            console.warn(`[sessions] failed to skip queued digest wake for ${id}: ${reason}`);
+            return;
+          }
+          next = this.steerQueue.peekNext(id);
+          continue;
+        }
+      }
+      break;
+    }
     if (!next) return;
-    const work = this.steer(id, next.message, undefined, next.attachments).catch((error) => {
+
+    // Deliver exactly this row (dequeue removes it); one-per-pass semantics for
+    // real steers are preserved.
+    this.steerQueue.deleteById(next.id);
+    const delivered = next;
+    const work = this.steer(id, delivered.message, undefined, delivered.attachments, delivered.origin).catch((error) => {
       const reason = error instanceof Error ? error.message : String(error);
       try {
         this.appendAndEmit(id, 'error', { message: `Queued message failed to send: ${reason}` });
@@ -420,6 +687,21 @@ export class SessionsService implements OnModuleDestroy {
     // to a closed DB handle after the module is destroyed.
     this.pendingWork.add(work);
     void work.finally(() => this.pendingWork.delete(work));
+  }
+
+  /**
+   * Drop a queued task-digest wake that must not restart an ERROR/PAUSED parent,
+   * atomically: the row delete and the suppression-note persist commit as one
+   * transaction (both-or-neither), so a crash between them can never swallow the
+   * wake. The note is fanned out to subscribers only after the commit.
+   */
+  private skipQueuedDigestWake(sessionId: string, rowId: number, status: SessionStatus): void {
+    const note = `Auto-steer suppressed: parent status ${status}. Digest delivered as event only.`;
+    const event = this.steerQueue.transaction<SessionEvent | null>(() => {
+      this.steerQueue.deleteById(rowId);
+      return this.persistOrchestrationEvent(sessionId, 'status', { note });
+    });
+    if (event) this.emitPersistedEvent(sessionId, event);
   }
 
   /** Grace period before a non-unwinding interrupted run is forced idle. */
@@ -579,8 +861,9 @@ export class SessionsService implements OnModuleDestroy {
     this.stalledRunTimers.clear();
     for (const entry of this.transcriptWatchers.values()) {
       if (entry.debounce) clearTimeout(entry.debounce);
+      if (entry.poller) clearInterval(entry.poller);
       try {
-        entry.watcher.close();
+        entry.watcher?.close();
       } catch {
         // Ignore watcher close failures during shutdown.
       }
@@ -707,11 +990,11 @@ export class SessionsService implements OnModuleDestroy {
     if (mtime !== null) this.transcriptMtimeCache.set(session.id, mtime);
   }
 
-  private refreshTranscriptIfNeeded(session: SessionDto): void {
+  private refreshTranscriptIfNeeded(session: SessionDto, options: { force?: boolean } = {}): void {
     const currentMtime = this.transcriptMtime(session);
     if (currentMtime === null) return;
     const cachedMtime = this.transcriptMtimeCache.get(session.id);
-    if (cachedMtime !== undefined && currentMtime === cachedMtime) return;
+    if (!options.force && cachedMtime !== undefined && currentMtime === cachedMtime) return;
 
     const hydrated = this.readTranscriptEvents(session);
     this.transcriptMtimeCache.set(session.id, currentMtime);
@@ -775,7 +1058,17 @@ export class SessionsService implements OnModuleDestroy {
     if (!existsSync(path)) return;
 
     const watcher = this.createTranscriptWatcher(id, path);
-    if (watcher) this.transcriptWatchers.set(id, { watcher, count: 1 });
+    const poller = setInterval(() => this.refreshTranscriptFromWatch(id), 250);
+    this.transcriptWatchers.set(id, { ...(watcher ? { watcher } : {}), poller, count: 1 });
+  }
+
+  private refreshTranscriptFromWatch(id: string): void {
+    if (this.locallyProducing.has(id)) return;
+    try {
+      this.refreshTranscriptIfNeeded(this.requireSession(id), { force: true });
+    } catch {
+      // Ignore transient read/session errors so the stream stays alive.
+    }
   }
 
   private createTranscriptWatcher(id: string, path: string): FSWatcher | null {
@@ -795,7 +1088,7 @@ export class SessionsService implements OnModuleDestroy {
           }
           if (this.locallyProducing.has(id)) return;
           try {
-            this.refreshTranscriptIfNeeded(this.requireSession(id));
+            this.refreshTranscriptIfNeeded(this.requireSession(id), { force: true });
           } catch {
             // Ignore transient read/session errors so the stream stays alive.
           }
@@ -812,12 +1105,12 @@ export class SessionsService implements OnModuleDestroy {
         } catch {
           // Ignore close failures.
         }
-        this.transcriptWatchers.delete(id);
-        const count = entry.count;
+        delete entry.watcher;
         setTimeout(() => {
-          if (this.transcriptWatchers.has(id) || !existsSync(path)) return;
+          const current = this.transcriptWatchers.get(id);
+          if (!current || current.watcher || !existsSync(path)) return;
           const replacement = this.createTranscriptWatcher(id, path);
-          if (replacement) this.transcriptWatchers.set(id, { watcher: replacement, count });
+          if (replacement) current.watcher = replacement;
         }, 1000);
       });
       return watcher;
@@ -832,7 +1125,7 @@ export class SessionsService implements OnModuleDestroy {
     const entry = this.transcriptWatchers.get(id);
     if (!entry) return;
     try {
-      entry.watcher.close();
+      entry.watcher?.close();
     } catch {
       // Ignore close failures.
     }
@@ -840,7 +1133,7 @@ export class SessionsService implements OnModuleDestroy {
     if (replacement) {
       entry.watcher = replacement;
     } else {
-      this.transcriptWatchers.delete(id);
+      delete entry.watcher;
     }
   }
 
@@ -850,8 +1143,9 @@ export class SessionsService implements OnModuleDestroy {
     entry.count -= 1;
     if (entry.count > 0) return;
     if (entry.debounce) clearTimeout(entry.debounce);
+    if (entry.poller) clearInterval(entry.poller);
     try {
-      entry.watcher.close();
+      entry.watcher?.close();
     } catch {
       // Ignore watcher close failures.
     }
@@ -951,7 +1245,12 @@ export class SessionsService implements OnModuleDestroy {
       transcriptMtimeMs,
       chatStoreMtimeMs,
       transcriptTurnEnded,
-      tools: this.agentTools?.forSession(session.id),
+      tools: this.agentTools?.forSession({
+        sessionId: session.id,
+        projectPath: session.projectPath,
+        provider: session.provider,
+        model: session.model,
+      }),
     };
   }
 

@@ -23,6 +23,10 @@ module.exports = {
   extraResources: [
     { from: 'build-resources/nuncio-server', to: 'nuncio-server' },
     { from: 'build-resources/web/dist', to: 'web/dist' },
+    // Menu-bar tray icons, loaded at runtime from resourcesPath/build in the
+    // packaged app (a source checkout reads them from ./build directly).
+    { from: 'build/trayTemplate.png', to: 'build/trayTemplate.png' },
+    { from: 'build/trayTemplate@2x.png', to: 'build/trayTemplate@2x.png' },
   ],
   asar: true,
   mac: {

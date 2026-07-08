@@ -1,0 +1,12 @@
+{
+  "id": "use-project-facts--control",
+  "title": "Control: same task with no seeded fact (measures fact-injection lift)",
+  "fixture": "ts-lib-weird-build",
+  "prompt": "Add the new endpoint listUsers to the generated API client's consumer in src/client-usage.ts, then produce a correct build. The check script must pass.",
+  "setup": {},
+  "verifyCommand": "bun run check-artifact",
+  "timeoutMs": 300000,
+  "tags": ["handoff", "control"],
+  "informational": true,
+  "expect": { "verifyPassed": false }
+}

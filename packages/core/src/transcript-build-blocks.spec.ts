@@ -3,7 +3,9 @@ import type { SessionEvent } from './api';
 import {
   buildTranscriptBlocks,
   derivePendingQueuedSteers,
+  projectTaskDigest,
   workingIndicatorLabel,
+  type TaskDigest,
 } from './transcript-build-blocks';
 
 function ev(seq: number, type: string, payload: Record<string, unknown>): SessionEvent {
@@ -439,5 +441,109 @@ describe('workingIndicatorLabel', () => {
   it('reports tool name when a tool is running', () => {
     const blocks = buildTranscriptBlocks([ev(1, 'tool_start', { callId: 'c1', tool: 'Read' })]);
     expect(workingIndicatorLabel(blocks, true)).toBe('Nuncio is using Read…');
+  });
+});
+
+describe('projectTaskDigest', () => {
+  const cases: Array<{ name: string; payload: Record<string, unknown>; expected: TaskDigest }> = [
+    {
+      name: 'DONE with a passing verify and a branch',
+      payload: {
+        taskId: 't-abc',
+        childSessionId: 's-child',
+        status: 'DONE',
+        outcomeSummary: 'Added the digest card and its tests.',
+        verify: { passed: true, output: 'ok' },
+        workspace: {
+          branch: 'feat/digest-card',
+          headSha: 'abc123',
+          baseBranch: 'dev',
+          dirtyFiles: [],
+          diffStat: null,
+        },
+        childBranch: 'feat/digest-card',
+      },
+      expected: {
+        taskId: 't-abc',
+        childSessionId: 's-child',
+        status: 'DONE',
+        outcomeSummary: 'Added the digest card and its tests.',
+        verify: { passed: true, output: 'ok' },
+        childBranch: 'feat/digest-card',
+      },
+    },
+    {
+      name: 'FAILED with a failing verify and no summary',
+      payload: {
+        taskId: 't-def',
+        childSessionId: 's-child2',
+        status: 'FAILED',
+        outcomeSummary: null,
+        verify: { passed: false },
+        workspace: null,
+        childBranch: null,
+      },
+      expected: {
+        taskId: 't-def',
+        childSessionId: 's-child2',
+        status: 'FAILED',
+        outcomeSummary: null,
+        verify: { passed: false },
+        childBranch: null,
+      },
+    },
+    {
+      name: 'CANCELLED with no child session and no verify',
+      payload: {
+        taskId: 't-ghi',
+        childSessionId: null,
+        status: 'CANCELLED',
+        outcomeSummary: null,
+        verify: null,
+        workspace: null,
+        childBranch: null,
+      },
+      expected: {
+        taskId: 't-ghi',
+        childSessionId: null,
+        status: 'CANCELLED',
+        outcomeSummary: null,
+        verify: null,
+        childBranch: null,
+      },
+    },
+  ];
+
+  it.each(cases)('projects $name', ({ payload, expected }) => {
+    expect(projectTaskDigest(payload)).toEqual(expected);
+  });
+
+  it('coerces an unknown status to FAILED and degrades malformed optional fields to null', () => {
+    expect(projectTaskDigest({ taskId: 't1', status: 'WEIRD', verify: { passed: 'yes' } })).toEqual({
+      taskId: 't1',
+      childSessionId: null,
+      status: 'FAILED',
+      outcomeSummary: null,
+      verify: null,
+      childBranch: null,
+    });
+  });
+
+  it('renders a task_completed event as a single digest block', () => {
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'user_message', { text: 'delegate this' }),
+      ev(2, 'task_completed', {
+        taskId: 't-abc',
+        childSessionId: 's-child',
+        status: 'DONE',
+        outcomeSummary: 'done',
+        verify: { passed: true },
+        childBranch: 'feat/x',
+      }),
+    ]);
+    expect(blocks).toHaveLength(2);
+    expect(blocks[1].kind).toBe('task_completed');
+    expect((blocks[1] as { digest: TaskDigest }).digest.childSessionId).toBe('s-child');
+    expect(blocks[1].key).toBe('task-completed-2');
   });
 });

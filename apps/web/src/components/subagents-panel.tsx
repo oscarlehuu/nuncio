@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { GitBranch } from 'lucide-react';
-import type { TaskDto } from '../lib/api';
+import type { HandoffBrief, TaskDto } from '../lib/api';
 import type { ModelOptionsMap } from '../lib/model-options';
 import type { ModelProvider } from '../lib/model-providers';
 import { holdSecondsRemaining, isHeldTask } from '../lib/subagent-hold';
@@ -24,6 +24,54 @@ interface SubagentsPanelProps {
   ) => void | Promise<void>;
   /** Re-arm the countdown when the picker opens, so it can't expire mid-selection. */
   onPickerOpen: (id: string) => void;
+}
+
+function BriefItems({ label, items }: { label: string; items?: string[] }) {
+  if (!items?.length) return null;
+  return (
+    <div>
+      <dt className="text-ui-sm font-medium text-muted-foreground">{label}</dt>
+      <dd>
+        <ul className="mt-1 list-disc space-y-0.5 pl-4">
+          {items.map((item, index) => (
+            <li key={`${label}-${index}`}>{item}</li>
+          ))}
+        </ul>
+      </dd>
+    </div>
+  );
+}
+
+function HandoffBriefDisclosure({ brief }: { brief?: HandoffBrief | null }) {
+  if (!brief) return null;
+  return (
+    <details
+      data-testid="handoff-brief"
+      className="mt-1 rounded-md border border-border/40 bg-muted/15 px-2.5 py-1.5 text-ui-sm"
+    >
+      <summary className="cursor-pointer select-none font-medium text-muted-foreground">
+        Handoff brief
+      </summary>
+      <dl className="mt-2 space-y-2 text-foreground/85">
+        <div>
+          <dt className="text-ui-sm font-medium text-muted-foreground">Goal</dt>
+          <dd className="mt-1">{brief.goal}</dd>
+        </div>
+        <BriefItems label="Constraints" items={brief.constraints} />
+        <BriefItems label="Decisions" items={brief.decisions} />
+        <BriefItems label="Files" items={brief.files} />
+        <BriefItems label="Done criteria" items={brief.doneCriteria} />
+        {brief.verifyCommand && (
+          <div>
+            <dt className="text-ui-sm font-medium text-muted-foreground">Verify command</dt>
+            <dd className="mt-1 rounded bg-muted/30 px-2 py-1 font-mono text-ui">
+              {brief.verifyCommand}
+            </dd>
+          </div>
+        )}
+      </dl>
+    </details>
+  );
 }
 
 /** Compact, dense list of child subagents spawned from this session's
@@ -116,21 +164,27 @@ export function SubagentsPanel({
       </div>
       <ul className="divide-y divide-border/30">
         {tasks.map((task) => (
-          <SubagentRow
-            key={task.id}
-            task={task}
-            now={now}
-            maxRemaining={maxRemainingRef.current.get(task.id) ?? holdSecondsRemaining(task, now)}
-            busy={busyId === task.id}
-            providers={providers}
-            onOpenSession={onOpenSession}
-            onReview={runRowAction(onReview)}
-            onCancel={runRowAction(onCancel)}
-            onRetry={runRowAction(onRetry)}
-            onStartNow={runRowAction(onStartNow)}
-            onChangeModel={handleChangeModel}
-            onPickerOpen={onPickerOpen}
-          />
+          <Fragment key={task.id}>
+            <SubagentRow
+              task={task}
+              now={now}
+              maxRemaining={maxRemainingRef.current.get(task.id) ?? holdSecondsRemaining(task, now)}
+              busy={busyId === task.id}
+              providers={providers}
+              onOpenSession={onOpenSession}
+              onReview={runRowAction(onReview)}
+              onCancel={runRowAction(onCancel)}
+              onRetry={runRowAction(onRetry)}
+              onStartNow={runRowAction(onStartNow)}
+              onChangeModel={handleChangeModel}
+              onPickerOpen={onPickerOpen}
+            />
+            {task.contextBrief && (
+              <li className="px-3 pb-2 pt-0">
+                <HandoffBriefDisclosure brief={task.contextBrief} />
+              </li>
+            )}
+          </Fragment>
         ))}
       </ul>
     </section>

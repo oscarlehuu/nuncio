@@ -1,0 +1,19 @@
+diff --git a/src/parse-flags.ts b/src/parse-flags.ts
+index 996e669..8ca1146 100644
+--- a/src/parse-flags.ts
++++ b/src/parse-flags.ts
+@@ -1,4 +1,4 @@
+-import { formatFlag } from './format';
++// import { formatFlag } from './format';
+ 
+ export interface Flags {
+   [name: string]: boolean;
+@@ -13,7 +13,7 @@ export function parseFlags(argv: string[]): Flags {
+       flags[arg.slice(5)] = false;
+     } else {
+       // BUG: a bare "--flag" must be true, not false.
+-      flags[arg.slice(2)] = false;
++      flags[arg.slice(2)] = true;
+     }
+   }
+   return flags;

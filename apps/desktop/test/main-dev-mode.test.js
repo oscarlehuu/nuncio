@@ -6,7 +6,13 @@ const vm = require('node:vm');
 const mainPath = path.resolve(__dirname, '../src/main.js');
 const mainSource = fs.readFileSync(mainPath, 'utf8');
 
-async function runMain({ env = {}, fetchImpl, advanceTimers = false } = {}) {
+async function runMain({
+  env = {},
+  fetchImpl,
+  advanceTimers = false,
+  singleInstanceLock = true,
+  onDaemonStart,
+} = {}) {
   const state = {
     appHandlers: {},
     daemonConstructed: 0,
@@ -28,6 +34,8 @@ async function runMain({ env = {}, fetchImpl, advanceTimers = false } = {}) {
     errors: [],
     externalOpens: [],
     quitCalls: 0,
+    trays: [],
+    singleInstanceLock,
   };
 
   let readyPromise;
@@ -52,6 +60,12 @@ async function runMain({ env = {}, fetchImpl, advanceTimers = false } = {}) {
     whenReady() {
       return {
         then(callback) {
+          // A losing second instance quits before ready; Electron never fires
+          // whenReady in that case, so neither does the mock.
+          if (!state.singleInstanceLock) {
+            readyPromise = Promise.resolve();
+            return readyPromise;
+          }
           readyPromise = Promise.resolve().then(callback);
           return readyPromise;
         },
@@ -63,6 +77,9 @@ async function runMain({ env = {}, fetchImpl, advanceTimers = false } = {}) {
     quit() {
       state.quitCalls += 1;
     },
+    requestSingleInstanceLock() {
+      return state.singleInstanceLock;
+    },
   };
 
   class FakeBrowserWindow {
@@ -71,6 +88,9 @@ async function runMain({ env = {}, fetchImpl, advanceTimers = false } = {}) {
       this.handlers = {};
       this.currentUrl = '';
       const webContentsHandlers = {};
+      this.shown = true;
+      this.focused = false;
+      this.minimized = false;
       this.webContents = {
         handlers: webContentsHandlers,
         openDevTools: (options) => state.devToolsCalls.push(options),
@@ -86,10 +106,34 @@ async function runMain({ env = {}, fetchImpl, advanceTimers = false } = {}) {
       this.handlers[eventName] = handler;
     }
 
+    emit(eventName, ...args) {
+      this.handlers[eventName]?.(...args);
+    }
+
     loadURL(url) {
       this.currentUrl = url;
       state.loadedUrls.push(url);
       return Promise.resolve();
+    }
+
+    show() {
+      this.shown = true;
+    }
+
+    hide() {
+      this.shown = false;
+    }
+
+    focus() {
+      this.focused = true;
+    }
+
+    isMinimized() {
+      return this.minimized;
+    }
+
+    restore() {
+      this.minimized = false;
     }
 
     setBrowserView(view) {
@@ -144,6 +188,9 @@ async function runMain({ env = {}, fetchImpl, advanceTimers = false } = {}) {
 
     async start() {
       state.daemonStartCalls += 1;
+      // Test seam: lets a spec observe/act at the exact moment the boot is
+      // suspended on daemon start (before the first window is created).
+      if (onDaemonStart) await onDaemonStart(state);
       return { url: this.url };
     }
 
@@ -182,6 +229,37 @@ async function runMain({ env = {}, fetchImpl, advanceTimers = false } = {}) {
           app: fakeApp,
           BrowserWindow: FakeBrowserWindow,
           BrowserView: FakeBrowserView,
+          Tray: class FakeTray {
+            constructor(image) {
+              this.image = image;
+              this.contextMenu = null;
+              this.handlers = {};
+              this.destroyed = false;
+              state.trays.push(this);
+            }
+            setToolTip() {}
+            setContextMenu(menu) {
+              this.contextMenu = menu;
+            }
+            on(eventName, handler) {
+              this.handlers[eventName] = handler;
+            }
+            destroy() {
+              this.destroyed = true;
+            }
+          },
+          nativeImage: {
+            createFromPath() {
+              return { isEmpty: () => true, setTemplateImage() {} };
+            },
+            createEmpty() {
+              return { isEmpty: () => true, setTemplateImage() {} };
+            },
+          },
+          Menu: {
+            buildFromTemplate: (template) => ({ template }),
+            setApplicationMenu() {},
+          },
           dialog: {
             showErrorBox(title, message) {
               state.dialogErrors.push({ title, message });
@@ -213,6 +291,10 @@ async function runMain({ env = {}, fetchImpl, advanceTimers = false } = {}) {
       if (specifier === './server-profiles') {
         // Real module: pure + filesystem-defensive, safe inside the sandbox.
         return require(path.resolve(__dirname, '../src/server-profiles.js'));
+      }
+      if (specifier === './shell-settings') {
+        // Real module: pure + filesystem-defensive, safe inside the sandbox.
+        return require(path.resolve(__dirname, '../src/shell-settings.js'));
       }
       throw new Error(`Unexpected require from main.js test: ${specifier}`);
     },
@@ -415,5 +497,168 @@ describe('desktop main dev-mode loading', () => {
 
     const invalid = await connect({}, 'ftp://nope');
     expect(invalid.ok).toBe(false);
+  });
+});
+
+describe('desktop tray + close-to-tray + single instance', () => {
+  test('a losing second instance quits before ready and never starts a daemon', async () => {
+    const state = await runMain({
+      singleInstanceLock: false,
+      fetchImpl: async () => ({ ok: false }),
+    });
+
+    // Loser quits immediately; whenReady boot must not run.
+    expect(state.quitCalls).toBe(1);
+    expect(state.daemonConstructed).toBe(0);
+    expect(state.daemonStartCalls).toBe(0);
+    expect(state.windows).toHaveLength(0);
+  });
+
+  test('second-instance surfaces the existing window instead of opening another', async () => {
+    const state = await runMain({ fetchImpl: async () => ({ ok: false }) });
+    const window = state.windows[0];
+    window.shown = false;
+    window.minimized = true;
+
+    state.appHandlers['second-instance']();
+
+    expect(window.shown).toBe(true);
+    expect(window.focused).toBe(true);
+    expect(window.minimized).toBe(false);
+    // No second window was created.
+    expect(state.windows).toHaveLength(1);
+  });
+
+  test('closing the window with close-to-tray on hides it and keeps the daemon', async () => {
+    const state = await runMain({ fetchImpl: async () => ({ ok: false }) });
+    const window = state.windows[0];
+    // A tray exists because close-to-tray defaults on.
+    expect(state.trays).toHaveLength(1);
+
+    let prevented = false;
+    window.emit('close', {
+      preventDefault() {
+        prevented = true;
+      },
+    });
+
+    expect(prevented).toBe(true);
+    expect(window.shown).toBe(false);
+    // Daemon was never stopped by a mere window close.
+    expect(state.daemonStopCalls).toBe(0);
+  });
+
+  test('window-all-closed does not quit while close-to-tray is on', async () => {
+    const state = await runMain({ fetchImpl: async () => ({ ok: false }) });
+    const before = state.quitCalls;
+    state.appHandlers['window-all-closed']();
+    expect(state.quitCalls).toBe(before);
+  });
+
+  test('tray menu: Open reopens/focuses the window; Pair deep-links to remote-access', async () => {
+    const state = await runMain({ fetchImpl: async () => ({ ok: false }) });
+    const tray = state.trays[0];
+    const items = tray.contextMenu.template;
+    const byLabel = (label) => items.find((item) => item.label === label);
+
+    // Menu shape: Open, Pair, separator, Quit.
+    expect(items.map((i) => i.label ?? `<${i.type}>`)).toEqual([
+      'Open Nuncio',
+      'Pair mobile device…',
+      '<separator>',
+      'Quit Nuncio',
+    ]);
+
+    const window = state.windows[0];
+    window.shown = false;
+    byLabel('Open Nuncio').click();
+    expect(window.shown).toBe(true);
+    expect(window.focused).toBe(true);
+
+    byLabel('Pair mobile device…').click();
+    // Deep-links the settings route straight to the remote-access pane.
+    const lastLoad = state.loadedUrls[state.loadedUrls.length - 1];
+    expect(lastLoad).toContain('/settings');
+    expect(lastLoad).toContain('section=remote-access');
+
+    let quitBefore = state.quitCalls;
+    byLabel('Quit Nuncio').click();
+    expect(state.quitCalls).toBe(quitBefore + 1);
+  });
+
+  test('shell IPC reports and updates close-to-tray, toggling the tray', async () => {
+    const state = await runMain({ fetchImpl: async () => ({ ok: false }) });
+    const get = state.ipcHandlers['shell:get-settings'];
+    const set = state.ipcHandlers['shell:set-settings'];
+    expect(typeof get).toBe('function');
+    expect(typeof set).toBe('function');
+
+    // Defaults on, tray present.
+    expect(get()).toEqual({ closeToTray: true });
+    expect(state.trays.filter((t) => !t.destroyed)).toHaveLength(1);
+
+    // Turn it off: tray goes away, and a subsequent window close is not intercepted.
+    expect(await set({}, { closeToTray: false })).toEqual({ closeToTray: false });
+    expect(get()).toEqual({ closeToTray: false });
+    expect(state.trays.every((t) => t.destroyed)).toBe(true);
+
+    const window = state.windows[0];
+    let prevented = false;
+    window.emit('close', {
+      preventDefault() {
+        prevented = true;
+      },
+    });
+    expect(prevented).toBe(false);
+
+    // Turn it back on: a fresh tray is created.
+    expect(await set({}, { closeToTray: true })).toEqual({ closeToTray: true });
+    expect(state.trays.filter((t) => !t.destroyed)).toHaveLength(1);
+
+    // A malformed payload keeps the current value.
+    expect(await set({}, null)).toEqual({ closeToTray: true });
+    expect(await set({}, { closeToTray: 'nope' })).toEqual({ closeToTray: true });
+  });
+
+  test('an update-driven quit is not swallowed by close-to-tray', async () => {
+    // quitAndInstall emits the window 'close' before 'before-quit', and fires
+    // 'before-quit-for-update' first. That must mark the quit so the close is
+    // NOT intercepted to the tray — otherwise the install is lost.
+    const state = await runMain({ fetchImpl: async () => ({ ok: false }) });
+    const window = state.windows[0];
+
+    // Update install begins: Electron fires this ahead of the window close.
+    state.appHandlers['before-quit-for-update']();
+
+    let prevented = false;
+    window.emit('close', {
+      preventDefault() {
+        prevented = true;
+      },
+    });
+
+    // The window is allowed to close (not hidden), so the install proceeds.
+    expect(prevented).toBe(false);
+    expect(window.shown).toBe(true);
+  });
+
+  test('second-instance during boot focuses the single real window without racing a second', async () => {
+    let sawWindowsMidBoot = -1;
+    const state = await runMain({
+      fetchImpl: async () => ({ ok: false }),
+      // Fire the double-launch while the boot is suspended on daemon start,
+      // before the first window has been created.
+      onDaemonStart: (s) => {
+        s.appHandlers['second-instance']();
+        sawWindowsMidBoot = s.windows.length;
+      },
+    });
+
+    // No premature window was created by the mid-boot second-instance.
+    expect(sawWindowsMidBoot).toBe(0);
+    // Boot created exactly one window, and the deferred focus was honored.
+    expect(state.windows).toHaveLength(1);
+    expect(state.windows[0].shown).toBe(true);
+    expect(state.windows[0].focused).toBe(true);
   });
 });

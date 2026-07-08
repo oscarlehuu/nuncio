@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
   TailscaleService,
+  defaultExec,
   isTailscaleAddress,
   normalizeRemoteAddress,
   type ExecFn,
@@ -179,5 +180,103 @@ describe('TailscaleService.isTrustedRemote', () => {
   it('degrades to untrusted when the CLI is missing', async () => {
     const service = serviceWith(fakeExec([], { installed: false }));
     expect(await service.isTrustedRemote('100.105.188.11')).toBe(false);
+  });
+});
+
+/** Exec that resolves version (for bin resolution) then a scripted serve/funnel result. */
+function fakeServeExec(
+  calls: string[][],
+  result: { ok: boolean; stderr?: string },
+  timeouts: number[] = [],
+): ExecFn {
+  return async (argv: string[], timeoutMs?: number) => {
+    calls.push(argv);
+    if (timeoutMs !== undefined) timeouts.push(timeoutMs);
+    if (argv[1] === 'version') return { ok: true, stdout: '1.98.3' };
+    return { ok: result.ok, stdout: '', stderr: result.stderr };
+  };
+}
+
+describe('TailscaleService.enableServe', () => {
+  it('returns true when serve exits 0 and passes the 10s timeout', async () => {
+    const calls: string[][] = [];
+    const timeouts: number[] = [];
+    const service = serviceWith(fakeServeExec(calls, { ok: true }, timeouts));
+    expect(await service.enableServe(3300)).toBe(true);
+    const serveCall = calls.find((argv) => argv[1] === 'serve');
+    expect(serveCall).toEqual([serveCall![0], 'serve', '--bg', '3300']);
+    // serve gets the longer 10s budget, not the default 3s.
+    expect(timeouts.some((t) => t === 10_000)).toBe(true);
+  });
+
+  it('returns false when serve fails', async () => {
+    const service = serviceWith(fakeServeExec([], { ok: false, stderr: 'boom' }));
+    expect(await service.enableServe(3300)).toBe(false);
+  });
+
+  it('returns false when the CLI is missing', async () => {
+    const service = serviceWith(fakeExec([], { installed: false }));
+    expect(await service.enableServe(3300)).toBe(false);
+  });
+});
+
+describe('TailscaleService.enableFunnel', () => {
+  it('returns ok on exit 0', async () => {
+    const service = serviceWith(fakeServeExec([], { ok: true }));
+    expect(await service.enableFunnel(3300)).toEqual({ ok: true });
+  });
+
+  it("detects an ACL denial from stderr and reports reason 'acl'", async () => {
+    const stderr =
+      'error: Funnel is not allowed on this tailnet; the ACL does not grant node-attr funnel';
+    const service = serviceWith(fakeServeExec([], { ok: false, stderr }));
+    expect(await service.enableFunnel(3300)).toEqual({ ok: false, reason: 'acl' });
+  });
+
+  it("treats an unknown 'funnel' subcommand (old CLI) as a generic error", async () => {
+    const stderr = 'flag provided but not defined: -bg\nUsage of tailscale:';
+    const service = serviceWith(fakeServeExec([], { ok: false, stderr }));
+    expect(await service.enableFunnel(3300)).toEqual({ ok: false, reason: 'error' });
+  });
+
+  it("reports reason 'error' for a non-ACL failure", async () => {
+    const service = serviceWith(fakeServeExec([], { ok: false, stderr: 'connection refused' }));
+    expect(await service.enableFunnel(3300)).toEqual({ ok: false, reason: 'error' });
+  });
+
+  it("reports reason 'error' when the CLI is missing", async () => {
+    const service = serviceWith(fakeExec([], { installed: false }));
+    expect(await service.enableFunnel(3300)).toEqual({ ok: false, reason: 'error' });
+  });
+
+  it('does not misclassify a non-funnel error as ACL', async () => {
+    // stderr mentions "denied" but not funnel — must stay generic.
+    const service = serviceWith(fakeServeExec([], { ok: false, stderr: 'permission denied: /tmp' }));
+    expect(await service.enableFunnel(3300)).toEqual({ ok: false, reason: 'error' });
+  });
+});
+
+describe('defaultExec deadline', () => {
+  it('resolves not-ok within the timeout when the child hangs and ignores SIGTERM', async () => {
+    // A shell that traps SIGTERM and sleeps forever models a wedged tailscale CLI.
+    // The exec deadline must resolve regardless — no dangling read/exit await — so
+    // pairing/start can never be pinned by a hung subprocess.
+    const started = Date.now();
+    const result = await defaultExec(
+      ['/bin/sh', '-c', 'trap "" TERM; sleep 60'],
+      200,
+    );
+    const elapsed = Date.now() - started;
+
+    expect(result.ok).toBe(false);
+    expect(result.stdout).toBe('');
+    // Deadline (200ms) + SIGKILL grace (500ms) budget; comfortably under the 60s sleep.
+    expect(elapsed).toBeLessThan(3_000);
+  });
+
+  it('returns the real result when the child completes before the deadline', async () => {
+    const result = await defaultExec(['/bin/sh', '-c', 'printf hello'], 5_000);
+    expect(result.ok).toBe(true);
+    expect(result.stdout).toBe('hello');
   });
 });
