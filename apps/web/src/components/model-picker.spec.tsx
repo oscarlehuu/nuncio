@@ -100,7 +100,7 @@ describe('ModelPicker', () => {
     expect(screen.getByLabelText('Fast mode on')).toBeInTheDocument();
   });
 
-  it('selects composer via submenu with fast=false', async () => {
+  it('selects composer from the flat model panel with fast=false', async () => {
     const onChange = vi.fn();
     render(
       <ModelPicker
@@ -111,9 +111,10 @@ describe('ModelPicker', () => {
     );
 
     await userEvent.click(screen.getByRole('button', { name: /claude haiku 4\.5/i }));
-    const cursorEngine = await screen.findByRole('menuitem', { name: /cursor/i });
-    await userEvent.hover(cursorEngine);
-
+    expect(await screen.findByPlaceholderText(/search models/i)).toBeInTheDocument();
+    expect(screen.getByText('Pi')).toBeInTheDocument();
+    expect(screen.getByText('Cursor')).toBeInTheDocument();
+    expect(screen.queryByTestId('model-picker-provider-submenu')).not.toBeInTheDocument();
     const composer = await screen.findByRole('menuitem', { name: /composer 2\.5/i });
     await userEvent.click(composer);
 
@@ -139,11 +140,7 @@ describe('ModelPicker', () => {
     render(<Harness />);
 
     await userEvent.click(screen.getByRole('button', { name: /composer 2\.5/i }));
-    const cursorEngine = await screen.findByRole('menuitem', { name: /cursor/i });
-    await userEvent.hover(cursorEngine);
-
-    const composer = await screen.findByRole('menuitem', { name: /composer 2\.5/i });
-    await userEvent.click(composer);
+    expect(await screen.findByRole('menuitem', { name: /composer 2\.5/i })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: /turn on fast mode/i }));
 
@@ -163,11 +160,6 @@ describe('ModelPicker', () => {
     );
 
     await userEvent.click(screen.getByRole('button', { name: /gpt 5\.5/i }));
-    const codexEngine = await screen.findByRole('menuitem', { name: /codex/i });
-    await userEvent.hover(codexEngine);
-
-    const codex = await screen.findByRole('menuitem', { name: /gpt 5\.5/i });
-    await userEvent.click(codex);
 
     expect(screen.getByRole('slider', { name: /reasoning effort/i })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: /^xhigh$/i })).not.toBeInTheDocument();
@@ -197,10 +189,9 @@ describe('ModelPicker', () => {
     );
 
     await userEvent.click(screen.getByRole('button', { name: /claude opus 4 8/i }));
-    const cursorEngine = await screen.findByRole('menuitem', { name: /cursor/i });
-    await userEvent.hover(cursorEngine);
 
     expect(screen.queryByRole('menuitem', { name: /^fast$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /turn on fast mode/i })).not.toBeInTheDocument();
   });
 
   it('drops fast when switching to a model that does not support it', async () => {
@@ -215,8 +206,6 @@ describe('ModelPicker', () => {
     );
 
     await userEvent.click(screen.getByRole('button', { name: /composer 2\.5/i }));
-    const cursorEngine = await screen.findByRole('menuitem', { name: /cursor/i });
-    await userEvent.hover(cursorEngine);
 
     const opus = await screen.findByRole('menuitem', { name: /claude opus 4 8/i });
     await userEvent.click(opus);
@@ -235,8 +224,6 @@ describe('ModelPicker', () => {
     );
 
     await userEvent.click(screen.getByRole('button', { name: /claude haiku 4\.5/i }));
-    const piEngine = await screen.findByRole('menuitem', { name: /^pi$/i });
-    await userEvent.hover(piEngine);
 
     const opusRow = await screen.findByRole('menuitem', { name: /claude opus 4\.6/i });
     await userEvent.click(opusRow);
@@ -263,9 +250,9 @@ describe('ModelPicker', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /claude haiku 4\.5/i }));
 
-    const engines = await screen.findAllByRole('menuitem', { name: /^(cursor|pi)$/i });
-    expect(engines[0]).toHaveAccessibleName(/pi/i);
-    expect(engines[1]).toHaveAccessibleName(/cursor/i);
+    const pi = await screen.findByText('Pi');
+    const cursor = await screen.findByText('Cursor');
+    expect(pi.compareDocumentPosition(cursor) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('shows a header per group when pi has more than one group', async () => {
@@ -295,8 +282,6 @@ describe('ModelPicker', () => {
     );
 
     await userEvent.click(screen.getByRole('button', { name: /claude haiku 4\.5/i }));
-    const piEngine = await screen.findByRole('menuitem', { name: /^pi$/i });
-    await userEvent.hover(piEngine);
 
     expect(await screen.findByText('Anthropic')).toBeInTheDocument();
     expect(await screen.findByText('OpenAI')).toBeInTheDocument();
@@ -327,9 +312,8 @@ describe('ModelPicker', () => {
     await userEvent.click(
       screen.getByRole('button', { name: /engine and model: inherit from project · default model/i }),
     );
-    const piEngine = await screen.findByRole('menuitem', { name: /^pi$/i });
-    await userEvent.hover(piEngine);
-    expect(await screen.findByRole('menuitem', { name: /provider default/i })).toBeInTheDocument();
+    expect(await screen.findByRole('menuitem', { name: /pi provider default/i })).toBeInTheDocument();
+    expect(screen.queryByTestId('model-picker-provider-submenu')).not.toBeInTheDocument();
   });
 
   it('resets the pair-mode model when selecting an engine provider default', async () => {
@@ -349,9 +333,7 @@ describe('ModelPicker', () => {
     );
 
     await userEvent.click(screen.getByRole('button', { name: /engine and model: pi · claude haiku 4\.5/i }));
-    const cursorEngine = await screen.findByRole('menuitem', { name: /^cursor$/i });
-    await userEvent.hover(cursorEngine);
-    await userEvent.click(await screen.findByRole('menuitem', { name: /provider default/i }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /cursor provider default/i }));
 
     expect(onPairChange).toHaveBeenCalledWith('cursor', null);
   });
@@ -397,14 +379,12 @@ describe('ModelPicker', () => {
     await userEvent.click(
       screen.getByRole('button', { name: /engine and model: inherit from project · default model/i }),
     );
-    const piEngine = await screen.findByRole('menuitem', { name: /^pi$/i });
-    await userEvent.hover(piEngine);
     await userEvent.click(await screen.findByRole('menuitem', { name: /claude haiku 4\.5/i }));
 
     expect(onPairChange).toHaveBeenCalledWith('pi', 'anthropic:claude-haiku-4-5');
   });
 
-  it('gives provider submenus a phone-safe width and Radix collision padding', async () => {
+  it('renders pair mode as one phone-safe flat panel with internal scroll', async () => {
     render(
       <ModelPicker
         pairMode="engine+model"
@@ -422,16 +402,15 @@ describe('ModelPicker', () => {
     await userEvent.click(
       screen.getByRole('button', { name: /engine and model: inherit from project · default model/i }),
     );
-    await userEvent.hover(await screen.findByRole('menuitem', { name: /^pi$/i }));
 
-    const submenu = await screen.findByTestId('model-picker-provider-submenu');
-    expect(submenu).toHaveAttribute('data-collision-padding', '12');
-    expect(submenu).toHaveAttribute('data-side-offset', '6');
-    expect(submenu.getAttribute('style')).toContain('min-width: min(20rem, calc(100vw - 24px))');
-    expect(submenu).toHaveClass('max-h-[min(360px,var(--radix-dropdown-menu-content-available-height))]');
+    const panel = await screen.findByTestId('model-picker-flat-panel');
+    expect(panel).toHaveClass('max-h-[min(420px,var(--radix-dropdown-menu-content-available-height))]', 'overflow-y-auto');
+    expect(panel.getAttribute('style')).toContain('min-width: min(22rem, calc(100vw - 24px))');
+    expect(screen.getByPlaceholderText(/search models/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('model-picker-provider-submenu')).not.toBeInTheDocument();
   });
 
-  it('keeps chat model submenus on the same collision-aware sizing contract', async () => {
+  it('keeps chat model picking in the same flat panel', async () => {
     render(
       <ModelPicker
         value="anthropic:claude-haiku-4-5"
@@ -441,11 +420,10 @@ describe('ModelPicker', () => {
     );
 
     await userEvent.click(screen.getByRole('button', { name: /claude haiku 4\.5/i }));
-    await userEvent.hover(await screen.findByRole('menuitem', { name: /^pi$/i }));
 
-    const submenu = await screen.findByTestId('model-picker-provider-submenu');
-    expect(submenu).toHaveAttribute('data-collision-padding', '12');
-    expect(submenu).toHaveAttribute('data-side-offset', '6');
-    expect(submenu.getAttribute('style')).toContain('min-width: min(20rem, calc(100vw - 24px))');
+    const panel = await screen.findByTestId('model-picker-flat-panel');
+    expect(panel).toHaveClass('max-h-[min(420px,var(--radix-dropdown-menu-content-available-height))]', 'overflow-y-auto');
+    expect(screen.getByPlaceholderText(/search models/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('model-picker-provider-submenu')).not.toBeInTheDocument();
   });
 });

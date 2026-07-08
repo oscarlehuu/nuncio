@@ -1,6 +1,4 @@
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
-import { Button } from '../ui/button';
 import { PrDetail } from './pr-detail';
 
 export function StandalonePrRoute() {
@@ -12,23 +10,17 @@ export function StandalonePrRoute() {
 
   return (
     <section className="flex-1 flex flex-col min-h-0 overflow-hidden bg-background">
-      <header className="flex items-center gap-2 border-b border-border bg-background/80 px-4 py-3 pl-16 backdrop-blur md:pl-4">
-        <Button variant="ghost" size="icon" onClick={() => navigate(-1)} aria-label="Back">
-          <ArrowLeft className="size-4" />
-        </Button>
-        <h1 className="min-w-0 truncate text-lg font-semibold tracking-tight">Pull request</h1>
-      </header>
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        <div className="mx-auto w-full max-w-[920px]">
-          {path && number !== null ? (
-            <PrDetail path={path} number={number} onBack={() => navigate(-1)} />
-          ) : (
+      {path && number !== null ? (
+        <PrDetail path={path} number={number} onBack={() => navigate(-1)} headerVariant="page" />
+      ) : (
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+          <div className="mx-auto w-full max-w-[920px]">
             <div className="rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
               Pull request link is missing repo context.
             </div>
-          )}
+          </div>
         </div>
-      </div>
+      )}
     </section>
   );
 }

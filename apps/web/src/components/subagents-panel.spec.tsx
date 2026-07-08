@@ -184,7 +184,6 @@ describe('SubagentsPanel', () => {
     );
 
     await userEvent.click(screen.getByRole('button', { name: /fable 5/i }));
-    await userEvent.hover(await screen.findByRole('menuitem', { name: /^pi$/i }));
     await userEvent.click(await screen.findByRole('menuitem', { name: /opus 4\.8/i }));
 
     // Model change is pending → Start now is locked out.

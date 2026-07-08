@@ -94,8 +94,6 @@ describe('CreateLoopDialog', () => {
     await userEvent.click(
       screen.getByRole('button', { name: /engine and model: inherit from project · default model/i }),
     );
-    const piEngine = await screen.findByRole('menuitem', { name: /^pi$/i });
-    await userEvent.hover(piEngine);
     await userEvent.click(await screen.findByRole('menuitem', { name: /fable 5/i }));
     await userEvent.click(screen.getByRole('button', { name: /create loop/i }));
     await waitFor(() => expect(createLoop).toHaveBeenCalled());

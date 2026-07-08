@@ -162,7 +162,7 @@ describe('InboxView', () => {
     expect(screen.getByTestId('loc').textContent).toBe('/forge/pr?path=%2FUsers%2Fme%2Fnuncio&number=42');
   });
 
-  it('keeps the forge web URL as a secondary pr-review action', async () => {
+  it('does not render the redundant external-link action for pr-review rows', async () => {
     const open = vi.fn();
     vi.stubGlobal('open', open);
     vi.mocked(fetchAttention).mockResolvedValue({
@@ -180,9 +180,10 @@ describe('InboxView', () => {
     renderInbox();
     await waitFor(() => expect(screen.getByText('Review PR #42')).toBeInTheDocument());
 
-    await userEvent.click(screen.getByRole('button', { name: /open "review pr #42" on github\/gitlab/i }));
+    expect(screen.queryByRole('button', { name: /open "review pr #42" on github\/gitlab/i })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /^open "review pr #42"$/i }));
 
-    expect(open).toHaveBeenCalledWith('https://github.com/o/r/pull/42', '_blank', 'noopener,noreferrer');
+    expect(open).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
 

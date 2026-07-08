@@ -6,6 +6,7 @@ import {
   fetchForgePull,
   fetchForgeThreads,
   setForgePullState,
+  type ForgePullRequestDetail,
   type ForgeReviewThread,
 } from '../../lib/forge-api';
 import { useForgeQuery } from '../../lib/forge-cache';
@@ -21,13 +22,14 @@ interface PrDetailProps {
   path: string;
   number: number;
   onBack?: () => void;
+  headerVariant?: 'compact' | 'page';
 }
 
 type PrTab = 'conversation' | 'files' | 'checks';
 
 const POLL_INTERVAL_MS = 30_000;
 
-export function PrDetail({ path, number, onBack }: PrDetailProps) {
+export function PrDetail({ path, number, onBack, headerVariant = 'compact' }: PrDetailProps) {
   const [tab, setTab] = useState<PrTab>('conversation');
   const [refreshing, setRefreshing] = useState(false);
 
@@ -81,62 +83,19 @@ export function PrDetail({ path, number, onBack }: PrDetailProps) {
     { id: 'checks', label: detail.checks.length > 0 ? `Checks (${detail.checks.length})` : 'Checks' },
   ];
 
-  return (
-    <div className="flex flex-col gap-3 px-3 py-3">
-      <div className="flex items-start gap-2">
-        {onBack && (
-          <Button variant="ghost" size="icon-sm" onClick={onBack} aria-label="Back" className="shrink-0">
-            <ArrowLeft className="size-3.5" />
-          </Button>
-        )}
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <ForgeStateBadge state={detail.state} draft={detail.draft} />
-            <a
-              href={detail.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex min-w-0 items-center gap-1 text-sm font-medium text-primary hover:underline"
-            >
-              <span className="truncate">#{number}</span>
-              <ExternalLink className="size-3 shrink-0" />
-            </a>
-            {detail.reviewDecision && (
-              <span
-                className={cn(
-                  'text-[10px] font-semibold uppercase',
-                  detail.reviewDecision === 'approved' ? 'text-success' : 'text-warning',
-                )}
-              >
-                {detail.reviewDecision.replace('_', ' ')}
-              </span>
-            )}
-            <button
-              type="button"
-              onClick={() => void refresh()}
-              disabled={refreshing}
-              aria-label="Refresh pull request"
-              className="ml-auto text-muted-foreground hover:text-foreground disabled:opacity-50"
-            >
-              <RefreshCw className={cn('size-3.5', refreshing && 'animate-spin')} />
-            </button>
-          </div>
-          <div className="mt-1 text-sm font-medium">{detail.title}</div>
-          <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="truncate font-mono">
-              {detail.sourceBranch} → {detail.targetBranch}
-            </span>
-            <span>by {detail.author}</span>
-            {(detail.additions > 0 || detail.deletions > 0) && (
-              <span className="font-mono">
-                <span className="text-success">+{detail.additions}</span>{' '}
-                <span className="text-destructive">-{detail.deletions}</span>
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
+  const header = (
+    <PrIdentityHeader
+      detail={detail}
+      number={number}
+      onBack={onBack}
+      onRefresh={() => void refresh()}
+      refreshing={refreshing}
+      variant={headerVariant}
+    />
+  );
 
+  const body = (
+    <>
       <div className="flex items-center gap-1 border-b border-border/50">
         {tabs.map((t) => (
           <button
@@ -195,6 +154,119 @@ export function PrDetail({ path, number, onBack }: PrDetailProps) {
           {detail.state === 'open' ? 'Close pull request' : 'Reopen pull request'}
         </button>
       )}
+    </>
+  );
+
+  if (headerVariant === 'page') {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        {header}
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+          <div className="mx-auto flex w-full max-w-[920px] flex-col gap-3">{body}</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3 px-3 py-3">
+      {header}
+      {body}
+    </div>
+  );
+}
+
+function PrIdentityHeader({
+  detail,
+  number,
+  onBack,
+  onRefresh,
+  refreshing,
+  variant,
+}: {
+  detail: ForgePullRequestDetail;
+  number: number;
+  onBack?: () => void;
+  onRefresh: () => void;
+  refreshing: boolean;
+  variant: 'compact' | 'page';
+}) {
+  const page = variant === 'page';
+
+  return (
+    <div
+      className={cn(
+        page
+          ? 'flex items-center gap-3 border-b border-border bg-background/80 px-4 py-3 pl-16 backdrop-blur md:pl-4'
+          : 'flex items-start gap-2',
+      )}
+    >
+      {onBack && (
+        <Button
+          variant="ghost"
+          size={page ? 'icon' : 'icon-sm'}
+          onClick={onBack}
+          aria-label="Back"
+          className="shrink-0"
+        >
+          <ArrowLeft className={page ? 'size-4' : 'size-3.5'} />
+        </Button>
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          {page ? (
+            <h1 className="min-w-0 truncate text-lg font-semibold tracking-tight">
+              #{number} {detail.title}
+            </h1>
+          ) : (
+            <>
+              <ForgeStateBadge state={detail.state} draft={detail.draft} />
+              <a
+                href={detail.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex min-w-0 items-center gap-1 text-sm font-medium text-primary hover:underline"
+              >
+                <span className="truncate">#{number}</span>
+                <ExternalLink className="size-3 shrink-0" />
+              </a>
+            </>
+          )}
+          {page && <ForgeStateBadge state={detail.state} draft={detail.draft} />}
+          {detail.reviewDecision && (
+            <span
+              className={cn(
+                'text-[10px] font-semibold uppercase',
+                detail.reviewDecision === 'approved' ? 'text-success' : 'text-warning',
+              )}
+            >
+              {detail.reviewDecision.replace('_', ' ')}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={refreshing}
+            aria-label="Refresh pull request"
+            className="ml-auto text-muted-foreground hover:text-foreground disabled:opacity-50"
+          >
+            <RefreshCw className={cn('size-3.5', refreshing && 'animate-spin')} />
+          </button>
+        </div>
+        {!page && <div className="mt-1 text-sm font-medium">{detail.title}</div>}
+        <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
+          <span className="truncate font-mono">
+            {detail.sourceBranch} → {detail.targetBranch}
+          </span>
+          <span>by {detail.author}</span>
+          {(detail.additions > 0 || detail.deletions > 0) && (
+            <span className="font-mono">
+              <span className="text-success">+{detail.additions}</span>{' '}
+              <span className="text-destructive">-{detail.deletions}</span>
+            </span>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

@@ -302,11 +302,11 @@ describe('App URL routing', () => {
   it('renders an in-app forge PR detail route by repo path and number', async () => {
     renderApp('/forge/pr?path=%2FUsers%2Fme%2Fnuncio&number=42');
     await waitFor(() => expect(fetchForgePull).toHaveBeenCalledWith('/Users/me/nuncio', 42));
-    expect(await screen.findByText('Review me')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /#42/i })).toHaveAttribute(
-      'href',
-      'https://github.com/o/r/pull/42',
-    );
+    expect(await screen.findByRole('heading', { name: /#42 review me/i })).toBeInTheDocument();
+    expect(screen.getByText('open')).toBeInTheDocument();
+    expect(screen.getByText(/feature.*main/)).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /^pull request$/i })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /^back$/i })).toHaveLength(1);
   });
 
   it('redirects legacy /inbox deep links to the merged Home route', async () => {

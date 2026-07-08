@@ -246,9 +246,7 @@ describe('LoopDetailView', () => {
     renderDetail();
     const trigger = await screen.findByRole('button', { name: /engine and model: pi · fable 5/i });
     await userEvent.click(trigger);
-    const cursorEngine = await screen.findByRole('menuitem', { name: /^cursor$/i });
-    await userEvent.hover(cursorEngine);
-    await userEvent.click(await screen.findByRole('menuitem', { name: /provider default/i }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /cursor provider default/i }));
     expect(
       await screen.findByRole('button', { name: /engine and model: cursor · default model/i }),
     ).toBeInTheDocument();
@@ -263,8 +261,6 @@ describe('LoopDetailView', () => {
     const save = screen.getByRole('button', { name: 'Save' });
     expect(save).toBeDisabled();
     await userEvent.click(trigger);
-    const piEngine = await screen.findByRole('menuitem', { name: /^pi$/i });
-    await userEvent.hover(piEngine);
     await userEvent.click(await screen.findByRole('menuitem', { name: /fable 5/i }));
     expect(save).toBeEnabled();
     await userEvent.click(save);
@@ -295,9 +291,7 @@ describe('LoopDetailView', () => {
     renderDetail();
     const trigger = await screen.findByRole('button', { name: /engine and model: pi · fable 5/i });
     await userEvent.click(trigger);
-    const cursorEngine = await screen.findByRole('menuitem', { name: /^cursor$/i });
-    await userEvent.hover(cursorEngine);
-    await userEvent.click(await screen.findByRole('menuitem', { name: /provider default/i }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /cursor provider default/i }));
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(updateLoop).toHaveBeenCalled());
     const payload = vi.mocked(updateLoop).mock.calls[0]![1];

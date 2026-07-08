@@ -36,10 +36,8 @@ describe('SubagentModelsSettingsSection', () => {
     // Row per provider appears once models load.
     await screen.findByText('Pi');
     // Open the borderless picker (its label starts as "Select model" while unset),
-    // hover the provider submenu, then choose a model.
+    // then choose a model from the flat panel.
     await userEvent.click(screen.getByRole('button', { name: /select model/i }));
-    const piSubmenu = await screen.findByRole('menuitem', { name: /^pi$/i });
-    await userEvent.hover(piSubmenu);
     await userEvent.click(await screen.findByRole('menuitem', { name: /opus 4\.8/i }));
 
     await waitFor(() =>

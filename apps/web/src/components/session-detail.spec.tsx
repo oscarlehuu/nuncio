@@ -1326,9 +1326,8 @@ describe('SessionDetail', () => {
       );
 
       await screen.findByTestId('subagents-panel');
-      // Open the model picker chip, drill into the provider, choose a different model.
+      // Open the flat model picker chip and choose a different model.
       await userEvent.click(screen.getByRole('button', { name: /fable 5/i }));
-      await userEvent.click(await screen.findByText('Pi'));
       await userEvent.click(await screen.findByText('Opus 4.8'));
 
       await waitFor(() =>

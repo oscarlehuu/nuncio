@@ -83,11 +83,6 @@ function prReviewTarget(item: AttentionItemDto): OpenTarget | null {
   return url ? { href: url } : null;
 }
 
-export function externalOpenTargetFor(item: AttentionItemDto): OpenTarget | null {
-  const url = payloadString(item.payload ?? {}, 'url');
-  return url ? { href: url } : null;
-}
-
 /**
  * Resolve the deep-link per kind from the item's payload (all fields optional —
  * tolerate an unrecognized shape by falling back to the subject or an external
