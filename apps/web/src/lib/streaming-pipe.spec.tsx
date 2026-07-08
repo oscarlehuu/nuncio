@@ -40,4 +40,45 @@ describe('streaming transcript pipe', () => {
       { kind: 'assistant', text: 'The project looks healthy.' },
     ]);
   });
+
+  it('renders exactly the authoritative final text when deltas would glue or drop the tail', () => {
+    // Guards the glued/missing-tail failure mode: a delta stream can be lossy
+    // or mis-chunked (here the naive concatenation "Finalanswer.EXTRA" is wrong
+    // and even loses a space), but the authoritative assistant_message must
+    // override the accumulated buffer so the rendered answer is exactly correct.
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'user_message', { text: 'Give the final answer' }),
+      ev(2, 'assistant_delta', { delta: 'Final' }),
+      ev(3, 'assistant_delta', { delta: 'answer.' }), // missing leading space (glue)
+      ev(4, 'assistant_delta', { delta: 'EXTRA' }), // stray tail chunk
+      ev(5, 'assistant_message', { text: 'Final answer. The tail is complete.' }),
+    ]);
+
+    const assistant = blocks.filter((block) => block.kind === 'assistant');
+    expect(assistant).toHaveLength(1);
+    expect(assistant[0]).toMatchObject({
+      kind: 'assistant',
+      text: 'Final answer. The tail is complete.',
+    });
+    // No streaming flag survives once the authoritative message has landed.
+    expect(assistant[0]).not.toHaveProperty('streaming', true);
+  });
+
+  it('keeps the streaming tail intact when the run ends only in deltas (no authoritative message yet)', () => {
+    // Mirror of the above: while still streaming, the full accumulated delta
+    // text (every chunk, in order) must be present — the tail is never dropped.
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'user_message', { text: 'stream it' }),
+      ev(2, 'assistant_delta', { delta: 'The quick ' }),
+      ev(3, 'assistant_delta', { delta: 'brown fox ' }),
+      ev(4, 'assistant_delta', { delta: 'jumps over the lazy tail' }),
+    ]);
+    const assistant = blocks.filter((block) => block.kind === 'assistant');
+    expect(assistant).toHaveLength(1);
+    expect(assistant[0]).toMatchObject({
+      kind: 'assistant',
+      text: 'The quick brown fox jumps over the lazy tail',
+      streaming: true,
+    });
+  });
 });

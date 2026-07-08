@@ -97,4 +97,87 @@ describe('useThrottledStreamText', () => {
     });
     expect(result.current).toBe('Hi there friend');
   });
+
+  it('reveals 100% of a long backlog once the drain settles (final equality, not just growth)', () => {
+    // Guards "stream không hết": length-only assertions pass while a bug leaves
+    // the last chars permanently hidden. Assert the exact final string equals
+    // fullText after the drain has fully settled.
+    const long = `${'a'.repeat(799)}Z`; // trailing sentinel that must appear
+    const { result, rerender } = renderHook(
+      ({ text, active }) => useThrottledStreamText(text, active),
+      { initialProps: { text: '', active: true } },
+    );
+
+    rerender({ text: long, active: true });
+    act(() => {
+      vi.advanceTimersByTime(5000); // well past any catch-up window
+    });
+    expect(result.current).toBe(long);
+    expect(result.current.endsWith('Z')).toBe(true);
+  });
+
+  it('fully reveals text that keeps growing during the catch-up drain, after growth stops', () => {
+    // Repeated deltas while a drain is mid-flight must not strand the tail:
+    // once growth stops, ticking to steady state must land on the exact fullText.
+    const { result, rerender } = renderHook(
+      ({ text, active }) => useThrottledStreamText(text, active),
+      { initialProps: { text: '', active: true } },
+    );
+
+    let text = '';
+    for (let i = 0; i < 20; i++) {
+      text += 'chunk-'.repeat(30); // 180 chars per delta, growing during drain
+      rerender({ text, active: true });
+      act(() => {
+        vi.advanceTimersByTime(50); // one tick between deltas — drain never fully catches up mid-stream
+      });
+      expect(result.current.length).toBeLessThanOrEqual(text.length);
+      expect(text.startsWith(result.current)).toBe(true); // never reveals ahead of source
+    }
+
+    // Growth stopped — drain to steady state must reach 100%.
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(result.current).toBe(text);
+  });
+
+  it('catches up to 100% when mounted mid-stream with a backlog past MOUNT_TAIL_CHARS', () => {
+    // Mounting into an already-streaming message starts near the tail (no
+    // minute-long replay), but it must still converge to the WHOLE text — the
+    // hidden head is revealed by the drain, not left behind forever.
+    const backlog = `HEAD${'y'.repeat(MOUNT_TAIL_CHARS * 20)}TAIL`;
+    const { result, rerender } = renderHook(
+      ({ text, active }) => useThrottledStreamText(text, active),
+      { initialProps: { text: backlog, active: true } },
+    );
+
+    // Starts near the tail, head still hidden.
+    expect(result.current.length).toBeLessThan(backlog.length);
+
+    // Keep the text stable and drain.
+    rerender({ text: backlog, active: true });
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(result.current).toBe(backlog);
+    expect(result.current.startsWith('HEAD')).toBe(true);
+    expect(result.current.endsWith('TAIL')).toBe(true);
+  });
+
+  it('reveals multibyte / surrogate-pair text exactly at completion (no mojibake)', () => {
+    // slice() by char index can split a surrogate pair mid-drain, but the
+    // completeness guarantee is that the FINAL revealed string equals fullText.
+    const emoji = '🎉'; // surrogate pair
+    const full = `Xin chào ${emoji.repeat(400)} kết thúc`;
+    const { result, rerender } = renderHook(
+      ({ text, active }) => useThrottledStreamText(text, active),
+      { initialProps: { text: '', active: true } },
+    );
+    rerender({ text: full, active: true });
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(result.current).toBe(full);
+  });
 });

@@ -113,6 +113,56 @@ describe('subscribeSessionEvents', () => {
     expect(resubscribe).toMatchObject({ method: 'subscribe', params: { sessionId: 's1', since: 9 } });
   });
 
+  it('resubscribes from the correct cursor when a behind marker interrupts a live stream (no gap)', () => {
+    // Guards "stream không hết": a behind marker must resubscribe from the
+    // highest seq already delivered, so the server replays exactly the gap and
+    // the consumer never misses events between the drop and the recovery.
+    const seen: number[] = [];
+    subscribeSessionEvents({
+      url: 'ws://x',
+      sessionId: 's1',
+      onEvent: (e) => seen.push(e.seq),
+      webSocketFactory: factory,
+    });
+    const ws = FakeSocket.instances[0];
+    ws.open();
+    ws.push({ channel: 's1', event: event(10) });
+    ws.push({ channel: 's1', event: event(11) });
+    ws.push({ channel: 's1', behind: true });
+
+    // Recovery resubscribes from 11 (the last delivered seq), not from 0.
+    const resubscribe = ws.sent[ws.sent.length - 1];
+    expect(resubscribe).toMatchObject({ method: 'subscribe', params: { sessionId: 's1', since: 11 } });
+
+    // Overlap replay: the server re-sends 11 (at the cursor) then the fresh 12.
+    // The client forwards every server event verbatim — deduplication of the
+    // overlapping 11 is the consumer's job (mergeEvents), not the relay's — but
+    // there is no GAP: 12 arrives and the cursor advances correctly.
+    ws.push({ channel: 's1', event: event(11) });
+    ws.push({ channel: 's1', event: event(12) });
+    expect(seen).toEqual([10, 11, 11, 12]);
+  });
+
+  it('keeps the subscribe cursor monotonic when the server sends an out-of-order lower seq', () => {
+    // A stale/out-of-order event must never rewind lastSeq, or a later
+    // resubscribe would ask the server to replay already-seen history as if it
+    // were new — the source of both gaps and floods.
+    subscribeSessionEvents({
+      url: 'ws://x',
+      sessionId: 's1',
+      onEvent: () => {},
+      webSocketFactory: factory,
+    });
+    const ws = FakeSocket.instances[0];
+    ws.open();
+    ws.push({ channel: 's1', event: event(20) });
+    ws.push({ channel: 's1', event: event(5) }); // out-of-order / stale
+    ws.push({ channel: 's1', behind: true });
+
+    const resubscribe = ws.sent[ws.sent.length - 1];
+    expect(resubscribe).toMatchObject({ params: { since: 20 } });
+  });
+
   it('resync resubscribes on a live socket and reconnects on a dead one', () => {
     const sub = subscribeSessionEvents({
       url: 'ws://x',

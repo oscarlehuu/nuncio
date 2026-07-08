@@ -237,6 +237,82 @@ describe('sessions WS relay', () => {
     await client.close();
   });
 
+  it('sends the behind marker mid-replay and loses no event across the resubscribe cycle', async () => {
+    // The overflow can trip during the initial cursor replay, not only on live
+    // pushes. When it does the client gets one behind marker; a resubscribe from
+    // its last seen seq must then deliver every remaining backlog event exactly
+    // once — the replay-phase drop must never swallow an event.
+    const fake = makeFakeSessions([1, 2, 3, 4, 5]);
+    let buffered = 0;
+    const port = await startServer(fake, {
+      maxBufferedBytes: 100,
+      getBufferedAmount: () => buffered,
+    });
+    const client = await connect(port);
+    const behind: unknown[] = [];
+    client.ws.addEventListener('message', (e) => {
+      const msg = JSON.parse(String(e.data));
+      if (msg.behind) behind.push(msg);
+    });
+
+    // Socket is already over the bound before the first replayed event is sent:
+    // the replay loop must bail with a behind marker and send nothing.
+    buffered = 10_000;
+    client.send({ id: 1, method: 'subscribe', params: { sessionId: 'sess-1', since: 0 } });
+    await client.waitFor(() => behind.length === 1);
+    expect(client.events.length).toBe(0);
+
+    // Consumer drains and resubscribes from its last seen seq (0, since nothing
+    // was delivered). Every backlog event arrives, in order, no gaps, no dupes.
+    buffered = 0;
+    client.send({ id: 2, method: 'subscribe', params: { sessionId: 'sess-1', since: 0 } });
+    await client.waitFor(() => client.events.length === 5);
+    expect(client.events.map((e) => e.seq)).toEqual([1, 2, 3, 4, 5]);
+    expect(behind.length).toBe(1);
+    await client.close();
+  });
+
+  it('recovers events emitted after the drop and before the resubscribe (no gap in the window)', async () => {
+    // The dangerous window: a subscription is dropped for overflow, then new
+    // events land while the client is unsubscribed, then the client resubscribes.
+    // Those in-between events have seq > lastSeen, so cursor replay must surface
+    // them — otherwise streamed text emitted during recovery is lost silently.
+    const fake = makeFakeSessions([1]);
+    let buffered = 0;
+    const port = await startServer(fake, {
+      maxBufferedBytes: 100,
+      getBufferedAmount: () => buffered,
+    });
+    const client = await connect(port);
+    const behind: unknown[] = [];
+    client.ws.addEventListener('message', (e) => {
+      const msg = JSON.parse(String(e.data));
+      if (msg.behind) behind.push(msg);
+    });
+
+    client.send({ id: 1, method: 'subscribe', params: { sessionId: 'sess-1', since: 0 } });
+    await client.waitFor(() => client.events.length === 1);
+    const lastSeen = Math.max(...client.events.map((e) => e.seq));
+
+    // Overflow drops the live subscription on the next emit.
+    buffered = 10_000;
+    fake.emit({ seq: 2, type: 'assistant_delta', payload: { delta: 'lost?' }, createdAt: 2 });
+    await client.waitFor(() => behind.length === 1);
+
+    // Events arriving strictly while the client holds no subscription.
+    fake.emit({ seq: 3, type: 'assistant_delta', payload: { delta: 'window-1' }, createdAt: 3 });
+    fake.emit({ seq: 4, type: 'assistant_delta', payload: { delta: 'window-2' }, createdAt: 4 });
+
+    // Resubscribe from the last seq the client actually saw (1). Everything after
+    // it — including the delta that triggered the drop and the two window events —
+    // must replay, in order, with none skipped.
+    buffered = 0;
+    client.send({ id: 2, method: 'subscribe', params: { sessionId: 'sess-1', since: lastSeen } });
+    await client.waitFor(() => client.events.length === 4);
+    expect(client.events.map((e) => e.seq)).toEqual([1, 2, 3, 4]);
+    await client.close();
+  });
+
   it('answers unknown methods with a 400 error', async () => {
     const fake = makeFakeSessions();
     const port = await startServer(fake);

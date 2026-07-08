@@ -144,6 +144,81 @@ describe('useSessionStream', () => {
     await waitFor(() => expect(getByTestId('count').textContent).toBe('4'));
   });
 
+  it('merges a live burst through the setTimeout fallback when requestAnimationFrame is unavailable', async () => {
+    // Environments without RAF (or when it is stripped) must still batch and
+    // deliver every event via the setTimeout(16) fallback — no event dropped.
+    const originalRaf = globalThis.requestAnimationFrame;
+    // Force the fallback branch: scheduleEventFlush checks `typeof rAF === 'function'`.
+    vi.stubGlobal('requestAnimationFrame', undefined);
+    vi.useFakeTimers();
+    try {
+      vi.mocked(fetchEvents).mockResolvedValue([ev(1)]);
+      let api: ReturnType<typeof useSessionStream> | undefined;
+      render(<Harness sid="s1" onReady={(stream) => { api = stream; }} />);
+
+      // Drain the fetch microtask + queueMicrotask open under fake timers.
+      await act(async () => {
+        await vi.runOnlyPendingTimersAsync();
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(lastSocket).toBeDefined();
+
+      act(() => {
+        lastSocket!.push(ev(2, 'assistant_delta', { delta: 'a' }));
+        lastSocket!.push(ev(3, 'assistant_delta', { delta: 'b' }));
+        lastSocket!.push(ev(4, 'assistant_delta', { delta: 'c' }));
+      });
+      // Not flushed yet — still coalesced behind the pending setTimeout.
+      expect(api!.events.map((e) => e.seq)).toEqual([1]);
+
+      act(() => {
+        vi.advanceTimersByTime(16);
+      });
+      expect(api!.events.map((e) => e.seq)).toEqual([1, 2, 3, 4]);
+    } finally {
+      vi.useRealTimers();
+      vi.stubGlobal('requestAnimationFrame', originalRaf);
+    }
+  });
+
+  it('cancels the pending flush on unmount without a post-unmount state update', async () => {
+    // A flush scheduled just before unmount must be cancelled, and no state
+    // update may run afterward — otherwise React logs an act()/unmounted-update
+    // warning and, worse, touches torn-down refs.
+    const frames: FrameRequestCallback[] = [];
+    const cancel = vi.fn();
+    vi.stubGlobal(
+      'requestAnimationFrame',
+      vi.fn((callback: FrameRequestCallback) => {
+        frames.push(callback);
+        return frames.length;
+      }),
+    );
+    vi.stubGlobal('cancelAnimationFrame', cancel);
+    vi.mocked(fetchEvents).mockResolvedValue([ev(1)]);
+
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { getByTestId, unmount } = render(<Harness sid="s1" />);
+    await waitFor(() => expect(getByTestId('count').textContent).toBe('1'));
+    await waitFor(() => expect(lastSocket).toBeDefined());
+
+    // Schedule a flush, then unmount before the frame callback runs.
+    act(() => {
+      lastSocket!.push(ev(2, 'assistant_delta', { delta: 'x' }));
+    });
+    expect(frames.length).toBe(1);
+
+    unmount();
+    expect(cancel).toHaveBeenCalled();
+
+    // Fire the (now-stale) frame callback: it must be a no-op, no warning.
+    act(() => frames.shift()?.(16));
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   it('clears events and skips fetch when the session id is null', async () => {
     vi.mocked(fetchEvents).mockResolvedValue([ev(1)]);
     const { getByTestId } = render(<Harness sid={null} />);
