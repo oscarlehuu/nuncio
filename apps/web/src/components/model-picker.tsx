@@ -55,6 +55,11 @@ interface ModelPickerProps {
   providers?: ModelProvider[];
   /** 'boxed' = composer toolbar chip; 'text' = borderless Cursor context label. */
   variant?: 'boxed' | 'text';
+  /** Fired when the menu opens (not on close). Lets a held subagent row re-arm
+   *  its countdown so the window can't expire mid-selection. */
+  onOpen?: () => void;
+  /** Lock the trigger (e.g. while a model change for this row is in flight). */
+  disabled?: boolean;
 }
 
 function SelectionCheck({ active }: { active: boolean }) {
@@ -353,7 +358,7 @@ function ModelRows({
   );
 }
 
-export function ModelPicker({ value, modelOptions, onChange, providers, variant = 'boxed' }: ModelPickerProps) {
+export function ModelPicker({ value, modelOptions, onChange, providers, variant = 'boxed', onOpen, disabled }: ModelPickerProps) {
   const catalog = normalizeModelCatalog(providers ?? []);
   const [open, setOpen] = useState(false);
   const asText = variant === 'text';
@@ -393,10 +398,19 @@ export function ModelPicker({ value, modelOptions, onChange, providers, variant 
   const fastOnTrigger = modelOptions?.fast === true;
 
   return (
-    <DropdownMenu open={open} onOpenChange={setOpen} modal={false}>
+    <DropdownMenu
+      open={open}
+      onOpenChange={(next) => {
+        if (disabled) return;
+        if (next && !open) onOpen?.();
+        setOpen(next);
+      }}
+      modal={false}
+    >
       <DropdownMenuTrigger asChild>
         <Button
           variant="outline"
+          disabled={disabled}
           className={cn(
             asText
               ? 'picker-trigger-text max-w-[300px]'

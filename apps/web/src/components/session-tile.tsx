@@ -190,7 +190,7 @@ export function SessionTile({
       style={glowStyle(status, pending)}
       className={cn(
         'group flex flex-col min-h-0 min-w-0 overflow-hidden rounded-xl border bg-card text-card-foreground',
-        'shadow-e1 surface-lit hover:shadow-e2 hover:-translate-y-px',
+        'shadow-e1 surface-lit hover:shadow-e2 hover:-translate-y-0.5',
         'transition-[box-shadow,border-color,translate] outline-none active:scale-[0.995]',
         'focus-visible:ring-2 focus-visible:ring-ring',
         tileStateClasses(status, pending, focused),

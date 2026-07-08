@@ -1,4 +1,4 @@
-import { memo, useMemo, useState, type ComponentProps, type ReactNode } from 'react';
+import { lazy, memo, Suspense, useMemo, useState, type ComponentProps, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Check, Copy } from 'lucide-react';
@@ -6,8 +6,14 @@ import { cn } from '@/lib/utils';
 import { splitMarkdownSegments } from '@/lib/markdown-segments';
 import { remarkCodePathLinks } from '@/lib/remark-code-path-links';
 import { resolveTranscriptLinkTarget } from '@/lib/transcript-link-target';
-import { MermaidDiagram } from '@/components/mermaid-diagram';
 import { ChatImage } from '@/components/chat-image';
+import { ChunkErrorBoundary } from '@/components/chunk-error-boundary';
+
+// Lazy: mermaid is ~1 MB minified and only needed when a transcript actually
+// contains a mermaid fence — keep it out of the entry chunk.
+const MermaidDiagram = lazy(() =>
+  import('@/components/mermaid-diagram').then((m) => ({ default: m.MermaidDiagram })),
+);
 
 export type MarkdownLinkClickHandler = (
   href: string,
@@ -92,7 +98,13 @@ function markdownComponents(
       const language = match?.[1];
       const code = String(children);
       if (language === 'mermaid' && !deferMermaid) {
-        return <MermaidDiagram code={code} />;
+        return (
+          <ChunkErrorBoundary>
+            <Suspense fallback={<CodeBlock language="mermaid" code={code} />}>
+              <MermaidDiagram code={code} />
+            </Suspense>
+          </ChunkErrorBoundary>
+        );
       }
       return <CodeBlock language={language} code={code} />;
     },

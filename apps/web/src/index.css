@@ -457,6 +457,81 @@
   --sidebar-accent: oklch(0.25 0.014 190);
 }
 
+/*
+ * ─── Glass + atmosphere ───────────────────────────────────────────────────────
+ * Cursor-style "liquid glass" for the FLOATING layer only — popovers, menus,
+ * dialogs, sheets, the command palette. Each gets a translucent fill (the opaque
+ * --popover token dialled down via color-mix, so it still tracks the accent tint
+ * per preset), a frosted backdrop, a hairline rim, and a top-lit bevel riding on
+ * the existing elevation shadow. Content surfaces (sidebar, cards, tiles, the
+ * transcript) stay solid — text never sits on a blur.
+ *
+ * These tokens live in their own :root/.dark blocks (a second occurrence) so the
+ * design-token parity check — which reads only the first :root{} / .dark{} —
+ * never sees them and stays byte-exact.
+ */
+:root {
+  --glass-blur: 18px;
+  --glass-saturate: 160%;
+  --glass-fill: 80%;
+  --glass-bg: color-mix(in srgb, var(--popover) var(--glass-fill), transparent);
+  --glass-rim: oklch(0.145 0.01 265 / 0.12);
+  --glass-highlight: oklch(1 0 0 / 0.6);
+  --app-aurora:
+    radial-gradient(74% 44% at 22% -6%, color-mix(in srgb, var(--ring) 5%, transparent), transparent 60%),
+    radial-gradient(56% 40% at 98% 0%, color-mix(in srgb, var(--ring) 3%, transparent), transparent 55%);
+}
+.dark {
+  --glass-fill: 72%;
+  --glass-rim: oklch(1 0 0 / 0.12);
+  --glass-highlight: oklch(1 0 0 / 0.12);
+  --app-aurora:
+    radial-gradient(74% 44% at 22% -6%, color-mix(in srgb, var(--ring) 13%, transparent), transparent 62%),
+    radial-gradient(56% 40% at 98% 0%, color-mix(in srgb, var(--ring) 8%, transparent), transparent 56%);
+}
+
+/* Frosted floating surface. Rim + shadow ride on box-shadow (not border) so it
+ * drops in cleanly wherever `bg-popover shadow-e2 ring-1 ring-foreground/10` was,
+ * with no border-side conflicts (e.g. the sheet's edge borders). */
+.surface-glass {
+  background-color: var(--glass-bg);
+  box-shadow:
+    0 0 0 1px var(--glass-rim),
+    var(--shadow-e2),
+    inset 0 1px 0 var(--glass-highlight);
+}
+.surface-glass-strong {
+  box-shadow:
+    0 0 0 1px var(--glass-rim),
+    var(--shadow-e3),
+    inset 0 1px 0 var(--glass-highlight);
+}
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .surface-glass {
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  }
+  .surface-glass-strong {
+    -webkit-backdrop-filter: blur(calc(var(--glass-blur) + 8px)) saturate(var(--glass-saturate));
+    backdrop-filter: blur(calc(var(--glass-blur) + 8px)) saturate(var(--glass-saturate));
+  }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .surface-glass,
+  .surface-glass-strong {
+    background-color: var(--popover);
+  }
+}
+
+/* Ambient app-shell wash — a faint brand-hue aurora on the base canvas so glass
+ * surfaces and empty space have depth to sit against. Fixed to the viewport;
+ * painted over the opaque --background on the app root. */
+.app-aurora {
+  background-image: var(--app-aurora);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -568,7 +643,12 @@ body {
  * muted text. Cursor's suggestion-chip vibe — a whisper, not a badge.
  */
 .suggestion-pill {
-  @apply inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-transparent px-2.5 py-1 text-ui text-muted-foreground;
+  @apply inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-transparent px-3 py-1.5 text-ui text-muted-foreground;
+  transition: transform 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.suggestion-pill:hover {
+  transform: translateY(-1px);
+  background-color: color-mix(in oklch, var(--secondary) 45%, transparent);
 }
 
 /*

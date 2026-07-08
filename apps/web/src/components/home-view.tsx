@@ -220,7 +220,7 @@ export function HomeView({
 
         <div
           className={cn(
-            'home-composer flex flex-col rounded-xl border bg-card shadow-e1 surface-lit transition-shadow focus-within:ring-2 focus-within:ring-ring/40',
+            'home-composer flex flex-col rounded-2xl border bg-card shadow-e2 surface-lit transition-shadow focus-within:ring-2 focus-within:ring-ring/40',
             dragActive ? 'border-primary ring-2 ring-primary/40' : 'border-border/70',
           )}
           onDragOver={
@@ -256,10 +256,10 @@ export function HomeView({
               }}
               placeholder="Ask Nuncio to build features, fix bugs, or work on your code…"
               className={cn(
-                'shrink-0 resize-none border-0 shadow-none bg-transparent text-md px-5 pb-2 focus-visible:ring-0 focus-visible:border-0',
+                'shrink-0 resize-none border-0 shadow-none bg-transparent text-md px-5 pb-2.5 focus-visible:ring-0 focus-visible:border-0',
                 // Embedded (board top bar) reads as a docked task bar, not a hero:
                 // half the height so it doesn't stack a second full composer over the board.
-                embedded ? 'min-h-[60px] pt-3' : 'min-h-[104px] pt-4',
+                embedded ? 'min-h-[60px] pt-3' : 'min-h-[112px] pt-5',
               )}
             />
             {showApprovalMode ? (
@@ -272,7 +272,7 @@ export function HomeView({
               </div>
             ) : null}
           </div>
-          <div className="home-composer-bar flex items-center gap-2 px-3 pb-3 pt-1">
+          <div className="home-composer-bar flex items-center gap-2 px-4 pb-3.5 pt-1.5">
             {canAttachImages && (
               <AttachButton
                 onFiles={(files) => void imageAttachments.addFiles(files)}
