@@ -63,7 +63,7 @@ interface GridViewProps {
   lifecycleBusy?: boolean;
   /** True when the unpinned sidebar hover rail overlays the content's left edge. */
   railOverlay?: boolean;
-  /** When the grid is scoped to one project (Fleet drill-down), its display name. */
+  /** When the grid is scoped to one project, its display name. */
   projectFilterName?: string | null;
 }
 

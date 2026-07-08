@@ -2,10 +2,10 @@ import { apiFetch } from './http';
 import type { AttentionItemDto } from './attention-api';
 
 /**
- * Fleet home client (rung 3 sub-phase C) — the cockpit landing. One row per
- * project, ordered by the server (red first → weight → activity), so the UI renders
- * in order and never re-sorts. Rows are derived on demand server-side; the client
- * tolerates a partial row (missing counts/reasons) so a legacy shape still renders.
+ * Fleet data client. One row per project, ordered by the server (red first →
+ * weight → activity), so future project surfaces can render in order and never
+ * re-sort. Rows are derived on demand server-side; the client tolerates a
+ * partial row (missing counts/reasons) so a legacy shape still renders.
  */
 
 export type FleetHealth = 'green' | 'yellow' | 'red';

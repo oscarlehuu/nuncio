@@ -57,11 +57,11 @@ interface SidebarProps {
   activeId: string | null;
   onSelect: (id: string | null) => void;
   onNew: () => void;
-  /** Fleet — the cockpit landing (rung 3 home). */
+  /** Home — digest plus the attention queue. */
   onHome?: () => void;
   /** Desktop multi-session workbench (the unified grid). */
   onGrid?: () => void;
-  /** Autopilot — the loops fleet (rung 2). */
+  /** Autopilot — scheduled loops and run history. */
   onAutopilot?: () => void;
   /** Unacked attention count for the Home badge; 0 = no badge. */
   inboxUnacked?: number;

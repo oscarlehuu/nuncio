@@ -93,4 +93,4 @@ others best-effort · single-machine queue v1.
 1. Direction test #6 wording — approve, amend, or drop?
 2. Budget defaults — what daily token/cost ceiling feels right to start?
 3. Digest delivery — push notification, in-app only, or both?
-4. Fleet home — **RESOLVED (founder, 2026-07-08): Fleet replaces the Workbench as the landing surface; the Workbench grid becomes the per-project drill-down.**
+4. Fleet home — **RESOLVED (founder, 2026-07-08): Fleet replaces the Workbench as the landing surface; the Workbench grid becomes the per-project drill-down.** **Amended 2026-07-08 after dogfood:** Fleet UI removed from Home because the global pinboard and project drill-down mismatch made fleet-row → filtered-grid semantically empty at current scale. The `/fleet` data layer is retained; a real project page is the future re-entry point.

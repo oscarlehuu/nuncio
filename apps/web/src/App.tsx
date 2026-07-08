@@ -29,11 +29,9 @@ import { useActiveRun } from './lib/use-active-run';
 import { useSessionNotifications } from './lib/use-session-notifications';
 import { useProviderUpdateNotifications } from './lib/use-provider-update-notifications';
 import { HomeView } from './components/home-view';
+import { HomeSurface } from './components/home-surface';
 import { GridView } from './components/grid-view';
 import { ChunkErrorBoundary } from './components/chunk-error-boundary';
-// Fleet is the landing surface — imported statically (lean, no heavy deps) so the
-// cockpit paints immediately without a lazy-chunk round-trip.
-import { FleetView } from './components/fleet-view';
 import type { ApprovalMode } from './components/approval-mode-picker';
 import { HandoffPicker } from './components/handoff-picker';
 import { DesktopSidebarHoverRail, DesktopSidebarPinned } from './components/desktop-sidebar-shell';
@@ -226,8 +224,7 @@ export default function App() {
     void refreshModels();
   }, [refreshModels]);
 
-  // '/' is now the Fleet cockpit — the landing IS the work, so the old
-  // land-in-the-grid redirect is retired.
+  // '/' is the daily review surface: digest first, attention queue second.
 
   const reviewProviderUpdates = useCallback(() => navigate('/settings'), [navigate]);
 
@@ -247,7 +244,7 @@ export default function App() {
     [dismissTransientSidebar, navigate],
   );
 
-  // The composer moved off '/' (now the Fleet home) to '/new'.
+  // The composer moved off '/' to '/new'.
   const handleNew = useCallback(() => {
     navigate('/new');
     dismissTransientSidebar();
@@ -620,9 +617,8 @@ export default function App() {
     [refresh, dismissTransientSidebar, navigate],
   );
 
-  // Workbench drill-down: `/grid?project=<path>` scopes the grid to one project;
-  // no param = the all-projects grid (the sidebar Workbench entry). Deep links to
-  // /session/:id and the bare /grid are untouched.
+  // Workbench can still be scoped by project for deep links or future project pages;
+  // no param = the all-projects grid (the sidebar Workbench entry).
   const gridProjectPath = new URLSearchParams(location.search).get('project');
   const gridSessions = gridProjectPath
     ? sessions.filter((s) => s.projectPath === gridProjectPath)
@@ -683,7 +679,7 @@ export default function App() {
         <Routes>
           <Route
             path="/"
-            element={<FleetView onNew={handleNew} railOverlay={!desktopSidebar.pinned} />}
+            element={<HomeSurface onNew={handleNew} railOverlay={!desktopSidebar.pinned} />}
           />
           <Route
             path="/new"

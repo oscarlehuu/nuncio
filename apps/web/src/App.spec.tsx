@@ -32,7 +32,6 @@ vi.mock('./lib/api', () => ({
   refreshSessionTranscript: vi.fn().mockResolvedValue({ added: 0 }),
   fetchAttentionCounts: vi.fn().mockResolvedValue({ total: 0, unacked: 0, bySeverity: {} }),
   fetchAttention: vi.fn().mockResolvedValue({ items: [], counts: { total: 0, unacked: 0, bySeverity: {} } }),
-  fetchFleet: vi.fn().mockResolvedValue([]),
   fetchDigest: vi.fn().mockResolvedValue(null),
   ackAttentionItem: vi.fn(),
   resolveAttentionItem: vi.fn(),
@@ -111,7 +110,6 @@ import {
   fetchModels,
   fetchSession,
   fetchSessions,
-  fetchFleet,
   pauseSession,
   restoreSession,
   steerSession,
@@ -120,7 +118,7 @@ import {
 } from './lib/api';
 import { fetchSettings, updateSetting } from './lib/settings-api';
 import type { ModelProvider } from './lib/model-providers';
-import type { AttentionItemDto, FleetRow } from './lib/api';
+import type { AttentionItemDto } from './lib/api';
 import { fetchForgePull } from './lib/forge-api';
 
 const LIVE_CATALOG: ModelProvider[] = [
@@ -196,25 +194,6 @@ function attentionItem(partial: Partial<AttentionItemDto> = {}): AttentionItemDt
     createdAt: partial.createdAt ?? Date.now() - 60_000,
     updatedAt: 0,
     resolvedAt: null,
-  };
-}
-
-function fleetRow(partial: Partial<FleetRow> = {}): FleetRow {
-  return {
-    path: partial.path ?? '/Users/me/nuncio',
-    name: partial.name ?? 'nuncio',
-    weight: partial.weight ?? 1,
-    health: partial.health ?? 'green',
-    reasons: partial.reasons ?? [],
-    topItem: partial.topItem ?? null,
-    counts: {
-      openAttention: 0,
-      runningSessions: 0,
-      activeLoops: 0,
-      openPRs: 0,
-      ...partial.counts,
-    },
-    lastActivityAt: partial.lastActivityAt ?? null,
   };
 }
 
@@ -315,7 +294,7 @@ describe('App URL routing', () => {
     expect(screen.queryByRole('heading', { name: /^inbox$/i })).not.toBeInTheDocument();
   });
 
-  it('renders the merged Home as digest, attention queue, then fleet rows', async () => {
+  it('renders Home as digest and attention queue without loading fleet rows', async () => {
     vi.mocked(fetchDigest).mockResolvedValue({
       slotKey: '2026-07-08:morning',
       variant: 'morning',
@@ -338,18 +317,28 @@ describe('App URL routing', () => {
       items: [attentionItem({ title: 'Approve command' })],
       counts: { total: 1, unacked: 1, bySeverity: {} },
     });
-    vi.mocked(fetchFleet).mockResolvedValue([
-      fleetRow({ path: '/Users/me/nuncio', name: 'nuncio', reasons: ['All clear'] }),
-    ]);
 
     renderApp('/');
 
     const digest = await screen.findByRole('button', { name: /read the morning digest/i });
     const queueItem = await screen.findByText('Approve command');
-    const fleet = await screen.findByRole('button', { name: 'Open nuncio' });
     expect(digest.compareDocumentPosition(queueItem) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(queueItem.compareDocumentPosition(fleet) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText(/^fleet$/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /open nuncio/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /new agent/i })).toBeInTheDocument();
+  });
+
+  it('keeps the empty Home queue calm', async () => {
+    vi.mocked(fetchDigest).mockResolvedValue(null);
+    vi.mocked(fetchAttention).mockResolvedValue({
+      items: [],
+      counts: { total: 0, unacked: 0, bySeverity: {} },
+    });
+
+    renderApp('/');
+
+    expect(await screen.findByText('Nothing needs you')).toBeInTheDocument();
+    expect(screen.queryByText(/^fleet$/i)).not.toBeInTheDocument();
   });
 });
 

@@ -524,6 +524,7 @@ describe('Sidebar', () => {
       expect(nav).toHaveTextContent('Home');
       expect(nav).toHaveTextContent('Workbench');
       expect(nav).toHaveTextContent('Autopilot');
+      expect(nav).not.toHaveTextContent('Fleet');
       expect(nav).not.toHaveTextContent('Inbox');
       expect(nav).not.toHaveTextContent('New Agent');
       expect(nav.querySelectorAll('button')).toHaveLength(3);
