@@ -109,6 +109,7 @@ describe('SessionsService live Pi transcript watcher reconciliation', () => {
   });
 
   it('does not let the watcher re-append hydrated Pi assistant blocks while a local live run is producing', async () => {
+    const watcher = installDeterministicTranscriptWatcher(service);
     const session = await service.create({ provider: 'pi', prompt: 'live prompt', workspace });
     await waitFor(() => service.getEvents(session.id).some((event) => event.type === 'assistant_message'));
     await waitFor(() => service.get(session.id)?.providerThreadId === piPath);
@@ -123,8 +124,14 @@ describe('SessionsService live Pi transcript watcher reconciliation', () => {
         { type: 'text', text: 'world\n' },
       ]))}\n`,
     );
+    bumpMtime(piPath);
 
-    await new Promise((resolve) => setTimeout(resolve, 350));
+    const watchHandle = watcher.get(session.id);
+    expect(watchHandle).toBeDefined();
+    watchHandle?.disablePolling();
+    const internals = service as unknown as { locallyProducing: Set<string> };
+    expect(internals.locallyProducing.has(session.id)).toBe(true);
+    watchHandle?.fire();
     unsubscribe();
 
     const assistantMessages = service
@@ -173,6 +180,7 @@ describe('SessionsService live Pi transcript watcher reconciliation', () => {
   });
 
   it('still streams watcher-hydrated events for external Pi handoff sessions', async () => {
+    const watcher = installDeterministicTranscriptWatcher(service);
     writeFileSync(piPath, `${JSON.stringify(piMessage('user', [{ type: 'text', text: 'initial request' }]))}\n`);
     const session = sessions.createHandoff({
       provider: 'pi',
@@ -186,6 +194,12 @@ describe('SessionsService live Pi transcript watcher reconciliation', () => {
     const received: SessionEvent[] = [];
     const unsubscribe = service.subscribe(session.id, (event) => received.push(event));
     appendFileSync(piPath, `${JSON.stringify(piMessage('assistant', [{ type: 'text', text: 'external reply' }]))}\n`);
+    bumpMtime(piPath);
+
+    const watchHandle = watcher.get(session.id);
+    expect(watchHandle).toBeDefined();
+    watchHandle?.disablePolling();
+    watchHandle?.fire();
 
     await waitFor(() => received.some((event) => event.type === 'assistant_message'));
     unsubscribe();
@@ -204,6 +218,55 @@ function piMessage(role: 'user' | 'assistant' | 'toolResult', content: unknown[]
     type: 'message',
     message: { role, content },
   };
+}
+
+type MinimalWatcher = {
+  close: () => void;
+  on: (event: string, listener: (...args: unknown[]) => void) => MinimalWatcher;
+};
+
+type TranscriptWatchInternals = {
+  createTranscriptWatcher: (id: string, path: string) => MinimalWatcher | null;
+  refreshTranscriptFromWatch: (id: string) => void;
+  transcriptWatchers?: Map<string, { poller?: ReturnType<typeof setInterval> }>;
+};
+
+function installDeterministicTranscriptWatcher(service: SessionsService) {
+  const internals = service as unknown as TranscriptWatchInternals;
+  const handles = new Map<string, { fire: () => void; disablePolling: () => void; isClosed: () => boolean }>();
+
+  internals.createTranscriptWatcher = (id: string) => {
+    let closed = false;
+    const watcher: MinimalWatcher = {
+      close: () => {
+        closed = true;
+      },
+      on: () => watcher,
+    };
+    handles.set(id, {
+      disablePolling: () => {
+        const entry = internals.transcriptWatchers?.get(id);
+        if (!entry?.poller) return;
+        clearInterval(entry.poller);
+        delete entry.poller;
+      },
+      fire: () => {
+        if (closed || !internals.transcriptWatchers?.has(id)) {
+          return;
+        }
+        internals.refreshTranscriptFromWatch(id);
+      },
+      isClosed: () => closed,
+    });
+    return watcher;
+  };
+
+  return handles;
+}
+
+function bumpMtime(path: string): void {
+  const future = new Date(Date.now() + 1000);
+  utimesSync(path, future, future);
 }
 
 async function waitFor(assertion: () => boolean, timeoutMs = 1500): Promise<void> {
