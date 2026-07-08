@@ -149,6 +149,26 @@ describe('FleetView', () => {
     expect(screen.getByTestId('loc').textContent).toBe('/autopilot/loop-9');
   });
 
+  it('deep-links a pr-review top item to the in-app PR view', async () => {
+    vi.mocked(fetchFleet).mockResolvedValue([
+      row({
+        name: 'nuncio',
+        health: 'red',
+        reasons: ['1 PR awaits review'],
+        topItem: {
+          id: 'i1', kind: 'pr-review', subjectId: '/Users/me/nuncio#42', projectPath: '/Users/me/nuncio',
+          severity: 2, title: 'Review PR #42',
+          payload: { projectPath: '/Users/me/nuncio', number: 42, url: 'https://github.com/o/r/pull/42' },
+          status: 'open', acknowledgedAt: null, createdAt: 0, updatedAt: 0, resolvedAt: null,
+        },
+      }),
+    ]);
+    renderFleet();
+    await waitFor(() => expect(screen.getByText('Review PR #42')).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'Open Review PR #42' }));
+    expect(screen.getByTestId('loc').textContent).toBe('/forge/pr?path=%2FUsers%2Fme%2Fnuncio&number=42');
+  });
+
   it('New agent triggers onNew (the composer moved off home)', async () => {
     vi.mocked(fetchFleet).mockResolvedValue([row({})]);
     const onNew = vi.fn();

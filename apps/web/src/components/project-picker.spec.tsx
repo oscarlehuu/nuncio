@@ -37,6 +37,10 @@ vi.mock('./folder-browser', () => ({
   },
 }));
 
+vi.mock('./project-picker-forges', () => ({
+  ProjectPickerForges: () => <div data-testid="forge-sections">GitHub repos</div>,
+}));
+
 describe('ProjectPicker', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -81,6 +85,35 @@ describe('ProjectPicker', () => {
     expect(screen.getByText('Recents')).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /old-repo/i })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /nuncio/i })).toBeInTheDocument();
+  });
+
+  it('keeps the command list phone-scrollable', async () => {
+    render(<ProjectPicker onChange={vi.fn()} />);
+
+    await userEvent.click(await screen.findByRole('button', { name: /no repo/i }));
+
+    const list = screen.getByRole('listbox');
+    expect(list).toHaveClass('max-h-[min(68vh,420px)]');
+    expect(list).toHaveClass('overflow-y-auto');
+    expect(list).toHaveClass('overscroll-contain');
+  });
+
+  it('keeps recents, browse, and custom actions above catalog and forge sections', async () => {
+    recordProjectSelection('/Users/dev/old-repo', 'old-repo');
+    render(<ProjectPicker onChange={vi.fn()} />);
+
+    await userEvent.click(await screen.findByRole('button', { name: /no repo/i }));
+
+    const oldRepo = await screen.findByRole('option', { name: /old-repo/i });
+    const browse = screen.getByRole('option', { name: /browse folders/i });
+    const custom = screen.getByRole('option', { name: /custom path/i });
+    const catalog = await screen.findByRole('option', { name: /nuncio/i });
+    const forge = screen.getByTestId('forge-sections');
+
+    expect(oldRepo.compareDocumentPosition(browse) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(browse.compareDocumentPosition(custom) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(custom.compareDocumentPosition(catalog) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(catalog.compareDocumentPosition(forge) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('lists projects and selects one', async () => {

@@ -198,10 +198,21 @@ describe('forge repo + clone api client', () => {
 
   it('cloneForgeRepo POSTs the clone request and returns the path', async () => {
     fetchMock.mockResolvedValue(jsonRes({ path: '/Users/me/cloned' }));
-    const { path } = await cloneForgeRepo({ forgeId: 'github', fullName: 'me/repo', cloneUrl: 'https://x/y.git' });
+    const { path } = await cloneForgeRepo({
+      forgeId: 'github',
+      fullName: 'me/repo',
+      cloneUrl: 'https://x/y.git',
+      private: false,
+    });
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe('/api/projects/clone');
     expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({
+      forgeId: 'github',
+      fullName: 'me/repo',
+      cloneUrl: 'https://x/y.git',
+      private: false,
+    });
     expect(path).toBe('/Users/me/cloned');
   });
 });

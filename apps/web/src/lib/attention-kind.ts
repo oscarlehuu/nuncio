@@ -60,17 +60,46 @@ export const TONE_CHIP: Record<AttentionTone, string> = {
 /** Where the primary "Open" action points for an item — an in-app route or an external url. */
 export type OpenTarget = { to: string } | { href: string };
 
+function payloadString(payload: Record<string, unknown>, key: string): string | null {
+  const value = payload[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function payloadNumber(payload: Record<string, unknown>, key: string): number | null {
+  const value = payload[key];
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0) return value;
+  if (typeof value === 'string' && /^\d+$/.test(value)) return Number(value);
+  return null;
+}
+
+function prReviewTarget(item: AttentionItemDto): OpenTarget | null {
+  const p = item.payload ?? {};
+  const projectPath = payloadString(p, 'projectPath') ?? item.projectPath;
+  const number = payloadNumber(p, 'number');
+  if (projectPath && number !== null) {
+    return { to: `/forge/pr?path=${encodeURIComponent(projectPath)}&number=${number}` };
+  }
+  const url = payloadString(p, 'url');
+  return url ? { href: url } : null;
+}
+
+export function externalOpenTargetFor(item: AttentionItemDto): OpenTarget | null {
+  const url = payloadString(item.payload ?? {}, 'url');
+  return url ? { href: url } : null;
+}
+
 /**
  * Resolve the deep-link per kind from the item's payload (all fields optional —
  * tolerate an unrecognized shape by falling back to the subject or an external
  * url). permission/verify-dead → the session; tripped-breaker → the loop; pr-review
- * → the PR's web url; unknown → a session if the payload carries one.
+ * → the in-app PR view when project+number exist; unknown → a session if the
+ * payload carries one.
  */
 export function openTargetFor(item: AttentionItemDto): OpenTarget | null {
   const p = item.payload ?? {};
-  const sessionId = typeof p.sessionId === 'string' ? p.sessionId : null;
-  const loopId = typeof p.loopId === 'string' ? p.loopId : null;
-  const url = typeof p.url === 'string' ? p.url : null;
+  const sessionId = payloadString(p, 'sessionId');
+  const loopId = payloadString(p, 'loopId');
+  const url = payloadString(p, 'url');
 
   switch (item.kind) {
     case 'permission':
@@ -79,7 +108,7 @@ export function openTargetFor(item: AttentionItemDto): OpenTarget | null {
     case 'tripped-breaker':
       return { to: `/autopilot/${loopId ?? item.subjectId}` };
     case 'pr-review':
-      return url ? { href: url } : null;
+      return prReviewTarget(item);
     default:
       return sessionId ? { to: `/session/${sessionId}` } : url ? { href: url } : null;
   }

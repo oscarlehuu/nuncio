@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2, Lock } from 'lucide-react';
+import { ChevronDown, ChevronRight, Loader2, Lock } from 'lucide-react';
 import { toast } from 'sonner';
 import { cloneForgeRepo, fetchForgeRepos, type ForgeRepoDto } from '../lib/api';
 import { fetchForgeStatus, type ForgeStatusDto } from '../lib/forge-status-api';
@@ -67,6 +67,7 @@ function ConnectedForgeSection({
   const [repos, setRepos] = useState<ForgeRepoDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [cloningId, setCloningId] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -91,6 +92,8 @@ function ConnectedForgeSection({
     if (!q) return repos.slice(0, 8);
     return repos.filter((r) => r.fullName.toLowerCase().includes(q)).slice(0, 12);
   }, [repos, query]);
+  const hasSearch = query.trim().length > 0;
+  const visible = expanded || (hasSearch && filtered.length > 0);
 
   const clone = async (repo: ForgeRepoDto) => {
     setCloningId(repo.id);
@@ -99,6 +102,7 @@ function ConnectedForgeSection({
         forgeId: forge.id,
         fullName: repo.fullName,
         cloneUrl: repo.cloneUrl,
+        private: repo.private,
       });
       onSelectPath(path);
     } catch (err) {
@@ -112,13 +116,26 @@ function ConnectedForgeSection({
   if (!loading && filtered.length === 0) return null;
 
   return (
-    <CommandGroup heading={heading}>
+    <CommandGroup forceMount>
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-ui-sm font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        onClick={() => setExpanded((next) => !next)}
+        aria-expanded={visible}
+        aria-label={`${heading} ${repos.length}`}
+      >
+        {visible ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
+        <span className="min-w-0 flex-1 truncate">{heading}</span>
+        <span className="rounded-full bg-muted/70 px-1.5 text-ui-xs tabular-nums text-muted-foreground">
+          {loading ? '...' : repos.length}
+        </span>
+      </button>
       {loading ? (
-        <div className="flex items-center gap-2 px-2 py-1.5 text-ui-sm text-muted-foreground">
+        <div className="flex items-center gap-2 px-2 py-1.5 text-ui-sm text-muted-foreground" hidden={!visible}>
           <Loader2 className="size-3.5 animate-spin" />
           Loading repositories…
         </div>
-      ) : (
+      ) : visible ? (
         filtered.map((repo) => (
           <CommandItem
             key={repo.id}
@@ -144,7 +161,7 @@ function ConnectedForgeSection({
             )}
           </CommandItem>
         ))
-      )}
+      ) : null}
     </CommandGroup>
   );
 }

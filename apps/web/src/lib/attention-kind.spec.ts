@@ -7,7 +7,7 @@ function item(partial: Partial<AttentionItemDto>): AttentionItemDto {
     id: 'i',
     kind: partial.kind ?? 'permission',
     subjectId: partial.subjectId ?? 'subj',
-    projectPath: null,
+    projectPath: partial.projectPath ?? null,
     severity: 0,
     title: 't',
     payload: partial.payload ?? null,
@@ -33,12 +33,31 @@ describe('openTargetFor', () => {
       to: '/autopilot/l3',
     });
   });
-  it('pr-review → the external PR url', () => {
+  it('pr-review → the in-app forge PR route when project and number are present', () => {
+    expect(
+      openTargetFor(item({
+        kind: 'pr-review',
+        projectPath: '/Users/me/nuncio',
+        payload: { projectPath: '/Users/me/nuncio', number: 42, url: 'https://ex/pr/42' },
+      })),
+    ).toEqual({
+      to: '/forge/pr?path=%2FUsers%2Fme%2Fnuncio&number=42',
+    });
+  });
+
+  it('pr-review falls back to the item projectPath when payload only carries the number', () => {
+    expect(openTargetFor(item({ kind: 'pr-review', projectPath: '/repo/app', payload: { number: 7 } }))).toEqual({
+      to: '/forge/pr?path=%2Frepo%2Fapp&number=7',
+    });
+  });
+
+  it('pr-review with only a url keeps the external fallback', () => {
     expect(openTargetFor(item({ kind: 'pr-review', payload: { url: 'https://ex/pr/42' } }))).toEqual({
       href: 'https://ex/pr/42',
     });
   });
-  it('pr-review with no url → no target (button hidden)', () => {
+
+  it('pr-review with no route data → no target (button hidden)', () => {
     expect(openTargetFor(item({ kind: 'pr-review', payload: {} }))).toBeNull();
   });
   it('unknown kind → session if payload carries one, else null', () => {

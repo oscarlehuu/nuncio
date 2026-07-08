@@ -58,6 +58,45 @@ vi.mock('./lib/use-provider-update-notifications', () => ({
   useProviderUpdateNotifications: vi.fn(),
 }));
 
+vi.mock('./lib/forge-api', () => ({
+  fetchForgeCapabilities: vi.fn().mockResolvedValue({
+    provider: 'github',
+    connected: true,
+    authMethod: 'cli',
+    requestChanges: true,
+    rebaseMerge: true,
+    mergeWhenChecksPass: true,
+    resolveThreads: true,
+    updateBranch: true,
+    rerunFailedOnly: true,
+    listRepositories: true,
+  }),
+  fetchForgePull: vi.fn().mockResolvedValue({
+    number: 42,
+    url: 'https://github.com/o/r/pull/42',
+    state: 'open',
+    title: 'Review me',
+    body: '',
+    author: 'octo',
+    draft: false,
+    sourceBranch: 'feature',
+    targetBranch: 'main',
+    mergeable: 'mergeable',
+    reviewDecision: null,
+    additions: 1,
+    deletions: 0,
+    changedFiles: 0,
+    checks: [],
+  }),
+  fetchForgeThreads: vi.fn().mockResolvedValue([]),
+  fetchForgePullFiles: vi.fn().mockResolvedValue([]),
+  setForgePullState: vi.fn(),
+  submitForgeReview: vi.fn(),
+  addForgePullComment: vi.fn(),
+  mergeForgePull: vi.fn(),
+  updateForgeBranch: vi.fn(),
+}));
+
 import { toast } from 'sonner';
 
 import App from './App';
@@ -82,6 +121,7 @@ import {
 import { fetchSettings, updateSetting } from './lib/settings-api';
 import type { ModelProvider } from './lib/model-providers';
 import type { AttentionItemDto, FleetRow } from './lib/api';
+import { fetchForgePull } from './lib/forge-api';
 
 const LIVE_CATALOG: ModelProvider[] = [
   {
@@ -256,6 +296,16 @@ describe('App URL routing', () => {
     renderApp('/grid');
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: /workbench/i })).toBeInTheDocument(),
+    );
+  });
+
+  it('renders an in-app forge PR detail route by repo path and number', async () => {
+    renderApp('/forge/pr?path=%2FUsers%2Fme%2Fnuncio&number=42');
+    await waitFor(() => expect(fetchForgePull).toHaveBeenCalledWith('/Users/me/nuncio', 42));
+    expect(await screen.findByText('Review me')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /#42/i })).toHaveAttribute(
+      'href',
+      'https://github.com/o/r/pull/42',
     );
   });
 

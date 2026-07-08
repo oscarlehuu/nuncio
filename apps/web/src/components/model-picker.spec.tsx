@@ -403,4 +403,49 @@ describe('ModelPicker', () => {
 
     expect(onPairChange).toHaveBeenCalledWith('pi', 'anthropic:claude-haiku-4-5');
   });
+
+  it('gives provider submenus a phone-safe width and Radix collision padding', async () => {
+    render(
+      <ModelPicker
+        pairMode="engine+model"
+        engine={null}
+        model={null}
+        onPairChange={vi.fn()}
+        providers={[PI_PROVIDER, CURSOR_PROVIDER]}
+        inheritOption={{ label: 'Inherit from project' }}
+        providerDefaultOption
+        autoPick={false}
+        variant="text"
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole('button', { name: /engine and model: inherit from project · default model/i }),
+    );
+    await userEvent.hover(await screen.findByRole('menuitem', { name: /^pi$/i }));
+
+    const submenu = await screen.findByTestId('model-picker-provider-submenu');
+    expect(submenu).toHaveAttribute('data-collision-padding', '12');
+    expect(submenu).toHaveAttribute('data-side-offset', '6');
+    expect(submenu.getAttribute('style')).toContain('min-width: min(20rem, calc(100vw - 24px))');
+    expect(submenu).toHaveClass('max-h-[min(360px,var(--radix-dropdown-menu-content-available-height))]');
+  });
+
+  it('keeps chat model submenus on the same collision-aware sizing contract', async () => {
+    render(
+      <ModelPicker
+        value="anthropic:claude-haiku-4-5"
+        onChange={vi.fn()}
+        providers={[PI_PROVIDER, CURSOR_PROVIDER]}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /claude haiku 4\.5/i }));
+    await userEvent.hover(await screen.findByRole('menuitem', { name: /^pi$/i }));
+
+    const submenu = await screen.findByTestId('model-picker-provider-submenu');
+    expect(submenu).toHaveAttribute('data-collision-padding', '12');
+    expect(submenu).toHaveAttribute('data-side-offset', '6');
+    expect(submenu.getAttribute('style')).toContain('min-width: min(20rem, calc(100vw - 24px))');
+  });
 });

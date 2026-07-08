@@ -140,7 +140,7 @@ export function ProjectPicker({
           ) : (
             <Command>
               <CommandInput placeholder="Search projects…" value={search} onValueChange={setSearch} />
-              <CommandList>
+              <CommandList className="max-h-[min(68vh,420px)] overflow-y-auto overscroll-contain">
                 <CommandEmpty>No project found.</CommandEmpty>
                 {recents.length > 0 && (
                   <CommandGroup heading="Recents">
@@ -161,6 +161,16 @@ export function ProjectPicker({
                     ))}
                   </CommandGroup>
                 )}
+                <CommandGroup>
+                  <CommandItem value="browse folders open" onSelect={openBrowser} forceMount>
+                    <FolderOpen className="size-3.5" data-icon="inline-start" />
+                    <span>Browse folders…</span>
+                  </CommandItem>
+                  <CommandItem value="custom path enter absolute" onSelect={() => setCustomMode(true)} forceMount>
+                    Custom path…
+                  </CommandItem>
+                </CommandGroup>
+                <CommandSeparator />
                 {catalogProjects.length > 0 && (
                   <CommandGroup heading="Projects">
                     {catalogProjects.map((project) => (
@@ -183,16 +193,6 @@ export function ProjectPicker({
                 {!apiBase && (
                   <ProjectPickerForges query={search} onSelectPath={selectProject} active={open} />
                 )}
-                <CommandSeparator />
-                <CommandGroup>
-                  <CommandItem value="browse folders open" onSelect={openBrowser}>
-                    <FolderOpen className="size-3.5" data-icon="inline-start" />
-                    <span>Browse folders…</span>
-                  </CommandItem>
-                  <CommandItem value="custom path enter absolute" onSelect={() => setCustomMode(true)}>
-                    Custom path…
-                  </CommandItem>
-                </CommandGroup>
               </CommandList>
             </Command>
           )}

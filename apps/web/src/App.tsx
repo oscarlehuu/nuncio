@@ -77,6 +77,9 @@ const DigestView = lazy(() =>
 const TimelineView = lazy(() =>
   import('./components/timeline-view').then((m) => ({ default: m.TimelineView })),
 );
+const StandalonePrRoute = lazy(() =>
+  import('./components/forge/standalone-pr-route').then((m) => ({ default: m.StandalonePrRoute })),
+);
 
 function sessionIdFromPath(pathname: string): string | null {
   return matchPath('/session/:sessionId', pathname)?.params.sessionId ?? null;
@@ -818,6 +821,16 @@ export default function App() {
               <ChunkErrorBoundary>
                 <Suspense fallback={<div className="flex-1" aria-hidden />}>
                   <TimelineView onBack={() => navigate('/digest')} />
+                </Suspense>
+              </ChunkErrorBoundary>
+            }
+          />
+          <Route
+            path="/forge/pr"
+            element={
+              <ChunkErrorBoundary>
+                <Suspense fallback={<div className="flex-1" aria-hidden />}>
+                  <StandalonePrRoute />
                 </Suspense>
               </ChunkErrorBoundary>
             }

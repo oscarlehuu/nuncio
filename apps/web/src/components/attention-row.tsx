@@ -3,6 +3,7 @@ import { ArrowUpRight, Check, ChevronDown, ChevronRight, ExternalLink } from 'lu
 import { relativeTime, type AttentionItemDto } from '../lib/api';
 import {
   attentionKindMeta,
+  externalOpenTargetFor,
   openTargetFor,
   TONE_ACCENT,
   TONE_CHIP,
@@ -27,6 +28,8 @@ export function AttentionRow({ item, busy, onOpen, onAck, onApprove, onResolve }
   const target = openTargetFor(item);
   const acked = item.acknowledgedAt !== null;
   const external = target !== null && 'href' in target;
+  const externalTarget = item.kind === 'pr-review' ? externalOpenTargetFor(item) : null;
+  const showExternalSecondary = target !== null && !external && externalTarget !== null && 'href' in externalTarget;
   const dispatcher = dispatcherPayload(item);
   const isDispatcher = item.kind === 'dispatcher-proposal' && dispatcher.proposals.length > 0;
   const approved = dispatcher.approvedAt !== null || dispatcher.taskIds.length > 0;
@@ -114,6 +117,21 @@ export function AttentionRow({ item, busy, onOpen, onAck, onApprove, onResolve }
           >
             Open
             {external ? <ExternalLink className="size-3.5" /> : <ArrowUpRight className="size-3.5" />}
+          </Button>
+        )}
+        {showExternalSecondary && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="h-8 w-8 text-muted-foreground"
+            disabled={busy}
+            onClick={() => {
+              if (externalTarget) onOpen(externalTarget);
+            }}
+            aria-label={`Open "${item.title}" on GitHub/GitLab`}
+            title="Open on GitHub/GitLab"
+          >
+            <ExternalLink className="size-3.5" />
           </Button>
         )}
       </div>

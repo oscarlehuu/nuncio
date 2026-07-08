@@ -25,11 +25,11 @@ function forge(partial: Partial<ForgeStatusDto>): ForgeStatusDto {
   };
 }
 
-function renderForges(onSelectPath = vi.fn()) {
+function renderForges(onSelectPath = vi.fn(), query = '') {
   return render(
     <Command>
       <CommandList>
-        <ProjectPickerForges query="" onSelectPath={onSelectPath} active />
+        <ProjectPickerForges query={query} onSelectPath={onSelectPath} active />
       </CommandList>
     </Command>,
   );
@@ -42,7 +42,24 @@ describe('ProjectPickerForges', () => {
     vi.mocked(cloneForgeRepo).mockReset();
   });
 
-  it('lists repos for a connected forge and clones on pick', async () => {
+  it('collapses connected forge repos by default and expands on header click', async () => {
+    vi.mocked(fetchForgeStatus).mockResolvedValue([forge({ connected: true })]);
+    vi.mocked(fetchForgeRepos).mockResolvedValue([
+      { id: '1', fullName: 'octo/nuncio', name: 'nuncio', description: 'the ADE', private: false, defaultBranch: 'main', cloneUrl: 'https://x/nuncio.git', webUrl: 'https://x/nuncio', updatedAt: null },
+    ]);
+    renderForges();
+
+    const header = await screen.findByRole('button', { name: /github repos.*1/i });
+    expect(header).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('octo/nuncio')).not.toBeInTheDocument();
+
+    await userEvent.click(header);
+
+    expect(header).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('octo/nuncio')).toBeInTheDocument();
+  });
+
+  it('clones a repo after expanding its forge section', async () => {
     vi.mocked(fetchForgeStatus).mockResolvedValue([forge({ connected: true })]);
     vi.mocked(fetchForgeRepos).mockResolvedValue([
       { id: '1', fullName: 'octo/nuncio', name: 'nuncio', description: 'the ADE', private: false, defaultBranch: 'main', cloneUrl: 'https://x/nuncio.git', webUrl: 'https://x/nuncio', updatedAt: null },
@@ -51,10 +68,30 @@ describe('ProjectPickerForges', () => {
     const onSelectPath = vi.fn();
     renderForges(onSelectPath);
 
-    await waitFor(() => expect(screen.getByText('octo/nuncio')).toBeInTheDocument());
+    await userEvent.click(await screen.findByRole('button', { name: /github repos.*1/i }));
     await userEvent.click(screen.getByText('octo/nuncio'));
     await waitFor(() => expect(cloneForgeRepo).toHaveBeenCalled());
+    expect(cloneForgeRepo).toHaveBeenCalledWith({
+      forgeId: 'github',
+      fullName: 'octo/nuncio',
+      cloneUrl: 'https://x/nuncio.git',
+      private: false,
+    });
     expect(onSelectPath).toHaveBeenCalledWith('/Users/me/nuncio');
+  });
+
+  it('auto-expands matching forge sections while searching', async () => {
+    vi.mocked(fetchForgeStatus).mockResolvedValue([forge({ connected: true })]);
+    vi.mocked(fetchForgeRepos).mockResolvedValue([
+      { id: '1', fullName: 'octo/nuncio', name: 'nuncio', description: 'the ADE', private: false, defaultBranch: 'main', cloneUrl: 'https://x/nuncio.git', webUrl: 'https://x/nuncio', updatedAt: null },
+      { id: '2', fullName: 'octo/mobile', name: 'mobile', description: null, private: false, defaultBranch: 'main', cloneUrl: 'https://x/mobile.git', webUrl: 'https://x/mobile', updatedAt: null },
+    ]);
+    renderForges(vi.fn(), 'nuncio');
+
+    const header = await screen.findByRole('button', { name: /github repos.*2/i });
+    expect(header).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('octo/nuncio')).toBeInTheDocument();
+    expect(screen.queryByText('octo/mobile')).not.toBeInTheDocument();
   });
 
   it('shows a disabled reason for a disconnected forge — never an auth prompt', async () => {

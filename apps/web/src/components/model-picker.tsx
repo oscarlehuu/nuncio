@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { Check, ChevronDown, Zap } from 'lucide-react';
 import {
   activeModelOptionBadges,
@@ -155,6 +155,35 @@ function absorbMenuPointer(event: React.SyntheticEvent) {
   event.stopPropagation();
 }
 
+const MODEL_SUBMENU_STYLE = {
+  minWidth: 'min(20rem, calc(100vw - 24px))',
+  maxWidth: 'calc(100vw - 24px)',
+} satisfies CSSProperties;
+
+const MODEL_SUBMENU_CLASS = 'max-h-[min(360px,var(--radix-dropdown-menu-content-available-height))] overflow-y-auto';
+
+function ModelPickerSubContent({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <DropdownMenuSubContent
+      sideOffset={6}
+      collisionPadding={12}
+      data-testid="model-picker-provider-submenu"
+      data-collision-padding="12"
+      data-side-offset="6"
+      style={MODEL_SUBMENU_STYLE}
+      className={cn(MODEL_SUBMENU_CLASS, className)}
+    >
+      {children}
+    </DropdownMenuSubContent>
+  );
+}
+
 function ModelOptionsPanel({
   model,
   current,
@@ -307,7 +336,7 @@ function ModelSubmenuRow({
           />
         </span>
       </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent className="w-[248px] p-0">
+      <ModelPickerSubContent className="p-0">
         <DropdownMenuItem
           className="cursor-default p-0 focus:bg-popover data-[highlighted]:bg-popover"
           onSelect={(event) => event.preventDefault()}
@@ -315,7 +344,7 @@ function ModelSubmenuRow({
         >
           <ModelOptionsPanel model={model} current={current} onPatch={patchOptions} />
         </DropdownMenuItem>
-      </DropdownMenuSubContent>
+      </ModelPickerSubContent>
     </DropdownMenuSub>
   );
 }
@@ -442,7 +471,7 @@ function PairModeModelPicker({
                 <ProviderIcon providerId={p.id} className="size-3.5 shrink-0 text-muted-foreground" />
                 <span className="truncate">{p.name}</span>
               </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="max-h-[360px] w-[240px] overflow-y-auto">
+              <ModelPickerSubContent>
                 {providerDefaultOption && (
                   <DropdownMenuItem onSelect={() => pickPair(p.id, null)} className="gap-2">
                     <SelectionCheck active={engineActive && model === null} />
@@ -456,7 +485,7 @@ function PairModeModelPicker({
                     <span className="truncate">{prettyModelName(m.name)}</span>
                   </DropdownMenuItem>
                 ))}
-              </DropdownMenuSubContent>
+              </ModelPickerSubContent>
             </DropdownMenuSub>
           );
         })}
@@ -564,9 +593,7 @@ function ChatModelPicker({
                   <ProviderIcon providerId={p.id} className="size-3.5 shrink-0 text-muted-foreground" />
                   <span className="truncate">{p.name}</span>
                 </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent
-                  className={cn('max-h-[360px] overflow-y-auto', flat.length > 8 ? 'w-[280px]' : 'w-[260px]')}
-                >
+                <ModelPickerSubContent>
                   {showGroupHeaders
                     ? groups.map((group, groupIdx) => {
                         if (group.models.length === 0) return null;
@@ -594,7 +621,7 @@ function ChatModelPicker({
                         onToggle={toggleBoolean}
                       />
                     )}
-                </DropdownMenuSubContent>
+                </ModelPickerSubContent>
               </DropdownMenuSub>
             </div>
           );

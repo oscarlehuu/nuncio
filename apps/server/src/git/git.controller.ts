@@ -41,11 +41,12 @@ export class GitController {
   }
 
   @Post('clone')
-  cloneRepository(@Body() body: { forgeId?: string; fullName?: string; cloneUrl?: string }) {
+  cloneRepository(@Body() body: { forgeId?: string; fullName?: string; cloneUrl?: string; private?: boolean }) {
     return this.clone.clone({
       forgeId: body?.forgeId ?? '',
       fullName: body?.fullName ?? '',
       cloneUrl: body?.cloneUrl ?? '',
+      private: body?.private,
     });
   }
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../lib/api', async () => {
@@ -50,9 +50,15 @@ function renderInbox() {
         <Route path="/inbox" element={<InboxView onBack={vi.fn()} />} />
         <Route path="/session/:id" element={<div>session page</div>} />
         <Route path="/autopilot/:loopId" element={<div>loop page</div>} />
+        <Route path="/forge/pr" element={<LocationProbe />} />
       </Routes>
     </MemoryRouter>,
   );
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="loc">{location.pathname + location.search}</div>;
 }
 
 describe('InboxView', () => {
@@ -135,6 +141,49 @@ describe('InboxView', () => {
     await waitFor(() => expect(screen.getByText('Nightly deps stopped after 3 fails')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /open/i }));
     expect(await screen.findByText('loop page')).toBeInTheDocument();
+  });
+
+  it('Open deep-links a pr-review item to the in-app PR view', async () => {
+    vi.mocked(fetchAttention).mockResolvedValue({
+      items: [
+        item({
+          id: 'a',
+          kind: 'pr-review',
+          title: 'Review PR #42',
+          projectPath: '/Users/me/nuncio',
+          payload: { projectPath: '/Users/me/nuncio', number: 42, url: 'https://github.com/o/r/pull/42' },
+        }),
+      ],
+      counts: { total: 1, unacked: 1, bySeverity: {} },
+    });
+    renderInbox();
+    await waitFor(() => expect(screen.getByText('Review PR #42')).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: /^open "review pr #42"$/i }));
+    expect(screen.getByTestId('loc').textContent).toBe('/forge/pr?path=%2FUsers%2Fme%2Fnuncio&number=42');
+  });
+
+  it('keeps the forge web URL as a secondary pr-review action', async () => {
+    const open = vi.fn();
+    vi.stubGlobal('open', open);
+    vi.mocked(fetchAttention).mockResolvedValue({
+      items: [
+        item({
+          id: 'a',
+          kind: 'pr-review',
+          title: 'Review PR #42',
+          projectPath: '/Users/me/nuncio',
+          payload: { projectPath: '/Users/me/nuncio', number: 42, url: 'https://github.com/o/r/pull/42' },
+        }),
+      ],
+      counts: { total: 1, unacked: 1, bySeverity: {} },
+    });
+    renderInbox();
+    await waitFor(() => expect(screen.getByText('Review PR #42')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('button', { name: /open "review pr #42" on github\/gitlab/i }));
+
+    expect(open).toHaveBeenCalledWith('https://github.com/o/r/pull/42', '_blank', 'noopener,noreferrer');
+    vi.unstubAllGlobals();
   });
 
   it('acked items render muted (Seen) inline, not re-sorted', async () => {

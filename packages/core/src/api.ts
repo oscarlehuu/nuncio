@@ -947,6 +947,7 @@ export async function cloneForgeRepo(input: {
   forgeId: string;
   fullName: string;
   cloneUrl: string;
+  private: boolean;
 }): Promise<{ path: string }> {
   const res = await apiFetch('/api/projects/clone', {
     method: 'POST',

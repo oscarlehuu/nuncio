@@ -6,7 +6,11 @@ import { join } from 'node:path';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { SettingsModule } from '../../../src/settings/settings.module';
 import { SettingsService } from '../../../src/settings/settings.service';
-import { CloneService, pickCloneDirName } from '../../../src/git/clone.service';
+import {
+  buildCloneAuthHeader,
+  CloneService,
+  pickCloneDirName,
+} from '../../../src/git/clone.service';
 import { RecentProjectsRepository } from '../../../src/git/recent-projects.repository';
 
 describe('pickCloneDirName', () => {
@@ -159,8 +163,8 @@ describe('CloneService', () => {
   it('injects the resolved credential into the clone command without persisting it into the repo', async () => {
     service.resolveToken = async (forgeId) => (forgeId === 'github' ? 'ghp_secret' : null);
     let seenToken: string | null | undefined;
-    service.cloneExec = async (url, dest, token) => {
-      seenToken = token;
+    service.cloneExec = async (url, dest, auth) => {
+      seenToken = auth?.token ?? null;
       // A real credentialed clone must NOT write the token into the repo config
       // or the origin URL. Materialize a clean repo (token-free) as git would.
       mkdirSync(join(dest, '.git'), { recursive: true });
@@ -175,6 +179,7 @@ describe('CloneService', () => {
       forgeId: 'github',
       fullName: 'octo/nuncio',
       cloneUrl: 'https://github.com/octo/nuncio.git',
+      private: true,
     });
 
     // The credential reached the command runner...
@@ -185,12 +190,74 @@ describe('CloneService', () => {
     expect(config).not.toContain('extraheader');
     expect(config).not.toContain('Authorization');
   });
+
+  it('clones a public repo without sending credentials first, even when a token resolves', async () => {
+    service.resolveToken = async (forgeId) => (forgeId === 'github' ? 'ghp_secret' : null);
+    const seenAuth: Array<string | null> = [];
+    service.cloneExec = async (url, dest, auth) => {
+      void url;
+      seenAuth.push(auth?.token ?? null);
+      mkdirSync(join(dest, '.git'), { recursive: true });
+    };
+    service.remoteMatches = async () => true;
+
+    await service.clone({
+      forgeId: 'github',
+      fullName: 'octo/nuncio',
+      cloneUrl: 'https://github.com/octo/nuncio.git',
+      private: false,
+    });
+
+    expect(seenAuth).toEqual([null]);
+  });
+
+  it('falls back to authenticated clone for a public repo only after plain clone fails', async () => {
+    service.resolveToken = async (forgeId) => (forgeId === 'github' ? 'ghp_secret' : null);
+    const seenAuth: Array<string | null> = [];
+    service.cloneExec = async (url, dest, auth) => {
+      void url;
+      seenAuth.push(auth?.token ?? null);
+      if (!auth) throw new BadRequestException('Repository not found');
+      mkdirSync(join(dest, '.git'), { recursive: true });
+    };
+    service.remoteMatches = async () => true;
+
+    await service.clone({
+      forgeId: 'github',
+      fullName: 'octo/nuncio',
+      cloneUrl: 'https://github.com/octo/nuncio.git',
+      private: false,
+    });
+
+    expect(seenAuth).toEqual([null, 'ghp_secret']);
+  });
+
+  it('surfaces a friendly error when authenticated GitHub clone rejects credentials', async () => {
+    service.resolveToken = async (forgeId) => (forgeId === 'github' ? 'ghp_secret' : null);
+    service.cloneExec = async () => {
+      throw new BadRequestException(
+        "remote: invalid credentials\nfatal: Authentication failed for 'https://github.com/octo/nuncio.git/'",
+      );
+    };
+
+    await expect(
+      service.clone({
+        forgeId: 'github',
+        fullName: 'octo/nuncio',
+        cloneUrl: 'https://github.com/octo/nuncio.git',
+        private: true,
+      }),
+    ).rejects.toThrow('GitHub token rejected - run gh auth login / check Settings');
+  });
 });
 
 describe('CloneService.buildCloneArgs (credential non-persistence mechanics)', () => {
   it('passes the token via a one-shot -c http.extraheader (not a persisted config write)', () => {
     const { buildCloneArgs } = require('../../../src/git/clone.service') as typeof import('../../../src/git/clone.service');
-    const args = buildCloneArgs('https://github.com/octo/nuncio.git', '/dest/nuncio', 'ghp_secret');
+    const args = buildCloneArgs('https://github.com/octo/nuncio.git', '/dest/nuncio', {
+      forgeId: 'github',
+      token: 'ghp_secret',
+    });
 
     // -c is an ephemeral per-invocation override; `git config` would persist. The
     // header carries the token, and it precedes the `clone` subcommand.
@@ -200,6 +267,16 @@ describe('CloneService.buildCloneArgs (credential non-persistence mechanics)', (
     expect(args[cIndex + 1]).toContain('Authorization:');
     expect(args).not.toContain('config'); // never `git config ...` (that persists)
     expect(args.indexOf('clone')).toBeGreaterThan(cIndex); // -c before the subcommand
+  });
+
+  it('formats GitHub clone auth as basic x-access-token credentials', () => {
+    const header = buildCloneAuthHeader('github', 'ghp_secret');
+    expect(header).toBe('Authorization: basic eC1hY2Nlc3MtdG9rZW46Z2hwX3NlY3JldA==');
+  });
+
+  it('formats GitLab clone auth as basic oauth2 credentials', () => {
+    const header = buildCloneAuthHeader('gitlab', 'glpat-secret');
+    expect(header).toBe('Authorization: basic b2F1dGgyOmdscGF0LXNlY3JldA==');
   });
 
   it('omits credentials entirely when no token is resolved', () => {

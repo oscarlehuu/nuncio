@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { githubCliToken, gitlabCliToken } from '../forges/cli-auth';
@@ -15,11 +15,30 @@ function expandHome(path: string): string {
  * `-c http.extraheader=...` override — ephemeral per-invocation, so it never
  * lands in the cloned repo's persisted `.git/config` or its origin URL. (Using
  * `git config` or embedding the token in the URL would persist it — never do
- * that.) No token → a plain `clone` with no credential surface.
+ * that.) No credential → a plain `clone` with no credential surface.
  */
-export function buildCloneArgs(url: string, dest: string, token: string | null): string[] {
-  if (!token) return ['clone', url, dest];
-  return ['-c', `http.extraheader=Authorization: Bearer ${token}`, 'clone', url, dest];
+export interface CloneCredential {
+  forgeId: string;
+  token: string;
+}
+
+export function buildCloneArgs(url: string, dest: string, credential: CloneCredential | null): string[] {
+  const header = credential ? buildCloneAuthHeader(credential.forgeId, credential.token) : null;
+  if (!header) return ['clone', url, dest];
+  return ['-c', `http.extraheader=${header}`, 'clone', url, dest];
+}
+
+export function buildCloneAuthHeader(forgeId: string, token: string): string | null {
+  const trimmed = token.trim();
+  if (!trimmed || /\s/.test(trimmed)) return null;
+
+  if (forgeId === 'github') {
+    return `Authorization: basic ${Buffer.from(`x-access-token:${trimmed}`).toString('base64')}`;
+  }
+  if (forgeId === 'gitlab') {
+    return `Authorization: basic ${Buffer.from(`oauth2:${trimmed}`).toString('base64')}`;
+  }
+  return null;
 }
 
 /**
@@ -45,6 +64,7 @@ export interface CloneRequest {
   forgeId: string;
   fullName: string;
   cloneUrl: string;
+  private?: boolean;
 }
 
 export interface CloneResult {
@@ -65,12 +85,12 @@ export class CloneService {
    * via a one-shot `-c http.extraheader` so a PRIVATE repo is cloneable without
    * the token ever persisting into the repo. Default shells out via Bun.
    */
-  cloneExec: (url: string, dest: string, token: string | null) => Promise<void> = async (
+  cloneExec: (url: string, dest: string, credential: CloneCredential | null) => Promise<void> = async (
     url,
     dest,
-    token,
+    credential,
   ) => {
-    const proc = Bun.spawn(['git', ...buildCloneArgs(url, dest, token)], {
+    const proc = Bun.spawn(['git', ...buildCloneArgs(url, dest, credential)], {
       stdout: 'pipe',
       stderr: 'pipe',
     });
@@ -78,7 +98,7 @@ export class CloneService {
     if (code !== 0) {
       const stderr = (await new Response(proc.stderr).text()).trim();
       // Never surface the token in an error message.
-      throw new BadRequestException(redactToken(stderr, token) || `git clone failed (${code})`);
+      throw new BadRequestException(redactToken(stderr, credential?.token ?? null) || `git clone failed (${code})`);
     }
   };
 
@@ -138,9 +158,48 @@ export class CloneService {
 
     const dirName = pickCloneDirName(repoName, (name) => existsSync(join(cloneDir, name)));
     const dest = join(cloneDir, dirName);
-    const token = await this.resolveToken(request.forgeId);
-    await this.cloneExec(cloneUrl, dest, token);
+    await this.cloneWithPrivacy(request.forgeId, cloneUrl, dest, request.private === false);
     return this.record(dest);
+  }
+
+  private async cloneWithPrivacy(
+    forgeId: string,
+    cloneUrl: string,
+    dest: string,
+    publicRepo: boolean,
+  ): Promise<void> {
+    if (publicRepo) {
+      try {
+        await this.cloneExec(cloneUrl, dest, null);
+        return;
+      } catch (error) {
+        rmSync(dest, { recursive: true, force: true });
+        const token = await this.resolveToken(forgeId);
+        if (!token) throw error;
+        await this.cloneAuthenticated(forgeId, cloneUrl, dest, token);
+        return;
+      }
+    }
+
+    const token = await this.resolveToken(forgeId);
+    await this.cloneAuthenticated(forgeId, cloneUrl, dest, token);
+  }
+
+  private async cloneAuthenticated(
+    forgeId: string,
+    cloneUrl: string,
+    dest: string,
+    token: string | null,
+  ): Promise<void> {
+    const credential = token ? { forgeId, token } : null;
+    try {
+      await this.cloneExec(cloneUrl, dest, credential);
+    } catch (error) {
+      if (credential && isInvalidCredentialError(error)) {
+        throw new BadRequestException(`${forgeName(forgeId)} token rejected - ${reauthHint(forgeId)}`);
+      }
+      throw error;
+    }
   }
 
   private record(path: string): CloneResult {
@@ -167,6 +226,23 @@ function sanitizeSegment(name: string, original: string): string {
 function redactToken(text: string, token: string | null): string {
   if (!token) return text;
   return text.split(token).join('***');
+}
+
+function isInvalidCredentialError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return /invalid credentials|authentication failed/i.test(text);
+}
+
+function forgeName(forgeId: string): string {
+  if (forgeId === 'github') return 'GitHub';
+  if (forgeId === 'gitlab') return 'GitLab';
+  return 'Forge';
+}
+
+function reauthHint(forgeId: string): string {
+  if (forgeId === 'github') return 'run gh auth login / check Settings';
+  if (forgeId === 'gitlab') return 'run glab auth login / check Settings';
+  return 'check Settings';
 }
 
 /** Normalize a remote URL for comparison (strip trailing .git and slashes). */
