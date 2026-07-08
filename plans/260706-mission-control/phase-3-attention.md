@@ -591,7 +591,7 @@ Edge-case-first, deterministic (injected `Clock`), neutral `TODO:` skeletons. Fu
 | # | Decision | Recommendation |
 |---|----------|----------------|
 | C1 | Population rule | **Union: configured ∪ recently-active**, deduped by path |
-| C2 | Health formula | **red = any high-bucket (sev≥4) open item; yellow = any open item; else green** |
+| C2 | Health formula | **red = any high-bucket (sev≥4) open item; yellow = any open item; else green** | **LOCKED (founder, 2026-07-08): tripped-breaker stays RED (threshold 4).**
 | C3 | Empty-diff signal | **`git status --porcelain` per running session on the 15m sweep** (ground truth, not a proxy) |
 | C4 | Fleet storage | **Derive-on-demand** (no materialized table) |
 | C5 | Anomaly cadence | **Ride the existing 15m infra sweep** (no new schedule) |
