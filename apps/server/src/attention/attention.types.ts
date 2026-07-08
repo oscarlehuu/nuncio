@@ -13,6 +13,7 @@ export type AttentionKind =
   | 'tripped-breaker'
   | 'zombie-session'
   | 'pr-review'
+  | 'dispatcher-proposal'
   | 'anomaly'
   | 'session-empty-diff'
   | 'loop-failing';
@@ -34,6 +35,7 @@ export const SEVERITY_BY_KIND: Readonly<Record<AttentionKind, number>> = {
   'tripped-breaker': 4,
   'zombie-session': 3,
   'pr-review': 2,
+  'dispatcher-proposal': 2,
   anomaly: 1,
   'session-empty-diff': 1,
   'loop-failing': 1,

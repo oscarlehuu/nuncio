@@ -173,6 +173,15 @@ export class AttentionRepository {
     return this.findById(id);
   }
 
+  /** Replace kind-specific detail without changing open/resolved state. */
+  updatePayload(id: string, payload: Record<string, unknown> | null, now: number): AttentionItemDto | null {
+    if (this.database.closed) return this.findById(id);
+    this.database.db
+      .prepare('UPDATE attention_items SET payload_json = ?, updated_at = ? WHERE id = ?')
+      .run(payload ? JSON.stringify(payload) : null, now, id);
+    return this.findById(id);
+  }
+
   /**
    * Terminal: status → resolved, resolved_at set (auto or manual). Idempotent —
    * re-resolving keeps the original resolved_at so a double-tap on a laggy phone

@@ -254,6 +254,15 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     default: 'daily@20:00',
   },
   {
+    key: 'NUNCIO_DISPATCHER_EVENING_SPEC',
+    category: 'advanced',
+    type: 'string',
+    label: 'Dispatcher: evening proposal time',
+    description: 'Daily time for deterministic dispatcher proposals. Default 20:05.',
+    envVar: 'NUNCIO_DISPATCHER_EVENING_SPEC',
+    default: 'daily@20:05',
+  },
+  {
     key: 'NUNCIO_HEARTBEAT_ZOMBIE_AGE_MIN',
     category: 'advanced',
     type: 'string',

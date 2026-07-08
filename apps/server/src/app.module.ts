@@ -6,6 +6,7 @@ import { AuthModule } from './auth/auth.module';
 import { BrowserModule } from './browser/browser.module';
 import { CursorLocalModule } from './cursor-local/cursor-local.module';
 import { DatabaseModule } from './db/database.module';
+import { DispatcherModule } from './dispatcher/dispatcher.module';
 import { ForgesModule } from './forges/forges.module';
 import { FsModule } from './fs/fs.module';
 import { GitModule } from './git/git.module';
@@ -30,6 +31,7 @@ import { PushModule } from './push/push.module';
   imports: [
     PushModule,
     DatabaseModule,
+    DispatcherModule,
     AttentionModule,
     HeartbeatModule,
     FleetModule,

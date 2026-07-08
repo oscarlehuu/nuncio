@@ -262,3 +262,93 @@ v1.
   - enqueue trims/forwards task input and returns `action: enqueued`.
   - enqueue validation errors return MCP tool errors.
   - pause loop calls the existing loop API and returns `action: paused`.
+
+# Sub-Phase D Design — Dispatcher v1 Rules + Approve-In-One-Tap
+
+## Storage + Authority
+
+Dispatcher v1 is deterministic. It never calls a model and never creates a
+parallel proposal table. A draft is one open `attention_items` row:
+
+- `kind`: `dispatcher-proposal`
+- `subjectId`: `dispatch:<YYYY-MM-DD>` using local day
+- `severity`: 2, the nearest existing integer bucket between `anomaly` (1) and
+  `pr-review` (2). It is an FYI-plus bundle: more actionable than a generic
+  anomaly but not more urgent than a single PR review.
+- `title`: `Dispatcher proposal for <YYYY-MM-DD>`
+- `payload.proposals`: capped ordered list of proposed queued tasks
+- `payload.approvedAt` and `payload.taskIds`: approval audit, written once
+
+Approve-in-one-tap creates queued tasks from the payload through the existing
+task enqueue path, then resolves the attention item. Approval is idempotent: if
+`taskIds` already exists, the service returns the same ids and never enqueues
+again. Partial approval is v1.1. The v1 phone contract is intentionally
+one-tap-all; subset selection adds UI state, per-proposal audit, and harder retry
+semantics without changing the core attention thesis.
+
+## Rule Inputs
+
+Rules fold over the same durable facts used by timeline, fleet, and attention:
+open attention rows, sessions/events, tasks, loops, loop runs, and project
+defaults. Rules do not issue duplicate queries when a caller already has these
+sources; repository collection is only the service boundary.
+
+## Rule List
+
+1. Open unacked attention: propose `Handle <title>` for high-signal open items
+   that are not themselves dispatcher proposals.
+2. Broken loop: propose `Resume or investigate <loop>` from an open
+   `tripped-breaker` item or a loop with `status='broken'`.
+3. Stale PR review: if an open `pr-review` item is older than 24h, propose
+   `Review or merge PR #<number>`.
+4. Failed verify window: from an open `verify-dead` item or a session with a
+   latest `verify_needs_attention` and no later green `verify_result`, propose
+   `Fix the failing verify in <project>`.
+5. Yesterday all-failed loop: when all settled runs for a loop yesterday failed
+   and count is non-zero, propose `Investigate why <loop> failed N times`.
+6. Yesterday failed task runs: for failed standalone tasks created yesterday,
+   propose `Investigate failed task: <prompt>`.
+7. Queued/running starvation: if a queued task is older than 2h, or a running
+   task is older than 4h, propose `Unblock queued task: <prompt>` or
+   `Check running task: <prompt>`.
+
+Every proposal has `{ title, prompt, projectPath, engine?, model?, rationale }`.
+`engine`/`model` come from the source loop or project defaults when available.
+`rationale` names the source fact in one line. The list is deduped against:
+
+- existing open dispatcher proposals
+- existing queued/running tasks for the same subject
+- duplicate subjects inside the same fold
+
+The list is capped to the top 5 by the same attention ranking shape: severity
+first, project importance next, older source fact first. Empty folds create no
+attention item; silence is success.
+
+## Cadence + API
+
+The daemon ensures one system schedule:
+
+- target: `{ kind: 'system', job: 'dispatcher-evening' }`
+- setting key: `NUNCIO_DISPATCHER_EVENING_SPEC`
+- default: `daily@20:05`
+
+The scheduler's existing system handler fires `draftEvening()`. Dogfood uses
+`POST /api/dispatcher/draft-now`; approval uses
+`POST /api/dispatcher/proposals/:id/approve`.
+
+## Red Suite
+
+- Pure folds: each source fact produces the expected proposal shape; in-flight
+  dedup suppresses duplicates; cap trims to 5; empty world returns no proposals.
+- Draft idempotency: drafting twice for the same local evening updates/replaces
+  the open `dispatcher-proposal` row for `dispatch:<date>` and never stacks.
+- Approval happy path: creates queued tasks, resolves the item, writes
+  `approvedAt` and `taskIds` into payload.
+- Approval idempotency: re-approval returns the same `taskIds` and creates no
+  duplicate tasks.
+- Approval failure: enqueue errors leave the item open with no partial audit,
+  so retry can safely try again.
+- Scheduler wiring: the 20:05 system job calls the dispatcher draft handler.
+- REST: `POST /dispatcher/draft-now` and
+  `POST /dispatcher/proposals/:id/approve` call the service.
+- ADR-007 guard: dispatcher introduces no new session event types.

@@ -41,10 +41,10 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private loopFireHandler: ((loopId: string) => unknown) | null = null;
 
   /**
-   * System-fire handler (HeartbeatService, registered to avoid a DI cycle).
-   * Resolves a {kind:'system',job} target — a rung-3 heartbeat layer.
+   * System-fire handlers (HeartbeatService + dispatcher, registered to avoid DI cycles).
+   * Resolve a {kind:'system',job} target — rung-3/rung-4 system layers.
    */
-  private systemFireHandler: ((job: string) => unknown) | null = null;
+  private readonly systemFireHandlers = new Set<(job: string) => unknown>();
 
   constructor(
     private readonly schedules: SchedulesRepository,
@@ -168,7 +168,12 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
   /** Register the system-fire handler (HeartbeatService, to avoid a DI cycle). */
   setSystemFireHandler(handler: (job: string) => unknown): void {
-    this.systemFireHandler = handler;
+    this.systemFireHandlers.add(handler);
+  }
+
+  /** Add a system-fire handler without replacing existing handlers. */
+  addSystemFireHandler(handler: (job: string) => unknown): void {
+    this.systemFireHandlers.add(handler);
   }
 
   /**
@@ -197,8 +202,8 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         // Loop targets resolve through the registered handler (budget-checked run).
         returned = this.loopFireHandler?.(target.loopId);
       } else if (target.kind === 'system') {
-        // Heartbeat layer — resolves through the system-fire handler (rung 3).
-        returned = this.systemFireHandler?.(target.job);
+        // System layers (heartbeat, dispatcher) share this seam.
+        returned = Promise.all([...this.systemFireHandlers].map((handler) => handler(target.job)));
       }
       pending = Promise.resolve(returned);
     } catch (error) {

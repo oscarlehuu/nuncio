@@ -136,6 +136,22 @@ describe('SchedulerService firing loop', () => {
     expect(tasks.enqueued).toHaveLength(0);
   });
 
+  it('allows multiple system fire handlers so heartbeat and dispatcher share the seam', () => {
+    const fired: string[] = [];
+    scheduler.setSystemFireHandler((job) => { fired.push(`heartbeat:${job}`); });
+    scheduler.addSystemFireHandler((job) => { fired.push(`dispatcher:${job}`); });
+    scheduler.create({
+      kind: 'cron',
+      spec: 'daily@20:05',
+      target: { kind: 'system', job: 'dispatcher-evening' },
+    });
+    clockNow = at(2026, 7, 7, 20, 5);
+
+    scheduler.scanDue();
+
+    expect(fired).toEqual(['heartbeat:dispatcher-evening', 'dispatcher:dispatcher-evening']);
+  });
+
   it('fires all schedules due at once, each advancing independently', () => {
     scheduler.create({ kind: 'cron', spec: 'daily@09:00', target: taskTarget('a') });
     scheduler.create({ kind: 'cron', spec: 'daily@09:00', target: taskTarget('b') });

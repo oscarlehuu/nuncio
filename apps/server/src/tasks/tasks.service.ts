@@ -75,11 +75,19 @@ export class TasksService {
   }
 
   enqueue(input: CreateTaskDto): TaskDto {
-    const prompt = input.prompt?.trim();
-    if (!prompt) throw new BadRequestException('prompt is required');
-    const task = this.tasks.create({ ...input, prompt });
+    return this.enqueueMany([input])[0]!;
+  }
+
+  enqueueMany(inputs: CreateTaskDto[]): TaskDto[] {
+    if (inputs.length === 0) return [];
+    const normalized = inputs.map((input) => {
+      const prompt = input.prompt?.trim();
+      if (!prompt) throw new BadRequestException('prompt is required');
+      return { ...input, prompt };
+    });
+    const tasks = this.tasks.createMany(normalized);
     void this.pump();
-    return task;
+    return tasks;
   }
 
   startMultitask(input: StartMultitaskDto): StartMultitaskResultDto {
