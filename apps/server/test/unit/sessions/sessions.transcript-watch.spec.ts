@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AgentsModule } from '../../../src/agents/agents.module';
@@ -63,6 +63,7 @@ describe('SessionsService transcript file watcher', () => {
   });
 
   it('streams appended Pi transcript events without manually refreshing and stops watching after unsubscribe', async () => {
+    const watcher = installDeterministicTranscriptWatcher(service);
     const session = sessions.createHandoff({
       provider: 'pi',
       title: 'Pi watch',
@@ -76,6 +77,8 @@ describe('SessionsService transcript file watcher', () => {
     const unsubscribe = service.subscribe(session.id, (event) => received.push(event));
 
     appendFileSync(piPath, `${JSON.stringify(piMessage('assistant', 'live reply'))}\n`);
+    bumpMtime(piPath);
+    watcher.get(session.id)?.fire();
 
     await waitFor(() => received.some((event) => event.type === 'assistant_message'));
     expect(received).toContainEqual(
@@ -91,7 +94,8 @@ describe('SessionsService transcript file watcher', () => {
 
     const countAfterUnsubscribe = received.length;
     appendFileSync(piPath, `${JSON.stringify(piMessage('assistant', 'after unsubscribe'))}\n`);
-    await new Promise((resolve) => setTimeout(resolve, 350));
+    bumpMtime(piPath);
+    watcher.get(session.id)?.fire();
 
     expect(received.length).toBe(countAfterUnsubscribe);
   });
@@ -106,9 +110,9 @@ describe('SessionsService transcript file watcher', () => {
     });
     expect(service.getEvents(session.id).map((event) => event.type)).toEqual(['user_message']);
 
-    // Append with nobody subscribed and ensure the mtime changes.
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // Append with nobody subscribed and force a distinct mtime.
     appendFileSync(piPath, `${JSON.stringify(piMessage('assistant', 'offline reply'))}\n`);
+    bumpMtime(piPath);
 
     const events = service.getEvents(session.id);
     expect(events).toContainEqual(
@@ -126,8 +130,8 @@ describe('SessionsService transcript file watcher', () => {
     });
     service.getEvents(session.id);
 
-    await new Promise((resolve) => setTimeout(resolve, 10));
     appendFileSync(piPath, `${JSON.stringify(piMessage('assistant', 'guarded reply'))}\n`);
+    bumpMtime(piPath);
 
     const internals = service as unknown as { locallyProducing: Set<string> };
     internals.locallyProducing.add(session.id);
@@ -146,6 +150,51 @@ function piMessage(role: 'user' | 'assistant', text: string) {
     type: 'message',
     message: { role, content: [{ type: 'text', text }] },
   };
+}
+
+type MinimalWatcher = {
+  close: () => void;
+  on: (event: string, listener: (...args: unknown[]) => void) => MinimalWatcher;
+};
+
+type TranscriptWatchInternals = {
+  createTranscriptWatcher: (id: string, path: string) => MinimalWatcher | null;
+  transcriptWatchers?: Map<string, unknown>;
+  locallyProducing: Set<string>;
+  refreshTranscriptIfNeeded: (session: unknown) => void;
+  requireSession: (id: string) => unknown;
+};
+
+function installDeterministicTranscriptWatcher(service: SessionsService) {
+  const internals = service as unknown as TranscriptWatchInternals;
+  const handles = new Map<string, { fire: () => void; isClosed: () => boolean }>();
+
+  internals.createTranscriptWatcher = (id: string) => {
+    let closed = false;
+    const watcher: MinimalWatcher = {
+      close: () => {
+        closed = true;
+      },
+      on: () => watcher,
+    };
+    handles.set(id, {
+      fire: () => {
+        if (closed || !internals.transcriptWatchers?.has(id) || internals.locallyProducing.has(id)) {
+          return;
+        }
+        internals.refreshTranscriptIfNeeded(internals.requireSession(id));
+      },
+      isClosed: () => closed,
+    });
+    return watcher;
+  };
+
+  return handles;
+}
+
+function bumpMtime(path: string): void {
+  const future = new Date(Date.now() + 1000);
+  utimesSync(path, future, future);
 }
 
 async function waitFor(assertion: () => boolean, timeoutMs = 1500): Promise<void> {

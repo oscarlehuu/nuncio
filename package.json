@@ -22,6 +22,7 @@
     "lint": "bun run --filter @nuncio/server lint && bun run --filter @nuncio/web lint && bun run --filter @nuncio/core lint && bun run --filter @nuncio/core typecheck && bun run --filter @nuncio/mobile lint && bun run --filter @nuncio/mobile typecheck",
     "changeset": "changeset",
     "add-changeset": "bun run scripts/add-changeset.mjs",
+    "setup-hooks": "bun run scripts/setup-hooks.mjs",
     "check-changeset": "bun run scripts/check-changeset.mjs",
     "check-branch-flow": "bun run scripts/check-branch-flow.mjs",
     "version": "changeset version",
@@ -29,8 +30,8 @@
     "release": "bun run scripts/release.mjs",
     "test:scripts": "bun test scripts/",
     "test:smoke-ui": "bun scripts/smoke-ui.mjs",
-    "gate": "bun run build && bun run lint && bun run test && bun run test:scripts",
-    "gate:full": "bun run gate && bun run --filter @nuncio/server test:e2e && bun run --filter @nuncio/web test && bun run test:smoke-ui"
+    "gate": "bun run build && bun run lint && bun run test && bun run --filter @nuncio/web test && bun run test:scripts",
+    "gate:full": "bun run gate && bun run --filter @nuncio/server test:e2e && bun run test:smoke-ui"
   },
   "devDependencies": {
     "@changesets/changelog-github": "^0.7.0",
