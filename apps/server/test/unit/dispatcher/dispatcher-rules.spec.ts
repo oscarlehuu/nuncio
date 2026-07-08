@@ -196,6 +196,24 @@ describe('dispatcher deterministic rule folds', () => {
     });
   });
 
+  it('emits exactly one verify-fix proposal when an open verify-dead item already represents the session', () => {
+    const proposals = foldDispatcherProposals(base({
+      attentionItems: [attention({ kind: 'verify-dead', subjectId: 's1' })],
+      sessions: [session({ id: 's1', projectPath: '/repo/app' })],
+      eventsBySession: {
+        s1: [
+          event(1, 'verify_result', NOW - 2 * HOUR, { ok: false }),
+          event(2, 'verify_needs_attention', NOW - HOUR, { reason: 'max_rounds' }),
+        ],
+      },
+    }));
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]).toMatchObject({
+      subjectKey: 'session:verify-dead:s1',
+      title: 'Fix the failing verify in app',
+    });
+  });
+
   it('does not propose a verify-dead session when a later green verify cleared it', () => {
     const proposals = foldDispatcherProposals(base({
       sessions: [session({ id: 's1' })],
@@ -209,6 +227,18 @@ describe('dispatcher deterministic rule folds', () => {
     expect(proposals).toHaveLength(0);
   });
 
+  it('emits exactly one broken-loop proposal when a tripped-breaker item already represents the loop', () => {
+    const proposals = foldDispatcherProposals(base({
+      attentionItems: [attention({ kind: 'tripped-breaker', subjectId: 'loop-1', severity: 4 })],
+      loops: [loop({ id: 'loop-1', name: 'Nightly', status: 'broken' })],
+    }));
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]).toMatchObject({
+      subjectKey: 'loop:broken:loop-1',
+      title: 'Resume or investigate Nightly',
+    });
+  });
+
   it('turns yesterday all-failed loop runs into an investigation proposal', () => {
     const proposals = foldDispatcherProposals(base({
       loops: [loop({ id: 'loop-1', name: 'Nightly' })],
@@ -220,6 +250,21 @@ describe('dispatcher deterministic rule folds', () => {
     expect(proposals[0]).toMatchObject({
       title: 'Investigate why Nightly failed 2 times',
       rationale: 'source: yesterday loop loop-1 had 2 failed runs and 0 ok runs',
+    });
+  });
+
+  it('does not add yesterday-failed loop proposals for loops already represented as broken', () => {
+    const proposals = foldDispatcherProposals(base({
+      loops: [loop({ id: 'loop-1', name: 'Nightly', status: 'broken' })],
+      loopRuns: [
+        loopRun({ id: 'r1', loopId: 'loop-1' }),
+        loopRun({ id: 'r2', loopId: 'loop-1' }),
+      ],
+    }));
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]).toMatchObject({
+      subjectKey: 'loop:broken:loop-1',
+      title: 'Resume or investigate Nightly',
     });
   });
 

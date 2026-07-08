@@ -88,7 +88,11 @@ export class DispatcherService implements OnModuleInit {
     const missing: DispatcherProposal[] = [];
     const taskIds: Array<string | null> = [];
     for (const proposal of payload.proposals) {
-      const existing = existingTasks.find((task) => task.prompt === proposal.prompt && task.projectPath === proposal.projectPath);
+      const existing = existingTasks.find((task) =>
+        isActiveTask(task) &&
+        task.prompt === proposal.prompt &&
+        task.projectPath === proposal.projectPath
+      );
       if (existing) {
         taskIds.push(existing.id);
       } else {
@@ -175,6 +179,10 @@ function taskInputFromProposal(proposal: DispatcherProposal): CreateTaskDto {
     ...(proposal.model ? { model: proposal.model } : {}),
     ...(proposal.projectPath ? { projectPath: proposal.projectPath } : {}),
   };
+}
+
+function isActiveTask(task: { status: string }): boolean {
+  return task.status === 'QUEUED' || task.status === 'RUNNING';
 }
 
 export { DEFAULT_DISPATCHER_SPEC, DISPATCHER_JOB, DISPATCHER_SPEC_KEY };

@@ -280,6 +280,27 @@ describe('DispatcherService', () => {
     expect(tasks.created).toHaveLength(1);
   });
 
+  it('approve does not recover terminal historical tasks for a fresh proposal with the same prompt', () => {
+    tasks.enqueueMany([{
+      prompt: proposal().prompt,
+      provider: proposal().engine,
+      model: proposal().model,
+      projectPath: proposal().projectPath ?? undefined,
+    }]);
+    tasks.created[0]!.status = 'DONE';
+    tasks.created[0]!.finishedAt = NOW - 24 * 60 * 60_000;
+    const item = attention.raise({
+      kind: 'dispatcher-proposal',
+      subjectId: 'dispatch:2026-07-09',
+      title: 'Dispatcher proposal for 2026-07-09',
+      payload: { proposals: [proposal()] },
+    });
+
+    expect(service.approve(item.id).taskIds).toEqual(['task-2']);
+    expect(tasks.created).toHaveLength(2);
+    expect(tasks.created.map((task) => task.status)).toEqual(['DONE', 'QUEUED']);
+  });
+
   it('approve leaves the item open without audit when task creation fails', () => {
     const item = attention.raise({
       kind: 'dispatcher-proposal',

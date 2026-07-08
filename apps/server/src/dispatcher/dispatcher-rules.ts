@@ -139,7 +139,7 @@ function candidateFromVerifyAttention(item: AttentionItemDto, sources: Dispatche
   const project = projectLabel(item.projectPath);
   return withDefaults(
     {
-      subjectKey: `attention:verify-dead:${item.subjectId}`,
+      subjectKey: `session:verify-dead:${item.subjectId}`,
       title: `Fix the failing verify in ${project}`,
       prompt: `Fix the failing verify in ${project}. Inspect session ${item.subjectId}, reproduce the failure, and land the smallest verified fix.`,
       projectPath: item.projectPath,
@@ -225,6 +225,7 @@ function candidateFromVerifySession(session: SessionDto, sources: DispatcherRule
 function candidatesFromYesterdayFailedLoops(sources: DispatcherRuleSources): Candidate[] {
   const yesterday = localDay(sources.now - DAY_MS);
   return sources.loops.flatMap((loop) => {
+    if (loop.status === 'broken') return [];
     const runs = sources.loopRuns.filter((run) => run.loopId === loop.id && run.dayBucket === yesterday);
     const settled = runs.filter((run) => run.outcome === 'ok' || run.outcome === 'failed');
     if (settled.length === 0 || settled.some((run) => run.outcome === 'ok')) return [];
@@ -337,9 +338,22 @@ function existingDispatcherSubjects(items: AttentionItemDto[], currentSubjectId:
     if (item.status !== 'open' || item.kind !== DISPATCHER_KIND) continue;
     if (item.subjectId === currentSubjectId) continue;
     const proposals = proposalsFromPayload(item.payload);
-    for (const proposal of proposals) subjects.add(proposal.subjectKey);
+    for (const proposal of proposals) {
+      subjects.add(proposal.subjectKey);
+      for (const alias of canonicalSubjectAliases(proposal.subjectKey)) subjects.add(alias);
+    }
   }
   return subjects;
+}
+
+function canonicalSubjectAliases(subjectKey: string): string[] {
+  if (subjectKey.startsWith('attention:verify-dead:')) {
+    return [`session:verify-dead:${subjectKey.slice('attention:verify-dead:'.length)}`];
+  }
+  if (subjectKey.startsWith('attention:tripped-breaker:')) {
+    return [`loop:broken:${subjectKey.slice('attention:tripped-breaker:'.length)}`];
+  }
+  return [];
 }
 
 function proposalsFromPayload(payload: Record<string, unknown> | null): Array<{ subjectKey: string }> {
