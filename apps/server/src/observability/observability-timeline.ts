@@ -32,13 +32,13 @@ export function buildGlobalTimeline(
   }
 
   const limit = Math.min(Math.max(1, query.limit ?? DEFAULT_LIMIT), MAX_LIMIT);
-  return entries
+  const page = entries
     .filter((item) => inWindow(item.ts, query))
     .filter((item) => (query.before === undefined ? true : item.ts < query.before!))
     .filter((item) => (query.provider ? item.provider === query.provider : true))
     .filter((item) => (query.projectPath ? item.projectPath === query.projectPath : true))
-    .sort(compareTimelineEntries)
-    .slice(0, limit);
+    .sort(compareTimelineEntries);
+  return takePageWithoutSplittingTimestamp(page, limit);
 }
 
 function appendSessionFacts(session: SessionDto, events: SessionEvent[], entries: TimelineEntryDto[]): void {
@@ -124,10 +124,13 @@ function appendTaskFact(task: TaskDto, entries: TimelineEntryDto[]): void {
 }
 
 function appendLoopRunFact(run: LoopRunDto, task: TaskDto | undefined, entries: TimelineEntryDto[]): void {
-  if (run.outcome === 'pending') return;
+  if (run.outcome !== 'ok' && run.outcome !== 'failed') return;
+  // A loop run row is created when work is enqueued; the linked task carries the
+  // settlement time. Fall back to createdAt only for missing legacy task rows.
+  const settledAt = task?.finishedAt ?? run.createdAt;
   entries.push(entry({
     id: `loop-run-settled:${run.id}`,
-    ts: run.createdAt,
+    ts: settledAt,
     kind: 'loop-run-settled',
     title: `Loop run ${run.outcome}${run.verify !== 'none' ? ` (${run.verify})` : ''}`,
     projectPath: task?.projectPath ?? null,
@@ -195,4 +198,13 @@ function appendAttentionFacts(item: AttentionItemDto, entries: TimelineEntryDto[
 
 function entry(input: Omit<TimelineEntryDto, 'at'>): TimelineEntryDto {
   return { ...input, at: input.ts };
+}
+
+function takePageWithoutSplittingTimestamp(entries: TimelineEntryDto[], limit: number): TimelineEntryDto[] {
+  if (entries.length <= limit) return entries;
+  const boundaryTs = entries[limit - 1]?.ts;
+  if (boundaryTs === undefined) return entries.slice(0, limit);
+  let end = limit;
+  while (end < entries.length && entries[end]?.ts === boundaryTs) end += 1;
+  return entries.slice(0, end);
 }

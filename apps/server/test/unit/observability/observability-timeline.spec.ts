@@ -193,6 +193,69 @@ describe('global observability timeline', () => {
     expect(buildGlobalTimeline(input, { window: { from: 0, to: 100 }, now: 100, limit: 2 })).toEqual(first);
   });
 
+  it('does not skip entries when a page boundary lands inside one timestamp group', () => {
+    const input = sources({
+      sessions: [
+        session({ id: 'tie-0', createdAt: 50 }),
+        session({ id: 'tie-1', createdAt: 50 }),
+        session({ id: 'tie-2', createdAt: 50 }),
+        session({ id: 'tie-3', createdAt: 50 }),
+        session({ id: 'tie-4', createdAt: 50 }),
+        session({ id: 'older', createdAt: 40 }),
+      ],
+    });
+
+    const first = buildGlobalTimeline(input, { window: { from: 0, to: 100 }, now: 100, limit: 3 });
+    const second = buildGlobalTimeline(input, {
+      window: { from: 0, to: 100 },
+      now: 100,
+      before: first.at(-1)?.ts,
+      limit: 3,
+    });
+    const union = [...first, ...second];
+
+    expect(first.filter((e) => e.ts === 50).map((e) => e.sessionId)).toEqual([
+      'tie-0',
+      'tie-1',
+      'tie-2',
+      'tie-3',
+      'tie-4',
+    ]);
+    expect(union.map((e) => e.sessionId).sort()).toEqual(['older', 'tie-0', 'tie-1', 'tie-2', 'tie-3', 'tie-4']);
+    expect(new Set(union.map((e) => e.id)).size).toBe(union.length);
+  });
+
+  it('timestamps settled loop run facts from the linked task finish time', () => {
+    const result = buildGlobalTimeline(
+      sources({
+        tasks: [task({ id: 'task-1', status: 'DONE', createdAt: 0, startedAt: 0, finishedAt: 5 })],
+        loopRuns: [loopRun({ id: 'run-1', outcome: 'ok', verify: 'green', createdAt: 0, taskId: 'task-1' })],
+      }),
+      { window: { from: 2, to: 9 }, now: 9 },
+    );
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'loop-run-settled', id: 'loop-run-settled:run-1', ts: 5, at: 5 }),
+      ]),
+    );
+  });
+
+  it('does not surface transparent loop bookkeeping rows as settled runs', () => {
+    const result = buildGlobalTimeline(
+      sources({
+        loopRuns: [
+          loopRun({ id: 'budget', outcome: 'budget-exhausted', verify: 'none', createdAt: 30, taskId: null }),
+          loopRun({ id: 'skip', outcome: 'skipped-overlap', verify: 'none', createdAt: 20, taskId: null }),
+          loopRun({ id: 'resume', outcome: 'resume', verify: 'none', createdAt: 10, taskId: null }),
+        ],
+      }),
+      { window: { from: 0, to: 100 }, now: 100 },
+    );
+
+    expect(result.filter((entry) => entry.kind === 'loop-run-settled')).toEqual([]);
+  });
+
   it('returns an empty feed for an empty window', () => {
     const result = buildGlobalTimeline(
       sources({ sessions: [session({ id: 's1', createdAt: 10 })] }),
