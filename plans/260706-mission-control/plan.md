@@ -93,4 +93,4 @@ others best-effort · single-machine queue v1.
 1. Direction test #6 wording — approve, amend, or drop?
 2. Budget defaults — what daily token/cost ceiling feels right to start?
 3. Digest delivery — push notification, in-app only, or both?
-4. Fleet home — replace the current Workbench home, or a sibling view the founder toggles?
+4. Fleet home — **RESOLVED (founder, 2026-07-08): Fleet replaces the Workbench as the landing surface; the Workbench grid becomes the per-project drill-down.**
