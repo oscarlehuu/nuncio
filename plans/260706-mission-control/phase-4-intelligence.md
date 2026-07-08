@@ -26,7 +26,7 @@
 | **D** | Dispatcher v1 rules + approve-in-one-tap | A/B/C + attention | Rules draft tomorrow from open attention, stale work, failed verifies, PRs. Approval enqueues via existing task path. |
 | **Seam only** | Dispatcher v2 agent session | C/D | Design only: an ordinary provider session granted the Nuncio MCP, proposes only. No model API calls in Nuncio. |
 
-## Founder-Decision Table
+## Founder-Decision Table — LOCKED (founder, 2026-07-08): all 9 as recommended
 
 | Decision | Recommendation | Why | Trade-off |
 |---|---|---|---|
