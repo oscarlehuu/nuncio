@@ -74,6 +74,25 @@ describe('TasksController', () => {
     );
   });
 
+  it('update forwards only the provided fields to the service', () => {
+    const update = jest.fn((id, input) => ({ id, ...input }));
+    const controller = new TasksController({ update } as never);
+
+    controller.update('t1', { provider: 'pi', model: 'pi:model', holdSeconds: 30 });
+    expect(update).toHaveBeenCalledWith('t1', { provider: 'pi', model: 'pi:model', holdSeconds: 30 });
+
+    update.mockClear();
+    controller.update('t1', { holdSeconds: 20 });
+    expect(update).toHaveBeenCalledWith('t1', { holdSeconds: 20 });
+  });
+
+  it('start-now delegates to the service', () => {
+    const startNow = jest.fn(() => ({ id: 't1', status: 'QUEUED', holdUntil: null }));
+    const controller = new TasksController({ startNow } as never);
+    expect(controller.startNow('t1')).toMatchObject({ holdUntil: null });
+    expect(startNow).toHaveBeenCalledWith('t1');
+  });
+
   it('cancel, retry, review, and delete delegate to the service', () => {
     const cancel = jest.fn(() => ({ id: 't1', status: 'CANCELLED' }));
     const retry = jest.fn(() => ({ id: 't2', status: 'QUEUED' }));

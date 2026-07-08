@@ -11,6 +11,10 @@ import {
   startMultitask,
   startMultitaskFromQueue,
   markTaskReviewed,
+  cancelTask,
+  retryTask,
+  updateTask,
+  startTaskNow,
 } from '../lib/api';
 import type { Session, SessionEvent, TaskDto } from '../lib/api';
 import type { ModelProvider } from '../lib/model-providers';
@@ -92,6 +96,10 @@ vi.mock('../lib/api', async () => {
     startMultitask: vi.fn(async () => ({ parentSessionId: 's1', tasks: [] })),
     startMultitaskFromQueue: vi.fn(async () => ({ parentSessionId: 's1', tasks: [] })),
     markTaskReviewed: vi.fn(async () => ({})),
+    cancelTask: vi.fn(async () => ({})),
+    retryTask: vi.fn(async () => ({})),
+    updateTask: vi.fn(async () => ({})),
+    startTaskNow: vi.fn(async () => ({})),
   };
 });
 
@@ -137,6 +145,7 @@ function makeTask(overrides: Partial<TaskDto> = {}): TaskDto {
     reviewState: null,
     sessionId: 'child-session-1',
     outcome: null,
+    holdUntil: null,
     createdAt: Date.now() - 1000,
     updatedAt: Date.now(),
     startedAt: Date.now() - 500,
@@ -1111,6 +1120,320 @@ describe('SessionDetail', () => {
       // A second fetch refreshes the list after review.
       await waitFor(() => expect(fetchChildTasks).toHaveBeenCalledTimes(2));
       expect(await screen.findByText(/reviewed/i)).toBeInTheDocument();
+    });
+
+    it('polls for child tasks while one is RUNNING and stops when all are terminal', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        vi.mocked(fetchChildTasks)
+          .mockResolvedValueOnce([makeTask({ id: 't1', status: 'RUNNING' })])
+          .mockResolvedValueOnce([makeTask({ id: 't1', status: 'RUNNING' })])
+          .mockResolvedValue([makeTask({ id: 't1', status: 'DONE', reviewState: 'reviewed' })]);
+        await renderDetail({ status: 'RUNNING' });
+
+        await waitFor(() => expect(fetchChildTasks).toHaveBeenCalledTimes(1));
+
+        // Interval fires while the task is still RUNNING.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(4000);
+        });
+        await waitFor(() => expect(fetchChildTasks).toHaveBeenCalledTimes(2));
+
+        // Next tick returns a terminal task, which tears the interval down.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(4000);
+        });
+        await waitFor(() => expect(fetchChildTasks).toHaveBeenCalledTimes(3));
+
+        const afterTerminal = vi.mocked(fetchChildTasks).mock.calls.length;
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(12000);
+        });
+        expect(vi.mocked(fetchChildTasks).mock.calls.length).toBe(afterTerminal);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('Cancel cancels a queued task and refreshes the list', async () => {
+      vi.mocked(fetchChildTasks)
+        .mockResolvedValueOnce([makeTask({ id: 't1', status: 'QUEUED', sessionId: null })])
+        .mockResolvedValue([makeTask({ id: 't1', status: 'CANCELLED', sessionId: null })]);
+      await renderDetail({ status: 'RUNNING' });
+
+      await screen.findByTestId('subagents-panel');
+      expect(screen.getByText('Queued')).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: /cancel/i }));
+
+      await waitFor(() => expect(cancelTask).toHaveBeenCalledWith('t1'));
+      // The handler must refetch after cancelling — the row flips to Cancelled.
+      expect(await screen.findByText('Cancelled')).toBeInTheDocument();
+      expect(vi.mocked(fetchChildTasks).mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('Retry retries a terminal task and refreshes the list', async () => {
+      vi.mocked(fetchChildTasks)
+        .mockResolvedValueOnce([makeTask({ id: 't1', status: 'FAILED' })])
+        .mockResolvedValue([makeTask({ id: 't1', status: 'RUNNING' })]);
+      await renderDetail({ status: 'RUNNING' });
+
+      await screen.findByTestId('subagents-panel');
+      expect(screen.getByText('Failed')).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: /retry/i }));
+
+      await waitFor(() => expect(retryTask).toHaveBeenCalledWith('t1'));
+      // The handler must refetch after retrying — the row flips back to Running.
+      expect(await screen.findByText('Running')).toBeInTheDocument();
+      expect(vi.mocked(fetchChildTasks).mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('Start now launches a held task and refreshes the list', async () => {
+      const holdUntil = Date.now() + 12_000;
+      vi.mocked(fetchChildTasks)
+        .mockResolvedValueOnce([makeTask({ id: 't1', status: 'QUEUED', sessionId: null, holdUntil })])
+        .mockResolvedValue([makeTask({ id: 't1', status: 'RUNNING' })]);
+      await renderDetail({ status: 'RUNNING' });
+
+      await screen.findByTestId('subagents-panel');
+      expect(screen.getByTestId('subagent-countdown')).toHaveTextContent(/starts in \d+s/);
+      await userEvent.click(screen.getByRole('button', { name: /start .* now/i }));
+
+      await waitFor(() => expect(startTaskNow).toHaveBeenCalledWith('t1'));
+      expect(vi.mocked(fetchChildTasks).mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('changing a held task model calls updateTask with provider, model and a re-arm', async () => {
+      const holdUntil = Date.now() + 12_000;
+      vi.mocked(fetchChildTasks).mockResolvedValue([
+        makeTask({ id: 't1', status: 'QUEUED', sessionId: null, holdUntil, provider: 'pi', model: 'claude-fable-5' }),
+      ]);
+      await renderDetail(
+        { status: 'RUNNING' },
+        NO_EVENTS,
+        [
+          {
+            id: 'pi',
+            name: 'Pi',
+            groups: [
+              {
+                id: 'g',
+                name: 'g',
+                models: [
+                  { id: 'claude-fable-5', name: 'Fable 5' },
+                  { id: 'claude-opus-4-8', name: 'Opus 4.8' },
+                ],
+              },
+            ],
+          },
+        ],
+      );
+
+      await screen.findByTestId('subagents-panel');
+      // Open the model picker chip, drill into the provider, choose a different model.
+      await userEvent.click(screen.getByRole('button', { name: /fable 5/i }));
+      await userEvent.click(await screen.findByText('Pi'));
+      await userEvent.click(await screen.findByText('Opus 4.8'));
+
+      await waitFor(() =>
+        expect(updateTask).toHaveBeenCalledWith(
+          't1',
+          expect.objectContaining({ provider: 'pi', model: 'claude-opus-4-8', holdSeconds: expect.any(Number) }),
+        ),
+      );
+    });
+
+    it('re-arm never shortens a window with more remaining than the default', async () => {
+      // Task has ~50s left; opening the picker (server default may be 60s) must
+      // NOT clamp the hold down to the 15s client default.
+      const holdUntil = Date.now() + 50_000;
+      vi.mocked(fetchChildTasks).mockResolvedValue([
+        makeTask({ id: 't1', status: 'QUEUED', sessionId: null, holdUntil, provider: 'pi', model: 'claude-fable-5' }),
+      ]);
+      await renderDetail(
+        { status: 'RUNNING' },
+        NO_EVENTS,
+        [
+          {
+            id: 'pi',
+            name: 'Pi',
+            groups: [{ id: 'g', name: 'g', models: [{ id: 'claude-fable-5', name: 'Fable 5' }] }],
+          },
+        ],
+      );
+
+      await screen.findByTestId('subagents-panel');
+      // Opening the picker re-arms; the chip label reflects the current model.
+      await userEvent.click(screen.getByRole('button', { name: /fable 5/i }));
+
+      await waitFor(() => expect(updateTask).toHaveBeenCalled());
+      const [, patch] = vi.mocked(updateTask).mock.calls[0];
+      expect(patch.holdSeconds).toBeGreaterThanOrEqual(50);
+    });
+
+    it('re-arm uses the default window when little time remains', async () => {
+      const holdUntil = Date.now() + 3_000; // 3s left, below the 15s default
+      vi.mocked(fetchChildTasks).mockResolvedValue([
+        makeTask({ id: 't1', status: 'QUEUED', sessionId: null, holdUntil, provider: 'pi', model: 'claude-fable-5' }),
+      ]);
+      await renderDetail(
+        { status: 'RUNNING' },
+        NO_EVENTS,
+        [
+          {
+            id: 'pi',
+            name: 'Pi',
+            groups: [{ id: 'g', name: 'g', models: [{ id: 'claude-fable-5', name: 'Fable 5' }] }],
+          },
+        ],
+      );
+
+      await screen.findByTestId('subagents-panel');
+      await userEvent.click(screen.getByRole('button', { name: /fable 5/i }));
+
+      await waitFor(() => expect(updateTask).toHaveBeenCalled());
+      const [, patch] = vi.mocked(updateTask).mock.calls[0];
+      expect(patch.holdSeconds).toBe(15);
+    });
+
+    it('drops a stale child-tasks response from a previous session after switching', async () => {
+      // Session A's fetch is slow; the user switches to B, whose fetch resolves
+      // first. A's late response must NOT overwrite B's subagent list.
+      let resolveA!: (tasks: TaskDto[]) => void;
+      vi.mocked(fetchChildTasks)
+        .mockImplementationOnce(
+          () => new Promise<TaskDto[]>((resolve) => { resolveA = resolve; }),
+        )
+        .mockResolvedValueOnce([
+          makeTask({ id: 't-b', prompt: "B's subagent", status: 'RUNNING', sessionId: null }),
+        ]);
+
+      const { rerender } = await renderDetail({ id: 's1', status: 'RUNNING' });
+
+      // Switch to session B before A resolves; B's list renders.
+      rerender(
+        <SessionDetail
+          session={makeSession({ id: 's2', status: 'RUNNING' })}
+          events={NO_EVENTS}
+          onSteer={vi.fn()}
+          onPause={vi.fn()}
+          onArchive={vi.fn()}
+        />,
+      );
+      expect(await screen.findByText("B's subagent")).toBeInTheDocument();
+
+      // Now A's stale response arrives — it must be dropped.
+      await act(async () => {
+        resolveA([
+          makeTask({ id: 't-a', prompt: "A's subagent", status: 'RUNNING', sessionId: null }),
+        ]);
+      });
+
+      expect(screen.getByText("B's subagent")).toBeInTheDocument();
+      expect(screen.queryByText("A's subagent")).toBeNull();
+    });
+
+    it('does not leak a stale action refresh from a previous session into the new one', async () => {
+      // On session A the user clicks Cancel; the cancel request is held open.
+      // They switch to B (which loads its own list). When A's cancel finally
+      // resolves, A's handler calls A's refreshChildTasks — bound to A's id.
+      // That late refresh must NOT write A's tasks into B's view.
+      let resolveCancel!: () => void;
+      vi.mocked(cancelTask).mockImplementationOnce(
+        () => new Promise((resolve) => { resolveCancel = () => resolve({} as TaskDto); }),
+      );
+      vi.mocked(fetchChildTasks)
+        // A initial load: a queued task with a Cancel action.
+        .mockResolvedValueOnce([makeTask({ id: 't-a', prompt: "A's subagent", status: 'QUEUED', sessionId: null })])
+        // B load after the switch.
+        .mockResolvedValueOnce([makeTask({ id: 't-b', prompt: "B's subagent", status: 'RUNNING', sessionId: null })])
+        // A's post-cancel refresh (should be dropped).
+        .mockResolvedValue([makeTask({ id: 't-a', prompt: "A's subagent", status: 'CANCELLED', sessionId: null })]);
+
+      const { rerender } = await renderDetail({ id: 's1', status: 'RUNNING' });
+      await screen.findByText("A's subagent");
+      await userEvent.click(screen.getByRole('button', { name: /cancel/i }));
+      await waitFor(() => expect(cancelTask).toHaveBeenCalledWith('t-a'));
+
+      // Switch to B before the cancel resolves; B's list renders.
+      rerender(
+        <SessionDetail
+          session={makeSession({ id: 's2', status: 'RUNNING' })}
+          events={NO_EVENTS}
+          onSteer={vi.fn()}
+          onPause={vi.fn()}
+          onArchive={vi.fn()}
+        />,
+      );
+      expect(await screen.findByText("B's subagent")).toBeInTheDocument();
+
+      // A's cancel resolves late → A's handler refreshes A's list. Must be dropped.
+      await act(async () => {
+        resolveCancel();
+      });
+
+      expect(screen.getByText("B's subagent")).toBeInTheDocument();
+      expect(screen.queryByText("A's subagent")).toBeNull();
+    });
+
+    it("commits B's own fetch even when a stale A action refresh fires first", async () => {
+      // Liveness: B's mount fetch is in flight when A's late action-bound refresh
+      // fires. That stale refresh must no-op WITHOUT claiming a sequence token —
+      // otherwise it starves B's legitimate response and the panel stays empty.
+      let resolveCancel!: () => void;
+      let resolveB!: (tasks: TaskDto[]) => void;
+      vi.mocked(cancelTask).mockImplementationOnce(
+        () => new Promise((resolve) => { resolveCancel = () => resolve({} as TaskDto); }),
+      );
+      vi.mocked(fetchChildTasks)
+        // A initial load.
+        .mockResolvedValueOnce([makeTask({ id: 't-a', prompt: "A's subagent", status: 'QUEUED', sessionId: null })])
+        // B's mount fetch — held open so A's late refresh can race ahead of it.
+        .mockImplementationOnce(
+          () => new Promise<TaskDto[]>((resolve) => { resolveB = resolve; }),
+        )
+        // Any A-bound refresh that slips through would fetch this — it must never commit.
+        .mockResolvedValue([makeTask({ id: 't-a', prompt: "A's subagent", status: 'CANCELLED', sessionId: null })]);
+
+      const { rerender } = await renderDetail({ id: 's1', status: 'RUNNING' });
+      await screen.findByText("A's subagent");
+      await userEvent.click(screen.getByRole('button', { name: /cancel/i }));
+      await waitFor(() => expect(cancelTask).toHaveBeenCalledWith('t-a'));
+
+      // Switch to B; its mount fetch is now pending (resolveB not yet called).
+      rerender(
+        <SessionDetail
+          session={makeSession({ id: 's2', status: 'RUNNING' })}
+          events={NO_EVENTS}
+          onSteer={vi.fn()}
+          onPause={vi.fn()}
+          onArchive={vi.fn()}
+        />,
+      );
+
+      // A's cancel resolves → A's stale refresh fires while B's fetch is still open.
+      await act(async () => {
+        resolveCancel();
+      });
+
+      // Now B's own fetch resolves — it MUST commit, not be starved into emptiness.
+      await act(async () => {
+        resolveB([makeTask({ id: 't-b', prompt: "B's subagent", status: 'RUNNING', sessionId: null })]);
+      });
+
+      expect(await screen.findByText("B's subagent")).toBeInTheDocument();
+      expect(screen.queryByText("A's subagent")).toBeNull();
+    });
+
+    it('opens a child session when its prompt is clicked', async () => {
+      const onOpenSession = vi.fn();
+      vi.mocked(fetchChildTasks).mockResolvedValueOnce([
+        makeTask({ id: 't1', status: 'RUNNING', sessionId: 'child-session-1' }),
+      ]);
+      await renderDetail({ status: 'RUNNING' }, NO_EVENTS, undefined, { onOpenSession });
+
+      await screen.findByTestId('subagents-panel');
+      await userEvent.click(screen.getByRole('button', { name: /open subagent session/i }));
+      expect(onOpenSession).toHaveBeenCalledWith('child-session-1');
     });
   });
 });

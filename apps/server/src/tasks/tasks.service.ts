@@ -1,4 +1,11 @@
-import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+  Optional,
+  type OnModuleDestroy,
+} from '@nestjs/common';
+import type { ModelOptionsMap } from '../models/model-options.types';
 import { deriveHasPendingInput } from '../sessions/domain/derive-pending-input';
 import { EventsRepository } from '../sessions/persistence/events.repository';
 import { SessionsService } from '../sessions/sessions.service';
@@ -16,8 +23,21 @@ import {
 /** How many trailing events to scan when deriving "waiting on user input". */
 const PENDING_SCAN_TAIL = 200;
 
+/** Launch-countdown bounds (seconds): long enough to react, short enough to matter. */
+const MIN_HOLD_SECONDS = 5;
+const MAX_HOLD_SECONDS = 600;
+const DEFAULT_HOLD_SECONDS = 15;
+
+function clampHoldSeconds(seconds: number): number {
+  return Math.min(MAX_HOLD_SECONDS, Math.max(MIN_HOLD_SECONDS, seconds));
+}
+
 @Injectable()
-export class TasksService {
+export class TasksService implements OnModuleDestroy {
+  /** Single wake timer that re-runs the pump when the earliest hold expires. */
+  private holdTimer: ReturnType<typeof setTimeout> | null = null;
+  private destroyed = false;
+
   constructor(
     private readonly tasks: TasksRepository,
     private readonly sessions: SessionsService,
@@ -63,7 +83,10 @@ export class TasksService {
     if (!prompts?.length) throw new BadRequestException('at least one prompt is required');
 
     const tasks = prompts.map((prompt) =>
-      this.enqueue(buildSubagentTaskInput(input, parent, prompt, this.settings)),
+      this.enqueue({
+        ...buildSubagentTaskInput(input, parent, prompt, this.settings),
+        holdUntil: Date.now() + this.countdownMs(),
+      }),
     );
 
     return { parentSessionId, tasks };
@@ -87,7 +110,10 @@ export class TasksService {
     }
 
     const tasks = prompts.map((prompt) =>
-      this.enqueue(buildSubagentTaskInput({ parentSessionId: trimmed, prompts }, parent, prompt, this.settings)),
+      this.enqueue({
+        ...buildSubagentTaskInput({ parentSessionId: trimmed, prompts }, parent, prompt, this.settings),
+        holdUntil: Date.now() + this.countdownMs(),
+      }),
     );
 
     return { parentSessionId: trimmed, tasks };
@@ -132,6 +158,67 @@ export class TasksService {
     return reviewed;
   }
 
+  /**
+   * Re-route or re-arm a task that is still queued (typically mid-hold). A hold
+   * re-arm is only allowed while the task is actually holding — you cannot start
+   * a countdown on a task that was never delayed.
+   */
+  update(
+    id: string,
+    input: { provider?: string; model?: string; modelOptions?: ModelOptionsMap | null; holdSeconds?: number },
+  ): TaskDto {
+    const task = this.requireTask(id);
+    if (task.status !== 'QUEUED') {
+      throw new BadRequestException('Only queued tasks can be updated');
+    }
+
+    // Validate at the boundary: a non-string provider/model or a non-finite
+    // holdSeconds would otherwise persist as garbage — e.g. NaN is stored as
+    // NULL by SQLite, silently un-holding the task without re-queuing a pump.
+    if (input.provider !== undefined && typeof input.provider !== 'string') {
+      throw new BadRequestException('provider must be a string');
+    }
+    if (input.model !== undefined && typeof input.model !== 'string') {
+      throw new BadRequestException('model must be a string');
+    }
+
+    let holdUntil: number | undefined;
+    if (input.holdSeconds !== undefined) {
+      if (typeof input.holdSeconds !== 'number' || !Number.isFinite(input.holdSeconds)) {
+        throw new BadRequestException('holdSeconds must be a number');
+      }
+      if (task.holdUntil == null) {
+        throw new BadRequestException('Task is not holding');
+      }
+      holdUntil = Date.now() + clampHoldSeconds(input.holdSeconds) * 1000;
+    }
+
+    const updated = this.tasks.updateWhileQueued(id, {
+      ...(input.provider !== undefined ? { provider: input.provider } : {}),
+      ...(input.model !== undefined ? { model: input.model } : {}),
+      ...(input.modelOptions !== undefined ? { modelOptions: input.modelOptions } : {}),
+      ...(holdUntil !== undefined ? { holdUntil } : {}),
+    });
+    // Null means the pump claimed the task between our read and write.
+    if (!updated) {
+      throw new BadRequestException('Only queued tasks can be updated');
+    }
+    // A re-arm may have pushed the earliest hold out; refresh the wake timer.
+    if (holdUntil !== undefined) this.armHoldTimer();
+    return updated;
+  }
+
+  /** Skip the rest of a held task's countdown and let the pump claim it now. */
+  startNow(id: string): TaskDto {
+    this.requireTask(id);
+    const cleared = this.tasks.clearHold(id);
+    if (!cleared) {
+      throw new BadRequestException('Only held tasks can be started now');
+    }
+    void this.pump();
+    return cleared;
+  }
+
   delete(id: string): void {
     this.requireTask(id);
     if (!this.tasks.delete(id)) {
@@ -151,16 +238,56 @@ export class TasksService {
     return Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
   }
 
+  /** Launch grace window in ms: configurable, parsed leniently, clamped. */
+  private countdownMs(): number {
+    const raw = this.settings?.resolve('NUNCIO_MULTITASK_COUNTDOWN_SECONDS');
+    const parsed = Number.parseInt(raw ?? '', 10);
+    const seconds = Number.isNaN(parsed) ? DEFAULT_HOLD_SECONDS : clampHoldSeconds(parsed);
+    return seconds * 1000;
+  }
+
+  onModuleDestroy(): void {
+    this.destroyed = true;
+    if (this.holdTimer) {
+      clearTimeout(this.holdTimer);
+      this.holdTimer = null;
+    }
+  }
+
   /**
    * FIFO pump. The claim→spawn body is fully synchronous, so concurrent pump
-   * calls cannot over-claim past the cap in a single-threaded runtime.
+   * calls cannot over-claim past the cap in a single-threaded runtime. Held
+   * tasks are skipped by claimNextQueued; a single wake timer re-runs the pump
+   * when the earliest hold expires.
    */
   private pump(): void {
+    if (this.destroyed) return;
     while (this.tasks.countRunning() < this.concurrency()) {
       const task = this.tasks.claimNextQueued();
-      if (!task) return;
+      if (!task) break;
       void this.execute(task).finally(() => this.pump());
     }
+    this.armHoldTimer();
+  }
+
+  /**
+   * Keep exactly one timer aimed at the next hold expiry (replacing any prior).
+   * Only holds strictly in the future get a timer: an already-expired hold is
+   * claimable now, so the pump that runs when capacity frees (execute().finally
+   * → pump) will claim it. Arming for an expired hold at full concurrency would
+   * spin a setTimeout(0)→pump→setTimeout(0) busy-loop until a slot opens.
+   */
+  private armHoldTimer(): void {
+    if (this.holdTimer) {
+      clearTimeout(this.holdTimer);
+      this.holdTimer = null;
+    }
+    if (this.destroyed) return;
+    const earliest = this.tasks.earliestHold();
+    if (earliest == null) return;
+    const delay = earliest - Date.now();
+    if (delay <= 0) return;
+    this.holdTimer = setTimeout(() => this.pump(), delay);
   }
 
   private async execute(task: TaskDto): Promise<void> {

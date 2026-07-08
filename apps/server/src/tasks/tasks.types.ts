@@ -24,6 +24,7 @@ export interface TaskRow {
   review_state: TaskReviewState | null;
   session_id: string | null;
   outcome_json: string | null;
+  hold_until: number | null;
   created_at: number;
   updated_at: number;
   started_at: number | null;
@@ -49,6 +50,8 @@ export interface TaskDto {
   outcome: Record<string, unknown> | null;
   /** Derived at read time: the linked session is waiting on the user. */
   pendingInput?: boolean;
+  /** When set, the pump must not claim this task until Date.now() >= holdUntil. */
+  holdUntil: number | null;
   createdAt: number;
   updatedAt: number;
   startedAt: number | null;
@@ -67,6 +70,7 @@ export interface CreateTaskDto {
   parentSessionId?: string;
   role?: TaskRole;
   cleanupPolicy?: TaskCleanupPolicy;
+  holdUntil?: number;
 }
 
 export interface StartMultitaskDto {

@@ -373,6 +373,65 @@ describe('CodexAgentProvider', () => {
     expect(streamed).toBe('First section. Same section.\n\nSecond section.');
   });
 
+  it('inserts a fresh paragraph break when an earlier item id reappears after a different item', async () => {
+    // Out-of-order edge: deltas arrive for item A, then B, then A again. The
+    // provider tracks only the *most recent* item id, so the returning A is
+    // treated as a brand-new item and gets its own paragraph break. This pins
+    // the current behavior: boundaries are drawn wherever the id CHANGES from
+    // the previous delta, not by grouping all deltas of one id together. Nothing
+    // is dropped and no text runs together — the final message concatenates all
+    // three segments with a break at each id change.
+    fakeClient.autoCompleteTurn = false;
+    fakeClient.emitApprovalRequests = false;
+    fakeClient.suppressAutoDelta = true;
+    const created = sessions.create({
+      id: 'session-reorder-item',
+      prompt: 'Interleaved items',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+    });
+    const emitted: Array<{ type: string; payload: unknown }> = [];
+
+    const run = provider.run(created.id, created.prompt, {
+      emit: (event) => emitted.push(event),
+      cwd: '/tmp/project',
+      model: created.model,
+    });
+
+    await waitUntil(() => sessions.findById(created.id)?.providerActiveTurnId === 'turn-1');
+
+    for (const [itemId, delta] of [
+      ['msg-a', 'Alpha.'],
+      ['msg-b', 'Bravo.'],
+      ['msg-a', 'Alpha again.'],
+    ] as const) {
+      fakeClient.emitNotification({
+        method: 'item/agentMessage/delta',
+        params: { threadId: 'codex-thread-1', turnId: 'turn-1', itemId, delta },
+      });
+    }
+    fakeClient.completeTurn();
+    await run;
+
+    const all = events.list(created.id);
+    const message = all.find((event) => event.type === 'assistant_message');
+    // A break appears at every id transition (a->b and b->a), so the returning
+    // 'msg-a' segment starts its own paragraph rather than joining the first.
+    expect(message?.payload).toEqual({
+      text: 'Alpha.\n\nBravo.\n\nAlpha again.',
+    });
+
+    // No break at the very start or end; the streamed delta join matches the
+    // final message exactly, so live and persisted text never diverge.
+    const streamed = all
+      .filter((event) => event.type === 'assistant_delta')
+      .map((event) => (event.payload as { delta: string }).delta)
+      .join('');
+    expect(streamed).toBe('Alpha.\n\nBravo.\n\nAlpha again.');
+    expect(streamed.startsWith('\n')).toBe(false);
+    expect(streamed.endsWith('\n')).toBe(false);
+  });
+
   it('lists Codex reasoning effort and fast priority options', async () => {
     provider.commandRunner = async () => ({
       status: 0,

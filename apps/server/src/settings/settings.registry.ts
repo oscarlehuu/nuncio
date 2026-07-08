@@ -239,8 +239,27 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     type: 'string',
     label: 'Default subagent model',
     description:
-      'Provider-neutral model default for delegated subagents. Leave empty to inherit the session model.',
+      'Provider-neutral model default for delegated subagents. Legacy global fallback used when the per-provider default subagent models map has no entry for the resolved provider. Leave empty to inherit the session model.',
     envVar: 'NUNCIO_SUBAGENT_MODEL',
+  },
+  {
+    key: 'NUNCIO_SUBAGENT_MODELS',
+    category: 'agents',
+    type: 'string',
+    label: 'Default subagent models',
+    description:
+      'JSON map of provider id → model id used as the default subagent model per provider. Takes precedence over the single legacy default subagent model.',
+    envVar: 'NUNCIO_SUBAGENT_MODELS',
+  },
+  {
+    key: 'NUNCIO_MULTITASK_COUNTDOWN_SECONDS',
+    category: 'agents',
+    type: 'string',
+    label: 'Multitask launch countdown',
+    description:
+      'Grace window in seconds before a multitask subagent launches, letting you change its model or start it early. Clamped between 5 and 600 seconds.',
+    envVar: 'NUNCIO_MULTITASK_COUNTDOWN_SECONDS',
+    default: '15',
   },
   {
     key: 'NUNCIO_SUBAGENT_CLEANUP_POLICY',

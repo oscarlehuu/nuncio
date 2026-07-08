@@ -1,4 +1,5 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import type { ModelOptionsMap } from '../models/model-options.types';
 import { TasksService } from './tasks.service';
 import type { CreateTaskDto, StartMultitaskDto } from './tasks.types';
 
@@ -58,6 +59,30 @@ export class TasksController {
       throw new BadRequestException('parentSessionId is required');
     }
     return this.tasks.startMultitaskFromQueue(body.parentSessionId.trim());
+  }
+
+  @Patch(':id')
+  update(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      provider?: string;
+      model?: string;
+      modelOptions?: ModelOptionsMap | null;
+      holdSeconds?: number;
+    },
+  ) {
+    return this.tasks.update(id, {
+      ...(body?.provider !== undefined ? { provider: body.provider } : {}),
+      ...(body?.model !== undefined ? { model: body.model } : {}),
+      ...(body?.modelOptions !== undefined ? { modelOptions: body.modelOptions } : {}),
+      ...(body?.holdSeconds !== undefined ? { holdSeconds: body.holdSeconds } : {}),
+    });
+  }
+
+  @Post(':id/start-now')
+  startNow(@Param('id') id: string) {
+    return this.tasks.startNow(id);
   }
 
   @Post(':id/cancel')

@@ -157,6 +157,17 @@ describe('SettingsView', () => {
     expect(screen.getByRole('heading', { name: 'Remote access' })).toBeInTheDocument();
   });
 
+  it('surfaces the default subagent models section via search', async () => {
+    renderWithTheme(
+      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    const search = screen.getByRole('searchbox', { name: /search settings/i });
+    // Query by the section's own title — the raw NUNCIO_SUBAGENT_MODELS row is
+    // replaced by the custom picker section, so search must still reach it.
+    await userEvent.type(search, 'default subagent models');
+    expect(await screen.findByText('Default subagent models')).toBeInTheDocument();
+  });
+
   it('renders provider rows with brand names in the Providers section', async () => {
     const settings = [
       makeSetting({ key: 'A', label: 'Cursor API Key', category: 'provider', providerId: 'cursor' }),

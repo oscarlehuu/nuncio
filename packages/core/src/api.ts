@@ -127,6 +127,7 @@ export interface TaskDto {
   sessionId: string | null;
   outcome: Record<string, unknown> | null;
   pendingInput?: boolean;
+  holdUntil: number | null;
   createdAt: number;
   updatedAt: number;
   startedAt: number | null;
@@ -555,5 +556,46 @@ export async function markTaskReviewed(id: string): Promise<TaskDto> {
     method: 'POST',
   });
   if (!res.ok) throw new Error('Failed to mark task reviewed');
+  return res.json();
+}
+
+/** Update a queued task's model/provider or re-arm its launch hold. */
+export async function updateTask(
+  id: string,
+  input: { provider?: string; model?: string; modelOptions?: ModelOptionsMap | null; holdSeconds?: number },
+): Promise<TaskDto> {
+  const res = await apiFetch(`/api/tasks/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error('Failed to update task');
+  return res.json();
+}
+
+/** Start a held task immediately, skipping the rest of its countdown. */
+export async function startTaskNow(id: string): Promise<TaskDto> {
+  const res = await apiFetch(`/api/tasks/${encodeURIComponent(id)}/start-now`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error('Failed to start task');
+  return res.json();
+}
+
+/** Cancel a queued subagent task. */
+export async function cancelTask(id: string): Promise<TaskDto> {
+  const res = await apiFetch(`/api/tasks/${encodeURIComponent(id)}/cancel`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error('Failed to cancel task');
+  return res.json();
+}
+
+/** Retry a finished task as a fresh queued run. */
+export async function retryTask(id: string): Promise<TaskDto> {
+  const res = await apiFetch(`/api/tasks/${encodeURIComponent(id)}/retry`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error('Failed to retry task');
   return res.json();
 }

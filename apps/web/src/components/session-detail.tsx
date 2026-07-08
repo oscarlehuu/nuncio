@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Archive, ArrowRightLeft, Check, Ellipsis, FolderGit2, FolderTree, GitBranch, Globe2, PanelRightClose, PanelRightOpen, Pause, Pencil, RotateCcw, Send, Square, SquareTerminal, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import type { MessageAttachment, ProviderRequestDecision, Session, SessionEvent, TaskDto } from '../lib/api';
@@ -10,7 +10,13 @@ import {
   startMultitask,
   startMultitaskFromQueue,
   markTaskReviewed,
+  cancelTask,
+  retryTask,
+  updateTask,
+  startTaskNow,
 } from '../lib/api';
+import type { ModelOptionsMap } from '../lib/model-options';
+import { DEFAULT_HOLD_SECONDS, holdSecondsRemaining } from '../lib/subagent-hold';
 import { derivePendingQueuedSteers } from '../lib/transcript-build-blocks';
 import { useComposerAttachments } from '../lib/use-composer-attachments';
 import { AttachButton, AttachmentTray } from './attachment-tray';
@@ -39,7 +45,11 @@ import { QueuedSteersPanel } from './queued-steers-panel';
 import { ApprovalModePicker, type ApprovalMode } from './approval-mode-picker';
 import { BrowserPanel, getDesktopBrowserBridge } from './browser-panel';
 import { FileExplorerPanel } from './file-explorer-panel';
-import { TerminalDock } from './terminal-dock';
+import { ChunkErrorBoundary } from './chunk-error-boundary';
+// Lazy: pulls in @xterm (~480 kB) and only mounts when the terminal tool opens.
+const TerminalDock = lazy(() =>
+  import('./terminal-dock').then((m) => ({ default: m.TerminalDock })),
+);
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -110,6 +120,8 @@ interface SessionDetailProps {
   /** Focus the composer when the view opens / the session changes (desktop only),
    *  so the user can type straight away. */
   autoFocusComposer?: boolean;
+  /** Navigate to a child subagent's own session from the subagents panel. */
+  onOpenSession?: (sessionId: string) => void;
 }
 
 export function SessionDetail({
@@ -134,6 +146,7 @@ export function SessionDetail({
   hasEarlier = false,
   onLoadEarlier,
   autoFocusComposer = false,
+  onOpenSession,
 }: SessionDetailProps) {
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [steerText, setSteerText] = useState('');
@@ -145,6 +158,10 @@ export function SessionDetail({
   const [respondingRequestId, setRespondingRequestId] = useState<string | null>(null);
   const [startingMultitask, setStartingMultitask] = useState(false);
   const [childTasks, setChildTasks] = useState<TaskDto[]>([]);
+  // Mirror of childTasks readable inside stable callbacks (re-arm math needs the
+  // task's live holdUntil without re-creating the handlers on every poll).
+  const childTasksRef = useRef<TaskDto[]>([]);
+  childTasksRef.current = childTasks;
 
   const workingDir = session.worktreePath ?? session.workspace ?? session.projectPath ?? undefined;
   const hasGitContext = !!(session.worktreePath || session.branch || session.projectPath);
@@ -237,19 +254,58 @@ export function SessionDetail({
     if (el && !el.disabled) el.focus({ preventScroll: true });
   }, [autoFocusComposer, session.id]);
 
+  // Two guards keep the child-tasks list correct under overlapping fetches:
+  //  - activeSessionIdRef is the session currently on screen. A refresh bound to
+  //    an old session (e.g. an action started on session A whose handler runs
+  //    after the user switched to B) is dropped — it is the LATEST call, so a
+  //    token alone cannot catch it; only session identity can.
+  //  - seqRef is a monotonic call token so that among refreshes for the SAME
+  //    session, only the newest one commits, even if an older (poll or manual)
+  //    fetch resolves out of order.
+  // A call born stale (already for the wrong session at call time) returns before
+  // claiming a token — otherwise it would consume the sequence and starve the
+  // legitimate in-flight fetch, leaving the panel permanently empty.
+  const activeSessionIdRef = useRef(session.id);
+  const childTasksSeqRef = useRef(0);
   const refreshChildTasks = useCallback(async () => {
+    const forSessionId = session.id;
+    if (activeSessionIdRef.current !== forSessionId) return;
+    const token = ++childTasksSeqRef.current;
     try {
-      const tasks = await fetchChildTasks(session.id);
-      setChildTasks(tasks);
+      const tasks = await fetchChildTasks(forSessionId);
+      if (activeSessionIdRef.current === forSessionId && childTasksSeqRef.current === token) {
+        setChildTasks(tasks);
+      }
     } catch {
       // A missing subagent list is non-fatal — the section stays hidden.
     }
   }, [session.id]);
 
   useEffect(() => {
+    activeSessionIdRef.current = session.id;
     setChildTasks([]);
     void refreshChildTasks();
-  }, [refreshChildTasks]);
+  }, [session.id, refreshChildTasks]);
+
+  // Poll while any child is still working so status, pending-input, and review
+  // state stay live without a manual refresh; stop once all reach a terminal state.
+  const hasActiveChildTasks = childTasks.some(
+    (task) => task.status === 'QUEUED' || task.status === 'RUNNING',
+  );
+  useEffect(() => {
+    if (!hasActiveChildTasks) return;
+    // Guard against overlap: skip a tick if the previous fetch is still in flight,
+    // so a stalled poll can't resolve after a newer one and regress the UI.
+    let inFlight = false;
+    const id = setInterval(() => {
+      if (inFlight) return;
+      inFlight = true;
+      void refreshChildTasks().finally(() => {
+        inFlight = false;
+      });
+    }, 4000);
+    return () => clearInterval(id);
+  }, [hasActiveChildTasks, refreshChildTasks]);
 
   const submitSteer = async (
     text: string,
@@ -328,6 +384,72 @@ export function SessionDetail({
         await refreshChildTasks();
       } catch (error) {
         toast.error(error instanceof Error ? error.message : 'Failed to mark task reviewed');
+      }
+    },
+    [refreshChildTasks],
+  );
+
+  const handleCancelTask = useCallback(
+    async (id: string) => {
+      try {
+        await cancelTask(id);
+        await refreshChildTasks();
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Failed to cancel task');
+      }
+    },
+    [refreshChildTasks],
+  );
+
+  const handleRetryTask = useCallback(
+    async (id: string) => {
+      try {
+        await retryTask(id);
+        await refreshChildTasks();
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Failed to retry task');
+      }
+    },
+    [refreshChildTasks],
+  );
+
+  // Re-arm the launch grace window on every edit so the user keeps time to
+  // reconsider — but NEVER shorten it. The configured window length lives
+  // server-side and can exceed our default; if the task still has more time
+  // than the default, keep that larger remainder. The server clamps to 5..600.
+  const reArmSeconds = useCallback((id: string) => {
+    const task = childTasksRef.current.find((t) => t.id === id);
+    const remaining = task ? holdSecondsRemaining(task, Date.now()) : 0;
+    return Math.ceil(Math.max(remaining, DEFAULT_HOLD_SECONDS));
+  }, []);
+
+  const handleChangeTaskModel = useCallback(
+    async (id: string, provider: string, model: string, modelOptions?: ModelOptionsMap) => {
+      try {
+        await updateTask(id, { provider, model, modelOptions, holdSeconds: reArmSeconds(id) });
+        await refreshChildTasks();
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Failed to update task model');
+      }
+    },
+    [refreshChildTasks, reArmSeconds],
+  );
+
+  const handlePickerOpen = useCallback((id: string) => {
+    // Opening the picker alone re-arms (never shortening); don't block on it,
+    // and stay quiet on failure — the countdown simply keeps running.
+    void updateTask(id, { holdSeconds: reArmSeconds(id) })
+      .then(() => refreshChildTasks())
+      .catch(() => {});
+  }, [refreshChildTasks, reArmSeconds]);
+
+  const handleStartTaskNow = useCallback(
+    async (id: string) => {
+      try {
+        await startTaskNow(id);
+        await refreshChildTasks();
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Failed to start task');
       }
     },
     [refreshChildTasks],
@@ -582,7 +704,17 @@ export function SessionDetail({
       </div>
 
       <div className="shrink-0 px-4 md:px-5 pt-2.5 pb-3 md:pb-4">
-        <SubagentsPanel tasks={childTasks} onReview={handleReviewTask} />
+        <SubagentsPanel
+          tasks={childTasks}
+          providers={providers}
+          onReview={handleReviewTask}
+          onCancel={handleCancelTask}
+          onRetry={handleRetryTask}
+          onOpenSession={onOpenSession}
+          onStartNow={handleStartTaskNow}
+          onChangeModel={handleChangeTaskModel}
+          onPickerOpen={handlePickerOpen}
+        />
         <div className="max-w-[760px] mx-auto">
           <PendingUserInputBanner
             pending={pendingUserInput}
@@ -609,7 +741,7 @@ export function SessionDetail({
           />
         </div>
         <div
-          className={`max-w-[760px] mx-auto rounded-xl border bg-card shadow-e1 surface-lit transition-shadow focus-within:ring-2 focus-within:ring-ring/40 ${dragActive ? 'border-primary ring-2 ring-primary/40' : 'border-border/70'}`}
+          className={`max-w-[760px] mx-auto rounded-2xl border bg-card shadow-e2 surface-lit transition-shadow focus-within:ring-2 focus-within:ring-ring/40 ${dragActive ? 'border-primary ring-2 ring-primary/40' : 'border-border/70'}`}
           onDragOver={
             canAttachImages
               ? (e) => {
@@ -874,7 +1006,11 @@ export function SessionDetail({
               className="flex-1 min-h-0 bg-card/60"
               style={panelOpen && activeTool === 'terminal' ? undefined : { display: 'none' }}
             >
-              <TerminalDock cwd={workingDir} />
+              <ChunkErrorBoundary>
+                <Suspense fallback={null}>
+                  <TerminalDock cwd={workingDir} />
+                </Suspense>
+              </ChunkErrorBoundary>
             </div>
           )}
         </aside>

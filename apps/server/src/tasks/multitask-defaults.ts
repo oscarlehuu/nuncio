@@ -14,6 +14,23 @@ function cleanupPolicy(value: string | null | undefined): TaskCleanupPolicy {
     : 'after-review';
 }
 
+/** Parse NUNCIO_SUBAGENT_MODELS (JSON map of provider id → model id) leniently. */
+function subagentModelForProvider(
+  provider: string,
+  settings?: SettingsService,
+): string | undefined {
+  const raw = settings?.resolve('NUNCIO_SUBAGENT_MODELS')?.trim();
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    const value = (parsed as Record<string, unknown>)[provider];
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function buildSubagentTaskInput(
   input: StartMultitaskDto,
   parent: SessionDto,
@@ -21,9 +38,15 @@ export function buildSubagentTaskInput(
   settings?: SettingsService,
 ): CreateTaskDto {
   const configuredProvider = settings?.resolve('NUNCIO_SUBAGENT_PROVIDER')?.trim();
-  const configuredModel = settings?.resolve('NUNCIO_SUBAGENT_MODEL')?.trim();
   const provider = input.provider?.trim() || configuredProvider || parent.provider;
+  // Per-provider map wins over the legacy global fallback; both are keyed by the
+  // resolved provider, not the raw input.
+  const mappedModel = subagentModelForProvider(provider, settings);
+  const legacyModel = settings?.resolve('NUNCIO_SUBAGENT_MODEL')?.trim();
+  const configuredModel = mappedModel || legacyModel;
   const model = input.model?.trim() || configuredModel || parent.model || undefined;
+  // modelOptions belong to the parent's model; inherit them only when the child
+  // ends up on that same model (no explicit request AND no configured override).
   const modelOptions =
     input.modelOptions ??
     (!input.model?.trim() && !configuredModel ? parent.modelOptions : null);

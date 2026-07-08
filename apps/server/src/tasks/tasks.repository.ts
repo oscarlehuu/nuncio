@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { v4 as uuidv4 } from 'uuid';
+import type { ModelOptionsMap } from '../models/model-options.types';
 import { DatabaseService } from '../db/database.service';
 import { taskRowToDto } from './task-row-mapper';
 import {
@@ -33,6 +34,7 @@ export class TasksRepository {
       review_state: null,
       session_id: null,
       outcome_json: null,
+      hold_until: input.holdUntil ?? null,
       created_at: now,
       updated_at: now,
       started_at: null,
@@ -42,14 +44,14 @@ export class TasksRepository {
       .prepare(
         `INSERT INTO tasks (id, prompt, status, provider, model, model_options, project_path,
            base_branch, use_worktree, workspace, parent_session_id, role, cleanup_policy,
-           review_state, session_id, outcome_json, created_at, updated_at, started_at, finished_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           review_state, session_id, outcome_json, hold_until, created_at, updated_at, started_at, finished_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id, row.prompt, row.status, row.provider, row.model, row.model_options,
         row.project_path, row.base_branch, row.use_worktree, row.workspace, row.parent_session_id,
         row.role, row.cleanup_policy, row.review_state, row.session_id, row.outcome_json,
-        row.created_at, row.updated_at, row.started_at, row.finished_at,
+        row.hold_until, row.created_at, row.updated_at, row.started_at, row.finished_at,
       );
     return taskRowToDto(row);
   }
@@ -79,18 +81,20 @@ export class TasksRepository {
     return row ? taskRowToDto(row) : null;
   }
 
-  /** Atomically claim the oldest QUEUED task, marking it RUNNING. */
+  /** Atomically claim the oldest QUEUED task past its hold window, marking it RUNNING. */
   claimNextQueued(): TaskDto | null {
     const now = Date.now();
     const row = this.database.db
-      .prepare<TaskRow, [number, number]>(
+      .prepare<TaskRow, [number, number, number]>(
         `UPDATE tasks SET status = 'RUNNING', started_at = ?, updated_at = ?
          WHERE id = (
-           SELECT id FROM tasks WHERE status = 'QUEUED' ORDER BY created_at ASC, rowid ASC LIMIT 1
+           SELECT id FROM tasks
+           WHERE status = 'QUEUED' AND (hold_until IS NULL OR hold_until <= ?)
+           ORDER BY created_at ASC, rowid ASC LIMIT 1
          )
          RETURNING *`,
       )
-      .get(now, now);
+      .get(now, now, now);
     return row ? taskRowToDto(row) : null;
   }
 
@@ -132,6 +136,67 @@ export class TasksRepository {
       )
       .get(now, id);
     return row ? taskRowToDto(row) : null;
+  }
+
+  /**
+   * Patch a still-queued task's routing/hold. Only the provided fields are
+   * written; the WHERE guard makes the update a no-op (null result) once the
+   * pump has claimed the task, so the service can surface the race as a 400.
+   */
+  updateWhileQueued(
+    id: string,
+    patch: { provider?: string; model?: string; modelOptions?: ModelOptionsMap | null; holdUntil?: number },
+  ): TaskDto | null {
+    const sets: string[] = [];
+    const values: Array<string | number | null> = [];
+    if (patch.provider !== undefined) {
+      sets.push('provider = ?');
+      values.push(patch.provider);
+    }
+    if (patch.model !== undefined) {
+      sets.push('model = ?');
+      values.push(patch.model);
+    }
+    if (patch.modelOptions !== undefined) {
+      sets.push('model_options = ?');
+      values.push(patch.modelOptions ? JSON.stringify(patch.modelOptions) : null);
+    }
+    if (patch.holdUntil !== undefined) {
+      sets.push('hold_until = ?');
+      values.push(patch.holdUntil);
+    }
+    // updated_at is always bumped so an empty patch is still a valid UPDATE.
+    sets.push('updated_at = ?');
+    values.push(Date.now());
+
+    const row = this.database.db
+      .prepare<TaskRow, Array<string | number | null>>(
+        `UPDATE tasks SET ${sets.join(', ')} WHERE id = ? AND status = 'QUEUED' RETURNING *`,
+      )
+      .get(...values, id);
+    return row ? taskRowToDto(row) : null;
+  }
+
+  /** Drop the hold on a still-queued, still-held task so the pump can claim it now. */
+  clearHold(id: string): TaskDto | null {
+    const row = this.database.db
+      .prepare<TaskRow, [number, string]>(
+        `UPDATE tasks SET hold_until = NULL, updated_at = ?
+         WHERE id = ? AND status = 'QUEUED' AND hold_until IS NOT NULL
+         RETURNING *`,
+      )
+      .get(Date.now(), id);
+    return row ? taskRowToDto(row) : null;
+  }
+
+  /** Earliest pending hold expiry across queued tasks, or null when none are held. */
+  earliestHold(): number | null {
+    const row = this.database.db
+      .prepare<{ earliest: number | null }, []>(
+        "SELECT MIN(hold_until) AS earliest FROM tasks WHERE status = 'QUEUED' AND hold_until IS NOT NULL",
+      )
+      .get();
+    return row?.earliest ?? null;
   }
 
   /** Only queued work can be cancelled; running work belongs to its session. */

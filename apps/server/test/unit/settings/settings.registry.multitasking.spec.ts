@@ -57,6 +57,35 @@ describe('SETTING_DEFINITIONS — multitasking defaults', () => {
     expect(def!.description).toContain('subtasks');
   });
 
+  it('registers a per-provider default subagent models map setting', () => {
+    const def = getSettingDefinition('NUNCIO_SUBAGENT_MODELS');
+    expect(def).toBeDefined();
+    expect(def!.category).toBe('agents');
+    expect(def!.providerId).toBeUndefined();
+    expect(def!.type).toBe('string');
+    expect(def!.label).toBe('Default subagent models');
+    expect(def!.envVar).toBe('NUNCIO_SUBAGENT_MODELS');
+    expect(def!.default).toBeUndefined();
+    expect(def!.description).toMatch(/JSON map/i);
+  });
+
+  it('registers the multitask launch countdown setting with a 15s default', () => {
+    const def = getSettingDefinition('NUNCIO_MULTITASK_COUNTDOWN_SECONDS');
+    expect(def).toBeDefined();
+    expect(def!.category).toBe('agents');
+    expect(def!.providerId).toBeUndefined();
+    expect(def!.type).toBe('string');
+    expect(def!.label).toBe('Multitask launch countdown');
+    expect(def!.envVar).toBe('NUNCIO_MULTITASK_COUNTDOWN_SECONDS');
+    expect(def!.default).toBe('15');
+    expect(def!.description).toMatch(/seconds/i);
+  });
+
+  it('notes the legacy fallback role on the single default subagent model setting', () => {
+    const def = getSettingDefinition('NUNCIO_SUBAGENT_MODEL');
+    expect(def!.description).toMatch(/legacy/i);
+  });
+
   it('registers a provider-neutral default browser target setting for tools', () => {
     const def = getSettingDefinition('NUNCIO_BROWSER_DEFAULT_TARGET');
     expect(def).toBeDefined();

@@ -212,6 +212,7 @@ export class DatabaseService implements OnModuleDestroy {
         review_state TEXT,
         session_id TEXT,
         outcome_json TEXT,
+        hold_until INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         started_at INTEGER,
@@ -233,6 +234,7 @@ export class DatabaseService implements OnModuleDestroy {
       ['role', "TEXT NOT NULL DEFAULT 'standalone'"],
       ['cleanup_policy', 'TEXT'],
       ['review_state', 'TEXT'],
+      ['hold_until', 'INTEGER'],
     ] as const;
 
     for (const [column, type] of taskColumnDefinitions) {

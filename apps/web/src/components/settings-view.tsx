@@ -23,6 +23,7 @@ import { fetchForgeStatus, type ForgeStatusDto } from '../lib/forge-status-api';
 import { AppearanceSettingsSection } from './appearance-settings-section';
 import { RemoteAccessSettingsSection } from './remote-access-settings-section';
 import { ProviderUpdateSettingsSection } from './provider-update-settings-section';
+import { SubagentModelsSettingsSection } from './subagent-models-settings-section';
 import { SettingsSectionNav, type SettingsSectionNavItem } from './settings-section-nav';
 
 interface SettingsViewProps {
@@ -124,7 +125,9 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
   const general = settings.filter(
     (s) => s.category === 'general' && s.key !== 'NUNCIO_TAILSCALE_AUTO_TRUST',
   );
-  const agents = settings.filter((s) => s.category === 'agents');
+  // NUNCIO_SUBAGENT_MODELS is surfaced by the custom per-provider picker section,
+  // not as a raw JSON string row.
+  const agents = settings.filter((s) => s.category === 'agents' && s.key !== 'NUNCIO_SUBAGENT_MODELS');
   const tools = settings.filter((s) => s.category === 'tools');
   const workspaces = settings.filter((s) => s.category === 'workspaces');
   const network = settings.filter((s) => s.category === 'network' && s.key !== 'NUNCIO_TAILSCALE_AUTO_TRUST');
@@ -238,6 +241,26 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
     </section>
   );
 
+  const subagentModelsValue = settings.find((s) => s.key === 'NUNCIO_SUBAGENT_MODELS')?.value ?? null;
+
+  const renderAgentsSection = (rows: Setting[], emptyText: string) => (
+    <section>
+      <h2 className="mb-2 text-ui-lg font-medium text-muted-foreground">Agents</h2>
+      <div className="overflow-hidden rounded-lg border border-border bg-card">
+        {rows.length > 0 ? (
+          <div className="px-4 divide-y divide-border/60">
+            {rows.map((s) => (
+              <SettingRow key={s.key} setting={s} onUpdate={onUpdate} onClear={onClear} />
+            ))}
+          </div>
+        ) : (
+          <div className="px-4 py-3 text-ui text-muted-foreground">{emptyText}</div>
+        )}
+        <SubagentModelsSettingsSection value={subagentModelsValue} onUpdate={onUpdate} />
+      </div>
+    </section>
+  );
+
   const renderProviderGroup = (title: string, providerIds: string[], includeUpdates = false, query = '') => {
     const rows = providerIds.map((id) => renderProviderRow(id, query)).filter(Boolean);
     return (
@@ -290,8 +313,18 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
     if (['github', 'gitlab'].some((id) => renderProviderRow(id, query))) {
       resultSections.push(<div key="source-control">{sourceResult}</div>);
     }
-    if (matchingAgents.length > 0) {
-      resultSections.push(<div key="agents">{renderSettingGroup('Agents', matchingAgents, '')}</div>);
+    // The per-provider default-model picker replaces the raw NUNCIO_SUBAGENT_MODELS
+    // row, so search must match it on the section's title and key synonyms —
+    // both when the query is a fragment of a synonym and vice-versa.
+    const subagentModelsMatch = [
+      'default subagent models',
+      'subagent',
+      'nuncio_subagent_models',
+      'multitask',
+      'agents',
+    ].some((term) => term.includes(query) || query.includes(term));
+    if (matchingAgents.length > 0 || subagentModelsMatch) {
+      resultSections.push(<div key="agents">{renderAgentsSection(matchingAgents, '')}</div>);
     }
     if (matchingTools.length > 0) {
       resultSections.push(<div key="mcp-tools">{renderSettingGroup('MCP & Tools', matchingTools, '')}</div>);
@@ -342,7 +375,7 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
       case 'mcp-tools':
         return renderSettingGroup('MCP & Tools', tools, 'No MCP or tool settings are available.');
       case 'agents':
-        return renderSettingGroup('Agents', agents, 'No agent defaults are available.');
+        return renderAgentsSection(agents, 'No agent defaults are available.');
       case 'workspaces':
         return renderSettingGroup('Workspaces', workspaces, 'No workspace settings are available.');
       case 'remote-access':
