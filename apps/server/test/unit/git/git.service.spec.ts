@@ -198,6 +198,7 @@ describe('GitService', () => {
 
       const result = await service.createWorktree(developRepo, undefined, 'dev00001', 'task');
 
+      expect(result.baseBranch).toBe('develop');
       const proc = Bun.spawn(
         ['git', '-C', result.worktreePath, 'log', '--format=%H', '-n', '1', 'develop'],
         { stdout: 'pipe', stderr: 'pipe' },

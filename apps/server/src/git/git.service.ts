@@ -135,6 +135,14 @@ function validateGitPath(path: string): string {
   return trimmed;
 }
 
+function validateGitRevision(revision: string): string {
+  const trimmed = revision.trim();
+  if (!trimmed || trimmed.startsWith('-') || trimmed.includes('\0')) {
+    throw new BadRequestException('Invalid base ref');
+  }
+  return trimmed;
+}
+
 function truncateDiff(diff: string): GitDiffDto {
   const maxDiffChars = 200_000;
   if (diff.length <= maxDiffChars) {
@@ -315,7 +323,7 @@ export class GitService {
       throw new BadRequestException(`Failed to create worktree: ${message}`);
     }
 
-    return { worktreePath, branch };
+    return { worktreePath, branch, baseBranch: resolvedBase };
   }
 
   private async resolveDefaultBranch(repoRoot: string): Promise<string> {
@@ -418,13 +426,9 @@ export class GitService {
     if (options.staged === true) {
       args.push('--staged');
     } else if (options.base?.trim()) {
-      const base = options.base.trim();
-      // Guard against option injection (e.g. `--output=`): a `base` beginning with
-      // `-` would be parsed as a git flag, not a revision. Reject it and pin the
-      // value as a revision with a trailing `--`.
-      if (base.startsWith('-')) {
-        throw new BadRequestException('Invalid base ref');
-      }
+      // Guard against option injection (e.g. `--output=`): a base beginning with
+      // `-` would be parsed as a git flag, not a revision.
+      const base = validateGitRevision(options.base);
       args.push(base, '--');
     }
 
@@ -437,7 +441,7 @@ export class GitService {
   }
 
   private async diffUntrackedFiles(repoRoot: string): Promise<string> {
-    const status = await git(['status', '--porcelain=v1'], repoRoot).catch(() => '');
+    const status = await git(['status', '--porcelain=v1', '-uall'], repoRoot).catch(() => '');
     const diffs: string[] = [];
 
     for (const line of status.split('\n')) {
@@ -457,6 +461,16 @@ export class GitService {
     }
 
     return diffs.filter(Boolean).join('\n');
+  }
+
+  async resolveWorktreeDiffBase(path: string, baseBranch?: string | null): Promise<string | null> {
+    const repoRoot = await this.resolveRepoRoot(path);
+    const base = validateGitRevision(baseBranch?.trim() || (await this.resolveDefaultBranch(repoRoot)));
+    try {
+      return await git(['merge-base', 'HEAD', base], repoRoot);
+    } catch {
+      return base;
+    }
   }
 
   private async diffPath(repoRoot: string, path: string): Promise<string> {

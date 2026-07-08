@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseModule } from '../../../../src/db/database.module';
 import { GitModule } from '../../../../src/git/git.module';
+import { GitService } from '../../../../src/git/git.service';
 import { SessionDiffService } from '../../../../src/sessions/diff/session-diff.service';
 
 /**
@@ -29,6 +30,7 @@ async function initRepo(dir: string): Promise<void> {
 describe('SessionDiffService', () => {
   let module: TestingModule;
   let svc: SessionDiffService;
+  let gitService: GitService;
   let dataDir: string;
   let repo: string;
   let workDir: string;
@@ -46,6 +48,7 @@ describe('SessionDiffService', () => {
       providers: [SessionDiffService],
     }).compile();
     svc = module.get(SessionDiffService);
+    gitService = module.get(GitService);
   });
 
   afterEach(async () => {
@@ -71,6 +74,16 @@ describe('SessionDiffService', () => {
     expect(diff.files.some((f) => f.path === 'fresh.ts')).toBe(true);
   });
 
+  it('an untracked file nested in a new directory is surfaced', async () => {
+    mkdirSync(join(repo, 'src', 'new-feature'), { recursive: true });
+    writeFileSync(join(repo, 'src', 'new-feature', 'index.ts'), 'export const nested = true;\n');
+    svc.resolveTarget = () => ({ gitDir: repo, base: null });
+
+    const diff = await svc.diff('s1');
+
+    expect(diff.files.some((f) => f.path === 'src/new-feature/index.ts')).toBe(true);
+  });
+
   it('a worktree session diffs vs its base branch (the full session delta)', async () => {
     // Branch off, commit a change on the branch → diff vs main shows it.
     await git(repo, ['checkout', '-b', 'feature']);
@@ -79,6 +92,51 @@ describe('SessionDiffService', () => {
     svc.resolveTarget = () => ({ gitDir: repo, base: 'main' });
     const diff = await svc.diff('s1');
     expect(diff.files.some((f) => f.path === 'a.ts')).toBe(true);
+  });
+
+  it('a work-local session ignores stored baseBranch metadata and shows only uncommitted work', async () => {
+    await git(repo, ['checkout', '-b', 'feature']);
+    writeFileSync(join(repo, 'branch-only.ts'), 'export const branchOnly = true;\n');
+    await git(repo, ['add', 'branch-only.ts']);
+    await git(repo, ['commit', '-m', 'branch-only work']);
+    const localSvc = new SessionDiffService(gitService, {
+      get: () => ({
+        worktreePath: null,
+        workspace: repo,
+        projectPath: repo,
+        baseBranch: 'main',
+      }),
+      steer: async () => undefined,
+    } as never);
+    localSvc.onModuleInit();
+
+    const diff = await localSvc.diff('s1');
+
+    expect(diff.files.some((f) => f.path === 'branch-only.ts')).toBe(false);
+    expect(diff.files).toEqual([]);
+  });
+
+  it('raw git truncation is surfaced in the structured session diff', async () => {
+    const truncatedSvc = new SessionDiffService({
+      diff: async () => ({
+        diff: [
+          'diff --git a/a.ts b/a.ts',
+          'index 1111111..2222222 100644',
+          '--- a/a.ts',
+          '+++ b/a.ts',
+          '@@ -1 +1 @@',
+          '-export const a = 1;',
+          '+export const a = 2;',
+        ].join('\n'),
+        truncated: true,
+      }),
+    } as unknown as GitService);
+    truncatedSvc.resolveTarget = () => ({ gitDir: repo, base: null });
+
+    const diff = await truncatedSvc.diff('s1');
+
+    expect(diff.truncated).toBe(true);
+    expect(diff.omittedFiles).toBeGreaterThan(0);
   });
 
   it('a clean worktree → empty diff, never a throw', async () => {

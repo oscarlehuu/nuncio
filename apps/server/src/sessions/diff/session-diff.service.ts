@@ -13,6 +13,8 @@ export interface SessionGitTarget {
   gitDir: string;
   /** Base ref for a worktree session (its branch-point), or null for the plain-cwd floor. */
   base: string | null;
+  /** Generated worktrees diff against their branch point; local sessions diff uncommitted work only. */
+  mode?: 'worktree' | 'local';
 }
 
 /**
@@ -52,7 +54,12 @@ export class SessionDiffService implements OnModuleInit {
         if (!session) throw new NotFoundException('Session not found');
         const gitDir = session.worktreePath ?? session.workspace ?? session.projectPath;
         if (!gitDir) throw new BadRequestException('Session has no git working directory');
-        return { gitDir, base: session.baseBranch?.trim() || null };
+        const isWorktree = Boolean(session.worktreePath);
+        return {
+          gitDir,
+          base: isWorktree ? session.baseBranch?.trim() || null : null,
+          mode: isWorktree ? 'worktree' : 'local',
+        };
       };
       this.steer = (sessionId, message) => this.sessions!.steer(sessionId, message);
     }
@@ -63,8 +70,17 @@ export class SessionDiffService implements OnModuleInit {
     if (!this.git) throw new Error('GitService is not available');
     const target = this.resolveTarget(sessionId);
     try {
-      const raw = await this.git.diff(target.gitDir, { base: target.base ?? undefined });
-      return capDiff(parseUnifiedDiff(raw.diff));
+      const base = target.mode === 'worktree'
+        ? await this.git.resolveWorktreeDiffBase(target.gitDir, target.base)
+        : target.base;
+      const raw = await this.git.diff(target.gitDir, { base: base ?? undefined });
+      const structured = capDiff(parseUnifiedDiff(raw.diff));
+      if (!raw.truncated) return structured;
+      return {
+        ...structured,
+        truncated: true,
+        omittedFiles: Math.max(structured.omittedFiles, 1),
+      };
     } catch (error) {
       if (error instanceof BadRequestException && String(error.message).startsWith('Not a git repository')) {
         return { files: [], truncated: false, omittedFiles: 0 };
