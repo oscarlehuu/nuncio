@@ -5,6 +5,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AppModule } from '../../src/app.module';
+import { DatabaseService } from '../../src/db/database.service';
+import { SessionsRepository } from '../../src/sessions/persistence/sessions.repository';
 import {
   configureSimulatedCursorEnv,
   withSimulatedCursorProvider,
@@ -27,6 +29,10 @@ async function initRepo(dir: string): Promise<void> {
   await runGitAsync(dir, ['config', 'user.email', 'test@nuncio.local']);
   await runGitAsync(dir, ['config', 'user.name', 'Nuncio Test']);
   await runGitAsync(dir, ['commit', '-m', 'init']);
+}
+
+function api(app: INestApplication) {
+  return request(app.getHttpAdapter().getInstance());
 }
 
 describe('Nuncio API', () => {
@@ -71,20 +77,20 @@ describe('Nuncio API', () => {
   });
 
   it('GET /api/health returns ok', async () => {
-    const res = await request(app.getHttpServer()).get('/api/health');
+    const res = await api(app).get('/api/health');
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('ok');
   });
 
   it('GET /api/timeline returns the global timeline feed', async () => {
-    const res = await request(app.getHttpServer()).get('/api/timeline?limit=5');
+    const res = await api(app).get('/api/timeline?limit=5');
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body.entries)).toBe(true);
     expect(res.body.entries.length).toBeLessThanOrEqual(5);
   });
 
   it('POST /api/sessions creates a session', async () => {
-    const res = await request(app.getHttpServer())
+    const res = await api(app)
       .post('/api/sessions')
       .send({ prompt: 'Fix the flaky websocket test' });
 
@@ -95,21 +101,86 @@ describe('Nuncio API', () => {
   });
 
   it('GET /api/sessions lists sessions', async () => {
-    const res = await request(app.getHttpServer()).get('/api/sessions');
+    const res = await api(app).get('/api/sessions');
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
     expect(res.body.length).toBeGreaterThan(0);
   });
 
+  it('GET /api/sessions tolerates sessions from an unregistered provider', async () => {
+    const repo = app.get(SessionsRepository);
+    const ghost = repo.create({
+      id: 'ghost-open',
+      prompt: 'stale test run',
+      provider: 'ghost-provider',
+    });
+
+    const res = await api(app).get('/api/sessions');
+
+    expect(res.status).toBe(200);
+    const listed = res.body.find((s: { id: string }) => s.id === ghost.id);
+    expect(listed).toMatchObject({
+      id: ghost.id,
+      provider: 'ghost-provider',
+      providerAvailable: false,
+      supportsInteraction: false,
+      supportsInterrupt: false,
+      supportsSteerWhileRunning: false,
+      supportsImages: false,
+    });
+  });
+
+  it('GET /api/sessions?includeArchived=true tolerates archived sessions from an unregistered provider', async () => {
+    const repo = app.get(SessionsRepository);
+    const db = app.get(DatabaseService).db;
+    const ghost = repo.create({
+      id: 'ghost-archived',
+      prompt: 'archived stale test run',
+      provider: 'ghost-provider',
+    });
+    db.prepare("UPDATE sessions SET status = 'ARCHIVED' WHERE id = ?").run(ghost.id);
+
+    const hidden = await api(app).get('/api/sessions');
+    expect(hidden.status).toBe(200);
+    expect(hidden.body.some((s: { id: string }) => s.id === ghost.id)).toBe(false);
+
+    const res = await api(app).get('/api/sessions?includeArchived=true');
+
+    expect(res.status).toBe(200);
+    const listed = res.body.find((s: { id: string }) => s.id === ghost.id);
+    expect(listed).toMatchObject({
+      id: ghost.id,
+      status: 'ARCHIVED',
+      provider: 'ghost-provider',
+      providerAvailable: false,
+    });
+  });
+
+  it('POST /api/sessions/:id/steer still rejects sessions from an unregistered provider', async () => {
+    const repo = app.get(SessionsRepository);
+    const ghost = repo.create({
+      id: 'ghost-action',
+      prompt: 'action needs provider',
+      provider: 'ghost-provider',
+    });
+
+    const res = await api(app)
+      .post(`/api/sessions/${ghost.id}/steer`)
+      .send({ message: 'resume this' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe('Unknown agent provider ghost-provider');
+  });
+
   it('GET /api/sessions/:id/events returns events after run', async () => {
-    const created = await request(app.getHttpServer())
+    const created = await api(app)
       .post('/api/sessions')
       .send({ prompt: 'Write a hello world script' });
 
     const id = created.body.id;
     await waitForIdle(app, id);
 
-    const res = await request(app.getHttpServer()).get(`/api/sessions/${id}/events`);
+    const res = await api(app).get(`/api/sessions/${id}/events`);
     expect(res.status).toBe(200);
     expect(res.body.some((e: { type: string }) => e.type === 'user_message')).toBe(true);
     expect(res.body.some((e: { type: string }) => e.type === 'assistant_message')).toBe(true);
@@ -117,66 +188,66 @@ describe('Nuncio API', () => {
 
   describe('phase 3 session lifecycle', () => {
     it('POST /api/sessions/:id/steer succeeds when IDLE', async () => {
-      const created = await request(app.getHttpServer())
+      const created = await api(app)
         .post('/api/sessions')
         .send({ prompt: 'Build the auth module' });
 
       const id = created.body.id;
       await waitForIdle(app, id);
 
-      const steer = await request(app.getHttpServer())
+      const steer = await api(app)
         .post(`/api/sessions/${id}/steer`)
         .send({ message: 'Focus on unit tests only' });
 
       expect(steer.status).toBe(201);
       await waitForIdle(app, id);
 
-      const events = await request(app.getHttpServer()).get(`/api/sessions/${id}/events`);
+      const events = await api(app).get(`/api/sessions/${id}/events`);
       expect(events.body.some((e: { type: string }) => e.type === 'steer_message')).toBe(true);
     });
 
     it('POST /api/sessions/:id/steer succeeds when PAUSED', async () => {
-      const created = await request(app.getHttpServer())
+      const created = await api(app)
         .post('/api/sessions')
         .send({ prompt: 'Refactor the session store' });
 
       const id = created.body.id;
       await waitForIdle(app, id);
 
-      const paused = await request(app.getHttpServer()).post(`/api/sessions/${id}/pause`);
+      const paused = await api(app).post(`/api/sessions/${id}/pause`);
       expect(paused.status).toBe(201);
       expect(paused.body.status).toBe('PAUSED');
 
-      const steer = await request(app.getHttpServer())
+      const steer = await api(app)
         .post(`/api/sessions/${id}/steer`)
         .send({ message: 'Resume with integration tests' });
 
       expect(steer.status).toBe(201);
       await waitForIdle(app, id);
-      expect((await request(app.getHttpServer()).get(`/api/sessions/${id}`)).body.status).toBe('IDLE');
+      expect((await api(app).get(`/api/sessions/${id}`)).body.status).toBe('IDLE');
     });
 
     it('POST /api/sessions/:id/archive transitions to ARCHIVED', async () => {
-      const created = await request(app.getHttpServer())
+      const created = await api(app)
         .post('/api/sessions')
         .send({ prompt: 'Archive me when done' });
 
       const id = created.body.id;
       await waitForIdle(app, id);
 
-      const archived = await request(app.getHttpServer()).post(`/api/sessions/${id}/archive`);
+      const archived = await api(app).post(`/api/sessions/${id}/archive`);
       expect(archived.status).toBe(201);
       expect(archived.body.status).toBe('ARCHIVED');
     });
 
     it('PATCH /api/sessions/:id renames the session', async () => {
-      const created = await request(app.getHttpServer())
+      const created = await api(app)
         .post('/api/sessions')
         .send({ prompt: 'Original title' });
       const id = created.body.id;
       await waitForIdle(app, id);
 
-      const renamed = await request(app.getHttpServer())
+      const renamed = await api(app)
         .patch(`/api/sessions/${id}`)
         .send({ title: 'My custom name' });
       expect(renamed.status).toBe(200);
@@ -185,31 +256,31 @@ describe('Nuncio API', () => {
     });
 
     it('PATCH /api/sessions/:id rejects empty title', async () => {
-      const created = await request(app.getHttpServer())
+      const created = await api(app)
         .post('/api/sessions')
         .send({ prompt: 'Some prompt' });
       const id = created.body.id;
 
-      const res = await request(app.getHttpServer())
+      const res = await api(app)
         .patch(`/api/sessions/${id}`)
         .send({ title: '   ' });
       expect(res.body.error).toBeDefined();
     });
 
     it('GET /api/sessions excludes archived sessions', async () => {
-      const created = await request(app.getHttpServer())
+      const created = await api(app)
         .post('/api/sessions')
         .send({ prompt: 'Hidden after archive' });
 
       const id = created.body.id;
       await waitForIdle(app, id);
-      await request(app.getHttpServer()).post(`/api/sessions/${id}/archive`);
+      await api(app).post(`/api/sessions/${id}/archive`);
 
-      const list = await request(app.getHttpServer()).get('/api/sessions');
+      const list = await api(app).get('/api/sessions');
       expect(list.status).toBe(200);
       expect(list.body.some((s: { id: string }) => s.id === id)).toBe(false);
 
-      const withArchived = await request(app.getHttpServer()).get('/api/sessions?includeArchived=true');
+      const withArchived = await api(app).get('/api/sessions?includeArchived=true');
       expect(withArchived.body.some((s: { id: string; status: string }) => s.id === id && s.status === 'ARCHIVED')).toBe(
         true,
       );
@@ -217,13 +288,13 @@ describe('Nuncio API', () => {
   });
 
   it('POST /api/sessions/:id/interactions/:requestId/respond returns 501 for cursor sessions', async () => {
-    const created = await request(app.getHttpServer())
+    const created = await api(app)
       .post('/api/sessions')
       .send({ prompt: 'Ask me something' });
     const id = created.body.id;
     await waitForIdle(app, id);
 
-    const res = await request(app.getHttpServer())
+    const res = await api(app)
       .post(`/api/sessions/${id}/interactions/req-1/respond`)
       .send({ answers: [], resolvedBy: 'skip' });
 
@@ -233,19 +304,19 @@ describe('Nuncio API', () => {
 
   describe('phase 4 workspace integration', () => {
     it('GET /api/projects lists git repos from configured roots', async () => {
-      const res = await request(app.getHttpServer()).get('/api/projects');
+      const res = await api(app).get('/api/projects');
       expect(res.status).toBe(200);
       expect(res.body.some((project: { path: string }) => project.path === repoPath)).toBe(true);
     });
 
     it('GET /api/projects/branches returns branches for a repo path', async () => {
-      const res = await request(app.getHttpServer()).get(`/api/projects/branches?path=${encodeURIComponent(repoPath)}`);
+      const res = await api(app).get(`/api/projects/branches?path=${encodeURIComponent(repoPath)}`);
       expect(res.status).toBe(200);
       expect(res.body.some((branch: { name: string }) => branch.name === 'main')).toBe(true);
     });
 
     it('POST /api/sessions with projectPath defaults to the selected workspace', async () => {
-      const res = await request(app.getHttpServer())
+      const res = await api(app)
         .post('/api/sessions')
         .send({
           prompt: 'Inspect workspace support',
@@ -263,7 +334,7 @@ describe('Nuncio API', () => {
     });
 
     it('POST /api/sessions creates worktree metadata when requested', async () => {
-      const res = await request(app.getHttpServer())
+      const res = await api(app)
         .post('/api/sessions')
         .send({
           prompt: 'Add workspace support',
@@ -284,7 +355,7 @@ describe('Nuncio API', () => {
 async function waitForIdle(app: INestApplication, id: string, timeoutMs = 5000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const res = await request(app.getHttpServer()).get(`/api/sessions/${id}`);
+    const res = await api(app).get(`/api/sessions/${id}`);
     if (res.body.status === 'IDLE' || res.body.status === 'ERROR') return;
     await new Promise((r) => setTimeout(r, 100));
   }

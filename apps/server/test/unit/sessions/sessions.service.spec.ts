@@ -160,6 +160,64 @@ describe('SessionsService lifecycle (phase 3)', () => {
     expect(listed.some((s) => s.id === archivedId && s.status === 'ARCHIVED')).toBe(true);
   });
 
+  it('list returns a session from an unregistered provider with capabilities disabled', () => {
+    const ghost = sessions.create({
+      id: 'ghost-open',
+      prompt: 'stale test run',
+      provider: 'ghost-provider',
+    });
+
+    const listed = service.list();
+    const dto = listed.find((s) => s.id === ghost.id);
+
+    expect(dto).toMatchObject({
+      id: ghost.id,
+      provider: 'ghost-provider',
+      providerAvailable: false,
+      supportsInteraction: false,
+      supportsInterrupt: false,
+      supportsSteerWhileRunning: false,
+      supportsImages: false,
+      pendingInput: false,
+    });
+  });
+
+  it('archived list returns a session from an unregistered provider with capabilities disabled', () => {
+    const ghost = sessions.create({
+      id: 'ghost-archived',
+      prompt: 'archived stale test run',
+      provider: 'ghost-provider',
+    });
+    sessions.updateStatus(ghost.id, 'RUNNING');
+    sessions.updateStatus(ghost.id, 'IDLE');
+    sessions.updateStatus(ghost.id, 'ARCHIVED');
+
+    expect(service.list().some((s) => s.id === ghost.id)).toBe(false);
+
+    const listed = service.list(true);
+    const dto = listed.find((s) => s.id === ghost.id);
+
+    expect(dto).toMatchObject({
+      id: ghost.id,
+      status: 'ARCHIVED',
+      provider: 'ghost-provider',
+      providerAvailable: false,
+    });
+  });
+
+  it('provider-required actions still reject a session from an unregistered provider', async () => {
+    const ghost = sessions.create({
+      id: 'ghost-action',
+      prompt: 'action needs provider',
+      provider: 'ghost-provider',
+    });
+
+    await expect(service.steer(ghost.id, 'resume this')).rejects.toMatchObject({
+      response: { message: 'Unknown agent provider ghost-provider' },
+      status: 400,
+    });
+  });
+
   describe('restore', () => {
     it('transitions an ARCHIVED session back to IDLE', () => {
       const id = seedSession('ARCHIVED');

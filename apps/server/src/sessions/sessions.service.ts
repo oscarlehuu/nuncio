@@ -1204,10 +1204,26 @@ export class SessionsService implements OnModuleDestroy {
   }
 
   private enrichSession(session: SessionDto): SessionDto {
-    const capabilities = this.agents.resolveForSession(session).capabilities;
+    let provider;
+    try {
+      provider = this.agents.resolveForSession(session);
+    } catch (error) {
+      if (!this.isUnknownProviderError(error, session.provider)) throw error;
+      return {
+        ...session,
+        providerAvailable: false,
+        supportsInteraction: false,
+        supportsInterrupt: false,
+        supportsSteerWhileRunning: false,
+        supportsImages: false,
+        pendingInput: false,
+      };
+    }
+    const capabilities = provider.capabilities;
     return {
       ...session,
-      supportsInteraction: this.agents.supportsInteractionForSession(session),
+      providerAvailable: true,
+      supportsInteraction: provider.supportsInteraction?.() ?? false,
       supportsInterrupt: capabilities.interrupt,
       supportsSteerWhileRunning: capabilities.steerWhileRunning,
       supportsImages: capabilities.images,
@@ -1217,6 +1233,10 @@ export class SessionsService implements OnModuleDestroy {
           ? deriveHasPendingInput(this.events.listTail(session.id, PENDING_SCAN_TAIL))
           : false,
     };
+  }
+
+  private isUnknownProviderError(error: unknown, providerId: string): boolean {
+    return error instanceof BadRequestException && error.message === `Unknown agent provider ${providerId}`;
   }
 
   private buildAgentRunContext(session: SessionDto): AgentRunContext {

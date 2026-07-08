@@ -121,6 +121,8 @@ export interface SessionDto {
   pullRequestNumber?: number | null;
   pullRequestState?: string | null;
   forgeStatus?: string;
+  /** False when the stored provider id is not registered in this build. */
+  providerAvailable?: boolean;
   supportsInteraction: boolean;
   supportsInterrupt: boolean;
   supportsSteerWhileRunning: boolean;

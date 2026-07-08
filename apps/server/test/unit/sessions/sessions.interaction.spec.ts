@@ -117,16 +117,24 @@ describe('SessionsService interaction', () => {
   });
 
   it('enrichSession uses CLI interaction support for handoff sessions', () => {
-    (sessionsRepo.findById as jest.Mock).mockReturnValue(
-      makeSession({ provider: 'cursor', cursorBackend: 'cli' }),
-    );
-    (agents.supportsInteractionForSession as jest.Mock).mockReturnValue(true);
+    const cliSession = makeSession({ provider: 'cursor', cursorBackend: 'cli' });
+    (sessionsRepo.findById as jest.Mock).mockReturnValue(cliSession);
+    (agents.resolveForSession as jest.Mock).mockReturnValue({
+      capabilities: {
+        interrupt: false,
+        modelSwitch: 'none',
+        effortSwitch: 'none',
+        images: false,
+        steerWhileRunning: false,
+      },
+      supportsInteraction: () => true,
+    });
 
     const session = (service as unknown as { requireSession: (id: string) => SessionDto }).requireSession(
       'abc12345',
     );
 
-    expect(agents.supportsInteractionForSession).toHaveBeenCalled();
+    expect(agents.resolveForSession).toHaveBeenCalledWith(cliSession);
     expect(session.supportsInteraction).toBe(true);
   });
 });
