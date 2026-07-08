@@ -3,6 +3,7 @@ export * from './attention-api';
 export * from './cursor-context';
 export * from './derive-pending-user-input';
 export * from './design-tokens';
+export * from './fleet-api';
 export * from './forge-status-api';
 export * from './handoff-api';
 export * from './handoff-session-groups';

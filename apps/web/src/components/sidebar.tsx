@@ -9,6 +9,7 @@ import {
   MessageSquare,
   Plus,
   Repeat,
+  Ship,
   RotateCcw,
   Search,
   Settings,
@@ -58,6 +59,8 @@ interface SidebarProps {
   activeId: string | null;
   onSelect: (id: string | null) => void;
   onNew: () => void;
+  /** Fleet — the cockpit landing (rung 3 home). */
+  onHome?: () => void;
   /** Desktop multi-session workbench (the unified grid). */
   onGrid?: () => void;
   /** Autopilot — the loops fleet (rung 2). */
@@ -81,6 +84,7 @@ export function Sidebar({
   activeId,
   onSelect,
   onNew,
+  onHome,
   onGrid,
   onAutopilot,
   onInbox,
@@ -150,6 +154,16 @@ export function Sidebar({
         </div>
         <MachineSwitcher />
         <nav className="mt-2.5 flex flex-col gap-px">
+          {onHome ? (
+            <button
+              type="button"
+              onClick={onHome}
+              className="group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-lg text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 active:scale-[0.99]"
+            >
+              <Ship className="size-4 shrink-0 text-muted-foreground group-hover:text-sidebar-foreground" />
+              <span className="flex-1">Fleet</span>
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={onNew}

@@ -516,6 +516,22 @@ describe('Sidebar', () => {
     });
   });
 
+  describe('Fleet nav', () => {
+    it('renders the Fleet entry and navigates home', async () => {
+      const onHome = vi.fn();
+      renderWithTheme(
+        <Sidebar sessions={[]} activeId={null} onSelect={() => {}} onNew={() => {}} onHome={onHome} />,
+      );
+      await userEvent.click(screen.getByRole('button', { name: /^fleet$/i }));
+      expect(onHome).toHaveBeenCalled();
+    });
+
+    it('omits the Fleet entry when onHome is not provided', () => {
+      renderWithTheme(<Sidebar sessions={[]} activeId={null} onSelect={() => {}} onNew={() => {}} />);
+      expect(screen.queryByRole('button', { name: /^fleet$/i })).not.toBeInTheDocument();
+    });
+  });
+
   describe('Inbox nav', () => {
     it('renders the Inbox entry and navigates', async () => {
       const onInbox = vi.fn();

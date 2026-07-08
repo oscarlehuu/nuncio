@@ -62,6 +62,8 @@ interface GridViewProps {
   lifecycleBusy?: boolean;
   /** True when the unpinned sidebar hover rail overlays the content's left edge. */
   railOverlay?: boolean;
+  /** When the grid is scoped to one project (Fleet drill-down), its display name. */
+  projectFilterName?: string | null;
 }
 
 export function GridView(props: GridViewProps) {
@@ -286,8 +288,11 @@ export function GridView(props: GridViewProps) {
             props.railOverlay && 'pl-16',
           )}
         >
-          <div>
+          <div className="flex items-baseline gap-2 min-w-0">
             <h1 className="text-[15px] font-medium leading-tight">Workbench</h1>
+            {props.projectFilterName && (
+              <span className="truncate text-[13px] text-muted-foreground">{props.projectFilterName}</span>
+            )}
           </div>
           <div
             role="tablist"

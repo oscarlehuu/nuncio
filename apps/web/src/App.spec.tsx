@@ -30,6 +30,8 @@ vi.mock('./lib/api', () => ({
   fetchEvents: vi.fn().mockResolvedValue([]),
   fetchActiveRun: vi.fn().mockResolvedValue({ active: false }),
   refreshSessionTranscript: vi.fn().mockResolvedValue({ added: 0 }),
+  fetchAttentionCounts: vi.fn().mockResolvedValue({ total: 0, unacked: 0, bySeverity: {} }),
+  fetchFleet: vi.fn().mockResolvedValue([]),
   statusLabel: (s: string) => s,
   relativeTime: () => 'now',
   SteerApiError: class SteerApiError extends Error {
@@ -167,7 +169,7 @@ describe('App URL routing', () => {
 
   it('navigates to /session/:id after creating a session', async () => {
     vi.mocked(createSession).mockResolvedValue(session);
-    renderApp('/');
+    renderApp('/new');
     const textarea = screen.getByPlaceholderText(/Ask Nuncio/i);
     await userEvent.type(textarea, 'build the thing{Enter}');
     await waitFor(() =>
@@ -193,12 +195,13 @@ describe('App URL routing', () => {
     );
   });
 
-  it('shows a toast and returns home when the session id is missing', async () => {
+  it('shows a toast and returns home (Fleet) when the session id is missing', async () => {
     vi.mocked(fetchSessions).mockResolvedValue([]);
     vi.mocked(fetchSession).mockRejectedValue(new Error('not found'));
     renderApp('/session/missing');
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Session not found'));
-    await waitFor(() => expect(screen.getByPlaceholderText(/Ask Nuncio/i)).toBeInTheDocument());
+    // Home is now the Fleet cockpit, not the composer.
+    await waitFor(() => expect(screen.getByRole('heading', { name: /^fleet$/i })).toBeInTheDocument());
   });
 
   it('renders the session grid at /grid', async () => {
@@ -302,7 +305,7 @@ describe('App create flow', () => {
     vi.mocked(createSession).mockResolvedValue(session);
     vi.mocked(fetchSessions).mockResolvedValue([session]);
 
-    renderApp();
+    renderApp('/new');
 
     const textarea = screen.getByPlaceholderText(/Ask Nuncio/i);
     await userEvent.type(textarea, 'build the thing{Enter}');

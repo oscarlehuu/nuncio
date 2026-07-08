@@ -23,12 +23,16 @@ import {
   type Session,
 } from './lib/api';
 import { clearSetting, fetchSettings, updateSetting, type Setting } from './lib/settings-api';
+import { projectDisplayName } from './lib/projects';
 import { DETAIL_EVENT_TAIL, useSessionStream } from './lib/use-session-stream';
 import { useActiveRun } from './lib/use-active-run';
 import { useSessionNotifications } from './lib/use-session-notifications';
 import { useProviderUpdateNotifications } from './lib/use-provider-update-notifications';
 import { HomeView } from './components/home-view';
 import { GridView } from './components/grid-view';
+// Fleet is the landing surface — imported statically (lean, no heavy deps) so the
+// cockpit paints immediately without a lazy-chunk round-trip.
+import { FleetView } from './components/fleet-view';
 
 // The Autopilot surfaces (list + detail + runs) load as one lazy chunk so they
 // never weigh on the entry bundle.
@@ -208,18 +212,8 @@ export default function App() {
     void refreshModels();
   }, [refreshModels]);
 
-  // Land in the work, not a blank canvas: on first load (desktop, with sessions)
-  // open straight to the Workbench instead of the empty composer home. One-shot —
-  // it never yanks the user later, and "New Agent" (→ '/') still reaches the composer.
-  const initialLandingDone = useRef(false);
-  useEffect(() => {
-    if (initialLandingDone.current || !listsReady) return;
-    initialLandingDone.current = true;
-    const isDesktop = window.matchMedia('(min-width: 768px)').matches;
-    if (isDesktop && sessions.length > 0 && location.pathname === '/') {
-      navigate('/grid', { replace: true });
-    }
-  }, [listsReady, sessions.length, location.pathname, navigate]);
+  // '/' is now the Fleet cockpit — the landing IS the work, so the old
+  // land-in-the-grid redirect is retired.
 
   const reviewProviderUpdates = useCallback(() => navigate('/settings'), [navigate]);
 
@@ -239,8 +233,9 @@ export default function App() {
     [dismissTransientSidebar, navigate],
   );
 
+  // The composer moved off '/' (now the Fleet home) to '/new'.
   const handleNew = useCallback(() => {
-    navigate('/');
+    navigate('/new');
     dismissTransientSidebar();
   }, [dismissTransientSidebar, navigate]);
 
@@ -509,6 +504,11 @@ export default function App() {
     dismissTransientSidebar();
   }, [dismissTransientSidebar, navigate]);
 
+  const handleOpenHome = useCallback(() => {
+    navigate('/');
+    dismissTransientSidebar();
+  }, [dismissTransientSidebar, navigate]);
+
   const handleOpenAutopilot = useCallback(() => {
     navigate('/autopilot');
     dismissTransientSidebar();
@@ -600,12 +600,24 @@ export default function App() {
     [refresh, dismissTransientSidebar, navigate],
   );
 
+  // Workbench drill-down: `/grid?project=<path>` scopes the grid to one project;
+  // no param = the all-projects grid (the sidebar Workbench entry). Deep links to
+  // /session/:id and the bare /grid are untouched.
+  const gridProjectPath = new URLSearchParams(location.search).get('project');
+  const gridSessions = gridProjectPath
+    ? sessions.filter((s) => s.projectPath === gridProjectPath)
+    : sessions;
+  const gridProjectName = gridProjectPath
+    ? projectDisplayName(gridProjectPath) ?? gridProjectPath
+    : null;
+
   const sidebarProps = {
     sessions,
     archivedSessions,
     activeId,
     onSelect: handleSelect,
     onNew: handleNew,
+    onHome: handleOpenHome,
     onGrid: handleOpenGrid,
     onAutopilot: handleOpenAutopilot,
     onInbox: handleOpenInbox,
@@ -650,8 +662,9 @@ export default function App() {
 
       <main className="flex-1 flex flex-col min-h-0 min-w-0">
         <Routes>
+          <Route path="/" element={<FleetView onNew={handleNew} />} />
           <Route
-            path="/"
+            path="/new"
             element={
               <HomeView
                 sessionCount={sessions.length}
@@ -668,7 +681,8 @@ export default function App() {
             path="/grid"
             element={
               <GridView
-                sessions={sessions}
+                sessions={gridSessions}
+                projectFilterName={gridProjectName}
                 providers={providers}
                 approvalMode={approvalMode}
                 onApprovalModeChange={handleApprovalModeChange}
