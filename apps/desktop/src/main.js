@@ -909,13 +909,16 @@ app.whenReady().then(async () => {
       // Launch the self-contained server binary from the app bundle, writing its
       // SQLite data under userData and serving the web bundle shipped alongside.
       const resourcesPath = process.resourcesPath;
+      const daemonEnv = { ...process.env };
+      delete daemonEnv.NUNCIO_FORCE_MOCK;
       supervisorOptions.serverBinaryPath = path.join(resourcesPath, 'nuncio-server');
       supervisorOptions.cwd = resourcesPath;
       supervisorOptions.env = {
-        ...process.env,
+        ...daemonEnv,
         // Share the SQLite backend with `bun run dev` and worktrees so every
         // surface sees the same sessions (the shared-backend convention).
         NUNCIO_DATA_DIR: path.join(require('node:os').homedir(), '.nuncio', 'data'),
+        NUNCIO_PACKAGED: '1',
         NUNCIO_WEB_DIST: path.join(resourcesPath, 'web', 'dist'),
       };
     }

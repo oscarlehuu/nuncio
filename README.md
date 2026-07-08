@@ -29,7 +29,7 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 - **Mobile-first PWA** — installable on iPhone via Tailscale HTTPS; standalone dark UI, safe-area aware
 - **Interactive browser dock** — desktop uses a real embedded Electron browser view with a persistent Nuncio profile; the web/PWA surface does not expose a browser dock
 - **Self-hosted** — your machine, your SQLite, your credentials; nothing leaves your tailnet
-- **Provider-neutral agent layer** — `AgentProvider` interface + `AgentRegistry`; Pi, Codex, Cursor, and Claude today (plus a `NUNCIO_FORCE_MOCK=1`-gated Mock for hermetic testing), extensible
+- **Provider-neutral agent layer** — `AgentProvider` interface + `AgentRegistry`; Pi, Codex, Cursor, and Claude today (plus a source-only `NUNCIO_FORCE_MOCK=1`-gated Mock for hermetic testing), extensible
 - **Settings store** — runtime-configurable env vars (API keys, paths, flags) stored in SQLite and editable via the frontend; secrets encrypted at rest (AES-256-GCM), env vars still honoured as fallback
 - **Codex approvals** — switch Codex between full-access and approval-required mode from the composer, then approve or deny pending provider actions in the transcript
 - **Folder picker** — browse the host machine's directories to pick a project (server-side, works on iPhone PWA), or paste a custom path
@@ -133,7 +133,7 @@ bun run build   # build server + web
 
 ### Pi credentials
 
-Nuncio drives the [Pi SDK](https://github.com/earendil-works/pi) in-process. Log in with the `pi` CLI first so `~/.pi/agent/auth.json` exists — it holds your API key **or** OAuth/subscription tokens (OpenAI, Anthropic). Override the agent directory with `PI_CODING_AGENT_DIR`. When no provider is configured at all, session creation returns `503`; for hermetic testing without any credentials, start the server with `NUNCIO_FORCE_MOCK=1` to register the built-in **Mock** provider (used by `bun run test:smoke-ui`).
+Nuncio drives the [Pi SDK](https://github.com/earendil-works/pi) in-process. Log in with the `pi` CLI first so `~/.pi/agent/auth.json` exists — it holds your API key **or** OAuth/subscription tokens (OpenAI, Anthropic). Override the agent directory with `PI_CODING_AGENT_DIR`. When no provider is configured at all, session creation returns `503`; for hermetic testing without any credentials in a source checkout, start the server with `NUNCIO_FORCE_MOCK=1` to register the built-in **Mock** provider (used by `bun run test:smoke-ui`). Packaged desktop builds set `NUNCIO_PACKAGED=1`, ignore that flag, and never register Mock.
 
 ### Cursor credentials
 
@@ -268,7 +268,7 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 
 ## Architecture
 
-- **Agent providers:** Pi SDK, Codex app-server, Cursor SDK, and Claude Agent SDK (plus a `NUNCIO_FORCE_MOCK=1`-gated Mock for testing) behind a common `AgentProvider` interface; `AgentRegistry` selects per session. Pi auth via the SDK's `AuthStorage` at `~/.pi/agent`; Codex auth via the local `codex` CLI login; Cursor auth via `CURSOR_API_KEY`; Claude auth via a logged-in Claude Code keychain or `ANTHROPIC_API_KEY`. See [docs/system-architecture.md](docs/system-architecture.md).
+- **Agent providers:** Pi SDK, Codex app-server, Cursor SDK, and Claude Agent SDK (plus a source-only `NUNCIO_FORCE_MOCK=1`-gated Mock for testing) behind a common `AgentProvider` interface; `AgentRegistry` selects per session. Pi auth via the SDK's `AuthStorage` at `~/.pi/agent`; Codex auth via the local `codex` CLI login; Cursor auth via `CURSOR_API_KEY`; Claude auth via a logged-in Claude Code keychain or `ANTHROPIC_API_KEY`. See [docs/system-architecture.md](docs/system-architecture.md).
 - **Agent runtime tools:** `AgentToolRegistry` binds per-session tools such as browser control into `AgentRunContext.tools`; providers adapt that once into Pi `customTools`, Cursor `local.customTools`, or Codex `dynamicTools`.
 - **Provider CLI updates:** Pi and Codex version checks run best-effort against public package metadata, surface optional notifications, and only run update commands after a user clicks Update.
 - **Backend:** NestJS (`apps/server`) on port 3000; after `bun run build`, it also serves `apps/web/dist` at `/` while keeping `/api/*` for JSON routes

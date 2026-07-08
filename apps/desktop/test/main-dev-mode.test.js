@@ -12,10 +12,14 @@ async function runMain({
   advanceTimers = false,
   singleInstanceLock = true,
   onDaemonStart,
+  appIsPackaged = false,
+  resourcesPath = path.join(__dirname, 'missing-resources'),
 } = {}) {
   const state = {
     appHandlers: {},
+    appName: 'Nuncio',
     daemonConstructed: 0,
+    daemonOptions: [],
     daemonStartCalls: 0,
     daemonStopCalls: 0,
     devToolsCalls: [],
@@ -79,6 +83,15 @@ async function runMain({
     },
     requestSingleInstanceLock() {
       return state.singleInstanceLock;
+    },
+    isPackaged: appIsPackaged,
+    name: 'Nuncio',
+    getVersion() {
+      return '0.2.0';
+    },
+    setName(name) {
+      state.appName = name;
+      this.name = name;
     },
   };
 
@@ -181,8 +194,9 @@ async function runMain({
   }
 
   class FakeDaemonSupervisor {
-    constructor() {
+    constructor(options = {}) {
       state.daemonConstructed += 1;
+      state.daemonOptions.push(options);
       this.url = 'http://daemon.test:3000';
     }
 
@@ -218,11 +232,18 @@ async function runMain({
     process: {
       ...process,
       env: { ...process.env, ...env },
+      resourcesPath,
       platform: process.platform,
     },
     require(specifier) {
       if (specifier === 'node:path') {
         return require('node:path');
+      }
+      if (specifier === 'node:fs') {
+        return require('node:fs');
+      }
+      if (specifier === 'node:os') {
+        return require('node:os');
       }
       if (specifier === 'electron') {
         return {
@@ -296,6 +317,14 @@ async function runMain({
         // Real module: pure + filesystem-defensive, safe inside the sandbox.
         return require(path.resolve(__dirname, '../src/shell-settings.js'));
       }
+      if (specifier === './updater') {
+        return {
+          initAutoUpdater() {},
+          updaterMenuItem() {
+            return { label: 'Check for Updates…', enabled: true };
+          },
+        };
+      }
       throw new Error(`Unexpected require from main.js test: ${specifier}`);
     },
     setTimeout: sandboxSetTimeout,
@@ -366,6 +395,28 @@ describe('desktop main dev-mode loading', () => {
     state.appHandlers.activate();
 
     expect(state.loadedUrls).toEqual(['http://localhost:5173', 'http://localhost:5173']);
+  });
+
+  test('packaged launch marks the daemon env and strips forced mock', async () => {
+    const resourcesPath = path.join(__dirname, 'packaged-resources');
+    const state = await runMain({
+      appIsPackaged: true,
+      resourcesPath,
+      env: {
+        NUNCIO_FORCE_MOCK: '1',
+        NUNCIO_PACKAGED: '0',
+      },
+    });
+
+    expect(state.daemonConstructed).toBe(1);
+    expect(state.daemonStartCalls).toBe(1);
+    expect(state.loadedUrls).toEqual(['http://daemon.test:3000']);
+    expect(state.daemonOptions).toHaveLength(1);
+    expect(state.daemonOptions[0].serverBinaryPath).toBe(path.join(resourcesPath, 'nuncio-server'));
+    expect(state.daemonOptions[0].cwd).toBe(resourcesPath);
+    expect(state.daemonOptions[0].env.NUNCIO_PACKAGED).toBe('1');
+    expect(state.daemonOptions[0].env.NUNCIO_FORCE_MOCK).toBeUndefined();
+    expect(state.daemonOptions[0].env.NUNCIO_WEB_DIST).toBe(path.join(resourcesPath, 'web', 'dist'));
   });
 
   test('desktop browser IPC embeds a BrowserView with a persistent Nuncio profile', async () => {

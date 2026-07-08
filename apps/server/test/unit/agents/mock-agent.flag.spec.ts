@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ServiceUnavailableException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -21,6 +21,7 @@ describe('MockAgentProvider gating (NUNCIO_FORCE_MOCK)', () => {
   let module: TestingModule;
   let dataDir: string;
   const priorFlag = process.env.NUNCIO_FORCE_MOCK;
+  const priorPackaged = process.env.NUNCIO_PACKAGED;
 
   afterEach(async () => {
     if (module) await module.close();
@@ -28,6 +29,8 @@ describe('MockAgentProvider gating (NUNCIO_FORCE_MOCK)', () => {
     delete process.env.NUNCIO_DATA_DIR;
     if (priorFlag === undefined) delete process.env.NUNCIO_FORCE_MOCK;
     else process.env.NUNCIO_FORCE_MOCK = priorFlag;
+    if (priorPackaged === undefined) delete process.env.NUNCIO_PACKAGED;
+    else process.env.NUNCIO_PACKAGED = priorPackaged;
   });
 
   async function bootRegistry(): Promise<AgentRegistry> {
@@ -58,6 +61,7 @@ describe('MockAgentProvider gating (NUNCIO_FORCE_MOCK)', () => {
 
   it('registers an always-available mock when NUNCIO_FORCE_MOCK=1', async () => {
     process.env.NUNCIO_FORCE_MOCK = '1';
+    delete process.env.NUNCIO_PACKAGED;
     const registry = await bootRegistry();
 
     const mock = registry.get('mock');
@@ -65,6 +69,31 @@ describe('MockAgentProvider gating (NUNCIO_FORCE_MOCK)', () => {
     expect(await mock.isAvailable()).toBe(true);
     expect(registry.all().map((p) => p.id)).toContain('mock');
     expect((await registry.available()).map((p) => p.id)).toContain('mock');
+  });
+
+  it('refuses mock in packaged builds even when NUNCIO_FORCE_MOCK=1', async () => {
+    process.env.NUNCIO_FORCE_MOCK = '1';
+    process.env.NUNCIO_PACKAGED = '1';
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const registry = await bootRegistry();
+
+      expect(() => registry.get('mock')).toThrow(BadRequestException);
+      expect(registry.all().map((p) => p.id)).not.toContain('mock');
+      expect((await registry.available()).map((p) => p.id)).not.toContain('mock');
+
+      try {
+        expect(await registry.defaultId()).not.toBe('mock');
+      } catch (error) {
+        expect(error).toBeInstanceOf(ServiceUnavailableException);
+      }
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toContain('NUNCIO_FORCE_MOCK');
+      expect(warn.mock.calls[0]?.[0]).toContain('NUNCIO_PACKAGED');
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('defaultId falls back to an AVAILABLE provider (mock) when no real engine is available', async () => {
