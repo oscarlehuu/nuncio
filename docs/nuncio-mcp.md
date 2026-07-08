@@ -4,7 +4,7 @@ Nuncio ships a local stdio MCP server for agents that should inspect or steer
 the running daemon. It is a thin proxy over the existing HTTP API; Nuncio does
 not call model APIs.
 
-## Run
+## Quickstart
 
 Start the daemon first:
 
@@ -22,6 +22,9 @@ The server reads:
 
 - `NUNCIO_API_ORIGIN` — daemon origin, default `http://127.0.0.1:3000`
 - `NUNCIO_AUTH_TOKEN` — optional Bearer token for non-loopback origins
+
+The stdio process exposes eight tools. Six are read-only context tools; only
+`nuncio_enqueue_task` and `nuncio_pause_loop` mutate state.
 
 ## Claude Code
 
