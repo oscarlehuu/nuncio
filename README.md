@@ -38,6 +38,7 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 - **Cross-machine grid (hub mode)** — grid slots can target any tailnet machine reachable through the hub: pick a machine in the slot composer to browse its projects, use its model catalog, and start or attach sessions there; remote tiles stream and steer live against that machine, show a reconnect state while it is down, and maximize into the session on the machine's own page
 - **Inspector dock** — the session side panel (source control + pull request, files, terminal, browser on desktop) remembers whether it was open and its last tab across visits; the source-control tab now includes opening a PR, watching its checks, and reviewing the session worktree diff.
 - **Diff review + hunk steering** — the session **Changes** panel shows structured worktree diffs with honest caps for binary, lockfile, too-large, and omitted files; tap a hunk, leave a comment, and Nuncio sends it back through the existing steer path, queued if the session is still running.
+- **Nuncio MCP server** — expose read-mostly Nuncio context plus constrained task enqueue / loop pause tools to local agent hosts over stdio with `bun run mcp`; the server is a thin proxy over the running daemon and never calls model APIs.
 
 ## Screenshots
 
@@ -90,6 +91,16 @@ bun run dev
 
 - **API:** http://localhost:3000/api/health
 - **Web:** http://localhost:5173 (proxies `/api` → 3000)
+
+### MCP server
+
+With the daemon running, expose Nuncio to local agent hosts over stdio:
+
+```bash
+bun --silent run mcp
+```
+
+Set `NUNCIO_API_ORIGIN` to target another daemon and `NUNCIO_AUTH_TOKEN` for non-loopback access. See [docs/nuncio-mcp.md](docs/nuncio-mcp.md).
 
 ### Local data (sessions & settings)
 
@@ -174,6 +185,7 @@ bun run test                                       # server unit tests (simulate
 bun run --filter @nuncio/server test:e2e           # HTTP e2e (simulated provider)
 bun run --filter @nuncio/server test:integration   # real Pi auth — skips when ~/.pi/agent absent
 bun run --filter @nuncio/server test:integration:codex # real Codex app-server — opt-in
+bun run --filter @nuncio/server mcp                # stdio MCP server
 bun run --filter @nuncio/web test                  # web component tests (vitest)
 bun run test:daily-driver                          # server unit + e2e, core, web
 bun run test:daily-driver:codex                    # daily-driver + real Codex smoke

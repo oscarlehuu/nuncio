@@ -188,3 +188,77 @@ Verified `packages/core/src/attention-api.ts` normalizes missing legacy digest
 sections and `apps/web/src/components/digest-view.tsx` reads only known fields.
 Additive `highlights` and `projectLines` will not break the current view, but
 they are not rendered until a web round adds those sections.
+
+# Sub-Phase C Design — Nuncio-as-MCP
+
+## Packaging
+
+Ship a **thin stdio proxy** as `bun run mcp` / `bun run --filter @nuncio/server mcp`.
+The entrypoint lives under `apps/server/src/mcp-stdio/` and connects to the
+already-running daemon over `NUNCIO_API_ORIGIN` (default
+`http://127.0.0.1:3000`). This keeps the MCP process small: no second Nest DI
+graph, no SQLite handle, no provider runtime, and no duplicate auth rules.
+Loopback rides ADR-008 loopback trust; non-loopback daemon access uses
+`NUNCIO_AUTH_TOKEN` as a Bearer token. HTTP MCP remains a later transport under
+`/api/mcp`, behind the existing AuthGuard.
+
+## Dependency Choice
+
+`@modelcontextprotocol/sdk@1.29.0` is present only as transitive lockfile/cache
+metadata in this checkout and is not importable from the workspace under Bun.
+Adding it directly would also bring the SDK plus `zod` peer and HTTP/OAuth
+dependencies for a tools-only stdio server. Sub-phase C uses a minimal
+line-delimited JSON-RPC implementation for the MCP tools subset:
+
+- `initialize`
+- `notifications/initialized`
+- `tools/list`
+- `tools/call`
+
+If a future HTTP transport ships, re-evaluate the SDK as a direct dependency.
+
+## Tool Surface
+
+All tools are written for agent dispatchers and return JSON text plus
+`structuredContent` using existing REST DTO shapes.
+
+| Tool | Purpose | Daemon API |
+|---|---|---|
+| `nuncio_list_sessions` | List Nuncio sessions so an agent can find active, idle, or archived work. | `GET /api/sessions` |
+| `nuncio_get_session` | Read one session detail plus observability/verify summary. | `GET /api/sessions/:id`, `GET /api/observability/sessions/:id` |
+| `nuncio_get_timeline` | Read the global timeline with pagination/filter passthrough. | `GET /api/timeline` |
+| `nuncio_get_attention` | Read the ranked founder attention inbox and counts. | `GET /api/attention` |
+| `nuncio_get_fleet` | Read fleet health rows for all projects. | `GET /api/fleet` |
+| `nuncio_list_loops` | List Autopilot loops. | `GET /api/loops` |
+| `nuncio_enqueue_task` | Enqueue a constrained task through the existing task queue. | `POST /api/tasks` |
+| `nuncio_pause_loop` | Pause one loop and return the paused loop DTO. | `POST /api/loops/:id/pause` |
+
+Mutation surface is locked to exactly `nuncio_enqueue_task` and
+`nuncio_pause_loop`. No archive/delete/restore/settings/cancel/retry tools in
+v1.
+
+## Safety Rails
+
+- The MCP process never calls model APIs. It is only a local tool server.
+- Mutations return explicit action objects (`enqueued`, `paused`) and the REST
+  DTO returned by the daemon.
+- Daemon errors become MCP tool errors with the daemon's message. Configured
+  auth tokens and Bearer values are redacted before returning errors.
+- Input schemas are typed JSON Schema. Runtime validation mirrors existing REST
+  validation for required task prompts and loop ids.
+- The destructive-tool guard enumerates registered tools and fails if a
+  destructive tool name appears.
+
+## Red Suite
+
+- `mcp-stdio-protocol.spec.ts`
+  - initialize handshake advertises tools-only capability.
+  - tool list returns the exact agent-readable names and schemas.
+  - read tool calls a stub daemon API and returns structured content.
+  - daemon errors surface as MCP tool errors with token redaction.
+- `mcp-stdio-mutations.spec.ts`
+  - mutation surface is exactly enqueue task + pause loop; no destructive tool
+    names.
+  - enqueue trims/forwards task input and returns `action: enqueued`.
+  - enqueue validation errors return MCP tool errors.
+  - pause loop calls the existing loop API and returns `action: paused`.

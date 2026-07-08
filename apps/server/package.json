@@ -5,6 +5,7 @@
   "scripts": {
     "build": "nest build",
     "dev": "bun ../../scripts/run-server.mjs --watch",
+    "mcp": "bun src/mcp-stdio/main.ts",
     "start": "bun ../../scripts/run-server.mjs",
     "start:prod": "bun run dist/main.js",
     "test": "bun test test/unit/",
