@@ -1,8 +1,7 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import type { Session } from '../../lib/api';
 import type { ForgeWorkflowRun } from '../../lib/forge-api';
 import type { ScmSegment } from '../../lib/inspector-preference';
-import { ReviewChanges } from '../review-changes';
 import { PrPanel } from '../pr-panel';
 import { IssueDetail } from './issue-detail';
 import { IssueList } from './issue-list';
@@ -25,6 +24,10 @@ const SEGMENTS: Array<{ id: ScmSegment; label: string }> = [
   { id: 'issues', label: 'Issues' },
   { id: 'actions', label: 'Actions' },
 ];
+
+const SessionChangesPanel = lazy(() =>
+  import('../session-changes-panel').then((module) => ({ default: module.SessionChangesPanel })),
+);
 
 /**
  * The SCM inspector tab: local changes, this session's PR, and repo-level
@@ -67,7 +70,9 @@ export function ScmPanel({ session, workingDir, segment, onSegmentChange }: ScmP
         {segment === 'changes' && (
           <>
             <div className="border-b border-border/60 bg-card/40">
-              <ReviewChanges sessionId={session.id} />
+              <Suspense fallback={<div className="px-3 py-3 text-sm text-muted-foreground">Loading changes…</div>}>
+                <SessionChangesPanel sessionId={session.id} sessionStatus={session.status} />
+              </Suspense>
             </div>
             <PrPanel session={session} repoPath={repoPath} />
           </>

@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import { SessionDetail } from './session-detail';
 import { INSPECTOR_PREFERENCE_STORAGE_KEY } from '../lib/inspector-preference';
 import {
-  fetchGitStatus,
+  fetchSessionDiff,
   fetchChildTasks,
   startMultitask,
   startMultitaskFromQueue,
@@ -76,14 +76,12 @@ vi.mock('../lib/api', async () => {
   const actual = await vi.importActual<typeof import('../lib/api')>('../lib/api');
   return {
     ...actual,
-    fetchGitStatus: vi.fn(async () => ({
-      branch: 'nuncio/s1-fix-auth',
-      ahead: 0,
-      behind: 0,
-      clean: true,
+    fetchSessionDiff: vi.fn(async () => ({
       files: [],
+      truncated: false,
+      omittedFiles: 0,
     })),
-    fetchGitDiff: vi.fn(async () => ({ diff: '', truncated: false })),
+    postDiffComment: vi.fn(async () => ({})),
     fetchPullRequest: vi.fn(async () => null),
     commitSession: vi.fn(),
     pushSession: vi.fn(),
@@ -514,15 +512,21 @@ describe('SessionDetail', () => {
     expect(screen.queryByText('Source Control')).toBeNull();
   });
 
-  it('opens source control with an empty commit message instead of the session title', async () => {
-    vi.mocked(fetchGitStatus).mockResolvedValueOnce({
-      branch: 'nuncio/s1-fix-auth',
-      ahead: 0,
-      behind: 0,
-      clean: false,
+  it('opens source control on the session diff surface without a duplicate commit composer', async () => {
+    vi.mocked(fetchSessionDiff).mockResolvedValueOnce({
       files: [
-        { path: 'src/app.ts', index: 'M', workTree: ' ', staged: true, insertions: 1, deletions: 0 },
+        {
+          path: 'src/app.ts',
+          oldPath: null,
+          status: 'modified',
+          additions: 1,
+          deletions: 0,
+          hunks: [],
+          collapsed: 'too-large',
+        },
       ],
+      truncated: false,
+      omittedFiles: 0,
     });
 
     await renderDetail({
@@ -532,10 +536,10 @@ describe('SessionDetail', () => {
     });
 
     await userEvent.click(screen.getByRole('button', { name: /toggle panel/i }));
-    const message = await screen.findByPlaceholderText(/commit message/i);
+    expect(await screen.findByText('src/app.ts')).toBeInTheDocument();
 
-    expect(message).toHaveValue('');
-    expect(screen.getByRole('button', { name: /^commit/i })).toBeDisabled();
+    expect(fetchSessionDiff).toHaveBeenCalledWith('s1');
+    expect(screen.queryByPlaceholderText(/commit message/i)).toBeNull();
   });
 
   it('does not show the source control toggle when there is no git context', async () => {
