@@ -126,7 +126,7 @@ function EmptyState({ compact }: { compact: boolean }) {
       )}
     >
       {!compact && (
-        <span className="grid size-12 place-items-center rounded-2xl bg-success/10 text-success shadow-e0">
+        <span className="grid size-12 place-items-center rounded-2xl bg-muted text-muted-foreground shadow-e0">
           <Check className="size-6" />
         </span>
       )}

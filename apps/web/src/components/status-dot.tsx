@@ -2,10 +2,12 @@ import type { SessionStatus } from '../lib/api';
 import { statusLabel } from '../lib/api';
 import { cn } from '@/lib/utils';
 
-const STATUS_CLASS: Record<SessionStatus, string> = {
+/* Color is a summons: amber = waiting on you, red = broken. A healthy running
+ * agent is a calm gray pulse, and an idle agent shows nothing at all. */
+const STATUS_CLASS: Record<SessionStatus, string | null> = {
   CREATED: 'bg-muted-foreground',
-  RUNNING: 'bg-success animate-pulse shadow-[0_0_6px_var(--color-success)]',
-  IDLE: 'bg-info',
+  RUNNING: 'bg-muted-foreground animate-pulse',
+  IDLE: null,
   PAUSED: 'bg-muted-foreground',
   ARCHIVED: 'bg-muted-foreground opacity-40',
   ERROR: 'bg-destructive',
@@ -14,10 +16,7 @@ const STATUS_CLASS: Record<SessionStatus, string> = {
 export function ConnectionDot({ className }: { className?: string }) {
   return (
     <span
-      className={cn(
-        'inline-block size-1.5 rounded-full shrink-0 bg-success shadow-[0_0_5px_var(--color-success)]',
-        className,
-      )}
+      className={cn('inline-block size-1.5 rounded-full shrink-0 bg-muted-foreground', className)}
       aria-hidden
     />
   );
@@ -36,6 +35,7 @@ export function StatusDot({
   const dotClass = pending
     ? 'bg-warning animate-pulse shadow-[0_0_6px_var(--color-warning)]'
     : STATUS_CLASS[status];
+  if (!dotClass) return null;
   return (
     <span
       className={cn('inline-block size-[7px] rounded-full shrink-0', dotClass, className)}

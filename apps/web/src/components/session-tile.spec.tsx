@@ -89,7 +89,7 @@ describe('SessionTile', () => {
     expect(streamState.loadEarlier).toHaveBeenCalledTimes(1);
   });
 
-  it('shows the success border when RUNNING', () => {
+  it('shows the neutral breathing border when RUNNING', () => {
     streamState.events = [statusEvent(1, 'RUNNING')];
     render(
       <SessionTile
@@ -99,7 +99,7 @@ describe('SessionTile', () => {
         onMaximize={noop}
       />,
     );
-    expect(screen.getByRole('button', { name: /session refactor the parser/i })).toHaveClass('border-success/80');
+    expect(screen.getByRole('button', { name: /session refactor the parser/i })).toHaveClass('border-border');
   });
 
   it('shows the destructive border when ERROR', () => {
@@ -146,8 +146,8 @@ describe('SessionTile', () => {
     );
     expect(container.querySelector('.border-warning')).toBeTruthy();
     expect(container.querySelector('.animate-pulse')).toBeTruthy();
-    // Pending input takes precedence: no run-state success border applied.
-    expect(screen.getByRole('button', { name: /session refactor the parser/i })).not.toHaveClass('border-success/80');
+    // Pending input takes precedence: no run-state neutral border applied.
+    expect(screen.getByRole('button', { name: /session refactor the parser/i })).not.toHaveClass('border-border');
   });
 
   it('shows a verify chip when the last verify run failed', () => {

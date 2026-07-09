@@ -129,7 +129,7 @@ function DigestBody({
         }
       >
         <Stat label="Raised" value={digest.attention.raised} />
-        <Stat label="Resolved" value={digest.attention.resolved} tone={digest.attention.resolved > 0 ? 'success' : undefined} />
+        <Stat label="Resolved" value={digest.attention.resolved} />
         <Stat
           label="Open now"
           value={digest.attention.openTopCount}
@@ -144,7 +144,7 @@ function DigestBody({
         openLabel="Open autopilot"
         summary={`${digest.budget.runsToday}/${digest.budget.cap} runs today`}
       >
-        <Stat label="Succeeded" value={digest.loops.runsOk} tone={digest.loops.runsOk > 0 ? 'success' : undefined} />
+        <Stat label="Succeeded" value={digest.loops.runsOk} />
         <Stat label="Failed" value={digest.loops.runsFailed} tone={digest.loops.runsFailed > 0 ? 'warning' : undefined} />
         <Stat label="PRs opened" value={digest.loops.prsOpened} icon={GitPullRequestArrow} />
       </Section>
@@ -289,7 +289,7 @@ function Stat({
 }: {
   label: string;
   value: number;
-  tone?: 'success' | 'warning';
+  tone?: 'warning';
   icon?: LucideIcon;
 }) {
   return (
@@ -301,7 +301,6 @@ function Stat({
       <dd
         className={cn(
           'mt-0.5 text-xl font-semibold tabular-nums leading-none',
-          tone === 'success' && 'text-success',
           tone === 'warning' && 'text-warning',
           !tone && 'text-foreground',
         )}

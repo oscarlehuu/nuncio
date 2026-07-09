@@ -44,19 +44,19 @@ interface SessionTileProps {
  * other:
  *   - border color + a breathing glow (.tile-glow) = activity
  *       waiting-for-input → amber, a larger + quicker breath (pulls the eye)
- *       running           → green, a calm slow breath
+ *       running           → neutral hairline, a faint gray breath
  *       error             → red, no breath
  *       idle/paused/…      → dim hairline
- *   - a blue ring + lift = focus (which tile the keyboard drives), layered on top
+ *   - a ring + lift = focus (which tile the keyboard drives), layered on top
  * The --glow-* custom properties (see glowStyle) drive the breath color/size/speed.
  */
 function tileStateClasses(status: SessionStatus, pending: boolean, focused: boolean): string {
   let activity: string;
   if (pending) activity = 'border-warning tile-glow';
-  else if (status === 'RUNNING') activity = 'border-success/80 tile-glow';
+  else if (status === 'RUNNING') activity = 'border-border tile-glow';
   else if (status === 'ERROR') activity = 'border-destructive';
   else activity = 'border-border/60';
-  return cn(activity, focused && 'ring-2 ring-info shadow-e2');
+  return cn(activity, focused && 'ring-2 ring-ring shadow-e2');
 }
 
 /** Breath color/intensity for the active tile states; undefined = no breath. */
@@ -65,8 +65,8 @@ function glowStyle(status: SessionStatus, pending: boolean): CSSProperties | und
     return { '--glow-color': 'var(--color-warning)', '--glow-size': '22px', '--glow-speed': '1.9s' } as CSSProperties;
   }
   if (status === 'RUNNING') {
-    // Signature hue on colored accent presets; falls back to success-green on mono.
-    return { '--glow-color': 'var(--glow-brand, var(--color-success))' } as CSSProperties;
+    // Working is calm: a faint foreground-tinted breath, never a color summons.
+    return { '--glow-color': 'color-mix(in oklch, var(--foreground) 30%, transparent)' } as CSSProperties;
   }
   return undefined;
 }

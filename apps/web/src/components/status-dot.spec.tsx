@@ -7,7 +7,6 @@ import { statusLabel } from '../lib/api';
 const STATUSES: SessionStatus[] = [
   'CREATED',
   'RUNNING',
-  'IDLE',
   'PAUSED',
   'ARCHIVED',
   'ERROR',
@@ -17,6 +16,16 @@ describe('StatusDot', () => {
   it.each(STATUSES)('renders a dot with the status title for %s', (status) => {
     render(<StatusDot status={status} />);
     expect(screen.getByTitle(statusLabel(status))).toBeInTheDocument();
+  });
+
+  it('renders nothing for IDLE — a settled agent asks for no attention', () => {
+    const { container } = render(<StatusDot status="IDLE" />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('renders the amber pending override even when IDLE', () => {
+    render(<StatusDot status="IDLE" pending />);
+    expect(screen.getByTitle('Waiting for you')).toBeInTheDocument();
   });
 
   it('does not apply a top-margin offset by default (stays centered in items-center parents)', () => {
