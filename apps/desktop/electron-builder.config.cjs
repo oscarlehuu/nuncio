@@ -6,8 +6,9 @@
 // Distinct appId/productName means dev and stable install side by side with
 // separate userData (and therefore separate SQLite data dirs).
 //
-// The self-contained server binary + web bundle are produced by
-// scripts/build-resources.mjs into ./build-resources before packaging.
+// The server script bundle (+ staged node_modules), Bun runtime, and web bundle
+// are produced by scripts/build-resources.mjs into ./build-resources before
+// packaging.
 
 const isDev = process.env.NUNCIO_CHANNEL === 'dev';
 
@@ -21,7 +22,8 @@ module.exports = {
   },
   files: ['src/**/*', 'package.json', '!test/**', '!**/*.spec.js'],
   extraResources: [
-    { from: 'build-resources/nuncio-server', to: 'nuncio-server' },
+    { from: 'build-resources/server', to: 'server' },
+    { from: 'build-resources/bun', to: 'bun' },
     { from: 'build-resources/web/dist', to: 'web/dist' },
     // Menu-bar tray icons, loaded at runtime from resourcesPath/build in the
     // packaged app (a source checkout reads them from ./build directly).
@@ -56,7 +58,8 @@ module.exports = {
     channel: isDev ? 'dev' : 'latest',
     releaseType: isDev ? 'prerelease' : 'release',
   },
-  // Sign the bundled server binary (afterPack) before the app is sealed, then
+  // Sign the bundled bun runtime + nested native binaries (afterPack) before
+  // the app is sealed, then
   // notarize + staple the .app (afterSign). Auto-update ships the stapled .app
   // inside the .zip, so the .dmg wrapper itself is left un-stapled (the app it
   // installs is still notarized, so it opens cleanly).

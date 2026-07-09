@@ -1,0 +1,7 @@
+{
+  "name": "nuncio-server-packaged",
+  "private": true,
+  "dependencies": {
+    "@cursor/sdk": "1.0.22"
+  }
+}

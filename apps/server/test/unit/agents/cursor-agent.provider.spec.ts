@@ -231,13 +231,23 @@ describe('CursorAgentProvider', () => {
     expect(modelsListCalls).toHaveLength(1);
   });
 
-  it('listModels falls back to static catalog when SDK throws', async () => {
+  it('listModels falls back to static catalog when SDK throws — and logs the failure', async () => {
     const { sdk } = makeStubSdk({ modelsListThrows: true });
     provider.sdkOverride = sdk as never;
     process.env.CURSOR_API_KEY = 'cursor_test_key';
 
-    const models = await provider.listModels();
-    expect(models[0].groups?.[0].models[0].id).toBe('cursor:composer-2.5');
+    const errorCalls: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      errorCalls.push(args.map(String).join(' '));
+    };
+    try {
+      const models = await provider.listModels();
+      expect(models[0].groups?.[0].models[0].id).toBe('cursor:composer-2.5');
+    } finally {
+      console.error = originalError;
+    }
+    expect(errorCalls.some((line) => line.includes('[cursor] listModels failed'))).toBe(true);
   });
 
   it('listModels exposes parameter options from SDK metadata', async () => {

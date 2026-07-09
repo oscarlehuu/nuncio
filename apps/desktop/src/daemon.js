@@ -121,8 +121,10 @@ class DaemonSupervisor {
     this.bunPath = options.bunPath ?? resolveBunPath();
     this.serverDir = options.serverDir ?? path.join(repoRoot, 'apps', 'server');
     this.entryPath = options.entryPath ?? path.join(this.serverDir, 'src', 'main.ts');
-    // Packaged builds pass a self-contained server binary (Bun runtime embedded);
-    // dev/source runs leave it null and launch `bun <entryPath>` instead.
+    // Both packaged and dev builds launch `bun <entryPath>` (packaged points
+    // bunPath/entryPath into Resources so @cursor/sdk resolves from the staged
+    // node_modules). serverBinaryPath remains as an escape hatch for spawning a
+    // prebuilt executable directly.
     this.serverBinaryPath = options.serverBinaryPath ?? null;
     this.cwd = options.cwd ?? this.serverDir;
     this.env = options.env ?? process.env;

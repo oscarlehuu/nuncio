@@ -881,7 +881,7 @@ app.whenReady().then(async () => {
   shellSettingsState = shellSettings.loadSettings(shellSettingsPath);
 
   // A packaged .app has no dev server and must never probe for one — it runs the
-  // compiled server binary shipped in Resources. The dev-server path stays for
+  // bundled server script with the Bun runtime shipped in Resources. The dev-server path stays for
   // `bun run dev` and for running `electron .` against a source checkout.
   const packaged = app.isPackaged;
   const forcedDevMode = !packaged && process.env.NUNCIO_DESKTOP_DEV === '1';
@@ -906,13 +906,16 @@ app.whenReady().then(async () => {
   } else {
     const supervisorOptions = { log: (message) => console.log(message) };
     if (packaged) {
-      // Launch the self-contained server binary from the app bundle, writing its
-      // SQLite data under userData and serving the web bundle shipped alongside.
+      // Launch the bundled server script with the shipped Bun runtime, writing
+      // its SQLite data under userData and serving the web bundle alongside.
+      // cwd must be Resources/server so externals like @cursor/sdk resolve
+      // against the staged node_modules there.
       const resourcesPath = process.resourcesPath;
       const daemonEnv = { ...process.env };
       delete daemonEnv.NUNCIO_FORCE_MOCK;
-      supervisorOptions.serverBinaryPath = path.join(resourcesPath, 'nuncio-server');
-      supervisorOptions.cwd = resourcesPath;
+      supervisorOptions.bunPath = path.join(resourcesPath, 'bun');
+      supervisorOptions.entryPath = path.join(resourcesPath, 'server', 'server.js');
+      supervisorOptions.cwd = path.join(resourcesPath, 'server');
       supervisorOptions.env = {
         ...daemonEnv,
         // Share the SQLite backend with `bun run dev` and worktrees so every

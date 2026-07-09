@@ -412,8 +412,10 @@ describe('desktop main dev-mode loading', () => {
     expect(state.daemonStartCalls).toBe(1);
     expect(state.loadedUrls).toEqual(['http://daemon.test:3000']);
     expect(state.daemonOptions).toHaveLength(1);
-    expect(state.daemonOptions[0].serverBinaryPath).toBe(path.join(resourcesPath, 'nuncio-server'));
-    expect(state.daemonOptions[0].cwd).toBe(resourcesPath);
+    expect(state.daemonOptions[0].serverBinaryPath).toBeUndefined();
+    expect(state.daemonOptions[0].bunPath).toBe(path.join(resourcesPath, 'bun'));
+    expect(state.daemonOptions[0].entryPath).toBe(path.join(resourcesPath, 'server', 'server.js'));
+    expect(state.daemonOptions[0].cwd).toBe(path.join(resourcesPath, 'server'));
     expect(state.daemonOptions[0].env.NUNCIO_PACKAGED).toBe('1');
     expect(state.daemonOptions[0].env.NUNCIO_FORCE_MOCK).toBeUndefined();
     expect(state.daemonOptions[0].env.NUNCIO_WEB_DIST).toBe(path.join(resourcesPath, 'web', 'dist'));

@@ -10,7 +10,7 @@
     "lint": "echo \"(desktop lint: n/a during spike)\"",
     "postinstall": "electron-rebuild -w node-pty",
     "rebuild": "electron-rebuild -w node-pty",
-    "build:resources": "node scripts/build-resources.mjs",
+    "build:resources": "bun scripts/build-resources.mjs",
     "dist": "bun run build:resources && electron-builder --config electron-builder.config.cjs",
     "dist:stable": "NUNCIO_CHANNEL=stable bun run dist",
     "dist:dev": "NUNCIO_CHANNEL=dev bun run dist"

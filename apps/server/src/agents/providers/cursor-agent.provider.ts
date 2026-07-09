@@ -108,7 +108,12 @@ export class CursorAgentProvider extends BaseAgentProvider {
       ];
       this.cachedModels = dto;
       return dto;
-    } catch {
+    } catch (error) {
+      // Surface the real failure (SDK load, network, auth) — a silent fallback
+      // hides packaging breakage behind a plausible-looking static catalog.
+      console.error(
+        `[cursor] listModels failed, using static fallback: ${error instanceof Error ? error.message : String(error)}`,
+      );
       return STATIC_FALLBACK_CURSOR_MODELS;
     }
   }
