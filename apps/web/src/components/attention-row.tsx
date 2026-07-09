@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowUpRight, Check, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
+import { ArrowUpRight, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
 import { relativeTime, type AttentionItemDto } from '../lib/api';
 import {
   attentionKindMeta,
@@ -16,12 +16,12 @@ interface AttentionRowProps {
   item: AttentionItemDto;
   busy?: boolean;
   onOpen: (target: OpenTarget) => void;
-  onAck: (id: string) => void;
   onApprove: (id: string, proposalCount: number) => void;
   onResolve: (id: string) => void;
 }
 
-export function AttentionRow({ item, busy, onOpen, onAck, onApprove, onResolve }: AttentionRowProps) {
+/** A row carries at most two actions: one primary (Open or Approve) plus Dismiss. */
+export function AttentionRow({ item, busy, onOpen, onApprove, onResolve }: AttentionRowProps) {
   const meta = attentionKindMeta(item.kind);
   const Icon = meta.icon;
   const target = openTargetFor(item);
@@ -70,19 +70,6 @@ export function AttentionRow({ item, busy, onOpen, onAck, onApprove, onResolve }
 
       {/* Actions — always visible (no hover), tap-sized for phone. */}
       <div className="flex shrink-0 items-center gap-1.5">
-        {!acked && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 gap-1.5 px-2.5"
-            disabled={busy}
-            onClick={() => onAck(item.id)}
-            aria-label={`Mark "${item.title}" seen`}
-          >
-            <Check className="size-3.5" />
-            <span className="hidden sm:inline">Seen</span>
-          </Button>
-        )}
         {isDispatcher && !approved && (
           <Button
             size="sm"

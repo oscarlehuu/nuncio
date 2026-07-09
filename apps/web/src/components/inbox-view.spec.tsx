@@ -99,15 +99,14 @@ describe('InboxView', () => {
     expect(screen.getByText('Brand new signal')).toBeInTheDocument();
   });
 
-  it('acks an item ("Seen")', async () => {
+  it('offers no separate Seen action — Dismiss and the primary are the only buttons', async () => {
     vi.mocked(fetchAttention).mockResolvedValue({
       items: [item({ id: 'a' })],
       counts: { total: 1, unacked: 1, bySeverity: {} },
     });
     renderInbox();
-    await waitFor(() => expect(screen.getByRole('button', { name: /mark .* seen/i })).toBeInTheDocument());
-    await userEvent.click(screen.getByRole('button', { name: /mark .* seen/i }));
-    expect(ackAttentionItem).toHaveBeenCalledWith('a');
+    await waitFor(() => expect(screen.getByRole('button', { name: /dismiss/i })).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: /seen/i })).not.toBeInTheDocument();
   });
 
   it('dismisses (resolves) an item', async () => {

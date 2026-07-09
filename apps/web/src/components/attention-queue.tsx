@@ -3,7 +3,6 @@ import { Check } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
-  ackAttentionItem,
   approveDispatcherProposal,
   fetchAttention,
   resolveAttentionItem,
@@ -101,7 +100,6 @@ export function AttentionQueue({ compactEmpty = false }: AttentionQueueProps) {
           item={item}
           busy={busyId === item.id}
           onOpen={handleOpen}
-          onAck={(id) => void act(id, ackAttentionItem)}
           onApprove={(id, proposalCount) =>
             void act(id, approveDispatcherProposal, (result) => {
               const taskIds = (result as { taskIds?: unknown }).taskIds;
