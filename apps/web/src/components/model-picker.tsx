@@ -21,6 +21,11 @@ import {
 } from '../lib/model-effort-options';
 import type { ModelOptionsMap } from '../lib/model-options';
 import {
+  loadRecentModels,
+  recordRecentModel,
+  type RecentModel,
+} from '../lib/model-preference';
+import {
   flattenProviders,
   modelById,
   normalizeModelCatalog,
@@ -158,14 +163,31 @@ const MODEL_PANEL_STYLE = {
 
 const MODEL_PANEL_CLASS = 'max-h-[min(420px,var(--radix-dropdown-menu-content-available-height))] overflow-y-auto';
 
+/* A provider with more models than this collapses to its first few plus an
+ * "All N models" expander, so browsing stays one screen tall. */
+const FEATURED_COLLAPSE_THRESHOLD = 6;
+const FEATURED_VISIBLE = 3;
+
+interface CliChip {
+  id: string | null;
+  label: string;
+}
+
 function ModelPickerFlatContent({
   children,
   query,
   onQueryChange,
+  chips,
+  activeChip = null,
+  onChipChange,
 }: {
   children: ReactNode;
   query: string;
   onQueryChange: (query: string) => void;
+  /** Optional CLI filter row under the search box; one chip per provider plus All. */
+  chips?: CliChip[];
+  activeChip?: string | null;
+  onChipChange?: (id: string | null) => void;
 }) {
   return (
     <DropdownMenuContent
@@ -187,6 +209,29 @@ function ModelPickerFlatContent({
             className="h-8 pl-8"
           />
         </div>
+        {chips && chips.length > 2 && (
+          <div className="mt-2 flex flex-wrap items-center gap-1" role="group" aria-label="Filter by CLI">
+            {chips.map((chip) => {
+              const active = activeChip === chip.id;
+              return (
+                <button
+                  key={chip.id ?? 'all'}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => onChipChange?.(chip.id)}
+                  className={cn(
+                    'rounded-full border px-2.5 py-0.5 text-ui-sm transition-colors',
+                    active
+                      ? 'border-foreground/40 bg-accent text-foreground'
+                      : 'border-border text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {chip.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
       <div className="p-1">{children}</div>
     </DropdownMenuContent>
@@ -517,6 +562,9 @@ function ChatModelPicker({
   const [query, setQuery] = useState('');
   const [expandedModelId, setExpandedModelId] = useState<string | null>(null);
   const [expandedOptions, setExpandedOptions] = useState<ModelOptionsMap | null>(null);
+  const [cliFilter, setCliFilter] = useState<string | null>(null);
+  const [expandedProviders, setExpandedProviders] = useState<ReadonlySet<string>>(new Set());
+  const [recents, setRecents] = useState<RecentModel[]>([]);
   const asText = variant === 'text';
   const lookup = modelById(catalog);
   const selected = lookup[value];
@@ -539,6 +587,8 @@ function ChatModelPicker({
         ? mergeOptionsForModel(model, normalized)
         : undefined;
     if (payload && Object.keys(payload).length === 0) payload = undefined;
+    // Persist only — the on-screen Recent list stays stable while the menu is open.
+    recordRecentModel({ modelId, providerId });
     onChange(modelId, providerId, payload);
     setOpen(false);
   };
@@ -546,6 +596,7 @@ function ChatModelPicker({
   const toggleBoolean = (modelId: string, providerId: string, options: ModelOptionsMap) => {
     const model = lookup[modelId];
     const payload = model ? mergeOptionsForModel(model, options) : normalizeModelOptions(options);
+    recordRecentModel({ modelId, providerId });
     onChange(modelId, providerId, payload);
   };
 
@@ -553,6 +604,19 @@ function ChatModelPicker({
     setExpandedModelId(modelId);
     setExpandedOptions(options);
   };
+
+  const visibleCatalog = cliFilter ? catalog.filter((p) => p.id === cliFilter) : catalog;
+  // Filtering to one CLI means "show me that CLI's whole catalog" — no collapse.
+  const collapseEnabled = !queryLower && !cliFilter;
+  const recentModels =
+    queryLower || cliFilter
+      ? []
+      : recents
+          .map((recent) => lookup[recent.modelId])
+          .filter(
+            (model, index): model is FlatModel =>
+              !!model && model.providerId === recents[index]?.providerId,
+          );
 
   const triggerBadges = activeModelOptionBadges(selected, modelOptions);
   const triggerName = selected ? prettyModelName(selected.name) : 'Select model';
@@ -565,7 +629,14 @@ function ChatModelPicker({
       open={open}
       onOpenChange={(next) => {
         if (disabled) return;
-        if (next && !open) onOpen?.();
+        if (next && !open) {
+          onOpen?.();
+          setRecents(loadRecentModels());
+        }
+        if (!next) {
+          setCliFilter(null);
+          setExpandedProviders(new Set());
+        }
         setOpen(next);
       }}
       modal={false}
@@ -596,8 +667,31 @@ function ChatModelPicker({
           <ChevronDown className="size-3 opacity-70" data-icon="inline-end" />
         </Button>
       </DropdownMenuTrigger>
-      <ModelPickerFlatContent query={query} onQueryChange={setQuery}>
-        {catalog.map((p, idx) => {
+      <ModelPickerFlatContent
+        query={query}
+        onQueryChange={setQuery}
+        chips={[{ id: null, label: 'All' }, ...catalog.map((p) => ({ id: p.id, label: p.name }))]}
+        activeChip={cliFilter}
+        onChipChange={setCliFilter}
+      >
+        {recentModels.length > 0 && (
+          <>
+            <DropdownMenuLabel className="px-2 pt-2 text-[11px] uppercase tracking-wide">
+              Recent
+            </DropdownMenuLabel>
+            <ModelRows
+              models={recentModels}
+              value={value}
+              modelOptions={modelOptions}
+              expandedModelId={expandedModelId}
+              expandedOptions={expandedOptions}
+              onPick={pick}
+              onToggle={toggleBoolean}
+              onExpand={expandModel}
+            />
+          </>
+        )}
+        {visibleCatalog.map((p, idx) => {
           const providerMatches = !queryLower || p.name.toLowerCase().includes(queryLower) || p.id.toLowerCase().includes(queryLower);
           const flat = flattenProviders([p]).filter((m) => {
             if (!queryLower || providerMatches) return true;
@@ -611,14 +705,54 @@ function ChatModelPicker({
           if (flat.length === 0) return null;
           const groups = p.groups ?? [];
           const showGroupHeaders = groups.length > 1;
+          const collapsed =
+            collapseEnabled &&
+            flat.length > FEATURED_COLLAPSE_THRESHOLD &&
+            !expandedProviders.has(p.id);
+          // The active model always stays visible, even when its provider is collapsed.
+          const featured = collapsed
+            ? [
+                ...flat.slice(0, FEATURED_VISIBLE),
+                ...flat.filter(
+                  (m, index) => index >= FEATURED_VISIBLE && m.id === value,
+                ),
+              ]
+            : flat;
           return (
             <div key={p.id}>
-              {idx > 0 && <DropdownMenuSeparator />}
+              {(idx > 0 || recentModels.length > 0) && <DropdownMenuSeparator />}
               <DropdownMenuLabel className="flex items-center gap-1.5 px-2 pt-2 text-[11px] uppercase tracking-wide">
                 <ProviderIcon providerId={p.id} className="size-3.5 shrink-0 text-muted-foreground" />
                 <span className="truncate">{p.name}</span>
               </DropdownMenuLabel>
-                  {showGroupHeaders
+                  {collapsed ? (
+                    <>
+                      <ModelRows
+                        models={featured}
+                        value={value}
+                        modelOptions={modelOptions}
+                        expandedModelId={expandedModelId}
+                        expandedOptions={expandedOptions}
+                        onPick={pick}
+                        onToggle={toggleBoolean}
+                        onExpand={expandModel}
+                      />
+                      <DropdownMenuItem
+                        onSelect={(event) => {
+                          event.preventDefault();
+                          setExpandedProviders((prev) => new Set(prev).add(p.id));
+                        }}
+                        className="gap-2 text-muted-foreground"
+                        aria-label={`Show all ${flat.length} ${p.name} models`}
+                      >
+                        <span className="size-4 shrink-0" />
+                        <span className="truncate">
+                          All {flat.length} {p.name} models
+                        </span>
+                        <ChevronDown className="ml-auto size-3.5 shrink-0" aria-hidden />
+                      </DropdownMenuItem>
+                    </>
+                  ) : showGroupHeaders
                     ? groups.map((group, groupIdx) => {
                         if (group.models.length === 0) return null;
                         const groupModels = flattenProviders([{ ...p, groups: [group] }]).filter((m) => flat.some((visible) => visible.id === m.id));

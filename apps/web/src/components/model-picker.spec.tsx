@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ModelPicker } from './model-picker';
@@ -86,7 +86,130 @@ const CODEX_PROVIDER: ModelProvider = {
   ],
 };
 
+const MANY_MODEL_PROVIDER: ModelProvider = {
+  id: 'claude',
+  name: 'Claude',
+  groups: [
+    {
+      id: 'claude',
+      name: 'Claude',
+      models: Array.from({ length: 8 }, (_, i) => ({
+        id: `claude:model-${i + 1}`,
+        name: `Claude Model ${i + 1}`,
+      })),
+    },
+  ],
+};
+
 describe('ModelPicker', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it('lists the last used models in a Recent section and records selections', async () => {
+    localStorage.setItem(
+      'nuncio-model-recents',
+      JSON.stringify([
+        { modelId: 'cursor:claude-opus-4-8', providerId: 'cursor' },
+        { modelId: 'ghost:not-in-catalog', providerId: 'ghost' },
+      ]),
+    );
+    const onChange = vi.fn();
+    render(
+      <ModelPicker
+        value="anthropic:claude-haiku-4-5"
+        onChange={onChange}
+        providers={[PI_PROVIDER, CURSOR_PROVIDER]}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /claude haiku 4\.5/i }));
+
+    // Known recents render on top; unknown (removed) models are skipped silently.
+    const recentLabel = await screen.findByText('Recent');
+    expect(recentLabel).toBeInTheDocument();
+    expect(screen.getAllByRole('menuitem', { name: /claude opus 4 8/i }).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/not-in-catalog/)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getAllByRole('menuitem', { name: /claude haiku 4\.5/i })[0]);
+    const stored = JSON.parse(localStorage.getItem('nuncio-model-recents') ?? '[]');
+    expect(stored[0]).toEqual({ modelId: 'anthropic:claude-haiku-4-5', providerId: 'pi' });
+  });
+
+  it('collapses a large provider to featured models plus an expander row', async () => {
+    render(
+      <ModelPicker
+        value="claude:model-1"
+        onChange={vi.fn()}
+        providers={[MANY_MODEL_PROVIDER]}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /claude model 1/i }));
+
+    expect(await screen.findByRole('menuitem', { name: /claude model 3/i })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /claude model 7/i })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('menuitem', { name: /show all 8 claude models/i }));
+    expect(await screen.findByRole('menuitem', { name: /claude model 7/i })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /show all 8 claude models/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps the active model visible when its provider is collapsed', async () => {
+    render(
+      <ModelPicker
+        value="claude:model-8"
+        onChange={vi.fn()}
+        providers={[MANY_MODEL_PROVIDER]}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /claude model 8/i }));
+
+    expect(await screen.findByRole('menuitem', { name: /claude model 8/i })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /claude model 5/i })).not.toBeInTheDocument();
+  });
+
+  it('searching disables the featured collapse', async () => {
+    render(
+      <ModelPicker
+        value="claude:model-1"
+        onChange={vi.fn()}
+        providers={[MANY_MODEL_PROVIDER]}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /claude model 1/i }));
+    await userEvent.type(await screen.findByPlaceholderText(/search models/i), 'model');
+
+    expect(await screen.findByRole('menuitem', { name: /claude model 7/i })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /show all 8 claude models/i })).not.toBeInTheDocument();
+  });
+
+  it('filters to one CLI via the chip row and shows its full catalog', async () => {
+    render(
+      <ModelPicker
+        value="anthropic:claude-haiku-4-5"
+        onChange={vi.fn()}
+        providers={[PI_PROVIDER, MANY_MODEL_PROVIDER]}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /claude haiku 4\.5/i }));
+
+    const chipRow = await screen.findByRole('group', { name: /filter by cli/i });
+    expect(chipRow).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /^claude$/i }));
+
+    // Filtered to the Claude CLI: Pi's models leave, and the collapse is off.
+    expect(screen.queryByRole('menuitem', { name: /claude haiku 4\.5/i })).not.toBeInTheDocument();
+    expect(await screen.findByRole('menuitem', { name: /claude model 7/i })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /show all 8 claude models/i })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /^all$/i }));
+    expect(await screen.findByRole('menuitem', { name: /claude haiku 4\.5/i })).toBeInTheDocument();
+  });
+
   it('shows a green lightning indicator when fast is on', () => {
     render(
       <ModelPicker
@@ -112,8 +235,8 @@ describe('ModelPicker', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /claude haiku 4\.5/i }));
     expect(await screen.findByPlaceholderText(/search models/i)).toBeInTheDocument();
-    expect(screen.getByText('Pi')).toBeInTheDocument();
-    expect(screen.getByText('Cursor')).toBeInTheDocument();
+    expect(screen.getAllByText('Pi').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Cursor').length).toBeGreaterThan(0);
     expect(screen.queryByTestId('model-picker-provider-submenu')).not.toBeInTheDocument();
     const composer = await screen.findByRole('menuitem', { name: /composer 2\.5/i });
     await userEvent.click(composer);
@@ -250,9 +373,16 @@ describe('ModelPicker', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /claude haiku 4\.5/i }));
 
-    const pi = await screen.findByText('Pi');
-    const cursor = await screen.findByText('Cursor');
-    expect(pi.compareDocumentPosition(cursor) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Group headers only — the CLI chip row repeats the provider names as buttons.
+    const headers = (await screen.findAllByText('Pi')).filter((el) => el.closest('button') === null);
+    const cursorHeaders = (await screen.findAllByText('Cursor')).filter(
+      (el) => el.closest('button') === null,
+    );
+    expect(headers.length).toBeGreaterThan(0);
+    expect(cursorHeaders.length).toBeGreaterThan(0);
+    expect(
+      headers[0].compareDocumentPosition(cursorHeaders[0]) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it('shows a header per group when pi has more than one group', async () => {

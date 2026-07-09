@@ -62,3 +62,51 @@ export function resolveModelSelection(
     modelOptions: defaultOptionsForModel(model),
   };
 }
+
+export const MODEL_RECENTS_STORAGE_KEY = 'nuncio-model-recents';
+
+/** How many recently used models the picker surfaces. */
+export const MODEL_RECENTS_LIMIT = 3;
+
+export type RecentModel = {
+  modelId: string;
+  providerId: string;
+};
+
+/** Most-recent-first list of models the user actually selected. Fails soft to []. */
+export function loadRecentModels(storage: Storage = localStorage): RecentModel[] {
+  try {
+    const raw = storage.getItem(MODEL_RECENTS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (entry): entry is RecentModel =>
+          !!entry &&
+          typeof entry === 'object' &&
+          typeof (entry as RecentModel).modelId === 'string' &&
+          typeof (entry as RecentModel).providerId === 'string',
+      )
+      .slice(0, MODEL_RECENTS_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+/** Push a selection to the front, deduped by modelId and capped at the limit. */
+export function recordRecentModel(
+  entry: RecentModel,
+  storage: Storage = localStorage,
+): RecentModel[] {
+  const next = [
+    { modelId: entry.modelId, providerId: entry.providerId },
+    ...loadRecentModels(storage).filter((recent) => recent.modelId !== entry.modelId),
+  ].slice(0, MODEL_RECENTS_LIMIT);
+  try {
+    storage.setItem(MODEL_RECENTS_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    /* storage full or unavailable — recents are a convenience, not state */
+  }
+  return next;
+}

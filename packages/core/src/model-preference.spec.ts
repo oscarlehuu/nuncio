@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   loadModelPreference,
+  loadRecentModels,
   MODEL_PREFERENCE_STORAGE_KEY,
+  MODEL_RECENTS_STORAGE_KEY,
+  recordRecentModel,
   resolveModelSelection,
   saveModelPreference,
 } from './model-preference';
@@ -98,5 +101,55 @@ describe('model-preference', () => {
     expect(localStorage.getItem(MODEL_PREFERENCE_STORAGE_KEY)).toBeNull();
     const resolved = resolveModelSelection(CURSOR_AND_PI, null);
     expect(resolved?.modelId).toBe('anthropic:claude-haiku-4');
+  });
+});
+
+describe('recent models', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it('returns [] when nothing is stored, storage throws, or JSON is corrupt', () => {
+    expect(loadRecentModels()).toEqual([]);
+    localStorage.setItem(MODEL_RECENTS_STORAGE_KEY, 'not-json{');
+    expect(loadRecentModels()).toEqual([]);
+    localStorage.setItem(MODEL_RECENTS_STORAGE_KEY, '{"modelId":"x"}');
+    expect(loadRecentModels()).toEqual([]);
+  });
+
+  it('drops malformed entries and caps the list at the limit', () => {
+    localStorage.setItem(
+      MODEL_RECENTS_STORAGE_KEY,
+      JSON.stringify([
+        { modelId: 'a', providerId: 'p' },
+        { modelId: 42 },
+        null,
+        { modelId: 'b', providerId: 'p' },
+        { modelId: 'c', providerId: 'p' },
+        { modelId: 'd', providerId: 'p' },
+      ]),
+    );
+    expect(loadRecentModels()).toEqual([
+      { modelId: 'a', providerId: 'p' },
+      { modelId: 'b', providerId: 'p' },
+      { modelId: 'c', providerId: 'p' },
+    ]);
+  });
+
+  it('records most-recent-first, dedupes by modelId, and caps at the limit', () => {
+    recordRecentModel({ modelId: 'a', providerId: 'p' });
+    recordRecentModel({ modelId: 'b', providerId: 'p' });
+    recordRecentModel({ modelId: 'a', providerId: 'p' });
+    expect(loadRecentModels()).toEqual([
+      { modelId: 'a', providerId: 'p' },
+      { modelId: 'b', providerId: 'p' },
+    ]);
+    recordRecentModel({ modelId: 'c', providerId: 'q' });
+    recordRecentModel({ modelId: 'd', providerId: 'q' });
+    expect(loadRecentModels()).toEqual([
+      { modelId: 'd', providerId: 'q' },
+      { modelId: 'c', providerId: 'q' },
+      { modelId: 'a', providerId: 'p' },
+    ]);
   });
 });
