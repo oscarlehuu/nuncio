@@ -77,7 +77,7 @@ export function GlobalRunsView() {
 
   return (
     <section className="flex-1 flex flex-col min-h-0 overflow-hidden bg-background">
-      <header className="flex items-center gap-2 px-4 py-3 border-b border-border sticky top-0 bg-background/80 backdrop-blur z-10">
+      <header className="flex items-center gap-2 px-4 py-3 border-b border-border sticky top-0 bg-background z-10">
         <Button variant="ghost" size="icon" onClick={() => navigate('/autopilot')} aria-label="Back to Autopilot">
           <ArrowLeft className="size-4" />
         </Button>

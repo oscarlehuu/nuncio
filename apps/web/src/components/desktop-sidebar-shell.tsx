@@ -35,7 +35,6 @@ export function DesktopSidebarPinned({
           data-testid="desktop-nav-toggle"
           variant="outline"
           size="icon"
-          className="backdrop-blur"
           aria-label="Unpin sidebar"
           aria-expanded={open}
           onClick={onTogglePin}
@@ -79,7 +78,6 @@ export function DesktopSidebarHoverRail({
           data-testid="desktop-nav-toggle"
           variant="outline"
           size="icon"
-          className="backdrop-blur"
           aria-label="Pin sidebar"
           aria-expanded={open}
           onMouseEnter={onOpenHover}

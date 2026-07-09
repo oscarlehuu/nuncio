@@ -659,7 +659,7 @@ export default function App() {
           <Button
             variant="outline"
             size="icon"
-            className="md:hidden fixed z-50 backdrop-blur"
+            className="md:hidden fixed z-50"
             style={{
               top: 'calc(12px + env(safe-area-inset-top, 0px))',
               left: 'calc(12px + env(safe-area-inset-left, 0px))',

@@ -197,7 +197,7 @@ function PrIdentityHeader({
     <div
       className={cn(
         page
-          ? 'flex items-center gap-3 border-b border-border bg-background/80 px-4 py-3 pl-16 backdrop-blur md:pl-4'
+          ? 'flex items-center gap-3 border-b border-border bg-background px-4 py-3 pl-16 md:pl-4'
           : 'flex items-start gap-2',
       )}
     >

@@ -176,7 +176,7 @@ function ModelPickerFlatContent({
       style={MODEL_PANEL_STYLE}
       className={cn(MODEL_PANEL_CLASS, 'w-[min(22rem,calc(100vw-24px))] p-0')}
     >
-      <div className="sticky top-0 z-10 border-b border-border/60 bg-popover/95 p-2 backdrop-blur">
+      <div className="sticky top-0 z-10 border-b border-border/60 bg-popover p-2">
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input

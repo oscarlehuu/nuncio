@@ -610,7 +610,7 @@ export function SessionDetail({
     <section className="flex-1 flex min-h-0">
       <TooltipProvider>
       <div className="flex-1 min-w-0 flex flex-col min-h-0">
-      <header className="shrink-0 relative flex items-center gap-3 px-4 md:px-5 py-3 border-b border-border bg-card/80 backdrop-blur min-h-[52px]">
+      <header className="shrink-0 relative flex items-center gap-3 px-4 md:px-5 py-3 border-b border-border bg-card min-h-[52px]">
         <div className="flex-1 min-w-0 flex justify-center items-center">
           {editingTitle ? (
             <div className="flex items-center gap-1.5 max-w-[60%]">
