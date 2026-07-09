@@ -113,6 +113,28 @@ function ModelNameWithBadges({
   );
 }
 
+/* Fixed-width leading indicator slot rendered in EVERY model row (order:
+ * check → slot → name), so model names start at the same x across all
+ * engines: a bolt when the model supports fast, an equal-width spacer
+ * otherwise. */
+function FastSlot({ model, active = false }: { model: FlatModel; active?: boolean }) {
+  if (!modelSupportsFast(model)) {
+    return (
+      <span
+        data-testid="model-fast-slot"
+        data-fast="false"
+        aria-hidden
+        className="inline-flex size-3.5 shrink-0"
+      />
+    );
+  }
+  return (
+    <span data-testid="model-fast-slot" data-fast="true" className="inline-flex shrink-0">
+      <FastLightningToggle active={active} />
+    </span>
+  );
+}
+
 function ModelVariantRow({
   model,
   variant,
@@ -127,6 +149,7 @@ function ModelVariantRow({
   return (
     <DropdownMenuItem onSelect={onSelect} className="gap-2">
       <SelectionCheck active={active} />
+      <FastSlot model={model} />
       <span className="truncate">{variant.label || prettyModelName(model.name)}</span>
     </DropdownMenuItem>
   );
@@ -144,6 +167,7 @@ function ModelPlainRow({
   return (
     <DropdownMenuItem onSelect={onSelect} className="gap-2">
       <SelectionCheck active={active} />
+      <FastSlot model={model} />
       <span className="truncate">{prettyModelName(model.name)}</span>
     </DropdownMenuItem>
   );
@@ -357,6 +381,8 @@ function ModelRows({
   onPick,
   onToggle,
   onExpand,
+  plainRows,
+  isRowActive,
 }: {
   models: FlatModel[];
   value: string;
@@ -366,10 +392,25 @@ function ModelRows({
   onPick: (modelId: string, providerId: string, options?: ModelOptionsMap) => void;
   onToggle: (modelId: string, providerId: string, options: ModelOptionsMap) => void;
   onExpand: (modelId: string, options: ModelOptionsMap) => void;
+  /** Pair mode: every model is a plain (engine, model) row — no variant
+   *  expansion and no per-model options panel. */
+  plainRows?: boolean;
+  /** Pair mode: active means engine AND model match, not just the model id. */
+  isRowActive?: (model: FlatModel) => boolean;
 }) {
   return (
     <>
       {models.map((model) => {
+        if (plainRows) {
+          return (
+            <ModelPlainRow
+              key={model.id}
+              model={model}
+              active={isRowActive ? isRowActive(model) : value === model.id}
+              onSelect={() => onPick(model.id, model.providerId)}
+            />
+          );
+        }
         if (modelShowsVariantRows(model)) {
           return (model.variants ?? []).map((variant) => {
             const options = variantParamsToOptions(variant.params);
@@ -394,7 +435,6 @@ function ModelRows({
             : expanded && expandedOptions
               ? mergeOptionsForModel(model, expandedOptions)
               : mergeOptionsForModel(model, plainRowOptions(model));
-          const showFast = modelSupportsFast(model);
           const fastOn = current.fast === true;
           const selectConfigurable = () => {
             const next = mergeOptionsForModel(model, active ? current : plainRowOptions(model));
@@ -416,13 +456,11 @@ function ModelRows({
                 className="gap-2"
               >
                 <SelectionCheck active={active} />
-                <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                  {showFast && <FastLightningToggle active={fastOn} />}
-                  <ModelNameWithBadges
-                    name={prettyModelName(model.name)}
-                    badges={active ? activeModelOptionBadges(model, current) : []}
-                  />
-                </span>
+                <FastSlot model={model} active={fastOn} />
+                <ModelNameWithBadges
+                  name={prettyModelName(model.name)}
+                  badges={active ? activeModelOptionBadges(model, current) : []}
+                />
               </DropdownMenuItem>
               {(active || expanded) && (
                 <div className="mx-1 mb-1 rounded-md border border-border/60 bg-muted/20">
@@ -447,116 +485,18 @@ function ModelRows({
   );
 }
 
-function PairModeModelPicker({
-  providers,
-  engine,
-  model,
-  onPairChange,
-  inheritOption,
-  providerDefaultOption,
-  variant = 'text',
-  compact,
-}: PairModelPickerProps) {
-  const catalog = normalizeModelCatalog(providers ?? []);
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
-  const lookup = modelById(catalog);
-  const engineLabel = engine ? catalog.find((p) => p.id === engine)?.name ?? engine : inheritOption?.label ?? 'Inherit';
-  const knownModel = model ? lookup[model] : undefined;
-  const modelLabel = model ? (knownModel ? prettyModelName(knownModel.name) : model) : 'default model';
-  const queryLower = query.trim().toLowerCase();
 
-  const pickPair = (nextEngine: string | null, nextModel: string | null) => {
-    onPairChange(nextEngine, nextModel);
-    setOpen(false);
-  };
+/* One picker, two modes. Chat mode drives a single model id + options; pair
+ * mode drives an (engine, model) pair for loops, where null engine means
+ * "inherit" and null model means "provider default". Both modes share the
+ * same panel: sticky search, CLI filter chips, featured collapse, and the
+ * aligned model rows. */
+export function ModelPicker(props: ModelPickerProps) {
+  const pair = props.pairMode === 'engine+model' ? props : null;
+  const chat = props.pairMode === 'engine+model' ? null : props;
+  const { providers, onOpen, disabled, autoPick = true } = props;
+  const variant = props.variant ?? (pair ? 'text' : 'boxed');
 
-  return (
-    <DropdownMenu open={open} onOpenChange={setOpen} modal={false}>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="outline"
-          className={cn(
-            variant === 'text'
-              ? 'picker-trigger-text max-w-full'
-              : 'composer-picker-trigger h-8 gap-1.5 px-2.5 max-w-[300px]',
-            compact && 'h-6',
-          )}
-          aria-label={`Engine and model: ${engineLabel} · ${modelLabel}`}
-        >
-          {engine && (
-            <ProviderIcon providerId={engine} className="size-3.5 shrink-0 text-muted-foreground" />
-          )}
-          <span className="truncate text-ui-lg">
-            {engineLabel} · {modelLabel}
-          </span>
-          <ChevronDown className="size-3 opacity-70" data-icon="inline-end" />
-        </Button>
-      </DropdownMenuTrigger>
-      <ModelPickerFlatContent query={query} onQueryChange={setQuery}>
-        {inheritOption && (
-          <>
-            <DropdownMenuItem onSelect={() => pickPair(null, null)} className="gap-2">
-              <SelectionCheck active={engine === null} />
-              <span className="truncate">{inheritOption.label}</span>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-          </>
-        )}
-        {catalog.map((p) => {
-          const providerMatches = !queryLower || p.name.toLowerCase().includes(queryLower) || p.id.toLowerCase().includes(queryLower);
-          const models = flattenProviders([p]).filter((m) => {
-            if (!queryLower || providerMatches) return true;
-            return (
-              m.id.toLowerCase().includes(queryLower) ||
-              m.name.toLowerCase().includes(queryLower) ||
-              prettyModelName(m.name).toLowerCase().includes(queryLower) ||
-              m.groupName.toLowerCase().includes(queryLower)
-            );
-          });
-          if (!providerMatches && models.length === 0) return null;
-          const engineActive = engine === p.id;
-          return (
-            <div key={p.id}>
-              <DropdownMenuLabel className="flex items-center gap-1.5 px-2 pt-2 text-[11px] uppercase tracking-wide">
-                <ProviderIcon providerId={p.id} className="size-3.5 shrink-0 text-muted-foreground" />
-                <span className="truncate">{p.name}</span>
-              </DropdownMenuLabel>
-                {providerDefaultOption && (
-                  <DropdownMenuItem
-                    onSelect={() => pickPair(p.id, null)}
-                    className="gap-2"
-                    aria-label={`${p.name} provider default`}
-                  >
-                    <SelectionCheck active={engineActive && model === null} />
-                    <span className="truncate">Provider default</span>
-                  </DropdownMenuItem>
-                )}
-                {providerDefaultOption && models.length > 0 && <DropdownMenuSeparator />}
-                {models.map((m) => (
-                  <DropdownMenuItem key={m.id} onSelect={() => pickPair(p.id, m.id)} className="gap-2">
-                    <SelectionCheck active={engineActive && model === m.id} />
-                    <span className="truncate">{prettyModelName(m.name)}</span>
-                  </DropdownMenuItem>
-                ))}
-            </div>
-          );
-        })}
-      </ModelPickerFlatContent>
-    </DropdownMenu>
-  );
-}
-
-function ChatModelPicker({
-  value,
-  modelOptions,
-  onChange,
-  providers,
-  variant = 'boxed',
-  onOpen,
-  disabled,
-  autoPick = true,
-}: ChatModelPickerProps) {
   const catalog = normalizeModelCatalog(providers ?? []);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -567,19 +507,26 @@ function ChatModelPicker({
   const [recents, setRecents] = useState<RecentModel[]>([]);
   const asText = variant === 'text';
   const lookup = modelById(catalog);
-  const selected = lookup[value];
+  const selectedModelId = pair ? pair.model ?? '' : chat!.value;
+  const modelOptions = chat?.modelOptions;
+  const selected = lookup[selectedModelId];
   const queryLower = query.trim().toLowerCase();
 
   useEffect(() => {
-    if (!autoPick) return;
+    if (!autoPick || !chat) return;
     const lookupForProviders = modelById(catalog);
-    if (!value || lookupForProviders[value]) return;
+    if (!chat.value || lookupForProviders[chat.value]) return;
     const first = flattenProviders(catalog)[0];
-    if (first) onChange(first.id, first.providerId, defaultOptionsForModel(first));
+    if (first) chat.onChange(first.id, first.providerId, defaultOptionsForModel(first));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoPick, onChange, catalog, value]);
+  }, [autoPick, chat?.onChange, catalog, chat?.value]);
 
   const pick = (modelId: string, providerId: string, options?: ModelOptionsMap) => {
+    if (pair) {
+      pair.onPairChange(providerId, modelId);
+      setOpen(false);
+      return;
+    }
     const model = lookup[modelId];
     const normalized = normalizeModelOptions(options);
     let payload =
@@ -589,15 +536,21 @@ function ChatModelPicker({
     if (payload && Object.keys(payload).length === 0) payload = undefined;
     // Persist only — the on-screen Recent list stays stable while the menu is open.
     recordRecentModel({ modelId, providerId });
-    onChange(modelId, providerId, payload);
+    chat!.onChange(modelId, providerId, payload);
+    setOpen(false);
+  };
+
+  const pickPair = (nextEngine: string | null, nextModel: string | null) => {
+    pair?.onPairChange(nextEngine, nextModel);
     setOpen(false);
   };
 
   const toggleBoolean = (modelId: string, providerId: string, options: ModelOptionsMap) => {
+    if (!chat) return;
     const model = lookup[modelId];
     const payload = model ? mergeOptionsForModel(model, options) : normalizeModelOptions(options);
     recordRecentModel({ modelId, providerId });
-    onChange(modelId, providerId, payload);
+    chat.onChange(modelId, providerId, payload);
   };
 
   const expandModel = (modelId: string, options: ModelOptionsMap) => {
@@ -609,7 +562,7 @@ function ChatModelPicker({
   // Filtering to one CLI means "show me that CLI's whole catalog" — no collapse.
   const collapseEnabled = !queryLower && !cliFilter;
   const recentModels =
-    queryLower || cliFilter
+    pair || queryLower || cliFilter
       ? []
       : recents
           .map((recent) => lookup[recent.modelId])
@@ -624,6 +577,19 @@ function ChatModelPicker({
   const showFastOnTrigger = selected ? modelSupportsFast(selected) : false;
   const fastOnTrigger = modelOptions?.fast === true;
 
+  const engineLabel = pair
+    ? pair.engine
+      ? catalog.find((p) => p.id === pair.engine)?.name ?? pair.engine
+      : pair.inheritOption?.label ?? 'Inherit'
+    : '';
+  const pairModelLabel = pair
+    ? pair.model
+      ? selected
+        ? prettyModelName(selected.name)
+        : pair.model
+      : 'default model'
+    : '';
+
   return (
     <DropdownMenu
       open={open}
@@ -631,7 +597,7 @@ function ChatModelPicker({
         if (disabled) return;
         if (next && !open) {
           onOpen?.();
-          setRecents(loadRecentModels());
+          if (!pair) setRecents(loadRecentModels());
         }
         if (!next) {
           setCliFilter(null);
@@ -639,33 +605,62 @@ function ChatModelPicker({
         }
         setOpen(next);
       }}
-      modal={false}
+      // Pair mode opens inside a modal Radix Dialog: the dialog's scroll lock
+      // swallows wheel events over anything outside its own subtree, and a
+      // non-modal dropdown never adds its own lock layer — so the portalled
+      // list could only be scrolled by dragging the scrollbar. A modal
+      // dropdown layers its own scroll lock that allow-lists its content,
+      // restoring wheel scrolling. The chat picker keeps non-modal so the
+      // composer stays interactive behind the open menu.
+      modal={pair ? true : false}
     >
       <DropdownMenuTrigger asChild>
-        <Button
-          variant="outline"
-          disabled={disabled}
-          className={cn(
-            asText
-              ? 'picker-trigger-text max-w-[300px]'
-              : 'composer-picker-trigger h-8 gap-1.5 px-2.5 max-w-[300px]',
-          )}
-          aria-label={triggerLabel}
-        >
-          <ProviderIcon
-            providerId={selected?.providerId ?? 'pi'}
-            className="size-3.5 shrink-0 text-muted-foreground"
-          />
-          {showFastOnTrigger && (
-            <FastLightningToggle active={fastOnTrigger} />
-          )}
-          <ModelNameWithBadges
-            name={triggerName}
-            badges={triggerBadges}
-            nameClassName={asText ? 'text-ui-lg' : 'font-medium text-ui-lg'}
-          />
-          <ChevronDown className="size-3 opacity-70" data-icon="inline-end" />
-        </Button>
+        {pair ? (
+          <Button
+            variant="outline"
+            disabled={disabled}
+            className={cn(
+              asText
+                ? 'picker-trigger-text max-w-full'
+                : 'composer-picker-trigger h-8 gap-1.5 px-2.5 max-w-[300px]',
+              pair.compact && 'h-6',
+            )}
+            aria-label={`Engine and model: ${engineLabel} · ${pairModelLabel}`}
+          >
+            {pair.engine && (
+              <ProviderIcon providerId={pair.engine} className="size-3.5 shrink-0 text-muted-foreground" />
+            )}
+            <span className="truncate text-ui-lg">
+              {engineLabel} · {pairModelLabel}
+            </span>
+            <ChevronDown className="size-3 opacity-70" data-icon="inline-end" />
+          </Button>
+        ) : (
+          <Button
+            variant="outline"
+            disabled={disabled}
+            className={cn(
+              asText
+                ? 'picker-trigger-text max-w-[300px]'
+                : 'composer-picker-trigger h-8 gap-1.5 px-2.5 max-w-[300px]',
+            )}
+            aria-label={triggerLabel}
+          >
+            <ProviderIcon
+              providerId={selected?.providerId ?? 'pi'}
+              className="size-3.5 shrink-0 text-muted-foreground"
+            />
+            {showFastOnTrigger && (
+              <FastLightningToggle active={fastOnTrigger} />
+            )}
+            <ModelNameWithBadges
+              name={triggerName}
+              badges={triggerBadges}
+              nameClassName={asText ? 'text-ui-lg' : 'font-medium text-ui-lg'}
+            />
+            <ChevronDown className="size-3 opacity-70" data-icon="inline-end" />
+          </Button>
+        )}
       </DropdownMenuTrigger>
       <ModelPickerFlatContent
         query={query}
@@ -674,6 +669,16 @@ function ChatModelPicker({
         activeChip={cliFilter}
         onChipChange={setCliFilter}
       >
+        {pair?.inheritOption && (
+          <>
+            <DropdownMenuItem onSelect={() => pickPair(null, null)} className="gap-2">
+              <SelectionCheck active={pair.engine === null} />
+              <span className="inline-flex size-3.5 shrink-0" aria-hidden />
+              <span className="truncate">{pair.inheritOption.label}</span>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
         {recentModels.length > 0 && (
           <>
             <DropdownMenuLabel className="px-2 pt-2 text-[11px] uppercase tracking-wide">
@@ -681,7 +686,7 @@ function ChatModelPicker({
             </DropdownMenuLabel>
             <ModelRows
               models={recentModels}
-              value={value}
+              value={selectedModelId}
               modelOptions={modelOptions}
               expandedModelId={expandedModelId}
               expandedOptions={expandedOptions}
@@ -702,19 +707,30 @@ function ChatModelPicker({
               m.groupName.toLowerCase().includes(queryLower)
             );
           });
-          if (flat.length === 0) return null;
+          // Pair mode keeps a matching provider visible even with no models,
+          // so its "Provider default" row stays selectable.
+          if (flat.length === 0 && !(pair && providerMatches)) return null;
+          const rowProps = pair
+            ? {
+                plainRows: true,
+                isRowActive: (m: FlatModel) => pair.engine === m.providerId && pair.model === m.id,
+              }
+            : {};
           const groups = p.groups ?? [];
           const showGroupHeaders = groups.length > 1;
+          // The active model always stays visible, even when its provider is
+          // collapsed. In pair mode active means this provider is the chosen
+          // engine AND the model matches.
+          const activeId = pair ? (pair.engine === p.id ? pair.model : null) : selectedModelId;
           const collapsed =
             collapseEnabled &&
             flat.length > FEATURED_COLLAPSE_THRESHOLD &&
             !expandedProviders.has(p.id);
-          // The active model always stays visible, even when its provider is collapsed.
           const featured = collapsed
             ? [
                 ...flat.slice(0, FEATURED_VISIBLE),
                 ...flat.filter(
-                  (m, index) => index >= FEATURED_VISIBLE && m.id === value,
+                  (m, index) => index >= FEATURED_VISIBLE && m.id === activeId,
                 ),
               ]
             : flat;
@@ -725,17 +741,30 @@ function ChatModelPicker({
                 <ProviderIcon providerId={p.id} className="size-3.5 shrink-0 text-muted-foreground" />
                 <span className="truncate">{p.name}</span>
               </DropdownMenuLabel>
+              {pair?.providerDefaultOption && (
+                <DropdownMenuItem
+                  onSelect={() => pickPair(p.id, null)}
+                  className="gap-2"
+                  aria-label={`${p.name} provider default`}
+                >
+                  <SelectionCheck active={pair.engine === p.id && pair.model === null} />
+                  <span className="inline-flex size-3.5 shrink-0" aria-hidden />
+                  <span className="truncate">Provider default</span>
+                </DropdownMenuItem>
+              )}
+              {pair?.providerDefaultOption && flat.length > 0 && <DropdownMenuSeparator />}
                   {collapsed ? (
                     <>
                       <ModelRows
                         models={featured}
-                        value={value}
+                        value={selectedModelId}
                         modelOptions={modelOptions}
                         expandedModelId={expandedModelId}
                         expandedOptions={expandedOptions}
                         onPick={pick}
                         onToggle={toggleBoolean}
                         onExpand={expandModel}
+                        {...rowProps}
                       />
                       <DropdownMenuItem
                         onSelect={(event) => {
@@ -746,6 +775,7 @@ function ChatModelPicker({
                         aria-label={`Show all ${flat.length} ${p.name} models`}
                       >
                         <span className="size-4 shrink-0" />
+                        <span className="inline-flex size-3.5 shrink-0" aria-hidden />
                         <span className="truncate">
                           All {flat.length} {p.name} models
                         </span>
@@ -763,13 +793,14 @@ function ChatModelPicker({
                             <DropdownMenuLabel>{group.name}</DropdownMenuLabel>
                             <ModelRows
                               models={groupModels}
-                              value={value}
+                              value={selectedModelId}
                               modelOptions={modelOptions}
                               expandedModelId={expandedModelId}
                               expandedOptions={expandedOptions}
                               onPick={pick}
                               onToggle={toggleBoolean}
                               onExpand={expandModel}
+                              {...rowProps}
                             />
                           </div>
                         );
@@ -777,13 +808,14 @@ function ChatModelPicker({
                     : (
                       <ModelRows
                         models={flat}
-                        value={value}
+                        value={selectedModelId}
                         modelOptions={modelOptions}
                         expandedModelId={expandedModelId}
                         expandedOptions={expandedOptions}
                         onPick={pick}
                         onToggle={toggleBoolean}
                         onExpand={expandModel}
+                        {...rowProps}
                       />
                     )}
             </div>
@@ -792,9 +824,4 @@ function ChatModelPicker({
       </ModelPickerFlatContent>
     </DropdownMenu>
   );
-}
-
-export function ModelPicker(props: ModelPickerProps) {
-  if (props.pairMode === 'engine+model') return <PairModeModelPicker {...props} />;
-  return <ChatModelPicker {...props} />;
 }

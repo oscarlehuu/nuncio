@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ModelPicker } from './model-picker';
 import type { ModelProvider } from '../lib/model-providers';
@@ -538,6 +538,69 @@ describe('ModelPicker', () => {
     expect(panel.getAttribute('style')).toContain('min-width: min(22rem, calc(100vw - 24px))');
     expect(screen.getByPlaceholderText(/search models/i)).toBeInTheDocument();
     expect(screen.queryByTestId('model-picker-provider-submenu')).not.toBeInTheDocument();
+  });
+
+  it('renders a fixed-width fast slot in every model row so names align', async () => {
+    render(
+      <ModelPicker
+        value="anthropic:claude-haiku-4-5"
+        onChange={vi.fn()}
+        providers={[PI_PROVIDER, CURSOR_PROVIDER, CODEX_PROVIDER]}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /claude haiku 4\.5/i }));
+    await screen.findByTestId('model-picker-flat-panel');
+
+    // Every model row (plain, configurable, variant) carries the slot.
+    const rows = screen.getAllByRole('menuitem');
+    for (const row of rows) {
+      expect(within(row).getByTestId('model-fast-slot')).toBeInTheDocument();
+    }
+    // Fast-capable rows show the bolt; the rest render the equal-width spacer.
+    const gpt = screen.getByRole('menuitem', { name: /gpt 5\.5/i });
+    expect(within(gpt).getByTestId('model-fast-slot')).toHaveAttribute('data-fast', 'true');
+    const haiku = screen.getAllByRole('menuitem', { name: /claude haiku 4\.5/i })[0];
+    expect(within(haiku).getByTestId('model-fast-slot')).toHaveAttribute('data-fast', 'false');
+  });
+
+  it('pair mode reuses the rich panel: chips, collapse, fast slots, no recents', async () => {
+    localStorage.setItem(
+      'nuncio-model-recents',
+      JSON.stringify([{ modelId: 'anthropic:claude-haiku-4-5', providerId: 'pi' }]),
+    );
+    const onPairChange = vi.fn();
+    render(
+      <ModelPicker
+        pairMode="engine+model"
+        engine="claude"
+        model="claude:model-8"
+        onPairChange={onPairChange}
+        providers={[MANY_MODEL_PROVIDER, CODEX_PROVIDER]}
+        inheritOption={{ label: 'Inherit from project' }}
+        providerDefaultOption
+        autoPick={false}
+        variant="text"
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /engine and model/i }));
+
+    // Same renderer as chat mode: chips row and featured collapse.
+    expect(await screen.findByRole('group', { name: /filter by cli/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /show all 8 claude models/i })).toBeInTheDocument();
+    // The selected engine+model survives its provider's collapse.
+    expect(screen.getByRole('menuitem', { name: /claude model 8/i })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /claude model 5/i })).not.toBeInTheDocument();
+    // Fast slots align pair rows too.
+    const gpt = screen.getByRole('menuitem', { name: /gpt 5\.5/i });
+    expect(within(gpt).getByTestId('model-fast-slot')).toHaveAttribute('data-fast', 'true');
+    // Pair mode never shows or records recents.
+    expect(screen.queryByText('Recent')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('menuitem', { name: /gpt 5\.5/i }));
+    expect(onPairChange).toHaveBeenCalledWith('codex', 'codex:gpt-5.5');
+    const stored = JSON.parse(localStorage.getItem('nuncio-model-recents') ?? '[]');
+    expect(stored).toEqual([{ modelId: 'anthropic:claude-haiku-4-5', providerId: 'pi' }]);
   });
 
   it('keeps chat model picking in the same flat panel', async () => {
