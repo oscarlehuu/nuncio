@@ -28,7 +28,6 @@ import { DETAIL_EVENT_TAIL, useSessionStream } from './lib/use-session-stream';
 import { useActiveRun } from './lib/use-active-run';
 import { useSessionNotifications } from './lib/use-session-notifications';
 import { useProviderUpdateNotifications } from './lib/use-provider-update-notifications';
-import { HomeView } from './components/home-view';
 import { HomeSurface } from './components/home-surface';
 import { GridView } from './components/grid-view';
 import { ChunkErrorBoundary } from './components/chunk-error-boundary';
@@ -141,6 +140,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const desktopSidebar = useDesktopSidebar();
   const [handoffOpen, setHandoffOpen] = useState(false);
+  const [composerFocusKey, setComposerFocusKey] = useState(0);
   const [handoffInitialWorkspace, setHandoffInitialWorkspace] = useState<string | undefined>();
   const [forceSteerMessage, setForceSteerMessage] = useState<string | null>(null);
   const [settings, setSettings] = useState<Setting[]>([]);
@@ -244,9 +244,10 @@ export default function App() {
     [dismissTransientSidebar, navigate],
   );
 
-  // The composer moved off '/' to '/new'.
+  // New agent = Home with the composer focused; the composer lives on '/'.
   const handleNew = useCallback(() => {
-    navigate('/new');
+    navigate('/');
+    setComposerFocusKey((key) => key + 1);
     dismissTransientSidebar();
   }, [dismissTransientSidebar, navigate]);
 
@@ -679,12 +680,8 @@ export default function App() {
         <Routes>
           <Route
             path="/"
-            element={<HomeSurface onNew={handleNew} railOverlay={!desktopSidebar.pinned} />}
-          />
-          <Route
-            path="/new"
             element={
-              <HomeView
+              <HomeSurface
                 sessionCount={sessions.length}
                 providers={providers}
                 onSubmit={handleCreate}
@@ -692,9 +689,13 @@ export default function App() {
                 approvalMode={approvalMode}
                 onApprovalModeChange={handleApprovalModeChange}
                 loading={creating}
+                composerFocusKey={composerFocusKey}
+                railOverlay={!desktopSidebar.pinned}
               />
             }
           />
+          {/* Legacy /new → the merged Home composer. */}
+          <Route path="/new" element={<Navigate to="/" replace />} />
           <Route
             path="/grid"
             element={

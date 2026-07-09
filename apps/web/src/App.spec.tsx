@@ -322,7 +322,9 @@ describe('App URL routing', () => {
     expect(digest.compareDocumentPosition(queueItem) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByText(/^fleet$/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /open nuncio/i })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /new agent/i })).toBeInTheDocument();
+    // The composer is merged into Home, above the digest.
+    const composer = screen.getByPlaceholderText(/Ask Nuncio/i);
+    expect(composer.compareDocumentPosition(digest) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('keeps the empty Home queue calm', async () => {

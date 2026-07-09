@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowRightLeft, ArrowUp, BookOpen, Bug, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -55,6 +55,10 @@ const STARTERS = [
 interface HomeViewProps {
   /** Embedded in the Board top bar: compact, top-aligned, no landing chrome. */
   embedded?: boolean;
+  /** Rendered inside another scroll surface (Home): full composer, no outer landing wrapper. */
+  inline?: boolean;
+  /** Increment to focus the prompt textarea (drives the new-agent shortcut). */
+  focusKey?: number;
   sessionCount: number;
   providers?: ModelProvider[];
   onSubmit: (
@@ -75,6 +79,8 @@ interface HomeViewProps {
 
 export function HomeView({
   embedded,
+  inline,
+  focusKey,
   providers,
   onSubmit,
   onContinueOnMobile,
@@ -96,6 +102,12 @@ export function HomeView({
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('local');
   const [dragActive, setDragActive] = useState(false);
   const imageAttachments = useComposerAttachments(setPrompt);
+  const promptRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    if (!focusKey) return;
+    promptRef.current?.focus();
+  }, [focusKey]);
 
   const catalogLoaded = Boolean(providers && providers.length > 0);
   const catalog = useMemo(() => normalizeModelCatalog(providers ?? []), [providers]);
@@ -191,7 +203,11 @@ export function HomeView({
     <section
       className={cn(
         'flex flex-col items-center',
-        embedded ? 'w-full py-3' : 'flex-1 justify-center p-6 pt-16 md:pt-6 overflow-y-auto',
+        embedded
+          ? 'w-full py-3'
+          : inline
+            ? 'w-full'
+            : 'flex-1 justify-center p-6 pt-16 md:pt-6 overflow-y-auto',
       )}
     >
       <div className="w-full max-w-[720px]">
@@ -245,6 +261,7 @@ export function HomeView({
           <div className="home-composer-prompt-frame flex flex-col">
             <AttachmentTray items={imageAttachments.items} onRemove={imageAttachments.remove} />
             <Textarea
+              ref={promptRef}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               onPaste={(e) => imageAttachments.handlePaste(e, canAttachImages)}

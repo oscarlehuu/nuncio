@@ -1,19 +1,48 @@
 import { useNavigate } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import type { MessageAttachment } from '../lib/api';
+import type { ModelProvider } from '../lib/model-providers';
+import type { ModelOptionsMap } from '../lib/model-options';
+import type { ApprovalMode } from './approval-mode-picker';
 import { AttentionQueue } from './attention-queue';
 import { DigestCard } from './digest-card';
-import { Button } from '@/components/ui/button';
+import { HomeView } from './home-view';
 import { cn } from '@/lib/utils';
 
 interface HomeSurfaceProps {
-  /** Start a new agent; the composer lives at /new. */
-  onNew: () => void;
+  sessionCount: number;
+  providers?: ModelProvider[];
+  onSubmit: (
+    prompt: string,
+    model?: string,
+    provider?: string,
+    projectPath?: string,
+    baseBranch?: string,
+    modelOptions?: ModelOptionsMap,
+    useWorktree?: boolean,
+    attachments?: MessageAttachment[],
+  ) => Promise<void>;
+  onContinueOnMobile?: () => void;
+  approvalMode?: ApprovalMode;
+  onApprovalModeChange?: (mode: ApprovalMode) => void | Promise<void>;
+  loading?: boolean;
+  /** Increment to focus the composer (the new-agent shortcut). */
+  composerFocusKey?: number;
   /** True when the unpinned desktop sidebar rail overlays the content's left edge. */
   railOverlay?: boolean;
 }
 
-/** Home is the founder's digest plus the ranked queue of work needing attention. */
-export function HomeSurface({ onNew, railOverlay = true }: HomeSurfaceProps) {
+/** Home: the composer on top, then the digest and the ranked attention queue. */
+export function HomeSurface({
+  sessionCount,
+  providers,
+  onSubmit,
+  onContinueOnMobile,
+  approvalMode,
+  onApprovalModeChange,
+  loading,
+  composerFocusKey,
+  railOverlay = true,
+}: HomeSurfaceProps) {
   const navigate = useNavigate();
 
   return (
@@ -25,22 +54,21 @@ export function HomeSurface({ onNew, railOverlay = true }: HomeSurfaceProps) {
         )}
       >
         <h1 className="text-lg font-semibold tracking-tight">Home</h1>
-        <div className="ml-auto">
-          <Button size="sm" className="gap-1.5" onClick={onNew}>
-            <Plus className="size-4" />
-            <span>New agent</span>
-            <kbd
-              aria-hidden
-              className="hidden rounded border border-primary-foreground/30 px-1 font-mono text-[0.65rem] sm:inline"
-            >
-              ⌘N
-            </kbd>
-          </Button>
-        </div>
       </header>
 
       <div className="flex-1 overflow-y-auto px-4 py-6">
         <div className="mx-auto flex w-full max-w-[720px] flex-col gap-6">
+          <HomeView
+            inline
+            focusKey={composerFocusKey}
+            sessionCount={sessionCount}
+            providers={providers}
+            onSubmit={onSubmit}
+            onContinueOnMobile={onContinueOnMobile}
+            approvalMode={approvalMode}
+            onApprovalModeChange={onApprovalModeChange}
+            loading={loading}
+          />
           <DigestCard onOpen={() => navigate('/digest')} />
           <AttentionQueue compactEmpty />
         </div>

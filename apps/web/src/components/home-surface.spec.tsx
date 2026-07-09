@@ -1,8 +1,18 @@
+import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { HomeSurface } from './home-surface';
+
+const noopSubmit = vi.fn().mockResolvedValue(undefined);
+
+function renderSurface(props: Partial<ComponentProps<typeof HomeSurface>> = {}) {
+  return render(
+    <MemoryRouter>
+      <HomeSurface sessionCount={0} providers={[]} onSubmit={noopSubmit} {...props} />
+    </MemoryRouter>,
+  );
+}
 
 vi.mock('sonner', () => ({
   toast: {
@@ -24,28 +34,27 @@ vi.mock('../lib/api', () => ({
 }));
 
 describe('HomeSurface', () => {
-  it('renders digest and attention queue without a fleet section', async () => {
-    render(
-      <MemoryRouter>
-        <HomeSurface onNew={vi.fn()} />
-      </MemoryRouter>,
-    );
+  it('renders composer, digest and attention queue without a fleet section', async () => {
+    renderSurface();
 
     expect(screen.getByRole('heading', { name: /^home$/i })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Ask Nuncio/i)).toBeInTheDocument();
     expect(await screen.findByText('Nothing needs you')).toBeInTheDocument();
     expect(screen.queryByText(/^fleet$/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /open .*fleet/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /new agent/i })).not.toBeInTheDocument();
   });
 
-  it('keeps the new-agent action in the Home header', async () => {
-    const onNew = vi.fn();
-    render(
+  it('focuses the composer when the focus key advances', async () => {
+    const { rerender } = renderSurface({ composerFocusKey: 0 });
+    const composer = screen.getByPlaceholderText(/Ask Nuncio/i);
+    expect(composer).not.toHaveFocus();
+
+    rerender(
       <MemoryRouter>
-        <HomeSurface onNew={onNew} />
+        <HomeSurface sessionCount={0} providers={[]} onSubmit={noopSubmit} composerFocusKey={1} />
       </MemoryRouter>,
     );
-
-    await userEvent.click(screen.getByRole('button', { name: /new agent/i }));
-    await waitFor(() => expect(onNew).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(composer).toHaveFocus());
   });
 });
