@@ -115,29 +115,29 @@
 /*
  * LIGHT — polished as a first-class theme, not a dark inversion.
  * Base content is the brightest surface; chrome (sidebar) recedes to a faint
- * cool gray so the two panes read apart without the border. A whisper of blue
- * hue (~255) keeps the grays from going flat/digital. Cards are pure white and
- * lifted by shadow rather than outline.
+ * gray so the two panes read apart without the border. All neutrals are pure
+ * achromatic grays — luminance alone builds the hierarchy. Cards are pure
+ * white and lifted by shadow rather than outline.
  */
 :root {
-  --background: oklch(0.995 0.001 255);   /* near-white content, a hair off pure */
-  --foreground: oklch(0.205 0.006 265);   /* soft near-black ink, not #000 */
+  --background: oklch(0.995 0 0);   /* near-white content, a hair off pure */
+  --foreground: oklch(0.205 0 0);   /* soft near-black ink, not #000 */
   --card: oklch(1 0 0);                    /* pure white, shadow-lifted */
-  --card-foreground: oklch(0.205 0.006 265);
+  --card-foreground: oklch(0.205 0 0);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.205 0.006 265);
-  --primary: oklch(0.24 0.006 265);
+  --popover-foreground: oklch(0.205 0 0);
+  --primary: oklch(0.24 0 0);
   --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.965 0.002 255);
-  --secondary-foreground: oklch(0.24 0.006 265);
-  --muted: oklch(0.965 0.002 255);         /* inset well */
-  --muted-foreground: oklch(0.53 0.008 260); /* lower-contrast meta text */
-  --accent: oklch(0.955 0.003 255);        /* hover wash */
-  --accent-foreground: oklch(0.24 0.006 265);
+  --secondary: oklch(0.965 0 0);
+  --secondary-foreground: oklch(0.24 0 0);
+  --muted: oklch(0.965 0 0);         /* inset well */
+  --muted-foreground: oklch(0.53 0 0); /* lower-contrast meta text */
+  --accent: oklch(0.955 0 0);        /* hover wash */
+  --accent-foreground: oklch(0.24 0 0);
   --destructive: oklch(0.577 0.235 27.2);
-  --border: oklch(0.145 0.01 265 / 8%);    /* black at low alpha — hairline */
-  --input: oklch(0.145 0.01 265 / 12%);
-  --ring: oklch(0.62 0.02 260);
+  --border: oklch(0.145 0 0 / 8%);    /* black at low alpha — hairline */
+  --input: oklch(0.145 0 0 / 12%);
+  --ring: oklch(0.62 0 0);
 
   /* Elevation — restrained, Cursor/Linear discipline: e1 (in-flow cards/tiles)
    * barely lifts — a tight 2-layer contact shadow that reads as "sits on the
@@ -145,22 +145,22 @@
    * sit ABOVE content (popover, dialog, sheet), so the hierarchy stays legible.
    * Light has no top-highlight (white card is already max luminance). */
   --elevation-0:
-    0 1px 2px oklch(0.22 0.03 265 / 0.10),
+    0 1px 2px oklch(0.22 0 0 / 0.10),
     inset 0 1px 0 oklch(1 0 0 / 0.12);
   --elevation-1:
-    0 1px 2px oklch(0.22 0.03 265 / 0.05),
-    0 2px 5px oklch(0.22 0.03 265 / 0.05);
+    0 1px 2px oklch(0.22 0 0 / 0.05),
+    0 2px 5px oklch(0.22 0 0 / 0.05);
   --elevation-2:
-    0 2px 4px oklch(0.22 0.03 265 / 0.05),
-    0 6px 16px -4px oklch(0.22 0.03 265 / 0.08),
-    0 16px 30px -12px oklch(0.22 0.03 265 / 0.10);
+    0 2px 4px oklch(0.22 0 0 / 0.05),
+    0 6px 16px -4px oklch(0.22 0 0 / 0.08),
+    0 16px 30px -12px oklch(0.22 0 0 / 0.10);
   --elevation-3:
-    0 4px 8px oklch(0.22 0.03 265 / 0.07),
-    0 14px 28px -6px oklch(0.22 0.03 265 / 0.10),
-    0 34px 56px -16px oklch(0.22 0.03 265 / 0.14);
+    0 4px 8px oklch(0.22 0 0 / 0.07),
+    0 14px 28px -6px oklch(0.22 0 0 / 0.10),
+    0 34px 56px -16px oklch(0.22 0 0 / 0.14);
   /* Barely-there bottom-shading on white cards. */
   --surface-gradient:
-    linear-gradient(180deg, oklch(0.145 0.01 265 / 0) 60%, oklch(0.145 0.01 265 / 0.01));
+    linear-gradient(180deg, oklch(0.145 0 0 / 0) 60%, oklch(0.145 0 0 / 0.01));
 
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
@@ -168,25 +168,25 @@
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
   --radius: 0.625rem;
-  --sidebar: oklch(0.965 0.003 255);       /* recessed cool gray chrome */
-  --sidebar-foreground: oklch(0.205 0.006 265);
-  --sidebar-primary: oklch(0.24 0.006 265);
+  --sidebar: oklch(0.965 0 0);       /* recessed cool gray chrome */
+  --sidebar-foreground: oklch(0.205 0 0);
+  --sidebar-primary: oklch(0.24 0 0);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.93 0.004 255);
-  --sidebar-accent-foreground: oklch(0.24 0.006 265);
-  --sidebar-border: oklch(0.145 0.01 265 / 7%);
-  --sidebar-ring: oklch(0.62 0.02 260);
+  --sidebar-accent: oklch(0.93 0 0);
+  --sidebar-accent-foreground: oklch(0.24 0 0);
+  --sidebar-border: oklch(0.145 0 0 / 7%);
+  --sidebar-ring: oklch(0.62 0 0);
 
   /* Status — muted, desaturated so they read premium, not alert-bright. */
   --status-success: oklch(0.6 0.11 150);
   --status-error: oklch(0.58 0.19 27);
   --status-warning: oklch(0.7 0.13 70);
   --status-info: oklch(0.6 0.11 240);
-  --status-neutral: oklch(0.6 0.01 260);
+  --status-neutral: oklch(0.6 0 0);
 
   /* Terminal — matches the light content surface, dark ink. */
-  --terminal-bg: oklch(0.985 0.002 255);
-  --terminal-fg: oklch(0.28 0.006 265);
+  --terminal-bg: oklch(0.985 0 0);
+  --terminal-fg: oklch(0.28 0 0);
 
   --chat-font-scale: 1;
   --chat-gap: 0.375rem;
@@ -195,28 +195,28 @@
 
 /*
  * DARK — Cursor's near-black. Sidebar is the darkest layer; content sits one
- * step lighter; cards/popovers climb ~2–3% L above content. A faint cool hue
- * (~265) warms the neutrals off pure gray. Borders are white at low alpha.
+ * step lighter; cards/popovers climb ~2–3% L above content. Neutrals are pure
+ * achromatic grays. Borders are white at low alpha.
  */
 .dark {
-  --background: oklch(0.185 0.004 265);    /* near-black content, raised over chrome */
-  --foreground: oklch(0.955 0.002 260);    /* slightly-off white ink */
-  --card: oklch(0.215 0.005 265);          /* +3% L over content */
-  --card-foreground: oklch(0.955 0.002 260);
-  --popover: oklch(0.225 0.005 265);
-  --popover-foreground: oklch(0.955 0.002 260);
-  --primary: oklch(0.92 0.003 260);
-  --primary-foreground: oklch(0.205 0.005 265);
-  --secondary: oklch(0.265 0.006 265);
-  --secondary-foreground: oklch(0.955 0.002 260);
-  --muted: oklch(0.255 0.005 265);         /* inset well */
-  --muted-foreground: oklch(0.62 0.008 260); /* noticeably lower contrast */
-  --accent: oklch(0.27 0.006 265);         /* hover wash */
-  --accent-foreground: oklch(0.955 0.002 260);
+  --background: oklch(0.185 0 0);    /* near-black content, raised over chrome */
+  --foreground: oklch(0.955 0 0);    /* slightly-off white ink */
+  --card: oklch(0.215 0 0);          /* +3% L over content */
+  --card-foreground: oklch(0.955 0 0);
+  --popover: oklch(0.225 0 0);
+  --popover-foreground: oklch(0.955 0 0);
+  --primary: oklch(0.92 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.265 0 0);
+  --secondary-foreground: oklch(0.955 0 0);
+  --muted: oklch(0.255 0 0);         /* inset well */
+  --muted-foreground: oklch(0.62 0 0); /* noticeably lower contrast */
+  --accent: oklch(0.27 0 0);         /* hover wash */
+  --accent-foreground: oklch(0.955 0 0);
   --destructive: oklch(0.68 0.185 25);
   --border: oklch(1 0 0 / 8%);             /* white hairline */
   --input: oklch(1 0 0 / 12%);
-  --ring: oklch(0.5 0.01 260);
+  --ring: oklch(0.5 0 0);
 
   /* Elevation — restrained, Cursor/Linear discipline. Near-black content eats
    * shadow, so the inset white top-highlight (light-from-above) carries most of
@@ -249,287 +249,25 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.155 0.004 265);       /* darkest layer — chrome recedes */
-  --sidebar-foreground: oklch(0.955 0.002 260);
-  --sidebar-primary: oklch(0.92 0.003 260);
-  --sidebar-primary-foreground: oklch(0.205 0.005 265);
-  --sidebar-accent: oklch(0.25 0.006 265);
-  --sidebar-accent-foreground: oklch(0.955 0.002 260);
+  --sidebar: oklch(0.155 0 0);       /* darkest layer — chrome recedes */
+  --sidebar-foreground: oklch(0.955 0 0);
+  --sidebar-primary: oklch(0.92 0 0);
+  --sidebar-primary-foreground: oklch(0.205 0 0);
+  --sidebar-accent: oklch(0.25 0 0);
+  --sidebar-accent-foreground: oklch(0.955 0 0);
   --sidebar-border: oklch(1 0 0 / 7%);
-  --sidebar-ring: oklch(0.5 0.01 260);
+  --sidebar-ring: oklch(0.5 0 0);
 
   /* Status — lifted, still desaturated for the dark surface. */
   --status-success: oklch(0.72 0.13 150);
   --status-error: oklch(0.7 0.17 25);
   --status-warning: oklch(0.78 0.13 75);
   --status-info: oklch(0.72 0.12 240);
-  --status-neutral: oklch(0.62 0.008 260);
+  --status-neutral: oklch(0.62 0 0);
 
   /* Terminal — near-black, matched to the dark content surface. */
-  --terminal-bg: oklch(0.165 0.004 265);
-  --terminal-fg: oklch(0.9 0.004 260);
-}
-
-/*
- * ─── Accent presets ──────────────────────────────────────────────────────────
- * A configurable signature hue, keyed off `data-accent` on <html> (see
- * accent-provider.tsx). Each colored preset repoints the brand-driven tokens —
- * --primary (buttons/send), --ring/--sidebar-ring (focus), --sidebar-primary —
- * and gives the neutrals a temperature: same lightness as the base tokens, but
- * shifted to the preset hue with a raised chroma so dark mode reads as a deep
- * tinted night rather than printer gray. Light surfaces muddy fast, so their
- * chroma is scaled way down (bg ~0.15x, sidebar ~0.35x of the dark chroma).
- *
- * `mono` intentionally has no block: it falls through to the base achromatic
- * tokens above, so it is pixel-identical to the app's original theme.
- *
- * The active/hover washes (--accent, --sidebar-accent) get only a whisper of the
- * hue at their existing lightness — a subtle tint, never loud color. --destructive
- * and the status colors are left untouched across every preset.
- *
- * --glow-brand feeds the running-tile breath (session-tile.tsx) so an active
- * agent pulses in the signature hue on colored presets, success-green on mono.
- *
- * --primary is also the link + title text color (markdown links, PR/issue/run
- * titles), not just a button fill. On white light surfaces the vivid accent L
- * fails WCAG AA (4.5:1 for body text), so light-mode --primary /
- * --sidebar-primary are darkened to a text-safe L (all four presets clear
- * ≥4.5:1 on white); --ring / --sidebar-ring keep the vivid accent since rings
- * are UI affordances, not held to text contrast. Dark mode keeps the vivid
- * accent everywhere — it already clears AA on the near-black surfaces.
- *
- * Per-preset comment lists the accent hue then the neutral hue (they differ on
- * some presets) and the dark neutral chroma.
- */
-
-/* IRIS — accent hue 285, neutral hue 285, dark neutral chroma 0.014 */
-:root[data-accent='iris'] {
-  /* --primary/--sidebar-primary darkened to L 0.57 for a comfortable ≥4.5:1 as
-   * link/title text on white; --ring keeps the vivid accent (UI, not text). */
-  --primary: oklch(0.57 0.19 285);
-  --primary-foreground: oklch(0.98 0.01 285);
-  --ring: oklch(0.63 0.19 285);
-  --sidebar-primary: oklch(0.57 0.19 285);
-  --sidebar-primary-foreground: oklch(0.98 0.01 285);
-  --sidebar-ring: oklch(0.63 0.19 285);
-  --glow-brand: oklch(0.63 0.19 285);
-  --background: oklch(0.995 0.0021 285);
-  --card: oklch(1 0 0);
-  --popover: oklch(1 0 0);
-  --secondary: oklch(0.965 0.005 285);
-  --muted: oklch(0.965 0.005 285);
-  --accent: oklch(0.955 0.01 285);
-  --sidebar: oklch(0.965 0.005 285);
-  --sidebar-accent: oklch(0.93 0.012 285);
-}
-.dark[data-accent='iris'] {
-  --primary: oklch(0.63 0.19 285);
-  --primary-foreground: oklch(0.98 0.01 285);
-  --ring: oklch(0.63 0.19 285);
-  --sidebar-primary: oklch(0.63 0.19 285);
-  --sidebar-primary-foreground: oklch(0.98 0.01 285);
-  --sidebar-ring: oklch(0.63 0.19 285);
-  --glow-brand: oklch(0.63 0.19 285);
-  --background: oklch(0.185 0.014 285);
-  --card: oklch(0.215 0.014 285);
-  --popover: oklch(0.225 0.014 285);
-  --secondary: oklch(0.265 0.014 285);
-  --muted: oklch(0.255 0.014 285);
-  --accent: oklch(0.27 0.018 285);
-  --sidebar: oklch(0.155 0.014 285);
-  --sidebar-accent: oklch(0.25 0.018 285);
-}
-
-/* COBALT — accent hue 255, neutral hue 258, dark neutral chroma 0.014 · DEFAULT */
-:root[data-accent='cobalt'] {
-  /* --primary/--sidebar-primary darkened to L 0.56 for a comfortable ≥4.5:1 as
-   * link/title text on white; --ring keeps the vivid accent (UI, not text). */
-  --primary: oklch(0.56 0.17 255);
-  --primary-foreground: oklch(0.98 0.01 255);
-  --ring: oklch(0.6 0.17 255);
-  --sidebar-primary: oklch(0.56 0.17 255);
-  --sidebar-primary-foreground: oklch(0.98 0.01 255);
-  --sidebar-ring: oklch(0.6 0.17 255);
-  --glow-brand: oklch(0.6 0.17 255);
-  --background: oklch(0.995 0.0021 258);
-  --card: oklch(1 0 0);
-  --popover: oklch(1 0 0);
-  --secondary: oklch(0.965 0.005 258);
-  --muted: oklch(0.965 0.005 258);
-  --accent: oklch(0.955 0.01 258);
-  --sidebar: oklch(0.965 0.005 258);
-  --sidebar-accent: oklch(0.93 0.012 258);
-}
-.dark[data-accent='cobalt'] {
-  /* L 0.62 (a hair above the 0.6 accent) so link/title text clears AA 4.5:1 on
-   * the dark card; cobalt is the default, so its text path must pass cleanly. */
-  --primary: oklch(0.62 0.17 255);
-  --primary-foreground: oklch(0.98 0.01 255);
-  --ring: oklch(0.6 0.17 255);
-  --sidebar-primary: oklch(0.62 0.17 255);
-  --sidebar-primary-foreground: oklch(0.98 0.01 255);
-  --sidebar-ring: oklch(0.6 0.17 255);
-  --glow-brand: oklch(0.6 0.17 255);
-  --background: oklch(0.185 0.014 258);
-  --card: oklch(0.215 0.014 258);
-  --popover: oklch(0.225 0.014 258);
-  --secondary: oklch(0.265 0.014 258);
-  --muted: oklch(0.255 0.014 258);
-  --accent: oklch(0.27 0.018 258);
-  --sidebar: oklch(0.155 0.014 258);
-  --sidebar-accent: oklch(0.25 0.018 258);
-}
-
-/* EMBER — accent hue 45, neutral hue 50, dark neutral chroma 0.008, dark ink on the dark-mode accent */
-:root[data-accent='ember'] {
-  /* --primary/--sidebar-primary darkened to L 0.57 for a comfortable ≥4.5:1 as
-   * link/title text on white; --ring keeps the vivid accent (UI, not text). */
-  --primary: oklch(0.57 0.16 45);
-  --primary-foreground: oklch(0.98 0.01 45);
-  --ring: oklch(0.68 0.16 45);
-  --sidebar-primary: oklch(0.57 0.16 45);
-  --sidebar-primary-foreground: oklch(0.98 0.01 45);
-  --sidebar-ring: oklch(0.68 0.16 45);
-  --glow-brand: oklch(0.68 0.16 45);
-  --background: oklch(0.995 0.0012 50);
-  --card: oklch(1 0 0);
-  --popover: oklch(1 0 0);
-  --secondary: oklch(0.965 0.004 50);
-  --muted: oklch(0.965 0.004 50);
-  --accent: oklch(0.955 0.008 50);
-  --sidebar: oklch(0.965 0.004 50);
-  --sidebar-accent: oklch(0.93 0.01 50);
-}
-.dark[data-accent='ember'] {
-  --primary: oklch(0.68 0.16 45);
-  --primary-foreground: oklch(0.15 0.02 45);
-  --ring: oklch(0.68 0.16 45);
-  --sidebar-primary: oklch(0.68 0.16 45);
-  --sidebar-primary-foreground: oklch(0.15 0.02 45);
-  --sidebar-ring: oklch(0.68 0.16 45);
-  --glow-brand: oklch(0.68 0.16 45);
-  --background: oklch(0.185 0.008 50);
-  --card: oklch(0.215 0.008 50);
-  --popover: oklch(0.225 0.008 50);
-  --secondary: oklch(0.265 0.008 50);
-  --muted: oklch(0.255 0.008 50);
-  --accent: oklch(0.27 0.012 50);
-  --sidebar: oklch(0.155 0.008 50);
-  --sidebar-accent: oklch(0.25 0.012 50);
-}
-
-/* JADE — accent hue 165, neutral hue 190, dark neutral chroma 0.010, dark ink on the dark-mode accent */
-:root[data-accent='jade'] {
-  /* light --primary darkened to L 0.54 for ≥4.5:1 as text on white; its light
-   * --primary-foreground is near-white (unlike dark mode's ink) so the button
-   * label clears ≥3:1 on the darker fill. --ring keeps the vivid accent. */
-  --primary: oklch(0.54 0.13 165);
-  --primary-foreground: oklch(0.98 0.01 165);
-  --ring: oklch(0.67 0.13 165);
-  --sidebar-primary: oklch(0.54 0.13 165);
-  --sidebar-primary-foreground: oklch(0.98 0.01 165);
-  --sidebar-ring: oklch(0.67 0.13 165);
-  --glow-brand: oklch(0.67 0.13 165);
-  --background: oklch(0.995 0.0015 190);
-  --card: oklch(1 0 0);
-  --popover: oklch(1 0 0);
-  --secondary: oklch(0.965 0.004 190);
-  --muted: oklch(0.965 0.004 190);
-  --accent: oklch(0.955 0.009 190);
-  --sidebar: oklch(0.965 0.004 190);
-  --sidebar-accent: oklch(0.93 0.011 190);
-}
-.dark[data-accent='jade'] {
-  --primary: oklch(0.67 0.13 165);
-  --primary-foreground: oklch(0.14 0.02 165);
-  --ring: oklch(0.67 0.13 165);
-  --sidebar-primary: oklch(0.67 0.13 165);
-  --sidebar-primary-foreground: oklch(0.14 0.02 165);
-  --sidebar-ring: oklch(0.67 0.13 165);
-  --glow-brand: oklch(0.67 0.13 165);
-  --background: oklch(0.185 0.01 190);
-  --card: oklch(0.215 0.01 190);
-  --popover: oklch(0.225 0.01 190);
-  --secondary: oklch(0.265 0.01 190);
-  --muted: oklch(0.255 0.01 190);
-  --accent: oklch(0.27 0.014 190);
-  --sidebar: oklch(0.155 0.01 190);
-  --sidebar-accent: oklch(0.25 0.014 190);
-}
-
-/*
- * ─── Glass + atmosphere ───────────────────────────────────────────────────────
- * Cursor-style "liquid glass" for the FLOATING layer only — popovers, menus,
- * dialogs, sheets, the command palette. Each gets a translucent fill (the opaque
- * --popover token dialled down via color-mix, so it still tracks the accent tint
- * per preset), a frosted backdrop, a hairline rim, and a top-lit bevel riding on
- * the existing elevation shadow. Content surfaces (sidebar, cards, tiles, the
- * transcript) stay solid — text never sits on a blur.
- *
- * These tokens live in their own :root/.dark blocks (a second occurrence) so the
- * design-token parity check — which reads only the first :root{} / .dark{} —
- * never sees them and stays byte-exact.
- */
-:root {
-  --glass-blur: 18px;
-  --glass-saturate: 160%;
-  --glass-fill: 80%;
-  --glass-bg: color-mix(in srgb, var(--popover) var(--glass-fill), transparent);
-  --glass-rim: oklch(0.145 0.01 265 / 0.12);
-  --glass-highlight: oklch(1 0 0 / 0.6);
-  --app-aurora:
-    radial-gradient(74% 44% at 22% -6%, color-mix(in srgb, var(--ring) 5%, transparent), transparent 60%),
-    radial-gradient(56% 40% at 98% 0%, color-mix(in srgb, var(--ring) 3%, transparent), transparent 55%);
-}
-.dark {
-  --glass-fill: 72%;
-  --glass-rim: oklch(1 0 0 / 0.12);
-  --glass-highlight: oklch(1 0 0 / 0.12);
-  --app-aurora:
-    radial-gradient(74% 44% at 22% -6%, color-mix(in srgb, var(--ring) 13%, transparent), transparent 62%),
-    radial-gradient(56% 40% at 98% 0%, color-mix(in srgb, var(--ring) 8%, transparent), transparent 56%);
-}
-
-/* Frosted floating surface. Rim + shadow ride on box-shadow (not border) so it
- * drops in cleanly wherever `bg-popover shadow-e2 ring-1 ring-foreground/10` was,
- * with no border-side conflicts (e.g. the sheet's edge borders). */
-.surface-glass {
-  background-color: var(--glass-bg);
-  box-shadow:
-    0 0 0 1px var(--glass-rim),
-    var(--shadow-e2),
-    inset 0 1px 0 var(--glass-highlight);
-}
-.surface-glass-strong {
-  box-shadow:
-    0 0 0 1px var(--glass-rim),
-    var(--shadow-e3),
-    inset 0 1px 0 var(--glass-highlight);
-}
-@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .surface-glass {
-    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  }
-  .surface-glass-strong {
-    -webkit-backdrop-filter: blur(calc(var(--glass-blur) + 8px)) saturate(var(--glass-saturate));
-    backdrop-filter: blur(calc(var(--glass-blur) + 8px)) saturate(var(--glass-saturate));
-  }
-}
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .surface-glass,
-  .surface-glass-strong {
-    background-color: var(--popover);
-  }
-}
-
-/* Ambient app-shell wash — a faint brand-hue aurora on the base canvas so glass
- * surfaces and empty space have depth to sit against. Fixed to the viewport;
- * painted over the opaque --background on the app root. */
-.app-aurora {
-  background-image: var(--app-aurora);
-  background-attachment: fixed;
-  background-repeat: no-repeat;
+  --terminal-bg: oklch(0.165 0 0);
+  --terminal-fg: oklch(0.9 0 0);
 }
 
 @layer base {

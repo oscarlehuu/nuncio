@@ -4,7 +4,6 @@ import type { ReactElement } from 'react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from './theme-provider';
 import { AppearanceProvider } from './appearance-provider';
-import { AccentProvider } from './accent-provider';
 import { SettingsView } from './settings-view';
 import type { Setting } from '../lib/settings-api';
 
@@ -28,9 +27,7 @@ vi.mock('../lib/provider-updates-api', () => ({
 function renderWithTheme(ui: ReactElement) {
   return render(
     <ThemeProvider defaultTheme="light">
-      <AccentProvider>
-        <AppearanceProvider>{ui}</AppearanceProvider>
-      </AccentProvider>
+      <AppearanceProvider>{ui}</AppearanceProvider>
     </ThemeProvider>,
   );
 }
@@ -61,7 +58,6 @@ describe('SettingsView', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
-    document.documentElement.removeAttribute('data-accent');
     // Reset any deep-link section query left by a prior test.
     window.history.replaceState(null, '', '/settings');
   });
@@ -436,35 +432,8 @@ describe('SettingsView', () => {
     expect(document.documentElement.getAttribute('data-motion')).toBe('on');
   });
 
-  it('renders the accent color picker defaulting to cobalt', () => {
-    renderWithTheme(
-      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
-    );
-    const group = screen.getByRole('radiogroup', { name: 'Accent color' });
-    expect(within(group).getByRole('radio', { name: 'Cobalt' })).toHaveAttribute('aria-checked', 'true');
-    expect(document.documentElement.getAttribute('data-accent')).toBe('cobalt');
-  });
 
-  it('selecting an accent swatch updates data-accent live', async () => {
-    renderWithTheme(
-      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
-    );
-    const group = screen.getByRole('radiogroup', { name: 'Accent color' });
-    await userEvent.click(within(group).getByRole('radio', { name: 'Ember' }));
-    expect(within(group).getByRole('radio', { name: 'Ember' })).toHaveAttribute('aria-checked', 'true');
-    expect(document.documentElement.getAttribute('data-accent')).toBe('ember');
-  });
 
-  it('reset to defaults restores the cobalt accent', async () => {
-    renderWithTheme(
-      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
-    );
-    const group = screen.getByRole('radiogroup', { name: 'Accent color' });
-    await userEvent.click(within(group).getByRole('radio', { name: 'Jade' }));
-    expect(document.documentElement.getAttribute('data-accent')).toBe('jade');
-    await userEvent.click(screen.getByRole('button', { name: /reset to defaults/i }));
-    expect(document.documentElement.getAttribute('data-accent')).toBe('cobalt');
-  });
 
   it('moving the font size slider updates the applied --chat-font-scale', async () => {
     renderWithTheme(

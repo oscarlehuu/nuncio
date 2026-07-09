@@ -5,7 +5,6 @@ import App from './App';
 import { AuthGate } from './components/auth-gate';
 import { ThemeProvider } from './components/theme-provider';
 import { AppearanceProvider } from './components/appearance-provider';
-import { AccentProvider } from './components/accent-provider';
 import { API_BASE, installApiBaseFetch } from './lib/api-base';
 import { unregisterLegacyServiceWorker } from './lib/unregister-service-worker';
 import './index.css';
@@ -21,13 +20,11 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter basename={API_BASE || undefined}>
       <ThemeProvider defaultTheme="system">
-        <AccentProvider>
-          <AppearanceProvider>
-            <AuthGate>
-              <App />
-            </AuthGate>
-          </AppearanceProvider>
-        </AccentProvider>
+        <AppearanceProvider>
+          <AuthGate>
+            <App />
+          </AuthGate>
+        </AppearanceProvider>
       </ThemeProvider>
     </BrowserRouter>
   </StrictMode>,

@@ -1,7 +1,5 @@
 import { useTheme, type Theme } from './theme-provider';
 import { useAppearance } from './appearance-provider';
-import { useAccent } from './accent-provider';
-import { DEFAULT_ACCENT, DEFAULT_CUSTOM_HEX } from '@/lib/accent-preference';
 import {
   CODE_FONT_OPTIONS,
   CODE_FONT_SIZE_MAX,
@@ -12,7 +10,6 @@ import {
   type DiffMarkers,
   type MotionMode,
 } from '@/lib/appearance-preference';
-import { AccentPicker } from './appearance/accent-picker';
 import { ThemePreviewCard } from './appearance/theme-preview-card';
 import {
   FieldRow,
@@ -80,13 +77,10 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
 
 export function AppearanceSettingsSection() {
   const { theme, setTheme } = useTheme();
-  const { setAccent, setCustomHex } = useAccent();
   const a = useAppearance();
 
   const resetToDefaults = () => {
     setTheme('system');
-    setAccent(DEFAULT_ACCENT);
-    setCustomHex(DEFAULT_CUSTOM_HEX);
     a.reset();
   };
 
@@ -121,12 +115,6 @@ export function AppearanceSettingsSection() {
             ))}
           </div>
         </div>
-        <FieldRow
-          title="Accent color"
-          description="Signature hue for buttons, focus, and active state"
-        >
-          <AccentPicker />
-        </FieldRow>
       </Group>
 
       {/* Typography */}

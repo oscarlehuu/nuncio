@@ -4,7 +4,6 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ThemeProvider } from './components/theme-provider';
 import { AppearanceProvider } from './components/appearance-provider';
-import { AccentProvider } from './components/accent-provider';
 
 vi.mock('sonner', () => ({
   toast: {
@@ -168,13 +167,11 @@ function renderApp(initialEntry = '/') {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
       <ThemeProvider defaultTheme="light">
-        <AccentProvider>
-          <AppearanceProvider>
-            <Routes>
-              <Route path="/*" element={<App />} />
-            </Routes>
-          </AppearanceProvider>
-        </AccentProvider>
+        <AppearanceProvider>
+          <Routes>
+            <Route path="/*" element={<App />} />
+          </Routes>
+        </AppearanceProvider>
       </ThemeProvider>
     </MemoryRouter>,
   );

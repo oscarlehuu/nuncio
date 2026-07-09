@@ -645,7 +645,7 @@ export default function App() {
   };
 
   return (
-    <div className="h-full flex bg-background app-aurora">
+    <div className="h-full flex bg-background">
       {desktopSidebar.pinned ? (
         <DesktopSidebarPinned
           open={desktopSidebar.open}
