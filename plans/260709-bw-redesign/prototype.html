@@ -1,0 +1,1381 @@
+<title>Nuncio — B&W redesign prototype</title>
+<style>
+  /* ————————————————————————————————————————————————————————————————
+     Nuncio B&W — Vercel-discipline monochrome. Two rules:
+       1. Luminance builds the hierarchy (sidebar < content < card).
+       2. Color exists only when something needs the founder:
+          amber = waiting on you, red = broken. Everything else is ink.
+     No glass, no aurora, no blur. Floating layers are solid + shadow.
+     ———————————————————————————————————————————————————————————————— */
+  .nuncio, .nuncio * { box-sizing: border-box; margin: 0; padding: 0; }
+  .nuncio {
+    --bg: #0a0a0a; --side: #050505; --card: #111214; --card2: #17181a;
+    --well: #101113;
+    --hair: rgba(255,255,255,.085); --hair2: rgba(255,255,255,.16);
+    --fg: #ededed; --mut: #8f8f8f; --mut2: #5b5b5b;
+    --pri: #ededed; --pri-fg: #0a0a0a;
+    --amber: #f5a623; --amber-dim: rgba(245,166,35,.14);
+    --red: #ef5f66; --red-dim: rgba(229,72,77,.14);
+    --grn: #56b366; --grn-txt: #56b366;
+    --sh1: 0 1px 2px rgba(0,0,0,.4);
+    --sh2: 0 4px 14px rgba(0,0,0,.45), 0 1px 3px rgba(0,0,0,.5);
+    --sh3: 0 12px 40px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.5);
+    --r: 8px; --r-lg: 12px;
+    font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 13px; line-height: 1.5; color: var(--fg); background: var(--bg);
+    position: fixed; inset: 0; display: flex; overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  .nuncio.lt {
+    --bg: #ffffff; --side: #fafafa; --card: #ffffff; --card2: #fafafa;
+    --well: #f7f7f7;
+    --hair: rgba(0,0,0,.09); --hair2: rgba(0,0,0,.18);
+    --fg: #171717; --mut: #6f6f6f; --mut2: #ababab;
+    --pri: #171717; --pri-fg: #ffffff;
+    --amber: #b3730d; --amber-dim: rgba(179,115,13,.10);
+    --red: #ca2a30; --red-dim: rgba(202,42,48,.08);
+    --grn: #1a7f37; --grn-txt: #1a7f37;
+    --sh1: 0 1px 2px rgba(0,0,0,.05);
+    --sh2: 0 4px 14px rgba(0,0,0,.07), 0 1px 3px rgba(0,0,0,.05);
+    --sh3: 0 12px 40px rgba(0,0,0,.12), 0 2px 8px rgba(0,0,0,.06);
+  }
+  .nuncio ::-webkit-scrollbar { width: 8px; height: 8px; }
+  .nuncio ::-webkit-scrollbar-thumb { background: var(--hair); border-radius: 4px; }
+  .nuncio button { font: inherit; color: inherit; background: none; border: 0; cursor: default; }
+  .nuncio input, .nuncio textarea { font: inherit; color: var(--fg); }
+  .nuncio svg { display: block; flex-shrink: 0; }
+  .nuncio kbd {
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 10px;
+    border: 1px solid var(--hair); border-radius: 4px; padding: 0 4px; color: var(--mut);
+  }
+  .mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  /* — buttons: exactly three voices — */
+  .btn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
+    border-radius: var(--r); font-size: 12.5px; font-weight: 500; white-space: nowrap;
+    transition: background .12s, border-color .12s, opacity .12s, transform .06s; }
+  .btn:active { transform: scale(.98); }
+  .btn.pri { background: var(--pri); color: var(--pri-fg); }
+  .btn.pri:hover { opacity: .88; }
+  .btn.out { border: 1px solid var(--hair2); background: transparent; }
+  .btn.out:hover { background: var(--hover, rgba(128,128,128,.09)); }
+  .btn.gho { color: var(--mut); }
+  .btn.gho:hover { color: var(--fg); background: rgba(128,128,128,.10); }
+  .btn.danger { color: var(--red); }
+  .btn.danger:hover { background: var(--red-dim); }
+  .btn.icon { width: 28px; padding: 0; justify-content: center; }
+  .btn[disabled] { opacity: .38; pointer-events: none; }
+  .btn.round { border-radius: 999px; }
+
+  /* — shell — */
+  .rail { position: fixed; left: 0; top: 0; bottom: 0; z-index: 60; width: 52px;
+    display: flex; flex-direction: column; transition: width .18s ease; }
+  .rail.open { width: 260px; background: var(--side); border-right: 1px solid var(--hair); box-shadow: var(--sh3); }
+  .rail .burger { margin: 10px; }
+  .rail .fly { flex: 1; min-height: 0; opacity: 0; pointer-events: none; transform: translateX(-6px);
+    transition: opacity .14s ease, transform .14s ease; border-top: 1px solid var(--hair); }
+  .rail.open .fly { opacity: 1; pointer-events: auto; transform: none; }
+  .shell-side { width: 260px; flex-shrink: 0; background: var(--side); border-right: 1px solid var(--hair);
+    display: flex; flex-direction: column; }
+  .shell-side .top { padding: 10px; border-bottom: 1px solid var(--hair); }
+  main.view { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; animation: fadein .16s ease; }
+  @keyframes fadein { from { opacity: 0; } }
+
+  /* — sidebar internals — */
+  .sb { display: flex; flex-direction: column; height: 100%; width: 260px; background: var(--side); font-size: 12.5px; }
+  .sb .brand { padding: 14px 14px 4px; font-weight: 600; letter-spacing: .01em; color: var(--mut); }
+  .sb nav { padding: 8px 8px 0; display: flex; flex-direction: column; gap: 1px; }
+  .sb nav .it { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--r);
+    color: var(--fg); font-size: 13px; transition: background .1s; text-align: left; width: 100%; }
+  .sb nav .it:hover { background: rgba(128,128,128,.10); }
+  .sb nav .it.on { background: rgba(128,128,128,.14); font-weight: 500; }
+  .sb nav .it svg { color: var(--mut); }
+  .sb .badge { margin-left: auto; min-width: 18px; text-align: center; border-radius: 999px;
+    background: var(--amber-dim); color: var(--amber); font-size: 10.5px; font-weight: 600; padding: 1px 6px; }
+  .sb .tabs { display: flex; gap: 2px; padding: 10px 12px 4px; }
+  .sb .tabs button { padding: 3px 8px; border-radius: 6px; color: var(--mut); font-size: 12.5px; }
+  .sb .tabs button.on { background: rgba(128,128,128,.14); color: var(--fg); font-weight: 500; }
+  .sb .tabs .n { color: var(--mut2); font-size: 10.5px; margin-left: 4px; }
+  .sb .list { flex: 1; overflow-y: auto; padding: 2px 8px 8px; }
+  .sb .grouphead { display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 8px 4px; color: var(--mut); font-size: 11px; }
+  .sb .ghd-btn { display: inline-flex; align-items: center; gap: 3px; color: var(--mut); font-size: 11px;
+    border-radius: 5px; padding: 1px 5px; }
+  .sb .ghd-btn:hover { background: rgba(128,128,128,.12); color: var(--fg); }
+  .sb .grp { display: flex; align-items: center; gap: 6px; width: 100%; padding: 5px 8px; border-radius: var(--r);
+    color: var(--fg); font-size: 12.5px; font-weight: 500; }
+  .sb .grp:hover { background: rgba(128,128,128,.08); }
+  .sb .grp svg { color: var(--mut); }
+  .sb .grp .n { margin-left: auto; color: var(--mut2); font-weight: 400; }
+  .sb .row { position: relative; display: block; width: 100%; text-align: left; padding: 5px 8px 6px;
+    border-radius: var(--r); transition: background .1s; }
+  .sb .row:hover { background: rgba(128,128,128,.09); }
+  .sb .row.on { background: rgba(128,128,128,.14); }
+  .sb .row .l1 { display: flex; align-items: center; gap: 6px; }
+  .sb .row .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+  .sb .row .ago { color: var(--mut2); font-size: 10.5px; }
+  .sb .row .l2 { display: flex; align-items: center; gap: 5px; margin-top: 1px; color: var(--mut);
+    font-size: 11px; overflow: hidden; white-space: nowrap; }
+  .sb .row .l2 .pv { overflow: hidden; text-overflow: ellipsis; }
+  .sb .row .hact { position: absolute; right: 5px; top: 5px; display: none; }
+  .sb .row:hover .hact { display: flex; gap: 2px; }
+  .sb .hact .btn { background: var(--side); box-shadow: var(--sh1); }
+  .sb footer { border-top: 1px solid var(--hair); padding: 8px 10px; display: flex; justify-content: flex-end; gap: 2px; }
+  .sb .search { position: relative; margin: 6px 12px 2px; }
+  .sb .search svg { position: absolute; left: 8px; top: 7px; color: var(--mut2); }
+  .sb .search input { width: 100%; height: 28px; padding: 0 8px 0 26px; border-radius: var(--r);
+    border: 1px solid var(--hair); background: transparent; font-size: 12px; outline: none; }
+  .sb .search input:focus { border-color: var(--hair2); }
+
+  /* — status dots: gray is a state, color is a summons — */
+  .dot { width: 7px; height: 7px; border-radius: 999px; flex-shrink: 0; }
+  .dot.run { background: var(--mut); animation: pulse 2.2s ease-in-out infinite; }
+  .dot.err { background: var(--red); }
+  .dot.wait { background: var(--amber); animation: pulse 1.6s ease-in-out infinite; }
+  .dot.ok { background: var(--mut2); }
+  @keyframes pulse { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
+
+  /* — page chrome — */
+  .phead { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--hair);
+    background: var(--bg); flex-shrink: 0; min-height: 49px; }
+  .phead h1 { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+  .phead .sp { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+  .pbody { flex: 1; overflow-y: auto; min-height: 0; }
+  .center-col { max-width: 720px; margin: 0 auto; padding: 24px 20px 48px; }
+  .rail-pad { padding-left: 60px; }
+
+  /* — cards — */
+  .card { background: var(--card); border: 1px solid var(--hair); border-radius: var(--r-lg); box-shadow: var(--sh1); }
+  .card.hov { transition: box-shadow .15s, border-color .15s; }
+  .card.hov:hover { box-shadow: var(--sh2); border-color: var(--hair2); }
+
+  /* — composer — */
+  .ctx-row { display: flex; align-items: center; justify-content: center; gap: 4px; margin-bottom: 10px;
+    color: var(--mut); font-size: 12.5px; }
+  .ctx-row .tpick { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 6px; color: var(--mut); }
+  .ctx-row .tpick:hover { color: var(--fg); background: rgba(128,128,128,.09); }
+  .ctx-row .sep { color: var(--mut2); }
+  .composer { background: var(--card); border: 1px solid var(--hair); border-radius: 14px; box-shadow: var(--sh2); }
+  .composer:focus-within { border-color: var(--hair2); }
+  .composer textarea { width: 100%; min-height: 96px; resize: none; border: 0; outline: none; background: transparent;
+    padding: 16px 18px 6px; font-size: 14px; }
+  .composer textarea::placeholder { color: var(--mut2); }
+  .composer .bar { display: flex; align-items: center; gap: 6px; padding: 6px 12px 12px; }
+  .composer .bar .grow { flex: 1; }
+  .send { width: 30px; height: 30px; border-radius: 999px; background: var(--pri); color: var(--pri-fg);
+    display: inline-flex; align-items: center; justify-content: center; transition: opacity .12s, transform .06s; }
+  .send:hover { opacity: .88; } .send:active { transform: scale(.94); }
+  .send[disabled] { opacity: .35; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--hair); border-radius: 999px;
+    padding: 5px 12px; color: var(--mut); font-size: 12px; transition: all .13s; }
+  .pill:hover { color: var(--fg); border-color: var(--hair2); transform: translateY(-1px); }
+
+  /* — attention queue — */
+  .q-item { position: relative; display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 16px;
+    overflow: hidden; }
+  .q-item .stripe { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+  .stripe.amber { background: var(--amber); } .stripe.quiet { background: var(--hair2); }
+  .chip { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; padding: 1px 8px;
+    font-size: 11px; font-weight: 500; border: 1px solid var(--hair2); color: var(--mut); }
+  .chip.amber { border-color: transparent; background: var(--amber-dim); color: var(--amber); }
+  .q-item .body { flex: 1; min-width: 0; }
+  .q-item .title { font-size: 13px; font-weight: 500; margin-top: 5px; }
+  .q-item .meta { color: var(--mut); font-size: 11.5px; margin-top: 1px; }
+  .q-item .acts { display: flex; gap: 6px; flex-shrink: 0; }
+  .digest-link { display: flex; align-items: center; gap: 12px; padding: 12px 14px; width: 100%; text-align: left; }
+  .digest-link .ic { width: 34px; height: 34px; border-radius: 9px; background: var(--well);
+    display: grid; place-items: center; color: var(--mut); border: 1px solid var(--hair); }
+  .digest-link .arrow { color: var(--mut); transition: transform .13s; }
+  .digest-link:hover .arrow { transform: translateX(2px); }
+  .sect-label { font-size: 11px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase;
+    color: var(--mut); margin: 26px 0 10px; }
+
+  /* — transcript — */
+  .msg-user { display: flex; justify-content: flex-end; margin: 14px 0; }
+  .msg-user .bub { max-width: 78%; background: var(--card2); border: 1px solid var(--hair);
+    border-radius: 12px; padding: 8px 13px; font-size: 13.5px; }
+  .msg-ai { display: flex; gap: 10px; margin: 14px 0; font-size: 13.5px; }
+  .msg-ai .av { width: 22px; height: 22px; border-radius: 999px; border: 1px solid var(--hair);
+    display: grid; place-items: center; font-size: 10px; font-weight: 600; color: var(--mut); flex-shrink: 0; margin-top: 1px; }
+  .msg-ai .txt { min-width: 0; }
+  .tool-row { display: flex; align-items: center; gap: 8px; padding: 3px 0 3px 32px; color: var(--mut); font-size: 12.5px; }
+  .tool-row svg { color: var(--mut2); }
+  .tool-row .tgt { color: var(--fg); opacity: .85; }
+  .tool-row .n { color: var(--mut2); font-size: 11.5px; }
+  .tool-out { margin: 4px 0 4px 32px; background: var(--well); border: 1px solid var(--hair); border-radius: var(--r);
+    padding: 8px 12px; font-size: 11.5px; color: var(--mut); max-width: 620px; }
+  .vchip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--hair2); border-radius: 999px;
+    padding: 0 8px; height: 20px; font-size: 11px; color: var(--mut); }
+
+  /* — session view — */
+  .sess-head { display: flex; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--hair);
+    background: var(--bg); min-height: 49px; flex-shrink: 0; position: relative; }
+  .sess-head .title-wrap { flex: 1; display: flex; justify-content: center; align-items: center; gap: 8px; min-width: 0; }
+  .sess-head .title { font-size: 13px; font-weight: 500; max-width: 46%; overflow: hidden; white-space: nowrap;
+    text-overflow: ellipsis; padding: 2px 6px; border-radius: 6px; }
+  .sess-head .title:hover { background: rgba(128,128,128,.09); }
+  .sess-head .right { position: absolute; right: 12px; display: flex; gap: 2px; }
+  .sess-body { flex: 1; min-height: 0; display: flex; }
+  .sess-scroll { flex: 1; overflow-y: auto; padding: 4px 28px; }
+  .sess-inner { max-width: 740px; margin: 0 auto; }
+  .steer-wrap { flex-shrink: 0; padding: 8px 20px 14px; }
+  .steer { max-width: 740px; margin: 0 auto; background: var(--card); border: 1px solid var(--hair);
+    border-radius: 14px; box-shadow: var(--sh2); }
+  .steer:focus-within { border-color: var(--hair2); }
+  .steer textarea { width: 100%; min-height: 42px; resize: none; border: 0; outline: none; background: transparent;
+    padding: 11px 14px 2px; font-size: 13px; }
+  .steer .bar { display: flex; align-items: center; gap: 10px; padding: 4px 10px 8px; color: var(--mut); font-size: 12px; }
+  .steer .foot { display: flex; gap: 14px; padding: 6px 14px; border-top: 1px solid var(--hair); color: var(--mut); font-size: 11px; align-items: center; }
+  .pending-banner { max-width: 740px; margin: 0 auto 8px; border: 1px solid var(--hair); border-left: 3px solid var(--amber);
+    background: var(--card); border-radius: var(--r-lg); padding: 10px 14px; box-shadow: var(--sh1); }
+  .panel { width: 340px; flex-shrink: 0; border-left: 1px solid var(--hair); display: flex; flex-direction: column; background: var(--side); }
+  .panel .phead2 { display: flex; align-items: center; gap: 2px; padding: 6px 8px; border-bottom: 1px solid var(--hair); }
+  .panel .phead2 .name { margin-left: 6px; font-size: 12.5px; font-weight: 500; }
+  .panel .pcontent { flex: 1; overflow-y: auto; padding: 10px; font-size: 12.5px; }
+  .filerow { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; }
+  .filerow:hover { background: rgba(128,128,128,.08); }
+  .filerow .path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .plus { color: var(--grn-txt); } .minus { color: var(--red); }
+  .term { background: #050505; border-radius: var(--r); padding: 10px 12px; color: #bbb; font-size: 11.5px; min-height: 120px; }
+  .lt .term { background: #171717; }
+
+  /* — workbench — */
+  .wb-head { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--hair); min-height: 45px; flex-shrink: 0; }
+  .wb-head h1 { font-size: 14px; font-weight: 600; }
+  .seg { margin-left: auto; display: flex; gap: 2px; background: var(--well); border: 1px solid var(--hair);
+    border-radius: 9px; padding: 2px; }
+  .seg button { padding: 2px 9px; border-radius: 7px; font-size: 11.5px; color: var(--mut); font-weight: 500; }
+  .seg button.on { background: var(--card); color: var(--fg); box-shadow: var(--sh1); }
+  .wb-grid { flex: 1; min-height: 0; display: grid; gap: 10px; padding: 10px; }
+  .tile { display: flex; flex-direction: column; min-height: 0; background: var(--card); border: 1px solid var(--hair);
+    border-radius: var(--r-lg); overflow: hidden; box-shadow: var(--sh1); transition: box-shadow .15s, border-color .15s, transform .15s; position: relative; }
+  .tile:hover { box-shadow: var(--sh2); transform: translateY(-1px); }
+  .tile.focus { border-color: var(--hair2); box-shadow: 0 0 0 1px var(--hair2), var(--sh2); }
+  .tile.wait { border-color: var(--amber); }
+  .tile.wait::after { content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    box-shadow: inset 0 0 22px -6px var(--amber); animation: pulse 1.9s ease-in-out infinite; }
+  .tile.err { border-color: var(--red); }
+  .tile .thead { display: flex; align-items: center; gap: 7px; padding: 8px 10px; border-bottom: 1px solid var(--hair); flex-shrink: 0; }
+  .tile .thead .tt { font-size: 12.5px; font-weight: 500; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .tile .thead .ts { font-size: 10.5px; color: var(--mut); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .tile .thead .hb { display: none; margin-left: auto; gap: 2px; }
+  .tile:hover .thead .hb { display: flex; }
+  .tile .tbody { flex: 1; overflow-y: auto; padding: 6px 12px; font-size: 12px; color: var(--mut); }
+  .tile .tfoot { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--hair); flex-shrink: 0; }
+  .tile .tfoot input { flex: 1; height: 28px; border: 1px solid var(--hair); background: transparent; border-radius: var(--r);
+    padding: 0 10px; font-size: 12px; outline: none; }
+  .tile .tfoot input:focus { border-color: var(--hair2); }
+  .tile.empty { align-items: stretch; justify-content: stretch; }
+  .tile.empty textarea { flex: 1; resize: none; border: 0; background: transparent; outline: none; padding: 12px; font-size: 12.5px; }
+  .tile.empty .ebar { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--hair); color: var(--mut); font-size: 11.5px; }
+
+  /* — settings — */
+  .set-wrap { flex: 1; min-height: 0; display: flex; }
+  .set-nav { width: 210px; flex-shrink: 0; border-right: 1px solid var(--hair); padding: 10px; overflow-y: auto; background: var(--side); }
+  .set-nav .it { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 6px 9px;
+    border-radius: var(--r); color: var(--mut); font-size: 12.5px; }
+  .set-nav .it svg { color: var(--mut2); }
+  .set-nav .it:hover { color: var(--fg); background: rgba(128,128,128,.08); }
+  .set-nav .it.on { color: var(--fg); background: rgba(128,128,128,.13); font-weight: 500; }
+  .set-nav .search svg { position: absolute; left: 8px; top: 8px; color: var(--mut2); }
+  .set-body { flex: 1; overflow-y: auto; padding: 22px 26px 60px; }
+  .set-sec { max-width: 640px; }
+  .set-row { display: flex; align-items: center; gap: 16px; padding: 13px 2px; border-bottom: 1px solid var(--hair); }
+  .set-row .info { flex: 1; min-width: 0; }
+  .set-row .lb { font-size: 13px; font-weight: 500; }
+  .set-row .ds { font-size: 11.5px; color: var(--mut); margin-top: 1px; }
+  .theme-cards { display: flex; gap: 10px; }
+  .tcard { border: 1px solid var(--hair); border-radius: 10px; padding: 5px; width: 120px; }
+  .tcard.on { border-color: var(--fg); }
+  .tcard .prev { height: 56px; border-radius: 6px; border: 1px solid var(--hair); overflow: hidden; display: flex; }
+  .tcard .cap { font-size: 11px; color: var(--mut); text-align: center; padding-top: 5px; }
+  .tcard.on .cap { color: var(--fg); font-weight: 500; }
+  .stepper { display: flex; align-items: center; border: 1px solid var(--hair); border-radius: var(--r); overflow: hidden; }
+  .stepper button { width: 26px; height: 26px; color: var(--mut); } .stepper button:hover { background: rgba(128,128,128,.1); color: var(--fg); }
+  .stepper .v { min-width: 44px; text-align: center; font-size: 12px; }
+  .selbox { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--hair); border-radius: var(--r);
+    height: 28px; padding: 0 10px; font-size: 12px; }
+  .selbox:hover { border-color: var(--hair2); }
+
+  /* — autopilot / digest / timeline / pr — */
+  .stat3 { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; }
+  .stat { padding: 12px 14px; }
+  .stat .k { font-size: 11px; color: var(--mut); }
+  .stat .v { font-size: 20px; font-weight: 600; letter-spacing: -.02em; margin-top: 2px; }
+  .stat .v.warn { color: var(--amber); }
+  .loop-row { display: flex; align-items: center; gap: 12px; padding: 13px 14px; }
+  .loop-row .nm { font-weight: 500; font-size: 13px; }
+  .loop-row .sub { color: var(--mut); font-size: 11.5px; margin-top: 1px; }
+  .tl-row { display: flex; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--hair); font-size: 12.5px; align-items: baseline; }
+  .tl-row time { width: 46px; color: var(--mut2); font-size: 11px; flex-shrink: 0; }
+  .diff { border: 1px solid var(--hair); border-radius: var(--r); overflow: hidden; font-size: 12px; }
+  .diff .dh { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--well); border-bottom: 1px solid var(--hair); }
+  .diff pre { padding: 8px 0; overflow-x: auto; line-height: 1.55; }
+  .diff .ln { padding: 0 12px; white-space: pre; }
+  .diff .add { color: var(--grn-txt); } .diff .del { color: var(--red); }
+  .diff .ctx2 { color: var(--mut); }
+
+  /* — overlays: solid, shadowed, zero blur — */
+  .menu { position: fixed; z-index: 200; min-width: 190px; background: var(--card); border: 1px solid var(--hair);
+    border-radius: 10px; box-shadow: var(--sh3); padding: 4px; animation: pop .12s ease; }
+  @keyframes pop { from { opacity: 0; transform: translateY(-3px); } }
+  .menu .mi { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 6px 9px;
+    border-radius: 7px; font-size: 12.5px; }
+  .menu .mi:hover { background: rgba(128,128,128,.11); }
+  .menu .mi.danger { color: var(--red); } .menu .mi.danger:hover { background: var(--red-dim); }
+  .menu .mi svg { color: var(--mut); } .menu .mi.danger svg { color: var(--red); }
+  .menu .mi .sub2 { margin-left: auto; color: var(--mut2); font-size: 11px; }
+  .menu .msep { height: 1px; background: var(--hair); margin: 4px 6px; }
+  .menu .mlabel { padding: 5px 9px 2px; font-size: 10.5px; color: var(--mut2); text-transform: uppercase; letter-spacing: .06em; }
+  .cli-glyph { font-weight: 600; font-size: 8.5px; border: 1px solid var(--hair); border-radius: 4px;
+    width: 13px; height: 13px; display: inline-grid; place-items: center; color: var(--mut); letter-spacing: 0; }
+  .scrim { position: fixed; inset: 0; z-index: 300; background: rgba(0,0,0,.55); display: grid; place-items: center; animation: fadein .14s ease; }
+  .dialog { width: 400px; background: var(--card); border: 1px solid var(--hair); border-radius: 14px;
+    box-shadow: var(--sh3); padding: 20px; animation: pop .14s ease; }
+  .dialog h3 { font-size: 14.5px; font-weight: 600; }
+  .dialog p { color: var(--mut); font-size: 12.5px; margin-top: 6px; }
+  .dialog .dfoot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  .toasts { position: fixed; right: 16px; bottom: 16px; z-index: 400; display: flex; flex-direction: column; gap: 8px; }
+  .toast { background: var(--card); border: 1px solid var(--hair); border-radius: 10px; box-shadow: var(--sh3);
+    padding: 9px 14px; font-size: 12.5px; display: flex; align-items: center; gap: 8px; animation: pop .15s ease; }
+
+  .nuncio a { color: var(--fg); text-decoration: underline; text-decoration-color: var(--hair2); text-underline-offset: 2px; }
+  .empty-hero { text-align: center; padding: 26px 0 6px; }
+  .empty-hero h2 { font-size: 14px; font-weight: 600; }
+  .empty-hero p { color: var(--mut); font-size: 12.5px; margin-top: 4px; }
+  @media (prefers-reduced-motion: reduce) { .nuncio * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="nuncio" id="nc"></div>
+
+<script>
+/* ————— icons (lucide-style, stroke = currentColor) ————— */
+const I = (d, s=14) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const ic = {
+  menu: I('<line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/>'),
+  home: I('<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.7V21h14V9.7"/>'),
+  grid: I('<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>'),
+  repeat: I('<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>'),
+  search: I('<circle cx="11" cy="11" r="7"/><path d="m21 21-4-4"/>', 13),
+  chevD: I('<polyline points="6 9 12 15 18 9"/>', 12),
+  chevR: I('<polyline points="9 6 15 12 9 18"/>', 12),
+  plus: I('<path d="M12 5v14M5 12h14"/>'),
+  arrowUp: I('<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>', 15),
+  arrowL: I('<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>', 15),
+  arrowUR: I('<path d="M7 7h10v10"/><path d="M7 17 17 7"/>', 13),
+  send: I('<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>', 14),
+  folder: I('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>', 13),
+  branch: I('<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>', 12),
+  term: I('<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>'),
+  file: I('<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/>', 13),
+  x: I('<path d="M18 6 6 18M6 6l12 12"/>', 13),
+  max: I('<polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>', 12),
+  min: I('<polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/>', 12),
+  archive: I('<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>', 13),
+  trash: I('<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>', 13),
+  restore: I('<path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"/><path d="M3 3v5h5"/>', 13),
+  check: I('<polyline points="20 6 9 17 4 12"/>', 13),
+  dots: I('<circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="19" cy="12" r="1" fill="currentColor"/>'),
+  sun: I('<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'),
+  moon: I('<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>'),
+  spark: I('<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/>'),
+  cog: I('<path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>'),
+  panel: I('<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="15" y1="3" x2="15" y2="21"/>'),
+  img: I('<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.9-3.9a2 2 0 0 0-2.8 0L6 19"/>'),
+  pause: I('<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>', 12),
+  play: I('<polygon points="6 3 20 12 6 21 6 3"/>', 12),
+  stop: I('<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/>', 12),
+  pencil: I('<path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>', 12),
+  pr: I('<circle cx="6" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/>', 13),
+  clock: I('<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/>', 13),
+  globe: I('<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18"/>', 13),
+  wrench: I('<path d="M14.7 6.3a4.5 4.5 0 0 0 6 6L14 19a2.1 2.1 0 0 1-3-3l6.7-6.7a4.5 4.5 0 0 0-3-3Z"/>', 13),
+  sunrise: I('<path d="M12 9V3m-4 3 4-4 4 4"/><path d="M4 18a8 8 0 0 1 16 0"/><path d="M2 21h20"/>', 15),
+  list: I('<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r=".5" fill="currentColor"/><circle cx="4" cy="12" r=".5" fill="currentColor"/><circle cx="4" cy="18" r=".5" fill="currentColor"/>', 13),
+  swap: I('<path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/>', 13),
+  msg: I('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/>', 12),
+  bolt: I('<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>', 11),
+  gauge: I('<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>', 11),
+};
+
+/* ————— mock data ————— */
+/* Model catalog — each group is one CLI/harness. Pi deliberately has 12 models to
+   exercise the long-engine case: collapsed groups show 3 featured models; search
+   flattens everything. `eff` mirrors the real effort select (Claude: low…max,
+   Codex: minimal…xhigh); `fast` mirrors the boolean fast/service-tier option. */
+const EFF_CLAUDE = ['low', 'medium', 'high', 'xhigh', 'max'];
+const EFF_CODEX = ['minimal', 'low', 'medium', 'high', 'xhigh'];
+const MODELS = [
+  { g: 'Claude Code', cli: 'claude', glyph: 'C', sub: 'claude-agent-sdk', models: [
+    { n: 'Fable 5', tag: '1m ctx', eff: EFF_CLAUDE },
+    { n: 'Opus 4.8', tag: '1m ctx', eff: EFF_CLAUDE, fast: true },
+    { n: 'Haiku 4.5', tag: 'fast + cheap' },
+  ] },
+  { g: 'Codex', cli: 'codex', glyph: 'X', sub: 'codex CLI', models: [
+    { n: 'gpt-5.5-codex', tag: 'agentic', eff: EFF_CODEX, fast: true },
+    { n: 'gpt-5.5-codex-mini', tag: 'cheap', eff: ['low', 'medium'] },
+  ] },
+  { g: 'Pi', cli: 'pi', glyph: 'P', sub: 'local harness', featured: 3, models: [
+    { n: 'Opus 4.8 (Pi)', tag: '$15/$75' }, { n: 'Sonnet 4.5 (Pi)', tag: '$3/$15' },
+    { n: 'Haiku 4.5 (Pi)', tag: '$0.8/$4' }, { n: 'Haiku 3.5 (Pi)', tag: '$0.8/$4' },
+    { n: 'GPT-5.5', tag: '$2/$8' }, { n: 'GPT-5.2', tag: '$1.3/$5' },
+    { n: 'Gemini 3 Pro', tag: '$2/$12' }, { n: 'Gemini 3 Flash', tag: '$0.3/$2.5' },
+    { n: 'DeepSeek V4', tag: '$0.3/$1.2' }, { n: 'Qwen3-Max', tag: '$1.2/$6' },
+    { n: 'Kimi K2.5', tag: '$0.6/$2.5' }, { n: 'GLM-5', tag: '$0.6/$2.2' },
+  ] },
+];
+/* Trigger label: model name, effort only when off-default, bolt when fast. */
+function modelTriggerHtml() {
+  const m = findModel(store.model);
+  const o = store.modelOpts;
+  const eff = m?.eff && o.effort && o.effort !== defaultEffort(m) ? ` · ${o.effort}` : '';
+  return `${esc(store.model)}${eff}${m?.fast && o.fast ? ' ' + ic.bolt : ''}`;
+}
+function findModel(name) {
+  for (const gr of MODELS) { const m = gr.models.find(x => x.n === name); if (m) return m; }
+  return null;
+}
+function defaultEffort(m) {
+  if (!m?.eff) return null;
+  return m.eff.includes('high') ? 'high' : m.eff[m.eff.length - 1];
+}
+const sessions = [
+  { id:'s1', title:'Fix flaky updater test', repo:'nuncio', branch:'nuncio/updater-fix', provider:'C', model:'Fable 5',
+    status:'RUNNING', ago:'2m', preview:'Running bun test — 3 suites left', ctx:'24%', verified:true },
+  { id:'s2', title:'Add QR pairing docs', repo:'nuncio', branch:'nuncio/qr-docs', provider:'C', model:'Opus 4.8',
+    status:'WAIT', ago:'12m', preview:'Waiting for you — port question', ctx:'41%' },
+  { id:'s3', title:'Review PR #87', repo:'nuncio', branch:'dev', provider:'X', model:'gpt-5.5-codex',
+    status:'IDLE', ago:'1h', preview:'Left 4 comments, 1 blocking', ctx:'18%' },
+  { id:'s4', title:'Refactor digest collector', repo:'pi-agent', branch:'main', provider:'P', model:'Haiku 4.5',
+    status:'ERROR', ago:'3h', preview:'Provider exited with code 1', ctx:'—' },
+  { id:'s5', title:'Explain the release flow', repo:null, branch:null, provider:'C', model:'Fable 5',
+    status:'IDLE', ago:'1d', preview:'Walked through desktop-build.yml', ctx:'9%' },
+];
+const archived = [
+  { id:'a1', title:'Mobile QR pairing — phase 5', repo:'nuncio', ago:'2d' },
+  { id:'a2', title:'Bundle budget guard', repo:'nuncio', ago:'5d' },
+];
+const S = id => sessions.find(s => s.id === id);
+
+/* ————— state ————— */
+const store = {
+  theme: localStorage.getItem('bw-theme') || 'dark',
+  route: location.hash.slice(1) || '/',
+  railOpen: false, pinned: localStorage.getItem('bw-pin') === '1',
+  sbTab: 'recent', groupBy: 'repository',
+  preset: '2x2', focus: 1, panel: false, tool: 'scm',
+  setSec: 'appearance', prTab: 'files',
+  queue: [
+    { id:'q1', kind:'needs-input', label:'Needs input', title:'Add QR pairing docs — which port should the pairing server bind?', meta:'nuncio · 12m', sid:'s2' },
+    { id:'q2', kind:'dispatcher', label:'Tomorrow’s plan', title:'3 proposals from the dispatcher', meta:'8m', open:false,
+      proposals:[
+        ['Deflake watcher seam test','nuncio — retries mask a real race in live-watch-dedup'],
+        ['Draft changelog for dev.21','nuncio — release notes lag 3 versions behind'],
+        ['Prune stale worktrees','pi-agent — 4 worktrees older than 30 days'],
+      ]},
+    { id:'q3', kind:'review', label:'Review ready', title:'PR #87 — deflake live-watch-dedup via the watcher seam', meta:'nightly-dogfood · 1h', pr:true },
+  ],
+  menu: null, dialog: null, toasts: [],
+  model: 'Fable 5', modelQ: '', modelExpand: {}, modelCli: 'all',
+  modelOpts: { effort: 'high', fast: false },
+  recentModels: ['Fable 5', 'gpt-5.5-codex'],
+  gridBound: ['s1', 's2', 's3'],
+  loops: [
+    { id:'l1', name:'nightly-dogfood', sub:'Every night 02:00 · last run 4h ago · opened PR #87', state:'active' },
+    { id:'l2', name:'changelog-draft', sub:'Mon 09:00 · paused by you 3d ago', state:'paused' },
+    { id:'l3', name:'stale-worktree-prune', sub:'Breaker tripped after 2 failed runs · needs a look', state:'tripped' },
+  ],
+};
+
+/* ————— helpers ————— */
+const $ = sel => document.querySelector(sel);
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+function toast(msg) {
+  const id = Math.random().toString(36).slice(2);
+  store.toasts.push({ id, msg });
+  render();
+  setTimeout(() => { store.toasts = store.toasts.filter(t => t.id !== id); render(); }, 2600);
+}
+function go(route) { store.menu = null; store.railOpen = false; location.hash = route; }
+window.addEventListener('hashchange', () => { store.route = location.hash.slice(1) || '/'; store.menu = null; render(); });
+
+/* ————— status dot: gray runs, color only when it needs you ————— */
+function dot(st) {
+  if (st === 'RUNNING') return '<span class="dot run" title="Running"></span>';
+  if (st === 'WAIT') return '<span class="dot wait" title="Waiting for you"></span>';
+  if (st === 'ERROR') return '<span class="dot err" title="Error"></span>';
+  return '';
+}
+const statusText = { RUNNING:'Running', WAIT:'Waiting for you', IDLE:'Idle', ERROR:'Error' };
+
+/* ————— sidebar ————— */
+function sidebarHtml() {
+  const active = store.route;
+  const navIt = (route, icon, label, badge='') =>
+    `<button class="it ${active === route ? 'on' : ''}" data-go="${route}">${icon}<span>${label}</span>${badge}</button>`;
+  const groups = store.groupBy === 'repository'
+    ? [['nuncio', sessions.filter(s => s.repo === 'nuncio')], ['pi-agent', sessions.filter(s => s.repo === 'pi-agent')]]
+    : [['Running', sessions.filter(s => s.status === 'RUNNING' || s.status === 'WAIT')],
+       ['Idle', sessions.filter(s => s.status === 'IDLE')], ['Error', sessions.filter(s => s.status === 'ERROR')]];
+  const chat = sessions.filter(s => !s.repo);
+
+  const row = s => `
+    <div class="row ${active === '/session/' + s.id ? 'on' : ''}" data-go="/session/${s.id}" role="button" tabindex="0">
+      <div class="l1">${dot(s.status)}<span class="t">${s.title}</span><span class="ago tnum">${s.ago}</span></div>
+      <div class="l2"><span style="font-weight:600;font-size:9px;border:1px solid var(--hair);border-radius:4px;width:13px;height:13px;display:inline-grid;place-items:center;color:var(--mut)">${s.provider}</span><span class="pv">${s.preview}</span></div>
+      ${s.status === 'IDLE' || s.status === 'ERROR' ? `<div class="hact"><button class="btn gho icon" data-act="archive" data-id="${s.id}" aria-label="Archive" title="Archive">${ic.archive}</button></div>` : ''}
+    </div>`;
+
+  const recentList = store.groupBy === 'repository'
+    ? `<div class="grouphead" style="padding-top:4px"><span>Projects</span></div>` +
+      groups.filter(([,ss]) => ss.length).map(([name, ss]) => `
+        <button class="grp">${ic.chevD}${ic.folder}<span>${name}</span><span class="n tnum">${ss.length}</span></button>
+        ${ss.map(row).join('')}`).join('') +
+      (chat.length ? `<div class="grouphead"><span style="display:inline-flex;align-items:center;gap:5px">${ic.msg} Chat</span></div>${chat.map(row).join('')}` : '')
+    : groups.filter(([,ss]) => ss.length).map(([name, ss]) => `
+        <button class="grp">${ic.chevD}<span>${name}</span><span class="n tnum">${ss.length}</span></button>
+        ${ss.map(row).join('')}`).join('');
+
+  const archList = archived.map(s => `
+    <div class="row" role="button" tabindex="0">
+      <div class="l1"><span class="t">${s.title}</span><span class="ago tnum">${s.ago}</span></div>
+      <div class="l2"><span class="pv">${s.repo}</span></div>
+      <div class="hact">
+        <button class="btn gho icon" data-act="restore" data-id="${s.id}" aria-label="Restore" title="Restore">${ic.restore}</button>
+        <button class="btn gho icon danger" data-act="ask-delete" data-id="${s.id}" aria-label="Delete" title="Delete">${ic.trash}</button>
+      </div>
+    </div>`).join('');
+
+  return `<div class="sb">
+    <div class="brand">Nuncio</div>
+    <nav>
+      ${navIt('/', ic.home, 'Home', '<span class="badge tnum">2</span>')}
+      ${navIt('/grid', ic.grid, 'Workbench')}
+      ${navIt('/autopilot', ic.repeat, 'Autopilot')}
+    </nav>
+    <div class="tabs" role="tablist">
+      <button role="tab" class="${store.sbTab === 'recent' ? 'on' : ''}" data-act="sbtab" data-v="recent">Recent</button>
+      <button role="tab" class="${store.sbTab === 'archived' ? 'on' : ''}" data-act="sbtab" data-v="archived">Archived<span class="n tnum">${archived.length}</span></button>
+    </div>
+    ${store.sbTab === 'archived' ? `<div class="search">${ic.search}<input placeholder="Search archived…" aria-label="Search archived"></div>` : ''}
+    <div class="list">
+      ${store.sbTab === 'recent'
+        ? `<div class="grouphead"><span>Recent</span>
+             <button class="ghd-btn" data-menu="groupby">${store.groupBy === 'repository' ? 'Repository' : 'Status'} ${ic.chevD}</button>
+           </div>${recentList}`
+        : archList}
+    </div>
+    <footer>
+      <button class="btn gho icon" data-go="/changelog" aria-label="What's new" title="What's new">${ic.spark}</button>
+      <button class="btn gho icon" data-go="/settings" aria-label="Settings" title="Settings">${ic.cog}</button>
+      <button class="btn gho icon" data-act="theme" aria-label="Toggle theme" title="Theme">${store.theme === 'dark' ? ic.sun : ic.moon}</button>
+    </footer>
+  </div>`;
+}
+
+/* ————— shared composer ————— */
+function composerHtml({ hero }) {
+  return `
+  <div class="ctx-row">
+    <button class="tpick" data-menu="repo">${ic.folder} nuncio ${ic.chevD}</button><span class="sep">·</span>
+    <button class="tpick" data-menu="branchpick">${ic.branch} dev ${ic.chevD}</button><span class="sep">·</span>
+    <button class="tpick" data-menu="wsmode">Work locally ${ic.chevD}</button>
+  </div>
+  <div class="composer">
+    <textarea id="heroPrompt" placeholder="Ask Nuncio to build features, fix bugs, or work on your code…" aria-label="New agent prompt"></textarea>
+    <div class="bar">
+      <button class="btn gho icon" aria-label="Attach image" title="Attach image">${ic.img}</button>
+      <button class="btn gho" data-menu="model" style="font-weight:400">${modelTriggerHtml()} ${ic.chevD}</button>
+      <div class="grow"></div>
+      <button class="btn gho icon" data-act="handoff" aria-label="Continue on mobile" title="Continue on mobile">${ic.swap}</button>
+      <button class="send" data-act="create" aria-label="Start agent">${ic.arrowUp}</button>
+    </div>
+  </div>
+  ${hero ? `<div style="display:flex;justify-content:center;gap:8px;margin-top:14px">
+    <button class="pill" data-act="starter" data-v="Find and fix the bug where ">Fix a bug</button>
+    <button class="pill" data-act="starter" data-v="Add a feature that ">Add a feature</button>
+    <button class="pill" data-act="starter" data-v="Give me a tour of how this codebase is structured.">Explain the codebase</button>
+  </div>` : ''}`;
+}
+
+/* ————— HOME: composer + digest + attention (merged, no /new) ————— */
+function homeHtml() {
+  const q = store.queue;
+  const items = q.map(it => {
+    const amber = it.kind === 'needs-input';
+    const chip = amber ? `<span class="chip amber">${ic.clock} ${it.label}</span>` : `<span class="chip">${it.label}</span>`;
+    let body = `<p class="title">${it.title}</p>`;
+    if (it.kind === 'dispatcher') {
+      body = `<button class="title" style="display:flex;align-items:center;gap:5px;text-align:left" data-act="qexpand" data-id="${it.id}">
+        ${it.open ? ic.chevD : ic.chevR}<span>${it.title}</span></button>` +
+        (it.open ? `<div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">${it.proposals.map(p =>
+          `<div style="border:1px solid var(--hair);border-radius:8px;padding:7px 10px;background:var(--well)">
+             <div style="font-weight:500;font-size:12.5px">${p[0]}</div>
+             <div style="color:var(--mut);font-size:11.5px;margin-top:1px">${p[1]}</div></div>`).join('')}</div>` : '');
+    }
+    const primary = it.kind === 'dispatcher'
+      ? `<button class="btn pri" data-act="approve" data-id="${it.id}">Approve</button>`
+      : `<button class="btn pri" data-go="${it.pr ? '/pr' : '/session/' + it.sid}">Open ${ic.arrowUR}</button>`;
+    return `<li class="card hov q-item">
+      <span class="stripe ${amber ? 'amber' : 'quiet'}"></span>
+      <div class="body">${chip}${body}<p class="meta">${it.meta}</p></div>
+      <div class="acts">
+        <button class="btn gho" data-act="dismiss" data-id="${it.id}">Dismiss</button>
+        ${primary}
+      </div>
+    </li>`;
+  }).join('');
+
+  return `
+  <header class="phead ${store.pinned ? '' : 'rail-pad'}"><h1>Home</h1></header>
+  <div class="pbody"><div class="center-col">
+    ${composerHtml({ hero: true })}
+    <div class="sect-label">Needs you</div>
+    ${q.length ? `<ul style="list-style:none;display:flex;flex-direction:column;gap:10px">${items}</ul>`
+      : `<div class="empty-hero"><h2>Nothing needs you</h2><p>Every agent is running clean — no approvals, stuck verifies, or paused loops waiting on you.</p></div>`}
+    <div class="sect-label">Today</div>
+    <button class="card hov digest-link" data-go="/digest">
+      <span class="ic">${ic.sunrise}</span>
+      <span style="flex:1;text-align:left">
+        <span style="display:block;font-weight:500;font-size:13px">Morning digest</span>
+        <span style="display:block;color:var(--mut);font-size:11.5px">Quiet night — 4 runs, 1 PR opened · 2h ago</span>
+      </span>
+      <span class="arrow">${ic.chevR}</span>
+    </button>
+  </div></div>`;
+}
+
+/* ————— SESSION ————— */
+function transcriptHtml(s) {
+  const tool = (icon, verb, tgt, n) =>
+    `<div class="tool-row">${icon}<span>${verb}</span><span class="tgt mono" style="font-size:11.5px">${tgt}</span>${n ? `<span class="n">${n}</span>` : ''}</div>`;
+  if (s.prompt) {
+    return `
+    <div class="msg-user"><div class="bub">${esc(s.prompt)}</div></div>
+    <div class="msg-ai"><div class="av">C</div><div class="txt">Picking this up — I'll scout the repo before touching anything.</div></div>
+    ${tool(ic.file, 'Read', 'AGENTS.md', '210 lines')}
+    ${tool(ic.search, 'Grepped', 'the areas your task touches', '…')}
+    <div class="tool-row">${ic.term}<span style="display:inline-flex;align-items:center;gap:6px"><span class="dot run"></span>Working…</span></div>`;
+  }
+  if (s.id === 's2') {
+    return `
+    <div class="msg-user"><div class="bub">Write the pairing guide for mobile QR setup and wire it into the docs nav</div></div>
+    <div class="msg-ai"><div class="av">C</div><div class="txt">I'll draft the guide from the pairing flow in the desktop app, then hook it into the docs sidebar.</div></div>
+    ${tool(ic.file, 'Read', 'apps/desktop/src/pairing.ts', '318 lines')}
+    ${tool(ic.file, 'Read', 'docs/mobile-setup.md', '92 lines')}
+    ${tool(ic.pencil, 'Wrote', 'docs/qr-pairing.md', '+204')}
+    <div class="msg-ai"><div class="av">C</div><div class="txt">One thing I can't decide from the code: the guide needs the default port for the pairing server. Which port should it document?</div></div>`;
+  }
+  return `
+  <div class="msg-user"><div class="bub">Fix the flaky updater test in apps/desktop and make the retry logic deterministic</div></div>
+  <div class="msg-ai"><div class="av">C</div><div class="txt">I'll reproduce the flake first, then trace where the retry timing leaks real time into the test.</div></div>
+  ${tool(ic.file, 'Read', 'apps/desktop/test/updater.test.js', '412 lines')}
+  ${tool(ic.search, 'Grepped', '"setTimeout" in apps/desktop/src', '6 matches')}
+  ${tool(ic.file, 'Read', 'apps/desktop/src/updater.js', '188 lines')}
+  <div class="msg-ai"><div class="av">C</div><div class="txt">Found it — the backoff uses a real timer, so under CI load the third retry fires after the mock clock asserts. I'll inject a scheduler seam instead.</div></div>
+  ${tool(ic.pencil, 'Edited', 'apps/desktop/src/updater.js', '+14 −9')}
+  ${tool(ic.pencil, 'Edited', 'apps/desktop/test/updater.test.js', '+22 −11')}
+  ${tool(ic.term, 'Ran', 'bun test apps/desktop', '')}
+  <div class="tool-out mono">25 pass, 0 fail — 25 runs of updater.test.js, 0 flakes (was 3/25)</div>
+  <div class="msg-ai"><div class="av">C</div><div class="txt">Done. The flake came from a real timer racing the mock clock. Retries now go through an injected scheduler; the suite passed 25/25 consecutive runs.</div></div>`;
+}
+
+function sessionHtml(id, fromGrid) {
+  const s = S(id) || sessions[0];
+  const running = s.status === 'RUNNING';
+  const waiting = s.status === 'WAIT';
+  const panel = store.panel ? `
+  <aside class="panel">
+    <div class="phead2">
+      ${['scm','files','term2'].map(t => {
+        const icn = t === 'scm' ? ic.branch : t === 'files' ? ic.file : ic.term;
+        const lb = t === 'scm' ? 'Source control' : t === 'files' ? 'Files' : 'Terminal';
+        return `<button class="btn gho icon ${store.tool === t ? '' : ''}" data-act="tool" data-v="${t}" aria-label="${lb}" title="${lb}" style="${store.tool === t ? 'background:rgba(128,128,128,.13);color:var(--fg)' : ''}">${icn}</button>`;
+      }).join('')}
+      <span class="name">${store.tool === 'scm' ? 'Source control' : store.tool === 'files' ? 'Files' : 'Terminal'}</span>
+      <button class="btn gho icon" style="margin-left:auto" data-act="panel" aria-label="Close panel">${ic.x}</button>
+    </div>
+    <div class="pcontent">
+      ${store.tool === 'scm' ? `
+        <div style="color:var(--mut);font-size:11px;margin:2px 0 8px">2 changed files on <span class="mono">${s.branch || 'dev'}</span></div>
+        <div class="filerow">${ic.file}<span class="path mono" style="font-size:11.5px">src/updater.js</span><span class="tnum plus">+14</span><span class="tnum minus">−9</span></div>
+        <div class="filerow">${ic.file}<span class="path mono" style="font-size:11.5px">test/updater.test.js</span><span class="tnum plus">+22</span><span class="tnum minus">−11</span></div>
+        <div style="display:flex;gap:6px;margin-top:12px">
+          <button class="btn out" data-act="toast" data-v="Committed 2 files">Commit</button>
+          <button class="btn gho" data-act="toast" data-v="Diff copied">Copy diff</button>
+        </div>` :
+      store.tool === 'files' ? `
+        ${['apps/desktop/src','apps/desktop/test','packages/core'].map(d => `<div class="filerow">${ic.folder}<span class="path mono" style="font-size:11.5px">${d}</span></div>`).join('')}
+        ${['updater.js','updater.test.js'].map(f => `<div class="filerow" style="padding-left:22px">${ic.file}<span class="path mono" style="font-size:11.5px">${f}</span></div>`).join('')}` : `
+        <div class="term mono">$ bun test apps/desktop<br>25 pass, 0 fail (2.1s)<br><span style="opacity:.6">$ █</span></div>`}
+    </div>
+  </aside>` : '';
+
+  return `
+  <div class="sess-head ${store.pinned || fromGrid ? '' : 'rail-pad'}">
+    <div class="title-wrap">
+      <button class="title" title="Click to rename">${s.title}</button>
+      ${s.verified ? `<span class="vchip">${ic.check} Verified</span>` : ''}
+    </div>
+    <div class="right">
+      ${fromGrid ? `<button class="btn out" data-go="/grid" style="height:26px">${ic.min} Grid</button>` : ''}
+      <button class="btn gho icon" data-act="panel" aria-pressed="${store.panel}" aria-label="Toggle panel" title="Panel">${ic.panel}</button>
+      <button class="btn gho icon" data-menu="sess" aria-label="Session actions">${ic.dots}</button>
+    </div>
+  </div>
+  <div class="sess-body">
+    <div style="flex:1;min-width:0;display:flex;flex-direction:column;min-height:0">
+      <div class="sess-scroll"><div class="sess-inner">${transcriptHtml(s)}</div></div>
+      <div class="steer-wrap">
+        ${waiting ? `<div class="pending-banner">
+          <div style="font-size:12.5px;font-weight:500">Which port should the pairing server bind?</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
+            <button class="btn out" data-act="answer">3030 — current default</button>
+            <button class="btn out" data-act="answer">Configurable, document both</button>
+          </div></div>` : ''}
+        <div class="steer">
+          <textarea placeholder="${waiting ? 'Answer the question above to continue…' : running ? 'Steer the live run — delivered before the next model call…' : 'Steer the agent — add context, change direction, ask a question…'}" aria-label="Steer"></textarea>
+          <div class="bar">
+            <button class="btn gho icon" aria-label="Attach">${ic.img}</button>
+            <span style="display:inline-flex;align-items:center;gap:6px"><span class="dot ok"></span>${s.model}</span>
+            <span class="tnum" title="Context used">${s.ctx}</span>
+            <div class="grow" style="flex:1"></div>
+            ${running ? `<button class="send" style="background:var(--red-dim);color:var(--red)" data-act="toast" data-v="Run stopped" aria-label="Stop">${ic.stop}</button>` : ''}
+            <button class="send" data-act="toast" data-v="Steer sent" aria-label="Send">${ic.send}</button>
+          </div>
+          <div class="foot">
+            ${s.repo ? `<span style="display:inline-flex;align-items:center;gap:4px">${ic.folder} ${s.repo}</span>` : ''}
+            ${s.branch ? `<span class="mono" style="display:inline-flex;align-items:center;gap:4px;font-size:10.5px">${ic.branch} ${s.branch}</span>` : ''}
+            <span style="display:inline-flex;align-items:center;gap:5px"><span class="dot ok"></span>Local</span>
+            ${running ? '<span style="display:inline-flex;align-items:center;gap:5px"><span class="dot run"></span>Running</span>' : ''}
+          </div>
+        </div>
+      </div>
+    </div>
+    ${panel}
+  </div>`;
+}
+
+/* ————— WORKBENCH ————— */
+function gridHtml() {
+  const presets = { '1x1': [1,1], '2x1': [2,1], '2x2': [2,2], '3x2': [3,2] };
+  const [cols, rows] = presets[store.preset];
+  const count = cols * rows;
+  const tiles = [];
+  for (let i = 0; i < count; i++) {
+    const s = S(store.gridBound[i]);
+    if (s) {
+      const cls = s.status === 'WAIT' ? 'wait' : s.status === 'ERROR' ? 'err' : '';
+      tiles.push(`
+      <div class="tile ${cls} ${store.focus === i ? 'focus' : ''}" data-act="tfocus" data-v="${i}" role="button" tabindex="0" aria-label="Session ${s.title}">
+        <div class="thead">
+          ${dot(s.status)}
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:6px"><span class="tt">${s.title}</span></div>
+            <div class="ts">${s.status === 'WAIT' ? '<span style="color:var(--amber)">Waiting for you</span>' : `${s.repo ?? 'Chat'} · ${s.model} · ${statusText[s.status]}`}</div>
+          </div>
+          <div class="hb">
+            <button class="btn gho icon" data-act="tmax" data-id="${s.id}" aria-label="Maximize">${ic.max}</button>
+            <button class="btn gho icon" data-act="slot-free" data-v="${i}" aria-label="Unbind slot">${ic.x}</button>
+          </div>
+        </div>
+        <div class="tbody">
+          ${s.id === 's1' ? `<div class="tool-row" style="padding-left:0">${ic.term}<span>Ran</span><span class="tgt mono" style="font-size:11px">bun test apps/desktop</span></div>
+          <p style="margin-top:6px">Retries now go through an injected scheduler; re-running the suite 25×…</p>` :
+            s.id === 's2' ? `<p>One thing I can't decide from the code: which port should the guide document for the pairing server?</p>` :
+            `<p>Left 4 comments on PR #87 — one blocking note on the dedup seam, rest are nits.</p>`}
+        </div>
+        <div class="tfoot">
+          <input placeholder="Steer this agent…" aria-label="Steer ${s.title}">
+          <button class="btn pri icon" data-act="toast" data-v="Steer sent" aria-label="Send">${ic.send}</button>
+        </div>
+      </div>`);
+    } else {
+      tiles.push(`
+      <div class="tile empty">
+        <textarea placeholder="Delegate a task to a new agent…" aria-label="New agent prompt" data-slot-prompt="${i}"></textarea>
+        <div class="ebar">
+          <button class="btn gho" data-menu="repo" style="font-weight:400;height:24px">${ic.folder} nuncio ${ic.chevD}</button>
+          <button class="btn gho" data-menu="model" style="font-weight:400;height:24px">${modelTriggerHtml()} ${ic.chevD}</button>
+          <div style="flex:1"></div>
+          <button class="btn gho" data-menu="attach" data-id="${i}" style="height:24px">Attach ${ic.chevD}</button>
+          <button class="send" style="width:26px;height:26px" data-act="slot-start" data-v="${i}" aria-label="Start">${ic.arrowUp}</button>
+        </div>
+      </div>`);
+    }
+  }
+  return `
+  <div class="wb-head ${store.pinned ? '' : 'rail-pad'}">
+    <h1>Workbench</h1>
+    <div class="seg" role="tablist" aria-label="Grid layout">
+      ${Object.keys(presets).map(p => `<button role="tab" aria-selected="${store.preset === p}" class="${store.preset === p ? 'on' : ''} tnum" data-act="preset" data-v="${p}">${p}</button>`).join('')}
+    </div>
+  </div>
+  <div class="wb-grid" style="grid-template-columns:repeat(${cols},minmax(0,1fr));grid-template-rows:repeat(${rows},minmax(0,1fr))">
+    ${tiles.join('')}
+  </div>`;
+}
+
+/* ————— AUTOPILOT ————— */
+function autopilotHtml() {
+  return `
+  <header class="phead ${store.pinned ? '' : 'rail-pad'}">
+    <button class="btn gho icon" data-go="/" aria-label="Back">${ic.arrowL}</button>
+    <h1>Autopilot</h1>
+    <div class="sp">
+      <button class="btn gho" data-go="/autopilot/runs">${ic.list} Run history</button>
+      <button class="btn pri" data-act="loop-new">${ic.plus} New loop</button>
+    </div>
+  </header>
+  <div class="pbody"><div class="center-col">
+    <div class="stat3">
+      <div class="card stat"><div class="k">Runs today</div><div class="v tnum">4<span style="color:var(--mut2);font-size:14px">/6</span></div></div>
+      <div class="card stat"><div class="k">Succeeded</div><div class="v tnum">3</div></div>
+      <div class="card stat"><div class="k">Failed</div><div class="v tnum warn">1</div></div>
+    </div>
+    <div class="sect-label">Loops</div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      ${store.loops.map(l => l.state === 'tripped' ? `
+      <div class="card hov loop-row" style="border-color:var(--red)">
+        <span class="dot err"></span>
+        <div style="flex:1;min-width:0">
+          <div class="nm">${l.name}</div>
+          <div class="sub">${l.sub}</div>
+        </div>
+        <button class="btn pri" data-go="/autopilot/runs">Inspect</button>
+      </div>` : `
+      <div class="card hov loop-row" ${l.state === 'paused' ? 'style="opacity:.75"' : ''}>
+        <span class="dot ${l.state === 'active' ? 'run' : 'ok'}"></span>
+        <div style="flex:1;min-width:0">
+          <div class="nm">${l.name}</div>
+          <div class="sub">${l.sub}</div>
+        </div>
+        <span class="chip">${l.state === 'active' ? 'Active' : 'Paused'}</span>
+        <button class="btn gho icon" data-act="loop-toggle" data-id="${l.id}" aria-label="${l.state === 'active' ? 'Pause' : 'Resume'}">${l.state === 'active' ? ic.pause : ic.play}</button>
+        <button class="btn gho icon" data-menu="loop" data-id="${l.id}" aria-label="Loop actions">${ic.dots}</button>
+      </div>`).join('')}
+    </div>
+  </div></div>`;
+}
+
+function runsHtml() {
+  const rows = [
+    ['04:12','nightly-dogfood','ok','Opened PR #87 — deflake live-watch-dedup'],
+    ['02:04','nightly-dogfood','ok','Verified clean, nothing to change'],
+    ['02:03','stale-worktree-prune','err','git worktree lock held — run failed'],
+    ['Mon','changelog-draft','ok','Drafted notes for dev.19'],
+  ];
+  return `
+  <header class="phead ${store.pinned ? '' : 'rail-pad'}">
+    <button class="btn gho icon" data-go="/autopilot" aria-label="Back">${ic.arrowL}</button>
+    <h1>Run history</h1>
+  </header>
+  <div class="pbody"><div class="center-col">
+    ${rows.map(r => `<div class="tl-row">
+      <time class="tnum">${r[0]}</time>
+      <span class="dot ${r[2] === 'ok' ? 'ok' : 'err'}" style="margin-top:5px"></span>
+      <span style="flex:1"><span style="font-weight:500">${r[1]}</span><span style="color:var(--mut)"> — ${r[3]}</span></span>
+      ${r[2] === 'err' ? '<span class="chip" style="border-color:var(--red);color:var(--red)">Failed</span>' : ''}
+    </div>`).join('')}
+  </div></div>`;
+}
+
+/* ————— DIGEST / TIMELINE ————— */
+function digestHtml() {
+  const stat = (k, v, warn) => `<div class="card stat"><div class="k">${k}</div><div class="v tnum ${warn ? 'warn' : ''}">${v}</div></div>`;
+  return `
+  <header class="phead ${store.pinned ? '' : 'rail-pad'}">
+    <button class="btn gho icon" data-go="/" aria-label="Back">${ic.arrowL}</button>
+    <h1>Digest</h1>
+  </header>
+  <div class="pbody"><div class="center-col" style="max-width:600px">
+    <div style="display:flex;align-items:center;gap:8px;color:var(--mut);font-size:11px;letter-spacing:.07em;text-transform:uppercase;font-weight:600">${ic.sunrise} 22:00 — 08:00</div>
+    <h2 style="font-size:22px;letter-spacing:-.02em;margin-top:8px">Morning digest</h2>
+    <p style="color:var(--mut);margin-top:4px">A quiet night. One thing waits on you; everything else ran clean.</p>
+    <div class="sect-label">Attention</div>
+    <div class="stat3">${stat('Raised','3')}${stat('Resolved','2')}${stat('Open now','1',true)}</div>
+    <div class="sect-label">Autopilot</div>
+    <div class="stat3">${stat('Runs','4/6')}${stat('Failed','1',true)}${stat('PRs opened','1')}</div>
+    <div class="sect-label">Sessions</div>
+    <div class="stat3">${stat('Completed','5')}${stat('Need you','1',true)}${stat('Errored','1',true)}</div>
+    <div class="sect-label">Highlights</div>
+    <div class="card" style="padding:4px 14px">
+      ${[['nightly-dogfood opened PR #87','deflake live-watch-dedup via the watcher seam','/pr'],
+         ['Updater flake fixed','25/25 clean runs after the scheduler seam','/session/s1'],
+         ['digest collector errored','provider exited with code 1 on pi-agent','/session/s4']]
+        .map(h => `<button class="tl-row" style="width:100%;text-align:left;border-bottom:1px solid var(--hair)" data-go="${h[2]}">
+          <span style="flex:1"><span style="font-weight:500">${h[0]}</span><span style="color:var(--mut)"> — ${h[1]}</span></span>${ic.arrowUR}</button>`).join('')}
+    </div>
+    <button class="btn gho" data-go="/timeline" style="margin-top:18px">See full timeline ${ic.arrowUR}</button>
+  </div></div>`;
+}
+
+function timelineHtml() {
+  const rows = [
+    ['08:02','Digest sent — morning edition'],
+    ['04:12','nightly-dogfood opened PR #87'],
+    ['03:58','s1 verify passed — 25/25 clean runs'],
+    ['02:04','nightly-dogfood run OK — nothing to change'],
+    ['02:03','stale-worktree-prune failed — breaker tripped'],
+    ['23:41','QR pairing docs agent asked for input'],
+    ['22:15','digest collector errored on pi-agent'],
+  ];
+  return `
+  <header class="phead ${store.pinned ? '' : 'rail-pad'}">
+    <button class="btn gho icon" data-go="/digest" aria-label="Back">${ic.arrowL}</button>
+    <h1>Timeline</h1>
+  </header>
+  <div class="pbody"><div class="center-col" style="max-width:560px">
+    ${rows.map(r => `<div class="tl-row"><time class="tnum mono">${r[0]}</time><span>${r[1]}</span></div>`).join('')}
+  </div></div>`;
+}
+
+/* ————— PR VIEW ————— */
+function prHtml() {
+  return `
+  <header class="phead ${store.pinned ? '' : 'rail-pad'}">
+    <button class="btn gho icon" data-go="/" aria-label="Back">${ic.arrowL}</button>
+    <span class="chip">Open</span>
+    <h1 style="font-size:14px">fix: deflake live-watch-dedup via the watcher seam <span style="color:var(--mut2);font-weight:400">#87</span></h1>
+    <div class="sp">
+      <button class="btn out" data-act="toast" data-v="Checked out nuncio/deflake-watch">Checkout</button>
+      <button class="btn pri" data-act="toast" data-v="Merged #87">Merge</button>
+    </div>
+  </header>
+  <div class="pbody"><div class="center-col" style="max-width:860px">
+    <div style="display:flex;align-items:center;gap:8px;color:var(--mut);font-size:12px">
+      ${ic.pr}<span class="mono" style="font-size:11px">nuncio/deflake-watch → dev</span>
+      <span>·</span><span>opened by nightly-dogfood · 4h ago</span>
+      <span style="margin-left:auto;display:inline-flex;align-items:center;gap:5px">${ic.check} CI · build · tests</span>
+    </div>
+    <div class="tabs" style="display:flex;gap:2px;margin:16px 0 12px;border-bottom:1px solid var(--hair);padding-bottom:0">
+      ${['overview','files'].map(t => `<button data-act="prtab" data-v="${t}"
+        style="padding:6px 10px;font-size:12.5px;color:${store.prTab === t ? 'var(--fg)' : 'var(--mut)'};border-bottom:2px solid ${store.prTab === t ? 'var(--fg)' : 'transparent'};margin-bottom:-1px;${store.prTab === t ? 'font-weight:500' : ''}">
+        ${t === 'overview' ? 'Overview' : 'Files changed'} ${t === 'files' ? '<span class="tnum" style="color:var(--mut2)">2</span>' : ''}</button>`).join('')}
+    </div>
+    ${store.prTab === 'overview' ? `
+      <div class="card" style="padding:14px 16px;font-size:13px">
+        <p>The live-watch-dedup spec raced the debounced watcher. This routes the test through the deterministic
+        watcher seam introduced in <span class="mono" style="font-size:11.5px">76eebda9</span> — no timers, no retries.</p>
+        <p style="color:var(--mut);margin-top:8px">4 review comments from Review PR #87 (1 resolved).</p>
+      </div>` : `
+      <div class="diff">
+        <div class="dh">${ic.file}<span class="mono" style="font-size:11.5px">packages/core/test/live-watch-dedup.spec.ts</span>
+          <span style="margin-left:auto" class="tnum"><span class="plus">+18</span> <span class="minus">−26</span></span></div>
+        <pre class="mono"><span class="ln ctx2">  it('dedups rapid watch events', async () => {</span>
+<span class="ln del">−   await sleep(150); // let the debounce settle</span>
+<span class="ln del">−   await retry(() => expect(events).toHaveLength(1), 3);</span>
+<span class="ln add">+   const seam = makeWatcherSeam();</span>
+<span class="ln add">+   seam.emit('change', 'a.ts'); seam.emit('change', 'a.ts');</span>
+<span class="ln add">+   await seam.flush();</span>
+<span class="ln add">+   expect(events).toHaveLength(1);</span>
+<span class="ln ctx2">  });</span></pre>
+      </div>
+      <div class="diff" style="margin-top:10px">
+        <div class="dh">${ic.file}<span class="mono" style="font-size:11.5px">packages/core/src/watcher-seam.ts</span>
+          <span style="margin-left:auto" class="tnum"><span class="plus">+9</span> <span class="minus">−2</span></span></div>
+        <pre class="mono"><span class="ln ctx2">  export function makeWatcherSeam() {</span>
+<span class="ln add">+   const queue: string[] = [];</span>
+<span class="ln add">+   const flush = () => drain(queue);</span>
+<span class="ln ctx2">    …</span></pre>
+      </div>`}
+  </div></div>`;
+}
+
+/* ————— SETTINGS ————— */
+function settingsHtml() {
+  const secs = [
+    ['general', 'General', ic.cog], ['appearance', 'Appearance', ic.sun],
+    ['providers', 'Providers', ic.spark], ['source', 'Source control', ic.branch],
+    ['agents', 'Agents', ic.wrench], ['remote', 'Remote access', ic.globe],
+    ['advanced', 'Advanced', ic.term],
+  ];
+  const row = (lb, ds, ctl) => `<div class="set-row"><div class="info"><div class="lb">${lb}</div><div class="ds">${ds}</div></div>${ctl}</div>`;
+  const seg2 = (opts, on) => `<div class="seg">${opts.map(o => `<button class="${o === on ? 'on' : ''}">${o}</button>`).join('')}</div>`;
+
+  let body = '';
+  if (store.setSec === 'appearance') {
+    body = `
+    <div class="sect-label" style="margin-top:0">Theme</div>
+    <div class="theme-cards">
+      ${[['System', true], ['Light', false], ['Dark', false]].map(([n, on]) => `
+        <button class="tcard ${on ? 'on' : ''}">
+          <span class="prev">${n === 'Light' ? '<span style="flex:1;background:#fff"></span>' : n === 'Dark' ? '<span style="flex:1;background:#111"></span>' : '<span style="flex:1;background:#fff"></span><span style="flex:1;background:#111"></span>'}</span>
+          <span class="cap">${n}</span>
+        </button>`).join('')}
+    </div>
+    <div class="sect-label">Typography</div>
+    ${row('Interface font size', 'Base size for menus, lists, and controls',
+      `<div class="stepper"><button>−</button><span class="v tnum">14 px</span><button>+</button></div>`)}
+    ${row('Interface font', 'Typeface for the app chrome', `<button class="selbox">Geist (default) ${ic.chevD}</button>`)}
+    ${row('Code font size', 'Monospace size in diffs and code blocks',
+      `<div class="stepper"><button>−</button><span class="v tnum">12 px</span><button>+</button></div>`)}
+    ${row('Code font', 'Typeface for code and diffs', `<button class="selbox">SF Mono (default) ${ic.chevD}</button>`)}
+    <div class="sect-label">Chat</div>
+    ${row('Chat font size', 'Scales chat text; code stays fixed', `<span class="tnum" style="color:var(--mut)">100%</span>`)}
+    ${row('Density', 'Vertical spacing between messages', seg2(['Comfortable', 'Compact'], 'Comfortable'))}
+    <div class="sect-label">Motion &amp; interaction</div>
+    ${row('Reduce motion', 'Quiet the waiting-glow and transitions', seg2(['System', 'On', 'Off'], 'System'))}
+    ${row('Diff markers', 'Color fills or plain + / − glyphs', seg2(['Color', '+ / −'], 'Color'))}`;
+  } else if (store.setSec === 'providers') {
+    body = ['Claude — connected via CLI', 'Codex — connected via CLI', 'Pi — update available'].map((p, i) => {
+      const [nm, st] = p.split(' — ');
+      return row(nm, st, i === 2
+        ? `<button class="btn out" data-act="toast" data-v="Pi updated">Update</button>`
+        : `<span style="display:inline-flex;align-items:center;gap:6px;color:var(--mut);font-size:12px">${ic.check} Connected</span>`);
+    }).join('');
+  } else if (store.setSec === 'source') {
+    body = row('GitHub', 'Authenticated via gh CLI', `<span style="display:inline-flex;align-items:center;gap:6px;color:var(--mut);font-size:12px">${ic.check} oscarlehuu</span>`) +
+      row('GitLab', 'glab CLI not authenticated', `<button class="btn out" disabled title="Run: glab auth login">Unavailable</button>`);
+  } else {
+    body = `<p style="color:var(--mut);font-size:12.5px">${secs.find(s => s[0] === store.setSec)[1]} settings — same row pattern as Appearance.</p>`;
+  }
+
+  return `
+  <header class="phead ${store.pinned ? '' : 'rail-pad'}">
+    <button class="btn gho icon" data-go="/" aria-label="Back">${ic.arrowL}</button>
+    <h1>Settings</h1>
+  </header>
+  <div class="set-wrap">
+    <nav class="set-nav">
+      <div class="search" style="position:relative;margin:0 0 8px">${ic.search}<input placeholder="Search settings" aria-label="Search settings"
+        style="width:100%;height:28px;padding:0 8px 0 26px;border-radius:8px;border:1px solid var(--hair);background:transparent;font-size:12px;outline:none">
+        <span style="position:absolute;left:8px;top:8px;color:var(--mut2)"></span></div>
+      ${secs.map(s => `<button class="it ${store.setSec === s[0] ? 'on' : ''}" data-act="setsec" data-v="${s[0]}">${s[2]}${s[1]}</button>`).join('')}
+    </nav>
+    <div class="set-body"><div class="set-sec">${body}</div></div>
+  </div>`;
+}
+
+/* ————— CHANGELOG ————— */
+function changelogHtml() {
+  const rel = (v, d, items) => `
+    <div style="display:flex;gap:18px;padding:16px 0;border-bottom:1px solid var(--hair)">
+      <div style="width:110px;flex-shrink:0"><div class="mono" style="font-size:12px;font-weight:600">${v}</div>
+      <div style="color:var(--mut2);font-size:11px;margin-top:2px">${d}</div></div>
+      <ul style="list-style:none;display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(--mut)">
+        ${items.map(i => `<li style="display:flex;gap:8px"><span style="color:var(--mut2)">—</span><span>${i}</span></li>`).join('')}
+      </ul>
+    </div>`;
+  return `
+  <header class="phead ${store.pinned ? '' : 'rail-pad'}">
+    <button class="btn gho icon" data-go="/" aria-label="Back">${ic.arrowL}</button>
+    <h1>What's new</h1>
+  </header>
+  <div class="pbody"><div class="center-col" style="max-width:620px">
+    ${rel('v0.2.0-dev.21', 'Jul 9', ['Monochrome redesign — color now means "needs you"', 'Home and the composer merged into one surface', 'Glass removed; floating layers are solid + shadow'])}
+    ${rel('v0.2.0-dev.20', 'Jul 8', ['Home is digest + attention queue', 'One-header PR view, flat model picker'])}
+    ${rel('v0.2.0-dev.19', 'Jul 7', ['Deflaked live-watch-dedup via the watcher seam', 'Clone auth fixes, collapsed forge sections'])}
+  </div></div>`;
+}
+
+/* ————— model picker list ————— */
+function modelListHtml() {
+  const row = m => `<button class="mi" data-act="model-set" data-v="${esc(m.n)}">
+    <span style="width:14px;display:inline-flex">${m.n === store.model ? ic.check : ''}</span>
+    <span>${esc(m.n)}</span>
+    ${m.eff || m.fast ? `<span style="color:var(--mut2);display:inline-flex;gap:2px">${m.eff ? ic.gauge : ''}${m.fast ? ic.bolt : ''}</span>` : ''}
+    <span class="sub2 tnum">${m.tag}</span></button>`;
+  const q = store.modelQ.trim().toLowerCase();
+  if (q) {
+    const hits = MODELS.flatMap(gr => gr.models.filter(m => m.n.toLowerCase().includes(q)).map(row));
+    return hits.length ? hits.join('') : '<div class="mlabel" style="padding:8px 9px">No model matches</div>';
+  }
+  const visible = MODELS.filter(gr => store.modelCli === 'all' || gr.cli === store.modelCli);
+  const recents = store.modelCli !== 'all' ? '' : store.recentModels
+    .map(n => { const m = findModel(n); return m ? row(m) : ''; }).join('');
+  const groups = visible.map(gr => {
+    const cap = gr.featured && !store.modelExpand[gr.g] && store.modelCli === 'all' ? gr.featured : gr.models.length;
+    const rows = gr.models.slice(0, cap).map(row).join('');
+    const more = gr.models.length > cap
+      ? `<button class="mi" data-act="model-more" data-v="${gr.g}" style="color:var(--mut)">
+           <span style="width:14px"></span>All ${gr.models.length} ${gr.g.split(' ')[0]} models ${ic.chevD}</button>` : '';
+    return `<div class="mlabel" style="display:flex;align-items:center;gap:6px">
+      <span class="cli-glyph">${gr.glyph}</span>${gr.g}<span style="text-transform:none;letter-spacing:0;font-weight:400">· ${gr.sub}</span></div>${rows}${more}`;
+  }).join('');
+  return (recents ? `<div class="mlabel">Recent</div>${recents}` : '') + groups;
+}
+
+/* Options panel for the selected model — mirrors the real ModelOptionsPanel:
+   an effort slider (Faster ↔ Smarter) plus the fast toggle when supported. */
+function modelOptsHtml() {
+  const m = findModel(store.model);
+  if (!m || (!m.eff && !m.fast)) return '';
+  const o = store.modelOpts;
+  let slider = '';
+  if (m.eff) {
+    const idx = Math.max(0, m.eff.indexOf(o.effort));
+    slider = `<div style="display:flex;align-items:center;gap:8px;padding:5px 0">
+      <span style="font-size:10.5px;color:var(--mut2)">Faster</span>
+      <span style="flex:1;display:flex;align-items:center">
+        ${m.eff.map((lv, i) => `<button data-act="opt-effort" data-v="${lv}" aria-label="Effort ${lv}" title="${lv}"
+          style="flex:1;height:18px;display:flex;align-items:center;justify-content:center;position:relative">
+          <span style="width:100%;height:2px;background:${i <= idx ? 'var(--fg)' : 'var(--hair2)'}"></span>
+          <span style="position:absolute;width:7px;height:7px;border-radius:99px;background:${i <= idx ? 'var(--fg)' : 'var(--hair2)'};${i === idx ? 'transform:scale(1.5)' : ''}"></span>
+        </button>`).join('')}
+      </span>
+      <span style="font-size:10.5px;color:var(--mut2)">Smarter</span>
+      <span class="tnum" style="width:44px;text-align:right;font-size:11px;color:var(--mut)">${o.effort}</span>
+    </div>`;
+  }
+  const fast = m.fast ? `<button data-act="opt-fast" aria-pressed="${o.fast}"
+      style="display:flex;align-items:center;gap:7px;width:100%;padding:5px 0;font-size:12px;color:${o.fast ? 'var(--fg)' : 'var(--mut)'}">
+      ${ic.bolt}<span style="flex:1;text-align:left">Fast</span>
+      <span style="width:26px;height:15px;border-radius:99px;position:relative;transition:background .15s;background:${o.fast ? 'var(--fg)' : 'var(--hair2)'}">
+        <span style="position:absolute;top:2px;width:11px;height:11px;border-radius:99px;transition:left .15s;background:${o.fast ? 'var(--pri-fg)' : 'var(--card)'};left:${o.fast ? '13px' : '2px'}"></span>
+      </span></button>` : '';
+  return `<div class="msep"></div>
+    <div style="padding:2px 9px 6px">
+      <div class="mlabel" style="padding:2px 0 0">${esc(store.model)}</div>
+      ${slider}${fast}
+    </div>`;
+}
+
+/* ————— menus ————— */
+function menuHtml() {
+  if (!store.menu) return '';
+  const { kind, x, y } = store.menu;
+  const mi = (icon, label, act = '', v = '', cls = '', sub = '') =>
+    `<button class="mi ${cls}" ${act ? `data-act="${act}" data-v="${v}"` : ''}>${icon}<span>${label}</span>${sub ? `<span class="sub2">${sub}</span>` : ''}</button>`;
+  let items = '';
+  if (kind === 'groupby') items = mi('', 'Repository', 'groupby', 'repository') + mi('', 'Status', 'groupby', 'status');
+  else if (kind === 'sess') items = mi(ic.swap, 'Continue on mobile', 'toast', 'QR handoff would open') +
+    mi(ic.pause, 'Pause session', 'toast', 'Session paused') +
+    mi(ic.archive, 'Archive session', 'toast', 'Session archived') +
+    '<div class="msep"></div>' + mi(ic.trash, 'Delete session…', 'ask-delete', 's', 'danger');
+  else if (kind === 'model') {
+    const clis = [['all', 'All'], ...MODELS.map(gr => [gr.cli, gr.g.split(' ')[0]])];
+    return `<div class="menu" style="left:${x}px;top:${y}px;width:280px" role="menu">
+      <div style="padding:4px 4px 4px">
+        <input id="modelSearch" placeholder="Search models…" aria-label="Search models" value="${esc(store.modelQ)}"
+          style="width:100%;height:28px;border:1px solid var(--hair);border-radius:7px;background:transparent;padding:0 9px;font-size:12px;outline:none">
+      </div>
+      <div style="display:flex;gap:2px;padding:2px 4px 6px">
+        ${clis.map(([id, lb]) => `<button data-act="model-cli" data-v="${id}"
+          style="padding:2px 8px;border-radius:6px;font-size:11px;${store.modelCli === id
+            ? 'background:rgba(128,128,128,.14);color:var(--fg);font-weight:500' : 'color:var(--mut)'}">${lb}</button>`).join('')}
+      </div>
+      <div id="modelList" style="max-height:264px;overflow-y:auto">${modelListHtml()}</div>
+      ${modelOptsHtml()}
+    </div>`;
+  }
+  else if (kind === 'repo') items = mi(ic.folder, 'nuncio', 'toast', 'Repo: nuncio') + mi(ic.folder, 'pi-agent', 'toast', 'Repo: pi-agent') +
+    '<div class="msep"></div>' + mi(ic.msg, 'No repo — just chat', 'toast', 'Chat mode');
+  else if (kind === 'branchpick') items = mi(ic.branch, 'dev', 'toast', 'Branch: dev') + mi(ic.branch, 'main', 'toast', 'Branch: main');
+  else if (kind === 'wsmode') items = mi('', 'Work locally', 'toast', 'Working locally') + mi('', 'Isolated worktree', 'toast', 'Worktree mode');
+  else if (kind === 'loop') items = mi(ic.pencil, 'Edit loop', 'loop-new') + '<div class="msep"></div>' +
+    mi(ic.trash, 'Delete loop', 'loop-del', store.menu.id || '', 'danger');
+  else if (kind === 'attach') {
+    const unbound = sessions.filter(s => !store.gridBound.includes(s.id));
+    items = unbound.length
+      ? unbound.map(s => mi('', s.title, 'slot-bind', s.id)).join('')
+      : '<div class="mlabel">Every session is already on the board</div>';
+  }
+  return `<div class="menu" style="left:${x}px;top:${y}px" role="menu">${items}</div>`;
+}
+
+function dialogHtml() {
+  if (!store.dialog) return '';
+  if (store.dialog === 'loop') {
+    const field = (lb, inner) => `<label style="display:block;margin-top:14px">
+      <span style="display:block;font-size:12px;font-weight:500;margin-bottom:5px">${lb}</span>${inner}</label>`;
+    const inp = `style="width:100%;height:30px;border:1px solid var(--hair);border-radius:8px;background:transparent;padding:0 10px;font-size:12.5px;outline:none"`;
+    return `<div class="scrim" data-act="dclose">
+      <div class="dialog" role="dialog" aria-modal="true" data-stop style="width:440px">
+        <h3>New loop</h3>
+        <p>A loop runs the same goal on a schedule and only calls you when something needs a decision.</p>
+        ${field('Goal', `<textarea id="loopGoal" placeholder="Dogfood the app nightly and open a PR for anything broken…"
+          style="width:100%;min-height:64px;border:1px solid var(--hair);border-radius:8px;background:transparent;padding:8px 10px;font-size:12.5px;outline:none;resize:vertical"></textarea>`)}
+        <div style="display:flex;gap:10px">
+          <div style="flex:1">${field('Schedule', `<input id="loopSched" value="Every night 02:00" ${inp}>`)}</div>
+          <div style="width:110px">${field('Max runs / day', `<input id="loopMax" value="2" class="tnum" ${inp}>`)}</div>
+        </div>
+        ${field('Stop when', `<input id="loopStop" placeholder="The breaker trips twice, or I pause it" ${inp}>`)}
+        <div class="dfoot">
+          <button class="btn out" data-act="dclose">Cancel</button>
+          <button class="btn pri" data-act="loop-create">Create loop</button>
+        </div>
+      </div>
+    </div>`;
+  }
+  return `<div class="scrim" data-act="dclose">
+    <div class="dialog" role="dialog" aria-modal="true" data-stop>
+      <h3>Delete session</h3>
+      <p>Permanently delete "Mobile QR pairing — phase 5"? This removes the session and its full transcript. This cannot be undone.</p>
+      <div class="dfoot">
+        <button class="btn out" data-act="dclose">Cancel</button>
+        <button class="btn pri" style="background:var(--red);color:#fff" data-act="dconfirm">Delete forever</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ————— root render ————— */
+function viewHtml() {
+  const r = store.route;
+  if (r.startsWith('/session/')) return sessionHtml(r.split('/')[2].split('?')[0], r.includes('from=grid'));
+  if (r === '/grid') return gridHtml();
+  if (r === '/autopilot') return autopilotHtml();
+  if (r === '/autopilot/runs') return runsHtml();
+  if (r === '/digest') return digestHtml();
+  if (r === '/timeline') return timelineHtml();
+  if (r === '/settings') return settingsHtml();
+  if (r === '/changelog') return changelogHtml();
+  if (r === '/pr') return prHtml();
+  return homeHtml();
+}
+
+function render() {
+  try { renderInner(); } catch (err) { console.error('render failed:', err); }
+}
+function renderInner() {
+  const el = $('#nc');
+  el.className = 'nuncio' + (store.theme === 'light' ? ' lt' : '');
+  el.innerHTML = `
+    ${store.pinned ? `
+      <aside class="shell-side">
+        <div class="top"><button class="btn out icon" data-act="pin" aria-label="Unpin sidebar">${ic.menu}</button></div>
+        <div style="flex:1;min-height:0">${sidebarHtml()}</div>
+      </aside>` : `
+      <div class="rail ${store.railOpen ? 'open' : ''}" id="rail">
+        <button class="btn out icon burger" data-act="pin" aria-label="Pin sidebar" style="background:var(--bg)">${ic.menu}</button>
+        <div class="fly">${sidebarHtml()}</div>
+      </div>`}
+    <main class="view">${viewHtml()}</main>
+    ${menuHtml()}
+    ${dialogHtml()}
+    <div class="toasts">${store.toasts.map(t => `<div class="toast">${ic.check}${t.msg}</div>`).join('')}</div>
+  `;
+  if (!store.pinned) {
+    // Toggle the class in place — re-rendering on hover would swap the DOM out
+    // from under the user's click.
+    const rail = $('#rail');
+    rail.addEventListener('mouseenter', () => { store.railOpen = true; rail.classList.add('open'); });
+    rail.addEventListener('mouseleave', () => { store.railOpen = false; rail.classList.remove('open'); });
+  }
+}
+
+/* ————— events (delegated) ————— */
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-go],[data-act],[data-menu],[data-stop]');
+  if (!t) {
+    // Clicks inside an open menu (e.g. the model search field) keep it open.
+    if (store.menu && !e.target.closest('.menu')) { store.menu = null; render(); }
+    return;
+  }
+  if (t.dataset.stop !== undefined && !t.dataset.act) return;
+
+  if (t.dataset.go !== undefined) { go(t.dataset.go); return; }
+
+  if (t.dataset.menu) {
+    const r = t.getBoundingClientRect();
+    const kind = t.dataset.menu;
+    store.menu = store.menu?.kind === kind ? null
+      : { kind, x: Math.min(r.left, innerWidth - (kind === 'model' ? 280 : 230)), y: r.bottom + 6, id: t.dataset.id };
+    if (store.menu?.kind === 'model') { store.modelQ = ''; store.modelExpand = {}; }
+    render();
+    if (store.menu?.kind === 'model') requestAnimationFrame(() => $('#modelSearch')?.focus());
+    return;
+  }
+
+  const act = t.dataset.act, v = t.dataset.v, id = t.dataset.id;
+  const closeMenu = () => { store.menu = null; };
+  switch (act) {
+    case 'theme': store.theme = store.theme === 'dark' ? 'light' : 'dark'; localStorage.setItem('bw-theme', store.theme); break;
+    case 'pin': store.pinned = !store.pinned; store.railOpen = false; localStorage.setItem('bw-pin', store.pinned ? '1' : '0'); break;
+    case 'sbtab': store.sbTab = v; break;
+    case 'groupby': store.groupBy = v; closeMenu(); break;
+    case 'preset': store.preset = v; store.focus = 0; break;
+    case 'tfocus': store.focus = Number(v); break;
+    case 'tmax': go('/session/' + id + '?from=grid'); return;
+    case 'panel': store.panel = !store.panel; break;
+    case 'tool': store.tool = v; break;
+    case 'setsec': store.setSec = v; break;
+    case 'prtab': store.prTab = v; break;
+    case 'qexpand': { const it = store.queue.find(q => q.id === id); it.open = !it.open; break; }
+    case 'approve': store.queue = store.queue.filter(q => q.id !== id); toast('3 tasks queued'); return;
+    case 'dismiss': store.queue = store.queue.filter(q => q.id !== id); toast('Dismissed'); return;
+    case 'answer': { S('s2').status = 'RUNNING'; S('s2').preview = 'Writing the pairing guide'; toast('Answer sent — agent resumed'); go('/session/s2'); return; }
+    case 'archive': toast('Session archived'); closeMenu(); break;
+    case 'restore': toast('Session restored'); break;
+    case 'loop-new': store.dialog = 'loop'; closeMenu(); break;
+    case 'loop-create': {
+      const g = $('#loopGoal')?.value.trim();
+      const name = g ? g.toLowerCase().split(/\s+/).slice(0, 3).join('-').replace(/[^a-z0-9-]/g, '') : 'new-loop';
+      store.loops.push({ id: 'l' + Date.now(), name, sub: `${$('#loopSched').value} · max ${$('#loopMax').value}/day · never run`, state: 'active' });
+      store.dialog = null; toast('Loop created'); break;
+    }
+    case 'loop-toggle': {
+      const l = store.loops.find(x => x.id === id);
+      l.state = l.state === 'active' ? 'paused' : 'active';
+      toast(l.state === 'active' ? 'Loop resumed' : 'Loop paused'); break;
+    }
+    case 'loop-del': store.loops = store.loops.filter(x => x.id !== v); store.menu = null; toast('Loop deleted'); break;
+    case 'ask-delete': store.dialog = 'delete'; closeMenu(); break;
+    case 'dclose': store.dialog = null; break;
+    case 'dconfirm': store.dialog = null; toast('Session deleted'); break;
+    case 'create': {
+      const ta = $('#heroPrompt');
+      const prompt = ta?.value.trim();
+      if (!prompt) { ta?.focus(); return; }
+      const ns = { id: 's' + Date.now(), title: prompt.length > 42 ? prompt.slice(0, 42) + '…' : prompt,
+        repo: 'nuncio', branch: 'dev', provider: 'C', model: 'Fable 5',
+        status: 'RUNNING', ago: 'now', preview: 'Scouting the repo…', ctx: '2%', prompt };
+      sessions.unshift(ns);
+      toast('Agent started');
+      go('/session/' + ns.id); return;
+    }
+    case 'slot-start': {
+      const i = Number(v);
+      const ta = document.querySelector(`[data-slot-prompt="${i}"]`);
+      const prompt = ta?.value.trim();
+      if (!prompt) { ta?.focus(); return; }
+      const ns = { id: 's' + Date.now(), title: prompt.length > 42 ? prompt.slice(0, 42) + '…' : prompt,
+        repo: 'nuncio', branch: 'dev', provider: 'C', model: 'Fable 5',
+        status: 'RUNNING', ago: 'now', preview: 'Scouting the repo…', ctx: '2%', prompt };
+      sessions.unshift(ns);
+      store.gridBound[i] = ns.id;
+      toast('Agent started'); break;
+    }
+    case 'slot-free': store.gridBound[Number(v)] = null; toast('Slot freed'); break;
+    case 'slot-bind': {
+      const slot = Number(store.menu?.id ?? -1);
+      if (slot >= 0) store.gridBound[slot] = v;
+      store.menu = null; break;
+    }
+    case 'starter': { const ta = $('#heroPrompt'); if (ta) { ta.value = v; ta.focus(); } return; }
+    case 'handoff': toast('QR handoff would open'); closeMenu(); break;
+    case 'model-set': {
+      store.model = v;
+      store.recentModels = [v, ...store.recentModels.filter(m => m !== v)].slice(0, 3);
+      const def = findModel(v);
+      store.modelOpts = { effort: defaultEffort(def), fast: false };
+      closeMenu(); break;
+    }
+    case 'model-more': {
+      store.modelExpand[v] = true;
+      const list = $('#modelList');
+      if (list) { list.innerHTML = modelListHtml(); return; }
+      break;
+    }
+    case 'model-cli': store.modelCli = v; break;
+    case 'opt-effort': store.modelOpts.effort = v; break;
+    case 'opt-fast': store.modelOpts.fast = !store.modelOpts.fast; break;
+    case 'toast': toast(v); closeMenu(); break;
+  }
+  render();
+});
+// Model search filters in place — swap only the list so the input keeps focus.
+document.addEventListener('input', e => {
+  if (e.target.id !== 'modelSearch') return;
+  store.modelQ = e.target.value;
+  const list = $('#modelList');
+  if (list) list.innerHTML = modelListHtml();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && (store.menu || store.dialog)) { store.menu = null; store.dialog = null; render(); }
+});
+
+render();
+</script>
