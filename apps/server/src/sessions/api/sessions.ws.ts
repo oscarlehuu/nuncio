@@ -46,6 +46,7 @@ export interface SessionsWsOptions {
 
 const DEFAULT_MAX_BUFFERED_BYTES = 1_000_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
+const MAX_INITIAL_TAIL = 10_000;
 
 function errorOf(err: unknown): RpcError {
   const maybe = err as { getStatus?: () => number; message?: unknown } | null;
@@ -188,9 +189,17 @@ export function attachSessionsWebSocketServer(
         const rawSince = Number(params.since ?? 0);
         const since = Number.isFinite(rawSince) ? rawSince : 0;
         const rawTail = Number(params.tail);
+        if (
+          since === 0 &&
+          params.tail !== undefined &&
+          (!Number.isSafeInteger(rawTail) || rawTail <= 0 || rawTail > MAX_INITIAL_TAIL)
+        ) {
+          send(ws, { id, error: { code: 400, message: `tail must be an integer from 1 to ${MAX_INITIAL_TAIL}` } });
+          return;
+        }
         const tail =
-          since === 0 && Number.isFinite(rawTail) && rawTail > 0
-            ? Math.floor(rawTail)
+          since === 0 && Number.isSafeInteger(rawTail) && rawTail > 0
+            ? rawTail
             : undefined;
         // Resubscribe replaces the previous subscription (drop-to-cursor recovery).
         subscriptions.get(sessionId)?.();
@@ -265,7 +274,9 @@ export function attachSessionsWebSocketServer(
       } catch {
         return;
       }
-      void handle(msg);
+      void handle(msg).catch((error) => {
+        send(ws, { id: msg.id, error: errorOf(error) });
+      });
     });
 
     ws.on('close', teardown);

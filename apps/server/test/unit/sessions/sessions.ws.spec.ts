@@ -205,6 +205,21 @@ describe('sessions WS relay', () => {
     await client.close();
   });
 
+  it('rejects an out-of-range initial tail without killing the connection', async () => {
+    const fake = makeFakeSessions([1, 2, 3]);
+    const port = await startServer(fake);
+    const client = await connect(port);
+
+    client.send({ id: 1, method: 'subscribe', params: { sessionId: 'sess-1', since: 0, tail: 1e20 } });
+    await client.waitFor(() => client.responses.length === 1);
+    expect(client.responses[0]?.error).toMatchObject({ code: 400 });
+
+    client.send({ id: 2, method: 'subscribe', params: { sessionId: 'sess-1', since: 0, tail: 2 } });
+    await client.waitFor(() => client.events.length === 2);
+    expect(client.events.map((event) => event.seq)).toEqual([2, 3]);
+    await client.close();
+  });
+
   it('rejects subscribing to an unknown session with a 404 error', async () => {
     const fake = makeFakeSessions();
     const port = await startServer(fake);

@@ -312,6 +312,33 @@ describe('SessionsService steer while RUNNING', () => {
     expect(events.list(id).some((event) => event.type === 'interrupted')).toBe(false);
   });
 
+  it('force-idles after one permanent provider disposal failure', async () => {
+    const id = seedRunning();
+    const dispose = jest.fn(() => {
+      throw new Error('runtime disposal failed');
+    });
+    installProvider(
+      stubProvider({
+        capabilities: {
+          interrupt: true,
+          modelSwitch: 'none',
+          effortSwitch: 'none',
+          images: false,
+          steerWhileRunning: false,
+        },
+        interrupt: async () => undefined,
+        dispose,
+      }),
+    );
+    (service as unknown as { interruptForceIdleMs: number }).interruptForceIdleMs = 20;
+
+    await service.interrupt(id);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(sessions.findById(id)?.status).toBe('IDLE');
+  });
+
   it('does not force-idle the run later when the provider interrupt rejects', async () => {
     const id = seedRunning();
     const dispose = jest.fn();
@@ -412,6 +439,30 @@ describe('SessionsService steer while RUNNING', () => {
     expect(events.list(created.id).some((e) => e.type === 'runtime_stalled')).toBe(true);
     expect(steer).toHaveBeenCalledTimes(1);
     expect(steer.mock.calls[0]?.[1]).toBe('queued while stalled');
+  });
+
+  it('stalled-run recovery does not retry a permanent provider disposal failure', async () => {
+    const dispose = jest.fn(() => {
+      throw new Error('runtime disposal failed');
+    });
+    installProvider(
+      stubProvider({
+        run: async (sessionId: string, _prompt: string, context: AgentRunContext) => {
+          sessions.updateStatus(sessionId, 'RUNNING');
+          context.emit?.(events.append(sessionId, 'status', { status: 'RUNNING' }));
+          await new Promise(() => undefined);
+        },
+        dispose,
+      }),
+    );
+    (service as unknown as { stalledRunForceIdleMs: number }).stalledRunForceIdleMs = 20;
+
+    const created = await service.create({ prompt: 'permanent dispose failure', provider: 'cursor' });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(sessions.findById(created.id)?.status).toBe('IDLE');
+    expect(events.list(created.id).some((event) => event.type === 'runtime_stalled')).toBe(true);
   });
 
   it('exposes interrupt and steer-while-running capabilities on the session DTO', async () => {

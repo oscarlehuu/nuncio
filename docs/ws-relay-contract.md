@@ -86,7 +86,7 @@ immediately.
 
 | Method | Params | Result | Notes |
 |---|---|---|---|
-| `subscribe` | `sessionId`, `since?` (default 0), `tail?` | `{ ok: true }` | Replays events with `seq > since` as channel pushes, then streams live. A positive `tail` bounds only a cursor-zero initial replay; reconnects resume from the highest seen `seq`. Subscribing again replaces the previous subscription (cursor recovery). Unknown session → error 404. |
+| `subscribe` | `sessionId`, `since?` (default 0), `tail?` | `{ ok: true }` | Replays events with `seq > since` as channel pushes, then streams live. An integer `tail` from 1–10,000 bounds only a cursor-zero initial replay; reconnects resume from the highest seen `seq`. Subscribing again replaces the previous subscription (cursor recovery). Unknown session → error 404. |
 | `unsubscribe` | `sessionId` | `{ ok: true }` | Stops pushes for that session. |
 | `steer` | `sessionId`, `message`, `forceResume?` | the updated session DTO | Same semantics and error codes as `POST /api/sessions/:id/steer` (400 invalid, 409 CLI busy, 503 CLI missing). |
 

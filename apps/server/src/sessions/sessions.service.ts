@@ -774,22 +774,38 @@ export class SessionsService implements OnModuleDestroy {
     const forceIdle = () => {
       if (this.interruptAttempts.get(id) !== attempt) return;
       this.interruptForceIdleTimers.delete(id);
-      try {
-        const current = this.sessions.findById(id);
-        if (current?.status !== 'RUNNING') {
-          this.resolveInterruptRecovery(id, attempt);
-          return;
-        }
-        this.disposeProviderSession(current, true);
-        this.locallyProducing.delete(id);
-        this.transition(id, 'IDLE');
-      } catch {
-        // A retained tail still has to commit before the lifecycle status. Retry
-        // after the base buffer's short flush window; the SDK is already fenced.
-        const retry = setTimeout(forceIdle, Math.min(this.interruptForceIdleMs, 250));
-        this.interruptForceIdleTimers.set(id, retry);
+      if (this.destroyed) {
+        this.resolveInterruptRecovery(id, attempt);
         return;
       }
+      let current: SessionDto | null;
+      try {
+        current = this.sessions.findById(id);
+      } catch {
+        // The owning test/app database may already be closing even if this
+        // timer was queued before its destroy flag became visible.
+        this.resolveInterruptRecovery(id, attempt);
+        return;
+      }
+      if (current?.status !== 'RUNNING') {
+        this.resolveInterruptRecovery(id, attempt);
+        return;
+      }
+      try {
+        this.disposeProviderSession(current, true);
+      } catch (error) {
+        if (error instanceof RetainedEventFlushError) {
+          // A retained tail still has to commit before the lifecycle status. Retry
+          // after the base buffer's short flush window; the SDK is already fenced.
+          const retry = setTimeout(forceIdle, Math.min(this.interruptForceIdleMs, 250));
+          this.interruptForceIdleTimers.set(id, retry);
+          return;
+        }
+        // The runtime is already fenced as far as the provider could manage;
+        // a permanent adapter error must not keep the FSM RUNNING forever.
+      }
+      this.locallyProducing.delete(id);
+      this.transition(id, 'IDLE');
       this.interruptAttempts.delete(id);
       this.resolveInterruptRecovery(id, attempt);
     };
@@ -1562,11 +1578,14 @@ export class SessionsService implements OnModuleDestroy {
     }
     try {
       this.disposeProviderSession(session);
-    } catch {
-      // Keep the accepted tail before the eventual runtime_stalled/status rows.
-      const retry = setTimeout(() => this.forceIdleStalledRun(id), 250);
-      this.stalledRunTimers.set(id, retry);
-      return;
+    } catch (error) {
+      if (error instanceof RetainedEventFlushError) {
+        // Keep the accepted tail before the eventual runtime_stalled/status rows.
+        const retry = setTimeout(() => this.forceIdleStalledRun(id), 250);
+        this.stalledRunTimers.set(id, retry);
+        return;
+      }
+      // Permanent adapter teardown failures must not hot-loop or wedge RUNNING.
     }
     this.locallyProducing.delete(id);
     try {
