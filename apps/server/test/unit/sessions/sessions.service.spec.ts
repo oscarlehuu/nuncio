@@ -327,10 +327,10 @@ describe('SessionsService lifecycle (phase 3)', () => {
     }
   });
 
-  it('does not append the lifecycle status when provider disposal reports a retained tail', () => {
+  it('finishes the lifecycle transition after a retained tail retries successfully', async () => {
     const id = seedSession('IDLE');
     const calls: string[] = [];
-    const flushError = new Error('temporary sqlite failure');
+    let remainingFailures = 1;
     const provider = {
       id: 'flush-failure',
       name: 'Flush failure',
@@ -347,7 +347,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
       steer: async () => undefined,
       dispose: () => {
         calls.push('dispose');
-        throw flushError;
+        if (remainingFailures-- > 0) throw new Error('temporary sqlite failure');
       },
       bustCache: () => undefined,
     } as AgentProvider;
@@ -355,9 +355,15 @@ describe('SessionsService lifecycle (phase 3)', () => {
     registry.resolveForSession = (() => provider) as AgentRegistry['resolveForSession'];
 
     try {
-      expect(() => service.archive(id)).toThrow(flushError);
+      expect(service.archive(id).status).toBe('IDLE');
       expect(calls).toEqual(['dispose']);
       expect(service.get(id)?.status).toBe('IDLE');
+      const started = Date.now();
+      while (service.get(id)?.status !== 'ARCHIVED' && Date.now() - started < 1000) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(service.get(id)?.status).toBe('ARCHIVED');
+      expect(calls.length).toBeGreaterThanOrEqual(2);
     } finally {
       registry.resolveForSession = originalResolve;
     }

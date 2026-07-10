@@ -117,6 +117,10 @@ export class SessionsService implements OnModuleDestroy {
     string,
     { attempt: symbol; resolve: () => void }
   >();
+  private readonly lifecycleRetries = new Map<
+    string,
+    { cancelled: boolean; promise: Promise<void> }
+  >();
   private readonly transcriptWatchers = new Map<
     string,
     {
@@ -869,10 +873,11 @@ export class SessionsService implements OnModuleDestroy {
     // so cancel that process tree even when no provider turn is active.
     this.verifierControllers.get(id)?.abort();
     if (session.status === 'RUNNING') {
-      this.disposeProviderSession(session);
+      const finished = this.disposeThenFinishLifecycle(session, () => this.finishPause(id));
+      if (!finished) return this.requireSession(id);
+    } else {
+      this.finishPause(id);
     }
-    this.cancelProviderRequests(id);
-    this.transition(id, 'PAUSED');
     return this.requireSession(id);
   }
 
@@ -881,10 +886,7 @@ export class SessionsService implements OnModuleDestroy {
     if (!canTransition(session.status, 'ARCHIVED')) {
       throw new BadRequestException(`Cannot archive session in status ${session.status}`);
     }
-    this.disposeProviderSession(session);
-    this.cancelProviderRequests(id);
-    this.steerQueue.deleteForSession(id);
-    this.transition(id, 'ARCHIVED');
+    this.disposeThenFinishLifecycle(session, () => this.finishArchive(id));
     return this.requireSession(id);
   }
 
@@ -913,12 +915,88 @@ export class SessionsService implements OnModuleDestroy {
     if (session.status !== 'ARCHIVED') {
       throw new BadRequestException(`Cannot delete session in status ${session.status}; archive first`);
     }
-    this.disposeProviderSession(session);
+    this.disposeThenFinishLifecycle(session, () => this.finishDelete(id));
+  }
+
+  private finishPause(id: string): void {
+    const current = this.sessions.findById(id);
+    if (!current || !canTransition(current.status, 'PAUSED')) return;
+    this.cancelProviderRequests(id);
+    this.transition(id, 'PAUSED');
+  }
+
+  private finishArchive(id: string): void {
+    const current = this.sessions.findById(id);
+    if (!current || !canTransition(current.status, 'ARCHIVED')) return;
+    this.cancelProviderRequests(id);
+    this.steerQueue.deleteForSession(id);
+    this.transition(id, 'ARCHIVED');
+  }
+
+  private finishDelete(id: string): void {
+    const current = this.sessions.findById(id);
+    if (current?.status !== 'ARCHIVED') return;
     this.cancelProviderRequests(id);
     this.streams.delete(id);
     this.steerQueue.deleteForSession(id);
     this.media?.deleteSession(id);
     this.sessions.delete(id);
+  }
+
+  /** Keep a lifecycle operation pending until the provider's retained tail commits. */
+  private disposeThenFinishLifecycle(session: SessionDto, finish: () => void): boolean {
+    try {
+      this.disposeProviderSession(session);
+      finish();
+      this.cancelLifecycleRetry(session.id);
+      return true;
+    } catch {
+      this.scheduleLifecycleRetry(session.id, session.status, finish);
+      return false;
+    }
+  }
+
+  private scheduleLifecycleRetry(
+    id: string,
+    expectedStatus: SessionStatus,
+    finish: () => void,
+  ): void {
+    if (this.lifecycleRetries.has(id)) return;
+    const record = { cancelled: false, promise: Promise.resolve() };
+    record.promise = (async () => {
+      while (!record.cancelled) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        if (record.cancelled) return;
+        const current = this.sessions.findById(id);
+        if (!current || current.status !== expectedStatus) return;
+        try {
+          this.disposeProviderSession(current);
+          finish();
+          return;
+        } catch {
+          // The base provider retains failed appends; retry until persistence
+          // recovers or the bounded shutdown drain explicitly cancels us.
+        }
+      }
+    })();
+    this.lifecycleRetries.set(id, record);
+    this.pendingWork.add(record.promise);
+    void record.promise.finally(() => {
+      if (this.lifecycleRetries.get(id) === record) this.lifecycleRetries.delete(id);
+      this.pendingWork.delete(record.promise);
+    });
+  }
+
+  private cancelLifecycleRetry(id: string): void {
+    const retry = this.lifecycleRetries.get(id);
+    if (!retry) return;
+    retry.cancelled = true;
+    this.lifecycleRetries.delete(id);
+  }
+
+  private cancelAllLifecycleRetries(): void {
+    for (const retry of this.lifecycleRetries.values()) retry.cancelled = true;
+    this.lifecycleRetries.clear();
   }
 
   /** Preserve buffered output, fence stale callbacks, then release the SDK. */
@@ -971,6 +1049,7 @@ export class SessionsService implements OnModuleDestroy {
     }
     this.transcriptWatchers.clear();
     await this.drainInFlightForShutdown();
+    this.cancelAllLifecycleRetries();
     this.cancelAllProviderEventRetries();
   }
 
@@ -1012,12 +1091,6 @@ export class SessionsService implements OnModuleDestroy {
         this.disposeProviderSession(session);
       } catch {
         // Best-effort teardown — shutdown proceeds regardless.
-      } finally {
-        try {
-          this.agents.resolveForSession(session).cancelPendingEventRetries?.(id);
-        } catch {
-          // Provider resolution/cleanup is best-effort during shutdown.
-        }
       }
     }
   }

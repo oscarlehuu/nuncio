@@ -7,8 +7,9 @@ export interface VerifyStatus {
   timedOut?: boolean;
 }
 
-/** The newest verify event wins: a start still awaiting its result reads as running. */
+/** The newest verify event wins unless a later lifecycle stop cancelled that run. */
 export function deriveVerifyStatus(events: SessionEvent[]): VerifyStatus | null {
+  let lifecycleStopped = false;
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const event = events[i];
     if (!event) continue;
@@ -17,7 +18,12 @@ export function deriveVerifyStatus(events: SessionEvent[]): VerifyStatus | null 
       ok?: boolean;
       exitCode?: number | null;
       timedOut?: boolean;
+      status?: string;
     };
+    if (event.type === 'status') {
+      lifecycleStopped = payload.status !== 'IDLE';
+      continue;
+    }
     if (event.type === 'verify_result') {
       return {
         state: payload.ok ? 'passed' : 'failed',
@@ -27,6 +33,7 @@ export function deriveVerifyStatus(events: SessionEvent[]): VerifyStatus | null 
       };
     }
     if (event.type === 'verify_start') {
+      if (lifecycleStopped) return null;
       return {
         state: 'running',
         ...(payload.command !== undefined ? { command: payload.command } : {}),

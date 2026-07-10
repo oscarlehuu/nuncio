@@ -451,6 +451,7 @@ describe('SessionsService steer while RUNNING', () => {
     const started = new Promise<void>((resolve) => {
       startedSteer = resolve;
     });
+    const cancelPendingEventRetries = jest.fn();
     installProvider(
       stubProvider({
         capabilities: {
@@ -467,6 +468,7 @@ describe('SessionsService steer while RUNNING', () => {
           });
         },
         interrupt: async () => undefined,
+        cancelPendingEventRetries,
       }),
     );
     internals.shutdownDrainTimeoutMs = 1000;
@@ -479,9 +481,11 @@ describe('SessionsService steer while RUNNING', () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
     const settledBeforeSteer = closeSettled;
+    const cancelledBeforeDrain = cancelPendingEventRetries.mock.calls.length;
     releaseSteer();
     await Promise.all([steering, closing]);
 
     expect(settledBeforeSteer).toBe(false);
+    expect(cancelledBeforeDrain).toBe(0);
   });
 });

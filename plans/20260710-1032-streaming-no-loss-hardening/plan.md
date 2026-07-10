@@ -25,7 +25,7 @@
 - [x] Green web in `apps/web/src/lib/use-session-stream.ts`: request/session generation guard, bootstrap `finally` connection, and stale-result suppression without weakening seq dedupe.
 - [x] Red mobile cases in new `apps/mobile/src/lib/use-session-transcript.spec.ts` plus `connection-manager.spec.ts`: failed REST bootstrap still starts manager/WS; foreground while connected resubscribes; `server_shutdown` freeze expires and probes again even without another OS signal.
 - [x] Green mobile in `apps/mobile/src/lib/use-session-transcript.ts` and `connection-manager.ts`: start relay from seq 0 on bootstrap error, explicit connected foreground resync, bounded shutdown cooldown with disposed/stale timer guards.
-- [x] Shared core changes were not required; `packages/core/src/session-relay-client.ts` remains wire-compatible and its existing suite stays green.
+- [x] Shared core relay adds an optional initial `tail`; reconnects remain cursor-only and WS v1 wire-compatible.
 
 ## Phase 3 — Bound direct and hub WS failure modes
 
