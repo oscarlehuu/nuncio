@@ -95,6 +95,11 @@ interface PendingProviderRequest {
   resolve: (result: ProviderRequestResult) => void;
 }
 
+interface PendingOrchestrationEvent {
+  type: SessionEventType;
+  payload: unknown;
+}
+
 @Injectable()
 export class SessionsService implements OnModuleDestroy {
   private readonly streams = new Map<string, EventEmitter>();
@@ -122,6 +127,8 @@ export class SessionsService implements OnModuleDestroy {
     string,
     { cancelled: boolean; promise: Promise<void> }
   >();
+  private readonly pendingOrchestrationEvents = new Map<string, PendingOrchestrationEvent[]>();
+  private readonly orchestrationRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly transcriptWatchers = new Map<
     string,
     {
@@ -608,7 +615,8 @@ export class SessionsService implements OnModuleDestroy {
     if (!session || session.status !== 'RUNNING') return;
     try {
       this.agents.resolveForSession(session).flushPendingEvents?.(sessionId);
-    } catch {
+    } catch (error) {
+      if (error instanceof RetainedEventFlushError) throw error;
       // A missing/unavailable provider must never block a digest append.
     }
   }
@@ -648,10 +656,66 @@ export class SessionsService implements OnModuleDestroy {
     type: SessionEventType,
     payload: unknown,
   ): SessionEvent | null {
-    this.flushParentBuffer(sessionId);
+    const queued = this.pendingOrchestrationEvents.get(sessionId);
+    if (queued?.length) {
+      queued.push({ type, payload });
+      this.scheduleOrchestrationRetry(sessionId);
+      return null;
+    }
+    try {
+      this.flushParentBuffer(sessionId);
+    } catch (error) {
+      if (!(error instanceof RetainedEventFlushError)) throw error;
+      this.pendingOrchestrationEvents.set(sessionId, [{ type, payload }]);
+      this.scheduleOrchestrationRetry(sessionId);
+      return null;
+    }
     const event = this.persistOrchestrationEvent(sessionId, type, payload);
     if (event) this.emit(sessionId, event);
     return event;
+  }
+
+  private scheduleOrchestrationRetry(sessionId: string): void {
+    if (this.destroyed || this.orchestrationRetryTimers.has(sessionId)) return;
+    const timer = setTimeout(() => {
+      this.orchestrationRetryTimers.delete(sessionId);
+      this.drainPendingOrchestrationEvents(sessionId);
+    }, 100);
+    this.orchestrationRetryTimers.set(sessionId, timer);
+  }
+
+  private drainPendingOrchestrationEvents(sessionId: string): void {
+    const queued = this.pendingOrchestrationEvents.get(sessionId);
+    if (this.destroyed || !queued?.length) return;
+    const session = this.sessions.findById(sessionId);
+    if (!session) {
+      this.pendingOrchestrationEvents.delete(sessionId);
+      return;
+    }
+    try {
+      // Retry even if the FSM already settled: the accepted provider tail still
+      // owns the earlier transcript position and must commit before this queue.
+      this.agents.resolveForSession(session).flushPendingEvents?.(sessionId);
+    } catch (error) {
+      if (error instanceof RetainedEventFlushError) {
+        this.scheduleOrchestrationRetry(sessionId);
+        return;
+      }
+      // A missing/unavailable provider cannot own an in-memory retained tail.
+    }
+
+    while (queued.length) {
+      const pending = queued[0];
+      try {
+        const event = this.persistOrchestrationEvent(sessionId, pending.type, pending.payload);
+        queued.shift();
+        if (event) this.emit(sessionId, event);
+      } catch {
+        this.scheduleOrchestrationRetry(sessionId);
+        return;
+      }
+    }
+    this.pendingOrchestrationEvents.delete(sessionId);
   }
 
   /**
@@ -751,7 +815,14 @@ export class SessionsService implements OnModuleDestroy {
       ),
       recovered.then(() => ({ kind: 'recovered' as const })),
     ]);
-    if (outcome.kind === 'recovered') return;
+    if (outcome.kind === 'recovered') {
+      const current = this.sessions.findById(id);
+      if (this.interruptAttempts.get(id) === attempt && !this.destroyed && current) {
+        this.appendAndEmit(id, 'interrupted', {});
+        this.interruptAttempts.delete(id);
+      }
+      return;
+    }
     if (outcome.kind === 'error') {
       if (this.interruptAttempts.get(id) === attempt) this.clearInterruptForceIdleWatch(id);
       throw outcome.error;
@@ -1052,6 +1123,9 @@ export class SessionsService implements OnModuleDestroy {
 
   async onModuleDestroy(): Promise<void> {
     this.destroyed = true;
+    for (const timer of this.orchestrationRetryTimers.values()) clearTimeout(timer);
+    this.orchestrationRetryTimers.clear();
+    this.pendingOrchestrationEvents.clear();
     for (const controller of this.verifierControllers.values()) controller.abort();
     this.verifierControllers.clear();
     for (const timer of this.interruptForceIdleTimers.values()) clearTimeout(timer);

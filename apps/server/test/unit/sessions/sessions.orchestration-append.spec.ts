@@ -3,12 +3,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AgentRegistry } from '../../../src/agents/agents.registry';
+import { RetainedEventFlushError } from '../../../src/agents/agents.base-provider';
 import { AgentsModule } from '../../../src/agents/agents.module';
 import { CursorLocalModule } from '../../../src/cursor-local/cursor-local.module';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { GitModule } from '../../../src/git/git.module';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
+import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
 import { SessionsService } from '../../../src/sessions/sessions.service';
 import {
   configureSimulatedCursorEnv,
@@ -19,6 +21,7 @@ describe('SessionsService.appendOrchestrationEvent flush ordering', () => {
   let module: TestingModule;
   let service: SessionsService;
   let repo: SessionsRepository;
+  let events: EventsRepository;
   let registry: AgentRegistry;
   let dataDir: string;
 
@@ -34,6 +37,7 @@ describe('SessionsService.appendOrchestrationEvent flush ordering', () => {
     ).compile();
     service = module.get(SessionsService);
     repo = module.get(SessionsRepository);
+    events = module.get(EventsRepository);
     registry = module.get(AgentRegistry);
   });
 
@@ -62,6 +66,47 @@ describe('SessionsService.appendOrchestrationEvent flush ordering', () => {
 
     expect(flush).toHaveBeenCalledWith(session.id);
     flush.mockRestore();
+  });
+
+  it('delays orchestration events until a retained parent delta commits', async () => {
+    const session = repo.create({ prompt: 'retry ordered parent', provider: 'cursor' });
+    repo.updateStatus(session.id, 'RUNNING');
+    const provider = registry.resolveForSession(repo.findById(session.id)!);
+    let flushAttempts = 0;
+    const flush = jest.spyOn(provider, 'flushPendingEvents').mockImplementation(() => {
+      flushAttempts += 1;
+      if (flushAttempts === 1) {
+        throw new RetainedEventFlushError(new Error('temporary sqlite failure'));
+      }
+      if (!events.list(session.id).some((event) => event.type === 'assistant_delta')) {
+        events.append(session.id, 'assistant_delta', { delta: 'accepted before digest' });
+      }
+    });
+
+    try {
+      const immediate = service.appendOrchestrationEvent(session.id, 'task_completed', {
+        taskId: 'retry-t1',
+        status: 'DONE',
+      });
+
+      expect(immediate).toBeNull();
+      expect(events.list(session.id).some((event) => event.type === 'task_completed')).toBe(false);
+
+      const started = Date.now();
+      while (
+        !events.list(session.id).some((event) => event.type === 'task_completed') &&
+        Date.now() - started < 1_000
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+
+      const ordered = events
+        .list(session.id)
+        .filter((event) => event.type === 'assistant_delta' || event.type === 'task_completed');
+      expect(ordered.map((event) => event.type)).toEqual(['assistant_delta', 'task_completed']);
+    } finally {
+      flush.mockRestore();
+    }
   });
 
   it('does not flush for a non-RUNNING (IDLE) session', () => {

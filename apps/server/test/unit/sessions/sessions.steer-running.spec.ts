@@ -245,6 +245,42 @@ describe('SessionsService steer while RUNNING', () => {
     expect(events.list(id).some((e) => e.type === 'interrupted')).toBe(true);
   });
 
+  it('appends an interrupted event when IDLE wins the provider settlement race', async () => {
+    const id = seedRunning();
+    let releaseInterrupt: () => void = () => undefined;
+    const interrupt = jest.fn(async () => {
+      sessions.updateStatus(id, 'IDLE');
+      const settled = events.append(id, 'status', { status: 'IDLE' });
+      (
+        service as unknown as {
+          onAgentEvent: (sessionId: string, event: typeof settled) => void;
+        }
+      ).onAgentEvent(id, settled);
+      await new Promise<void>((resolve) => {
+        releaseInterrupt = resolve;
+      });
+    });
+    installProvider(
+      stubProvider({
+        capabilities: {
+          interrupt: true,
+          modelSwitch: 'none',
+          effortSwitch: 'none',
+          images: false,
+          steerWhileRunning: false,
+        },
+        interrupt,
+      }),
+    );
+
+    const interrupting = service.interrupt(id);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(events.list(id).some((event) => event.type === 'interrupted')).toBe(true);
+    releaseInterrupt();
+    await interrupting;
+  });
+
   it('forces a hung run to IDLE when interrupt does not unwind it, then drains the queue', async () => {
     const id = seedRunning();
     const steer = jest.fn(async (_sessionId: string, _message: string) => undefined);
