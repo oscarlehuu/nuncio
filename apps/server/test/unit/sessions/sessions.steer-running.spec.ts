@@ -212,7 +212,7 @@ describe('SessionsService steer while RUNNING', () => {
 
     const first = service.steer(created.id, 'first');
     await Promise.resolve();
-    expect(sessions.findById(created.id)?.status).toBe('RUNNING');
+    expect(sessions.findById(created.id)?.status).toBe('IDLE');
     const second = service.steer(created.id, 'second');
     releaseAvailability();
     await Promise.all([first, second]);
@@ -231,6 +231,21 @@ describe('SessionsService steer while RUNNING', () => {
 
     await expect(service.steer(created.id, 'retry later')).rejects.toThrow('tail still pending');
     expect(sessions.findById(created.id)?.status).toBe('IDLE');
+  });
+
+  it('restores PAUSED when provider availability fails before a steer starts', async () => {
+    const created = sessions.create({ prompt: 'paused preflight failure', provider: 'cursor' });
+    sessions.updateStatus(created.id, 'RUNNING');
+    sessions.updateStatus(created.id, 'IDLE');
+    sessions.updateStatus(created.id, 'PAUSED');
+    const provider = stubProvider();
+    registry.resolveForSession = (() => provider) as AgentRegistry['resolveForSession'];
+    registry.resolveAvailableForSession = (async () => {
+      throw new Error('provider unavailable');
+    }) as AgentRegistry['resolveAvailableForSession'];
+
+    await expect(service.steer(created.id, 'stay paused')).rejects.toThrow('provider unavailable');
+    expect(sessions.findById(created.id)?.status).toBe('PAUSED');
   });
 
   it('dedupes steer_message against hydrated user_message on transcript refresh', () => {

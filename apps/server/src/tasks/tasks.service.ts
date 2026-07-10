@@ -305,10 +305,16 @@ export class TasksService implements OnModuleDestroy {
     // A cancelled task is QUEUED and never ran, so it has no child session and
     // needs no async snapshot — build the digest synchronously so the cancel and
     // the parent-log append commit as one atomic unit.
-    const built =
-      task.parentSessionId && this.sessions.get(task.parentSessionId)
-        ? { parentSessionId: task.parentSessionId, payload: buildOutcomeDigest({ ...task, status: 'CANCELLED' }, null, [], null) }
-        : null;
+    let built: { parentSessionId: string; payload: TaskCompletedPayload } | null;
+    try {
+      built =
+        task.parentSessionId && this.sessions.get(task.parentSessionId)
+          ? { parentSessionId: task.parentSessionId, payload: buildOutcomeDigest({ ...task, status: 'CANCELLED' }, null, [], null) }
+          : null;
+    } catch (error) {
+      this.tasks.releaseCancellation(id);
+      throw error;
+    }
 
     const commit = () => this.database.transaction<{ row: TaskDto | null; event: SessionEvent | null }>(() => {
         const row = this.tasks.cancel(id);

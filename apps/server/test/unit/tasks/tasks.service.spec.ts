@@ -1011,6 +1011,27 @@ describe('TasksService', () => {
       }
     });
 
+    it('releases a cancellation reservation when digest preparation throws', async () => {
+      const parent = await sessions.create({ prompt: 'cancel prep parent', provider: 'cursor', workspace });
+      const victim = repo.create({
+        prompt: 'cancel prep failure',
+        provider: 'cursor',
+        workspace,
+        role: 'subagent',
+        parentSessionId: parent.id,
+      });
+      const getSpy = jest.spyOn(sessions, 'get').mockImplementation(() => {
+        throw new Error('parent read failed');
+      });
+      try {
+        await expect(service.cancel(victim.id)).rejects.toThrow('parent read failed');
+      } finally {
+        getSpy.mockRestore();
+      }
+      expect(repo.claimNextQueued()?.id).toBe(victim.id);
+      repo.finish(victim.id, 'FAILED', { reason: 'test_cleanup' });
+    });
+
     it('flushes a delta buffered during the retry await before a cancellation digest', async () => {
       const parent = await sessions.create({ prompt: 'cancel ordering parent', provider: 'cursor', workspace });
       const victim = repo.create({

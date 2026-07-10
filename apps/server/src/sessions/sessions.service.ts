@@ -116,6 +116,7 @@ export class SessionsService implements OnModuleDestroy {
   private readonly locallyProducing = new Set<string>();
   private readonly verifying = new Set<string>();
   private readonly runPromises = new Map<string, Promise<void>>();
+  private readonly startingSteers = new Set<string>();
   // Verify-feedback loop settlement: resolves when the loop reaches a terminal
   // state (green verify / needs-attention / no-command). Task-lane consumers
   // await this instead of a bare awaitRun so they wait for the whole loop.
@@ -465,20 +466,25 @@ export class SessionsService implements OnModuleDestroy {
       if (!handled) this.enqueueSteer(id, trimmed, persisted, origin);
       return this.requireSession(id);
     }
+    if (this.startingSteers.has(id)) {
+      this.enqueueSteer(id, trimmed, persisted, origin);
+      return this.requireSession(id);
+    }
     if (!canTransition(current.status, 'RUNNING')) {
       throw new BadRequestException(`Cannot steer session in status ${current.status}`);
     }
 
     this.refreshTranscriptIfNeeded(current);
-    // Claim RUNNING before the first await. A concurrent steer now observes the
-    // claim and follows the live-steer/queue path instead of starting a second
-    // provider turn that fences the first generation.
-    this.transition(id, 'RUNNING');
+    // Claim start ownership before the first await without mutating the FSM. A
+    // concurrent steer queues, while provider/preflight failure preserves the
+    // exact prior state (CREATED, IDLE, PAUSED, or ERROR).
+    this.startingSteers.add(id);
     let provider: AgentProvider;
     try {
       provider = await this.agents.resolveAvailableForSession(current);
     } catch (error) {
-      if (this.sessions.findById(id)?.status === 'RUNNING') this.transition(id, 'IDLE');
+      this.startingSteers.delete(id);
+      if (current.status === 'IDLE') setTimeout(() => this.drainSteerQueue(id), 0);
       throw error;
     }
 
@@ -492,10 +498,8 @@ export class SessionsService implements OnModuleDestroy {
       });
       this.trackPendingWork(steering);
       await steering;
-    } catch (error) {
-      if (this.sessions.findById(id)?.status === 'RUNNING') this.transition(id, 'IDLE');
-      throw error;
     } finally {
+      this.startingSteers.delete(id);
       this.locallyProducing.delete(id);
     }
     this.trackPendingWork(this.maybeVerify(id));
