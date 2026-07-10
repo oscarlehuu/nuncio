@@ -31,6 +31,8 @@ const COALESCED_EVENT_TYPES = new Set(['assistant_delta', 'thinking_delta']);
 const DELTA_FLUSH_MS = 100;
 /** Flush before a merged payload can approach the 4KB event truncation limit. */
 const DELTA_FLUSH_MAX_CHARS = 2000;
+/** Hard aggregate bound while durable storage is unavailable. */
+const RETAINED_EVENT_MAX_BYTES = 256 * 1024;
 /** Sidebar/session-list preview is useful live, but must not write SQLite per token. */
 const PREVIEW_FLUSH_MS = 250;
 
@@ -41,6 +43,12 @@ interface DeltaBuffer {
   delta: string;
   emit?: EventEmitter;
   timer: ReturnType<typeof setTimeout> | null;
+}
+
+interface RetainedEvent {
+  type: string;
+  payload: unknown;
+  emit?: EventEmitter;
 }
 
 interface PreviewBuffer {
@@ -107,6 +115,13 @@ export abstract class BaseAgentProvider implements AgentProvider {
     } catch (error) {
       teardownError ??= error;
     }
+    try {
+      // Providers may need to persist terminal cleanup (for example tool_end)
+      // while the current run emitter is still valid.
+      if (this.prepareRuntimeDispose(sessionId)) this.flushPendingEvents(sessionId);
+    } catch (error) {
+      teardownError ??= error;
+    }
     this.invalidateRun(sessionId);
     try {
       this.disposeRuntime(sessionId);
@@ -118,6 +133,11 @@ export abstract class BaseAgentProvider implements AgentProvider {
 
   /** Release engine-specific handles after the shared tail flush + run fence. */
   protected disposeRuntime(_sessionId: string): void {}
+
+  /** Persist engine-specific terminal events before the shared run fence. */
+  protected prepareRuntimeDispose(_sessionId: string): boolean {
+    return false;
+  }
 
   /** Make every callback carrying the current run's guarded emitter stale. */
   invalidateRun(sessionId: string): void {
@@ -135,6 +155,8 @@ export abstract class BaseAgentProvider implements AgentProvider {
   ): Promise<void>;
 
   private readonly deltaBuffers = new Map<string, DeltaBuffer>();
+  private readonly retainedEvents = new Map<string, RetainedEvent[]>();
+  private readonly retainedEventTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly previewBuffers = new Map<string, PreviewBuffer>();
   private readonly runGenerations = new Map<string, number>();
   private readonly guardedEmitters = new WeakMap<
@@ -149,11 +171,42 @@ export abstract class BaseAgentProvider implements AgentProvider {
     emit?: EventEmitter,
   ): void {
     if (!this.isEmitterCurrent(sessionId, emit)) return;
+    const acceptedEmit = this.acceptedEmitter(emit);
+    const incomingDelta = coalescableDelta(type, payload);
+    if (incomingDelta !== null && incomingDelta.length > DELTA_FLUSH_MAX_CHARS) {
+      const base = payloadBase(payload);
+      for (let offset = 0; offset < incomingDelta.length; offset += DELTA_FLUSH_MAX_CHARS) {
+        this.pushEvent(sessionId, type, {
+          ...base,
+          delta: incomingDelta.slice(offset, offset + DELTA_FLUSH_MAX_CHARS),
+        }, emit);
+      }
+      return;
+    }
+    if (this.retainedEvents.get(sessionId)?.length) {
+      this.retainEvent(sessionId, type, payload, acceptedEmit);
+      return;
+    }
     const delta = coalescableDelta(type, payload);
     if (delta === null) {
       // Non-delta events flush first so transcript ordering is preserved.
-      this.flushDeltas(sessionId);
-      const event = this.events.append(sessionId, type, payload);
+      try {
+        this.flushDeltas(sessionId);
+      } catch {
+        // The event was accepted from the current SDK generation. Keep it
+        // behind the earlier delta and retry without misclassifying a transient
+        // repository failure as a provider failure.
+        this.retainEvent(sessionId, type, payload, acceptedEmit);
+        return;
+      }
+      let event;
+      try {
+        event = this.events.append(sessionId, type, payload);
+        if (event.seq <= 0) throw new Error('Event append did not commit');
+      } catch {
+        this.retainEvent(sessionId, type, payload, acceptedEmit);
+        return;
+      }
       emit?.(event);
       return;
     }
@@ -161,7 +214,12 @@ export abstract class BaseAgentProvider implements AgentProvider {
     const base = payloadBase(payload);
     const buffered = this.deltaBuffers.get(sessionId);
     if (buffered && (buffered.type !== type || !sameBase(buffered.base, base))) {
-      this.flushDeltas(sessionId);
+      try {
+        this.flushDeltas(sessionId);
+      } catch {
+        this.retainEvent(sessionId, type, payload, acceptedEmit);
+        return;
+      }
     }
 
     const current = this.deltaBuffers.get(sessionId);
@@ -173,17 +231,35 @@ export abstract class BaseAgentProvider implements AgentProvider {
         // The callback was accepted while this generation was current. Keep
         // its upstream fan-out so a later persistence retry can still deliver
         // the committed row even if dispose has fenced new SDK callbacks.
-        emit: this.acceptedEmitter(emit),
+        emit: acceptedEmit,
         timer: null,
       };
       this.deltaBuffers.set(sessionId, next);
       this.scheduleDeltaFlush(sessionId, next);
+      if (next.delta.length >= DELTA_FLUSH_MAX_CHARS) {
+        try {
+          this.flushDeltas(sessionId);
+        } catch {
+          // The bounded active chunk remains retryable.
+        }
+      }
+      return;
+    }
+    if (current.delta.length >= DELTA_FLUSH_MAX_CHARS) {
+      // A full chunk whose append is retrying owns the earlier transcript
+      // position. Queue later bytes behind it instead of growing one unbounded
+      // in-memory/event payload during a prolonged repository outage.
+      this.retainEvent(sessionId, type, payload, acceptedEmit);
       return;
     }
     current.delta += delta;
-    current.emit = this.acceptedEmitter(emit) ?? current.emit;
+    current.emit = acceptedEmit ?? current.emit;
     if (current.delta.length >= DELTA_FLUSH_MAX_CHARS) {
-      this.flushDeltas(sessionId);
+      try {
+        this.flushDeltas(sessionId);
+      } catch {
+        // flushDeltas retained this exact buffer and armed its retry.
+      }
     }
   }
 
@@ -195,10 +271,11 @@ export abstract class BaseAgentProvider implements AgentProvider {
    */
   flushPendingEvents(sessionId: string): void {
     this.flushDeltas(sessionId);
+    this.flushRetainedEvents(sessionId);
   }
 
   pendingEventSessionIds(): string[] {
-    return [...this.deltaBuffers.keys()];
+    return [...new Set([...this.deltaBuffers.keys(), ...this.retainedEvents.keys()])];
   }
 
   /** Shutdown-only: stop retained tails from retrying against a closing database. */
@@ -207,12 +284,19 @@ export abstract class BaseAgentProvider implements AgentProvider {
       const buffered = this.deltaBuffers.get(sessionId);
       if (buffered?.timer) clearTimeout(buffered.timer);
       this.deltaBuffers.delete(sessionId);
+      const retainedTimer = this.retainedEventTimers.get(sessionId);
+      if (retainedTimer) clearTimeout(retainedTimer);
+      this.retainedEventTimers.delete(sessionId);
+      this.retainedEvents.delete(sessionId);
       return;
     }
     for (const buffered of this.deltaBuffers.values()) {
       if (buffered.timer) clearTimeout(buffered.timer);
     }
     this.deltaBuffers.clear();
+    for (const timer of this.retainedEventTimers.values()) clearTimeout(timer);
+    this.retainedEventTimers.clear();
+    this.retainedEvents.clear();
   }
 
   /** Persist + emit any buffered delta for the session as a single merged event. */
@@ -227,6 +311,9 @@ export abstract class BaseAgentProvider implements AgentProvider {
         ...buffered.base,
         delta: buffered.delta,
       });
+      if (event.seq <= 0) {
+        throw new Error('Buffered event append did not commit');
+      }
     } catch (error) {
       // Keep the exact buffer in place. Timer and synchronous failures are both
       // retryable; deletion happens only after append has committed.
@@ -248,11 +335,146 @@ export abstract class BaseAgentProvider implements AgentProvider {
     buffered.timer = setTimeout(() => {
       buffered.timer = null;
       try {
-        this.flushDeltas(sessionId);
+        this.flushPendingEvents(sessionId);
       } catch {
-        // flushDeltas retained the buffer and scheduled the bounded retry.
+        // The failed stage retained its exact queue and scheduled the retry.
       }
     }, DELTA_FLUSH_MS);
+  }
+
+  private retainEvent(
+    sessionId: string,
+    type: string,
+    payload: unknown,
+    emit?: EventEmitter,
+  ): void {
+    const queue = this.retainedEvents.get(sessionId) ?? [];
+    const delta = coalescableDelta(type, payload);
+    const last = queue.at(-1);
+    const lastDelta = last ? coalescableDelta(last.type, last.payload) : null;
+    const active = this.deltaBuffers.get(sessionId);
+    const activeBytes = active
+      ? this.retainedEventBytes({
+          type: active.type,
+          payload: { ...active.base, delta: active.delta },
+          emit: active.emit,
+        })
+      : 0;
+    const retainedBytes = activeBytes +
+      queue.reduce((total, event) => total + this.retainedEventBytes(event), 0);
+    if (
+      delta !== null &&
+      last &&
+      lastDelta !== null &&
+      last.type === type &&
+      sameBase(payloadBase(last.payload), payloadBase(payload)) &&
+      lastDelta.length + delta.length <= DELTA_FLUSH_MAX_CHARS
+    ) {
+      const merged = { ...payloadBase(last.payload), delta: lastDelta + delta };
+      const nextBytes = retainedBytes - this.retainedEventBytes(last) +
+        this.retainedEventBytes({ ...last, payload: merged });
+      if (nextBytes > RETAINED_EVENT_MAX_BYTES) this.stopForRetainedOverflow(sessionId, emit);
+      last.payload = merged;
+      last.emit = emit ?? last.emit;
+    } else {
+      const retained = { type, payload, emit };
+      if (retainedBytes + this.retainedEventBytes(retained) > RETAINED_EVENT_MAX_BYTES) {
+        this.stopForRetainedOverflow(sessionId, emit);
+      }
+      queue.push(retained);
+    }
+    this.retainedEvents.set(sessionId, queue);
+    this.scheduleRetainedEventFlush(sessionId);
+  }
+
+  private retainedEventBytes(event: RetainedEvent): number {
+    try {
+      return Buffer.byteLength(JSON.stringify([event.type, event.payload]) ?? '');
+    } catch {
+      return RETAINED_EVENT_MAX_BYTES + 1;
+    }
+  }
+
+  private stopForRetainedOverflow(sessionId: string, emit?: EventEmitter): never {
+    const message = `Retained event buffer exceeded ${RETAINED_EVENT_MAX_BYTES} bytes`;
+    const buffered = this.deltaBuffers.get(sessionId);
+    if (buffered?.timer) clearTimeout(buffered.timer);
+    this.deltaBuffers.delete(sessionId);
+    const retainedTimer = this.retainedEventTimers.get(sessionId);
+    if (retainedTimer) clearTimeout(retainedTimer);
+    this.retainedEventTimers.delete(sessionId);
+    this.retainedEvents.delete(sessionId);
+    try {
+      this.sessions.updateStatus(sessionId, 'ERROR');
+    } catch {
+      // Storage/session state may already be unavailable; fencing still bounds memory.
+    }
+    const terminal: RetainedEvent[] = [
+      { type: 'error', payload: { message }, emit },
+      { type: 'status', payload: { status: 'ERROR' }, emit },
+    ];
+    const pending: RetainedEvent[] = [];
+    for (const retained of terminal) {
+      try {
+        const event = this.events.append(sessionId, retained.type, retained.payload);
+        if (event.seq <= 0) throw new Error('Overflow terminal event did not commit');
+        retained.emit?.(event);
+      } catch {
+        pending.push(retained);
+      }
+    }
+    if (pending.length) {
+      this.retainedEvents.set(sessionId, pending);
+      this.scheduleRetainedEventFlush(sessionId);
+    }
+    this.invalidateRun(sessionId);
+    try {
+      this.disposeRuntime(sessionId);
+    } catch {
+      // The overflow error below is the durable-storage failure signal.
+    }
+    throw new Error(message);
+  }
+
+  private flushRetainedEvents(sessionId: string): void {
+    const queue = this.retainedEvents.get(sessionId);
+    if (!queue?.length) return;
+    const timer = this.retainedEventTimers.get(sessionId);
+    if (timer) clearTimeout(timer);
+    this.retainedEventTimers.delete(sessionId);
+    while (queue.length) {
+      const retained = queue[0]!;
+      let event;
+      try {
+        event = this.events.append(sessionId, retained.type, retained.payload);
+        if (event.seq <= 0) throw new Error('Retained event append did not commit');
+      } catch (error) {
+        this.scheduleRetainedEventFlush(sessionId);
+        throw new RetainedEventFlushError(error);
+      }
+      queue.shift();
+      try {
+        retained.emit?.(event);
+      } catch {
+        // The row is durable; a disconnected live listener will recover it by
+        // cursor replay and must not poison the persistence queue.
+      }
+    }
+    this.retainedEvents.delete(sessionId);
+  }
+
+  private scheduleRetainedEventFlush(sessionId: string): void {
+    const current = this.retainedEventTimers.get(sessionId);
+    if (current) return;
+    const timer = setTimeout(() => {
+      this.retainedEventTimers.delete(sessionId);
+      try {
+        this.flushPendingEvents(sessionId);
+      } catch {
+        // The failed stage retained its exact queue and scheduled the retry.
+      }
+    }, DELTA_FLUSH_MS);
+    this.retainedEventTimers.set(sessionId, timer);
   }
 
   /** Update the session-list preview without turning every raw token into a DB write. */
@@ -340,13 +562,33 @@ export abstract class BaseAgentProvider implements AgentProvider {
       // unhandled rejection and crash the process.
       const current = this.sessions.findById(sessionId);
       if (!current || current.status !== 'RUNNING') return;
-      this.sessions.updateStatus(sessionId, 'IDLE');
-      this.pushEvent(sessionId, 'status', { status: 'IDLE' }, runContext.emit);
+      this.pushEvent(
+        sessionId,
+        'status',
+        { status: 'IDLE' },
+        this.settleStatusBeforeFanout(sessionId, 'IDLE', runContext.emit),
+      );
+      await this.waitForPendingEvents(sessionId);
+      if (!this.isRunCurrent(sessionId, generation)) return;
+      const settled = this.sessions.findById(sessionId);
+      if (settled?.status === 'RUNNING') this.sessions.updateStatus(sessionId, 'IDLE');
     } catch (error) {
       if (!this.isRunCurrent(sessionId, generation)) return;
       this.flushPreview(sessionId);
       if (error instanceof AgentRunCancelledError) return;
-      this.handleError(sessionId, error, runContext.emit);
+      await this.handleError(sessionId, error, runContext.emit);
+    }
+  }
+
+  /** Do not let post-turn work overtake terminal events retained during an outage. */
+  private async waitForPendingEvents(sessionId: string): Promise<void> {
+    while (this.pendingEventSessionIds().includes(sessionId)) {
+      try {
+        this.flushPendingEvents(sessionId);
+      } catch (error) {
+        if (!(error instanceof RetainedEventFlushError)) throw error;
+        await new Promise((resolve) => setTimeout(resolve, DELTA_FLUSH_MS));
+      }
     }
   }
 
@@ -379,13 +621,21 @@ export abstract class BaseAgentProvider implements AgentProvider {
       (guard.sessionId === sessionId && this.isRunCurrent(sessionId, guard.generation));
   }
 
-  private handleError(sessionId: string, error: unknown, emit?: EventEmitter): void {
+  private async handleError(sessionId: string, error: unknown, emit?: EventEmitter): Promise<void> {
     if (error instanceof HttpException) {
       const session = this.sessions.findById(sessionId);
       if (session?.status === 'RUNNING') {
         try {
-          this.sessions.updateStatus(sessionId, 'IDLE');
-          this.pushEvent(sessionId, 'status', { status: 'IDLE' }, emit);
+          this.pushEvent(
+            sessionId,
+            'status',
+            { status: 'IDLE' },
+            this.settleStatusBeforeFanout(sessionId, 'IDLE', emit),
+          );
+          await this.waitForPendingEvents(sessionId);
+          if (this.sessions.findById(sessionId)?.status === 'RUNNING') {
+            this.sessions.updateStatus(sessionId, 'IDLE');
+          }
         } catch {
           /* session deleted mid-run */
         }
@@ -397,8 +647,30 @@ export abstract class BaseAgentProvider implements AgentProvider {
     // there is nothing to update and no event bus to push to. Logging the error
     // here would just spam — the original failure already happened upstream.
     if (!this.sessions.findById(sessionId)) return;
-    this.sessions.updateStatus(sessionId, 'ERROR');
-    this.pushEvent(sessionId, 'status', { status: 'ERROR' }, emit);
+    this.pushEvent(
+      sessionId,
+      'status',
+      { status: 'ERROR' },
+      this.settleStatusBeforeFanout(sessionId, 'ERROR', emit),
+    );
     this.pushEvent(sessionId, 'error', { message }, emit);
+    await this.waitForPendingEvents(sessionId);
+    if (this.sessions.findById(sessionId)?.status === 'RUNNING') {
+      this.sessions.updateStatus(sessionId, 'ERROR');
+    }
+  }
+
+  private settleStatusBeforeFanout(
+    sessionId: string,
+    status: 'IDLE' | 'ERROR',
+    emit?: EventEmitter,
+  ): EventEmitter {
+    return (event) => {
+      if (!this.isEmitterCurrent(sessionId, emit)) return;
+      if (this.sessions.findById(sessionId)?.status === 'RUNNING') {
+        this.sessions.updateStatus(sessionId, status);
+      }
+      emit?.(event);
+    };
   }
 }

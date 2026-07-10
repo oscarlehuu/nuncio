@@ -213,6 +213,41 @@ describe('subscribeSessionEvents', () => {
     expect(second.sent[0]).toMatchObject({ method: 'subscribe', params: { since: 2 } });
   });
 
+  it('confirms a live resubscribe without disturbing another in-flight RPC', async () => {
+    const sub = subscribeSessionEvents({
+      url: 'ws://x',
+      sessionId: 's1',
+      onEvent: () => {},
+      webSocketFactory: factory,
+    });
+    const ws = FakeSocket.instances[0];
+    ws.open();
+    const steering = sub.call('steer', { sessionId: 's1', message: 'keep me' });
+    const steerRequest = ws.sent[ws.sent.length - 1]!;
+    const health = sub.confirmResync(100);
+    const subscribeRequest = ws.sent[ws.sent.length - 1]!;
+
+    ws.push({ id: subscribeRequest.id, result: { ok: true } });
+    await expect(health).resolves.toBe(true);
+    ws.push({ id: steerRequest.id, result: { status: 'RUNNING' } });
+    await expect(steering).resolves.toEqual({ status: 'RUNNING' });
+  });
+
+  it('reports a half-open live resubscribe when its acknowledgement times out', async () => {
+    const sub = subscribeSessionEvents({
+      url: 'ws://x',
+      sessionId: 's1',
+      onEvent: () => {},
+      webSocketFactory: factory,
+    });
+    FakeSocket.instances[0].open();
+
+    const health = sub.confirmResync(100);
+    vi.advanceTimersByTime(100);
+
+    await expect(health).resolves.toBe(false);
+  });
+
   it('correlates RPC responses and rejects on server error', async () => {
     const sub = subscribeSessionEvents({
       url: 'ws://x',

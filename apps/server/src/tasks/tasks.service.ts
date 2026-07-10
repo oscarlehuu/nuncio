@@ -5,6 +5,7 @@ import {
   Optional,
   type OnModuleDestroy,
 } from '@nestjs/common';
+import { RetainedEventFlushError } from '../agents/agents.base-provider';
 import { DatabaseService } from '../db/database.service';
 import type { ModelOptionsMap } from '../models/model-options.types';
 import { assembleSubagentBrief } from '../orchestration/handoff-brief.assembler';
@@ -39,6 +40,7 @@ const PENDING_SCAN_TAIL = 200;
 const MIN_HOLD_SECONDS = 5;
 const MAX_HOLD_SECONDS = 600;
 const DEFAULT_HOLD_SECONDS = 15;
+const RETAINED_PARENT_FLUSH_RETRY_MS = 100;
 
 function clampHoldSeconds(seconds: number): number {
   return Math.min(MAX_HOLD_SECONDS, Math.max(MIN_HOLD_SECONDS, seconds));
@@ -296,8 +298,11 @@ export class TasksService implements OnModuleDestroy {
     });
   }
 
-  cancel(id: string): TaskDto {
+  async cancel(id: string): Promise<TaskDto> {
     const task = this.requireTask(id);
+    const reserved = this.tasks.updateWhileQueued(id, { holdUntil: Number.MAX_SAFE_INTEGER });
+    if (!reserved) throw new BadRequestException('Only queued tasks can be cancelled');
+    const previousHold = task.holdUntil ?? null;
     // A cancelled task is QUEUED and never ran, so it has no child session and
     // needs no async snapshot — build the digest synchronously so the cancel and
     // the parent-log append commit as one atomic unit.
@@ -306,15 +311,27 @@ export class TasksService implements OnModuleDestroy {
         ? { parentSessionId: task.parentSessionId, payload: buildOutcomeDigest({ ...task, status: 'CANCELLED' }, null, [], null) }
         : null;
 
-    // Flush the parent buffer before the transaction (see finishWithDigest).
-    if (built) this.sessions.flushParentBuffer(built.parentSessionId);
-
-    const result = this.database.transaction<{ row: TaskDto | null; event: SessionEvent | null }>(() => {
-      const row = this.tasks.cancel(id);
-      if (!row || !built) return { row, event: null };
-      const event = this.sessions.persistOrchestrationEvent(built.parentSessionId, 'task_completed', built.payload);
-      return { row, event };
-    });
+    const commit = () => this.database.transaction<{ row: TaskDto | null; event: SessionEvent | null }>(() => {
+        const row = this.tasks.cancel(id);
+        if (!row || !built) return { row, event: null };
+        const event = this.sessions.persistOrchestrationEvent(built.parentSessionId, 'task_completed', built.payload);
+        return { row, event };
+      });
+    // Keep the final synchronous flush adjacent to the digest transaction. An
+    // already-queued provider microtask can buffer another delta while the
+    // retained-tail retry await yields.
+    let result: { row: TaskDto | null; event: SessionEvent | null };
+    try {
+      result = built
+        ? await this.afterParentBufferFlush(built.parentSessionId, commit)
+        : commit();
+    } catch (error) {
+      // The digest/cancel transaction did not commit. Release the cancellation
+      // lease so normal task execution can resume instead of stranding the row.
+      this.tasks.updateWhileQueued(id, { holdUntil: previousHold });
+      this.pump();
+      throw error;
+    }
     if (!result.row) {
       throw new BadRequestException('Only queued tasks can be cancelled');
     }
@@ -571,21 +588,54 @@ export class TasksService implements OnModuleDestroy {
       return this.tasks.finish(task.id, status, outcome);
     }
 
-    // Flush the parent's buffered deltas BEFORE the transaction: the flush
-    // appends+emits its own delta independently, so a later rollback of the
-    // finish+digest transaction can never erase an already-broadcast delta.
-    this.sessions.flushParentBuffer(built.parentSessionId);
-
-    const result = this.database.transaction<{ row: TaskDto | null; event: SessionEvent | null }>(() => {
-      const row = this.tasks.finish(task.id, status, outcome);
-      const event = this.sessions.persistOrchestrationEvent(built.parentSessionId, 'task_completed', built.payload);
-      return { row, event };
-    });
+    // The final flush and transaction run in one synchronous turn so a parent
+    // delta cannot overtake its task digest after the retry await yields.
+    const result = await this.afterParentBufferFlush(built.parentSessionId, () =>
+      this.database.transaction<{ row: TaskDto | null; event: SessionEvent | null }>(() => {
+        const row = this.tasks.finish(task.id, status, outcome);
+        const event = this.sessions.persistOrchestrationEvent(built.parentSessionId, 'task_completed', built.payload);
+        return { row, event };
+      }),
+    );
     // Fan out to live subscribers only after the commit — never inside the txn.
     if (result.event) this.sessions.emitPersistedEvent(built.parentSessionId, result.event);
     // Optionally wake the parent (post-commit, best-effort).
     if (result.row) await this.maybeNotifyParent(result.row, built.parentSessionId, built.payload);
     return result.row;
+  }
+
+  /**
+   * A provider retains a delta whose append failed and retries it in place.
+   * Task settlement must wait for that earlier transcript position before it
+   * atomically commits the terminal row and digest; otherwise the task can stay
+   * RUNNING until a daemon restart after a recoverable database failure.
+   */
+  private async flushParentBufferWithRetry(parentSessionId: string): Promise<void> {
+    while (!this.destroyed) {
+      try {
+        this.sessions.flushParentBuffer(parentSessionId);
+        return;
+      } catch (error) {
+        if (!(error instanceof RetainedEventFlushError)) throw error;
+        await new Promise((resolve) => setTimeout(resolve, RETAINED_PARENT_FLUSH_RETRY_MS));
+      }
+    }
+    throw new Error('Tasks service stopped before the retained parent tail could be flushed');
+  }
+
+  private async afterParentBufferFlush<T>(parentSessionId: string, operation: () => T): Promise<T> {
+    while (!this.destroyed) {
+      await this.flushParentBufferWithRetry(parentSessionId);
+      try {
+        // No await may appear between this final flush and operation().
+        this.sessions.flushParentBuffer(parentSessionId);
+      } catch (error) {
+        if (error instanceof RetainedEventFlushError) continue;
+        throw error;
+      }
+      return operation();
+    }
+    throw new Error('Tasks service stopped before the parent operation could commit');
   }
 
   /** Effective notify policy: per-task override wins over the setting/default. */

@@ -130,6 +130,67 @@ describe('SessionsService.appendOrchestrationEvent flush ordering', () => {
     flush.mockRestore();
   });
 
+  it('flushes a retained provider tail after the session has already settled', () => {
+    const session = repo.create({ prompt: 'settled retained parent', provider: 'cursor' });
+    repo.updateStatus(session.id, 'RUNNING');
+    repo.updateStatus(session.id, 'ERROR');
+    const provider = registry.resolveForSession(repo.findById(session.id)!);
+    const pending = jest.spyOn(provider, 'pendingEventSessionIds').mockReturnValue([session.id]);
+    const flush = jest.spyOn(provider, 'flushPendingEvents').mockImplementation(() => {
+      events.append(session.id, 'assistant_delta', { delta: 'retained before settle' });
+    });
+
+    service.appendOrchestrationEvent(session.id, 'task_completed', { taskId: 'settled-t1' });
+
+    expect(flush).toHaveBeenCalledWith(session.id);
+    const ordered = events
+      .list(session.id)
+      .filter((event) => event.type === 'assistant_delta' || event.type === 'task_completed');
+    expect(ordered.map((event) => event.type)).toEqual(['assistant_delta', 'task_completed']);
+    flush.mockRestore();
+    pending.mockRestore();
+  });
+
+  it('keeps a queued event when a repository read fails during retry', async () => {
+    const session = repo.create({ prompt: 'retry read failure', provider: 'cursor' });
+    repo.updateStatus(session.id, 'RUNNING');
+    const provider = registry.resolveForSession(repo.findById(session.id)!);
+    let flushAttempts = 0;
+    const flush = jest.spyOn(provider, 'flushPendingEvents').mockImplementation(() => {
+      if (flushAttempts++ === 0) {
+        throw new RetainedEventFlushError(new Error('queue the digest'));
+      }
+    });
+
+    expect(service.appendOrchestrationEvent(session.id, 'task_completed', {
+      taskId: 'read-retry-t1',
+    })).toBeNull();
+
+    const originalFind = repo.findById.bind(repo);
+    let readFailures = 1;
+    const find = jest.spyOn(repo, 'findById').mockImplementation((id: string) => {
+      if (id === session.id && readFailures-- > 0) throw new Error('sqlite read temporarily failed');
+      return originalFind(id);
+    });
+
+    try {
+      expect(() => (
+        service as unknown as { drainPendingOrchestrationEvents: (id: string) => void }
+      ).drainPendingOrchestrationEvents(session.id)).not.toThrow();
+      const started = Date.now();
+      while (
+        !events.list(session.id).some((event) => event.type === 'task_completed') &&
+        Date.now() - started < 1_000
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(events.list(session.id).some((event) => event.type === 'task_completed')).toBe(true);
+    } finally {
+      find.mockRestore();
+      flush.mockRestore();
+    }
+  });
+
   it('persistOrchestrationEvent does NOT flush — the flush is a separate caller step', () => {
     const session = repo.create({ prompt: 'persist-only parent', provider: 'cursor' });
     repo.updateStatus(session.id, 'RUNNING');

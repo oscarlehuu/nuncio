@@ -22,7 +22,8 @@ function harness(overrides: Partial<ConnectionManagerDeps> = {}) {
   let appStateCb: ((active: boolean) => void) | null = null;
   const states: ConnectionState[] = [];
 
-  const deps: ConnectionManagerDeps & { resync: () => void } = {
+  let resyncResult = true;
+  const deps: ConnectionManagerDeps = {
     candidateUrls: ['http://a', 'http://b'],
     initialUrl: 'http://a',
     probe: async () => probeResult,
@@ -30,8 +31,9 @@ function harness(overrides: Partial<ConnectionManagerDeps> = {}) {
     reopen: () => {
       reopens += 1;
     },
-    resync: () => {
+    resync: async () => {
       resyncs += 1;
+      return resyncResult;
     },
     subscribeNetInfo: (cb) => {
       netInfoCb = cb;
@@ -70,6 +72,9 @@ function harness(overrides: Partial<ConnectionManagerDeps> = {}) {
     setProbe: (result: string | null) => {
       probeResult = result;
     },
+    setResync: (result: boolean) => {
+      resyncResult = result;
+    },
     fireTimers: () => {
       const due = timers.splice(0, timers.length);
       for (const t of due) t.fn();
@@ -101,6 +106,20 @@ describe('createConnectionManager', () => {
     expect(h.reopens()).toBe(0);
     expect(h.onActiveUrl).toEqual([]);
     expect(h.manager.getState()).toBe('connected');
+  });
+
+  it('probes and reopens when a foreground health acknowledgement times out', async () => {
+    const h = harness();
+    h.manager.start();
+    h.open();
+    h.setResync(false);
+
+    h.appState(true);
+    await h.tick();
+
+    expect(h.resyncs()).toBe(1);
+    expect(h.reopens()).toBe(1);
+    expect(h.manager.getState()).toBe('connecting');
   });
 
   it('on a drop, re-probes and reopens on the same URL without switching', async () => {
@@ -139,6 +158,30 @@ describe('createConnectionManager', () => {
     expect(h.onActiveUrl).toEqual(['http://b']);
     expect(h.reopens()).toBe(1);
     expect(h.manager.getState()).toBe('connected'); // stayed connected, no flicker
+  });
+
+  it('ignores an old foreground health result after a network switch reopens the relay', async () => {
+    let resolveHealth: (healthy: boolean) => void = () => undefined;
+    const h = harness({
+      resync: () => new Promise<boolean>((resolve) => {
+        resolveHealth = resolve;
+      }),
+    });
+    h.manager.start();
+    h.open();
+
+    h.appState(true);
+    h.setProbe('http://b');
+    h.netInfo();
+    await h.tick();
+    expect(h.reopens()).toBe(1);
+    expect(h.onActiveUrl).toEqual(['http://b']);
+
+    // Closing the old socket resolves its pending ACK as unhealthy. That result
+    // belongs to the old connection and must not reopen the new winner again.
+    resolveHealth(false);
+    await h.tick();
+    expect(h.reopens()).toBe(1);
   });
 
   it('a network change with the same winner leaves a healthy connection alone', async () => {

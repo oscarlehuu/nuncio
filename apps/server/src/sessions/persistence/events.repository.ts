@@ -91,7 +91,7 @@ export class EventsRepository {
     return row?.total ?? 0;
   }
 
-  append(sessionId: string, type: string, payload: unknown): SessionEvent {
+  append(sessionId: string, type: string, payload: unknown, notify = true): SessionEvent {
     const now = Date.now();
     const stored = truncatePayload(payload, MAX_EVENT_PAYLOAD_BYTES).value;
     // A turn that outlived shutdown must not write to a closed handle; return a
@@ -117,8 +117,12 @@ export class EventsRepository {
       )
       .run(row.session_id, row.seq, row.type, row.payload, row.created_at);
     const event: SessionEvent = { seq, type, payload: stored, createdAt: now };
-    notifySessionEventHooks(sessionId, event);
+    if (notify) notifySessionEventHooks(sessionId, event);
     return event;
+  }
+
+  notifyPersisted(sessionId: string, event: SessionEvent): void {
+    notifySessionEventHooks(sessionId, event);
   }
 
   appendBatch(
@@ -129,10 +133,11 @@ export class EventsRepository {
     const results: SessionEvent[] = [];
     const tx = this.database.db.transaction(() => {
       for (const item of items) {
-        results.push(this.append(sessionId, item.type, item.payload));
+        results.push(this.append(sessionId, item.type, item.payload, false));
       }
     });
     tx();
+    for (const event of results) this.notifyPersisted(sessionId, event);
     return results;
   }
 

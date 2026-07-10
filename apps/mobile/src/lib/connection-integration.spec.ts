@@ -85,7 +85,7 @@ function wire(options: { probe: () => Promise<string | null>; candidateUrls: str
     probe: options.probe,
     onActiveUrl: () => {}, // api-client repoint is out of scope for this wiring test
     reopen: openSubscription,
-    resync: () => subscription?.resync(),
+    resync: () => subscription?.confirmResync() ?? Promise.resolve(false),
     subscribeNetInfo: (cb) => {
       netInfoCb = cb;
       return () => {
@@ -147,10 +147,29 @@ it('foreground resync preserves an in-flight steer RPC on the healthy socket', a
   h.appState(true);
   await h.tick();
   expect(FakeSocket.instances).toHaveLength(1);
+  const subscribeRequest = first.sent[first.sent.length - 1];
+  first.push({ id: subscribeRequest!.id, result: { ok: true } });
   first.push({ id: request!.id, result: { status: 'RUNNING' } });
   await h.tick();
 
   expect(outcome).toEqual({ status: 'RUNNING' });
+});
+
+it('foreground recovery reopens when a live-looking socket misses the subscribe acknowledgement', async () => {
+  vi.useFakeTimers();
+  const h = wire({ probe: async () => 'http://a', candidateUrls: ['http://a'] });
+  const first = FakeSocket.instances[0];
+  first.open();
+
+  h.appState(true);
+  await h.tick();
+  expect(FakeSocket.instances).toHaveLength(1);
+
+  await vi.advanceTimersByTimeAsync(2_000);
+  await h.tick();
+
+  expect(FakeSocket.instances.length).toBeGreaterThan(1);
+  expect(first.closed).toBe(true);
 });
 
 describe('relay + connection manager integration', () => {

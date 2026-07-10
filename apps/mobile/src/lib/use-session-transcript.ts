@@ -140,7 +140,7 @@ export function useSessionTranscript(sessionId: string | null) {
             applyConnection({ ...(activeConnection() ?? connection), serverUrl: url });
           },
           reopen: openSubscription,
-          resync: () => subscriptionRef.current?.resync(),
+          resync: () => subscriptionRef.current?.confirmResync() ?? Promise.resolve(false),
         });
         managerRef.current = manager;
         unsubscribe = manager.subscribe(setConnectionState);

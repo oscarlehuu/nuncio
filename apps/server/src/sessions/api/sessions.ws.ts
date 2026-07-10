@@ -203,38 +203,79 @@ export function attachSessionsWebSocketServer(
             : undefined;
         // Resubscribe replaces the previous subscription (drop-to-cursor recovery).
         subscriptions.get(sessionId)?.();
-        send(ws, { id, result: { ok: true } });
+        subscriptions.delete(sessionId);
 
-        // A subscription that outruns the socket is dropped, not buffered: the
-        // client gets one small "behind" marker and recovers by resubscribing
-        // from its last seen seq.
-        for (const event of sessions.getEvents(
-          sessionId,
-          since,
-          tail !== undefined ? { tail } : undefined,
-        )) {
-          const push = { channel: sessionId, event };
-          if (bufferedAmount(ws) + serializedBytes(push) > maxBuffered) {
-            send(ws, { channel: sessionId, behind: true });
-            return;
-          }
-          send(ws, push);
-        }
         let liveUnsub: () => void = () => {};
         let dropped = false;
-        liveUnsub = sessions.subscribe(sessionId, (event) => {
+        let replaying = true;
+        let highWater = since;
+        const pendingLive: SessionEvent[] = [];
+        let pendingLiveBytes = 0;
+        const dropSubscription = () => {
           if (dropped) return;
+          dropped = true;
+          liveUnsub();
+          subscriptions.delete(sessionId);
+          send(ws, { channel: sessionId, behind: true });
+        };
+        const pushEvent = (event: SessionEvent): boolean => {
+          if (event.seq <= highWater) return true;
           const push = { channel: sessionId, event };
           if (bufferedAmount(ws) + serializedBytes(push) > maxBuffered) {
-            dropped = true;
+            dropSubscription();
+            return false;
+          }
+          highWater = event.seq;
+          send(ws, push);
+          return true;
+        };
+
+        try {
+          // Install live delivery before reading the replay. Events arriving
+          // during that read are held briefly, then deduped by seq after it.
+          liveUnsub = sessions.subscribe(sessionId, (event) => {
+            if (dropped) return;
+            if (replaying) {
+              const bytes = serializedBytes({ channel: sessionId, event });
+              if (bufferedAmount(ws) + pendingLiveBytes + bytes > maxBuffered) {
+                dropSubscription();
+                return;
+              }
+              pendingLiveBytes += bytes;
+              pendingLive.push(event);
+              return;
+            }
+            pushEvent(event);
+          });
+          if (dropped) {
             liveUnsub();
-            subscriptions.delete(sessionId);
-            send(ws, { channel: sessionId, behind: true });
             return;
           }
-          send(ws, push);
-        });
-        subscriptions.set(sessionId, liveUnsub);
+          subscriptions.set(sessionId, liveUnsub);
+          // The subscription is live now. Acknowledge liveness before a possibly
+          // large replay so foreground health checks cannot time out on backlog.
+          send(ws, { id, result: { ok: true } });
+
+          for (const event of sessions.getEvents(
+            sessionId,
+            since,
+            tail !== undefined ? { tail } : undefined,
+          )) {
+            if (!pushEvent(event)) return;
+          }
+
+          replaying = false;
+          pendingLive.sort((a, b) => a.seq - b.seq);
+          for (const event of pendingLive) {
+            pendingLiveBytes -= serializedBytes({ channel: sessionId, event });
+            if (!pushEvent(event)) return;
+          }
+        } catch (error) {
+          replaying = false;
+          liveUnsub();
+          subscriptions.delete(sessionId);
+          send(ws, { id, error: errorOf(error) });
+        }
         return;
       }
 

@@ -180,6 +180,36 @@ describe('PiAgentProvider', () => {
     expect(sessions.findById(created.id)?.status).toBe('RUNNING');
   });
 
+  it('dispose seals an open Pi tool before fencing the run emitter', async () => {
+    let releasePrompt: () => void = () => undefined;
+    const promptStarted = new Promise<void>((resolveStarted) => {
+      promptBehavior = async () =>
+        new Promise<void>((resolve) => {
+          releasePrompt = resolve;
+          resolveStarted();
+        });
+    });
+    isStreaming = true;
+    const created = sessions.create({ prompt: 'dispose open tool', provider: 'pi' });
+    const running = provider.run(created.id, created.prompt, { emit: () => {} });
+    await promptStarted;
+    subscribedHandler!({
+      type: 'tool_execution_start',
+      toolCallId: 'open-call',
+      toolName: 'bash',
+      args: { command: 'sleep 10' },
+    });
+
+    provider.dispose(created.id);
+    releasePrompt();
+    await running;
+
+    expect(events.list(created.id).filter((event) => (
+      (event.type === 'tool_start' || event.type === 'tool_end') &&
+      (event.payload as { callId?: string }).callId === 'open-call'
+    )).map((event) => event.type)).toEqual(['tool_start', 'tool_end']);
+  });
+
   it('interrupt calls abort on an active session and no-ops without one', async () => {
     await provider.interrupt('no-such-session');
     expect(abortMock).not.toHaveBeenCalled();

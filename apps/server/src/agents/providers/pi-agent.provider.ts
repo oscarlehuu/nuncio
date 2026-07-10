@@ -155,6 +155,13 @@ export class PiAgentProvider extends BaseAgentProvider {
     this.interruptedSessions.delete(sessionId);
   }
 
+  protected prepareRuntimeDispose(sessionId: string): boolean {
+    const handle = this.activeSessions.get(sessionId);
+    if (!handle) return false;
+    handle.sealOpenTools();
+    return true;
+  }
+
   /**
    * Inject a steer message into a live streaming run. The Pi SDK queues it and
    * delivers after the current turn's tool calls, before the next LLM call —
@@ -375,7 +382,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       accumulatedThinking = '';
       this.pushEvent(sessionId, 'thinking_start', { thinkingId }, currentEmit);
     };
-    const sealOpenTools = (emit?: AgentRunContext['emit']) => {
+    const sealOpenTools = (emit: AgentRunContext['emit'] = currentEmit) => {
       for (const [callId, tool] of openTools) {
         this.pushEvent(sessionId, 'tool_end', { callId, tool, isError: false }, emit);
       }

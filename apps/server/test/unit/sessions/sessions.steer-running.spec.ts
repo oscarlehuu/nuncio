@@ -377,6 +377,40 @@ describe('SessionsService steer while RUNNING', () => {
     expect(sessions.findById(id)?.status).toBe('IDLE');
   });
 
+  it('retries a force-idle transition after its status event append fails', async () => {
+    const id = seedRunning();
+    installProvider(stubProvider({
+      capabilities: {
+        interrupt: true,
+        modelSwitch: 'none',
+        effortSwitch: 'none',
+        images: false,
+        steerWhileRunning: false,
+      },
+      interrupt: async () => undefined,
+    }));
+    (service as unknown as { interruptForceIdleMs: number }).interruptForceIdleMs = 20;
+    const originalAppend = events.append.bind(events);
+    let failures = 1;
+    events.append = ((sessionId: string, type: string, payload: unknown) => {
+      if (type === 'status' && (payload as { status?: string }).status === 'IDLE' && failures-- > 0) {
+        throw new Error('status event temporarily unavailable');
+      }
+      return originalAppend(sessionId, type, payload);
+    }) as EventsRepository['append'];
+
+    try {
+      await service.interrupt(id);
+      await new Promise((resolve) => setTimeout(resolve, 220));
+      expect(sessions.findById(id)?.status).toBe('IDLE');
+      expect(events.list(id).filter(
+        (event) => event.type === 'status' && (event.payload as { status?: string }).status === 'IDLE',
+      )).toHaveLength(1);
+    } finally {
+      events.append = originalAppend as EventsRepository['append'];
+    }
+  });
+
   it('does not force-idle the run later when the provider interrupt rejects', async () => {
     const id = seedRunning();
     const dispose = jest.fn();
@@ -402,6 +436,74 @@ describe('SessionsService steer while RUNNING', () => {
 
     expect(sessions.findById(id)?.status).toBe('RUNNING');
     expect(dispose).not.toHaveBeenCalled();
+  });
+
+  it('keeps force-idle recovery armed when interrupt rejects after teardown starts', async () => {
+    const id = seedRunning();
+    let rejectInterrupt: (error: Error) => void = () => undefined;
+    let disposeCalls = 0;
+    installProvider(stubProvider({
+      capabilities: {
+        interrupt: true,
+        modelSwitch: 'none',
+        effortSwitch: 'none',
+        images: false,
+        steerWhileRunning: false,
+      },
+      interrupt: async () => new Promise<void>((_resolve, reject) => {
+        rejectInterrupt = reject;
+      }),
+      dispose: () => {
+        disposeCalls += 1;
+        if (disposeCalls === 1) throw new RetainedEventFlushError(new Error('tail pending'));
+      },
+    }));
+    (service as unknown as { interruptForceIdleMs: number }).interruptForceIdleMs = 20;
+
+    const interrupting = service.interrupt(id);
+    await new Promise((resolve) => setTimeout(resolve, 35));
+    rejectInterrupt(new Error('late interrupt failure'));
+    await expect(interrupting).rejects.toThrow('late interrupt failure');
+    await new Promise((resolve) => setTimeout(resolve, 280));
+
+    expect(disposeCalls).toBeGreaterThanOrEqual(2);
+    expect(sessions.findById(id)?.status).toBe('IDLE');
+  });
+
+  it('keeps shutdown disposal best-effort when an active-session lookup fails', () => {
+    const id = seedRunning();
+    const internals = service as unknown as {
+      locallyProducing: Set<string>;
+      disposeActiveTurns: () => void;
+    };
+    internals.locallyProducing.add(id);
+    const originalFind = sessions.findById.bind(sessions);
+    sessions.findById = (() => {
+      throw new Error('sqlite read failed');
+    }) as SessionsRepository['findById'];
+    try {
+      expect(() => internals.disposeActiveTurns()).not.toThrow();
+    } finally {
+      sessions.findById = originalFind as SessionsRepository['findById'];
+      internals.locallyProducing.delete(id);
+    }
+  });
+
+  it('keeps shutdown provider collection best-effort when an active-session lookup fails', () => {
+    const id = seedRunning();
+    const internals = service as unknown as {
+      locallyProducing: Set<string>;
+      registeredProviders: () => Set<AgentProvider>;
+    };
+    internals.locallyProducing.add(id);
+    const originalFind = sessions.findById.bind(sessions);
+    sessions.findById = (() => { throw new Error('sqlite read failed'); }) as SessionsRepository['findById'];
+    try {
+      expect(() => internals.registeredProviders()).not.toThrow();
+    } finally {
+      sessions.findById = originalFind as SessionsRepository['findById'];
+      internals.locallyProducing.delete(id);
+    }
   });
 
   it('cancels the old force-idle timer when the interrupted run settles', async () => {
@@ -477,6 +579,34 @@ describe('SessionsService steer while RUNNING', () => {
     expect(events.list(created.id).some((e) => e.type === 'runtime_stalled')).toBe(true);
     expect(steer).toHaveBeenCalledTimes(1);
     expect(steer.mock.calls[0]?.[1]).toBe('queued while stalled');
+  });
+
+  it('retries only the stalled-run IDLE transition after a transient status append failure', async () => {
+    installProvider(stubProvider({
+      run: async (sessionId: string, _prompt: string, context: AgentRunContext) => {
+        sessions.updateStatus(sessionId, 'RUNNING');
+        context.emit?.(events.append(sessionId, 'status', { status: 'RUNNING' }));
+        await new Promise(() => undefined);
+      },
+    }));
+    (service as unknown as { stalledRunForceIdleMs: number }).stalledRunForceIdleMs = 20;
+    const originalAppend = events.append.bind(events);
+    let failures = 1;
+    events.append = ((sessionId: string, type: string, payload: unknown) => {
+      if (type === 'status' && (payload as { status?: string }).status === 'IDLE' && failures-- > 0) {
+        throw new Error('status event temporarily unavailable');
+      }
+      return originalAppend(sessionId, type, payload);
+    }) as EventsRepository['append'];
+
+    try {
+      const created = await service.create({ prompt: 'stalled transition retry', provider: 'cursor' });
+      await new Promise((resolve) => setTimeout(resolve, 320));
+      expect(sessions.findById(created.id)?.status).toBe('IDLE');
+      expect(events.list(created.id).filter((event) => event.type === 'runtime_stalled')).toHaveLength(1);
+    } finally {
+      events.append = originalAppend as EventsRepository['append'];
+    }
   });
 
   it('stalled-run recovery does not retry a permanent provider disposal failure', async () => {

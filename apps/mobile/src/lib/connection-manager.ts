@@ -25,8 +25,8 @@ export interface ConnectionManagerDeps {
   onActiveUrl: (url: string) => void;
   /** Open (or reopen) the relay subscription against the current active URL. */
   reopen: () => void;
-  /** Resubscribe the current healthy relay from its monotonic cursor. */
-  resync: () => void;
+  /** Resubscribe from the cursor and confirm the live socket acknowledged it. */
+  resync: () => Promise<boolean>;
   /** Subscribe to network reachability flips; returns an unsubscribe. */
   subscribeNetInfo: (onChange: () => void) => () => void;
   /** Subscribe to foreground/background; `active` true when the app is foreground. */
@@ -79,6 +79,9 @@ export function createConnectionManager(deps: ConnectionManagerDeps): Connection
   // A probe is async; if the network flips again mid-probe, only the latest run
   // may apply its result. This token invalidates stale in-flight probes.
   let probeToken = 0;
+  // Increment whenever this manager replaces the relay subscription. A health
+  // ACK belongs to the generation that sent it and cannot condemn a newer one.
+  let connectionGeneration = 0;
   const listeners = new Set<(state: ConnectionState) => void>();
   const unsubscribers: Array<() => void> = [];
 
@@ -94,6 +97,11 @@ export function createConnectionManager(deps: ConnectionManagerDeps): Connection
       clearTimer(retryTimer);
       retryTimer = null;
     }
+  };
+
+  const reopen = () => {
+    connectionGeneration += 1;
+    deps.reopen();
   };
 
   const scheduleRetry = () => {
@@ -141,7 +149,7 @@ export function createConnectionManager(deps: ConnectionManagerDeps): Connection
       activeUrl = winner;
       deps.onActiveUrl(winner);
     }
-    deps.reopen();
+    reopen();
   };
 
   // An external kick bypasses the backoff timer and thaws a server-shutdown
@@ -173,7 +181,7 @@ export function createConnectionManager(deps: ConnectionManagerDeps): Connection
     if (winner && winner !== activeUrl) {
       activeUrl = winner;
       deps.onActiveUrl(winner);
-      deps.reopen();
+      reopen();
     }
   };
 
@@ -214,8 +222,18 @@ export function createConnectionManager(deps: ConnectionManagerDeps): Connection
           if (!active || disposed) return;
           if (state === 'connected') {
             // The OS can suspend a live-looking socket without a close event.
-            // Keep in-flight RPCs on the healthy socket and replay from its cursor.
-            deps.resync();
+            // Confirm the cursor subscription on the current socket first so
+            // healthy in-flight RPCs survive; a missed ACK proves it half-open.
+            const generation = connectionGeneration;
+            void deps.resync().then((healthy) => {
+              if (
+                healthy ||
+                disposed ||
+                state !== 'connected' ||
+                generation !== connectionGeneration
+              ) return;
+              void reprobeAndReopen();
+            });
             return;
           }
           kick();

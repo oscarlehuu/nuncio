@@ -17,7 +17,7 @@ export interface NativeManagerOptions {
   initialUrl: string;
   onActiveUrl: (url: string) => void;
   reopen: () => void;
-  resync: () => void;
+  resync: () => Promise<boolean>;
 }
 
 export function createNativeConnectionManager(options: NativeManagerOptions): ConnectionManager {

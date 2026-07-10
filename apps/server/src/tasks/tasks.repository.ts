@@ -163,7 +163,7 @@ export class TasksRepository {
    */
   updateWhileQueued(
     id: string,
-    patch: { provider?: string; model?: string; modelOptions?: ModelOptionsMap | null; holdUntil?: number },
+    patch: { provider?: string; model?: string; modelOptions?: ModelOptionsMap | null; holdUntil?: number | null },
   ): TaskDto | null {
     const sets: string[] = [];
     const values: Array<string | number | null> = [];

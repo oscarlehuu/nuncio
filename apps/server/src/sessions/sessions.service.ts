@@ -20,6 +20,7 @@ import { CursorLocalSessionsService } from '../cursor-local/cursor-local-session
 import { turnsToSessionEvents } from '../cursor-local/cursor-transcript-hydrate';
 import { readCursorChatMetadata } from '../cursor-local/cursor-chat-store';
 import { ContextFactsService } from '../context/context-facts.service';
+import { DatabaseService } from '../db/database.service';
 import { renderContextFacts } from '../context/context-facts.renderer';
 import { materializeContextFile } from '../context/context-file.materializer';
 import { GitService } from '../git/git.service';
@@ -119,6 +120,7 @@ export class SessionsService implements OnModuleDestroy {
   private readonly stalledRunTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly interruptForceIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly interruptAttempts = new Map<string, symbol>();
+  private readonly interruptRecoveriesStarted = new Map<string, symbol>();
   private readonly interruptRecoveries = new Map<
     string,
     { attempt: symbol; resolve: () => void }
@@ -158,6 +160,7 @@ export class SessionsService implements OnModuleDestroy {
     @Optional() private readonly projectDefaults?: ProjectDefaultsResolver,
     @Optional() private readonly contextFacts?: ContextFactsService,
     @Optional() private readonly profiles?: PromptProfileService,
+    @Optional() private readonly database?: DatabaseService,
   ) {
     // A crash mid-fan-out can leave steer rows leased forever; a claim must
     // never outlive the process that took it. Release before restore so the
@@ -608,13 +611,18 @@ export class SessionsService implements OnModuleDestroy {
    * event. MUST be called BEFORE opening any transaction that appends such an
    * event — the flush appends AND emits its delta synchronously, and a delta is
    * a legitimate event regardless of whether that later transaction commits.
-   * No-op for non-RUNNING sessions or a missing/unavailable provider.
+   * Settled sessions are also flushed when the provider still owns accepted
+   * events from the preceding run. No-op when no buffer exists or the provider
+   * is missing/unavailable.
    */
   flushParentBuffer(sessionId: string): void {
     const session = this.sessions.findById(sessionId);
-    if (!session || session.status !== 'RUNNING') return;
+    if (!session) return;
     try {
-      this.agents.resolveForSession(session).flushPendingEvents?.(sessionId);
+      const provider = this.agents.resolveForSession(session);
+      const hasRetainedEvents = provider.pendingEventSessionIds?.().includes(sessionId) ?? false;
+      if (session.status !== 'RUNNING' && !hasRetainedEvents) return;
+      provider.flushPendingEvents?.(sessionId);
     } catch (error) {
       if (error instanceof RetainedEventFlushError) throw error;
       // A missing/unavailable provider must never block a digest append.
@@ -687,35 +695,33 @@ export class SessionsService implements OnModuleDestroy {
   private drainPendingOrchestrationEvents(sessionId: string, duringShutdown = false): void {
     const queued = this.pendingOrchestrationEvents.get(sessionId);
     if ((this.destroyed && !duringShutdown) || !queued?.length) return;
-    const session = this.sessions.findById(sessionId);
-    if (!session) {
-      this.pendingOrchestrationEvents.delete(sessionId);
-      return;
-    }
     try {
-      // Retry even if the FSM already settled: the accepted provider tail still
-      // owns the earlier transcript position and must commit before this queue.
-      this.agents.resolveForSession(session).flushPendingEvents?.(sessionId);
-    } catch (error) {
-      if (error instanceof RetainedEventFlushError) {
-        this.scheduleOrchestrationRetry(sessionId);
+      const session = this.sessions.findById(sessionId);
+      if (!session) {
+        this.pendingOrchestrationEvents.delete(sessionId);
         return;
       }
-      // A missing/unavailable provider cannot own an in-memory retained tail.
-    }
-
-    while (queued.length) {
-      const pending = queued[0];
       try {
+        // Retry even if the FSM already settled: the accepted provider tail still
+        // owns the earlier transcript position and must commit before this queue.
+        this.agents.resolveForSession(session).flushPendingEvents?.(sessionId);
+      } catch (error) {
+        if (error instanceof RetainedEventFlushError) throw error;
+        // A missing/unavailable provider cannot own an in-memory retained tail.
+      }
+
+      while (queued.length) {
+        const pending = queued[0];
         const event = this.persistOrchestrationEvent(sessionId, pending.type, pending.payload);
         queued.shift();
         if (event) this.emit(sessionId, event);
-      } catch {
-        this.scheduleOrchestrationRetry(sessionId);
-        return;
       }
+      this.pendingOrchestrationEvents.delete(sessionId);
+    } catch {
+      // Reads and appends can fail under the same transient SQLite fault. Keep
+      // the queue intact and retry instead of letting a timer crash the daemon.
+      if (!duringShutdown) this.scheduleOrchestrationRetry(sessionId);
     }
-    this.pendingOrchestrationEvents.delete(sessionId);
   }
 
   /**
@@ -824,7 +830,10 @@ export class SessionsService implements OnModuleDestroy {
       return;
     }
     if (outcome.kind === 'error') {
-      if (this.interruptAttempts.get(id) === attempt) this.clearInterruptForceIdleWatch(id);
+      if (
+        this.interruptAttempts.get(id) === attempt &&
+        this.interruptRecoveriesStarted.get(id) !== attempt
+      ) this.clearInterruptForceIdleWatch(id);
       throw outcome.error;
     }
     const current = this.sessions.findById(id);
@@ -839,6 +848,43 @@ export class SessionsService implements OnModuleDestroy {
     const recovered = new Promise<void>((resolve) => {
       this.interruptRecoveries.set(id, { attempt, resolve });
     });
+    const transitionToIdle = () => {
+      if (this.interruptAttempts.get(id) !== attempt) return;
+      this.interruptForceIdleTimers.delete(id);
+      if (this.destroyed) {
+        this.resolveInterruptRecovery(id, attempt);
+        return;
+      }
+      let current: SessionDto | null;
+      try {
+        current = this.sessions.findById(id);
+      } catch {
+        current = null;
+      }
+      if (!current) {
+        const retry = setTimeout(transitionToIdle, Math.min(this.interruptForceIdleMs, 250));
+        this.interruptForceIdleTimers.set(id, retry);
+        return;
+      }
+      if (current.status !== 'RUNNING') {
+        this.interruptAttempts.delete(id);
+        this.interruptRecoveriesStarted.delete(id);
+        this.resolveInterruptRecovery(id, attempt);
+        return;
+      }
+      try {
+        this.transition(id, 'IDLE');
+      } catch {
+        // The runtime is already fenced. Retry only the atomic status+event
+        // transition so a transient SQLite failure cannot strand RUNNING.
+        const retry = setTimeout(transitionToIdle, Math.min(this.interruptForceIdleMs, 250));
+        this.interruptForceIdleTimers.set(id, retry);
+        return;
+      }
+      this.interruptAttempts.delete(id);
+      this.interruptRecoveriesStarted.delete(id);
+      this.resolveInterruptRecovery(id, attempt);
+    };
     // A hung provider stream can swallow the abort and leave the run pending
     // forever; if the session is still RUNNING after the grace period, drop
     // the zombie handle and force it idle so the user is never stuck.
@@ -862,6 +908,7 @@ export class SessionsService implements OnModuleDestroy {
         this.resolveInterruptRecovery(id, attempt);
         return;
       }
+      this.interruptRecoveriesStarted.set(id, attempt);
       try {
         this.disposeProviderSession(current, true);
       } catch (error) {
@@ -876,9 +923,7 @@ export class SessionsService implements OnModuleDestroy {
         // a permanent adapter error must not keep the FSM RUNNING forever.
       }
       this.locallyProducing.delete(id);
-      this.transition(id, 'IDLE');
-      this.interruptAttempts.delete(id);
-      this.resolveInterruptRecovery(id, attempt);
+      transitionToIdle();
     };
     const timer = setTimeout(forceIdle, this.interruptForceIdleMs);
     this.interruptForceIdleTimers.set(id, timer);
@@ -887,6 +932,7 @@ export class SessionsService implements OnModuleDestroy {
 
   private clearInterruptForceIdleWatch(id: string): void {
     this.interruptAttempts.delete(id);
+    this.interruptRecoveriesStarted.delete(id);
     this.cancelInterruptForceIdleTimer(id);
   }
 
@@ -960,12 +1006,8 @@ export class SessionsService implements OnModuleDestroy {
     // Verification runs while the session is IDLE. Pause is a lifecycle stop,
     // so cancel that process tree even when no provider turn is active.
     this.verifierControllers.get(id)?.abort();
-    if (session.status === 'RUNNING') {
-      const finished = this.disposeThenFinishLifecycle(session, () => this.finishPause(id));
-      if (!finished) return this.requireSession(id);
-    } else {
-      this.finishPause(id);
-    }
+    const finished = this.disposeThenFinishLifecycle(session, 'pause', () => this.finishPause(id));
+    if (!finished) return this.requireSession(id);
     return this.requireSession(id);
   }
 
@@ -974,7 +1016,7 @@ export class SessionsService implements OnModuleDestroy {
     if (!canTransition(session.status, 'ARCHIVED')) {
       throw new BadRequestException(`Cannot archive session in status ${session.status}`);
     }
-    this.disposeThenFinishLifecycle(session, () => this.finishArchive(id));
+    this.disposeThenFinishLifecycle(session, 'archive', () => this.finishArchive(id));
     return this.requireSession(id);
   }
 
@@ -1003,7 +1045,7 @@ export class SessionsService implements OnModuleDestroy {
     if (session.status !== 'ARCHIVED') {
       throw new BadRequestException(`Cannot delete session in status ${session.status}; archive first`);
     }
-    this.disposeThenFinishLifecycle(session, () => this.finishDelete(id));
+    this.disposeThenFinishLifecycle(session, 'delete', () => this.finishDelete(id));
   }
 
   private finishPause(id: string): void {
@@ -1032,19 +1074,42 @@ export class SessionsService implements OnModuleDestroy {
   }
 
   /** Keep a lifecycle operation pending until the provider's retained tail commits. */
-  private disposeThenFinishLifecycle(session: SessionDto, finish: () => void): boolean {
+  private disposeThenFinishLifecycle(
+    session: SessionDto,
+    operation: 'pause' | 'archive' | 'delete',
+    finish: () => void,
+  ): boolean {
+    let providerDisposed = false;
     try {
       this.disposeProviderSession(session);
+      providerDisposed = true;
       finish();
       this.cancelLifecycleRetry(session.id);
       return true;
     } catch (error) {
       if (this.isUnknownProviderError(error, session.provider)) {
-        finish();
-        return true;
+        try {
+          finish();
+          return true;
+        } catch {
+          this.scheduleLifecycleRetry(session.id, session.status, operation, finish);
+          return false;
+        }
       }
-      if (!(error instanceof RetainedEventFlushError)) throw error;
-      this.scheduleLifecycleRetry(session.id, session.status, finish);
+      if (
+        !providerDisposed &&
+        !(error instanceof RetainedEventFlushError) &&
+        !this.providerUsesSharedRunFence(session)
+      ) throw error;
+      this.scheduleLifecycleRetry(session.id, session.status, operation, finish);
+      return false;
+    }
+  }
+
+  private providerUsesSharedRunFence(session: SessionDto): boolean {
+    try {
+      return typeof this.agents.resolveForSession(session).invalidateRun === 'function';
+    } catch {
       return false;
     }
   }
@@ -1052,24 +1117,58 @@ export class SessionsService implements OnModuleDestroy {
   private scheduleLifecycleRetry(
     id: string,
     expectedStatus: SessionStatus,
+    operation: 'pause' | 'archive' | 'delete',
     finish: () => void,
   ): void {
-    if (this.lifecycleRetries.has(id)) return;
+    const existing = this.lifecycleRetries.get(id);
+    if (existing) {
+      // A newer user intent supersedes the older lifecycle request while both
+      // still target the same persisted pre-transition status.
+      existing.cancelled = true;
+      this.lifecycleRetries.delete(id);
+    }
     const record = { cancelled: false, promise: Promise.resolve() };
     record.promise = (async () => {
       while (!record.cancelled) {
         await new Promise((resolve) => setTimeout(resolve, 100));
         if (record.cancelled) return;
-        const current = this.sessions.findById(id);
+        let current: SessionDto | null;
+        try {
+          current = this.sessions.findById(id);
+        } catch {
+          // A transient read failure must not abandon a requested lifecycle
+          // transition whose status row is still unchanged.
+          continue;
+        }
         if (!current || current.status !== expectedStatus) return;
         try {
           this.disposeProviderSession(current);
+        } catch (error) {
+          if (this.isUnknownProviderError(error, current.provider)) {
+            // Provider-independent lifecycle work can still complete for a
+            // persisted session whose adapter is no longer registered.
+          } else if (!(error instanceof RetainedEventFlushError)) {
+            try {
+              this.surfaceLifecycleRetryFailure(current, operation, error);
+              return;
+            } catch {
+              // Persistence can fail independently of provider teardown. Retry
+              // until the failure is durably visible or shutdown cancels us.
+            }
+            continue;
+          } else {
+            // The base provider retains failed appends; retry until persistence
+            // recovers or the bounded shutdown drain explicitly cancels us.
+            continue;
+          }
+        }
+        try {
           finish();
           return;
-        } catch (error) {
-          if (!(error instanceof RetainedEventFlushError)) return;
-          // The base provider retains failed appends; retry until persistence
-          // recovers or the bounded shutdown drain explicitly cancels us.
+        } catch {
+          // The lifecycle transition + status event commit atomically below.
+          // A transient persistence failure therefore leaves the old status in
+          // place and is safe to retry without losing the requested operation.
         }
       }
     })();
@@ -1079,6 +1178,18 @@ export class SessionsService implements OnModuleDestroy {
       if (this.lifecycleRetries.get(id) === record) this.lifecycleRetries.delete(id);
       this.pendingWork.delete(record.promise);
     });
+  }
+
+  private surfaceLifecycleRetryFailure(
+    session: SessionDto,
+    operation: 'pause' | 'archive' | 'delete',
+    error: unknown,
+  ): void {
+    const reason = error instanceof Error ? error.message : String(error);
+    this.appendAndEmit(session.id, 'error', {
+      message: `Lifecycle ${operation} failed after retained output recovery: ${reason}`,
+    });
+    if (canTransition(session.status, 'ERROR')) this.transition(session.id, 'ERROR');
   }
 
   private cancelLifecycleRetry(id: string): void {
@@ -1130,6 +1241,7 @@ export class SessionsService implements OnModuleDestroy {
     for (const timer of this.interruptForceIdleTimers.values()) clearTimeout(timer);
     this.interruptForceIdleTimers.clear();
     this.interruptAttempts.clear();
+    this.interruptRecoveriesStarted.clear();
     for (const recovery of this.interruptRecoveries.values()) recovery.resolve();
     this.interruptRecoveries.clear();
     for (const timer of this.stalledRunTimers.values()) clearTimeout(timer);
@@ -1220,9 +1332,9 @@ export class SessionsService implements OnModuleDestroy {
   /** Fence and release every locally-producing provider before the DB closes. */
   private disposeActiveTurns(): void {
     for (const id of [...this.locallyProducing]) {
-      const session = this.sessions.findById(id);
-      if (!session) continue;
       try {
+        const session = this.sessions.findById(id);
+        if (!session) continue;
         this.disposeProviderSession(session);
       } catch {
         // Best-effort teardown — shutdown proceeds regardless.
@@ -1249,12 +1361,12 @@ export class SessionsService implements OnModuleDestroy {
     }
     if (typeof this.agents.cli === 'function') providers.add(this.agents.cli());
     for (const id of this.locallyProducing) {
-      const session = this.sessions.findById(id);
-      if (!session) continue;
       try {
+        const session = this.sessions.findById(id);
+        if (!session) continue;
         providers.add(this.agents.resolveForSession(session));
       } catch {
-        // Missing providers have no in-memory retained event buffer to drain.
+        // Missing providers/read failures cannot abort best-effort shutdown.
       }
     }
     return providers;
@@ -1611,10 +1723,24 @@ export class SessionsService implements OnModuleDestroy {
   }
 
   private transition(id: string, status: SessionStatus): void {
-    this.sessions.updateStatus(id, status);
+    let event: SessionEvent;
+    let notifyAfterCommit = false;
+    if (this.database) {
+      event = this.database.transaction(() => {
+        this.sessions.updateStatus(id, status);
+        const persisted = this.events.append(id, 'status', { status }, false);
+        if (persisted.seq <= 0) throw new Error('Status event append did not commit');
+        return persisted;
+      });
+      notifyAfterCommit = true;
+    } else {
+      this.sessions.updateStatus(id, status);
+      event = this.events.append(id, 'status', { status });
+    }
+    if (notifyAfterCommit) this.events.notifyPersisted(id, event);
     this.updateStalledRunWatchForStatus(id, status);
     if (status !== 'RUNNING') this.cancelInterruptForceIdleTimer(id);
-    this.appendAndEmit(id, 'status', { status });
+    this.emit(id, event);
     if (status === 'IDLE') {
       setTimeout(() => this.drainSteerQueue(id), 0);
     }
@@ -1722,7 +1848,32 @@ export class SessionsService implements OnModuleDestroy {
       timeoutMs: this.stalledRunForceIdleMs,
       resumable: this.isResumableAfterRestart(session),
     });
-    this.transition(id, 'IDLE');
+    this.finishStalledRunTransition(id);
+  }
+
+  private finishStalledRunTransition(id: string): void {
+    this.stalledRunTimers.delete(id);
+    if (this.destroyed) return;
+    let current: SessionDto | null;
+    try {
+      current = this.sessions.findById(id);
+    } catch {
+      current = null;
+    }
+    if (!current) {
+      const retry = setTimeout(() => this.finishStalledRunTransition(id), 250);
+      this.stalledRunTimers.set(id, retry);
+      return;
+    }
+    if (current.status !== 'RUNNING') return;
+    try {
+      this.transition(id, 'IDLE');
+    } catch {
+      // runtime_stalled is already durable; retry only the atomic transition to
+      // avoid both a zombie RUNNING row and duplicate recovery annotations.
+      const retry = setTimeout(() => this.finishStalledRunTransition(id), 250);
+      this.stalledRunTimers.set(id, retry);
+    }
   }
 
   private getOrCreateBus(id: string): EventEmitter {

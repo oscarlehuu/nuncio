@@ -72,12 +72,15 @@ export interface SessionSubscriptionOptions {
 export interface SessionSubscription {
   /** Reconnect/resubscribe from the last seen seq (tab became visible, app foregrounded). */
   resync(): void;
+  /** Confirm a live cursor resubscribe; false means the socket is half-open/dead. */
+  confirmResync(timeoutMs?: number): Promise<boolean>;
   /** RPC over the same socket, e.g. steer. Rejects with the server's {code, message}. */
   call(method: string, params: Record<string, unknown>): Promise<unknown>;
   close(): void;
 }
 
 const DEFAULT_RECONNECT_MS = 2000;
+const DEFAULT_RESYNC_ACK_TIMEOUT_MS = 2000;
 
 export function subscribeSessionEvents(options: SessionSubscriptionOptions): SessionSubscription {
   const reconnectMs = options.reconnectMs ?? DEFAULT_RECONNECT_MS;
@@ -122,6 +125,38 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
         },
       }),
     );
+  };
+
+  const confirmSubscribe = (timeoutMs: number): Promise<boolean> => {
+    if (closed || !socketOpen || !socket) return Promise.resolve(false);
+    const id = nextRpcId++;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        if (!pending.delete(id)) return;
+        resolve(false);
+      }, timeoutMs);
+      pending.set(id, {
+        resolve: () => {
+          clearTimeout(timer);
+          resolve(true);
+        },
+        reject: () => {
+          clearTimeout(timer);
+          resolve(false);
+        },
+      });
+      try {
+        socket!.send(JSON.stringify({
+          id,
+          method: 'subscribe',
+          params: { sessionId: options.sessionId, since: lastSeq },
+        }));
+      } catch {
+        clearTimeout(timer);
+        pending.delete(id);
+        resolve(false);
+      }
+    });
   };
 
   const scheduleReconnect = () => {
@@ -232,6 +267,9 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
         reopening = false;
       }
       connect();
+    },
+    confirmResync(timeoutMs = DEFAULT_RESYNC_ACK_TIMEOUT_MS) {
+      return confirmSubscribe(timeoutMs);
     },
     call(method, params) {
       return new Promise((resolve, reject) => {
