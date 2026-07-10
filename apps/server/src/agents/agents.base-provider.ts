@@ -88,9 +88,28 @@ export abstract class BaseAgentProvider implements AgentProvider {
   }
 
   dispose(sessionId: string): void {
-    this.flushPendingEvents(sessionId);
+    let teardownError: unknown;
+    try {
+      this.flushPendingEvents(sessionId);
+    } catch (error) {
+      teardownError = error;
+    }
+    try {
+      this.flushPreview(sessionId);
+    } catch (error) {
+      teardownError ??= error;
+    }
     this.invalidateRun(sessionId);
+    try {
+      this.disposeRuntime(sessionId);
+    } catch (error) {
+      teardownError ??= error;
+    }
+    if (teardownError) throw teardownError;
   }
+
+  /** Release engine-specific handles after the shared tail flush + run fence. */
+  protected disposeRuntime(_sessionId: string): void {}
 
   /** Make every callback carrying the current run's guarded emitter stale. */
   invalidateRun(sessionId: string): void {

@@ -282,7 +282,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
     });
   });
 
-  it('runs flush, generation invalidation, then dispose for a session lifecycle teardown', () => {
+  it('delegates lifecycle teardown once to provider-owned disposal', () => {
     const id = seedSession('IDLE');
     const calls: string[] = [];
     const provider = {
@@ -299,23 +299,21 @@ describe('SessionsService lifecycle (phase 3)', () => {
       listModels: async () => [],
       run: async () => undefined,
       steer: async () => undefined,
-      flushPendingEvents: () => calls.push('flush'),
-      invalidateRun: () => calls.push('invalidate'),
       dispose: () => calls.push('dispose'),
       bustCache: () => undefined,
-    } as AgentProvider & { invalidateRun: (sessionId: string) => void };
+    } as AgentProvider;
     const originalResolve = registry.resolveForSession.bind(registry);
     registry.resolveForSession = (() => provider) as AgentRegistry['resolveForSession'];
 
     try {
       service.archive(id);
-      expect(calls).toEqual(['flush', 'invalidate', 'dispose']);
+      expect(calls).toEqual(['dispose']);
     } finally {
       registry.resolveForSession = originalResolve;
     }
   });
 
-  it('still fences and disposes the provider when flushing the streamed tail fails', () => {
+  it('does not append the lifecycle status when provider disposal reports a retained tail', () => {
     const id = seedSession('IDLE');
     const calls: string[] = [];
     const flushError = new Error('temporary sqlite failure');
@@ -333,20 +331,19 @@ describe('SessionsService lifecycle (phase 3)', () => {
       listModels: async () => [],
       run: async () => undefined,
       steer: async () => undefined,
-      flushPendingEvents: () => {
-        calls.push('flush');
+      dispose: () => {
+        calls.push('dispose');
         throw flushError;
       },
-      invalidateRun: () => calls.push('invalidate'),
-      dispose: () => calls.push('dispose'),
       bustCache: () => undefined,
-    } as AgentProvider & { invalidateRun: (sessionId: string) => void };
+    } as AgentProvider;
     const originalResolve = registry.resolveForSession.bind(registry);
     registry.resolveForSession = (() => provider) as AgentRegistry['resolveForSession'];
 
     try {
-      expect(service.archive(id).status).toBe('ARCHIVED');
-      expect(calls).toEqual(['flush', 'invalidate', 'dispose']);
+      expect(() => service.archive(id)).toThrow(flushError);
+      expect(calls).toEqual(['dispose']);
+      expect(service.get(id)?.status).toBe('IDLE');
     } finally {
       registry.resolveForSession = originalResolve;
     }

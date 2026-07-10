@@ -113,6 +113,10 @@ export class SessionsService implements OnModuleDestroy {
   private readonly stalledRunTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly interruptForceIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly interruptAttempts = new Map<string, symbol>();
+  private readonly interruptRecoveries = new Map<
+    string,
+    { attempt: symbol; resolve: () => void }
+  >();
   private readonly transcriptWatchers = new Map<
     string,
     {
@@ -734,12 +738,18 @@ export class SessionsService implements OnModuleDestroy {
       throw new BadRequestException(`Interrupt not supported by provider ${provider.id}`);
     }
     const attempt = Symbol(id);
-    this.armInterruptForceIdle(id, attempt);
-    try {
-      await provider.interrupt(id);
-    } catch (error) {
+    const recovered = this.armInterruptForceIdle(id, attempt);
+    const outcome = await Promise.race([
+      provider.interrupt(id).then(
+        () => ({ kind: 'provider' as const }),
+        (error: unknown) => ({ kind: 'error' as const, error }),
+      ),
+      recovered.then(() => ({ kind: 'recovered' as const })),
+    ]);
+    if (outcome.kind === 'recovered') return;
+    if (outcome.kind === 'error') {
       if (this.interruptAttempts.get(id) === attempt) this.clearInterruptForceIdleWatch(id);
-      throw error;
+      throw outcome.error;
     }
     const current = this.sessions.findById(id);
     if (this.interruptAttempts.get(id) !== attempt || this.destroyed || !current) return;
@@ -747,27 +757,40 @@ export class SessionsService implements OnModuleDestroy {
     if (current.status !== 'RUNNING') this.interruptAttempts.delete(id);
   }
 
-  private armInterruptForceIdle(id: string, attempt: symbol): void {
+  private armInterruptForceIdle(id: string, attempt: symbol): Promise<void> {
     this.clearInterruptForceIdleWatch(id);
     this.interruptAttempts.set(id, attempt);
+    const recovered = new Promise<void>((resolve) => {
+      this.interruptRecoveries.set(id, { attempt, resolve });
+    });
     // A hung provider stream can swallow the abort and leave the run pending
     // forever; if the session is still RUNNING after the grace period, drop
     // the zombie handle and force it idle so the user is never stuck.
-    const timer = setTimeout(() => {
+    const forceIdle = () => {
       if (this.interruptAttempts.get(id) !== attempt) return;
-      this.interruptAttempts.delete(id);
       this.interruptForceIdleTimers.delete(id);
       try {
         const current = this.sessions.findById(id);
-        if (current?.status !== 'RUNNING') return;
-        this.disposeProviderSession(current);
+        if (current?.status !== 'RUNNING') {
+          this.resolveInterruptRecovery(id, attempt);
+          return;
+        }
+        this.disposeProviderSession(current, true);
         this.locallyProducing.delete(id);
         this.transition(id, 'IDLE');
       } catch {
-        // Session deleted while the grace timer was pending — nothing to do.
+        // A retained tail still has to commit before the lifecycle status. Retry
+        // after the base buffer's short flush window; the SDK is already fenced.
+        const retry = setTimeout(forceIdle, Math.min(this.interruptForceIdleMs, 250));
+        this.interruptForceIdleTimers.set(id, retry);
+        return;
       }
-    }, this.interruptForceIdleMs);
+      this.interruptAttempts.delete(id);
+      this.resolveInterruptRecovery(id, attempt);
+    };
+    const timer = setTimeout(forceIdle, this.interruptForceIdleMs);
     this.interruptForceIdleTimers.set(id, timer);
+    return recovered;
   }
 
   private clearInterruptForceIdleWatch(id: string): void {
@@ -777,9 +800,18 @@ export class SessionsService implements OnModuleDestroy {
 
   private cancelInterruptForceIdleTimer(id: string): void {
     const timer = this.interruptForceIdleTimers.get(id);
-    if (!timer) return;
-    clearTimeout(timer);
-    this.interruptForceIdleTimers.delete(id);
+    if (timer) {
+      clearTimeout(timer);
+      this.interruptForceIdleTimers.delete(id);
+    }
+    this.resolveInterruptRecovery(id);
+  }
+
+  private resolveInterruptRecovery(id: string, attempt?: symbol): void {
+    const recovery = this.interruptRecoveries.get(id);
+    if (!recovery || (attempt && recovery.attempt !== attempt)) return;
+    this.interruptRecoveries.delete(id);
+    recovery.resolve();
   }
 
   async setSessionModel(
@@ -887,29 +919,11 @@ export class SessionsService implements OnModuleDestroy {
   }
 
   /** Preserve buffered output, fence stale callbacks, then release the SDK. */
-  private disposeProviderSession(session: SessionDto): void {
-    this.clearInterruptForceIdleWatch(session.id);
+  private disposeProviderSession(session: SessionDto, preserveInterruptAttempt = false): void {
+    if (!preserveInterruptAttempt) this.clearInterruptForceIdleWatch(session.id);
     this.verifierControllers.get(session.id)?.abort();
     const provider = this.agents.resolveForSession(session);
-    let teardownError: unknown;
-    try {
-      provider.flushPendingEvents?.(session.id);
-    } catch {
-      // The base provider retains the exact tail and schedules a retry. Teardown
-      // must still fence the old callbacks, release the SDK runtime, and finish
-      // the requested lifecycle transition.
-    }
-    try {
-      provider.invalidateRun?.(session.id);
-    } catch (error) {
-      teardownError ??= error;
-    }
-    try {
-      provider.dispose(session.id);
-    } catch (error) {
-      teardownError ??= error;
-    }
-    if (teardownError) throw teardownError;
+    provider.dispose(session.id);
   }
 
   /** Raw bytes of a stored chat image, or null if the id is unknown/malformed. */
@@ -939,6 +953,8 @@ export class SessionsService implements OnModuleDestroy {
     for (const timer of this.interruptForceIdleTimers.values()) clearTimeout(timer);
     this.interruptForceIdleTimers.clear();
     this.interruptAttempts.clear();
+    for (const recovery of this.interruptRecoveries.values()) recovery.resolve();
+    this.interruptRecoveries.clear();
     for (const timer of this.stalledRunTimers.values()) clearTimeout(timer);
     this.stalledRunTimers.clear();
     for (const entry of this.transcriptWatchers.values()) {
@@ -1440,7 +1456,10 @@ export class SessionsService implements OnModuleDestroy {
     try {
       this.disposeProviderSession(session);
     } catch {
-      // Provider lookup/dispose failure should not leave the UI wedged RUNNING.
+      // Keep the accepted tail before the eventual runtime_stalled/status rows.
+      const retry = setTimeout(() => this.forceIdleStalledRun(id), 250);
+      this.stalledRunTimers.set(id, retry);
+      return;
     }
     this.locallyProducing.delete(id);
     try {

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { AgentRunContext, EventEmitter } from '../../../src/agents/agents.types';
 import { BaseAgentProvider } from '../../../src/agents/agents.base-provider';
+import { MockAgentProvider } from '../../../src/agents/providers/mock-agent.provider';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
@@ -60,6 +61,7 @@ class OverlappingRunProvider extends BaseAgentProvider {
   readonly name = 'Overlapping';
   readonly contexts: AgentRunContext[] = [];
   private readonly releases: Array<() => void> = [];
+  released = 0;
 
   async isAvailable(): Promise<boolean> {
     return true;
@@ -76,6 +78,10 @@ class OverlappingRunProvider extends BaseAgentProvider {
       { delta },
       this.contexts[runIndex]?.emit,
     );
+  }
+
+  protected disposeRuntime(): void {
+    this.released += 1;
   }
 
   release(runIndex: number): void {
@@ -241,5 +247,52 @@ describe('BaseAgentProvider streamed-tail preservation', () => {
       .join('');
     expect(text).toBe('fresh callback');
     expect(sessions.findById(created.id)?.status).toBe('IDLE');
+  });
+
+  it('releases the runtime and retains the accepted tail when dispose flushing fails', async () => {
+    const overlapping = new OverlappingRunProvider(sessions, events);
+    const created = sessions.create({ prompt: 'dispose retry', provider: 'overlapping' });
+    const running = overlapping.run(created.id, created.prompt, { emit: () => {} });
+    while (overlapping.contexts.length < 1) await Promise.resolve();
+    overlapping.emitFrom(0, 'accepted before dispose');
+
+    const originalAppend = events.append.bind(events);
+    events.append = ((sessionId: string, type: string, payload: unknown) => {
+      if (type === 'assistant_delta') throw new Error('persistent sqlite failure');
+      return originalAppend(sessionId, type, payload);
+    }) as EventsRepository['append'];
+    let disposeError: unknown;
+    try {
+      overlapping.dispose(created.id);
+    } catch (error) {
+      disposeError = error;
+    } finally {
+      events.append = originalAppend as EventsRepository['append'];
+    }
+
+    expect(disposeError).toBeInstanceOf(Error);
+    expect(overlapping.released).toBe(1);
+    overlapping.flushPendingEvents(created.id);
+    overlapping.release(0);
+    await running;
+    const deltas = events.list(created.id).filter((event) => event.type === 'assistant_delta');
+    expect(deltas.map((event) => (event.payload as { delta: string }).delta)).toEqual([
+      'accepted before dispose',
+    ]);
+  });
+
+  it('does not let a disposed Mock callback overwrite the last accepted preview', async () => {
+    const mock = new MockAgentProvider(sessions, events);
+    const created = sessions.create({ prompt: 'preview fence', provider: 'mock' });
+    const running = mock.run(created.id, created.prompt, { emit: () => {} });
+    await new Promise((resolve) => setTimeout(resolve, 45));
+
+    mock.dispose(created.id);
+    const previewAtDispose = sessions.findById(created.id)?.preview;
+    await running;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect(previewAtDispose?.length).toBeGreaterThan(0);
+    expect(sessions.findById(created.id)?.preview).toBe(previewAtDispose);
   });
 });

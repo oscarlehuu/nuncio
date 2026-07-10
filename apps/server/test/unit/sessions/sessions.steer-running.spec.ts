@@ -296,14 +296,19 @@ describe('SessionsService steer while RUNNING', () => {
     );
     (service as unknown as { interruptForceIdleMs: number }).interruptForceIdleMs = 20;
 
-    const interrupting = service.interrupt(id);
+    let interruptSettled = false;
+    const interrupting = service.interrupt(id).then(() => {
+      interruptSettled = true;
+    });
     await new Promise((resolve) => setTimeout(resolve, 80));
     const statusWhileProviderHung = sessions.findById(id)?.status;
+    const settledWhileProviderHung = interruptSettled;
     releaseInterrupt();
     await interrupting;
     await new Promise((resolve) => setTimeout(resolve, 40));
 
     expect(statusWhileProviderHung).toBe('IDLE');
+    expect(settledWhileProviderHung).toBe(true);
     expect(events.list(id).some((event) => event.type === 'interrupted')).toBe(false);
   });
 

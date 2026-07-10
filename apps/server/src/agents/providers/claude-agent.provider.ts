@@ -238,12 +238,11 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     await active.query.applyFlagSettings({ effortLevel });
   }
 
-  dispose(sessionId: string): void {
+  protected disposeRuntime(sessionId: string): void {
     const active = this.activeSessions.get(sessionId);
     if (!active) return;
     this.activeSessions.delete(sessionId);
     this.interruptedSessions.delete(sessionId);
-    this.flushDeltas(sessionId);
     // A completed turn leaves the SDK-spawned CLI subprocess resident; aborting
     // is the only reliable teardown — it kills the child and unblocks the
     // in-flight generator. Closing the input queue alone does not reap it.
@@ -566,7 +565,9 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
           active.openTools.set(callId, mapped.payload.tool as string);
         }
         this.pushEvent(sessionId, mapped.type, mapped.payload, context.emit);
-        if (mapped.type === 'assistant_delta') this.touchPreview(sessionId, active.delta.accumulatedText);
+        if (mapped.type === 'assistant_delta') {
+          this.touchPreview(sessionId, active.delta.accumulatedText, context.emit);
+        }
       }
       return false;
     }

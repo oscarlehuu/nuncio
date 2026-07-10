@@ -146,12 +146,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     }
   }
 
-  dispose(sessionId: string): void {
-    // Persist every accepted token before callbacks are fenced and the SDK
-    // subscription is removed. A transient append failure keeps the handle live
-    // so the retained base buffer can retry instead of being discarded.
-    this.flushPendingEvents(sessionId);
-    this.invalidateRun(sessionId);
+  protected disposeRuntime(sessionId: string): void {
     const handle = this.activeSessions.get(sessionId);
     if (!handle) return;
     void handle.session.abort().catch(() => undefined);
