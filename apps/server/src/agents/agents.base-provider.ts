@@ -17,6 +17,14 @@ export class AgentRunCancelledError extends Error {
   }
 }
 
+/** A buffered event append failed but remains retained for a later retry. */
+export class RetainedEventFlushError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'RetainedEventFlushError';
+  }
+}
+
 /** Streamed token events that are safe to merge by concatenating `delta`. */
 const COALESCED_EVENT_TYPES = new Set(['assistant_delta', 'thinking_delta']);
 /** Quiet-stream flush: buffered deltas reach persistence/subscribers within this window. */
@@ -221,7 +229,7 @@ export abstract class BaseAgentProvider implements AgentProvider {
       if (this.deltaBuffers.get(sessionId) === buffered) {
         this.scheduleDeltaFlush(sessionId, buffered);
       }
-      throw error;
+      throw new RetainedEventFlushError(error);
     }
     if (this.deltaBuffers.get(sessionId) === buffered) {
       this.deltaBuffers.delete(sessionId);

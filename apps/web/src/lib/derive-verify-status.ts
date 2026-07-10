@@ -21,7 +21,9 @@ export function deriveVerifyStatus(events: SessionEvent[]): VerifyStatus | null 
       status?: string;
     };
     if (event.type === 'status') {
-      lifecycleStopped = payload.status !== 'IDLE';
+      if (typeof payload.status === 'string') {
+        lifecycleStopped = payload.status !== 'IDLE';
+      }
       continue;
     }
     if (event.type === 'verify_result') {

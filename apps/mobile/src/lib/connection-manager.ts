@@ -25,6 +25,8 @@ export interface ConnectionManagerDeps {
   onActiveUrl: (url: string) => void;
   /** Open (or reopen) the relay subscription against the current active URL. */
   reopen: () => void;
+  /** Resubscribe the current healthy relay from its monotonic cursor. */
+  resync: () => void;
   /** Subscribe to network reachability flips; returns an unsubscribe. */
   subscribeNetInfo: (onChange: () => void) => () => void;
   /** Subscribe to foreground/background; `active` true when the app is foreground. */
@@ -212,8 +214,8 @@ export function createConnectionManager(deps: ConnectionManagerDeps): Connection
           if (!active || disposed) return;
           if (state === 'connected') {
             // The OS can suspend a live-looking socket without a close event.
-            // The caller reopens from its monotonic last-seen cursor.
-            deps.reopen();
+            // Keep in-flight RPCs on the healthy socket and replay from its cursor.
+            deps.resync();
             return;
           }
           kick();

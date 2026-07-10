@@ -17,17 +17,21 @@ function harness(overrides: Partial<ConnectionManagerDeps> = {}) {
   const timers: Array<{ fn: () => void; ms: number }> = [];
   const onActiveUrl: string[] = [];
   let reopens = 0;
+  let resyncs = 0;
   let netInfoCb: (() => void) | null = null;
   let appStateCb: ((active: boolean) => void) | null = null;
   const states: ConnectionState[] = [];
 
-  const deps: ConnectionManagerDeps = {
+  const deps: ConnectionManagerDeps & { resync: () => void } = {
     candidateUrls: ['http://a', 'http://b'],
     initialUrl: 'http://a',
     probe: async () => probeResult,
     onActiveUrl: (url) => onActiveUrl.push(url),
     reopen: () => {
       reopens += 1;
+    },
+    resync: () => {
+      resyncs += 1;
     },
     subscribeNetInfo: (cb) => {
       netInfoCb = cb;
@@ -59,6 +63,7 @@ function harness(overrides: Partial<ConnectionManagerDeps> = {}) {
     onActiveUrl,
     timers,
     reopens: () => reopens,
+    resyncs: () => resyncs,
     netInfo: () => netInfoCb?.(),
     appState: (active: boolean) => appStateCb?.(active),
     open: () => manager.handleOpen(),
@@ -92,7 +97,8 @@ describe('createConnectionManager', () => {
     expect(h.manager.getState()).toBe('connected');
     h.appState(true);
     await h.tick();
-    expect(h.reopens()).toBe(1);
+    expect(h.resyncs()).toBe(1);
+    expect(h.reopens()).toBe(0);
     expect(h.onActiveUrl).toEqual([]);
     expect(h.manager.getState()).toBe('connected');
   });

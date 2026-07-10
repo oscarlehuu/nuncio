@@ -12,6 +12,7 @@ import { existsSync, watch, type FSWatcher } from 'node:fs';
 import { homedir } from 'node:os';
 import { v4 as uuidv4 } from 'uuid';
 import { AgentRegistry } from '../agents/agents.registry';
+import { RetainedEventFlushError } from '../agents/agents.base-provider';
 import type { AgentAttachment, AgentProvider, AgentRunContext } from '../agents/agents.types';
 import { AgentToolRegistry } from '../agents/tools/agent-tool-registry';
 import { MediaStore } from './media.store';
@@ -950,7 +951,12 @@ export class SessionsService implements OnModuleDestroy {
       finish();
       this.cancelLifecycleRetry(session.id);
       return true;
-    } catch {
+    } catch (error) {
+      if (this.isUnknownProviderError(error, session.provider)) {
+        finish();
+        return true;
+      }
+      if (!(error instanceof RetainedEventFlushError)) throw error;
       this.scheduleLifecycleRetry(session.id, session.status, finish);
       return false;
     }
@@ -973,7 +979,8 @@ export class SessionsService implements OnModuleDestroy {
           this.disposeProviderSession(current);
           finish();
           return;
-        } catch {
+        } catch (error) {
+          if (!(error instanceof RetainedEventFlushError)) return;
           // The base provider retains failed appends; retry until persistence
           // recovers or the bounded shutdown drain explicitly cancels us.
         }

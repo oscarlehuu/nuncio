@@ -297,6 +297,29 @@ describe('subscribeSessionEvents', () => {
     expect(closes).toBe(0);
   });
 
+  it('rejects pending RPCs when intentional close settles asynchronously', async () => {
+    const sub = subscribeSessionEvents({
+      url: 'ws://x',
+      sessionId: 's1',
+      onEvent: () => {},
+      webSocketFactory: factory,
+    });
+    const ws = FakeSocket.instances[0];
+    ws.open();
+    ws.close = () => {
+      ws.closed = true;
+    };
+    const call = sub.call('steer', { sessionId: 's1', message: 'hi' });
+    let outcome: unknown = 'pending';
+    void call.catch((error) => { outcome = error; });
+
+    sub.close();
+    ws.fire('close', {});
+    await Promise.resolve();
+
+    expect(outcome).toMatchObject({ message: 'connection closed' });
+  });
+
   it('fires onClose on a socket drop and still self-reconnects by default', () => {
     let closes = 0;
     subscribeSessionEvents({

@@ -101,6 +101,11 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
   let nextRpcId = 1;
   const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
 
+  const rejectPending = () => {
+    for (const rpc of pending.values()) rpc.reject(new Error('connection closed'));
+    pending.clear();
+  };
+
   const sendSubscribe = () => {
     const tail =
       lastSeq === 0 && Number.isFinite(options.tail) && (options.tail ?? 0) > 0
@@ -189,8 +194,7 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
     ws.addEventListener('close', () => {
       if (socket !== ws) return;
       socketOpen = false;
-      for (const rpc of pending.values()) rpc.reject(new Error('connection closed'));
-      pending.clear();
+      rejectPending();
       // Intentional teardowns are not drops: close() (the whole subscription is
       // being disposed) and resync()'s stale-socket swap both close deliberately,
       // so neither must fire onClose or schedule a reconnect — otherwise an owner
@@ -242,6 +246,7 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
     },
     close() {
       closed = true;
+      rejectPending();
       if (reconnectTimer !== null) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;

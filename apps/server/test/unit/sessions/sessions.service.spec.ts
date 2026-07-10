@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { AgentsModule } from '../../../src/agents/agents.module';
 import { AgentRegistry } from '../../../src/agents/agents.registry';
 import type { AgentProvider } from '../../../src/agents/agents.types';
+import { RetainedEventFlushError } from '../../../src/agents/agents.base-provider';
 import { CursorLocalModule } from '../../../src/cursor-local/cursor-local.module';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { GitModule } from '../../../src/git/git.module';
@@ -232,6 +233,18 @@ describe('SessionsService lifecycle (phase 3)', () => {
     });
   });
 
+  it('archives a persisted session whose provider is no longer registered', () => {
+    const ghost = sessions.create({
+      id: 'ghost-lifecycle',
+      prompt: 'old provider session',
+      provider: 'ghost-provider',
+    });
+    sessions.updateStatus(ghost.id, 'RUNNING');
+    sessions.updateStatus(ghost.id, 'IDLE');
+
+    expect(service.archive(ghost.id).status).toBe('ARCHIVED');
+  });
+
   describe('restore', () => {
     it('transitions an ARCHIVED session back to IDLE', () => {
       const id = seedSession('ARCHIVED');
@@ -347,7 +360,9 @@ describe('SessionsService lifecycle (phase 3)', () => {
       steer: async () => undefined,
       dispose: () => {
         calls.push('dispose');
-        if (remainingFailures-- > 0) throw new Error('temporary sqlite failure');
+        if (remainingFailures-- > 0) {
+          throw new RetainedEventFlushError(new Error('temporary sqlite failure'));
+        }
       },
       bustCache: () => undefined,
     } as AgentProvider;
@@ -364,6 +379,41 @@ describe('SessionsService lifecycle (phase 3)', () => {
       }
       expect(service.get(id)?.status).toBe('ARCHIVED');
       expect(calls.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      registry.resolveForSession = originalResolve;
+    }
+  });
+
+  it('surfaces a permanent provider disposal failure instead of retrying forever', async () => {
+    const id = seedSession('IDLE');
+    let calls = 0;
+    const provider = {
+      id: 'broken-runtime',
+      name: 'Broken runtime',
+      capabilities: {
+        interrupt: false,
+        modelSwitch: 'none',
+        effortSwitch: 'none',
+        images: false,
+        steerWhileRunning: false,
+      },
+      isAvailable: async () => true,
+      listModels: async () => [],
+      run: async () => undefined,
+      steer: async () => undefined,
+      dispose: () => {
+        calls += 1;
+        throw new Error('runtime cannot dispose');
+      },
+      bustCache: () => undefined,
+    } as AgentProvider;
+    const originalResolve = registry.resolveForSession.bind(registry);
+    registry.resolveForSession = (() => provider) as AgentRegistry['resolveForSession'];
+
+    try {
+      expect(() => service.archive(id)).toThrow('runtime cannot dispose');
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(calls).toBe(1);
     } finally {
       registry.resolveForSession = originalResolve;
     }
