@@ -252,7 +252,10 @@ describe('BaseAgentProvider streamed-tail preservation', () => {
   it('releases the runtime and retains the accepted tail when dispose flushing fails', async () => {
     const overlapping = new OverlappingRunProvider(sessions, events);
     const created = sessions.create({ prompt: 'dispose retry', provider: 'overlapping' });
-    const running = overlapping.run(created.id, created.prompt, { emit: () => {} });
+    const emitted: Array<{ type: string; payload: unknown }> = [];
+    const running = overlapping.run(created.id, created.prompt, {
+      emit: (event) => emitted.push(event),
+    });
     while (overlapping.contexts.length < 1) await Promise.resolve();
     overlapping.emitFrom(0, 'accepted before dispose');
 
@@ -279,6 +282,12 @@ describe('BaseAgentProvider streamed-tail preservation', () => {
     expect(deltas.map((event) => (event.payload as { delta: string }).delta)).toEqual([
       'accepted before dispose',
     ]);
+    expect(emitted).toContainEqual(
+      expect.objectContaining({
+        type: 'assistant_delta',
+        payload: { delta: 'accepted before dispose' },
+      }),
+    );
   });
 
   it('can cancel a retained delta retry when shutdown makes persistence unavailable', async () => {

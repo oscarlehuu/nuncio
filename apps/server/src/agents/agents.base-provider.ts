@@ -131,7 +131,7 @@ export abstract class BaseAgentProvider implements AgentProvider {
   private readonly runGenerations = new Map<string, number>();
   private readonly guardedEmitters = new WeakMap<
     EventEmitter,
-    { sessionId: string; generation: number }
+    { sessionId: string; generation: number; upstream?: EventEmitter }
   >();
 
   protected pushEvent(
@@ -162,7 +162,10 @@ export abstract class BaseAgentProvider implements AgentProvider {
         type,
         base,
         delta,
-        emit,
+        // The callback was accepted while this generation was current. Keep
+        // its upstream fan-out so a later persistence retry can still deliver
+        // the committed row even if dispose has fenced new SDK callbacks.
+        emit: this.acceptedEmitter(emit),
         timer: null,
       };
       this.deltaBuffers.set(sessionId, next);
@@ -170,7 +173,7 @@ export abstract class BaseAgentProvider implements AgentProvider {
       return;
     }
     current.delta += delta;
-    current.emit = emit ?? current.emit;
+    current.emit = this.acceptedEmitter(emit) ?? current.emit;
     if (current.delta.length >= DELTA_FLUSH_MAX_CHARS) {
       this.flushDeltas(sessionId);
     }
@@ -332,8 +335,6 @@ export abstract class BaseAgentProvider implements AgentProvider {
       this.flushPreview(sessionId);
       if (error instanceof AgentRunCancelledError) return;
       this.handleError(sessionId, error, runContext.emit);
-    } finally {
-      if (this.isRunCurrent(sessionId, generation)) this.invalidateRun(sessionId);
     }
   }
 
@@ -346,8 +347,13 @@ export abstract class BaseAgentProvider implements AgentProvider {
     const guarded: EventEmitter = (event) => {
       if (this.isRunCurrent(sessionId, generation)) upstream?.(event);
     };
-    this.guardedEmitters.set(guarded, { sessionId, generation });
+    this.guardedEmitters.set(guarded, { sessionId, generation, upstream });
     return { ...context, emit: guarded };
+  }
+
+  private acceptedEmitter(emit?: EventEmitter): EventEmitter | undefined {
+    if (!emit) return undefined;
+    return this.guardedEmitters.get(emit)?.upstream ?? emit;
   }
 
   private isRunCurrent(sessionId: string, generation: number): boolean {

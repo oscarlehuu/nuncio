@@ -16,7 +16,7 @@ export const SESSIONS_WS_PATH = '/api/sessions/ws';
  */
 export interface SessionRelayService {
   get(id: string): unknown;
-  getEvents(id: string, since?: number): SessionEvent[];
+  getEvents(id: string, since?: number, options?: { tail?: number }): SessionEvent[];
   subscribe(id: string, listener: (event: SessionEvent) => void): () => void;
   steer(id: string, message: string, forceResume?: boolean): Promise<unknown>;
 }
@@ -187,6 +187,11 @@ export function attachSessionsWebSocketServer(
         }
         const rawSince = Number(params.since ?? 0);
         const since = Number.isFinite(rawSince) ? rawSince : 0;
+        const rawTail = Number(params.tail);
+        const tail =
+          since === 0 && Number.isFinite(rawTail) && rawTail > 0
+            ? Math.floor(rawTail)
+            : undefined;
         // Resubscribe replaces the previous subscription (drop-to-cursor recovery).
         subscriptions.get(sessionId)?.();
         send(ws, { id, result: { ok: true } });
@@ -194,7 +199,11 @@ export function attachSessionsWebSocketServer(
         // A subscription that outruns the socket is dropped, not buffered: the
         // client gets one small "behind" marker and recovers by resubscribing
         // from its last seen seq.
-        for (const event of sessions.getEvents(sessionId, since)) {
+        for (const event of sessions.getEvents(
+          sessionId,
+          since,
+          tail !== undefined ? { tail } : undefined,
+        )) {
           const push = { channel: sessionId, event };
           if (bufferedAmount(ws) + serializedBytes(push) > maxBuffered) {
             send(ws, { channel: sessionId, behind: true });

@@ -21,6 +21,8 @@ export interface SessionSubscriptionOptions {
   url: string;
   sessionId: string;
   since?: number;
+  /** Bound only the initial cursor-zero replay; reconnects continue from lastSeq. */
+  tail?: number;
   onEvent: (event: SessionEvent) => void;
   /** Injected for React Native (auth headers) and tests; defaults to the global WebSocket. */
   webSocketFactory?: WebSocketFactory;
@@ -100,11 +102,19 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
   const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
 
   const sendSubscribe = () => {
+    const tail =
+      lastSeq === 0 && Number.isFinite(options.tail) && (options.tail ?? 0) > 0
+        ? Math.floor(options.tail!)
+        : undefined;
     socket?.send(
       JSON.stringify({
         id: nextRpcId++,
         method: 'subscribe',
-        params: { sessionId: options.sessionId, since: lastSeq },
+        params: {
+          sessionId: options.sessionId,
+          since: lastSeq,
+          ...(tail !== undefined ? { tail } : {}),
+        },
       }),
     );
   };

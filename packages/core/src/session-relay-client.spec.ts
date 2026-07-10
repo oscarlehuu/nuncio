@@ -77,6 +77,33 @@ describe('subscribeSessionEvents', () => {
     expect(seen).toEqual([4, 5]);
   });
 
+  it('requests a bounded tail only while the cursor is still zero', () => {
+    subscribeSessionEvents({
+      url: 'ws://x/api/sessions/ws',
+      sessionId: 's1',
+      since: 0,
+      tail: 50,
+      onEvent: () => {},
+      webSocketFactory: factory,
+    } as Parameters<typeof subscribeSessionEvents>[0] & { tail: number });
+    const ws = FakeSocket.instances[0];
+    ws.open();
+    expect(ws.sent[0]).toMatchObject({
+      method: 'subscribe',
+      params: { sessionId: 's1', since: 0, tail: 50 },
+    });
+
+    ws.push({ channel: 's1', event: event(51) });
+    ws.push({ channel: 's1', behind: true });
+    expect(ws.sent[ws.sent.length - 1]).toEqual(
+      expect.objectContaining({
+        method: 'subscribe',
+        params: { sessionId: 's1', since: 51 },
+      }),
+    );
+    expect((ws.sent[ws.sent.length - 1]!.params as Record<string, unknown>).tail).toBeUndefined();
+  });
+
   it('reconnects after a drop and resubscribes from the last seen seq', () => {
     const seen: number[] = [];
     subscribeSessionEvents({

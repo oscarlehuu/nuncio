@@ -431,17 +431,21 @@ describe('useSessionStream', () => {
   it('opens the relay from seq 0 when the initial REST bootstrap fails', async () => {
     vi.mocked(fetchEvents).mockRejectedValueOnce(new Error('temporary REST failure'));
 
-    render(<Harness sid="s1" />);
+    render(<Harness sid="s1" tail={50} />);
 
     await waitFor(() => expect(lastSocket).toBeDefined());
     await waitFor(() => expect(lastSocket!.subscribes.length).toBe(1));
-    expect(lastSocket!.subscribes[0].params).toMatchObject({ sessionId: 's1', since: 0 });
+    expect(lastSocket!.subscribes[0].params).toMatchObject({
+      sessionId: 's1',
+      since: 0,
+      tail: 50,
+    });
   });
 
   it('opens the relay from seq 0 when the REST bootstrap stays pending', async () => {
     vi.useFakeTimers();
     vi.mocked(fetchEvents).mockReturnValueOnce(new Promise(() => {}));
-    render(<Harness sid="s1" />);
+    render(<Harness sid="s1" tail={50} />);
     expect(lastSocket).toBeUndefined();
 
     await act(async () => {
@@ -451,7 +455,11 @@ describe('useSessionStream', () => {
 
     expect(lastSocket).toBeDefined();
     await act(async () => Promise.resolve());
-    expect(lastSocket!.subscribes[0].params).toMatchObject({ sessionId: 's1', since: 0 });
+    expect(lastSocket!.subscribes[0].params).toMatchObject({
+      sessionId: 's1',
+      since: 0,
+      tail: 50,
+    });
   });
 
   it('visibility recovery resubscribes from the highest live seq', async () => {

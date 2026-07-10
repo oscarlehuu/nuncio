@@ -128,6 +128,7 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
       url: sessionRelayUrl(baseRef.current),
       sessionId: activeSessionId,
       since: sinceRef.current,
+      tail: tailRef.current,
       onEvent,
     });
   }, [isCurrent, onEvent]);

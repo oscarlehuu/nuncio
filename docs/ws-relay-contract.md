@@ -40,7 +40,7 @@ the target machine trusts the hub's tailnet identity for the second hop.
 Client → server requests:
 
 ```json
-{ "id": 1, "method": "subscribe", "params": { "sessionId": "…", "since": 0 } }
+{ "id": 1, "method": "subscribe", "params": { "sessionId": "…", "since": 0, "tail": 1000 } }
 ```
 
 Server → client responses (correlated by `id`):
@@ -86,7 +86,7 @@ immediately.
 
 | Method | Params | Result | Notes |
 |---|---|---|---|
-| `subscribe` | `sessionId`, `since?` (default 0) | `{ ok: true }` | Replays events with `seq > since` as channel pushes, then streams live. Subscribing again to the same session replaces the previous subscription (cursor recovery). Unknown session → error 404. |
+| `subscribe` | `sessionId`, `since?` (default 0), `tail?` | `{ ok: true }` | Replays events with `seq > since` as channel pushes, then streams live. A positive `tail` bounds only a cursor-zero initial replay; reconnects resume from the highest seen `seq`. Subscribing again replaces the previous subscription (cursor recovery). Unknown session → error 404. |
 | `unsubscribe` | `sessionId` | `{ ok: true }` | Stops pushes for that session. |
 | `steer` | `sessionId`, `message`, `forceResume?` | the updated session DTO | Same semantics and error codes as `POST /api/sessions/:id/steer` (400 invalid, 409 CLI busy, 503 CLI missing). |
 

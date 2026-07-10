@@ -29,7 +29,10 @@ function makeFakeSessions(seed: number[] = []): FakeSessions {
     steerCalls: [],
     steerImpl: async (id) => ({ id, status: 'RUNNING' }),
     get: (id) => (id === 'sess-1' ? { id } : undefined),
-    getEvents: (_id, since = 0) => events.filter((e) => e.seq > since),
+    getEvents: (_id, since = 0, options?: { tail?: number }) => {
+      const replay = events.filter((event) => event.seq > since);
+      return options?.tail === undefined ? replay : replay.slice(-options.tail);
+    },
     subscribe: (_id, listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -184,6 +187,21 @@ describe('sessions WS relay', () => {
     client.send({ id: 1, method: 'subscribe', params: { sessionId: 'sess-1', since: 2 } });
     await client.waitFor(() => client.events.length === 2);
     expect(client.events.map((e) => e.seq)).toEqual([3, 4]);
+    await client.close();
+  });
+
+  it('bounds an initial cursor-zero replay to the requested tail window', async () => {
+    const fake = makeFakeSessions([1, 2, 3, 4, 5]);
+    const port = await startServer(fake);
+    const client = await connect(port);
+    client.send({
+      id: 1,
+      method: 'subscribe',
+      params: { sessionId: 'sess-1', since: 0, tail: 2 },
+    });
+
+    await client.waitFor(() => client.events.length === 2);
+    expect(client.events.map((event) => event.seq)).toEqual([4, 5]);
     await client.close();
   });
 
