@@ -56,6 +56,16 @@ describe('projectCrewRun', () => {
     expect(projected.run).toMatchObject({ phase: 'BUILD', status: 'BLOCKED_PROVIDER', blockedReason: 'provider_unavailable' });
   });
 
+  it('projects a recovery block without waiting for a full run refetch', () => {
+    const projected = projectCrewRun(base('BUILD', 'RECOVERING'), [
+      event(2, 'recovery_blocked', { reason: 'workspace moved' }),
+    ]);
+
+    expect(projected.run).toMatchObject({
+      phase: 'BUILD', status: 'BLOCKED_USER', blockedReason: 'unrecoverable_failure', revision: 2,
+    });
+  });
+
   it('keeps the strict fresh-final-review handoff inside REVIEW', () => {
     const projected = projectCrewRun(base('REVIEW', 'RUNNING'), [
       { ...event(2, 'final_review_requested', { basedOnWorkspaceHead: headA }), contextRevision: 2 },

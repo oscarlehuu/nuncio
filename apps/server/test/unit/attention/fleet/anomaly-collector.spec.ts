@@ -47,6 +47,29 @@ describe('AnomalyCollector', () => {
     delete process.env.NUNCIO_DATA_DIR;
   });
 
+  it('excludes Crew member sessions from repository-backed anomaly inputs', () => {
+    let rawCalls = 0;
+    let userFacingCalls = 0;
+    const sessions = {
+      list: () => {
+        rawCalls += 1;
+        return [{ id: 'crew', verifyOwner: 'crew', status: 'RUNNING', updatedAt: 0 }];
+      },
+      listUserFacing: () => {
+        userFacingCalls += 1;
+        return [{ id: 'solo', verifyOwner: 'session', status: 'RUNNING', updatedAt: 0 }];
+      },
+    };
+    const publicCollector = new AnomalyCollector(
+      undefined, undefined, sessions as never, undefined, undefined, undefined,
+    );
+    publicCollector.onModuleInit();
+
+    expect(publicCollector.runningSessions().map(({ id }) => id)).toEqual(['solo']);
+    expect(userFacingCalls).toBe(1);
+    expect(rawCalls).toBe(0);
+  });
+
   describe('(a) session-empty-diff', () => {
     it('RUNNING > T with an empty diff raises the anomaly', async () => {
       collector.runningSessions = () => [{ id: 's1', projectPath: '/p', gitDir: '/wt', runningForMs: T + 1 }];

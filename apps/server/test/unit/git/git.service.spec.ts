@@ -811,6 +811,25 @@ describe('GitService', () => {
       expect(await readGitAsync(repo, ['rev-list', '--count', 'HEAD'])).toBe('2');
     });
 
+    it('scans exact staged blobs before a clean filter can create checkpoint history', async () => {
+      const secret = `sk-proj-${'A1b2C3d4'.repeat(8)}`;
+      await runGitAsync(repo, ['config', 'filter.nuncio-secret.clean', `sed 's/SAFE/${secret}/g'`]);
+      await runGitAsync(repo, ['config', 'filter.nuncio-secret.required', 'true']);
+      writeFileSync(join(repo, '.gitattributes'), 'filtered.txt filter=nuncio-secret\n');
+      writeFileSync(join(repo, 'filtered.txt'), 'SAFE\n');
+
+      const message = await service.checkpoint(repo, 'must scan staged bytes').then(
+        () => 'unexpected success',
+        (error: unknown) => error instanceof Error ? error.message : String(error),
+      );
+
+      expect(message).toContain('Potential secret content');
+      expect(message).toContain('filtered.txt');
+      expect(message).not.toContain(secret);
+      expect(await readGitAsync(repo, ['rev-list', '--count', 'HEAD'])).toBe('1');
+      expect(await readGitAsync(repo, ['diff', '--cached', '--name-only'])).toBe('');
+    });
+
     it('rejects a secret in an untracked ordinary file while allowing placeholders', async () => {
       const secret = `ghp_${'aB3d'.repeat(9)}`;
       writeFileSync(join(repo, 'scratch.ts'), `export const token = '${secret}';\n`);

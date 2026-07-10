@@ -86,6 +86,55 @@ describe('CrewRunnerService', () => {
     expect(harness.order).toEqual(['quiesce', 'accept']);
   });
 
+  it('keeps review feedback as durable intent until the Reviewer task settles', async () => {
+    const review = {
+      memberSessionId: 'reviewer-1', workspaceHead: 'a'.repeat(40),
+      result: { kind: 'review', workspaceHead: 'a'.repeat(40), findings: [{ severity: 'blocker' }] },
+    };
+    const harness = runnerHarness({
+      run: { phase: 'REVIEW', status: 'RUNNING' }, results: [review],
+      members: [{ id: 'reviewer-1', memberKey: 'reviewer:primary', isCurrent: true }],
+      stageResult: { phase: 'BUILD', status: 'QUEUED' },
+    });
+
+    const duringTool = await harness.runner.acceptSubmission({
+      runId: 'run-1', result: review,
+    } as never);
+    expect(duringTool).toMatchObject({ phase: 'REVIEW', status: 'RUNNING' });
+    expect(harness.accept).not.toHaveBeenCalled();
+
+    const settled = await harness.runner.handleTaskFinished({
+      executionKind: 'crew-member', crewRunId: 'run-1', crewMemberKey: 'reviewer:primary',
+      crewPhase: 'REVIEW', crewAttemptKey: 'runner:review:attempt:1', status: 'SUCCEEDED',
+    } as never);
+    expect(settled).toMatchObject({ phase: 'BUILD', status: 'QUEUED' });
+    expect(harness.accept).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the plan as durable intent until the Foreman task settles', async () => {
+    const plan = {
+      memberSessionId: 'foreman-1', workspaceHead: 'a'.repeat(40),
+      result: { kind: 'plan', summary: 'Plan', steps: ['Build'], openQuestions: [] },
+    };
+    const harness = runnerHarness({
+      run: { phase: 'PLAN', status: 'RUNNING' }, results: [plan],
+      members: [{ id: 'foreman-1', memberKey: 'foreman:primary', isCurrent: true }],
+      stageResult: { phase: 'BUILD', status: 'QUEUED' },
+    });
+
+    const duringTool = await harness.runner.acceptSubmission({
+      runId: 'run-1', result: plan,
+    } as never);
+    expect(duringTool).toMatchObject({ phase: 'PLAN', status: 'RUNNING' });
+    expect(harness.accept).not.toHaveBeenCalled();
+
+    await harness.runner.handleTaskFinished({
+      executionKind: 'crew-member', crewRunId: 'run-1', crewMemberKey: 'foreman:primary',
+      crewPhase: 'PLAN', crewAttemptKey: 'runner:plan:attempt:1', status: 'SUCCEEDED',
+    } as never);
+    expect(harness.accept).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores boot-interrupted task replay until workspace recovery opens execution', async () => {
     const harness = runnerHarness({ run: { phase: 'BUILD', status: 'RUNNING' } });
     harness.runner.onModuleInit();

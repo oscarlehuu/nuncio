@@ -34,6 +34,29 @@ describe('FleetService', () => {
     svc = new FleetService();
   });
 
+  it('excludes Crew member sessions from repository-backed Fleet sources', () => {
+    let rawCalls = 0;
+    let userFacingCalls = 0;
+    const sessions = {
+      list: () => {
+        rawCalls += 1;
+        return [{ id: 'crew', verifyOwner: 'crew', projectPath: '/crew', status: 'RUNNING', updatedAt: 2 }];
+      },
+      listUserFacing: () => {
+        userFacingCalls += 1;
+        return [{ id: 'solo', verifyOwner: 'session', projectPath: '/solo', status: 'RUNNING', updatedAt: 1 }];
+      },
+    };
+    const publicFleet = new FleetService(
+      { list: () => [] } as never, sessions as never, undefined, undefined, undefined,
+    );
+    publicFleet.onModuleInit();
+
+    expect(publicFleet.sources().activePaths).toEqual(['/solo']);
+    expect(userFacingCalls).toBe(1);
+    expect(rawCalls).toBe(0);
+  });
+
   it('populates the UNION of configured projects and recently-active paths, deduped', async () => {
     withSources({
       configured: [{ path: '/a', name: 'a', weight: 1 }, { path: '/b', name: 'b', weight: 1 }],

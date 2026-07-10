@@ -102,7 +102,11 @@ export class CrewGitWorkspaceAdapter implements CrewWorkspacePort {
     return resolve(raw.startsWith('~/') ? join(homedir(), raw.slice(2)) : raw);
   }
   private async defaultBranch(projectPath: string): Promise<string> {
-    return (await this.git.listBranches(projectPath)).find((branch) => branch.isDefault)?.name ?? 'main';
+    const branches = await this.git.listBranches(projectPath);
+    return branches.find((branch) => branch.isDefault)?.name
+      ?? branches.find((branch) => branch.isCurrent)?.name
+      ?? branches[0]?.name
+      ?? 'main';
   }
 }
 

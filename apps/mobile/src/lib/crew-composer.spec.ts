@@ -86,10 +86,11 @@ describe('mobile Crew composer contracts', () => {
   });
 
   it('invalidates Ready as soon as its selected profile or project changes', () => {
-    const resolvedFor = crewResolutionKey('quality', '/repo-a');
-    expect(isCrewResolutionCurrent(resolvedFor, 'quality', '/repo-a')).toBe(true);
-    expect(isCrewResolutionCurrent(resolvedFor, 'speed', '/repo-a')).toBe(false);
-    expect(isCrewResolutionCurrent(resolvedFor, 'quality', '/repo-b')).toBe(false);
+    const resolvedFor = crewResolutionKey('quality', '/repo-a', 'release');
+    expect(isCrewResolutionCurrent(resolvedFor, 'quality', '/repo-a', 'release')).toBe(true);
+    expect(isCrewResolutionCurrent(resolvedFor, 'speed', '/repo-a', 'release')).toBe(false);
+    expect(isCrewResolutionCurrent(resolvedFor, 'quality', '/repo-b', 'release')).toBe(false);
+    expect(isCrewResolutionCurrent(resolvedFor, 'quality', '/repo-a', 'main')).toBe(false);
   });
 
   it('renders the resolved team in fixed workflow order', () => {

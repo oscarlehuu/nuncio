@@ -144,6 +144,10 @@ replacement with the same frozen provider/model; it does not trigger a provider 
 Session memory is continuity, not authority. Git, append-only Crew events, structured results, and
 artifact integrity remain authoritative.
 
+A successor normally re-resolves the saved profile. If that profile was deleted after the prior
+run, Nuncio re-resolves the prior immutable snapshot instead, preserving the same provider/model
+bindings without silently selecting a replacement profile.
+
 ## Workspace and write authority
 
 Every active run owns one retained worktree and branch. The run records the canonical worktree
@@ -191,9 +195,13 @@ Supported host sandboxes are:
 - macOS: Seatbelt through `/usr/bin/sandbox-exec`;
 - Linux: bubblewrap through `/usr/bin/bwrap`.
 
-Both modes disable network, isolate HOME/temp state, bind the disposable snapshot, protect Git
-metadata and dependency stores, and constrain filesystem access. Sandbox absence makes profile resolution
-`needs_setup`; Nuncio does not run the command unsandboxed.
+Readiness runs and caches a minimal sandbox probe; binary existence alone is not enough. A host
+that cannot actually apply Seatbelt or bubblewrap resolves `needs_setup` before a run is created.
+On macOS, file data is denied globally outside the disposable snapshot, isolated temp/cache,
+read-only dependency store, Nuncio's executable directory, and narrowly required system runtime
+paths. Host locations such as the user's home, sibling temp files, `/private/etc`, and `/Library`
+remain unreadable. Both modes disable network, protect Git metadata and dependency stores, and
+constrain filesystem access. Nuncio never falls back to an unsandboxed command.
 
 Combined stdout/stderr uses a shared byte budget: 16 MiB by default, with the runner accepting no
 configuration above 64 MiB. Overflow terminates the process group and fails verification. Timeout
@@ -289,8 +297,9 @@ The additive REST surface is:
 - guarded pause, resume, cancel, clarification, and gate-specific extra-round commands.
 
 Web/PWA and Expo both default to Solo, require a server-resolved `ready` profile before Crew
-creation, show the fixed phase order, member Sessions, current gate evidence, recovery/blocker
-state, immutable history, and valid commands. They do not resolve provider/model bindings locally.
+creation, and let the user choose the exact base branch before that resolution is accepted. They
+show the fixed phase order, member Sessions, current gate evidence, recovery/blocker state,
+immutable history, and valid commands. They do not resolve provider/model bindings locally.
 Crew lifecycle pushes are emitted from the Crew aggregate with both `crewTaskId` and `crewRunId`;
 hidden member Session pushes are suppressed so notification navigation preserves run identity.
 
@@ -315,12 +324,12 @@ The implementation includes unit contracts for reducer, profile resolution, runt
 workspace/lease authority, structured results, verifier/artifacts, recovery/successors, API, core
 transport/projections, and web/mobile surfaces. The local verification record is:
 
-- 194 Crew server unit tests and 10 Crew HTTP e2e tests passed;
-- the full 39-test server e2e layer, 349 core tests, 859 web tests, 87 mobile checks, and 126 script
+- 204 Crew server unit tests and 10 Crew HTTP e2e tests passed;
+- the full 39-test server e2e layer, 350 core tests, 861 web tests, 89 mobile checks, and 126 script
   tests passed;
 - `bun run gate:full` passed, including the existing level-5 real-browser smoke in headless mode
   across Solo and Crew, desktop and narrow layouts, pause/resume, fixed gates, and terminal success;
-- independent high-reasoning review findings were addressed and the follow-up verifier/security
-  review returned no open finding.
+- independent high-reasoning review findings were regression-tested and addressed; the final
+  follow-up review found no actionable correctness regressions.
 
 GitHub records `dev` PR/CI integration separately. Stable promotion remains outside this baseline.

@@ -16,7 +16,7 @@ synchronized baseline documentation. Stable-release promotion is tracked separat
 
 ## Implemented mobile surface
 
-- Solo-default composer with ready-profile Crew creation.
+- Solo-default composer with project, base-branch, and ready-profile Crew creation.
 - Crew run list/detail navigation and push/deep-link routing.
 - Fixed progress, gate cards, member Session links, outcome evidence, valid run actions, and
   terminal successor request.
@@ -33,13 +33,13 @@ synchronized baseline documentation. Stable-release promotion is tracked separat
 
 ## Final local proof
 
-- [x] Server Crew unit suite: 194 passed; Crew HTTP e2e: 10 passed.
-- [x] Full server e2e: 39 passed; core: 349; web: 859; mobile: 87; scripts: 126.
+- [x] Server Crew unit suite: 204 passed; Crew HTTP e2e: 10 passed.
+- [x] Full server e2e: 39 passed; core: 350; web: 861; mobile: 89; scripts: 126.
 - [x] `bun run gate:full` passed with build, lint/typecheck, unit, e2e, and browser layers.
 - [x] Headless real-browser smoke passed on desktop and narrow layouts without taking over the
   user's visible browser; Solo lifecycle and Crew pause/resume through terminal success passed.
-- [x] Independent high-reasoning correctness/security findings were fixed; scoped verifier
-  follow-up returned no finding.
+- [x] Independent high-reasoning correctness/security findings were fixed with regression tests;
+  the final follow-up review found no actionable correctness regressions.
 - [x] Minor changeset exists; branch-flow and changeset checks run again against latest `dev`
   immediately before PR.
 

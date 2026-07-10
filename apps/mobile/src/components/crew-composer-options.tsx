@@ -1,19 +1,22 @@
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 import type { CrewProfileDto, ResolvedCrewProfileDto } from '@nuncio/core/crew-api';
 import { resolvedCrewTeam } from '../lib/crew-composer';
-import type { CrewProject } from '../lib/crew-projects';
+import type { CrewBranch, CrewProject } from '../lib/crew-projects';
 
 interface Props {
   profiles: CrewProfileDto[];
   projects: CrewProject[];
+  branches: CrewBranch[];
   profileId: string;
   projectPath: string;
+  baseBranch: string;
   resolution: ResolvedCrewProfileDto | null;
   loading: boolean;
   resolving: boolean;
   error: string | null;
   onProfileChange: (id: string) => void;
   onProjectChange: (path: string) => void;
+  onBranchChange: (branch: string) => void;
   onRetry: () => void;
   onOpenSetup: () => void;
 }
@@ -37,6 +40,16 @@ export function CrewComposerOptions(props: Props) {
         items={props.profiles.map((profile) => ({ key: profile.id, label: profile.name }))}
         value={props.profileId}
         onChange={props.onProfileChange}
+      />
+      <ChoiceRow
+        label="Base branch"
+        empty="No selectable branches"
+        items={props.branches.map((branch) => ({
+          key: branch.name,
+          label: branch.isDefault ? `${branch.name} · default` : branch.name,
+        }))}
+        value={props.baseBranch}
+        onChange={props.onBranchChange}
       />
       <ResolutionCard {...props} />
     </View>
@@ -84,6 +97,7 @@ function ResolutionCard(props: Props) {
   if (props.error) return <Notice title="Crew unavailable" body={props.error} action="Try again" onPress={props.onRetry} />;
   if (!props.profiles.length) return <Notice title="No Crew profile" body="Create a profile in the web app first." action="Open web settings" onPress={props.onOpenSetup} />;
   if (!props.projects.length) return <Notice title="No project" body="Add a project root in the web app, then retry." action="Try again" onPress={props.onRetry} />;
+  if (!props.branches.length || !props.baseBranch) return <Notice title="No base branch" body="Choose a project with a selectable Git branch, then retry." action="Try again" onPress={props.onRetry} />;
   if (props.resolving) return <Notice title="Resolving Crew" body="Checking live provider and model availability." />;
   if (props.resolution?.state === 'needs_setup') {
     const issue = props.resolution.issues.map((item) => item.message).join(' · ') || 'A required role is unavailable.';

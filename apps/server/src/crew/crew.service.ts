@@ -7,7 +7,7 @@ import {
 import type {
   CrewProfileDefinition, CrewProfileOverride, CrewRunDto,
 } from './domain/crew.types';
-import { CrewProfileResolver, QUALITY_CREW_PRESET } from './crew-profile.resolver';
+import { CrewProfileResolver, QUALITY_CREW_PRESET, savedProfileFromSnapshot } from './crew-profile.resolver';
 import { CrewProviderCatalogService } from './crew-provider-catalog.service';
 import { CrewVerifyCommandResolver, pickExplicitVerifyCommand } from './crew-verify-command.resolver';
 import { CrewRunnerService } from './crew-runner.service';
@@ -58,7 +58,15 @@ export class CrewService {
     projectPath?: string | null; baseBranch?: string | null; baseHead?: string | null;
     projectOverride?: CrewProfileOverride; runOverride?: CrewProfileOverride;
   } = {}) {
-    const profile = this.requireProfile(id);
+    return this.resolveSavedProfile(this.requireProfile(id), input);
+  }
+
+  private async resolveSavedProfile(profile: {
+    id: string; revision: number; presetId: 'quality'; definition: CrewProfileDefinition;
+  }, input: {
+    projectPath?: string | null; baseBranch?: string | null; baseHead?: string | null;
+    projectOverride?: CrewProfileOverride; runOverride?: CrewProfileOverride;
+  }) {
     const explicitVerifyCommand = pickExplicitVerifyCommand(input.projectOverride, input.runOverride);
     let baseHead = input.baseHead?.trim() || null;
     if (input.projectPath && !baseHead) {
@@ -124,9 +132,15 @@ export class CrewService {
     }
     const profileId = input.profileId ?? prior.profileSnapshot.sourceProfileId;
     if (!profileId) throw new CrewValidationError('profileId is required for successor');
-    const resolution = await this.resolveProfile(profileId, {
-      projectPath: task.projectPath, baseHead: prior.workspaceHead, runOverride: input.override,
-    });
+    const savedProfile = this.profiles.findById(profileId);
+    if (!savedProfile && profileId !== prior.profileSnapshot.sourceProfileId) {
+      throw new CrewNotFoundError('CrewProfile', profileId);
+    }
+    const resolution = await this.resolveSavedProfile(
+      savedProfile ?? savedProfileFromSnapshot(prior.profileSnapshot), {
+        projectPath: task.projectPath, baseHead: prior.workspaceHead, runOverride: input.override,
+      },
+    );
     if (resolution.state !== 'ready') throw new CrewProfileNeedsSetupError(resolution.issues);
     const run = await this.successors.create({
       task, prior, profileSnapshot: resolution.snapshot, changeRequest: input.changeRequest,

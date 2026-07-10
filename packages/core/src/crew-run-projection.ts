@@ -111,6 +111,10 @@ function applyEvent(run: CrewRunDetailDto, event: CrewEventDto) {
       if (reasons.has(payload.reason as Exclude<CrewBlockReason, null>)) run.blockedReason = payload.reason as CrewBlockReason;
       return;
     case 'recovery_started': run.status = 'RECOVERING'; return;
+    case 'recovery_blocked':
+      run.status = 'BLOCKED_USER';
+      run.blockedReason = 'unrecoverable_failure';
+      return;
     case 'provider_blocked':
       run.status = 'BLOCKED_PROVIDER';
       run.blockedReason = reasons.has(payload.reason as Exclude<CrewBlockReason, null>) ? payload.reason as CrewBlockReason : 'provider_unavailable';

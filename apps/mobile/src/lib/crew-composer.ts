@@ -38,16 +38,20 @@ export function shouldApplyCrewResolution(
   return requestId === currentRequestId && !aborted;
 }
 
-export function crewResolutionKey(profileId: string, projectPath: string): string {
-  return JSON.stringify([profileId.trim(), projectPath.trim()]);
+export function crewResolutionKey(
+  profileId: string, projectPath: string, baseBranch: string,
+): string {
+  return JSON.stringify([profileId.trim(), projectPath.trim(), baseBranch.trim()]);
 }
 
 export function isCrewResolutionCurrent(
   resolvedFor: string | null,
   profileId: string,
   projectPath: string,
+  baseBranch: string,
 ): boolean {
-  return resolvedFor !== null && resolvedFor === crewResolutionKey(profileId, projectPath);
+  return resolvedFor !== null
+    && resolvedFor === crewResolutionKey(profileId, projectPath, baseBranch);
 }
 
 export function resolvedCrewTeam(resolution: ResolvedCrewProfileDto): string[] {

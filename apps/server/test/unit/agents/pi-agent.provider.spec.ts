@@ -328,6 +328,29 @@ describe('PiAgentProvider', () => {
     expect(emitted.some((e) => e.type === 'steer_message')).toBe(true);
   });
 
+  it('steers a Solo run when stable tool definitions are rebuilt with fresh closures', async () => {
+    const runtimeTools = () => ({
+      systemPromptAppend: 'Use the session browser tool when needed.',
+      tools: [{
+        name: 'browser_state',
+        description: 'Read the current browser state.',
+        inputSchema: { type: 'object', properties: {} },
+        execute: async () => 'state',
+      }],
+    });
+    const created = sessions.create({ prompt: 'browse during a long task', provider: 'pi' });
+    await provider.run(created.id, created.prompt, { emit: () => {}, tools: runtimeTools() });
+
+    isStreaming = true;
+    const handled = await provider.steerMidRun(created.id, 'check the next page', {
+      emit: () => {},
+      tools: runtimeTools(),
+    });
+
+    expect(handled).toBe(true);
+    expect(steerMock).toHaveBeenCalledWith('check the next page', undefined);
+  });
+
   it('does not invoke the live SDK steer until its durable reservation recovers', async () => {
     const created = sessions.create({ prompt: 'durable live steer', provider: 'pi' });
     await provider.run(created.id, created.prompt, { emit: () => {} });

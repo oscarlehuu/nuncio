@@ -192,7 +192,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     if (!handle || !handle.session.isStreaming) return false;
     this.assertRuntimePolicyUnchanged(handle, context);
     const runtimeTools = runtimeToolsForPolicy(context.runtimePolicy, context.tools);
-    if (!samePiRuntimeTools(handle.runtimeToolSnapshot, runtimeTools)) {
+    if (!samePiRuntimeTools(handle.runtimeToolSnapshot, runtimeTools, context.runtimePolicy != null)) {
       throw new Error('Runtime tools cannot change during an active Pi turn.');
     }
     const generation = this.currentRunGeneration(sessionId);
@@ -314,7 +314,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       this.activeSessions.set(sessionId, handle);
     } else {
       this.assertRuntimePolicyUnchanged(handle, context);
-      if (!samePiRuntimeTools(handle.runtimeToolSnapshot, runtimeTools)) {
+      if (!samePiRuntimeTools(handle.runtimeToolSnapshot, runtimeTools, context.runtimePolicy != null)) {
         if (handle.session.isStreaming) {
           throw new Error('Runtime tools cannot change during an active Pi turn.');
         }
@@ -768,9 +768,11 @@ function snapshotPiRuntimeTools(runtimeTools: AgentRuntimeTools | undefined): Pi
 function samePiRuntimeTools(
   snapshot: PiRuntimeToolSnapshot,
   runtimeTools: AgentRuntimeTools | undefined,
+  requireExecuteIdentity: boolean,
 ): boolean {
   const next = snapshotPiRuntimeTools(runtimeTools);
   return snapshot.length === next.length && snapshot.every(
-    (tool, index) => tool.definition === next[index]?.definition && tool.execute === next[index]?.execute,
+    (tool, index) => tool.definition === next[index]?.definition
+      && (!requireExecuteIdentity || tool.execute === next[index]?.execute),
   );
 }

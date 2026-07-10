@@ -1,8 +1,16 @@
 import { existsSync, mkdtempSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 const LINUX_HOST_READ_ROOTS = ['/usr', '/bin', '/sbin', '/lib', '/lib64', '/etc'];
+const MACOS_SYSTEM_READ_ROOTS = [
+  '/System/Library', '/usr/bin', '/usr/sbin', '/usr/lib', '/usr/share', '/bin', '/sbin', '/dev',
+  '/private/var/db/timezone',
+];
+const MACOS_TOOLCHAIN_PREFIXES = ['/opt/homebrew', '/usr/local'];
+const MACOS_TOOLCHAIN_READ_SUBPATHS = ['bin', 'sbin', 'Cellar', 'lib', 'opt', 'share'];
+const sandboxProbeCache = new Map<string, boolean>();
 
 export interface CrewSandboxLaunch {
   argv: string[];
@@ -20,7 +28,13 @@ export function isCrewVerifierSandboxAvailable(
   platform = process.platform,
   executable = platform === 'darwin' ? '/usr/bin/sandbox-exec' : '/usr/bin/bwrap',
 ): boolean {
-  return (platform === 'darwin' || platform === 'linux') && existsSync(executable);
+  if ((platform !== 'darwin' && platform !== 'linux') || !existsSync(executable)) return false;
+  const key = `${platform}:${executable}`;
+  const cached = sandboxProbeCache.get(key);
+  if (cached !== undefined) return cached;
+  const available = probeSandbox(platform, executable);
+  sandboxProbeCache.set(key, available);
+  return available;
 }
 
 export function buildCrewSandboxLaunch(
@@ -49,24 +63,43 @@ export function buildCrewSandboxLaunch(
   const tempDir = realpathSync.native(mkdtempSync(join(tmpdir(), 'nuncio-crew-verify-')));
   try {
     const toolBin = dirname(process.execPath);
-    const path = ['/nuncio-tools', '/usr/bin', '/bin', '/usr/sbin', '/sbin', '/opt/homebrew/bin', '/usr/local/bin', toolBin]
+    const macosToolchainRoots = platform === 'darwin' ? macosToolchainReadRoots(toolBin) : [];
+    const pathEntries = platform === 'darwin'
+      ? ['/usr/bin', '/bin', '/usr/sbin', '/sbin', ...MACOS_TOOLCHAIN_PREFIXES
+          .flatMap((prefix) => ['bin', 'sbin'].map((name) => join(prefix, name)))
+          .filter(existsSync), toolBin]
+      : ['/nuncio-tools', '/usr/bin', '/bin', '/usr/sbin', '/sbin'];
+    const path = pathEntries
       .filter((entry, index, all) => all.indexOf(entry) === index).join(':');
-    const env = { HOME: tempDir, TMPDIR: tempDir, PATH: path, CI: '1', LANG: 'en_US.UTF-8', NO_COLOR: '1' };
+    const env = {
+      HOME: tempDir,
+      TMPDIR: tempDir,
+      XDG_CACHE_HOME: join(tempDir, '.cache'),
+      BUN_INSTALL_CACHE_DIR: join(tempDir, 'bun-install-cache'),
+      BUN_RUNTIME_TRANSPILER_CACHE_PATH: join(tempDir, 'bun-runtime-cache'),
+      PATH: path,
+      CI: '1',
+      LANG: 'en_US.UTF-8',
+      NO_COLOR: '1',
+    };
     if (platform === 'linux') return linuxLaunch(
       sandboxExecutable, command, canonicalCwd, tempDir, env, dependencyRoot,
     );
-    const readRoots = [canonicalCwd, tempDir, toolBin, ...(dependencyRoot ? [dependencyRoot] : [])];
-    const exactReads = [...new Set(readRoots.flatMap(ancestorDirectories))];
+    const readRoots = [
+      canonicalCwd, tempDir, ...macosToolchainRoots, ...(dependencyRoot ? [dependencyRoot] : []),
+      ...MACOS_SYSTEM_READ_ROOTS.filter(existsSync),
+    ];
+    // Seatbelt evaluates directory traversal of the filesystem root as
+    // file-read-data. Keep only the root node readable; descendants still pass
+    // through the explicit subpath allowlist below.
+    const exactReads = [...new Set(['/', ...readRoots.flatMap(ancestorDirectories)])];
     const profile = [
       '(version 1)',
       '(allow default)',
       '(deny network*)',
       '(deny mach-lookup)',
       '(deny appleevent-send)',
-      ...['/Users', dirname(realpathSync.native(tmpdir())), '/private/tmp', '/Volumes']
-        .map((root) => denyReadOutside(
-          root, readRoots, exactReads.filter((path) => within(root, path)),
-        )),
+      denyReadOutside('/', readRoots, exactReads),
       `(deny file-write* (require-all (require-not (subpath ${seatbelt(canonicalCwd)}))`,
       `  (require-not (subpath ${seatbelt(tempDir)})) (require-not (literal "/dev/null"))))`,
       ...(dependencyRoot ? [`(deny file-write* (subpath ${seatbelt(dependencyRoot)}))`] : []),
@@ -85,6 +118,22 @@ export function buildCrewSandboxLaunch(
   } catch (error) {
     rmSync(tempDir, { recursive: true, force: true });
     throw error;
+  }
+}
+
+function probeSandbox(platform: string, executable: string): boolean {
+  const argv = platform === 'darwin'
+    ? ['-p', '(version 1)\n(allow default)\n(deny network*)', '/usr/bin/true']
+    : [
+        '--die-with-parent', '--unshare-all', '--new-session',
+        '--ro-bind', '/', '/', '/usr/bin/true',
+      ];
+  try {
+    return spawnSync(executable, argv, {
+      env: { PATH: '/usr/bin:/bin' }, stdio: 'ignore', timeout: 3000,
+    }).status === 0;
+  } catch {
+    return false;
   }
 }
 
@@ -121,4 +170,12 @@ function ancestorDirectories(path: string): string[] {
   const ancestors: string[] = [];
   for (let current = dirname(path); current !== dirname(current); current = dirname(current)) ancestors.push(current);
   return ancestors;
+}
+
+function macosToolchainReadRoots(toolBin: string): string[] {
+  const candidates = [toolBin, ...MACOS_TOOLCHAIN_PREFIXES.flatMap((prefix) =>
+    MACOS_TOOLCHAIN_READ_SUBPATHS.map((name) => join(prefix, name)),
+  )];
+  return candidates.filter(existsSync).map((path) => realpathSync.native(path))
+    .filter((path, index, all) => all.indexOf(path) === index);
 }

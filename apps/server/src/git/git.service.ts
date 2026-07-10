@@ -5,12 +5,10 @@ import { basename, join, resolve, sep } from 'node:path';
 import { SettingsService } from '../settings/settings.service';
 import {
   readBoundedGitBlobs,
-  validateGitCheckpointRange,
-} from './git-checkpoint-range-validation';
-import {
-  checkpointGitWorkspace,
-  inspectGitWorkspaceBoundary,
-} from './git-workspace-boundary';
+} from './git-checkpoint-blob-validation';
+import { validateGitCheckpointRange } from './git-checkpoint-range-validation';
+import { inspectGitWorkspaceBoundary } from './git-workspace-boundary';
+import { checkpointGitWorkspace } from './git-workspace-checkpoint';
 import type {
   BranchDto,
   CommitResultDto,
@@ -38,9 +36,12 @@ function sanitizeSlug(slug: string): string {
     .replace(/^-|-$/g, '') || 'task';
 }
 
-async function git(args: string[], cwd?: string): Promise<string> {
+async function git(
+  args: string[], cwd?: string, env?: Record<string, string | undefined>,
+): Promise<string> {
   const proc = Bun.spawn(['git', ...args], {
     cwd,
+    ...(env ? { env } : {}),
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -54,6 +55,10 @@ async function git(args: string[], cwd?: string): Promise<string> {
     throw new Error(stderr || stdout || `git ${args.join(' ')} failed`);
   }
   return stdout;
+}
+
+async function gitWithIndex(args: string[], cwd: string, indexPath: string): Promise<string> {
+  return git(args, cwd, { ...process.env, GIT_INDEX_FILE: indexPath });
 }
 
 async function gitAllowExit(args: string[], cwd: string, allowedExitCodes: number[]): Promise<string> {
@@ -296,7 +301,9 @@ export class GitService {
   async checkpoint(path: string, message: string): Promise<GitCheckpointResultDto> {
     return checkpointGitWorkspace(expandHome(path), message, {
       git: (args, cwd) => git(args, cwd),
+      gitWithIndex,
       isAncestor: gitIsAncestor,
+      readBlobs: readBoundedGitBlobs,
     });
   }
 

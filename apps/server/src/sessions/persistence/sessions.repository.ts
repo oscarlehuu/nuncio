@@ -97,6 +97,15 @@ export class SessionsRepository {
     return rows.map(toDto);
   }
 
+  /** Public projections omit internal Crew member sessions by construction. */
+  listUserFacing(includeArchived = false): SessionDto[] {
+    const sql = includeArchived
+      ? "SELECT * FROM sessions WHERE verify_owner = 'session' ORDER BY updated_at DESC"
+      : "SELECT * FROM sessions WHERE verify_owner = 'session' AND status != 'ARCHIVED' ORDER BY updated_at DESC";
+    const rows = this.database.db.prepare<SessionRow, []>(sql).all();
+    return rows.map(toDto);
+  }
+
   findById(id: string): SessionDto | null {
     // Once the DB is closing, an in-flight agent turn that outlived shutdown must
     // not touch the handle. Returning null makes the provider's runOrSteer

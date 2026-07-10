@@ -208,8 +208,7 @@ export class SessionsService implements OnModuleDestroy {
 
   list(includeArchived = false): SessionDto[] {
     return this.sessions
-      .list(includeArchived)
-      .filter((session) => session.verifyOwner !== 'crew')
+      .listUserFacing(includeArchived)
       .map((session) => this.enrichSession(session));
   }
 

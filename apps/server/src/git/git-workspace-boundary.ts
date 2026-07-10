@@ -1,15 +1,9 @@
-import { BadRequestException } from '@nestjs/common';
 import { existsSync, lstatSync, realpathSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type {
   GitBoundaryExpectation,
   GitBoundaryInspectionDto,
-  GitCheckpointResultDto,
 } from './git.types';
-import {
-  scanSensitiveCheckpointContents,
-  sensitiveCheckpointPaths,
-} from './git-sensitive-checkpoint-paths';
 
 export interface GitBoundaryOperations {
   git(args: string[], cwd: string): Promise<string>;
@@ -117,65 +111,6 @@ export async function inspectGitWorkspaceBoundary(
   result.ok = true;
   result.reason = null;
   return result;
-}
-
-export async function checkpointGitWorkspace(
-  requestedPath: string,
-  message: string,
-  operations: GitBoundaryOperations,
-): Promise<GitCheckpointResultDto> {
-  const trimmed = message.trim();
-  if (!trimmed) throw new BadRequestException('Commit message is required');
-  const before = await inspectGitWorkspaceBoundary(requestedPath, {}, operations);
-  if (!before.ok || !before.fullHead) {
-    throw new BadRequestException(`Invalid workspace boundary: ${before.reason ?? 'unknown'}`);
-  }
-  if (before.clean) return { fullHead: before.fullHead, clean: true, committed: false };
-
-  const outputs = await Promise.all([
-    operations.git(['diff', '--name-only', '-z', '--'], before.canonicalPath),
-    operations.git(['diff', '--cached', '--name-only', '-z', '--'], before.canonicalPath),
-    operations.git(['ls-files', '--others', '--exclude-standard', '-z'], before.canonicalPath),
-  ]);
-  const sensitive = sensitiveCheckpointPaths(outputs);
-  if (sensitive.length > 0) {
-    throw new BadRequestException(`Sensitive paths require explicit user handling: ${sensitive.join(', ')}`);
-  }
-  const contentScan = scanSensitiveCheckpointContents(before.canonicalPath, outputs);
-  const unscanned = [...contentScan.overflowPaths, ...contentScan.unreadablePaths].sort();
-  if (unscanned.length > 0) {
-    throw new BadRequestException(
-      `Checkpoint content scan could not safely inspect candidate paths: ${unscanned.join(', ')}`,
-    );
-  }
-  if (contentScan.secretPaths.length > 0) {
-    throw new BadRequestException(
-      `Potential secret content requires explicit user handling: ${contentScan.secretPaths.join(', ')}`,
-    );
-  }
-
-  const [name, email] = await Promise.all([
-    operations.git(['config', '--local', '--get', 'user.name'], before.canonicalPath).catch(() => ''),
-    operations.git(['config', '--local', '--get', 'user.email'], before.canonicalPath).catch(() => ''),
-  ]);
-  if (!name.trim() || !email.trim()) {
-    throw new BadRequestException('Repository-local Git identity is required for checkpoint commits');
-  }
-  try {
-    await operations.git(['add', '-A', '--', '.'], before.canonicalPath);
-    await operations.git([
-      '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgSign=false',
-      'commit', '--no-verify', '-m', trimmed,
-    ], before.canonicalPath);
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new BadRequestException(`Failed to checkpoint workspace: ${reason}`);
-  }
-  const after = await inspectGitWorkspaceBoundary(before.canonicalPath, {}, operations);
-  if (!after.ok || !after.fullHead || !after.clean) {
-    throw new BadRequestException(`Checkpoint did not leave a clean workspace: ${after.reason ?? 'dirty'}`);
-  }
-  return { fullHead: after.fullHead, clean: true, committed: true };
 }
 
 /** Git SHA-1 and SHA-256 repositories expose 40- and 64-character full ids. */

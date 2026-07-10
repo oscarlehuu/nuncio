@@ -80,6 +80,16 @@ describe('CrewGitWorkspaceAdapter crash reconciliation', () => {
     expect(created.baseBranch).toBe('main');
   });
 
+  it('falls back to the current local branch when origin HEAD names a missing branch', async () => {
+    await git(repo, ['branch', '-m', 'release']);
+    await git(repo, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk']);
+    const releaseHead = await gitText(repo, ['rev-parse', 'release']);
+
+    await expect(adapter.resolveBase(repo)).resolves.toEqual({
+      baseBranch: 'release', baseHead: releaseHead,
+    });
+  });
+
   it('checks project files against the frozen revision instead of mutable checkout state', async () => {
     mkdirSync(join(repo, '.nuncio'), { recursive: true });
     writeFileSync(join(repo, '.nuncio', 'verify'), 'exit 0\n');

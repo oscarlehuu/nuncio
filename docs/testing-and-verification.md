@@ -113,15 +113,15 @@ package's green suite as full Crew proof.
 | Contract | Required proof |
 |---|---|
 | Fixed state machine | Exact six-phase happy path; illegal tuples/events; mandatory Verify/Review; terminal immutability; duplicate idempotency |
-| Profile readiness | Only `ready`/`needs_setup`; live Pi/Codex/Claude binding/model; independent Reviewer; exact runtime policy; verify command; host sandbox |
+| Profile readiness | Only `ready`/`needs_setup`; live Pi/Codex/Claude binding/model; independent Reviewer; exact runtime policy; verify command; cached operational host-sandbox probe, not binary existence |
 | Runtime authority | Read-only Foreman/Reviewer; workspace-write Builder; network disabled; path/symlink/`.git` escape denial; generic task/multitask rejects Crew-owned parents; policy persists through resume |
 | Workspace ownership | One worktree; one `builder:primary` lease; clean/reachable full-head boundaries; stale head invalidates gates |
 | Retry/freshness | Independent default 2/2 caps; same Builder Session; reused Reviewer in loop; strict fresh final Reviewer only after review feedback |
-| Deterministic Verify | Exit/timeout/spawn/abort/overflow; Seatbelt/bubblewrap refusal when absent; post-command boundary unchanged |
+| Deterministic Verify | Exit/timeout/spawn/abort/overflow; Seatbelt/bubblewrap refusal when absent or unusable; macOS host-data default deny; post-command boundary unchanged |
 | Artifacts | Redaction before storage; SHA/byte integrity; run scoping; fail-closed diff/output bounds; UTF-8-safe `nextOffset`; loading/error/end UI |
 | Recovery | Crash at every durable boundary including checkpoint→result→lease release; replay equals projection; no duplicate commit/task/result/event; exact-base worktree adoption; exact-head Verify rerun; dirty Build marker; provider loss blocks without substitution |
 | Successors | Exact prior revision/head; retained canonical worktree; new snapshot/gates; old run byte-stable; compatible Foreman/Builder continuation only |
-| Clients | Solo default; server-authored readiness; fixed phase order; valid expected-revision actions; aborted Verify is not failed; bounded latest-per-task summaries; current evidence only; narrow responsive layout |
+| Clients | Solo default; selected base branch participates in mobile/web readiness and creation; server-authored readiness; fixed phase order; valid expected-revision actions; aborted Verify is not failed; bounded latest-per-task summaries; current evidence only; narrow responsive layout |
 
 Runtime-policy adapter unit tests prove mapping and path/tool enforcement without spending model
 turns. When matching credentials exist, use the opt-in Pi/Codex/Claude integration suites with the

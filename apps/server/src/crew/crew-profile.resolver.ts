@@ -1,8 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import type {
-  CrewProfileDefinition, CrewProfileIssue, CrewProfileOverride, CrewProfileResolution,
+  CrewProfileDefinition, CrewProfileIssue, CrewProfileOverride, CrewProfileResolution, CrewProfileSnapshot,
   CrewProviderCapability, CrewRole, CrewRoleBinding, CrewRuntimePolicy,
 } from './domain/crew.types';
+import { CrewValidationError } from './domain/crew-errors';
 import { isCrewVerifierSandboxAvailable } from './crew-command-sandbox';
 
 export const QUALITY_CREW_PRESET = {
@@ -112,4 +113,23 @@ function deepFreeze<T>(value: T): T {
     for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
   }
   return value;
+}
+
+export function savedProfileFromSnapshot(snapshot: CrewProfileSnapshot): ResolveCrewProfileInput['savedProfile'] {
+  if (!snapshot.sourceProfileId || snapshot.sourceProfileRevision === null) {
+    throw new CrewValidationError('Crew snapshot has no saved profile identity');
+  }
+  const binding = (role: CrewRole): CrewRoleBinding => ({
+    provider: snapshot.bindings[role].provider,
+    model: snapshot.bindings[role].model,
+  });
+  return {
+    id: snapshot.sourceProfileId,
+    revision: snapshot.sourceProfileRevision,
+    presetId: snapshot.presetId,
+    definition: {
+      bindings: { foreman: binding('foreman'), builder: binding('builder'), reviewer: binding('reviewer') },
+      policy: { ...snapshot.policy },
+    },
+  };
 }

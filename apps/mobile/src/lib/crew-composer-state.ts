@@ -11,21 +11,34 @@ import {
   isCrewResolutionCurrent,
   shouldApplyCrewResolution,
 } from './crew-composer';
-import { fetchCrewProjects, type CrewProject } from './crew-projects';
+import {
+  fetchCrewBranches,
+  fetchCrewProjects,
+  preferredCrewBaseBranch,
+  selectableCrewBranches,
+  type CrewBranch,
+  type CrewProject,
+} from './crew-projects';
 
 export function useCrewComposerState(mode: CrewExecutionMode) {
   const [profiles, setProfiles] = useState<CrewProfileDto[]>([]);
   const [projects, setProjects] = useState<CrewProject[]>([]);
   const [profileId, setProfileId] = useState('');
   const [projectPath, setProjectPath] = useState('');
+  const [branches, setBranches] = useState<CrewBranch[]>([]);
+  const [baseBranch, setBaseBranch] = useState('');
+  const [branchesForProject, setBranchesForProject] = useState<string | null>(null);
   const [resolution, setResolution] = useState<ResolvedCrewProfileDto | null>(null);
   const [resolvedFor, setResolvedFor] = useState<string | null>(null);
   const [optionsLoading, setOptionsLoading] = useState(false);
+  const [branchesLoading, setBranchesLoading] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resolutionAttempt, setResolutionAttempt] = useState(0);
+  const [branchAttempt, setBranchAttempt] = useState(0);
   const optionsLock = useRef(false);
+  const branchRequestId = useRef(0);
   const resolutionRequestId = useRef(0);
 
   const loadOptions = useCallback(async () => {
@@ -60,19 +73,50 @@ export function useCrewComposerState(mode: CrewExecutionMode) {
   }, [loadOptions, loaded, mode]);
 
   useEffect(() => {
+    const current = ++branchRequestId.current;
+    setBranchesForProject(null);
+    setBranches([]);
+    setBaseBranch('');
+    if (mode !== 'crew' || !projectPath) {
+      setBranchesLoading(false);
+      return;
+    }
+    setBranchesLoading(true);
+    setError(null);
+    fetchCrewBranches(projectPath)
+      .then((next) => {
+        if (current !== branchRequestId.current) return;
+        const selectable = selectableCrewBranches(next);
+        const preferred = preferredCrewBaseBranch(selectable);
+        setBranches(selectable);
+        setBaseBranch(preferred);
+        setBranchesForProject(projectPath);
+        if (!preferred) setError('No selectable base branches found for this project.');
+      })
+      .catch(() => {
+        if (current !== branchRequestId.current) return;
+        setError('Could not load base branches for this project.');
+      })
+      .finally(() => {
+        if (current === branchRequestId.current) setBranchesLoading(false);
+      });
+  }, [branchAttempt, mode, projectPath]);
+
+  useEffect(() => {
     const current = ++resolutionRequestId.current;
-    if (mode !== 'crew' || !profileId || !projectPath) {
+    const branchReady = branchesForProject === projectPath && Boolean(baseBranch);
+    if (mode !== 'crew' || !profileId || !projectPath || !branchReady) {
       setResolution(null);
       setResolvedFor(null);
       setResolving(false);
       return;
     }
     const controller = new AbortController();
-    const selectionKey = crewResolutionKey(profileId, projectPath);
+    const selectionKey = crewResolutionKey(profileId, projectPath, baseBranch);
     setResolvedFor(null);
     setResolving(true);
     setError(null);
-    resolveCrewProfile(profileId, projectPath, undefined, controller.signal)
+    resolveCrewProfile(profileId, projectPath, baseBranch, controller.signal)
       .then((next) => {
         if (shouldApplyCrewResolution(current, resolutionRequestId.current, controller.signal.aborted)) {
           setResolution(next);
@@ -91,29 +135,40 @@ export function useCrewComposerState(mode: CrewExecutionMode) {
         }
       });
     return () => controller.abort();
-  }, [mode, profileId, projectPath, resolutionAttempt]);
+  }, [baseBranch, branchesForProject, mode, profileId, projectPath, resolutionAttempt]);
 
   const retry = useCallback(() => {
     setError(null);
-    if (loaded) setResolutionAttempt((value) => value + 1);
+    if (loaded) {
+      setBranchAttempt((value) => value + 1);
+      setResolutionAttempt((value) => value + 1);
+    }
     else void loadOptions();
   }, [loadOptions, loaded]);
 
   const resolutionIsCurrent =
-    mode === 'crew' && isCrewResolutionCurrent(resolvedFor, profileId, projectPath);
+    mode === 'crew'
+    && branchesForProject === projectPath
+    && isCrewResolutionCurrent(resolvedFor, profileId, projectPath, baseBranch);
 
   return {
     profiles,
     projects,
+    branches,
     profileId,
     projectPath,
+    baseBranch,
     resolution: resolutionIsCurrent ? resolution : null,
-    optionsLoading,
+    optionsLoading: optionsLoading || branchesLoading,
     resolving,
     error,
     setProfileId,
     setProjectPath,
+    setBaseBranch,
     retry,
-    canSubmit: Boolean(resolutionIsCurrent && resolution?.state === 'ready' && !resolving),
+    canSubmit: Boolean(
+      resolutionIsCurrent && resolution?.state === 'ready'
+      && !resolving && !branchesLoading,
+    ),
   };
 }

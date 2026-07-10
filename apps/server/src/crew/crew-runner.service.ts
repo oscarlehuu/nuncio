@@ -86,7 +86,12 @@ export class CrewRunnerService implements OnModuleInit, OnModuleDestroy {
   acceptSubmission(notice: CrewSubmissionNotice): Promise<CrewRunDto> {
     return this.serial(notice.runId, async () => {
       try {
+        // A tool call persists durable intent, but a provider turn may still be
+        // RUNNING after the call returns. Advance only from task settlement so a
+        // reused Foreman/Reviewer session cannot be enqueued concurrently.
         if (notice.result.result.kind === 'builder-intent'
+          || notice.result.result.kind === 'plan'
+          || notice.result.result.kind === 'review'
           || notice.result.result.kind === 'synthesis') return this.requireRun(notice.runId);
         const run = await this.stages.accept(notice);
         return await this.drive(run.id);

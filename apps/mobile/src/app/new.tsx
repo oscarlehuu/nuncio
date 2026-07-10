@@ -73,6 +73,7 @@ export default function NewSession() {
           objective: prompt,
           projectPath: crew.projectPath,
           profileId: crew.profileId,
+          baseBranch: crew.baseBranch,
         });
         if (!input) return;
         const { task } = await createCrewTask(input);
@@ -143,14 +144,17 @@ export default function NewSession() {
             <CrewComposerOptions
               profiles={crew.profiles}
               projects={crew.projects}
+              branches={crew.branches}
               profileId={crew.profileId}
               projectPath={crew.projectPath}
+              baseBranch={crew.baseBranch}
               resolution={crew.resolution}
               loading={crew.optionsLoading}
               resolving={crew.resolving}
               error={crew.error}
               onProfileChange={crew.setProfileId}
               onProjectChange={crew.setProjectPath}
+              onBranchChange={crew.setBaseBranch}
               onRetry={crew.retry}
               onOpenSetup={openCrewSettings}
             />

@@ -10,6 +10,10 @@ const NOW = new Date(2026, 6, 8, 20, 5).getTime();
 class FakeAttentionRepository {
   rows: AttentionItemDto[] = [];
 
+  list(status?: AttentionItemDto['status']): AttentionItemDto[] {
+    return status ? this.rows.filter((row) => row.status === status) : [...this.rows];
+  }
+
   findById(id: string): AttentionItemDto | null {
     return this.rows.find((row) => row.id === id) ?? null;
   }
@@ -189,6 +193,31 @@ describe('DispatcherService', () => {
     expect(item!.payload).toMatchObject({
       proposals: [expect.objectContaining({ title: 'Fix the failing verify in app' })],
     });
+  });
+
+  it('excludes Crew member sessions from repository-backed dispatcher inputs', () => {
+    let rawCalls = 0;
+    let userFacingCalls = 0;
+    const sessions = {
+      list: () => { rawCalls += 1; return [{ id: 'crew', verifyOwner: 'crew' }]; },
+      listUserFacing: () => {
+        userFacingCalls += 1;
+        return [{ id: 'solo', verifyOwner: 'session' }];
+      },
+    };
+    const publicDispatcher = new DispatcherService(
+      attention as never, repo as never, tasks as never, undefined, undefined,
+      sessions as never, { list: () => [] } as never,
+      undefined, undefined, undefined,
+    );
+
+    const sources = (publicDispatcher as unknown as {
+      collectSources: () => DispatcherRuleSources;
+    }).collectSources();
+    expect(sources.sessions.map(({ id, verifyOwner }) => ({ id, verifyOwner })))
+      .toEqual([{ id: 'solo', verifyOwner: 'session' }]);
+    expect(userFacingCalls).toBe(1);
+    expect(rawCalls).toBe(0);
   });
 
   it('draftFromSources returns null and creates no item when there are zero proposals', () => {

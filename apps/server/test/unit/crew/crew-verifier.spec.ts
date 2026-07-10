@@ -188,6 +188,8 @@ describe('CrewCommandRunner', () => {
       expect((await runner.run('printf discarded >/dev/null', workspace, 1000)).exitCode).toBe(0);
       expect((await runner.run('ps eww -p $PPID >/dev/null', workspace, 1000)).exitCode).not.toBe(0);
       if (process.platform === 'darwin') {
+        expect((await runner.run('cat /private/etc/hosts >/dev/null', workspace, 1000)).exitCode)
+          .not.toBe(0);
         expect((await runner.run('/usr/bin/security list-keychains >/dev/null', workspace, 1000)).exitCode).not.toBe(0);
       }
       expect((await runner.run('printf bad > .git/config', workspace, 1000)).exitCode).not.toBe(0);
@@ -208,6 +210,13 @@ describe('CrewCommandRunner', () => {
       rmSync(outsideTmpRead, { force: true });
       rmSync(outsideWrite, { force: true });
     }
+  });
+
+  it('runs an advertised Homebrew Node toolchain inside the macOS sandbox', async () => {
+    if (process.platform !== 'darwin' || !existsSync('/opt/homebrew/bin/node')) return;
+    const result = await new CrewCommandRunner().run('node --version', process.cwd(), 2000);
+    expect(result).toMatchObject({ exitCode: 0, timedOut: false, spawnError: null });
+    expect(result.stdout.trim()).toMatch(/^v\d+/);
   });
 
   it('fails closed when no supported verifier sandbox is available', () => {
