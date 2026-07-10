@@ -281,6 +281,36 @@ describe('BaseAgentProvider streamed-tail preservation', () => {
     ]);
   });
 
+  it('can cancel a retained delta retry when shutdown makes persistence unavailable', async () => {
+    const overlapping = new OverlappingRunProvider(sessions, events);
+    const created = sessions.create({ prompt: 'shutdown retry', provider: 'overlapping' });
+    const running = overlapping.run(created.id, created.prompt, { emit: () => {} });
+    while (overlapping.contexts.length < 1) await Promise.resolve();
+    overlapping.emitFrom(0, 'accepted before shutdown');
+
+    const originalAppend = events.append.bind(events);
+    let attempts = 0;
+    events.append = ((sessionId: string, type: string, payload: unknown) => {
+      if (type === 'assistant_delta') {
+        attempts += 1;
+        throw new Error('sqlite already closed');
+      }
+      return originalAppend(sessionId, type, payload);
+    }) as EventsRepository['append'];
+
+    try {
+      expect(() => overlapping.dispose(created.id)).toThrow('sqlite already closed');
+      overlapping.cancelPendingEventRetries(created.id);
+      await new Promise((resolve) => setTimeout(resolve, 260));
+      expect(attempts).toBe(1);
+    } finally {
+      events.append = originalAppend as EventsRepository['append'];
+      overlapping.flushPendingEvents(created.id);
+      overlapping.release(0);
+      await running;
+    }
+  });
+
   it('does not let a disposed Mock callback overwrite the last accepted preview', async () => {
     const mock = new MockAgentProvider(sessions, events);
     const created = sessions.create({ prompt: 'preview fence', provider: 'mock' });

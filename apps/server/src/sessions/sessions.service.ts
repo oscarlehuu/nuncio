@@ -12,7 +12,7 @@ import { existsSync, watch, type FSWatcher } from 'node:fs';
 import { homedir } from 'node:os';
 import { v4 as uuidv4 } from 'uuid';
 import { AgentRegistry } from '../agents/agents.registry';
-import type { AgentAttachment, AgentRunContext } from '../agents/agents.types';
+import type { AgentAttachment, AgentProvider, AgentRunContext } from '../agents/agents.types';
 import { AgentToolRegistry } from '../agents/tools/agent-tool-registry';
 import { MediaStore } from './media.store';
 import { CursorLocalSessionsService } from '../cursor-local/cursor-local-sessions.service';
@@ -865,6 +865,9 @@ export class SessionsService implements OnModuleDestroy {
     if (!canTransition(session.status, 'PAUSED')) {
       throw new BadRequestException(`Cannot pause session in status ${session.status}`);
     }
+    // Verification runs while the session is IDLE. Pause is a lifecycle stop,
+    // so cancel that process tree even when no provider turn is active.
+    this.verifierControllers.get(id)?.abort();
     if (session.status === 'RUNNING') {
       this.disposeProviderSession(session);
     }
@@ -968,6 +971,7 @@ export class SessionsService implements OnModuleDestroy {
     }
     this.transcriptWatchers.clear();
     await this.drainInFlightForShutdown();
+    this.cancelAllProviderEventRetries();
   }
 
   /** Hard ceiling on how long shutdown waits for in-flight turns to unwind. */
@@ -1008,6 +1012,29 @@ export class SessionsService implements OnModuleDestroy {
         this.disposeProviderSession(session);
       } catch {
         // Best-effort teardown — shutdown proceeds regardless.
+      } finally {
+        try {
+          this.agents.resolveForSession(session).cancelPendingEventRetries?.(id);
+        } catch {
+          // Provider resolution/cleanup is best-effort during shutdown.
+        }
+      }
+    }
+  }
+
+  private cancelAllProviderEventRetries(): void {
+    // Some lean unit modules inject only the registry methods needed by their
+    // scenario. Production AgentRegistry exposes both collections.
+    const providers = new Set<AgentProvider>();
+    if (typeof this.agents.all === 'function') {
+      for (const provider of this.agents.all()) providers.add(provider);
+    }
+    if (typeof this.agents.cli === 'function') providers.add(this.agents.cli());
+    for (const provider of providers) {
+      try {
+        provider.cancelPendingEventRetries?.();
+      } catch {
+        // Shutdown must continue even if a provider cleanup hook fails.
       }
     }
   }

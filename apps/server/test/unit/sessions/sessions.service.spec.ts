@@ -136,6 +136,20 @@ describe('SessionsService lifecycle (phase 3)', () => {
     expect(service.get(pausedId)?.status).toBe('ARCHIVED');
   });
 
+  it('aborts an active verifier before pausing an IDLE session', () => {
+    const id = seedSession('IDLE');
+    const controller = new AbortController();
+    const internals = service as unknown as {
+      verifierControllers: Map<string, AbortController>;
+    };
+    internals.verifierControllers.set(id, controller);
+
+    expect(service.pause(id).status).toBe('PAUSED');
+    expect(controller.signal.aborted).toBe(true);
+
+    internals.verifierControllers.delete(id);
+  });
+
   it('rejects archive when session is RUNNING', () => {
     const id = seedSession('RUNNING');
     expect(() => service.archive(id)).toThrow(BadRequestException);
