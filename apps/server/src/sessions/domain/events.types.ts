@@ -23,6 +23,7 @@ export type SessionEventType =
   | 'verify_result'
   | 'verify_retry'
   | 'verify_needs_attention'
+  | 'steer_reserved'
   | 'steer_message'
   | 'steer_queued'
   | 'steer_queue_cleared'

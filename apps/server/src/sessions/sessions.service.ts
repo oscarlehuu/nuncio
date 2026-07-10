@@ -80,6 +80,7 @@ class PermanentLifecycleCleanupError extends Error {
 /** Trailing events scanned to decide whether a run is blocked on your input. */
 const PENDING_SCAN_TAIL = 200;
 const DEFAULT_STALLED_RUN_FORCE_IDLE_MS = 30 * 60 * 1000;
+const DEFAULT_DELETE_RETRY_WAIT_MS = 5_000;
 
 /** Ancestor walk depth cap — bounds cost and survives a manufactured cycle. */
 const ANCESTOR_WALK_CAP = 10;
@@ -108,6 +109,12 @@ interface PendingOrchestrationEvent {
   payload: unknown;
 }
 
+interface LifecycleRetry {
+  cancelled: boolean;
+  promise: Promise<void>;
+  failure?: unknown;
+}
+
 @Injectable()
 export class SessionsService implements OnModuleDestroy {
   private readonly streams = new Map<string, EventEmitter>();
@@ -117,6 +124,7 @@ export class SessionsService implements OnModuleDestroy {
   private readonly verifying = new Set<string>();
   private readonly runPromises = new Map<string, Promise<void>>();
   private readonly startingSteers = new Set<string>();
+  private readonly drainingSteerQueues = new Set<string>();
   // Verify-feedback loop settlement: resolves when the loop reaches a terminal
   // state (green verify / needs-attention / no-command). Task-lane consumers
   // await this instead of a bare awaitRun so they wait for the whole loop.
@@ -133,10 +141,9 @@ export class SessionsService implements OnModuleDestroy {
     string,
     { attempt: symbol; resolve: () => void }
   >();
-  private readonly lifecycleRetries = new Map<
-    string,
-    { cancelled: boolean; promise: Promise<void> }
-  >();
+  private readonly lifecycleRetries = new Map<string, LifecycleRetry>();
+  /** Bound one HTTP request without cancelling the durable background cleanup. */
+  private deleteRetryWaitMs = DEFAULT_DELETE_RETRY_WAIT_MS;
   private readonly pendingOrchestrationEvents = new Map<string, PendingOrchestrationEvent[]>();
   private readonly orchestrationRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly transcriptWatchers = new Map<
@@ -481,14 +488,18 @@ export class SessionsService implements OnModuleDestroy {
     this.startingSteers.add(id);
     let provider: AgentProvider;
     try {
-      provider = await this.agents.resolveAvailableForSession(current);
+      provider = await this.trackPendingWork(this.agents.resolveAvailableForSession(current));
+      if (this.destroyed) {
+        throw new HttpException('Session service is shutting down', HttpStatus.SERVICE_UNAVAILABLE);
+      }
     } catch (error) {
       this.startingSteers.delete(id);
-      if (current.status === 'IDLE') setTimeout(() => this.drainSteerQueue(id), 0);
+      this.scheduleSteerDrainAfterFailedStart(id, current.status);
       throw error;
     }
 
     this.locallyProducing.add(id);
+    let startFailed = false;
     try {
       const steering = provider.steer(id, trimmed, {
         ...this.buildAgentRunContext(current),
@@ -498,9 +509,13 @@ export class SessionsService implements OnModuleDestroy {
       });
       this.trackPendingWork(steering);
       await steering;
+    } catch (error) {
+      startFailed = true;
+      throw error;
     } finally {
       this.startingSteers.delete(id);
       this.locallyProducing.delete(id);
+      if (startFailed) this.scheduleSteerDrainAfterFailedStart(id, current.status);
     }
     this.trackPendingWork(this.maybeVerify(id));
     return this.requireSession(id);
@@ -760,11 +775,30 @@ export class SessionsService implements OnModuleDestroy {
     setTimeout(() => this.drainSteerQueue(id), 0);
   }
 
+  /** Retry an acknowledged concurrent steer only if no newer lifecycle state won. */
+  private scheduleSteerDrainAfterFailedStart(id: string, expectedStatus: SessionStatus): void {
+    // An active queue drain owns both retry timing and row acknowledgement.
+    // Scheduling here as well would bypass its backoff and create a hot loop.
+    if (
+      this.destroyed ||
+      this.drainingSteerQueues.has(id) ||
+      this.sessions.findById(id)?.status !== expectedStatus
+    ) return;
+    setTimeout(() => {
+      if (
+        this.destroyed ||
+        this.drainingSteerQueues.has(id) ||
+        this.sessions.findById(id)?.status !== expectedStatus
+      ) return;
+      this.drainSteerQueue(id);
+    }, 0);
+  }
+
   /** Deliver the next queued steer once the foreground run has settled. */
   private drainSteerQueue(id: string): void {
     // Drain timers can outlive the service; after shutdown the database is
     // closed, so touching the queue would throw from a detached timer.
-    if (this.destroyed) return;
+    if (this.destroyed || this.drainingSteerQueues.has(id)) return;
 
     // Skip any leading task-digest wakes that must not restart an ERROR/PAUSED
     // session, then deliver the first eligible row. Skipping is atomic (row
@@ -792,23 +826,68 @@ export class SessionsService implements OnModuleDestroy {
       break;
     }
     if (!next) return;
+    const authorizedStatus = this.sessions.findById(id)?.status;
+    if (!authorizedStatus) return;
 
-    // Deliver exactly this row (dequeue removes it); one-per-pass semantics for
-    // real steers are preserved.
-    this.steerQueue.deleteById(next.id);
+    // Keep ownership of this durable row until provider delivery succeeds.
+    // Failed attempts leave it in place for retry instead of dropping an
+    // acknowledged message.
+    this.drainingSteerQueues.add(id);
     const delivered = next;
-    const work = this.steer(id, delivered.message, undefined, delivered.attachments, delivered.origin).catch((error) => {
-      const reason = error instanceof Error ? error.message : String(error);
+    let deliveryFailed = false;
+    const work = (async () => {
       try {
-        this.appendAndEmit(id, 'error', { message: `Queued message failed to send: ${reason}` });
-      } catch {
-        // Session gone (deleted/archived mid-drain) — nothing left to notify.
+        await this.steer(
+          id,
+          delivered.message,
+          undefined,
+          delivered.attachments,
+          delivered.origin,
+        );
+      } catch (error) {
+        deliveryFailed = true;
+        const reason = error instanceof Error ? error.message : String(error);
+        try {
+          this.appendAndEmit(id, 'error', { message: `Queued message failed to send: ${reason}` });
+        } catch {
+          // Session gone (deleted/archived mid-drain) — nothing left to notify.
+        }
+        return;
       }
-    });
+
+      // Provider delivery already completed. A transient acknowledgement write
+      // must retry only the delete; redelivering could repeat external effects.
+      await this.acknowledgeDeliveredSteer(delivered.id);
+    })();
     // Track so shutdown awaits it — a fire-and-forget drained steer must not write
     // to a closed DB handle after the module is destroyed.
     this.pendingWork.add(work);
-    void work.finally(() => this.pendingWork.delete(work));
+    void work.finally(() => {
+      this.pendingWork.delete(work);
+      this.drainingSteerQueues.delete(id);
+      if (this.destroyed) return;
+      if (!deliveryFailed) {
+        setTimeout(() => this.drainSteerQueue(id), 0);
+        return;
+      }
+      // A user lifecycle action (especially pause/archive) wins over an older
+      // delivery retry. The durable row remains for a later explicit resume.
+      if (this.sessions.findById(id)?.status === authorizedStatus) {
+        setTimeout(() => this.drainSteerQueue(id), 250);
+      }
+    });
+  }
+
+  /** Retry only the durable queue acknowledgement after provider delivery. */
+  private async acknowledgeDeliveredSteer(rowId: number): Promise<void> {
+    while (!this.destroyed) {
+      try {
+        this.steerQueue.deleteById(rowId);
+        return;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
   }
 
   /**
@@ -1063,12 +1142,39 @@ export class SessionsService implements OnModuleDestroy {
     return this.enrichSession(updated);
   }
 
-  delete(id: string): void {
+  async delete(id: string): Promise<void> {
     const session = this.requireSession(id);
     if (session.status !== 'ARCHIVED') {
       throw new BadRequestException(`Cannot delete session in status ${session.status}; archive first`);
     }
-    this.disposeThenFinishLifecycle(session, 'delete', () => this.finishDelete(id));
+    const finished = this.disposeThenFinishLifecycle(session, 'delete', () => this.finishDelete(id));
+    if (finished) return;
+
+    const retry = this.lifecycleRetries.get(id);
+    if (!retry) {
+      throw new HttpException('Delete could not be scheduled', HttpStatus.SERVICE_UNAVAILABLE);
+    }
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const outcome = await Promise.race([
+      retry.promise.then(() => 'settled' as const),
+      new Promise<'timeout'>((resolve) => {
+        timeout = setTimeout(() => resolve('timeout'), this.deleteRetryWaitMs);
+      }),
+    ]);
+    if (timeout) clearTimeout(timeout);
+    if (outcome === 'timeout') {
+      throw new HttpException(
+        'Delete cleanup is still pending; retry later',
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
+    if (!this.sessions.findById(id) && !this.destroyed) return;
+    const reason = retry.failure instanceof Error
+      ? retry.failure.message
+      : retry.failure !== undefined
+        ? String(retry.failure)
+        : 'cleanup did not complete';
+    throw new HttpException(`Delete failed: ${reason}`, HttpStatus.SERVICE_UNAVAILABLE);
   }
 
   private finishPause(id: string): void {
@@ -1154,7 +1260,7 @@ export class SessionsService implements OnModuleDestroy {
       existing.cancelled = true;
       this.lifecycleRetries.delete(id);
     }
-    const record = { cancelled: false, promise: Promise.resolve() };
+    const record: LifecycleRetry = { cancelled: false, promise: Promise.resolve() };
     record.promise = (async () => {
       while (!record.cancelled) {
         await new Promise((resolve) => setTimeout(resolve, 100));
@@ -1177,6 +1283,7 @@ export class SessionsService implements OnModuleDestroy {
           } else if (!(error instanceof RetainedEventFlushError)) {
             try {
               this.surfaceLifecycleRetryFailure(current, operation, error);
+              record.failure = error;
               return;
             } catch {
               // Persistence can fail independently of provider teardown. Retry
@@ -1196,6 +1303,7 @@ export class SessionsService implements OnModuleDestroy {
           if (error instanceof PermanentLifecycleCleanupError) {
             try {
               this.surfaceLifecycleRetryFailure(current, operation, error.cause);
+              record.failure = error.cause;
               return;
             } catch {
               // Retry only until the permanent cleanup failure is durably visible.

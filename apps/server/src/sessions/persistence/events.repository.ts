@@ -24,6 +24,11 @@ function parseEvent(row: EventRow): SessionEvent {
 export class EventsRepository {
   constructor(private readonly database: DatabaseService) {}
 
+  /** Run related session/event writes on the shared SQLite connection atomically. */
+  transaction<T>(fn: () => T): T {
+    return this.database.transaction(fn);
+  }
+
   list(sessionId: string, since = 0, limit?: number): SessionEvent[] {
     const rows =
       limit !== undefined

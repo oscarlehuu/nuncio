@@ -337,28 +337,28 @@ describe('SessionsService lifecycle (phase 3)', () => {
       expect(service.get(id)).not.toBeNull();
       expect(events.list(id).length).toBeGreaterThan(0);
 
-      service.delete(id);
+      await service.delete(id);
 
       expect(service.get(id)).toBeNull();
       expect(events.list(id)).toHaveLength(0);
     });
 
-    it('rejects delete on a non-archived session (must archive first)', () => {
+    it('rejects delete on a non-archived session (must archive first)', async () => {
       const idleId = seedSession('IDLE');
       const runningId = seedSession('RUNNING');
-      expect(() => service.delete(idleId)).toThrow(BadRequestException);
-      expect(() => service.delete(runningId)).toThrow(BadRequestException);
+      await expect(service.delete(idleId)).rejects.toThrow(BadRequestException);
+      await expect(service.delete(runningId)).rejects.toThrow(BadRequestException);
     });
 
-    it('rejects delete on a missing session', () => {
-      expect(() => service.delete('nope')).toThrow(NotFoundException);
+    it('rejects delete on a missing session', async () => {
+      await expect(service.delete('nope')).rejects.toThrow(NotFoundException);
     });
 
     it('disposes the agent handle before deleting', async () => {
       const id = await seedArchivedWithEvents();
       const provider = registry.get('cursor');
       const disposeSpy = jest.spyOn(provider, 'dispose');
-      service.delete(id);
+      await service.delete(id);
       expect(disposeSpy).toHaveBeenCalledWith(id);
       disposeSpy.mockRestore();
     });
@@ -373,7 +373,10 @@ describe('SessionsService lifecycle (phase 3)', () => {
         throw new Error('immutable media directory');
       } };
       try {
-        service.delete(id);
+        const deleting = service.delete(id).then(
+          () => null,
+          (error: unknown) => error,
+        );
         const started = Date.now();
         while (!events.list(id).some((event) => event.type === 'error') && Date.now() - started < 1_000) {
           await new Promise((resolve) => setTimeout(resolve, 20));
@@ -382,12 +385,68 @@ describe('SessionsService lifecycle (phase 3)', () => {
           type: 'error',
           payload: expect.objectContaining({ message: expect.stringContaining('immutable media directory') }),
         }));
+        expect(await deleting).toEqual(
+          expect.objectContaining({ message: expect.stringContaining('immutable media directory') }),
+        );
         const callsAfterSurface = cleanupCalls;
         await new Promise((resolve) => setTimeout(resolve, 250));
         expect(cleanupCalls).toBe(callsAfterSurface);
       } finally {
         internals.media = originalMedia;
       }
+    });
+
+    it('bounds the HTTP delete wait while retained cleanup continues in the background', async () => {
+      const id = await seedArchivedWithEvents();
+      let storageBlocked = true;
+      const provider = {
+        id: 'delete-retry',
+        name: 'Delete retry',
+        capabilities: {
+          interrupt: false,
+          modelSwitch: 'none',
+          effortSwitch: 'none',
+          images: false,
+          steerWhileRunning: false,
+        },
+        isAvailable: async () => true,
+        listModels: async () => [],
+        run: async () => undefined,
+        steer: async () => undefined,
+        dispose: () => {
+          if (storageBlocked) throw new RetainedEventFlushError(new Error('storage unavailable'));
+        },
+        bustCache: () => undefined,
+      } as AgentProvider;
+      const originalResolve = registry.resolveForSession.bind(registry);
+      registry.resolveForSession = (() => provider) as AgentRegistry['resolveForSession'];
+      const internals = service as unknown as { deleteRetryWaitMs?: number };
+      internals.deleteRetryWaitMs = 25;
+
+      const deleting = service.delete(id).then(
+        () => 'deleted' as const,
+        (error: unknown) => error,
+      );
+      const outcome = await Promise.race([
+        deleting,
+        new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 80)),
+      ]);
+
+      try {
+        expect(outcome).not.toBe('hung');
+        expect(outcome).toEqual(expect.objectContaining({
+          message: expect.stringContaining('still pending'),
+        }));
+        expect(service.get(id)).not.toBeNull();
+      } finally {
+        storageBlocked = false;
+        const started = Date.now();
+        while (service.get(id) && Date.now() - started < 1_000) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        registry.resolveForSession = originalResolve;
+      }
+      expect(service.get(id)).toBeNull();
     });
   });
 

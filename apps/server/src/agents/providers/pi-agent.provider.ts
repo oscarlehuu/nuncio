@@ -13,7 +13,7 @@ import { EventsRepository } from '../../sessions/persistence/events.repository';
 import { SessionsRepository } from '../../sessions/persistence/sessions.repository';
 import { SettingsService } from '../../settings/settings.service';
 import type { AgentRunContext, InteractionResponse } from '../agents.types';
-import { BaseAgentProvider } from '../agents.base-provider';
+import { AgentRunCancelledError, BaseAgentProvider } from '../agents.base-provider';
 import { eventImagesFromAttachments } from '../agents.attachments';
 import {
   appendRuntimeToolInstructions,
@@ -174,19 +174,44 @@ export class PiAgentProvider extends BaseAgentProvider {
   ): Promise<boolean> {
     const handle = this.activeSessions.get(sessionId);
     if (!handle || !handle.session.isStreaming) return false;
+    const generation = this.currentRunGeneration(sessionId);
     const eventImages = eventImagesFromAttachments(context.attachments);
+    const payload = {
+      text: message,
+      ...(eventImages ? { images: eventImages } : {}),
+      ...(context.steerOrigin ? { origin: context.steerOrigin } : {}),
+    };
     this.pushEvent(
       sessionId,
-      'steer_message',
-      {
-        text: message,
-        ...(eventImages ? { images: eventImages } : {}),
-        ...(context.steerOrigin ? { origin: context.steerOrigin } : {}),
-      },
+      'steer_reserved',
+      payload,
       context.emit,
     );
+    try {
+      await this.waitForPendingEvents(sessionId);
+    } catch (error) {
+      if (error instanceof AgentRunCancelledError) return false;
+      throw error;
+    }
+    if (
+      !this.isCurrentRunGeneration(sessionId, generation) ||
+      this.activeSessions.get(sessionId) !== handle ||
+      !handle.session.isStreaming
+    ) return false;
     const images = piImagesFromAttachments(context);
-    await handle.session.steer(message, images.length ? images : undefined);
+    try {
+      await handle.session.steer(message, images.length ? images : undefined);
+    } catch {
+      return false;
+    }
+    this.pushEvent(sessionId, 'steer_message', payload, context.emit);
+    try {
+      await this.waitForPendingEvents(sessionId);
+    } catch (error) {
+      // The SDK already accepted the input. Preserve exactly-once routing even
+      // if teardown fences the run while its delivery event is recovering.
+      if (!(error instanceof AgentRunCancelledError)) throw error;
+    }
     return true;
   }
 

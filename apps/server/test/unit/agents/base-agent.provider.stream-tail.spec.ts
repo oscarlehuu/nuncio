@@ -466,6 +466,30 @@ describe('BaseAgentProvider streamed-tail preservation', () => {
     expect(rowStatusAtFanout).toEqual(['IDLE']);
   });
 
+  it('retries terminal settlement atomically instead of misclassifying a successful turn', async () => {
+    provider.script = [{ type: 'assistant_message', payload: { text: 'completed successfully' } }];
+    const created = sessions.create({ prompt: 'atomic terminal settlement', provider: 'scripted-tail' });
+    const originalUpdateStatus = sessions.updateStatus.bind(sessions);
+    let idleFailures = 1;
+    sessions.updateStatus = ((sessionId: string, status: Parameters<SessionsRepository['updateStatus']>[1]) => {
+      if (status === 'IDLE' && idleFailures-- > 0) throw new Error('transient status failure');
+      return originalUpdateStatus(sessionId, status);
+    }) as SessionsRepository['updateStatus'];
+
+    try {
+      await provider.run(created.id, created.prompt, { emit: () => {} });
+    } finally {
+      sessions.updateStatus = originalUpdateStatus as SessionsRepository['updateStatus'];
+    }
+
+    expect(sessions.findById(created.id)?.status).toBe('IDLE');
+    expect(events.list(created.id).filter((event) => event.type === 'status')).toEqual([
+      expect.objectContaining({ payload: { status: 'RUNNING' } }),
+      expect.objectContaining({ payload: { status: 'IDLE' } }),
+    ]);
+    expect(events.list(created.id).some((event) => event.type === 'error')).toBe(false);
+  });
+
   it('does not invoke the provider until the initiating input event is durable', async () => {
     provider.script = [{ type: 'assistant_message', payload: { text: 'after input' } }];
     provider.executions = 0;
@@ -560,6 +584,39 @@ describe('BaseAgentProvider streamed-tail preservation', () => {
       expect(overlapping.released).toBe(1);
     } finally {
       events.append = originalAppend as EventsRepository['append'];
+      overlapping.cancelPendingEventRetries(created.id);
+      overlapping.release(0);
+      await running;
+    }
+  });
+
+  it('settles a RUNNING row after overflow recovery commits the retained ERROR status', async () => {
+    const overlapping = new OverlappingRunProvider(sessions, events);
+    const created = sessions.create({ prompt: 'overflow status recovery', provider: 'overlapping' });
+    const running = overlapping.run(created.id, created.prompt, { emit: () => {} });
+    while (overlapping.contexts.length < 1) await Promise.resolve();
+
+    const originalAppend = events.append.bind(events);
+    const originalUpdateStatus = sessions.updateStatus.bind(sessions);
+    events.append = (() => { throw new Error('disk unavailable'); }) as EventsRepository['append'];
+    sessions.updateStatus = (() => { throw new Error('status unavailable'); }) as SessionsRepository['updateStatus'];
+    try {
+      expect(() => overlapping.emitFrom(0, 'x'.repeat(300 * 1024))).toThrow(
+        'Retained event buffer exceeded',
+      );
+      expect(sessions.findById(created.id)?.status).toBe('RUNNING');
+
+      events.append = originalAppend as EventsRepository['append'];
+      sessions.updateStatus = originalUpdateStatus as SessionsRepository['updateStatus'];
+      overlapping.flushPendingEvents(created.id);
+
+      expect(sessions.findById(created.id)?.status).toBe('ERROR');
+      expect(events.list(created.id)).toContainEqual(
+        expect.objectContaining({ type: 'status', payload: { status: 'ERROR' } }),
+      );
+    } finally {
+      events.append = originalAppend as EventsRepository['append'];
+      sessions.updateStatus = originalUpdateStatus as SessionsRepository['updateStatus'];
       overlapping.cancelPendingEventRetries(created.id);
       overlapping.release(0);
       await running;

@@ -314,6 +314,81 @@ describe('PiAgentProvider', () => {
     expect(emitted.some((e) => e.type === 'steer_message')).toBe(true);
   });
 
+  it('does not invoke the live SDK steer until its durable reservation recovers', async () => {
+    const created = sessions.create({ prompt: 'durable live steer', provider: 'pi' });
+    await provider.run(created.id, created.prompt, { emit: () => {} });
+    isStreaming = true;
+    const originalAppend = events.append.bind(events);
+    let blockReservation = true;
+    events.append = ((sessionId: string, type: string, payload: unknown, notify?: boolean) => {
+      if (type === 'steer_reserved' && blockReservation) throw new Error('storage unavailable');
+      return originalAppend(sessionId, type, payload, notify);
+    }) as EventsRepository['append'];
+
+    const steering = provider.steerMidRun(created.id, 'persist me first', {});
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(steerMock).not.toHaveBeenCalled();
+      blockReservation = false;
+      await steering;
+      expect(steerMock).toHaveBeenCalledWith('persist me first', undefined);
+      expect(events.list(created.id)).toContainEqual(
+        expect.objectContaining({ type: 'steer_message', payload: { text: 'persist me first' } }),
+      );
+    } finally {
+      blockReservation = false;
+      events.append = originalAppend as EventsRepository['append'];
+      await steering.catch(() => undefined);
+    }
+  });
+
+  it('returns a persisted steer to the normal queue when the Pi turn ends during recovery', async () => {
+    const created = sessions.create({ prompt: 'live recovery race', provider: 'pi' });
+    let finishTurn: () => void = () => undefined;
+    promptBehavior = async () => new Promise<void>((resolve) => { finishTurn = resolve; });
+    isStreaming = true;
+    const run = provider.run(created.id, created.prompt, { emit: () => {} });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const originalAppend = events.append.bind(events);
+    let blockReservation = true;
+    events.append = ((sessionId: string, type: string, payload: unknown, notify?: boolean) => {
+      if (type === 'steer_reserved' && blockReservation) throw new Error('storage unavailable');
+      return originalAppend(sessionId, type, payload, notify);
+    }) as EventsRepository['append'];
+
+    const steering = provider.steerMidRun(created.id, 'queue me after recovery', {});
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      isStreaming = false;
+      finishTurn();
+      const retained = (provider as unknown as {
+        retainedEvents: Map<string, Array<{ type: string; payload: unknown }>>;
+      }).retainedEvents;
+      const started = Date.now();
+      while (
+        !retained.get(created.id)?.some((event) =>
+          event.type === 'status' && (event.payload as { status?: string }).status === 'IDLE') &&
+        Date.now() - started < 1_000
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      blockReservation = false;
+
+      expect(await steering).toBe(false);
+      await run;
+      expect(steerMock).not.toHaveBeenCalled();
+      expect(events.list(created.id).some((event) => event.type === 'steer_message')).toBe(false);
+      expect(events.list(created.id).some((event) => event.type === 'steer_reserved')).toBe(true);
+      expect(sessions.findById(created.id)?.status).toBe('IDLE');
+    } finally {
+      blockReservation = false;
+      events.append = originalAppend as EventsRepository['append'];
+      finishTurn();
+      await Promise.allSettled([steering, run]);
+    }
+  });
+
   it('steerMidRun stamps context.steerOrigin onto the emitted steer_message', async () => {
     const created = sessions.create({ prompt: 'long task', provider: 'pi' });
     await provider.run(created.id, created.prompt, { emit: () => {} });

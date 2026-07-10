@@ -272,6 +272,8 @@ export function attachSessionsWebSocketServer(
             pendingLiveBytes -= serializedBytes({ channel: sessionId, event });
             if (!pushEvent(event)) return;
           }
+          pendingLive.length = 0;
+          pendingLiveBytes = 0;
         } catch (error) {
           replaying = false;
           liveUnsub();

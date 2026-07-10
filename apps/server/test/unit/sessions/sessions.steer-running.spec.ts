@@ -248,6 +248,246 @@ describe('SessionsService steer while RUNNING', () => {
     expect(sessions.findById(created.id)?.status).toBe('PAUSED');
   });
 
+  it('does not drain a concurrent steer after the user pauses during a failed preflight', async () => {
+    const created = sessions.create({ prompt: 'pause during preflight', provider: 'cursor' });
+    sessions.updateStatus(created.id, 'RUNNING');
+    sessions.updateStatus(created.id, 'IDLE');
+    const steer = jest.fn(async (sessionId: string) => {
+      sessions.updateStatus(sessionId, 'RUNNING');
+    });
+    const provider = stubProvider({ steer });
+    registry.resolveForSession = (() => provider) as AgentRegistry['resolveForSession'];
+    let rejectAvailability: (error: Error) => void = () => undefined;
+    let availabilityCalls = 0;
+    registry.resolveAvailableForSession = (async () => {
+      availabilityCalls += 1;
+      if (availabilityCalls === 1) {
+        await new Promise<void>((_resolve, reject) => { rejectAvailability = reject; });
+      }
+      return provider;
+    }) as AgentRegistry['resolveAvailableForSession'];
+
+    const first = service.steer(created.id, 'first');
+    await Promise.resolve();
+    await service.steer(created.id, 'keep queued');
+    service.pause(created.id);
+    rejectAvailability(new Error('provider unavailable'));
+    await expect(first).rejects.toThrow('provider unavailable');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(sessions.findById(created.id)?.status).toBe('PAUSED');
+    expect(steer).not.toHaveBeenCalled();
+    expect(availabilityCalls).toBe(1);
+  });
+
+  it('drains a concurrent steer when a PAUSED start fails without a newer lifecycle action', async () => {
+    const created = sessions.create({ prompt: 'paused failed start', provider: 'cursor' });
+    sessions.updateStatus(created.id, 'RUNNING');
+    sessions.updateStatus(created.id, 'IDLE');
+    sessions.updateStatus(created.id, 'PAUSED');
+    const steer = jest.fn(async () => undefined);
+    const provider = stubProvider({ steer });
+    registry.resolveForSession = (() => provider) as AgentRegistry['resolveForSession'];
+    let rejectAvailability: (error: Error) => void = () => undefined;
+    let availabilityCalls = 0;
+    registry.resolveAvailableForSession = (async () => {
+      availabilityCalls += 1;
+      if (availabilityCalls === 1) {
+        await new Promise<void>((_resolve, reject) => { rejectAvailability = reject; });
+      }
+      return provider;
+    }) as AgentRegistry['resolveAvailableForSession'];
+
+    const first = service.steer(created.id, 'first');
+    await Promise.resolve();
+    await service.steer(created.id, 'second');
+    rejectAvailability(new Error('provider unavailable'));
+    await expect(first).rejects.toThrow('provider unavailable');
+    const started = Date.now();
+    while (steer.mock.calls.length < 1 && Date.now() - started < 1_000) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(steer).toHaveBeenCalledWith(created.id, 'second', expect.any(Object));
+  });
+
+  it('drains a concurrent steer after the provider rejects the claimed start', async () => {
+    const created = sessions.create({ prompt: 'rejected claimed start', provider: 'cursor' });
+    sessions.updateStatus(created.id, 'RUNNING');
+    sessions.updateStatus(created.id, 'IDLE');
+    let releaseFirst: () => void = () => undefined;
+    const steer = jest.fn(async (_sessionId: string, _message: string) => {
+      if (steer.mock.calls.length === 1) {
+        await new Promise<void>((resolve) => { releaseFirst = resolve; });
+        throw new RetainedEventFlushError(new Error('retained tail unavailable'));
+      }
+    });
+    installProvider(stubProvider({ steer }));
+
+    const first = service.steer(created.id, 'first');
+    await Promise.resolve();
+    await service.steer(created.id, 'second');
+    releaseFirst();
+    await expect(first).rejects.toThrow('retained tail unavailable');
+    const started = Date.now();
+    while (steer.mock.calls.length < 2 && Date.now() - started < 1_000) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(steer).toHaveBeenCalledTimes(2);
+    expect(steer.mock.calls[1]?.[1]).toBe('second');
+  });
+
+  it('keeps a queued steer durable across repeated delivery failures', async () => {
+    const created = sessions.create({ prompt: 'repeated failed delivery', provider: 'cursor' });
+    sessions.updateStatus(created.id, 'RUNNING');
+    sessions.updateStatus(created.id, 'IDLE');
+    let releaseFirst: () => void = () => undefined;
+    let deliveryAvailable = false;
+    const steer = jest.fn(async () => {
+      if (steer.mock.calls.length === 1) {
+        await new Promise<void>((resolve) => { releaseFirst = resolve; });
+      }
+      if (!deliveryAvailable) {
+        throw new RetainedEventFlushError(new Error('storage still unavailable'));
+      }
+    });
+    installProvider(stubProvider({ steer }));
+
+    const first = service.steer(created.id, 'first');
+    await Promise.resolve();
+    await service.steer(created.id, 'must survive');
+    releaseFirst();
+    await expect(first).rejects.toThrow('storage still unavailable');
+    const started = Date.now();
+    while (steer.mock.calls.length < 2 && Date.now() - started < 1_000) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(service.steerQueueRepository.peekNext(created.id)?.message).toBe('must survive');
+    deliveryAvailable = true;
+    service.scheduleSteerDrain(created.id);
+    const recovered = Date.now();
+    while (steer.mock.calls.length < 3 && Date.now() - recovered < 1_000) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    while (service.steerQueueRepository.peekNext(created.id) && Date.now() - recovered < 1_000) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(steer.mock.calls[2]).toEqual([created.id, 'must survive', expect.any(Object)]);
+    expect(service.steerQueueRepository.peekNext(created.id)).toBeNull();
+  });
+
+  it('retries queue acknowledgement without redelivering an accepted steer', async () => {
+    const created = sessions.create({ prompt: 'ack retry', provider: 'cursor' });
+    sessions.updateStatus(created.id, 'RUNNING');
+    sessions.updateStatus(created.id, 'IDLE');
+    service.steerQueueRepository.enqueue(created.id, 'deliver once');
+    const steer = jest.fn(async () => undefined);
+    installProvider(stubProvider({ steer }));
+    const originalDelete = service.steerQueueRepository.deleteById.bind(
+      service.steerQueueRepository,
+    );
+    let deleteCalls = 0;
+    const deleteSpy = jest
+      .spyOn(service.steerQueueRepository, 'deleteById')
+      .mockImplementation((rowId) => {
+        deleteCalls += 1;
+        if (deleteCalls === 1) throw new Error('sqlite temporarily unavailable');
+        originalDelete(rowId);
+      });
+
+    try {
+      service.scheduleSteerDrain(created.id);
+      const started = Date.now();
+      while (service.steerQueueRepository.peekNext(created.id) && Date.now() - started < 1_000) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+
+      expect(steer).toHaveBeenCalledTimes(1);
+      expect(deleteCalls).toBeGreaterThanOrEqual(2);
+      expect(service.steerQueueRepository.peekNext(created.id)).toBeNull();
+    } finally {
+      deleteSpy.mockRestore();
+    }
+  });
+
+  it('does not retry a failed queued delivery after a newer pause wins', async () => {
+    const created = sessions.create({ prompt: 'pause wins retry', provider: 'cursor' });
+    sessions.updateStatus(created.id, 'RUNNING');
+    sessions.updateStatus(created.id, 'IDLE');
+    service.steerQueueRepository.enqueue(created.id, 'stay paused');
+    let releaseDelivery: () => void = () => undefined;
+    const steer = jest.fn(async () => {
+      await new Promise<void>((resolve) => { releaseDelivery = resolve; });
+      throw new RetainedEventFlushError(new Error('delivery failed'));
+    });
+    installProvider(stubProvider({ steer }));
+
+    service.scheduleSteerDrain(created.id);
+    const started = Date.now();
+    while (steer.mock.calls.length < 1 && Date.now() - started < 1_000) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    service.pause(created.id);
+    releaseDelivery();
+    await new Promise((resolve) => setTimeout(resolve, 350));
+
+    expect(sessions.findById(created.id)?.status).toBe('PAUSED');
+    expect(steer).toHaveBeenCalledTimes(1);
+    expect(service.steerQueueRepository.peekNext(created.id)?.message).toBe('stay paused');
+  });
+
+  it('backs off one failed queue delivery instead of scheduling a zero-delay retry', async () => {
+    const created = sessions.create({ prompt: 'queue backoff', provider: 'cursor' });
+    sessions.updateStatus(created.id, 'RUNNING');
+    sessions.updateStatus(created.id, 'IDLE');
+    service.steerQueueRepository.enqueue(created.id, 'retry later');
+    const steer = jest.fn(async () => {
+      throw new RetainedEventFlushError(new Error('still unavailable'));
+    });
+    installProvider(stubProvider({ steer }));
+
+    service.scheduleSteerDrain(created.id);
+    const started = Date.now();
+    while (steer.mock.calls.length < 1 && Date.now() - started < 1_000) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    expect(steer).toHaveBeenCalledTimes(1);
+    expect(service.steerQueueRepository.peekNext(created.id)?.message).toBe('retry later');
+  });
+
+  it('tracks availability preflight and prevents provider work after shutdown starts', async () => {
+    const created = sessions.create({ prompt: 'shutdown preflight', provider: 'cursor' });
+    sessions.updateStatus(created.id, 'RUNNING');
+    sessions.updateStatus(created.id, 'IDLE');
+    const steer = jest.fn(async () => undefined);
+    const provider = stubProvider({ steer });
+    registry.resolveForSession = (() => provider) as AgentRegistry['resolveForSession'];
+    let releaseAvailability: () => void = () => undefined;
+    const availability = new Promise<AgentProvider>((resolve) => {
+      releaseAvailability = () => resolve(provider);
+    });
+    registry.resolveAvailableForSession = (() => availability) as AgentRegistry['resolveAvailableForSession'];
+    const internals = service as unknown as {
+      destroyed: boolean;
+      pendingWork: Set<Promise<unknown>>;
+    };
+
+    const steering = service.steer(created.id, 'must not start');
+    await Promise.resolve();
+    expect(internals.pendingWork.has(availability)).toBe(true);
+    internals.destroyed = true;
+    releaseAvailability();
+    await expect(steering).rejects.toThrow('shutting down');
+    expect(steer).not.toHaveBeenCalled();
+    internals.destroyed = false;
+  });
+
   it('dedupes steer_message against hydrated user_message on transcript refresh', () => {
     const created = sessions.create({ prompt: 'dedupe test', provider: 'cursor' });
     events.append(created.id, 'steer_message', { text: 'follow the plan' });
@@ -337,6 +577,9 @@ describe('SessionsService steer while RUNNING', () => {
   it('forces a hung run to IDLE when interrupt does not unwind it, then drains the queue', async () => {
     const id = seedRunning();
     const steer = jest.fn(async (sessionId: string, _message: string, context: AgentRunContext) => {
+      if (sessions.findById(sessionId)?.status !== 'RUNNING') {
+        sessions.updateStatus(sessionId, 'RUNNING');
+      }
       sessions.updateStatus(sessionId, 'IDLE');
       context.emit?.(events.append(sessionId, 'status', { status: 'IDLE' }));
     });

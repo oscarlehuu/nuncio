@@ -49,6 +49,8 @@ interface RetainedEvent {
   type: string;
   payload: unknown;
   emit?: EventEmitter;
+  /** FSM settlement that must succeed before this terminal event can commit. */
+  settleStatus?: 'IDLE' | 'ERROR';
 }
 
 interface PreviewBuffer {
@@ -74,6 +76,12 @@ function sameBase(a: Record<string, unknown>, b: Record<string, unknown>): boole
   const bKeys = Object.keys(b);
   if (aKeys.length !== bKeys.length) return false;
   return aKeys.every((key) => a[key] === b[key]);
+}
+
+function terminalStatus(type: string, payload: unknown): 'IDLE' | 'ERROR' | undefined {
+  if (type !== 'status' || typeof payload !== 'object' || payload === null) return undefined;
+  const status = (payload as { status?: unknown }).status;
+  return status === 'IDLE' || status === 'ERROR' ? status : undefined;
 }
 
 export abstract class BaseAgentProvider implements AgentProvider {
@@ -201,8 +209,8 @@ export abstract class BaseAgentProvider implements AgentProvider {
       }
       let event;
       try {
-        event = this.events.append(sessionId, type, payload);
-        if (event.seq <= 0) throw new Error('Event append did not commit');
+        event = this.persistEvent(sessionId, type, payload, terminalStatus(type, payload));
+        if (!event) return;
       } catch {
         this.retainEvent(sessionId, type, payload, acceptedEmit);
         return;
@@ -377,7 +385,7 @@ export abstract class BaseAgentProvider implements AgentProvider {
       last.payload = merged;
       last.emit = emit ?? last.emit;
     } else {
-      const retained = { type, payload, emit };
+      const retained = { type, payload, emit, settleStatus: terminalStatus(type, payload) };
       if (retainedBytes + this.retainedEventBytes(retained) > RETAINED_EVENT_MAX_BYTES) {
         this.stopForRetainedOverflow(sessionId, emit);
       }
@@ -419,7 +427,7 @@ export abstract class BaseAgentProvider implements AgentProvider {
     }
     pending.push(
       { type: 'error', payload: { message }, emit },
-      { type: 'status', payload: { status: 'ERROR' }, emit },
+      { type: 'status', payload: { status: 'ERROR' }, emit, settleStatus: 'ERROR' },
     );
     this.retainedEvents.set(sessionId, pending);
     this.scheduleRetainedEventFlush(sessionId);
@@ -442,8 +450,16 @@ export abstract class BaseAgentProvider implements AgentProvider {
       const retained = queue[0]!;
       let event;
       try {
-        event = this.events.append(sessionId, retained.type, retained.payload);
-        if (event.seq <= 0) throw new Error('Retained event append did not commit');
+        event = this.persistEvent(
+          sessionId,
+          retained.type,
+          retained.payload,
+          retained.settleStatus,
+        );
+        if (!event) {
+          queue.shift();
+          continue;
+        }
       } catch (error) {
         this.scheduleRetainedEventFlush(sessionId);
         throw new RetainedEventFlushError(error);
@@ -457,6 +473,31 @@ export abstract class BaseAgentProvider implements AgentProvider {
       }
     }
     this.retainedEvents.delete(sessionId);
+  }
+
+  private persistEvent(
+    sessionId: string,
+    type: string,
+    payload: unknown,
+    settleStatus?: 'IDLE' | 'ERROR',
+  ) {
+    if (!settleStatus) {
+      const event = this.events.append(sessionId, type, payload);
+      if (event.seq <= 0) throw new Error('Event append did not commit');
+      return event;
+    }
+
+    let event: ReturnType<EventsRepository['append']> | null = null;
+    this.events.transaction(() => {
+      const current = this.sessions.findById(sessionId);
+      if (!current || (current.status !== 'RUNNING' && current.status !== settleStatus)) return;
+      if (current.status === 'RUNNING') this.sessions.updateStatus(sessionId, settleStatus);
+      const persisted = this.events.append(sessionId, type, payload, false);
+      if (persisted.seq <= 0) throw new Error('Terminal event append did not commit');
+      event = persisted;
+    });
+    if (event) this.events.notifyPersisted(sessionId, event);
+    return event;
   }
 
   private scheduleRetainedEventFlush(sessionId: string): void {
@@ -564,12 +605,7 @@ export abstract class BaseAgentProvider implements AgentProvider {
       // unhandled rejection and crash the process.
       const current = this.sessions.findById(sessionId);
       if (!current || current.status !== 'RUNNING') return;
-      this.pushEvent(
-        sessionId,
-        'status',
-        { status: 'IDLE' },
-        this.settleStatusBeforeFanout(sessionId, 'IDLE', runContext.emit),
-      );
+      this.pushEvent(sessionId, 'status', { status: 'IDLE' }, runContext.emit);
       await this.waitForPendingEvents(sessionId);
       if (!this.isRunCurrent(sessionId, generation)) return;
       const settled = this.sessions.findById(sessionId);
@@ -583,8 +619,12 @@ export abstract class BaseAgentProvider implements AgentProvider {
   }
 
   /** Do not let post-turn work overtake terminal events retained during an outage. */
-  private async waitForPendingEvents(sessionId: string): Promise<void> {
+  protected async waitForPendingEvents(sessionId: string): Promise<void> {
+    const generation = this.runGenerations.get(sessionId);
     while (this.pendingEventSessionIds().includes(sessionId)) {
+      if (generation !== undefined && !this.isRunCurrent(sessionId, generation)) {
+        throw new AgentRunCancelledError();
+      }
       try {
         this.flushPendingEvents(sessionId);
       } catch (error) {
@@ -592,6 +632,19 @@ export abstract class BaseAgentProvider implements AgentProvider {
         await new Promise((resolve) => setTimeout(resolve, DELTA_FLUSH_MS));
       }
     }
+    if (generation !== undefined && !this.isRunCurrent(sessionId, generation)) {
+      throw new AgentRunCancelledError();
+    }
+  }
+
+  /** Snapshot the currently executing turn so provider-specific awaits can revalidate it. */
+  protected currentRunGeneration(sessionId: string): number | undefined {
+    return this.runGenerations.get(sessionId);
+  }
+
+  /** True only while the same shared provider turn still owns this session. */
+  protected isCurrentRunGeneration(sessionId: string, generation: number | undefined): boolean {
+    return generation !== undefined && this.isRunCurrent(sessionId, generation);
   }
 
   private guardRunContext(
@@ -628,12 +681,7 @@ export abstract class BaseAgentProvider implements AgentProvider {
       const session = this.sessions.findById(sessionId);
       if (session?.status === 'RUNNING') {
         try {
-          this.pushEvent(
-            sessionId,
-            'status',
-            { status: 'IDLE' },
-            this.settleStatusBeforeFanout(sessionId, 'IDLE', emit),
-          );
+          this.pushEvent(sessionId, 'status', { status: 'IDLE' }, emit);
           await this.waitForPendingEvents(sessionId);
           if (this.sessions.findById(sessionId)?.status === 'RUNNING') {
             this.sessions.updateStatus(sessionId, 'IDLE');
@@ -649,12 +697,7 @@ export abstract class BaseAgentProvider implements AgentProvider {
     // there is nothing to update and no event bus to push to. Logging the error
     // here would just spam — the original failure already happened upstream.
     if (!this.sessions.findById(sessionId)) return;
-    this.pushEvent(
-      sessionId,
-      'status',
-      { status: 'ERROR' },
-      this.settleStatusBeforeFanout(sessionId, 'ERROR', emit),
-    );
+    this.pushEvent(sessionId, 'status', { status: 'ERROR' }, emit);
     this.pushEvent(sessionId, 'error', { message }, emit);
     await this.waitForPendingEvents(sessionId);
     if (this.sessions.findById(sessionId)?.status === 'RUNNING') {
@@ -662,17 +705,4 @@ export abstract class BaseAgentProvider implements AgentProvider {
     }
   }
 
-  private settleStatusBeforeFanout(
-    sessionId: string,
-    status: 'IDLE' | 'ERROR',
-    emit?: EventEmitter,
-  ): EventEmitter {
-    return (event) => {
-      if (!this.isEmitterCurrent(sessionId, emit)) return;
-      if (this.sessions.findById(sessionId)?.status === 'RUNNING') {
-        this.sessions.updateStatus(sessionId, status);
-      }
-      emit?.(event);
-    };
-  }
 }
