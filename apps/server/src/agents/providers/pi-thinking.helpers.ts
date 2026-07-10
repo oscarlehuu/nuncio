@@ -7,6 +7,7 @@ export const PI_THINKING_LEVELS = [
   'medium',
   'high',
   'xhigh',
+  'max',
 ] as const;
 
 export type PiThinkingLevel = (typeof PI_THINKING_LEVELS)[number];
@@ -18,15 +19,15 @@ const PI_THINKING_LABELS: Record<PiThinkingLevel, string> = {
   medium: 'Medium',
   high: 'High',
   xhigh: 'Extra High',
+  max: 'Max',
 };
 
-const PI_DEFAULT_SUPPORTED = new Set<PiThinkingLevel>([
+const PI_BASELINE_THINKING_LEVELS = new Set<PiThinkingLevel>([
   'off',
   'minimal',
   'low',
   'medium',
   'high',
-  'xhigh',
 ]);
 
 export type PiModelThinkingMeta = {
@@ -41,21 +42,20 @@ export function isPiThinkingLevel(value: string | null | undefined): value is Pi
     value === 'low' ||
     value === 'medium' ||
     value === 'high' ||
-    value === 'xhigh'
+    value === 'xhigh' ||
+    value === 'max'
   );
 }
 
 function supportedLevelsForModel(model: PiModelThinkingMeta | undefined): PiThinkingLevel[] {
   if (!model?.reasoning) return [];
   const map = model.thinkingLevelMap;
-  if (map && Object.keys(map).length > 0) {
-    return PI_THINKING_LEVELS.filter((level) => {
-      const mapped = map[level];
-      if (mapped === null) return false;
-      return mapped !== undefined || PI_DEFAULT_SUPPORTED.has(level);
-    });
-  }
-  return [...PI_THINKING_LEVELS];
+  return PI_THINKING_LEVELS.filter((level) => {
+    const mapped = map?.[level];
+    if (mapped === null) return false;
+    if (PI_BASELINE_THINKING_LEVELS.has(level)) return true;
+    return mapped !== undefined;
+  });
 }
 
 export function piThinkingDescriptors(

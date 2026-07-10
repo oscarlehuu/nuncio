@@ -8,6 +8,8 @@ type FakeModel = {
   name: string;
   cost?: { input: number; output: number };
   contextWindow?: number;
+  reasoning?: boolean;
+  thinkingLevelMap?: Record<string, string | null>;
 };
 
 let availableModels: FakeModel[] = [];
@@ -76,6 +78,36 @@ describe('PiAgentProvider.listModels', () => {
     const models = await makeProvider().listModels();
 
     expect(models).toBe(STATIC_MODEL_PROVIDERS);
+  });
+
+  it('exposes Max only when the Pi registry model explicitly supports it', async () => {
+    availableModels = [
+      {
+        provider: 'openai-codex',
+        id: 'gpt-5.6-sol',
+        name: 'GPT-5.6 Sol',
+        reasoning: true,
+        thinkingLevelMap: { xhigh: 'xhigh', max: 'max' },
+        contextWindow: 372_000,
+      },
+    ];
+    throwOnCreate = false;
+
+    const providers = await makeProvider().listModels();
+    const model = providers[0]?.groups?.[0]?.models?.[0];
+    const thinking = model?.options?.find((option) => option.id === 'thinkingLevel');
+
+    expect(model?.id).toBe('openai-codex:gpt-5.6-sol');
+    expect(model?.contextWindow).toBe(372_000);
+    expect(thinking?.options?.map((option) => option.id)).toEqual([
+      'off',
+      'minimal',
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+    ]);
   });
 
   it('falls back to static providers when the SDK throws', async () => {

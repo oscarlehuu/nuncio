@@ -1,6 +1,5 @@
 import {
   defaultSelectionsFromDescriptors,
-  mergeModelOptions,
   type ModelOptionDescriptor,
   type ModelOptionsMap,
 } from './model-options';
@@ -163,11 +162,23 @@ export function mergeOptionsForModel(
   partial: ModelOptionsMap | undefined,
 ): ModelOptionsMap {
   const descriptors = effectiveOptionDescriptors(model);
-  const merged = mergeModelOptions(descriptors, partial);
-  const allowed = new Set(descriptors.map((descriptor) => descriptor.id));
+  const defaults = defaultSelectionsFromDescriptors(descriptors);
   const out: ModelOptionsMap = {};
-  for (const [key, value] of Object.entries(merged)) {
-    if (allowed.has(key)) out[key] = value;
+  for (const descriptor of descriptors) {
+    const candidate = partial?.[descriptor.id];
+    const fallback = defaults[descriptor.id];
+    if (descriptor.type === 'boolean') {
+      if (typeof candidate === 'boolean') out[descriptor.id] = candidate;
+      else if (typeof fallback === 'boolean') out[descriptor.id] = fallback;
+      continue;
+    }
+
+    const choices = descriptor.options ?? [];
+    const supported =
+      typeof candidate === 'string' &&
+      (choices.length === 0 || choices.some((choice) => choice.id === candidate));
+    if (supported) out[descriptor.id] = candidate;
+    else if (typeof fallback === 'string') out[descriptor.id] = fallback;
   }
   return out;
 }

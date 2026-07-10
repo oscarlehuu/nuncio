@@ -774,7 +774,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
         defaultValue,
         options: efforts.map((effort) => ({
           id: effort.id,
-          label: effort.id,
+          label: codexReasoningEffortLabel(effort.id),
           isDefault: effort.id === defaultValue,
         })),
       },
@@ -795,9 +795,10 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
         typeof effort === 'string'
           ? effort
           : effort.reasoningEffort ?? effort.reasoning_effort ?? effort.effort ?? effort.id;
-      if (!id?.trim() || ids.has(id)) continue;
-      ids.add(id);
-      out.push({ id });
+      const normalizedId = id?.trim();
+      if (!normalizedId || ids.has(normalizedId)) continue;
+      ids.add(normalizedId);
+      out.push({ id: normalizedId });
     }
     return out;
   }
@@ -833,12 +834,31 @@ function defaultCodexModelOptions(): ModelOptionDescriptorDto[] {
       defaultValue: DEFAULT_CODEX_REASONING_EFFORT,
       options: DEFAULT_CODEX_REASONING_EFFORTS.map((effort) => ({
         id: effort,
-        label: effort,
+        label: codexReasoningEffortLabel(effort),
         isDefault: effort === DEFAULT_CODEX_REASONING_EFFORT,
       })),
     },
     codexFastOption(),
   ];
+}
+
+function codexReasoningEffortLabel(effort: string): string {
+  switch (effort.toLowerCase()) {
+    case 'low':
+      return 'Low';
+    case 'medium':
+      return 'Medium';
+    case 'high':
+      return 'High';
+    case 'xhigh':
+      return 'Extra High';
+    case 'max':
+      return 'Max';
+    case 'ultra':
+      return 'Ultra · Multi-agent';
+    default:
+      return effort;
+  }
 }
 
 function codexFastOption(): ModelOptionDescriptorDto {

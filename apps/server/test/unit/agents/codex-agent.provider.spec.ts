@@ -29,12 +29,45 @@ class FakeCodexClient extends EventEmitter implements CodexAppServerClientLike {
   modelListResponse: unknown = {
     data: [
       {
-        id: 'gpt-5.5',
-        displayName: 'GPT-5.5',
-        description: 'Codex model',
+        id: 'gpt-5.6-sol',
+        displayName: 'GPT-5.6 Sol',
+        description: 'Flagship GPT-5.6 model',
         supportedReasoningEfforts: [
+          { reasoningEffort: 'low' },
           { reasoningEffort: 'medium' },
+          { reasoningEffort: 'high' },
           { reasoningEffort: 'xhigh' },
+          { reasoningEffort: 'max' },
+          { reasoningEffort: 'ultra', description: 'Maximum reasoning with automatic task delegation' },
+        ],
+        defaultReasoningEffort: 'low',
+        supportsFastMode: true,
+      },
+      {
+        id: 'gpt-5.6-terra',
+        displayName: 'GPT-5.6 Terra',
+        description: 'Balanced GPT-5.6 model',
+        supportedReasoningEfforts: [
+          { reasoningEffort: 'low' },
+          { reasoningEffort: 'medium' },
+          { reasoningEffort: 'high' },
+          { reasoningEffort: 'xhigh' },
+          { reasoningEffort: 'max' },
+          { reasoningEffort: 'ultra', description: 'Maximum reasoning with automatic task delegation' },
+        ],
+        defaultReasoningEffort: 'medium',
+        supportsFastMode: true,
+      },
+      {
+        id: 'gpt-5.6-luna',
+        displayName: 'GPT-5.6 Luna',
+        description: 'Fast GPT-5.6 model',
+        supportedReasoningEfforts: [
+          { reasoningEffort: 'low' },
+          { reasoningEffort: 'medium' },
+          { reasoningEffort: 'high' },
+          { reasoningEffort: 'xhigh' },
+          { reasoningEffort: 'max' },
         ],
         defaultReasoningEffort: 'medium',
         supportsFastMode: true,
@@ -432,7 +465,7 @@ describe('CodexAgentProvider', () => {
     expect(streamed.endsWith('\n')).toBe(false);
   });
 
-  it('lists Codex reasoning effort and fast priority options', async () => {
+  it('lists model-specific GPT-5.6 reasoning efforts and fast priority options', async () => {
     provider.commandRunner = async () => ({
       status: 0,
       stdout: 'ok',
@@ -440,20 +473,48 @@ describe('CodexAgentProvider', () => {
     });
 
     const providers = await provider.listModels();
-    const model = providers[0]?.groups?.[0]?.models?.[0];
+    const models = providers[0]?.groups?.[0]?.models ?? [];
+    const sol = models.find((model) => model.id === 'codex:gpt-5.6-sol');
+    const terra = models.find((model) => model.id === 'codex:gpt-5.6-terra');
+    const luna = models.find((model) => model.id === 'codex:gpt-5.6-luna');
 
-    expect(model?.id).toBe('codex:gpt-5.5');
-    expect(model?.options).toContainEqual({
+    expect(models.map((model) => model.id)).toEqual([
+      'codex:gpt-5.6-sol',
+      'codex:gpt-5.6-terra',
+      'codex:gpt-5.6-luna',
+    ]);
+    expect(sol?.options).toContainEqual({
       id: 'reasoningEffort',
       label: 'Reasoning',
       type: 'select',
-      defaultValue: 'medium',
+      defaultValue: 'low',
       options: [
-        { id: 'medium', label: 'medium', isDefault: true },
-        { id: 'xhigh', label: 'xhigh', isDefault: false },
+        { id: 'low', label: 'Low', isDefault: true },
+        { id: 'medium', label: 'Medium', isDefault: false },
+        { id: 'high', label: 'High', isDefault: false },
+        { id: 'xhigh', label: 'Extra High', isDefault: false },
+        { id: 'max', label: 'Max', isDefault: false },
+        { id: 'ultra', label: 'Ultra · Multi-agent', isDefault: false },
       ],
     });
-    expect(model?.options).toContainEqual({
+    const terraReasoning = terra?.options?.find((option) => option.id === 'reasoningEffort');
+    expect(terraReasoning?.defaultValue).toBe('medium');
+    expect(terraReasoning?.options?.at(-1)).toEqual({
+      id: 'ultra',
+      label: 'Ultra · Multi-agent',
+      isDefault: false,
+    });
+    expect(luna?.options?.find((option) => option.id === 'reasoningEffort')).toMatchObject({
+      defaultValue: 'medium',
+      options: [
+        { id: 'low', label: 'Low', isDefault: false },
+        { id: 'medium', label: 'Medium', isDefault: true },
+        { id: 'high', label: 'High', isDefault: false },
+        { id: 'xhigh', label: 'Extra High', isDefault: false },
+        { id: 'max', label: 'Max', isDefault: false },
+      ],
+    });
+    expect(sol?.options).toContainEqual({
       id: 'fast',
       label: 'Priority',
       type: 'boolean',
@@ -485,6 +546,35 @@ describe('CodexAgentProvider', () => {
         model: 'gpt-5.5',
         effort: 'xhigh',
         serviceTier: 'fast',
+        approvalPolicy: 'never',
+        sandboxPolicy: { type: 'dangerFullAccess' },
+      },
+    });
+  });
+
+  it('forwards GPT-5.6 Ultra through the app-server effort field', async () => {
+    const created = sessions.create({
+      id: 'session-ultra',
+      prompt: 'Delegate independent checks',
+      provider: 'codex',
+      model: 'codex:gpt-5.6-sol',
+      modelOptions: { reasoningEffort: 'ultra' },
+    });
+
+    await provider.run(created.id, created.prompt, {
+      emit: () => undefined,
+      cwd: '/tmp/project',
+      model: created.model,
+      modelOptions: created.modelOptions,
+    });
+
+    expect(fakeClient.requests).toContainEqual({
+      method: 'turn/start',
+      params: {
+        threadId: 'codex-thread-1',
+        input: [{ type: 'text', text: 'Delegate independent checks', text_elements: [] }],
+        model: 'gpt-5.6-sol',
+        effort: 'ultra',
         approvalPolicy: 'never',
         sandboxPolicy: { type: 'dangerFullAccess' },
       },
