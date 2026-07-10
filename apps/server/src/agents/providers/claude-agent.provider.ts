@@ -7,9 +7,14 @@ import type { ModelOptionsMap } from '../../models/model-options.types';
 import type { ModelProviderDto } from '../../models/models.types';
 import { AgentRunCancelledError, BaseAgentProvider } from '../agents.base-provider';
 import type { AgentRunContext, InteractionResponse } from '../agents.types';
+import {
+  runtimePolicyKey,
+  runtimeToolsForPolicy,
+} from '../agent-runtime-policy';
 import { appendRuntimeToolInstructions } from '../tools/agent-runtime-tools.types';
 import {
   buildClaudeMcpServers,
+  CLAUDE_RUNTIME_MCP_SERVER,
   type ClaudeMcpServerConfig,
   type CreateSdkMcpServer,
 } from '../tools/claude-runtime-tools.adapter';
@@ -51,6 +56,7 @@ import {
 import type { AgentAttachment } from '../agents.types';
 import { CLAUDE_STATIC_MODELS } from './claude-agent.models';
 import { InputQueue } from './claude-agent.input-queue';
+import { buildClaudeRuntimePolicyOptions } from './claude-runtime-policy';
 
 const CLAUDE_MODEL_PREFIX = 'claude:';
 const DEFAULT_PERMISSION_MODE: ClaudePermissionMode = 'acceptEdits';
@@ -110,12 +116,14 @@ interface ActiveClaudeSession {
    */
   pendingRedirects: number;
   /**
-   * A cheap signature of the runtime toolset the live query was last built with
-   * (tool names + serialized input shapes). A follow-up turn whose derived
-   * toolset differs pushes the rebuilt set through `setMcpServers`; an unchanged
-   * signature skips the call.
+   * Signature of the runtime toolset the live query was last built with,
+   * including execute-closure identity so stable Crew schemas still refresh
+   * their turn-scoped authority through `setMcpServers`.
    */
   mcpToolSignature: string;
+  runtimePolicyKey: string;
+  /** Persisted thread being resumed until its first successful terminal result. */
+  resumedThreadId?: string;
 }
 
 @Injectable()
@@ -130,9 +138,15 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     // context.attachments through the single buildUserMessage builder.
     images: true,
     steerWhileRunning: true,
+    runtimePolicies: [
+      { filesystem: 'read-only', network: 'disabled' },
+      { filesystem: 'workspace-write', network: 'disabled' },
+    ],
   } as const;
 
   private readonly activeSessions = new Map<string, ActiveClaudeSession>();
+  private readonly mcpToolInstances = new WeakMap<object, number>();
+  private nextMcpToolInstance = 1;
   /** Sessions whose current run was interrupted — the terminal result is a clean stop, not an error. */
   private readonly interruptedSessions = new Set<string>();
   private cachedAvailable?: boolean;
@@ -261,24 +275,28 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     isSteer: boolean,
     context: AgentRunContext,
   ): Promise<void> {
+    const safeContext = this.policySafeContext(context);
     const existing = this.activeSessions.get(sessionId);
     if (existing) {
+      if (existing.runtimePolicyKey !== runtimePolicyKey(context.runtimePolicy)) {
+        throw new Error('Runtime policy cannot change on an active Claude session.');
+      }
       // Follow-up turn on a still-open query (the previous turn completed but
       // the handle persists). This is a normal next turn, NOT a mid-flight
       // redirect — the live-redirect path is steerMidRun with priority 'now'.
       existing.delta = createDeltaMappingState();
-      existing.requestProviderApproval = context.requestProviderApproval;
+      existing.requestProviderApproval = safeContext.requestProviderApproval;
       this.interruptedSessions.delete(sessionId);
-      await this.maybeRebuildMcpServers(existing, context);
-      existing.input.push(this.buildUserMessage(text, context, false));
-      await this.consume(sessionId, existing, context);
+      await this.maybeRebuildMcpServers(existing, safeContext);
+      existing.input.push(this.buildUserMessage(text, safeContext, false));
+      await this.consume(sessionId, existing, safeContext);
       return;
     }
 
     // A fresh run always starts a normal turn; resume threads through options.
-    const active = await this.startSession(sessionId, text, context);
+    const active = await this.startSession(sessionId, text, safeContext);
     this.activeSessions.set(sessionId, active);
-    await this.consume(sessionId, active, context);
+    await this.consume(sessionId, active, safeContext);
   }
 
   /**
@@ -292,12 +310,16 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
   ): Promise<boolean> {
     const active = this.activeSessions.get(sessionId);
     if (!active) return false;
+    if (active.runtimePolicyKey !== runtimePolicyKey(context.runtimePolicy)) {
+      throw new Error('Runtime policy cannot change on an active Claude session.');
+    }
+    const safeContext = this.policySafeContext(context);
     this.pushEvent(sessionId, 'steer_message', { text: message }, context.emit);
     // priority 'now' cuts the in-flight turn short and redirects; the truncated
     // turn emits its own terminal result that consume() must not treat as the
     // run's end.
     active.pendingRedirects += 1;
-    active.input.push(this.buildUserMessage(message, context, true));
+    active.input.push(this.buildUserMessage(message, safeContext, true));
     return true;
   }
 
@@ -419,6 +441,12 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     const apiKey = this.resolveApiKey();
     const effort = this.resolveEffort(context.modelOptions);
     const appendSystemPrompt = context.tools?.systemPromptAppend?.trim() || undefined;
+    const trustedMcpToolNames = (context.tools?.tools ?? []).map(
+      (tool) => `mcp__${CLAUDE_RUNTIME_MCP_SERVER}__${tool.name}`,
+    );
+    const policyOptions = context.runtimePolicy
+      ? buildClaudeRuntimePolicyOptions(context.runtimePolicy, trustedMcpToolNames)
+      : undefined;
 
     const active: ActiveClaudeSession = {
       // query is assigned below; declared first so the canUseTool closure can
@@ -432,6 +460,8 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
       openTools: new Map(),
       requestProviderApproval: context.requestProviderApproval,
       mcpToolSignature: this.mcpToolSignature(context),
+      runtimePolicyKey: runtimePolicyKey(context.runtimePolicy),
+      ...(resume ? { resumedThreadId: resume } : {}),
     };
 
     const mcpServers = await this.buildMcpServers(context);
@@ -441,15 +471,18 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     active.query = this.queryFactory({
       prompt: input,
       options: {
-        cwd: context.cwd ?? context.workspace ?? process.cwd(),
+        cwd: policyOptions?.workspaceRoot ?? context.cwd ?? context.workspace ?? process.cwd(),
         includePartialMessages: true,
         // Session behavior is fully determined by nuncio: no ~/.claude plugins,
         // hooks, or CLAUDE.md leak into a nuncio-run session.
         settingSources: [],
-        permissionMode: this.resolvePermissionMode(),
+        permissionMode: policyOptions?.permissionMode ?? this.resolvePermissionMode(),
         canUseTool: (toolName, toolInput, options) =>
-          this.approveTool(active, toolName, toolInput, options),
+          policyOptions
+            ? policyOptions.authorizeTool(toolName, toolInput)
+            : this.approveTool(active, toolName, toolInput, options),
         abortController: abort,
+        ...(policyOptions ? { tools: policyOptions.tools, hooks: policyOptions.hooks } : {}),
         ...(model ? { model } : {}),
         ...(resume ? { resume } : {}),
         ...(effort ? { effort } : {}),
@@ -478,6 +511,11 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     return servers as Record<string, ClaudeMcpServer> | undefined;
   }
 
+  private policySafeContext(context: AgentRunContext): AgentRunContext {
+    const tools = runtimeToolsForPolicy(context.runtimePolicy, context.tools);
+    return tools === context.tools ? context : { ...context, tools };
+  }
+
   /**
    * MCP servers are baked at query construction, but sessions.service derives
    * `context.tools` per turn — a changed toolset on a follow-up would otherwise
@@ -500,16 +538,28 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
   }
 
   /**
-   * A cheap, stable signature of a session's runtime toolset — tool names paired
-   * with their serialized input schemas — so a follow-up turn can detect a
-   * changed toolset without diffing the live MCP server instances. Empty when the
-   * turn carries no tools.
+   * A signature of each advertised definition plus its execute closure. Crew
+   * schemas stay stable across revisions, but their closures carry turn-scoped
+   * authority; treating a new closure as a changed MCP server prevents a resumed
+   * query from executing the prior turn's authority.
    */
   private mcpToolSignature(context: AgentRunContext): string {
     const tools = context.tools?.tools ?? [];
     return JSON.stringify(
-      tools.map((tool) => [tool.name, tool.inputSchema ?? {}]),
+      tools.map((tool) => [
+        tool.name,
+        tool.inputSchema ?? {},
+        this.mcpToolInstance(tool.execute),
+      ]),
     );
+  }
+
+  private mcpToolInstance(execute: object): number {
+    const existing = this.mcpToolInstances.get(execute);
+    if (existing !== undefined) return existing;
+    const created = this.nextMcpToolInstance++;
+    this.mcpToolInstances.set(execute, created);
+    return created;
   }
 
   /**
@@ -538,6 +588,7 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
       // An abort (dispose mid-run) makes the generator throw — treat as a cancel,
       // not an error, so the shared error path does not land ERROR.
       if (active.abort.signal.aborted) throw new AgentRunCancelledError('Claude session disposed.');
+      if (active.resumedThreadId) this.invalidateResumedThread(sessionId, active);
       throw error;
     }
   }
@@ -661,6 +712,7 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
       // The stored thread cannot be resumed (workspace moved / session evicted);
       // drop the handle so a fresh run starts clean, then surface a clear error.
       this.sealOpenTools(sessionId, active, context);
+      this.invalidateResumedThread(sessionId, active);
       this.dropHandle(sessionId, active);
       throw new Error(`Cannot resume Claude session: ${classified.message}`);
     }
@@ -671,6 +723,7 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     }
 
     this.sealOpenTools(sessionId, active, context);
+    active.resumedThreadId = undefined;
     this.pushEvent(
       sessionId,
       'assistant_message',
@@ -678,6 +731,14 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
       context.emit,
     );
     return true;
+  }
+
+  private invalidateResumedThread(sessionId: string, active: ActiveClaudeSession): void {
+    active.resumedThreadId = undefined;
+    this.sessions.updateProviderRuntimeState(sessionId, {
+      providerThreadId: null,
+      providerActiveTurnId: null,
+    });
   }
 
   /**

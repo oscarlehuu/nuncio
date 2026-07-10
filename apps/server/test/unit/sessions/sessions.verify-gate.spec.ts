@@ -1,8 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AgentsModule } from '../../../src/agents/agents.module';
+import type { AgentRunContext } from '../../../src/agents/agents.types';
+import { CursorAgentProvider } from '../../../src/agents/providers/cursor-agent.provider';
 import { CursorLocalModule } from '../../../src/cursor-local/cursor-local.module';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { GitModule } from '../../../src/git/git.module';
@@ -84,6 +86,93 @@ describe('SessionsService verifier gate', () => {
     const result = await waitForVerifyResult(session.id);
     expect(result!.payload).toMatchObject({ ok: false, exitCode: 1 });
     expect(service.get(session.id)?.status).toBe('IDLE');
+  });
+
+  it('skips the Solo verifier when verification is owned by Crew', async () => {
+    writeVerifyScript('echo should-not-run\nexit 1\n');
+    const session = await service.create({
+      prompt: 'crew verifies this member',
+      provider: 'cursor',
+      workspace,
+      verifyOwner: 'crew',
+    });
+
+    await service.awaitRun(session.id);
+
+    expect(service.get(session.id)?.verifyOwner).toBe('crew');
+    expect(events.list(session.id).some((event) => event.type.startsWith('verify_'))).toBe(false);
+  });
+
+  it('rejects an explicit policy before invoking a provider that does not advertise support', async () => {
+    await expect(
+      service.create({
+        prompt: 'must not reach Cursor',
+        provider: 'cursor',
+        workspace,
+        runtimePolicy: {
+          filesystem: 'read-only',
+          workspaceRoot: workspace,
+          network: 'disabled',
+        },
+      }),
+    ).rejects.toThrow('does not support runtime policy');
+  });
+
+  it('passes the persisted policy through first run and follow-up steer while dropping runtime tools', async () => {
+    const cursor = module.get(CursorAgentProvider);
+    const originalCapabilities = cursor.capabilities;
+    const originalRun = cursor.run.bind(cursor);
+    const originalSteer = cursor.steer.bind(cursor);
+    const contexts: AgentRunContext[] = [];
+    Object.defineProperty(cursor, 'capabilities', {
+      configurable: true,
+      value: {
+        ...originalCapabilities,
+        runtimePolicies: [{ filesystem: 'read-only', network: 'disabled' }],
+      },
+    });
+    cursor.run = async (id, prompt, context) => {
+      contexts.push(context);
+      await originalRun(id, prompt, context);
+    };
+    cursor.steer = async (id, message, context) => {
+      contexts.push(context);
+      await originalSteer(id, message, context);
+    };
+    try {
+      const session = await service.create({
+        prompt: 'policy context',
+        provider: 'cursor',
+        workspace,
+        runtimePolicy: {
+          filesystem: 'read-only',
+          workspaceRoot: workspace,
+          network: 'disabled',
+        },
+      });
+      await service.awaitRun(session.id);
+      await service.continueExistingSession(session.id, { prompt: 'follow up' });
+
+      const expectedPolicy = {
+        filesystem: 'read-only',
+        workspaceRoot: realpathSync(workspace),
+        network: 'disabled',
+      };
+      expect(service.get(session.id)?.runtimePolicy).toEqual(expectedPolicy);
+      expect(contexts).toHaveLength(2);
+      expect(contexts.map((context) => context.runtimePolicy)).toEqual([
+        expectedPolicy,
+        expectedPolicy,
+      ]);
+      expect(contexts.every((context) => context.tools === undefined)).toBe(true);
+    } finally {
+      cursor.run = originalRun;
+      cursor.steer = originalSteer;
+      Object.defineProperty(cursor, 'capabilities', {
+        configurable: true,
+        value: originalCapabilities,
+      });
+    }
   });
 
   it('awaitRun resolves only after the run and its verification settle', async () => {

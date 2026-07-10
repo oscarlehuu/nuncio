@@ -5,22 +5,20 @@ import { OrchestrationToolsService } from '../../orchestration/tools/orchestrati
 import type {
   AgentRuntimeTool,
   AgentRuntimeToolResult,
+  AgentRuntimeToolScope,
+  AgentRuntimeToolSource,
   AgentRuntimeTools,
 } from './agent-runtime-tools.types';
 
 const BROWSER_PROMPT_APPEND =
   'When the user asks for browser, web, UI, site, screenshot, or visual verification work, use the Nuncio browser tools first. Omit target to use the configured default from Settings > MCP & Tools; target=auto prefers the Nuncio in-app browser, then falls back to the Nuncio-owned external CDP browser.';
 
-export interface ToolScope {
-  sessionId: string;
-  projectPath: string | null;
-  /** The session's engine — resolves the prompt profile's tools-preamble (D2). */
-  provider?: string;
-  model?: string | null;
-}
+export type ToolScope = AgentRuntimeToolScope;
 
 @Injectable()
 export class AgentToolRegistry {
+  private readonly sources = new Set<AgentRuntimeToolSource>();
+
   constructor(
     private readonly browser: BrowserToolService,
     @Optional()
@@ -28,11 +26,25 @@ export class AgentToolRegistry {
     private readonly orchestration?: OrchestrationToolsService,
   ) {}
 
+  /** Register an independently-scoped source; the disposer prevents stale closures. */
+  registerSource(source: AgentRuntimeToolSource): () => void {
+    this.sources.add(source);
+    return () => {
+      this.sources.delete(source);
+    };
+  }
+
   forSession(scope: ToolScope): AgentRuntimeTools {
     const browserTools = this.browser.toolDefinitions.map((definition): AgentRuntimeTool => ({
       name: definition.name,
       description: definition.description,
       inputSchema: stripSessionId(definition.inputSchema),
+      security: {
+        network: 'required',
+        workspaceMutation: 'none',
+        runtimePolicies: [],
+        scope: 'session',
+      },
       execute: async (input) =>
         browserResultToRuntimeResult(
           await this.browser.execute(definition.name, {
@@ -44,11 +56,27 @@ export class AgentToolRegistry {
 
     // Merge orchestration tools (gated by NUNCIO_ORCHESTRATION_TOOLS; empty when off).
     const orchestration = this.orchestration?.forScope(scope) ?? { tools: [] };
-    const appends = [BROWSER_PROMPT_APPEND, orchestration.systemPromptAppend].filter(Boolean);
+    const orchestrationTools = orchestration.tools.map((tool): AgentRuntimeTool => ({
+      ...tool,
+      security: {
+        network: 'disabled',
+        workspaceMutation: 'none',
+        runtimePolicies: [],
+        scope: 'session',
+      },
+    }));
+    const sourced = [...this.sources]
+      .map((source) => source.forSession(scope))
+      .filter((tools): tools is AgentRuntimeTools => tools !== undefined);
+    const appends = [
+      BROWSER_PROMPT_APPEND,
+      orchestration.systemPromptAppend,
+      ...sourced.map((tools) => tools.systemPromptAppend),
+    ].filter(Boolean);
 
     return {
       systemPromptAppend: appends.join('\n\n'),
-      tools: [...browserTools, ...orchestration.tools],
+      tools: [...browserTools, ...orchestrationTools, ...sourced.flatMap((tools) => tools.tools)],
     };
   }
 }

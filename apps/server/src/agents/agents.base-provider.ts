@@ -89,6 +89,23 @@ export abstract class BaseAgentProvider implements AgentProvider {
 
   dispose(_sessionId: string): void {}
 
+  /**
+   * Provider-neutral stop acknowledgement. Interrupt-capable adapters must
+   * first await their SDK/transport acknowledgement; only then is the local
+   * handle detached. Adapters without interrupt support treat synchronous
+   * dispose as their stop acknowledgement.
+   */
+  async quiesce(sessionId: string): Promise<void> {
+    const provider = this as AgentProvider;
+    if (this.capabilities.interrupt) {
+      if (!provider.interrupt) {
+        throw new Error(`Provider ${this.id} declares interrupt support without implementing it.`);
+      }
+      await provider.interrupt(sessionId);
+    }
+    this.dispose(sessionId);
+  }
+
   /** Default no-op; providers that cache availability/models override this. */
   bustCache(): void {}
 

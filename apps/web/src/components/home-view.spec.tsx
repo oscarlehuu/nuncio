@@ -8,6 +8,18 @@ import {
   recordProjectSelection,
 } from '../lib/project-preference';
 import type { ModelProvider } from '../lib/model-providers';
+import {
+  createCrewTask,
+  fetchCrewProfiles,
+  resolveCrewProfile,
+  type CrewProfileDto,
+} from '@nuncio/core/crew-api';
+
+vi.mock('@nuncio/core/crew-api', () => ({
+  createCrewTask: vi.fn(),
+  fetchCrewProfiles: vi.fn(),
+  resolveCrewProfile: vi.fn(),
+}));
 
 const PI_ONLY_PROVIDERS: ModelProvider[] = [
   {
@@ -39,6 +51,31 @@ const CODEX_ONLY_PROVIDERS: ModelProvider[] = [
     ],
   },
 ];
+
+const CREW_PROFILE: CrewProfileDto = {
+  id: 'quality', name: 'Oscar Quality Crew', revision: 2, presetId: 'quality',
+  definition: {
+    bindings: {
+      foreman: { provider: 'claude', model: 'fable', label: 'Fable' },
+      builder: { provider: 'codex', model: 'sol', label: 'Sol' },
+      reviewer: { provider: 'claude', model: 'opus', label: 'Opus' },
+    },
+    policy: { verifyCommand: 'bun test', maxVerifyRetries: 2, maxReviewRetries: 2, strictFreshFinalReviewer: true },
+  },
+  createdAt: 1, updatedAt: 2,
+};
+const READY = {
+  state: 'ready' as const,
+  snapshot: {
+    ...CREW_PROFILE.definition,
+    presetId: 'quality' as const,
+    sourceProfileId: CREW_PROFILE.id,
+    sourceProfileRevision: CREW_PROFILE.revision,
+    tester: { kind: 'nuncio' as const, runtimePolicy: 'read-only' as const },
+    resolvedAt: 3,
+  },
+  issues: [],
+};
 
 vi.mock('../lib/api', () => ({
   fetchModels: vi.fn().mockResolvedValue([]),
@@ -80,6 +117,12 @@ vi.mock('./branch-picker', async () => {
 describe('HomeView', () => {
   beforeEach(() => {
     localStorage.clear();
+    vi.mocked(fetchCrewProfiles).mockReset().mockResolvedValue([CREW_PROFILE]);
+    vi.mocked(resolveCrewProfile).mockReset().mockResolvedValue(READY);
+    vi.mocked(createCrewTask).mockReset().mockResolvedValue({
+      task: { id: 'task-1', objective: 'Ship it', projectPath: '/code/nuncio', baseBranch: 'main', createdAt: 1, updatedAt: 1 },
+      run: {} as never,
+    });
   });
 
   it('submits the prompt on Enter', async () => {
@@ -279,5 +322,78 @@ describe('HomeView', () => {
     );
     await userEvent.click(screen.getByRole('button', { name: /continue on mobile/i }));
     expect(onContinue).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts every fresh composer in Solo mode', () => {
+    const { unmount } = render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
+    expect(screen.getByRole('radio', { name: 'Solo' })).toHaveAttribute('aria-checked', 'true');
+    unmount();
+    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
+    expect(screen.getByRole('radio', { name: 'Solo' })).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('Crew mode hides Solo model and Codex approval controls', async () => {
+    render(
+      <HomeView sessionCount={0} onSubmit={vi.fn()} providers={CODEX_ONLY_PROVIDERS}
+        onApprovalModeChange={vi.fn()} onCrewCreated={vi.fn()} />,
+    );
+    expect(await screen.findByRole('button', { name: /gpt 5.5/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('radio', { name: 'Crew' }));
+    expect(screen.queryByRole('button', { name: /gpt 5.5/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /approval mode/i })).not.toBeInTheDocument();
+  });
+
+  it('replaces the Solo workspace choice with a fixed Crew worktree indicator', async () => {
+    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
+    expect(screen.getByRole('button', { name: /workspace mode: work locally/i })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('radio', { name: 'Crew' }));
+    expect(screen.queryByRole('button', { name: /workspace mode/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('status', { name: 'Crew worktree' })).toHaveClass('min-h-11');
+
+    await userEvent.click(screen.getByRole('radio', { name: 'Solo' }));
+    expect(screen.getByRole('button', { name: /workspace mode: work locally/i })).toBeInTheDocument();
+  });
+
+  it('refreshes saved profiles whenever Crew mode is re-entered', async () => {
+    const updated = { ...CREW_PROFILE, name: 'Updated Quality Crew', revision: 3 };
+    vi.mocked(fetchCrewProfiles)
+      .mockReset()
+      .mockResolvedValueOnce([CREW_PROFILE])
+      .mockResolvedValueOnce([updated]);
+    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
+
+    await userEvent.click(screen.getByRole('radio', { name: 'Crew' }));
+    expect(await screen.findByRole('option', { name: CREW_PROFILE.name })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('radio', { name: 'Solo' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Crew' }));
+
+    expect(await screen.findByRole('option', { name: updated.name })).toBeInTheDocument();
+    expect(fetchCrewProfiles).toHaveBeenCalledTimes(2);
+  });
+
+  it('resolves a Ready profile, creates once on double tap, and calls the lead route callback', async () => {
+    const onCrewCreated = vi.fn();
+    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} onCrewCreated={onCrewCreated} />);
+    await userEvent.click(screen.getByRole('button', { name: /no repo/i }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Crew' }));
+    expect(await screen.findByText('Ready')).toBeInTheDocument();
+    await userEvent.type(screen.getByPlaceholderText(/ask nuncio/i), 'Ship it');
+    const send = screen.getByRole('button', { name: /send/i });
+    expect(send).toBeEnabled();
+    await userEvent.dblClick(send);
+    expect(createCrewTask).toHaveBeenCalledTimes(1);
+    expect(createCrewTask).toHaveBeenCalledWith({ objective: 'Ship it', projectPath: '/code/nuncio', baseBranch: 'main', profileId: 'quality' });
+    expect(onCrewCreated).toHaveBeenCalledWith('task-1');
+  });
+
+  it('Needs setup disables Delegate and links directly to Crew profile settings', async () => {
+    vi.mocked(resolveCrewProfile).mockResolvedValue({ ...READY, state: 'needs_setup', issues: [{ code: 'MODEL_UNAVAILABLE', role: 'builder', message: 'Builder model unavailable' }] });
+    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} onCrewCreated={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: /no repo/i }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Crew' }));
+    expect(await screen.findByText('Needs setup')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /send/i })).toBeDisabled();
+    expect(screen.getByRole('link', { name: /set up profile/i })).toHaveAttribute('href', '/settings?section=crew-profiles');
   });
 });

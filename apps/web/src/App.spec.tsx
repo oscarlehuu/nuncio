@@ -56,6 +56,12 @@ vi.mock('./lib/use-provider-update-notifications', () => ({
   useProviderUpdateNotifications: vi.fn(),
 }));
 
+vi.mock('./components/crew/crew-task-detail', () => ({
+  CrewTaskDetail: ({ taskId, runId }: { taskId: string; runId?: string }) => (
+    <div>Crew task {taskId} · run {runId ?? 'latest'}</div>
+  ),
+}));
+
 vi.mock('./lib/forge-api', () => ({
   fetchForgeCapabilities: vi.fn().mockResolvedValue({
     provider: 'github',
@@ -225,6 +231,16 @@ describe('App URL routing', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /session actions/i })).toBeInTheDocument(),
     );
+  });
+
+  it('renders Crew detail when loaded at /crew/:taskId', async () => {
+    renderApp('/crew/task-1');
+    expect(await screen.findByText('Crew task task-1 · run latest')).toBeInTheDocument();
+  });
+
+  it('forwards the immutable run query to Crew detail', async () => {
+    renderApp('/crew/task-1?run=run-2');
+    expect(await screen.findByText('Crew task task-1 · run run-2')).toBeInTheDocument();
   });
 
   it('navigates to /session/:id after creating a session', async () => {

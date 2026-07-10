@@ -72,6 +72,7 @@ describe('SessionsService steer while RUNNING', () => {
       listModels: async () => [],
       run: async () => undefined,
       steer: async () => undefined,
+      quiesce: async () => undefined,
       dispose: () => undefined,
       bustCache: () => undefined,
       ...overrides,

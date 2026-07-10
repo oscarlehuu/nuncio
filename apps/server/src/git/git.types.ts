@@ -54,3 +54,37 @@ export interface RemoteInfoDto {
   owner: string;
   repo: string;
 }
+
+export type GitBoundaryFailureReason =
+  | 'missing'
+  | 'symlink'
+  | 'not-directory'
+  | 'not-git'
+  | 'workspace-root-mismatch'
+  | 'detached-head'
+  | 'branch-mismatch'
+  | 'head-diverged';
+
+export interface GitBoundaryExpectation {
+  expectedBranch?: string;
+  expectedAncestorHead?: string;
+  expectedCanonicalPath?: string;
+}
+
+export interface GitBoundaryInspectionDto {
+  ok: boolean;
+  exists: boolean;
+  symlink: boolean;
+  canonicalPath: string;
+  branch: string | null;
+  fullHead: string | null;
+  clean: boolean;
+  reachable: boolean;
+  reason: GitBoundaryFailureReason | null;
+}
+
+export interface GitCheckpointResultDto {
+  fullHead: string;
+  clean: true;
+  committed: boolean;
+}

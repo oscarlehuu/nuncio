@@ -446,6 +446,47 @@ describe('SessionDetail', () => {
     expect(onRespondProviderRequest).toHaveBeenCalledWith('req-1', 'approve');
   });
 
+  it('keeps Crew-owned member sessions inspect-only while preserving the transcript', async () => {
+    const crewOwner = { verifyOwner: 'crew' } as unknown as Partial<Session>;
+    const events: SessionEvent[] = [
+      {
+        seq: 1,
+        type: 'provider_request',
+        payload: {
+          requestId: 'req-crew',
+          provider: 'codex',
+          method: 'exec/approval',
+          status: 'pending',
+          params: { command: 'git status' },
+        },
+        createdAt: Date.now(),
+      },
+    ];
+
+    await renderDetail(
+      { ...crewOwner, status: 'RUNNING', provider: 'codex', model: 'codex:gpt-5.5' },
+      events,
+      undefined,
+      {
+        onRename: vi.fn(),
+        onDelete: vi.fn(),
+        onRestore: vi.fn(),
+        onContinueOnMobile: vi.fn(),
+        onApprovalModeChange: vi.fn(),
+        onRespondProviderRequest: vi.fn(),
+      },
+    );
+
+    expect(screen.getByText('git status')).toBeInTheDocument();
+    expect(screen.getByText(/managed by crew/i)).toBeInTheDocument();
+    expect(screen.getByText(/inspect-only member session/i)).toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: /send|stop session|session actions/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /approve request|approval mode/i })).toBeNull();
+    await userEvent.click(screen.getByTestId('session-title'));
+    expect(screen.queryByTestId('rename-input')).toBeNull();
+  });
+
   it('marks provider approval requests as resolved', async () => {
     const events: SessionEvent[] = [
       {

@@ -6,7 +6,7 @@
 [![runtime: Bun](https://img.shields.io/badge/runtime-Bun%20%E2%89%A5%201.3-f9f1e1?logo=bun)](https://bun.sh)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-A self-hosted, mobile-first web app for delegating tasks to AI coding agents. Run it on your own machine, point it at your own Pi / Codex / Cursor credentials, and assign work from your phone — agents keep going while you're away, and you can steer them mid-task.
+A self-hosted, mobile-first web app for delegating tasks to AI coding agents. Run it on your own machine, point it at your own Pi / Codex / Cursor / Claude credentials, and assign work from your phone — agents keep going while you're away, and you can steer them mid-task.
 
 Think Devin, but self-hosted and provider-neutral: the agent layer is a single interface, so Pi, Codex, Cursor, and future agent SDKs plug in uniformly.
 
@@ -14,11 +14,12 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 
 - **Delegate tasks** — create a session with a prompt; the agent runs in-process and streams output as events
 - **Per-session provider + model** — choose the agent provider (`pi` / `codex` / `cursor` / `claude`) and the exact model (e.g. `codex:gpt-5.6-sol`, `cursor:composer-2`, `claude:sonnet`) per session; both are stored on the session and wired through to the provider runtime
+- **Solo or Crew** — Solo keeps the per-session engine/model picker. Crew uses a saved Quality profile to bind independent Foreman, Builder, and Reviewer models across Pi, Codex, and Claude, then runs the fixed local workflow `Plan → Build → Verify → Review → Synthesize → Done` in one isolated worktree. Nuncio owns deterministic verification, retry caps, writer authority, recovery, Attention blockers, and immutable successor runs; models never self-certify or silently switch providers.
 - **Steer mid-task** — send follow-up messages that continue the same agent conversation when the provider supports it
 - **Multitasking subagents** — fan out prompts from an existing session into provider-neutral child tasks; each child becomes its own session, inherits the parent provider/model/workspace unless overridden, and waits for review when finished
 - **Post-turn checks + auto-fix** — after a turn ends, Nuncio runs your project's check command (a `.nuncio/verify` script or the `NUNCIO_VERIFY_COMMAND` setting) and shows a passed/failed chip next to the session and on grid tiles. Optionally it feeds a failing run's output back to the agent and lets it try again: set `NUNCIO_VERIFY_AUTO_STEER` to enable and `NUNCIO_VERIFY_MAX_ROUNDS` (default 3) to cap the rounds; after that — or when two runs fail identically — the session is flagged as needing your attention. Auto-retries and the needs-attention state each get their own transcript row.
 - **Autopilot loops** — hand a standing goal to a loop and let it run on a schedule (`daily@22:00`, `every:6h`, `mon@09:00`); each fire enqueues a task in a fresh worktree, runs the auto-fix loop above, and lands its work as a pull request. Loops respect a daily run budget, auto-pause after 3 consecutive failed runs (flagged as needing you), and can stop themselves after N total runs or N green verifies. Schedules, budgets, and the breaker are durable SQLite and rebuild at boot. Manage them in the **Autopilot** view — a dashboard with fleet stats and a 14-day sparkline, a template gallery for common loop shapes, a per-loop detail page with rename and a **Run now** button (with a truthful skip reason on a 409), and a global run history that drills into each run's verify output — scoped to per-project defaults (engine, worktree policy, verify command, auto-fix override) set in **Settings → Projects**, with a per-loop engine override on top. Each run's prompt is primed with a "previous run context" block (last outcome, failure streak, verify tail) so a loop picks up where it left off
-- **Attention Inbox** — one ranked queue for everything that needs you: pending inputs/provider approvals, verify loops that gave up, broken Autopilot loops, open PRs awaiting review, and fleet anomalies. Ack marks an item seen without resolving it; resolve/dismiss is a founder override; the sidebar badge counts only unacked open work.
+- **Attention Inbox** — one ranked queue for everything that needs you: pending inputs/provider approvals, verify loops or Crew runs that need a decision, broken Autopilot loops, open PRs awaiting review, and fleet anomalies. Ack marks an item seen without resolving it; the sidebar badge counts only unacked open work.
 - **Heartbeat + digest** — Nuncio runs local self-checks for forge credentials and zombie sessions, reconciles the fleet and attention collectors on a cadence, and sends morning/evening digest pushes backed by an in-app digest view with real windowed counts, timeline highlights, and per-project summary lines.
 - **Observability + timeline** — derive honest metrics and timeline facts from existing durable rows at `/api/observability/*` and `/api/timeline`: turns, steers, verify outcomes, run durations, tasks, loop runs, attention, digests, and provider/project/day rollups. Token and cost fields stay `null` unless a provider reports structured usage.
 - **Dispatcher proposals** — every evening, Nuncio drafts tomorrow's plan from durable attention, verify, task, loop, and PR facts as a dispatcher proposal; approve it in one tap to create queued tasks idempotently.
@@ -48,6 +49,10 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 ## Status
 
 Rungs 0–4 are shipped through Intelligence: provider-neutral sessions, mobile/PWA, steer/model selection, workspace/Fleet/attention/diff review, observability, global timeline, local MCP, and dispatcher proposals. Promotion/release hardening and later automation rungs remain planned — see [Roadmap](#roadmap).
+
+Crew MVP is implemented and verified for the `dev` integration lane. It is not yet part of the
+stable release. The baseline is the fixed local Quality workflow
+`PLAN -> BUILD -> VERIFY -> REVIEW -> SYNTHESIZE -> DONE`, with Solo still the default.
 
 ## Changelog
 
@@ -274,6 +279,7 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 
 - **Agent providers:** Pi SDK, Codex app-server, Cursor SDK, and Claude Agent SDK (plus a source-only `NUNCIO_FORCE_MOCK=1`-gated Mock for testing) behind a common `AgentProvider` interface; `AgentRegistry` selects per session. Pi auth via the SDK's `AuthStorage` at `~/.pi/agent`; Codex auth via the local `codex` CLI login; Cursor auth via `CURSOR_API_KEY`; Claude auth via a logged-in Claude Code keychain or `ANTHROPIC_API_KEY`. See [docs/system-architecture.md](docs/system-architecture.md).
 - **Agent runtime tools:** `AgentToolRegistry` binds per-session tools such as browser control into `AgentRunContext.tools`; providers adapt that once into Pi `customTools`, Cursor `local.customTools`, or Codex `dynamicTools`.
+- **Crew workspace harness:** a durable `CrewTask` owns immutable `CrewRun` revisions above the existing Task/Session primitives. The Crew reducer is the sole transition authority; one writer lease confines Builder, Foreman/Reviewer run read-only, mandatory verify runs in Seatbelt on macOS or bubblewrap on Linux against a full Git HEAD, and provider sessions are reused only when their frozen binding, policy, and workspace remain compatible. Full redacted verify/diff artifacts are read progressively through integrity-checked byte ranges. See [docs/crew-workspace-harness.md](docs/crew-workspace-harness.md) and [docs/crew-run-authority-and-state-machine.md](docs/crew-run-authority-and-state-machine.md).
 - **Provider CLI updates:** Pi and Codex version checks run best-effort against public package metadata, surface optional notifications, and only run update commands after a user clicks Update.
 - **Backend:** NestJS (`apps/server`) on port 3000; after `bun run build`, it also serves `apps/web/dist` at `/` while keeping `/api/*` for JSON routes
 - **Frontend:** Vite + React + Tailwind + shadcn/ui (`apps/web`) on port 5173 in dev/preview (`NUNCIO_WEB_PORT` overrides dev/preview; `NUNCIO_API_ORIGIN` overrides the `/api` proxy target)
@@ -310,12 +316,20 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 | DELETE | `/api/sessions/:id` | Permanently delete an archived session + its event log |
 | GET | `/api/tasks?parentSessionId=` | List durable queued/running/finished tasks, optionally filtered to child subagents of a parent session |
 | POST | `/api/tasks` | Queue a standalone task `{ "prompt": "...", "provider?": "pi\|codex\|cursor", "model?": "...", "projectPath?": "/abs/repo", "useWorktree?": true }` |
-| POST | `/api/tasks/multitask` | Fan out child subagent tasks from a parent session `{ "parentSessionId": "...", "prompts": ["..."], "provider?": "...", "model?": "...", "cleanupPolicy?": "after-review\|manual\|never" }`; omitted provider/model/workspace inherit from the parent session or subagent defaults |
+| POST | `/api/tasks/multitask` | Fan out child subagent tasks from an ordinary parent session `{ "parentSessionId": "...", "prompts": ["..."], "provider?": "...", "model?": "...", "cleanupPolicy?": "after-review\|manual\|never" }`; omitted provider/model/workspace inherit from the parent or subagent defaults; Crew-owned member sessions are rejected so this path cannot bypass Crew authority or its one-writer lease |
 | POST | `/api/tasks/:id/reviewed` | Mark a finished child subagent task as reviewed so cleanup policy can act on it |
 | POST | `/api/tasks/:id/cancel` | Cancel a queued task before it starts |
 | POST | `/api/tasks/:id/retry` | Clone a finished task back into the queue |
 | DELETE | `/api/tasks/:id` | Delete a terminal task row |
 | GET | `/api/models` | Model catalog (aggregated from available providers, including per-provider `capabilities`) |
+| GET/POST | `/api/crew/profiles` | List or create saved Quality Crew profiles; updates use `PATCH /api/crew/profiles/:id` with `expectedRevision`, and `POST /api/crew/profiles/:id/resolve` validates live bindings plus the project verify command |
+| POST | `/api/crew/tasks` | Create a Crew task `{ "objective": "...", "projectPath": "/abs/repo", "baseBranch?": "main", "profileId": "..." }` and start its first immutable run |
+| GET | `/api/crew/tasks/:id` | Read the stable Crew task and its immutable run history; `POST /api/crew/tasks/:id/runs` creates an exact-head successor for a terminal run |
+| GET | `/api/crew-runs?status=&projectPath=&limit=&offset=` | Read a bounded, latest-per-task summary page (default 20, maximum 100); excludes profile snapshots, context, worktree paths, and other full-run state |
+| GET | `/api/crew-runs/:id` | Read the projected run, member sessions, sanitized artifact metadata, deterministic gate evidence, and typed final result |
+| GET | `/api/crew-runs/:id/events?since=` | Read the append-only Crew event cursor |
+| GET | `/api/crew-runs/:runId/artifacts/:artifactId?offset=&limit=` | Read a run-scoped redacted artifact range; defaults to 16,384 bytes, caps at 65,536, and returns UTF-8-safe `nextOffset` + `eof` |
+| POST | `/api/crew-runs/:id/{pause,resume,cancel,clarification,extra-round}` | Apply one of the five guarded local actions with `expectedRevision`; no generic transition or external-write endpoint exists |
 | GET | `/api/provider-updates` | Check Pi/Codex CLI versions and return optional update metadata |
 | POST | `/api/provider-updates/:provider/update` | Run an allowlisted user-triggered update for `pi` or `codex` when supported |
 | GET | `/api/settings` | List all settings with section categories (secrets masked, never raw) |
@@ -371,14 +385,15 @@ Imported Cursor sessions use `cursor_backend=cli` and resume via the CLI subproc
 apps/
   server/
     src/
-      agents/        AgentProvider interface + BaseAgentProvider + AgentRegistry + providers/ (pi, codex, cursor)
+      agents/        AgentProvider interface + BaseAgentProvider + AgentRegistry + providers/ (pi, codex, cursor, claude)
+      crew/          fixed Crew workflow, profile resolver, runner/recovery, context, artifacts, gates, persistence
       provider-updates/ optional Pi/Codex CLI version checks + user-triggered update endpoint
       sessions/      api/ · domain/ (types, fsm) · persistence/ (repositories) + service + module
       models/        model catalog aggregation from providers
       health/ · db/
     test/
       unit/          *.spec.ts (bun test)
-      e2e/           HTTP e2e (simulated cursor provider)
+      e2e/           HTTP e2e (simulated Cursor + forced-Mock Crew workflow)
       integration/   real Pi/Codex auth (skips unless matching local credentials are present; opt-in)
   web/      Vite + React + Tailwind v4 + shadcn/ui (installable PWA)
 mockup.html UI blueprint (reference)
@@ -391,6 +406,7 @@ assets/     Screenshots for the README (un-ignored only here — see .gitignore)
 
 - **3-layer state decoupling:** Conversation (durable) / Agent loop (replaceable) / Machine state (FSM)
 - **Provider-neutral agent layer:** every agent SDK implements `AgentProvider`; `AgentRegistry` resolves per session so Pi/Codex/Cursor/any future SDK plug in uniformly
+- **Workspace harness above provider loops:** Crew shares durable context and Git evidence, not hidden reasoning or provider caches; each provider retains its own conversation runtime while Nuncio owns the outer workflow and authority boundary
 - **Per-session provider + model selection** — `provider` + `model` stored on the session, wired through to the SDK
 - **Long-running, resumable sessions** — FSM + event log persist in SQLite; Pi conversation history is in-memory pending session revival (planned)
 
@@ -404,6 +420,7 @@ Phase plans and milestones: [plans/260626-nuncio-roadmap/](plans/260626-nuncio-r
 | 2 | PWA + mobile + Tailscale prod | Done |
 | 3 | Steer, pause, model picker | Done |
 | — | Agent-provider abstraction + Pi/Codex/Cursor providers | Done |
+| — | Provider-neutral Quality Crew workspace harness | Implemented and verified for the `dev` lane |
 | 4 | Git workspace, branch, PR | Workspace support partially shipped; PR/cleanup planned |
 | 5 | Web Push + webhooks | Planned |
 

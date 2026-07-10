@@ -87,4 +87,6 @@ raise, not necessarily a blocker:
 - Locked technical decisions + rationale → [`docs/architecture-decisions.md`](architecture-decisions.md)
 - How to test and self-verify without the user → [`docs/testing-and-verification.md`](testing-and-verification.md)
 - System internals → [`docs/system-architecture.md`](system-architecture.md)
+- Proposed provider-neutral Crew/workspace harness → [`docs/crew-workspace-harness.md`](crew-workspace-harness.md)
+- Crew authority and state-machine decision draft → [`docs/crew-run-authority-and-state-machine.md`](crew-run-authority-and-state-machine.md)
 - Phased roadmap → [`plans/`](../plans/)
