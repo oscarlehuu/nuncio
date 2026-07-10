@@ -891,9 +891,25 @@ export class SessionsService implements OnModuleDestroy {
     this.clearInterruptForceIdleWatch(session.id);
     this.verifierControllers.get(session.id)?.abort();
     const provider = this.agents.resolveForSession(session);
-    provider.flushPendingEvents?.(session.id);
-    provider.invalidateRun?.(session.id);
-    provider.dispose(session.id);
+    let teardownError: unknown;
+    try {
+      provider.flushPendingEvents?.(session.id);
+    } catch {
+      // The base provider retains the exact tail and schedules a retry. Teardown
+      // must still fence the old callbacks, release the SDK runtime, and finish
+      // the requested lifecycle transition.
+    }
+    try {
+      provider.invalidateRun?.(session.id);
+    } catch (error) {
+      teardownError ??= error;
+    }
+    try {
+      provider.dispose(session.id);
+    } catch (error) {
+      teardownError ??= error;
+    }
+    if (teardownError) throw teardownError;
   }
 
   /** Raw bytes of a stored chat image, or null if the id is unknown/malformed. */
@@ -1534,12 +1550,21 @@ export class SessionsService implements OnModuleDestroy {
       this.appendAndEmit(sessionId, 'verify_start', { command: command.display });
       const run = await runVerifyCommand(command, cwd, VERIFY_TIMEOUT_MS, controller.signal);
       // The verify command is a spawned shell that can outlive a shutdown; after
-      // it resolves the DB handle may be closed. Bail before touching it.
-      if (this.destroyed || !this.sessions.findById(sessionId)) return;
+      // it resolves the DB handle may be closed. Lifecycle cancellation is not a
+      // failed check, so also require the same IDLE session that started it.
+      if (
+        this.destroyed ||
+        controller.signal.aborted ||
+        this.sessions.findById(sessionId)?.status !== 'IDLE'
+      ) return;
       result = { command: command.display, ...run };
       this.appendAndEmit(sessionId, 'verify_result', result);
     } catch (error) {
-      if (this.destroyed || !this.sessions.findById(sessionId)) return;
+      if (
+        this.destroyed ||
+        controller.signal.aborted ||
+        this.sessions.findById(sessionId)?.status !== 'IDLE'
+      ) return;
       const message = error instanceof Error ? error.message : String(error);
       result = {
         command: command.display,

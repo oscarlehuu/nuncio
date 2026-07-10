@@ -315,6 +315,43 @@ describe('SessionsService lifecycle (phase 3)', () => {
     }
   });
 
+  it('still fences and disposes the provider when flushing the streamed tail fails', () => {
+    const id = seedSession('IDLE');
+    const calls: string[] = [];
+    const flushError = new Error('temporary sqlite failure');
+    const provider = {
+      id: 'flush-failure',
+      name: 'Flush failure',
+      capabilities: {
+        interrupt: false,
+        modelSwitch: 'none',
+        effortSwitch: 'none',
+        images: false,
+        steerWhileRunning: false,
+      },
+      isAvailable: async () => true,
+      listModels: async () => [],
+      run: async () => undefined,
+      steer: async () => undefined,
+      flushPendingEvents: () => {
+        calls.push('flush');
+        throw flushError;
+      },
+      invalidateRun: () => calls.push('invalidate'),
+      dispose: () => calls.push('dispose'),
+      bustCache: () => undefined,
+    } as AgentProvider & { invalidateRun: (sessionId: string) => void };
+    const originalResolve = registry.resolveForSession.bind(registry);
+    registry.resolveForSession = (() => provider) as AgentRegistry['resolveForSession'];
+
+    try {
+      expect(service.archive(id).status).toBe('ARCHIVED');
+      expect(calls).toEqual(['flush', 'invalidate', 'dispose']);
+    } finally {
+      registry.resolveForSession = originalResolve;
+    }
+  });
+
   describe('per-session provider selection', () => {
     it('defaults to cursor when provider omitted and cursor is available', async () => {
       const session = await service.create({ prompt: 'default provider task' });
