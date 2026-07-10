@@ -23,6 +23,17 @@ describe('Crew push notifications', () => {
     expect(crewPushContentFor(run('TERMINAL', 'CANCELLED'), 'Ship Crew')?.title).toBe('Crew cancelled');
   });
 
+  it('bounds a long multi-byte objective to a notification-safe preview', () => {
+    const content = crewPushContentFor(
+      run('BLOCKED_USER'),
+      `Ship Crew ${'🛠️'.repeat(2_000)}`,
+    );
+
+    expect(content?.body.endsWith('…')).toBe(true);
+    expect(Buffer.byteLength(content?.body ?? '', 'utf8')).toBeLessThanOrEqual(512);
+    expect(content?.body).not.toContain('�');
+  });
+
   it('broadcasts only user-relevant committed run changes and unsubscribes on shutdown', async () => {
     let listener: ((value: CrewRunDto) => void) | null = null;
     const broadcasts: unknown[] = [];

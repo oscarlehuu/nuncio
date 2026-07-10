@@ -838,6 +838,48 @@ describe('CodexAgentProvider', () => {
     expect(fakeClient.requests.filter((request) => request.method === 'thread/start')).toHaveLength(0);
   });
 
+  it('preserves a Codex thread after a transient resume transport failure', async () => {
+    const created = sessions.create({
+      id: 'session-transient-resume',
+      prompt: 'Initial prompt',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+      providerThreadId: 'durable-codex-thread',
+    });
+    fakeClient.threadResumeError = new Error('codex app-server disconnected');
+
+    await provider.steer(created.id, 'Continue', {
+      model: created.model,
+      cwd: '/tmp/project',
+    });
+
+    const failed = sessions.findById(created.id)!;
+    expect(failed.status).toBe('ERROR');
+    expect(failed.providerThreadId).toBe('durable-codex-thread');
+    expect(provider.canResumeThread(failed)).toBe(true);
+  });
+
+  it('does not treat an authentication error mentioning a thread as stale continuity', async () => {
+    const created = sessions.create({
+      id: 'session-auth-resume',
+      prompt: 'Initial prompt',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+      providerThreadId: 'auth-retry-thread',
+    });
+    fakeClient.threadResumeError = new Error('invalid credentials while resuming thread');
+
+    await provider.steer(created.id, 'Continue', {
+      model: created.model,
+      cwd: '/tmp/project',
+    });
+
+    expect(sessions.findById(created.id)).toMatchObject({
+      status: 'ERROR',
+      providerThreadId: 'auth-retry-thread',
+    });
+  });
+
   it('updates the Nuncio title from the resumed Codex thread name', async () => {
     fakeClient.threadResumeName = 'Continue Codex title sync';
     const created = sessions.create({

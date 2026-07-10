@@ -320,6 +320,64 @@ describe('SessionsService lifecycle (phase 3)', () => {
     }
   });
 
+  it('fences a Crew member whose initial provider start is still resolving', async () => {
+    const provider = registry.get('cursor');
+    let releaseProvider: ((value: AgentProvider) => void) | undefined;
+    const providerReady = new Promise<AgentProvider>((resolve) => {
+      releaseProvider = resolve;
+    });
+    const resolveSpy = jest.spyOn(registry, 'resolveAvailableForSession')
+      .mockReturnValue(providerReady);
+    const runSpy = jest.spyOn(provider, 'run');
+    try {
+      const created = await service.create({
+        prompt: 'Crew start must not escape cancellation',
+        provider: 'cursor',
+        verifyOwner: 'crew',
+      });
+
+      await service.quiesceCrewSession(created.id);
+      releaseProvider?.(provider);
+      await service.awaitRun(created.id);
+
+      expect(runSpy).not.toHaveBeenCalled();
+      expect(events.list(created.id).some((event) => event.type === 'user_message')).toBe(false);
+      expect(service.get(created.id)?.status).toBe('CREATED');
+    } finally {
+      resolveSpy.mockRestore();
+      runSpy.mockRestore();
+    }
+  });
+
+  it('fences a Crew continuation that is still resolving its provider', async () => {
+    const crewId = seedSession('IDLE', 'crew');
+    const provider = registry.get('cursor');
+    let releaseProvider: ((value: AgentProvider) => void) | undefined;
+    const providerReady = new Promise<AgentProvider>((resolve) => {
+      releaseProvider = resolve;
+    });
+    const resolveSpy = jest.spyOn(registry, 'resolveAvailableForSession')
+      .mockReturnValue(providerReady);
+    const steerSpy = jest.spyOn(provider, 'steer');
+    try {
+      const continuation = service.continueExistingSession(crewId, {
+        prompt: 'Do not start after the owner has quiesced this continuation',
+        origin: 'crew-member-task',
+      });
+      await Promise.resolve();
+
+      await service.quiesceCrewSession(crewId);
+      releaseProvider?.(provider);
+      await expect(continuation).resolves.toMatchObject({ status: 'IDLE' });
+
+      expect(steerSpy).not.toHaveBeenCalled();
+      expect(events.list(crewId).some((event) => event.type === 'steer_message')).toBe(false);
+    } finally {
+      resolveSpy.mockRestore();
+      steerSpy.mockRestore();
+    }
+  });
+
   it('propagates provider quiescence failure without claiming the Crew session stopped', async () => {
     const crewId = seedSession('RUNNING', 'crew');
     const provider = registry.get('cursor');

@@ -614,7 +614,11 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
       // An abort (dispose mid-run) makes the generator throw — treat as a cancel,
       // not an error, so the shared error path does not land ERROR.
       if (active.abort.signal.aborted) throw new AgentRunCancelledError('Claude session disposed.');
-      if (active.resumedThreadId) this.invalidateResumedThread(sessionId, active);
+      // A generic SDK/transport failure does not prove the durable Claude thread
+      // is stale. Drop only the dead local iterator so a retry can resume the
+      // same native thread; the explicit cannot-resume result below owns thread
+      // invalidation when Claude confirms that continuity is impossible.
+      if (this.activeSessions.get(sessionId) === active) this.dropHandle(sessionId, active);
       throw error;
     }
   }

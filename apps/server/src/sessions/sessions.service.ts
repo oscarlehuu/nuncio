@@ -126,6 +126,10 @@ interface LifecycleRetry {
   failure?: unknown;
 }
 
+interface CrewStartAttempt {
+  cancelled: boolean;
+}
+
 @Injectable()
 export class SessionsService implements OnModuleDestroy {
   private readonly streams = new Map<string, EventEmitter>();
@@ -135,6 +139,8 @@ export class SessionsService implements OnModuleDestroy {
   private readonly verifying = new Set<string>();
   private readonly runPromises = new Map<string, Promise<void>>();
   private readonly startingSteers = new Set<string>();
+  private readonly crewStartAttempts = new Map<string, Set<CrewStartAttempt>>();
+  private readonly crewQuiesceCounts = new Map<string, number>();
   private readonly drainingSteerQueues = new Set<string>();
   // Verify-feedback loop settlement: resolves when the loop reaches a terminal
   // state (green verify / needs-attention / no-command). Task-lane consumers
@@ -519,15 +525,51 @@ export class SessionsService implements OnModuleDestroy {
     if (session.verifyOwner !== 'crew') {
       throw new BadRequestException('Session is not Crew-owned');
     }
-    const provider = this.agents.resolveForSession(session);
-    await provider.quiesce(id);
-    if (session.status === 'RUNNING') this.appendAndEmit(id, 'interrupted', { owner: 'crew' });
-    this.locallyProducing.delete(id);
-    this.cancelProviderRequests(id);
-    this.steerQueue.deleteForSession(id);
-    this.settleVerify(id);
-    if (this.sessions.findById(id)?.status === 'RUNNING') this.transition(id, 'IDLE');
-    return this.requireSession(id);
+    this.beginCrewQuiescence(id);
+    try {
+      const provider = this.agents.resolveForSession(session);
+      await provider.quiesce(id);
+      if (session.status === 'RUNNING') this.appendAndEmit(id, 'interrupted', { owner: 'crew' });
+      this.locallyProducing.delete(id);
+      this.cancelProviderRequests(id);
+      this.steerQueue.deleteForSession(id);
+      this.settleVerify(id);
+      if (this.sessions.findById(id)?.status === 'RUNNING') this.transition(id, 'IDLE');
+      return this.requireSession(id);
+    } finally {
+      this.endCrewQuiescence(id);
+    }
+  }
+
+  private beginCrewQuiescence(id: string): void {
+    this.crewQuiesceCounts.set(id, (this.crewQuiesceCounts.get(id) ?? 0) + 1);
+    for (const attempt of this.crewStartAttempts.get(id) ?? []) attempt.cancelled = true;
+  }
+
+  private endCrewQuiescence(id: string): void {
+    const remaining = (this.crewQuiesceCounts.get(id) ?? 1) - 1;
+    if (remaining > 0) this.crewQuiesceCounts.set(id, remaining);
+    else this.crewQuiesceCounts.delete(id);
+  }
+
+  private beginCrewStart(session: SessionDto): CrewStartAttempt | null {
+    if (session.verifyOwner !== 'crew') return null;
+    const attempt = { cancelled: (this.crewQuiesceCounts.get(session.id) ?? 0) > 0 };
+    const attempts = this.crewStartAttempts.get(session.id) ?? new Set<CrewStartAttempt>();
+    attempts.add(attempt);
+    this.crewStartAttempts.set(session.id, attempts);
+    return attempt;
+  }
+
+  private endCrewStart(id: string, attempt: CrewStartAttempt | null): void {
+    if (!attempt) return;
+    const attempts = this.crewStartAttempts.get(id);
+    attempts?.delete(attempt);
+    if (attempts?.size === 0) this.crewStartAttempts.delete(id);
+  }
+
+  private canStartCrewAttempt(attempt: CrewStartAttempt | null): boolean {
+    return attempt?.cancelled !== true;
   }
 
   async steer(
@@ -575,6 +617,12 @@ export class SessionsService implements OnModuleDestroy {
     // concurrent steer queues, while provider/preflight failure preserves the
     // exact prior state (CREATED, IDLE, PAUSED, or ERROR).
     this.startingSteers.add(id);
+    const crewStart = this.beginCrewStart(current);
+    if (!this.canStartCrewAttempt(crewStart)) {
+      this.startingSteers.delete(id);
+      this.endCrewStart(id, crewStart);
+      return this.requireSession(id);
+    }
     let provider: AgentProvider;
     try {
       provider = await this.trackPendingWork(this.agents.resolveAvailableForSession(current));
@@ -583,8 +631,14 @@ export class SessionsService implements OnModuleDestroy {
       }
     } catch (error) {
       this.startingSteers.delete(id);
+      this.endCrewStart(id, crewStart);
       this.scheduleSteerDrainAfterFailedStart(id, current.status);
       throw error;
+    }
+    if (!this.canStartCrewAttempt(crewStart)) {
+      this.startingSteers.delete(id);
+      this.endCrewStart(id, crewStart);
+      return this.requireSession(id);
     }
 
     this.locallyProducing.add(id);
@@ -603,6 +657,7 @@ export class SessionsService implements OnModuleDestroy {
       throw error;
     } finally {
       this.startingSteers.delete(id);
+      this.endCrewStart(id, crewStart);
       this.locallyProducing.delete(id);
       if (startFailed) this.scheduleSteerDrainAfterFailedStart(id, current.status);
     }
@@ -2166,18 +2221,22 @@ export class SessionsService implements OnModuleDestroy {
   private startRun(session: SessionDto, attachments?: AgentAttachment[]): void {
     if (session.cursorBackend === 'cli') return;
     const persisted = this.persistImageAttachments(session.id, attachments);
+    const crewStart = this.beginCrewStart(session);
     this.locallyProducing.add(session.id);
     // Arm loop settlement before the run so a task can awaitVerifySettled and
     // wait for the whole verify-feedback loop, not just the first turn+verify.
     this.armVerifySettlement(session.id);
     const run = (async () => {
       try {
+        if (!this.canStartCrewAttempt(crewStart)) return;
         const provider = await this.agents.resolveAvailableForSession(session);
+        if (!this.canStartCrewAttempt(crewStart)) return;
         await provider.run(session.id, session.prompt, {
           ...this.buildAgentRunContext(session),
           attachments: persisted,
         });
       } finally {
+        this.endCrewStart(session.id, crewStart);
         this.locallyProducing.delete(session.id);
       }
       await this.maybeVerify(session.id);

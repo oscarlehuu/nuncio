@@ -110,6 +110,18 @@ interface ActiveCodexSession {
 const DEFAULT_CODEX_REASONING_EFFORT = 'medium';
 const DEFAULT_CODEX_REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const;
 
+function isDefinitiveCodexResumeError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /runtime tool definitions do not match the persisted codex thread/i.test(message) ||
+    /(?:thread|conversation)(?: id)?[^\n]{0,160}(?:not found|does not exist|no longer exists|unknown|missing|incompatible)/i.test(message) ||
+    /(?:no such|unknown|missing|incompatible) (?:codex )?(?:thread|conversation)(?: id)?/i.test(message) ||
+    /(?:invalid|malformed) (?:codex )?(?:thread|conversation)(?: id)?/i.test(message) ||
+    /(?:thread|conversation)(?: id)? (?:is )?(?:invalid|malformed)/i.test(message) ||
+    /(?:cwd|workspace|rollout path).*(?:mismatch|does not match|incompatible)/i.test(message)
+  );
+}
+
 const FALLBACK_CODEX_MODELS: ModelProviderDto[] = [
   {
     id: 'codex',
@@ -437,7 +449,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
       this.activeSessions.set(sessionId, active);
       return active;
     } catch (error) {
-      if (resumeCandidate) {
+      if (resumeCandidate && isDefinitiveCodexResumeError(error)) {
         this.sessions.updateProviderRuntimeState(sessionId, {
           providerThreadId: null,
           providerActiveTurnId: null,

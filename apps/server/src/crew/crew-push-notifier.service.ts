@@ -1,4 +1,5 @@
 import { Injectable, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
+import { byteLength, truncateHeadBytes } from '../orchestration/byte-truncate';
 import { PushService } from '../push/push.service';
 import type { CrewRunDto } from './domain/crew.types';
 import { CrewRunsRepository } from './persistence/crew-runs.repository';
@@ -8,6 +9,18 @@ export interface CrewRunPushContent {
   title: string;
   body: string;
   data: { crewTaskId: string; crewRunId: string };
+}
+
+const CREW_PUSH_BODY_MAX_BYTES = 512;
+
+function crewPushBody(objective: string): string {
+  if (byteLength(objective) <= CREW_PUSH_BODY_MAX_BYTES) return objective;
+  const suffix = '…';
+  const head = truncateHeadBytes(
+    objective,
+    CREW_PUSH_BODY_MAX_BYTES - byteLength(suffix),
+  ).trimEnd();
+  return `${head}${suffix}`;
 }
 
 export function crewPushContentFor(
@@ -27,7 +40,7 @@ export function crewPushContentFor(
             : null;
   return title ? {
     title,
-    body: objective,
+    body: crewPushBody(objective),
     data: { crewTaskId: run.taskId, crewRunId: run.id },
   } : null;
 }

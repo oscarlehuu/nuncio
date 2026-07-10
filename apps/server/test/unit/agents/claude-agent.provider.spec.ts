@@ -314,6 +314,45 @@ describe('ClaudeAgentProvider', () => {
     expect(provider.canResumeThread(failed)).toBe(false);
   });
 
+  it('preserves a resumed thread after a transient iterator failure and retries it natively', async () => {
+    const resumeOptions: Array<string | undefined> = [];
+    let attempt = 0;
+    provider.queryFactory = ({ options }) => {
+      resumeOptions.push(options.resume);
+      attempt += 1;
+      if (attempt === 1) {
+        return {
+          async interrupt() {},
+          async setModel() {},
+          async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+            yield { type: 'system', subtype: 'init', session_id: 'durable-thread' };
+            throw new Error('temporary Claude transport failure');
+          },
+        };
+      }
+      return new CapturingQuery('durable-thread');
+    };
+    const created = sessions.create({
+      prompt: 'continue',
+      provider: 'claude',
+      model: 'claude:haiku',
+      providerThreadId: 'durable-thread',
+    });
+
+    await provider.run(created.id, 'continue', { cwd: '/tmp/ws', model: 'claude:haiku' });
+    expect(sessions.findById(created.id)).toMatchObject({
+      status: 'ERROR',
+      providerThreadId: 'durable-thread',
+    });
+
+    await provider.steer(created.id, 'retry', { cwd: '/tmp/ws', model: 'claude:haiku' });
+    expect(resumeOptions).toEqual(['durable-thread', 'durable-thread']);
+    expect(sessions.findById(created.id)).toMatchObject({
+      status: 'IDLE',
+      providerThreadId: 'durable-thread',
+    });
+  });
+
   describe('permission mode setting', () => {
     it('defaults to acceptEdits when unset', async () => {
       const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
