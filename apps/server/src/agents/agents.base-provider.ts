@@ -197,6 +197,10 @@ export abstract class BaseAgentProvider implements AgentProvider {
     this.flushDeltas(sessionId);
   }
 
+  pendingEventSessionIds(): string[] {
+    return [...this.deltaBuffers.keys()];
+  }
+
   /** Shutdown-only: stop retained tails from retrying against a closing database. */
   cancelPendingEventRetries(sessionId?: string): void {
     if (sessionId !== undefined) {

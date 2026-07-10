@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AgentsModule } from '../../../src/agents/agents.module';
 import { AgentRegistry } from '../../../src/agents/agents.registry';
+import { RetainedEventFlushError } from '../../../src/agents/agents.base-provider';
 import type { AgentProvider, AgentRunContext } from '../../../src/agents/agents.types';
 import { CursorLocalModule } from '../../../src/cursor-local/cursor-local.module';
 import { DatabaseModule } from '../../../src/db/database.module';
@@ -18,6 +19,7 @@ import {
 } from '../../helpers/simulated-cursor-app';
 
 describe('SessionsService steer while RUNNING', () => {
+  type TestProvider = AgentProvider & { pendingEventSessionIds?: () => string[] };
   let service: SessionsService;
   let sessions: SessionsRepository;
   let events: EventsRepository;
@@ -57,7 +59,7 @@ describe('SessionsService steer while RUNNING', () => {
     registry.resolveAvailableForSession = originalResolveAvailable;
   });
 
-  function stubProvider(overrides: Partial<AgentProvider> = {}): AgentProvider {
+  function stubProvider(overrides: Partial<TestProvider> = {}): TestProvider {
     return {
       id: 'stub',
       name: 'Stub',
@@ -539,6 +541,9 @@ describe('SessionsService steer while RUNNING', () => {
       startedSteer = resolve;
     });
     const cancelPendingEventRetries = jest.fn();
+    const flushPendingEvents = jest.fn();
+    let retainedTail = true;
+    let disposeAttempts = 0;
     installProvider(
       stubProvider({
         capabilities: {
@@ -555,7 +560,21 @@ describe('SessionsService steer while RUNNING', () => {
           });
         },
         interrupt: async () => undefined,
-        cancelPendingEventRetries,
+        dispose: () => {
+          disposeAttempts += 1;
+          if (disposeAttempts === 1) {
+            throw new RetainedEventFlushError(new Error('one-off shutdown failure'));
+          }
+        },
+        pendingEventSessionIds: () => (retainedTail ? [id] : []),
+        flushPendingEvents: () => {
+          flushPendingEvents();
+          retainedTail = false;
+        },
+        cancelPendingEventRetries: () => {
+          cancelPendingEventRetries();
+          retainedTail = false;
+        },
       }),
     );
     internals.shutdownDrainTimeoutMs = 1000;
@@ -574,5 +593,7 @@ describe('SessionsService steer while RUNNING', () => {
 
     expect(settledBeforeSteer).toBe(false);
     expect(cancelledBeforeDrain).toBe(0);
+    expect(flushPendingEvents).toHaveBeenCalledWith();
+    expect(retainedTail).toBe(false);
   });
 });

@@ -99,6 +99,8 @@ export interface AgentProvider {
    * No-op when nothing is buffered.
    */
   flushPendingEvents?(sessionId: string): void;
+  /** Session ids whose accepted events are still waiting for persistence. */
+  pendingEventSessionIds?(): string[];
   /** Stop retry timers once shutdown can no longer persist their retained tails. */
   cancelPendingEventRetries?(sessionId?: string): void;
   /** Whether this provider can respond to live interactive tool prompts (e.g. AskQuestion). */

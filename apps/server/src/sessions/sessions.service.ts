@@ -684,9 +684,9 @@ export class SessionsService implements OnModuleDestroy {
     this.orchestrationRetryTimers.set(sessionId, timer);
   }
 
-  private drainPendingOrchestrationEvents(sessionId: string): void {
+  private drainPendingOrchestrationEvents(sessionId: string, duringShutdown = false): void {
     const queued = this.pendingOrchestrationEvents.get(sessionId);
-    if (this.destroyed || !queued?.length) return;
+    if ((this.destroyed && !duringShutdown) || !queued?.length) return;
     const session = this.sessions.findById(sessionId);
     if (!session) {
       this.pendingOrchestrationEvents.delete(sessionId);
@@ -1125,7 +1125,6 @@ export class SessionsService implements OnModuleDestroy {
     this.destroyed = true;
     for (const timer of this.orchestrationRetryTimers.values()) clearTimeout(timer);
     this.orchestrationRetryTimers.clear();
-    this.pendingOrchestrationEvents.clear();
     for (const controller of this.verifierControllers.values()) controller.abort();
     this.verifierControllers.clear();
     for (const timer of this.interruptForceIdleTimers.values()) clearTimeout(timer);
@@ -1146,6 +1145,7 @@ export class SessionsService implements OnModuleDestroy {
     }
     this.transcriptWatchers.clear();
     await this.drainInFlightForShutdown();
+    this.pendingOrchestrationEvents.clear();
     this.cancelAllLifecycleRetries();
     this.cancelAllProviderEventRetries();
   }
@@ -1166,17 +1166,55 @@ export class SessionsService implements OnModuleDestroy {
     this.disposeActiveTurns();
     const deadline = Date.now() + this.shutdownDrainTimeoutMs;
     while (Date.now() < deadline) {
+      const retainedEvents = this.flushRetainedProviderEventsForShutdown();
+      for (const id of [...this.pendingOrchestrationEvents.keys()]) {
+        this.drainPendingOrchestrationEvents(id, true);
+      }
       const inFlight = [...this.runPromises.values(), ...this.pendingWork];
-      if (inFlight.length === 0) return;
+      if (
+        inFlight.length === 0 &&
+        !retainedEvents &&
+        this.pendingOrchestrationEvents.size === 0
+      ) return;
       const remaining = deadline - Date.now();
-      const timedOut = Symbol('timeout');
-      const outcome = await Promise.race([
-        Promise.allSettled(inFlight).then(() => 'settled'),
-        new Promise((resolve) => setTimeout(() => resolve(timedOut), remaining)),
-      ]);
-      if (outcome === timedOut) return; // proceed with teardown regardless
-      // else loop: awaiting a run may have spawned a drained steer — re-check.
+      if (remaining <= 0) return;
+      const retryDelay = Math.min(100, remaining);
+      if (inFlight.length === 0) {
+        await new Promise((resolve) => setTimeout(resolve, retryDelay));
+      } else {
+        await Promise.race([
+          Promise.allSettled(inFlight),
+          new Promise((resolve) => setTimeout(resolve, retryDelay)),
+        ]);
+      }
+      // Re-check because a run may have spawned work, or persistence may have
+      // recovered for a provider tail / orchestration queue.
     }
+  }
+
+  private flushRetainedProviderEventsForShutdown(): boolean {
+    let retained = false;
+    for (const provider of this.registeredProviders()) {
+      let sessionIds: string[];
+      try {
+        sessionIds = provider.pendingEventSessionIds?.() ?? [];
+      } catch {
+        continue;
+      }
+      for (const sessionId of sessionIds) {
+        try {
+          provider.flushPendingEvents?.(sessionId);
+        } catch {
+          retained = true;
+        }
+      }
+      try {
+        if ((provider.pendingEventSessionIds?.().length ?? 0) > 0) retained = true;
+      } catch {
+        // A provider that cannot report its queue cannot be drained further.
+      }
+    }
+    return retained;
   }
 
   /** Fence and release every locally-producing provider before the DB closes. */
@@ -1193,6 +1231,16 @@ export class SessionsService implements OnModuleDestroy {
   }
 
   private cancelAllProviderEventRetries(): void {
+    for (const provider of this.registeredProviders()) {
+      try {
+        provider.cancelPendingEventRetries?.();
+      } catch {
+        // Shutdown must continue even if a provider cleanup hook fails.
+      }
+    }
+  }
+
+  private registeredProviders(): Set<AgentProvider> {
     // Some lean unit modules inject only the registry methods needed by their
     // scenario. Production AgentRegistry exposes both collections.
     const providers = new Set<AgentProvider>();
@@ -1200,13 +1248,16 @@ export class SessionsService implements OnModuleDestroy {
       for (const provider of this.agents.all()) providers.add(provider);
     }
     if (typeof this.agents.cli === 'function') providers.add(this.agents.cli());
-    for (const provider of providers) {
+    for (const id of this.locallyProducing) {
+      const session = this.sessions.findById(id);
+      if (!session) continue;
       try {
-        provider.cancelPendingEventRetries?.();
+        providers.add(this.agents.resolveForSession(session));
       } catch {
-        // Shutdown must continue even if a provider cleanup hook fails.
+        // Missing providers have no in-memory retained event buffer to drain.
       }
     }
+    return providers;
   }
 
   requestProviderApproval(

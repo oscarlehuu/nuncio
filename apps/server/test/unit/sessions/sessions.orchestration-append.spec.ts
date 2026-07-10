@@ -176,4 +176,37 @@ describe('SessionsService.appendOrchestrationEvent flush ordering', () => {
   it('returns null and never throws when the session is gone', () => {
     expect(service.appendOrchestrationEvent('no-such', 'task_completed', {})).toBeNull();
   });
+
+  it('drains retained-tail orchestration events before shutdown clears retries', async () => {
+    const session = repo.create({ prompt: 'shutdown ordered parent', provider: 'cursor' });
+    repo.updateStatus(session.id, 'RUNNING');
+    const provider = registry.resolveForSession(repo.findById(session.id)!);
+    let flushAttempts = 0;
+    const flush = jest.spyOn(provider, 'flushPendingEvents').mockImplementation(() => {
+      flushAttempts += 1;
+      if (flushAttempts === 1) {
+        throw new RetainedEventFlushError(new Error('one-off shutdown failure'));
+      }
+      if (!events.list(session.id).some((event) => event.type === 'assistant_delta')) {
+        events.append(session.id, 'assistant_delta', { delta: 'tail before shutdown' });
+      }
+    });
+
+    try {
+      expect(service.appendOrchestrationEvent(session.id, 'task_completed', {
+        taskId: 'shutdown-t1',
+        status: 'DONE',
+      })).toBeNull();
+
+      await service.onModuleDestroy();
+
+      const ordered = events
+        .list(session.id)
+        .filter((event) => event.type === 'assistant_delta' || event.type === 'task_completed');
+      expect(ordered.map((event) => event.type)).toEqual(['assistant_delta', 'task_completed']);
+      expect(flushAttempts).toBeGreaterThanOrEqual(2);
+    } finally {
+      flush.mockRestore();
+    }
+  });
 });
