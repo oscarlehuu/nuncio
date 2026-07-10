@@ -72,7 +72,7 @@ export function useCrewComposerState(mode: CrewExecutionMode) {
     setResolvedFor(null);
     setResolving(true);
     setError(null);
-    resolveCrewProfile(profileId, projectPath, controller.signal)
+    resolveCrewProfile(profileId, projectPath, undefined, controller.signal)
       .then((next) => {
         if (shouldApplyCrewResolution(current, resolutionRequestId.current, controller.signal.aborted)) {
           setResolution(next);

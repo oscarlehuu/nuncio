@@ -18,6 +18,7 @@ export class CrewVerifyCommandResolver {
     projectPath: string | null,
     profileCommand: string | null | undefined,
     explicitCommand?: string | null,
+    projectScriptAtHead?: boolean,
   ): string | null {
     const explicit = validateCommand(explicitCommand);
     if (explicit) return explicit;
@@ -25,7 +26,7 @@ export class CrewVerifyCommandResolver {
       const projectCommand = this.projectCommand(projectPath);
       if (projectCommand) return validateCommand(projectCommand);
       const script = join(projectPath, '.nuncio', 'verify');
-      if (existsSync(script)) return './.nuncio/verify';
+      if (projectScriptAtHead ?? existsSync(script)) return 'sh ./.nuncio/verify';
     }
     const saved = validateCommand(profileCommand);
     if (saved) return saved;

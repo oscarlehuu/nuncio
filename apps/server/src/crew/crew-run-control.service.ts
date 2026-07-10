@@ -1,5 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { CREW_ATTENTION_PORT, type CrewAttentionPort } from './crew-execution.ports';
+import {
+  CREW_ATTENTION_PORT, CREW_WORKSPACE_PORT, type CrewAttentionPort, type CrewWorkspacePort,
+} from './crew-execution.ports';
 import { CrewNotFoundError, CrewRevisionConflictError } from './domain/crew-errors';
 import type { CrewRunDto } from './domain/crew.types';
 import { CrewRecoveryService } from './crew-recovery.service';
@@ -13,6 +15,7 @@ export class CrewRunControlService {
     private readonly runner: CrewRunnerService,
     private readonly recovery: CrewRecoveryService,
     @Inject(CREW_ATTENTION_PORT) private readonly attention: CrewAttentionPort,
+    @Inject(CREW_WORKSPACE_PORT) private readonly workspace: CrewWorkspacePort,
   ) {}
 
   async pause(id: string, expectedRevision: number): Promise<CrewRunDto> {
@@ -76,18 +79,43 @@ export class CrewRunControlService {
     const verification = this.runner.abortVerification(id);
     return this.runner.runExclusive(id, async () => {
       await verification;
-      this.requireRevision(id, expectedRevision);
+      const current = this.requireRevision(id, expectedRevision);
       await this.runner.quiesceCrewRun(id);
-      return this.command(id, expectedRevision, name, event);
+      const contextPatch = await this.pausedBuildContext(current, event);
+      return this.command(
+        id, expectedRevision, name, event, contextPatch,
+      );
     });
+  }
+
+  private async pausedBuildContext(
+    run: CrewRunDto,
+    event: Parameters<CrewRunsRepository['applyEvent']>[1]['event'],
+  ): Promise<Record<string, unknown> | undefined> {
+    if (event.type !== 'pause_requested' || run.phase !== 'BUILD'
+      || !run.worktreePath || !run.workspaceHead) return undefined;
+    try {
+      const boundary = await this.workspace.inspectBoundary(run.worktreePath, {
+        expectedBranch: run.branch ?? undefined,
+        expectedCanonicalPath: run.worktreePath,
+      });
+      const preservedDirty = boundary.ok && boundary.exists && !boundary.symlink
+        && boundary.canonicalPath === run.worktreePath && boundary.branch === run.branch
+        && boundary.fullHead === run.workspaceHead && boundary.reachable && !boundary.clean;
+      return preservedDirty ? { resumeDirtyBuild: true } : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private command(
     id: string, expectedRevision: number, name: string,
     event: Parameters<CrewRunsRepository['applyEvent']>[1]['event'],
+    contextPatch?: Record<string, unknown>,
   ): CrewRunDto {
     return this.runs.applyEvent(id, {
       expectedRevision, idempotencyKey: `api:${name}:${expectedRevision}`, actor: 'user', event,
+      ...(contextPatch ? { contextPatch } : {}),
     });
   }
 

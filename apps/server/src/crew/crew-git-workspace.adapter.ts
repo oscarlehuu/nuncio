@@ -14,6 +14,10 @@ export class CrewGitWorkspaceAdapter implements CrewWorkspacePort {
     const baseHead = await gitValue(projectPath, ['rev-parse', '--verify', `${baseBranch}^{commit}`]);
     return { baseBranch, baseHead };
   }
+  async fileExistsAtRevision(projectPath: string, revision: string, relativePath: string) {
+    const entry = await gitValue(projectPath, ['ls-tree', revision, '--', relativePath]);
+    return /^(100644|100755) blob [0-9a-f]+\t/.test(entry);
+  }
   async createWorktree(input: {
     runId: string; projectPath: string; baseBranch: string; baseHead: string; slug: string;
   }) {

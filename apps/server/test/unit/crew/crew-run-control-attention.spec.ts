@@ -27,6 +27,7 @@ describe('CrewRunControlService Attention lifecycle', () => {
       } as never,
       {} as never,
       { raise: jest.fn(), clear } as never,
+      {} as never,
     );
 
     await invoke(service);
@@ -42,6 +43,7 @@ describe('CrewRunControlService Attention lifecycle', () => {
       { runExclusive: (_id: string, operation: () => Promise<unknown>) => operation() } as never,
       {} as never,
       { raise: jest.fn(), clear } as never,
+      {} as never,
     );
 
     await expect(service.clarification('run-1', 4, 'Use SQLite')).rejects.toThrow('persist failed');

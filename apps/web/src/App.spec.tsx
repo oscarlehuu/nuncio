@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ThemeProvider } from './components/theme-provider';
@@ -112,6 +112,7 @@ import {
   fetchArchivedSessions,
   fetchAttention,
   fetchDigest,
+  fetchEvents,
   fetchModels,
   fetchSession,
   fetchSessions,
@@ -218,6 +219,7 @@ describe('App URL routing', () => {
   beforeEach(() => {
     stubEventSource();
     vi.mocked(fetchModels).mockResolvedValue(LIVE_CATALOG);
+    vi.mocked(fetchEvents).mockReset().mockResolvedValue([]);
     vi.mocked(fetchSessions).mockResolvedValue([session]);
     vi.mocked(fetchSession).mockReset();
     vi.mocked(fetchSession).mockResolvedValue(session);
@@ -269,6 +271,28 @@ describe('App URL routing', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /session actions/i })).toBeInTheDocument(),
     );
+  });
+
+  it('keeps a deep-loaded Crew member route-local instead of adding it to Solo navigation', async () => {
+    const crewMember = fakeSession({
+      id: 'crew-member-1', title: 'Hidden Crew Builder', verifyOwner: 'crew',
+    });
+    vi.mocked(fetchSessions).mockResolvedValue([]);
+    vi.mocked(fetchSession).mockResolvedValue(crewMember);
+    vi.mocked(fetchEvents).mockResolvedValue([{
+      seq: 1, type: 'status', payload: { status: 'PAUSED' }, createdAt: 10,
+    }]);
+
+    renderApp('/session/crew-member-1');
+    await waitFor(() => expect(fetchSession).toHaveBeenCalledWith('crew-member-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('session-detail')).toHaveAttribute('data-session-status', 'PAUSED');
+    });
+    await pinDesktopSidebar();
+
+    const sidebar = screen.getByTestId('desktop-sidebar-pinned');
+    expect(within(sidebar).queryByRole('button', { name: 'Open Hidden Crew Builder' })).not.toBeInTheDocument();
+    expect(fetchSession).toHaveBeenCalledTimes(1);
   });
 
   it('shows a toast and returns Home when the session id is missing', async () => {

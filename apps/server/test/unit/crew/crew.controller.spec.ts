@@ -179,7 +179,7 @@ describe('CrewController', () => {
     };
     const service = {
       getProfile: () => ({ id: 'p1' }), updateProfile: () => ({ id: 'p1', revision: 2 }),
-      deleteProfile: jest.fn(), resolveProfile: () => ({ state: 'ready' }),
+      deleteProfile: jest.fn(), resolveProfile: jest.fn(() => ({ state: 'ready' })),
       createSuccessor: () => ({ task: { id: 't1' }, run: { id: 'r2', priorRunId: 'r1' } }),
     };
     const controller = new CrewController(service as never);
@@ -187,7 +187,12 @@ describe('CrewController', () => {
     expect(await controller.updateProfile('p1', { expectedRevision: 1, definition })).toEqual({
       profile: { id: 'p1', revision: 2 },
     });
-    expect(await controller.resolveProfile('p1')).toEqual({ resolution: { state: 'ready' } });
+    expect(await controller.resolveProfile('p1', {
+      projectPath: '/repo', baseBranch: 'release',
+    })).toEqual({ resolution: { state: 'ready' } });
+    expect(service.resolveProfile).toHaveBeenCalledWith('p1', expect.objectContaining({
+      projectPath: '/repo', baseBranch: 'release',
+    }));
     expect(controller.deleteProfile('p1')).toEqual({ ok: true });
     expect(await controller.createSuccessor('t1', {
       priorRunId: 'r1', expectedRevision: 9, expectedBaseHead: 'head-1', changeRequest: 'Add tests',

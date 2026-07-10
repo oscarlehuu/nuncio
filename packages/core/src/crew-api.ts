@@ -74,9 +74,13 @@ export async function deleteCrewProfile(id: string): Promise<void> {
 export async function resolveCrewProfile(
   id: string,
   projectPath?: string,
+  baseBranch?: string,
   signal?: AbortSignal,
 ): Promise<ResolvedCrewProfileDto> {
-  const body = projectPath ? { projectPath } : {};
+  const body = {
+    ...(projectPath ? { projectPath } : {}),
+    ...(baseBranch?.trim() ? { baseBranch: baseBranch.trim() } : {}),
+  };
   const init = { ...jsonInit('POST', body), signal };
   const resolution = (await request(`/api/crew/profiles/${idPath(id)}/resolve`, init)).resolution;
   if (

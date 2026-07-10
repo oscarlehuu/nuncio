@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CrewGitWorkspaceAdapter } from '../../../src/crew/crew-git-workspace.adapter';
@@ -78,6 +78,37 @@ describe('CrewGitWorkspaceAdapter crash reconciliation', () => {
 
     expect(await gitText(created.worktreePath, ['rev-parse', 'HEAD'])).toBe(frozenHead);
     expect(created.baseBranch).toBe('main');
+  });
+
+  it('checks project files against the frozen revision instead of mutable checkout state', async () => {
+    mkdirSync(join(repo, '.nuncio'), { recursive: true });
+    writeFileSync(join(repo, '.nuncio', 'verify'), 'exit 0\n');
+    const fileAtRevision = (adapter as unknown as {
+      fileExistsAtRevision(path: string, revision: string, file: string): Promise<boolean>;
+    }).fileExistsAtRevision.bind(adapter);
+
+    expect(await fileAtRevision(repo, baseHead, '.nuncio/verify')).toBe(false);
+    await git(repo, ['add', '.nuncio/verify']);
+    await git(repo, ['commit', '-m', 'add verifier']);
+    const verifierHead = await gitText(repo, ['rev-parse', 'HEAD']);
+    expect(await fileAtRevision(repo, verifierHead, '.nuncio/verify')).toBe(true);
+
+    rmSync(join(repo, '.nuncio', 'verify'));
+    symlinkSync('../README.md', join(repo, '.nuncio', 'verify'));
+    await git(repo, ['add', '-A']);
+    await git(repo, ['commit', '-m', 'replace verifier with symlink']);
+    const symlinkHead = await gitText(repo, ['rev-parse', 'HEAD']);
+    expect(await fileAtRevision(repo, symlinkHead, '.nuncio/verify')).toBe(false);
+
+    rmSync(join(repo, '.nuncio', 'verify'));
+    mkdirSync(join(repo, '.nuncio', 'verify'));
+    writeFileSync(join(repo, '.nuncio', 'verify', 'nested.sh'), 'exit 0\n');
+    await git(repo, ['add', '-A']);
+    await git(repo, ['commit', '-m', 'replace verifier with directory']);
+    const directoryHead = await gitText(repo, ['rev-parse', 'HEAD']);
+    expect(await fileAtRevision(repo, directoryHead, '.nuncio/verify')).toBe(false);
+    await expect(fileAtRevision(repo, 'missing-frozen-head', '.nuncio/verify'))
+      .rejects.toThrow();
   });
 });
 

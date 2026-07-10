@@ -24,6 +24,10 @@ describe('CrewRunControlService CAS', () => {
     );
     const controls = new CrewRunControlService(
       runs as never, runner, {} as never, { raise: jest.fn(), clear: jest.fn() } as never,
+      { inspectBoundary: async () => ({
+        ok: true, exists: true, symlink: false, canonicalPath: '/worktree', branch: null,
+        fullHead: 'a'.repeat(40), clean: true, reachable: true, reason: null,
+      }) } as never,
     );
 
     const settled = await Promise.allSettled([

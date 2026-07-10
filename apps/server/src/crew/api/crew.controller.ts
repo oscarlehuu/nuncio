@@ -49,6 +49,7 @@ export class CrewController {
   ) {
     return this.mapAsync(async () => ({ resolution: await this.crew.resolveProfile(id, {
       projectPath: body.projectPath == null ? null : requiredString(body.projectPath, 'projectPath', 4096),
+      baseBranch: body.baseBranch == null ? null : requiredString(body.baseBranch, 'baseBranch', 512),
       projectOverride: normalizeOverride(body.projectOverride), runOverride: normalizeOverride(body.override),
     }) }));
   }

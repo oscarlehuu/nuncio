@@ -384,7 +384,10 @@ Solo stays the composer default. Crew profile resolution returns only `ready` or
 Reviewer; Nuncio Tester is deterministic. Foreman/Reviewer use read-only policy, Builder uses
 workspace-write, and every explicit policy disables network. A missing provider/model, unsupported
 policy, missing verify command, non-independent Reviewer, or missing verifier sandbox makes the
-profile `needs_setup`.
+profile `needs_setup`. Task creation resolves the selected branch to an exact SHA and rechecks a
+project `.nuncio/verify` against that Git tree before freezing the snapshot; the script runs via
+`sh` so its executable bit is irrelevant. Builder checkpoint commits require repository-local Git
+author identity.
 
 ### State and authority
 
@@ -465,7 +468,9 @@ On boot, `CrewRecoveryService` scans non-terminal runs, compares event replay wi
 validates the retained workspace, and idempotently finishes any interrupted Builder
 intent → checkpoint → result → lease-release chain before comparing heads. A pre-existing
 deterministic worktree must equal the frozen base SHA; only the correlated finalizer may reconcile
-its clean checkpoint descendant. Recovery then resumes the frozen provider Session when possible. A non-resumable member gets a linked
+its clean checkpoint descendant. An acknowledged BUILD pause sets the same explicit dirty-resume
+marker used by crash recovery before the phase is queued again. Recovery then resumes the frozen
+provider Session when possible. A non-resumable member gets a linked
 replacement with the same provider/model. Irreconcilable state becomes one `crew-blocked`
 Attention item; no unexpected Git state or provider binding is silently adopted.
 

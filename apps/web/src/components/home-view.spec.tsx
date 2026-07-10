@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HomeView } from './home-view';
 import { saveModelPreference } from '../lib/model-preference';
@@ -106,7 +106,11 @@ vi.mock('./branch-picker', async () => {
       }, [projectPath, value, onChange]);
 
       return (
-        <button type="button" disabled={!projectPath} onClick={() => onChange('main')}>
+        <button
+          type="button"
+          disabled={!projectPath}
+          onClick={() => onChange(value === 'main' ? 'release' : 'main')}
+        >
           {value ?? 'Branch'}
         </button>
       );
@@ -378,6 +382,9 @@ describe('HomeView', () => {
     await userEvent.click(screen.getByRole('button', { name: /no repo/i }));
     await userEvent.click(screen.getByRole('radio', { name: 'Crew' }));
     expect(await screen.findByText('Ready')).toBeInTheDocument();
+    expect(resolveCrewProfile).toHaveBeenCalledWith(
+      'quality', '/code/nuncio', 'main', expect.any(AbortSignal),
+    );
     await userEvent.type(screen.getByPlaceholderText(/ask nuncio/i), 'Ship it');
     const send = screen.getByRole('button', { name: /send/i });
     expect(send).toBeEnabled();
@@ -385,6 +392,19 @@ describe('HomeView', () => {
     expect(createCrewTask).toHaveBeenCalledTimes(1);
     expect(createCrewTask).toHaveBeenCalledWith({ objective: 'Ship it', projectPath: '/code/nuncio', baseBranch: 'main', profileId: 'quality' });
     expect(onCrewCreated).toHaveBeenCalledWith('task-1');
+  });
+
+  it('re-resolves Crew readiness when the selected base branch changes', async () => {
+    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
+    await userEvent.click(screen.getByRole('button', { name: /no repo/i }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Crew' }));
+    expect(await screen.findByText('Ready')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /^main$/i }));
+
+    await waitFor(() => expect(resolveCrewProfile).toHaveBeenCalledWith(
+      'quality', '/code/nuncio', 'release', expect.any(AbortSignal),
+    ));
   });
 
   it('Needs setup disables Delegate and links directly to Crew profile settings', async () => {

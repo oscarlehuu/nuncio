@@ -78,11 +78,13 @@ describe('crew api', () => {
     expect(fetchMock.mock.calls[4]![1]).toMatchObject({ method: 'DELETE' });
   });
 
-  it('resolves a profile for the selected project', async () => {
+  it('resolves a profile for the selected project branch', async () => {
     const resolution = { state: 'ready', snapshot, issues: [] };
     fetchMock.mockResolvedValue(jsonResponse({ resolution }));
-    await expect(resolveCrewProfile('p/1', '/repo x')).resolves.toEqual(resolution);
-    expect(fetchMock).toHaveBeenCalledWith('https://mac.test/api/crew/profiles/p%2F1/resolve', expect.objectContaining({ body: JSON.stringify({ projectPath: '/repo x' }) }));
+    await expect(resolveCrewProfile('p/1', '/repo x', 'release')).resolves.toEqual(resolution);
+    expect(fetchMock).toHaveBeenCalledWith('https://mac.test/api/crew/profiles/p%2F1/resolve', expect.objectContaining({
+      body: JSON.stringify({ projectPath: '/repo x', baseBranch: 'release' }),
+    }));
   });
 
   it('creates, reads, lists bounded summaries, and creates a successor', async () => {

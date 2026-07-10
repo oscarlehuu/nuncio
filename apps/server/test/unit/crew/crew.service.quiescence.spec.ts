@@ -10,7 +10,16 @@ interface MutableRun {
   revision: number; worktreePath: string; workspaceHead: string; verifyRetriesUsed?: number;
 }
 
-function serviceWith(quiesceCrewRun: () => Promise<void>, findById = () => running) {
+const cleanBoundary = {
+  ok: true, exists: true, symlink: false, canonicalPath: '/worktree',
+  branch: 'nuncio/run', fullHead: 'a'.repeat(40), clean: true, reachable: true, reason: null,
+};
+
+function serviceWith(
+  quiesceCrewRun: () => Promise<void>,
+  findById = () => running,
+  boundary = cleanBoundary,
+) {
   const applyEvent = jest.fn();
   const runs = { findById, applyEvent };
   const service = new CrewRunControlService(
@@ -21,6 +30,7 @@ function serviceWith(quiesceCrewRun: () => Promise<void>, findById = () => runni
     } as never,
     {} as never,
     { raise: jest.fn(), clear: jest.fn() } as never,
+    { inspectBoundary: async () => boundary } as never,
   );
   return { service, applyEvent };
 }
@@ -45,6 +55,39 @@ describe('CrewService quiescence barrier', () => {
     applyEvent.mockReturnValue({ ...running, revision: 5 });
     await service[operation]('run-1', 4);
     expect(applyEvent).toHaveBeenCalledWith('run-1', expect.objectContaining({ expectedRevision: 4 }));
+  });
+
+  it('durably marks a paused BUILD so the same dirty Builder can resume', async () => {
+    const build = {
+      ...running, phase: 'BUILD', context: {}, worktreePath: '/worktree', branch: 'nuncio/run',
+      workspaceHead: 'a'.repeat(40),
+    };
+    const { service, applyEvent } = serviceWith(
+      async () => {}, () => build, { ...cleanBoundary, clean: false },
+    );
+    applyEvent.mockReturnValue({ ...build, revision: 5, status: 'PAUSED' });
+
+    await service.pause('run-1', 4);
+
+    expect(applyEvent).toHaveBeenCalledWith('run-1', expect.objectContaining({
+      event: { type: 'pause_requested' },
+      contextPatch: { resumeDirtyBuild: true },
+    }));
+  });
+
+  it('does not grant dirty resume when BUILD was clean at the pause boundary', async () => {
+    const build = {
+      ...running, phase: 'BUILD', context: {}, worktreePath: '/worktree', branch: 'nuncio/run',
+      workspaceHead: 'a'.repeat(40),
+    };
+    const { service, applyEvent } = serviceWith(async () => {}, () => build, cleanBoundary);
+    applyEvent.mockReturnValue({ ...build, revision: 5, status: 'PAUSED' });
+
+    await service.pause('run-1', 4);
+
+    expect(applyEvent).toHaveBeenCalledWith('run-1', expect.not.objectContaining({
+      contextPatch: expect.anything(),
+    }));
   });
 
   it.each(['pause', 'cancel'] as const)(
@@ -94,6 +137,7 @@ describe('CrewService quiescence barrier', () => {
       );
       const service = new CrewRunControlService(
         runs as never, runner, {} as never, { raise: jest.fn(), clear: jest.fn() } as never,
+        { inspectBoundary: async () => cleanBoundary } as never,
       );
 
       const starting = runner.start('run-1');
@@ -153,6 +197,7 @@ describe('CrewService quiescence barrier', () => {
       );
       const service = new CrewRunControlService(
         runs as never, runner, {} as never, { raise: jest.fn(), clear: jest.fn() } as never,
+        { inspectBoundary: async () => cleanBoundary } as never,
       );
       const starting = runner.start('run-1');
       await verifyStarted.promise;

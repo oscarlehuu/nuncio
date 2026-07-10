@@ -57,6 +57,16 @@ Quality defaults are:
 - `strictFreshFinalReviewer = true`;
 - a project/profile/global verify command must resolve before the profile is ready.
 
+For a project-level `.nuncio/verify`, task creation checks that the file is tracked at the exact
+selected base SHA; an untracked file or a file that exists only on another branch cannot make the
+profile ready. Nuncio invokes the tracked script with `sh`, so it does not require an executable
+bit. Project and profile command overrides remain trusted configuration and take precedence.
+
+Crew checkpoints require a repository-local Git identity because Nuncio will not borrow ambient
+global author metadata for autonomous commits. Configure it once in each target repository with
+`git config --local user.name "Your Name"` and
+`git config --local user.email "you@example.com"` before delegating build work.
+
 ## Fixed execution loop
 
 ### Plan
@@ -243,8 +253,8 @@ Recovery is layered:
 5. A resumable provider Session is continued. Otherwise Nuncio creates a linked member
    incarnation with the same frozen binding and current context/workspace.
 6. An interrupted Verify may be queued again only after the exact current head and clean boundary
-   are re-established. Build recovery may preserve a dirty in-progress worktree only through the
-   explicit recovery marker.
+   are re-established. Build recovery and an acknowledged BUILD pause may preserve a dirty
+   in-progress worktree only through the explicit recovery marker.
 7. A pre-existing deterministic worktree is adopted only when its full HEAD equals the frozen base
    SHA. Missing, moved, symlinked, diverged, descendant, stale, or unavailable state blocks in
    Attention; it is not silently repaired or rerouted.

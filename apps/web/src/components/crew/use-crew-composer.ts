@@ -63,7 +63,7 @@ export function useCrewComposer({
     const current = ++requestId.current;
     setResolving(true);
     setError(null);
-    resolveCrewProfile(profileId, projectPath, controller.signal)
+    resolveCrewProfile(profileId, projectPath, baseBranch, controller.signal)
       .then((next) => {
         if (current === requestId.current) setResolution(next);
       })
@@ -76,7 +76,7 @@ export function useCrewComposer({
         if (current === requestId.current) setResolving(false);
       });
     return () => controller.abort();
-  }, [loadingProfiles, mode, profileId, profileRefresh, projectPath]);
+  }, [baseBranch, loadingProfiles, mode, profileId, profileRefresh, projectPath]);
 
   const setMode = (next: ExecutionMode) => {
     if (next === 'crew' && mode !== 'crew') {

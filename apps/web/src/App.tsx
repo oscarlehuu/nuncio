@@ -763,6 +763,7 @@ export default function App() {
                 steering={steering}
                 lifecycleBusy={lifecycleBusy}
                 onSessionLoaded={(session) => {
+                  if (session.verifyOwner === 'crew') return;
                   setSessions((prev) => {
                     if (prev.some((s) => s.id === session.id)) return prev;
                     return [session, ...prev];
@@ -975,6 +976,7 @@ function SessionRoute({
     archivedSessions.find((s) => s.id === sessionId) ??
     null;
   const session = listedSession ?? fetchedSession;
+  const fetchedSessionId = fetchedSession?.id;
   const { events, refetch, loadEarlier, hasEarlier } = useSessionStream(
     session?.id ?? null,
     '',
@@ -988,7 +990,7 @@ function SessionRoute({
   }, [sessionId]);
 
   useEffect(() => {
-    if (!sessionId || listedSession || !listsReady) return;
+    if (!sessionId || listedSession || fetchedSessionId === sessionId || !listsReady) return;
 
     let cancelled = false;
     void fetchSession(sessionId)
@@ -1006,7 +1008,7 @@ function SessionRoute({
     return () => {
       cancelled = true;
     };
-  }, [sessionId, listedSession, listsReady, onMissingSession, onSessionLoaded]);
+  }, [sessionId, listedSession, fetchedSessionId, listsReady, onMissingSession, onSessionLoaded]);
 
   useEffect(() => {
     if (!session) return;
@@ -1025,7 +1027,15 @@ function SessionRoute({
       }
       if (status && title) break;
     }
-    if (status) onSessionStatus(session.id, status, statusCreatedAt);
+    if (status) {
+      setFetchedSession((prev) => {
+        if (!prev || prev.id !== session.id) return prev;
+        const updatedAt = Math.max(prev.updatedAt, statusCreatedAt);
+        if (prev.status === status && prev.updatedAt === updatedAt) return prev;
+        return { ...prev, status, updatedAt };
+      });
+      onSessionStatus(session.id, status, statusCreatedAt);
+    }
     if (title) {
       setFetchedSession((prev) => {
         if (!prev || prev.id !== session.id) return prev;

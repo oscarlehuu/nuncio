@@ -23,7 +23,7 @@ describe('CrewVerifyCommandResolver', () => {
     expect(resolver.resolve(root, 'profile-check', 'run-check')).toBe('run-check');
   });
 
-  it('freezes a project .nuncio/verify script before profile', () => {
+  it('freezes a project .nuncio/verify script through the shell before profile', () => {
     const projectPath = join(root, 'script-project');
     mkdirSync(join(projectPath, '.nuncio'), { recursive: true });
     writeFileSync(join(projectPath, '.nuncio', 'verify'), 'exit 0\n');
@@ -31,21 +31,38 @@ describe('CrewVerifyCommandResolver', () => {
       { findByPath: () => null } as never,
       { resolveVerifyCommand: () => 'global-check' } as never,
     );
-    expect(resolver.resolve(projectPath, 'profile-check')).toBe('./.nuncio/verify');
+    expect(resolver.resolve(projectPath, 'profile-check')).toBe('sh ./.nuncio/verify');
   });
 
-  it('runs the head-local worktree script rather than the mutable source checkout', async () => {
+  it('runs a non-executable head-local worktree script rather than the mutable source checkout', async () => {
     const projectPath = join(root, 'source-project');
     const worktreePath = join(root, 'crew-worktree');
     mkdirSync(join(projectPath, '.nuncio'), { recursive: true });
     mkdirSync(join(worktreePath, '.nuncio'), { recursive: true });
-    writeFileSync(join(projectPath, '.nuncio', 'verify'), '#!/bin/sh\nprintf source\n', { mode: 0o755 });
-    writeFileSync(join(worktreePath, '.nuncio', 'verify'), '#!/bin/sh\nprintf worktree\n', { mode: 0o755 });
+    writeFileSync(join(projectPath, '.nuncio', 'verify'), '#!/bin/sh\nprintf source\n', { mode: 0o644 });
+    writeFileSync(join(worktreePath, '.nuncio', 'verify'), '#!/bin/sh\nprintf worktree\n', { mode: 0o644 });
     const resolver = new CrewVerifyCommandResolver(
       { findByPath: () => null } as never, { resolveVerifyCommand: () => null } as never,
     );
     const command = resolver.resolve(projectPath, null)!;
     expect((await new CrewCommandRunner().run(command, worktreePath, 1000)).stdout).toBe('worktree');
+  });
+
+  it('uses frozen-head script presence instead of an untracked mutable checkout file', () => {
+    const projectPath = join(root, 'untracked-script-project');
+    mkdirSync(join(projectPath, '.nuncio'), { recursive: true });
+    writeFileSync(join(projectPath, '.nuncio', 'verify'), 'exit 0\n');
+    const resolver = new CrewVerifyCommandResolver(
+      { findByPath: () => null } as never,
+      { resolveVerifyCommand: () => null } as never,
+    );
+    const resolveAtHead = resolver.resolve.bind(resolver) as (
+      projectPath: string | null, profile: string | null, explicit?: string | null,
+      projectScriptAtHead?: boolean,
+    ) => string | null;
+
+    expect(resolveAtHead(projectPath, 'profile-check', null, false)).toBe('profile-check');
+    expect(resolveAtHead(projectPath, null, null, true)).toBe('sh ./.nuncio/verify');
   });
 
   it('uses profile before the global fallback and returns null when all are absent', () => {

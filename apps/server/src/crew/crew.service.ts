@@ -55,14 +55,27 @@ export class CrewService {
     if (!this.profiles.delete(id)) throw new CrewNotFoundError('CrewProfile', id);
   }
   async resolveProfile(id: string, input: {
-    projectPath?: string | null; projectOverride?: CrewProfileOverride; runOverride?: CrewProfileOverride;
+    projectPath?: string | null; baseBranch?: string | null; baseHead?: string | null;
+    projectOverride?: CrewProfileOverride; runOverride?: CrewProfileOverride;
   } = {}) {
     const profile = this.requireProfile(id);
     const explicitVerifyCommand = pickExplicitVerifyCommand(input.projectOverride, input.runOverride);
+    let baseHead = input.baseHead?.trim() || null;
+    if (input.projectPath && !baseHead) {
+      baseHead = (await this.workspace.resolveBase(input.projectPath, input.baseBranch)).baseHead;
+    }
+    const projectScriptAtHead = input.projectPath && baseHead
+      ? await this.workspace.fileExistsAtRevision(
+          input.projectPath, baseHead, '.nuncio/verify',
+        )
+      : undefined;
     return this.resolver.resolve({
       savedProfile: profile, catalog: await this.catalog.list(),
       resolvedVerifyCommand: this.verifyCommands.resolve(
-        input.projectPath ?? null, profile.definition.policy.verifyCommand, explicitVerifyCommand,
+        input.projectPath ?? null,
+        profile.definition.policy.verifyCommand,
+        explicitVerifyCommand,
+        projectScriptAtHead,
       ),
       ...(input.projectOverride ? { projectOverride: input.projectOverride } : {}),
       ...(input.runOverride ? { runOverride: input.runOverride } : {}),
@@ -73,11 +86,11 @@ export class CrewService {
     objective: string; projectPath: string; baseBranch?: string | null; profileId: string;
     override?: CrewProfileOverride;
   }) {
+    const frozenBase = await this.workspace.resolveBase(input.projectPath, input.baseBranch);
     const resolution = await this.resolveProfile(input.profileId, {
-      projectPath: input.projectPath, runOverride: input.override,
+      projectPath: input.projectPath, baseHead: frozenBase.baseHead, runOverride: input.override,
     });
     if (resolution.state !== 'ready') throw new CrewProfileNeedsSetupError(resolution.issues);
-    const frozenBase = await this.workspace.resolveBase(input.projectPath, input.baseBranch);
     const created = this.database.transaction(() => {
       const task = this.tasks.create({ ...input, baseBranch: frozenBase.baseBranch });
       const run = this.runs.create({
@@ -112,7 +125,7 @@ export class CrewService {
     const profileId = input.profileId ?? prior.profileSnapshot.sourceProfileId;
     if (!profileId) throw new CrewValidationError('profileId is required for successor');
     const resolution = await this.resolveProfile(profileId, {
-      projectPath: task.projectPath, runOverride: input.override,
+      projectPath: task.projectPath, baseHead: prior.workspaceHead, runOverride: input.override,
     });
     if (resolution.state !== 'ready') throw new CrewProfileNeedsSetupError(resolution.issues);
     const run = await this.successors.create({

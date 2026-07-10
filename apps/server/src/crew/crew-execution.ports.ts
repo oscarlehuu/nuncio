@@ -21,6 +21,9 @@ export interface CrewWorkspacePort {
   resolveBase(
     projectPath: string, baseBranch?: string | null,
   ): Promise<{ baseBranch: string; baseHead: string }>;
+  fileExistsAtRevision(
+    projectPath: string, revision: string, relativePath: string,
+  ): Promise<boolean>;
   createWorktree(input: {
     runId: string; projectPath: string; baseBranch: string; baseHead: string; slug: string;
   }): Promise<{ worktreePath: string; branch: string; baseBranch: string }>;
