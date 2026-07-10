@@ -14,7 +14,9 @@ envelope `v` field), never breaking.
 - Direct: `GET ws(s)://<host>/api/sessions/ws` (HTTP upgrade)
 - Through a hub: `ws(s)://<hub>/m/<machine>/api/sessions/ws` — the hub relays
   frames verbatim to the target machine's endpoint.
-- Keepalive: the server sends a WS ping every 15s.
+- Keepalive: each direct or hub relay leg sends a WS ping every 15s and
+  terminates a socket that misses the next pong. Clients reconnect and replay
+  from their highest seen `seq`.
 
 ## Authorization (at upgrade)
 
@@ -38,7 +40,7 @@ the target machine trusts the hub's tailnet identity for the second hop.
 Client → server requests:
 
 ```json
-{ "id": 1, "method": "subscribe", "params": { "sessionId": "…", "since": 0 } }
+{ "id": 1, "method": "subscribe", "params": { "sessionId": "…", "since": 0, "tail": 1000 } }
 ```
 
 Server → client responses (correlated by `id`):
@@ -76,13 +78,15 @@ unknown notice.
 `SIGTERM`/`SIGINT`. It is best-effort and fire-and-forget: the server does not
 wait for the frame to flush before closing, and a crash (rather than a clean
 quit) sends no notice — clients fall back to the heartbeat timeout and reconnect
-in that case.
+in that case. Mobile treats the notice as a short 1–2s jittered cooldown, then
+probes and reopens automatically; foregrounding or a network change may retry
+immediately.
 
 ## Methods
 
 | Method | Params | Result | Notes |
 |---|---|---|---|
-| `subscribe` | `sessionId`, `since?` (default 0) | `{ ok: true }` | Replays events with `seq > since` as channel pushes, then streams live. Subscribing again to the same session replaces the previous subscription (cursor recovery). Unknown session → error 404. |
+| `subscribe` | `sessionId`, `since?` (default 0), `tail?` | `{ ok: true }` | Replays events with `seq > since` as channel pushes, then streams live. An integer `tail` from 1–10,000 bounds only a cursor-zero initial replay; reconnects resume from the highest seen `seq`. Subscribing again replaces the previous subscription (cursor recovery). Unknown session → error 404. |
 | `unsubscribe` | `sessionId` | `{ ok: true }` | Stops pushes for that session. |
 | `steer` | `sessionId`, `message`, `forceResume?` | the updated session DTO | Same semantics and error codes as `POST /api/sessions/:id/steer` (400 invalid, 409 CLI busy, 503 CLI missing). |
 
@@ -97,6 +101,12 @@ client recovers by resubscribing with `since = <last seq it has seen>` — the
 replay fills the gap. `@nuncio/core`'s `subscribeSessionEvents` does this
 automatically.
 
+The hub applies the same 1 MB bound independently in both directions, including
+client frames queued while the target socket is connecting. It terminates both
+legs when the bound is exceeded or when the target has not connected within
+10s. Abrupt termination is intentional: the durable cursor replay is the
+recovery path, while unbounded buffering can exhaust the host.
+
 ## Client contract (`@nuncio/core/session-relay-client`)
 
 `subscribeSessionEvents({ url, sessionId, since, onEvent, webSocketFactory? })`
@@ -105,3 +115,9 @@ it on reconnect (2s), on `behind`, and on `resync()` (tab visible / app
 foregrounded). `call(method, params)` issues RPCs (e.g. steer) over the same
 socket. React Native injects a `webSocketFactory` that adds the Bearer header;
 browsers rely on the cookie.
+
+Web and mobile normally bootstrap the transcript over REST before subscribing.
+REST is only an optimization: if it fails or stays pending for 1s, the client
+opens the relay from `seq = 0`; a late REST result is merged by `seq` and may
+never replace newer live events or move the cursor backwards. Switching sessions
+invalidates every older bootstrap/refetch callback before it can mutate state.

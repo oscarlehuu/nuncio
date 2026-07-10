@@ -67,6 +67,16 @@ describe('SessionsService verifier gate', () => {
     return undefined;
   }
 
+  async function waitForEvent(sessionId: string, type: string, timeoutMs = 5000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const found = events.list(sessionId).find((event) => event.type === type);
+      if (found) return found;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return undefined;
+  }
+
   it('appends verify_start and a passing verify_result after a run ends IDLE', async () => {
     writeVerifyScript('echo checks-ok\nexit 0\n');
     const session = await service.create({ prompt: 'verify me', provider: 'cursor', workspace });
@@ -84,6 +94,19 @@ describe('SessionsService verifier gate', () => {
     const result = await waitForVerifyResult(session.id);
     expect(result!.payload).toMatchObject({ ok: false, exitCode: 1 });
     expect(service.get(session.id)?.status).toBe('IDLE');
+  });
+
+  it('does not record a failed verify when archive aborts the verifier', async () => {
+    writeVerifyScript('while true; do sleep 1; done\n');
+    const session = await service.create({ prompt: 'archive during verify', provider: 'cursor', workspace });
+
+    expect(await waitForEvent(session.id, 'verify_start')).toBeDefined();
+    expect(service.get(session.id)?.status).toBe('IDLE');
+    service.archive(session.id);
+    await service.awaitRun(session.id);
+
+    expect(service.get(session.id)?.status).toBe('ARCHIVED');
+    expect(events.list(session.id).some((event) => event.type === 'verify_result')).toBe(false);
   });
 
   it('awaitRun resolves only after the run and its verification settle', async () => {

@@ -63,6 +63,16 @@ function subscribeSince(socket: MockWebSocket): number {
   return (last?.params as { since: number }).since;
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function Harness({
   sid,
   tail,
@@ -227,6 +237,27 @@ describe('useSessionStream', () => {
     expect(lastSocket).toBeUndefined();
   });
 
+  it('clears the previous transcript while a different session bootstraps', async () => {
+    const sessionB = deferred<ReturnType<typeof ev>[]>();
+    vi.mocked(fetchEvents).mockImplementation((id) => {
+      if (id === 's1') return Promise.resolve([ev(1)]);
+      return sessionB.promise;
+    });
+    let api: ReturnType<typeof useSessionStream> | undefined;
+    const view = render(
+      <Harness sid="s1" onReady={(stream) => { api = stream; }} />,
+    );
+    await waitFor(() => expect(api?.events.map((event) => event.seq)).toEqual([1]));
+
+    view.rerender(<Harness sid="s2" onReady={(stream) => { api = stream; }} />);
+
+    await waitFor(() => expect(api?.events).toEqual([]));
+    expect(fetchEvents).toHaveBeenLastCalledWith('s2', 0, '');
+
+    sessionB.resolve([ev(8)]);
+    await waitFor(() => expect(api?.events.map((event) => event.seq)).toEqual([8]));
+  });
+
   it('requests only the tail window on mount when a tail depth is set', async () => {
     vi.mocked(fetchEvents).mockResolvedValue([ev(5), ev(6)]);
     render(<Harness sid="s1" tail={50} />);
@@ -298,6 +329,150 @@ describe('useSessionStream', () => {
     await waitFor(() => expect(getByTestId('count').textContent).toBe('2'));
     expect(fetchEvents).toHaveBeenLastCalledWith('s1', 0, '');
     expect(MockWebSocket.instances.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('does not let a stale refetch from session A overwrite session B or seed its cursor', async () => {
+    const staleARefetch = deferred<ReturnType<typeof ev>[]>();
+    let sessionAFetches = 0;
+    vi.mocked(fetchEvents).mockImplementation((id) => {
+      if (id === 's1') {
+        sessionAFetches += 1;
+        return sessionAFetches === 1 ? Promise.resolve([ev(1)]) : staleARefetch.promise;
+      }
+      return Promise.resolve([ev(10)]);
+    });
+    let api: ReturnType<typeof useSessionStream> | undefined;
+    const view = render(
+      <Harness sid="s1" onReady={(stream) => { api = stream; }} />,
+    );
+    await waitFor(() => expect(api?.events.map((event) => event.seq)).toEqual([1]));
+
+    let staleRefetch!: Promise<void>;
+    act(() => {
+      staleRefetch = api!.refetch();
+    });
+    await waitFor(() => expect(sessionAFetches).toBe(2));
+    view.rerender(<Harness sid="s2" onReady={(stream) => { api = stream; }} />);
+    await waitFor(() => expect(api?.events.map((event) => event.seq)).toEqual([10]));
+    const bSocket = MockWebSocket.instances[MockWebSocket.instances.length - 1]!;
+    await waitFor(() => expect(bSocket.subscribes.length).toBe(1));
+    expect(bSocket.subscribes[0].params).toMatchObject({ sessionId: 's2', since: 10 });
+
+    staleARefetch.resolve([ev(99)]);
+    await act(async () => {
+      await staleRefetch;
+    });
+
+    expect(api!.events.map((event) => event.seq)).toEqual([10]);
+    expect(MockWebSocket.instances[MockWebSocket.instances.length - 1]).toBe(bSocket);
+    expect(bSocket.subscribes).toHaveLength(1);
+  });
+
+  it('does not let an older same-session refetch overwrite a newer result', async () => {
+    const older = deferred<ReturnType<typeof ev>[]>();
+    const newer = deferred<ReturnType<typeof ev>[]>();
+    let fetchCount = 0;
+    vi.mocked(fetchEvents).mockImplementation(() => {
+      fetchCount += 1;
+      if (fetchCount === 1) return Promise.resolve([ev(1)]);
+      return fetchCount === 2 ? older.promise : newer.promise;
+    });
+    let api: ReturnType<typeof useSessionStream> | undefined;
+    render(<Harness sid="s1" onReady={(stream) => { api = stream; }} />);
+    await waitFor(() => expect(api?.events.map((event) => event.seq)).toEqual([1]));
+
+    const olderRequest = api!.refetch();
+    const newerRequest = api!.refetch();
+    newer.resolve([ev(12)]);
+    await act(async () => {
+      await newerRequest;
+    });
+    expect(api!.events.map((event) => event.seq)).toEqual([1, 12]);
+    const newestSocket = MockWebSocket.instances[MockWebSocket.instances.length - 1]!;
+    await waitFor(() => expect(newestSocket.subscribes.length).toBe(1));
+    expect(subscribeSince(newestSocket)).toBe(12);
+
+    older.resolve([ev(4)]);
+    await act(async () => {
+      await olderRequest;
+    });
+
+    expect(api!.events.map((event) => event.seq)).toEqual([1, 12]);
+    expect(MockWebSocket.instances[MockWebSocket.instances.length - 1]).toBe(newestSocket);
+  });
+
+  it('keeps live events that arrive while a same-session refetch is pending', async () => {
+    const refetchResult = deferred<ReturnType<typeof ev>[]>();
+    let fetchCount = 0;
+    vi.mocked(fetchEvents).mockImplementation(() => {
+      fetchCount += 1;
+      return fetchCount === 1 ? Promise.resolve([ev(1)]) : refetchResult.promise;
+    });
+    let api: ReturnType<typeof useSessionStream> | undefined;
+    render(<Harness sid="s1" onReady={(stream) => { api = stream; }} />);
+    await waitFor(() => expect(api?.events.map((event) => event.seq)).toEqual([1]));
+    await waitFor(() => expect(lastSocket?.subscribes.length).toBe(1));
+
+    const pendingRefetch = api!.refetch();
+    act(() => lastSocket!.push(ev(7, 'assistant_delta', { delta: 'live' })));
+    await waitFor(() => expect(api?.events.map((event) => event.seq)).toEqual([1, 7]));
+
+    refetchResult.resolve([ev(1), ev(2), ev(3), ev(4), ev(5)]);
+    await act(async () => {
+      await pendingRefetch;
+    });
+
+    expect(api!.events.map((event) => event.seq)).toEqual([1, 2, 3, 4, 5, 7]);
+    const newestSocket = MockWebSocket.instances[MockWebSocket.instances.length - 1]!;
+    await waitFor(() => expect(newestSocket.subscribes.length).toBe(1));
+    expect(subscribeSince(newestSocket)).toBe(7);
+  });
+
+  it('opens the relay from seq 0 when the initial REST bootstrap fails', async () => {
+    vi.mocked(fetchEvents).mockRejectedValueOnce(new Error('temporary REST failure'));
+
+    render(<Harness sid="s1" tail={50} />);
+
+    await waitFor(() => expect(lastSocket).toBeDefined());
+    await waitFor(() => expect(lastSocket!.subscribes.length).toBe(1));
+    expect(lastSocket!.subscribes[0].params).toMatchObject({
+      sessionId: 's1',
+      since: 0,
+      tail: 50,
+    });
+  });
+
+  it('opens the relay from seq 0 when the REST bootstrap stays pending', async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetchEvents).mockReturnValueOnce(new Promise(() => {}));
+    render(<Harness sid="s1" tail={50} />);
+    expect(lastSocket).toBeUndefined();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+      await Promise.resolve();
+    });
+
+    expect(lastSocket).toBeDefined();
+    await act(async () => Promise.resolve());
+    expect(lastSocket!.subscribes[0].params).toMatchObject({
+      sessionId: 's1',
+      since: 0,
+      tail: 50,
+    });
+  });
+
+  it('visibility recovery resubscribes from the highest live seq', async () => {
+    vi.mocked(fetchEvents).mockResolvedValue([ev(1)]);
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    render(<Harness sid="s1" />);
+    await waitFor(() => expect(lastSocket?.subscribes.length).toBe(1));
+
+    act(() => lastSocket!.push(ev(7, 'assistant_delta', { delta: 'live' })));
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+
+    await waitFor(() => expect(lastSocket!.subscribes.length).toBe(2));
+    expect(subscribeSince(lastSocket!)).toBe(7);
   });
 
   it('reconnects after a socket drop and resubscribes with the updated cursor', async () => {

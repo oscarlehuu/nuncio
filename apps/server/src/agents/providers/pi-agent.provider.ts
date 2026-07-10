@@ -13,7 +13,7 @@ import { EventsRepository } from '../../sessions/persistence/events.repository';
 import { SessionsRepository } from '../../sessions/persistence/sessions.repository';
 import { SettingsService } from '../../settings/settings.service';
 import type { AgentRunContext, InteractionResponse } from '../agents.types';
-import { BaseAgentProvider } from '../agents.base-provider';
+import { AgentRunCancelledError, BaseAgentProvider } from '../agents.base-provider';
 import { eventImagesFromAttachments } from '../agents.attachments';
 import {
   appendRuntimeToolInstructions,
@@ -56,6 +56,7 @@ type PiSessionHandle = {
   modelRegistry: PiModelRegistry;
   prompt: (text: string, options?: PiPromptOptions) => Promise<void>;
   unsubscribe: () => void;
+  setEmit: (emit?: AgentRunContext['emit']) => void;
   resetAssistantText: () => void;
   getAssistantText: () => string;
   /** Turn-final assistant messages already emitted during the current prompt. */
@@ -145,12 +146,20 @@ export class PiAgentProvider extends BaseAgentProvider {
     }
   }
 
-  dispose(sessionId: string): void {
+  protected disposeRuntime(sessionId: string): void {
     const handle = this.activeSessions.get(sessionId);
     if (!handle) return;
+    void handle.session.abort().catch(() => undefined);
     handle.unsubscribe();
     this.activeSessions.delete(sessionId);
     this.interruptedSessions.delete(sessionId);
+  }
+
+  protected prepareRuntimeDispose(sessionId: string): boolean {
+    const handle = this.activeSessions.get(sessionId);
+    if (!handle) return false;
+    handle.sealOpenTools();
+    return true;
   }
 
   /**
@@ -165,19 +174,44 @@ export class PiAgentProvider extends BaseAgentProvider {
   ): Promise<boolean> {
     const handle = this.activeSessions.get(sessionId);
     if (!handle || !handle.session.isStreaming) return false;
+    const generation = this.currentRunGeneration(sessionId);
     const eventImages = eventImagesFromAttachments(context.attachments);
+    const payload = {
+      text: message,
+      ...(eventImages ? { images: eventImages } : {}),
+      ...(context.steerOrigin ? { origin: context.steerOrigin } : {}),
+    };
     this.pushEvent(
       sessionId,
-      'steer_message',
-      {
-        text: message,
-        ...(eventImages ? { images: eventImages } : {}),
-        ...(context.steerOrigin ? { origin: context.steerOrigin } : {}),
-      },
+      'steer_reserved',
+      payload,
       context.emit,
     );
+    try {
+      await this.waitForPendingEvents(sessionId);
+    } catch (error) {
+      if (error instanceof AgentRunCancelledError) return false;
+      throw error;
+    }
+    if (
+      !this.isCurrentRunGeneration(sessionId, generation) ||
+      this.activeSessions.get(sessionId) !== handle ||
+      !handle.session.isStreaming
+    ) return false;
     const images = piImagesFromAttachments(context);
-    await handle.session.steer(message, images.length ? images : undefined);
+    try {
+      await handle.session.steer(message, images.length ? images : undefined);
+    } catch {
+      return false;
+    }
+    this.pushEvent(sessionId, 'steer_message', payload, context.emit);
+    try {
+      await this.waitForPendingEvents(sessionId);
+    } catch (error) {
+      // The SDK already accepted the input. Preserve exactly-once routing even
+      // if teardown fences the run while its delivery event is recovering.
+      if (!(error instanceof AgentRunCancelledError)) throw error;
+    }
     return true;
   }
 
@@ -257,6 +291,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       handle = await this.createPiSession(sessionId, context);
       this.activeSessions.set(sessionId, handle);
     }
+    handle.setEmit(context.emit);
 
     const images = piImagesFromAttachments(context);
     const promptOptions: PiPromptOptions = {
@@ -349,6 +384,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       this.sessions.updateProviderRuntimeState(sessionId, { providerThreadId: session.sessionFile });
     }
 
+    let currentEmit = context.emit;
     let assistantText = '';
     let assistantTurnsEmitted = 0;
     let lastTurnError: string | null = null;
@@ -369,9 +405,9 @@ export class PiAgentProvider extends BaseAgentProvider {
       thinkingOpen = true;
       thinkingId = crypto.randomUUID();
       accumulatedThinking = '';
-      this.pushEvent(sessionId, 'thinking_start', { thinkingId }, context.emit);
+      this.pushEvent(sessionId, 'thinking_start', { thinkingId }, currentEmit);
     };
-    const sealOpenTools = (emit?: AgentRunContext['emit']) => {
+    const sealOpenTools = (emit: AgentRunContext['emit'] = currentEmit) => {
       for (const [callId, tool] of openTools) {
         this.pushEvent(sessionId, 'tool_end', { callId, tool, isError: false }, emit);
       }
@@ -387,8 +423,8 @@ export class PiAgentProvider extends BaseAgentProvider {
         } | undefined;
         if (inner?.type === 'text_delta' && inner.delta) {
           assistantText += inner.delta;
-          this.pushEvent(sessionId, 'assistant_delta', { delta: inner.delta }, context.emit);
-          this.touchPreview(sessionId, assistantText);
+          this.pushEvent(sessionId, 'assistant_delta', { delta: inner.delta }, currentEmit);
+          this.touchPreview(sessionId, assistantText, currentEmit);
         }
         if (inner?.type === 'thinking_start') {
           ensureThinkingStarted();
@@ -400,13 +436,13 @@ export class PiAgentProvider extends BaseAgentProvider {
             sessionId,
             'thinking_delta',
             { thinkingId, delta: inner.delta },
-            context.emit,
+            currentEmit,
           );
         }
         if (inner?.type === 'thinking_end') {
           ensureThinkingStarted();
           const text = typeof inner.content === 'string' ? inner.content : accumulatedThinking;
-          this.pushEvent(sessionId, 'thinking_message', { thinkingId, text }, context.emit);
+          this.pushEvent(sessionId, 'thinking_message', { thinkingId, text }, currentEmit);
           resetThinking();
         }
       }
@@ -416,7 +452,7 @@ export class PiAgentProvider extends BaseAgentProvider {
         const userInputPayload = buildUserInputRequestedPayload(tool, event.args, callId);
         if (userInputPayload) {
           userInputRequests.add(callId);
-          this.pushEvent(sessionId, 'user_input_requested', userInputPayload, context.emit);
+          this.pushEvent(sessionId, 'user_input_requested', userInputPayload, currentEmit);
           return;
         }
         openTools.set(callId, tool);
@@ -425,7 +461,7 @@ export class PiAgentProvider extends BaseAgentProvider {
           sessionId,
           'tool_start',
           { callId, tool, ...(input !== undefined ? { input } : {}) },
-          context.emit,
+          currentEmit,
         );
       }
       if (event.type === 'tool_execution_end') {
@@ -443,7 +479,7 @@ export class PiAgentProvider extends BaseAgentProvider {
             isError: event.isError,
             ...(output !== undefined ? { output } : {}),
           },
-          context.emit,
+          currentEmit,
         );
       }
       if (event.type === 'message_end') {
@@ -471,14 +507,14 @@ export class PiAgentProvider extends BaseAgentProvider {
             if (text.trim()) {
               // Per-turn final message: mirrors the pi session file exactly, so
               // transcript refreshes dedupe instead of duplicating steered runs.
-              this.pushEvent(sessionId, 'assistant_message', { text }, context.emit);
+              this.pushEvent(sessionId, 'assistant_message', { text }, currentEmit);
               assistantTurnsEmitted += 1;
             }
           }
         }
       }
       if (event.type === 'agent_end') {
-        sealOpenTools(context.emit);
+        sealOpenTools(currentEmit);
       }
     });
 
@@ -487,6 +523,9 @@ export class PiAgentProvider extends BaseAgentProvider {
       modelRegistry,
       prompt: (prompt, options) => session.prompt(prompt, options as never),
       unsubscribe,
+      setEmit: (emit) => {
+        currentEmit = emit;
+      },
       resetAssistantText: () => {
         assistantText = '';
         assistantTurnsEmitted = 0;

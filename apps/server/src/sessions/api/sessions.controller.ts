@@ -171,8 +171,8 @@ export class SessionsController {
   }
 
   @Delete(':id')
-  delete(@Param('id') id: string) {
-    this.sessions.delete(id);
+  async delete(@Param('id') id: string) {
+    await this.sessions.delete(id);
     return { ok: true };
   }
 

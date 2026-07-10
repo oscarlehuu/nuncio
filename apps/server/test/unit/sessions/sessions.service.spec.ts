@@ -6,13 +6,16 @@ import { tmpdir } from 'node:os';
 import { AgentsModule } from '../../../src/agents/agents.module';
 import { AgentRegistry } from '../../../src/agents/agents.registry';
 import type { AgentProvider } from '../../../src/agents/agents.types';
+import { RetainedEventFlushError } from '../../../src/agents/agents.base-provider';
 import { CursorLocalModule } from '../../../src/cursor-local/cursor-local.module';
 import { DatabaseModule } from '../../../src/db/database.module';
+import { DatabaseService } from '../../../src/db/database.service';
 import { GitModule } from '../../../src/git/git.module';
 import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
 import { SessionsService } from '../../../src/sessions/sessions.service';
+import { registerSessionEventHook } from '../../../src/sessions/domain/session-event-hooks';
 import {
   configureSimulatedCursorEnv,
   withSimulatedCursorProvider,
@@ -42,6 +45,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
   let sessions: SessionsRepository;
   let events: EventsRepository;
   let registry: AgentRegistry;
+  let database: DatabaseService;
   let dataDir: string;
   let repoPath: string;
   let workspacesDir: string;
@@ -66,6 +70,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
     sessions = module.get(SessionsRepository);
     events = module.get(EventsRepository);
     registry = module.get(AgentRegistry);
+    database = module.get(DatabaseService);
   });
 
   afterAll(async () => {
@@ -134,6 +139,42 @@ describe('SessionsService lifecycle (phase 3)', () => {
     expect(service.archive(pausedId).status).toBe('ARCHIVED');
     expect(service.get(idleId)?.status).toBe('ARCHIVED');
     expect(service.get(pausedId)?.status).toBe('ARCHIVED');
+  });
+
+  it('does not notify status hooks when the surrounding transaction rolls back', () => {
+    const id = seedSession('IDLE');
+    const seen: string[] = [];
+    const off = registerSessionEventHook((sessionId, event) => {
+      if (sessionId === id && event.type === 'status') seen.push((event.payload as { status: string }).status);
+    });
+    const originalTransaction = database.transaction.bind(database);
+    database.transaction = ((fn: () => unknown) => originalTransaction(() => {
+      fn();
+      throw new Error('commit failed');
+    })) as DatabaseService['transaction'];
+    try {
+      expect(() => (service as unknown as { transition: (sessionId: string, status: 'PAUSED') => void })
+        .transition(id, 'PAUSED')).toThrow('commit failed');
+      expect(sessions.findById(id)?.status).toBe('IDLE');
+      expect(seen).toEqual([]);
+    } finally {
+      database.transaction = originalTransaction as DatabaseService['transaction'];
+      off();
+    }
+  });
+
+  it('aborts an active verifier before pausing an IDLE session', () => {
+    const id = seedSession('IDLE');
+    const controller = new AbortController();
+    const internals = service as unknown as {
+      verifierControllers: Map<string, AbortController>;
+    };
+    internals.verifierControllers.set(id, controller);
+
+    expect(service.pause(id).status).toBe('PAUSED');
+    expect(controller.signal.aborted).toBe(true);
+
+    internals.verifierControllers.delete(id);
   });
 
   it('rejects archive when session is RUNNING', () => {
@@ -218,6 +259,47 @@ describe('SessionsService lifecycle (phase 3)', () => {
     });
   });
 
+  it('archives a persisted session whose provider is no longer registered', () => {
+    const ghost = sessions.create({
+      id: 'ghost-lifecycle',
+      prompt: 'old provider session',
+      provider: 'ghost-provider',
+    });
+    sessions.updateStatus(ghost.id, 'RUNNING');
+    sessions.updateStatus(ghost.id, 'IDLE');
+
+    expect(service.archive(ghost.id).status).toBe('ARCHIVED');
+  });
+
+  it('retries an unknown-provider archive when its status write fails transiently', async () => {
+    const ghost = sessions.create({
+      id: 'ghost-lifecycle-retry',
+      prompt: 'old provider retry',
+      provider: 'ghost-provider',
+    });
+    sessions.updateStatus(ghost.id, 'RUNNING');
+    sessions.updateStatus(ghost.id, 'IDLE');
+    const originalAppend = events.append.bind(events);
+    let archiveFailures = 1;
+    events.append = ((sessionId: string, type: string, payload: unknown) => {
+      if (type === 'status' && (payload as { status?: string }).status === 'ARCHIVED' && archiveFailures-- > 0) {
+        throw new Error('archive status temporarily unavailable');
+      }
+      return originalAppend(sessionId, type, payload);
+    }) as EventsRepository['append'];
+
+    try {
+      expect(service.archive(ghost.id).status).toBe('IDLE');
+      const started = Date.now();
+      while (service.get(ghost.id)?.status !== 'ARCHIVED' && Date.now() - started < 1_500) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(service.get(ghost.id)?.status).toBe('ARCHIVED');
+    } finally {
+      events.append = originalAppend as EventsRepository['append'];
+    }
+  });
+
   describe('restore', () => {
     it('transitions an ARCHIVED session back to IDLE', () => {
       const id = seedSession('ARCHIVED');
@@ -255,31 +337,447 @@ describe('SessionsService lifecycle (phase 3)', () => {
       expect(service.get(id)).not.toBeNull();
       expect(events.list(id).length).toBeGreaterThan(0);
 
-      service.delete(id);
+      await service.delete(id);
 
       expect(service.get(id)).toBeNull();
       expect(events.list(id)).toHaveLength(0);
     });
 
-    it('rejects delete on a non-archived session (must archive first)', () => {
+    it('rejects delete on a non-archived session (must archive first)', async () => {
       const idleId = seedSession('IDLE');
       const runningId = seedSession('RUNNING');
-      expect(() => service.delete(idleId)).toThrow(BadRequestException);
-      expect(() => service.delete(runningId)).toThrow(BadRequestException);
+      await expect(service.delete(idleId)).rejects.toThrow(BadRequestException);
+      await expect(service.delete(runningId)).rejects.toThrow(BadRequestException);
     });
 
-    it('rejects delete on a missing session', () => {
-      expect(() => service.delete('nope')).toThrow(NotFoundException);
+    it('rejects delete on a missing session', async () => {
+      await expect(service.delete('nope')).rejects.toThrow(NotFoundException);
     });
 
     it('disposes the agent handle before deleting', async () => {
       const id = await seedArchivedWithEvents();
       const provider = registry.get('cursor');
       const disposeSpy = jest.spyOn(provider, 'dispose');
-      service.delete(id);
+      await service.delete(id);
       expect(disposeSpy).toHaveBeenCalledWith(id);
       disposeSpy.mockRestore();
     });
+
+    it('surfaces a permanent media cleanup failure instead of retrying forever', async () => {
+      const id = await seedArchivedWithEvents();
+      const internals = service as unknown as { media?: { deleteSession: (sessionId: string) => void } };
+      const originalMedia = internals.media;
+      let cleanupCalls = 0;
+      internals.media = { deleteSession: () => {
+        cleanupCalls += 1;
+        throw new Error('immutable media directory');
+      } };
+      try {
+        const deleting = service.delete(id).then(
+          () => null,
+          (error: unknown) => error,
+        );
+        const started = Date.now();
+        while (!events.list(id).some((event) => event.type === 'error') && Date.now() - started < 1_000) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        expect(events.list(id)).toContainEqual(expect.objectContaining({
+          type: 'error',
+          payload: expect.objectContaining({ message: expect.stringContaining('immutable media directory') }),
+        }));
+        expect(await deleting).toEqual(
+          expect.objectContaining({ message: expect.stringContaining('immutable media directory') }),
+        );
+        const callsAfterSurface = cleanupCalls;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        expect(cleanupCalls).toBe(callsAfterSurface);
+      } finally {
+        internals.media = originalMedia;
+      }
+    });
+
+    it('bounds the HTTP delete wait while retained cleanup continues in the background', async () => {
+      const id = await seedArchivedWithEvents();
+      let storageBlocked = true;
+      const provider = {
+        id: 'delete-retry',
+        name: 'Delete retry',
+        capabilities: {
+          interrupt: false,
+          modelSwitch: 'none',
+          effortSwitch: 'none',
+          images: false,
+          steerWhileRunning: false,
+        },
+        isAvailable: async () => true,
+        listModels: async () => [],
+        run: async () => undefined,
+        steer: async () => undefined,
+        dispose: () => {
+          if (storageBlocked) throw new RetainedEventFlushError(new Error('storage unavailable'));
+        },
+        bustCache: () => undefined,
+      } as AgentProvider;
+      const originalResolve = registry.resolveForSession.bind(registry);
+      registry.resolveForSession = (() => provider) as AgentRegistry['resolveForSession'];
+      const internals = service as unknown as { deleteRetryWaitMs?: number };
+      internals.deleteRetryWaitMs = 25;
+
+      const deleting = service.delete(id).then(
+        () => 'deleted' as const,
+        (error: unknown) => error,
+      );
+      const outcome = await Promise.race([
+        deleting,
+        new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 80)),
+      ]);
+
+      try {
+        expect(outcome).not.toBe('hung');
+        expect(outcome).toEqual(expect.objectContaining({
+          message: expect.stringContaining('still pending'),
+        }));
+        expect(service.get(id)).not.toBeNull();
+      } finally {
+        storageBlocked = false;
+        const started = Date.now();
+        while (service.get(id) && Date.now() - started < 1_000) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        registry.resolveForSession = originalResolve;
+      }
+      expect(service.get(id)).toBeNull();
+    });
+  });
+
+  it('delegates lifecycle teardown once to provider-owned disposal', () => {
+    const id = seedSession('IDLE');
+    const calls: string[] = [];
+    const provider = {
+      id: 'ordered',
+      name: 'Ordered',
+      capabilities: {
+        interrupt: false,
+        modelSwitch: 'none',
+        effortSwitch: 'none',
+        images: false,
+        steerWhileRunning: false,
+      },
+      isAvailable: async () => true,
+      listModels: async () => [],
+      run: async () => undefined,
+      steer: async () => undefined,
+      dispose: () => calls.push('dispose'),
+      bustCache: () => undefined,
+    } as AgentProvider;
+    const originalResolve = registry.resolveForSession.bind(registry);
+    registry.resolveForSession = (() => provider) as AgentRegistry['resolveForSession'];
+
+    try {
+      service.archive(id);
+      expect(calls).toEqual(['dispose']);
+    } finally {
+      registry.resolveForSession = originalResolve;
+    }
+  });
+
+  it('finishes the lifecycle transition after a retained tail retries successfully', async () => {
+    const id = seedSession('IDLE');
+    const calls: string[] = [];
+    let remainingFailures = 1;
+    const provider = {
+      id: 'flush-failure',
+      name: 'Flush failure',
+      capabilities: {
+        interrupt: false,
+        modelSwitch: 'none',
+        effortSwitch: 'none',
+        images: false,
+        steerWhileRunning: false,
+      },
+      isAvailable: async () => true,
+      listModels: async () => [],
+      run: async () => undefined,
+      steer: async () => undefined,
+      dispose: () => {
+        calls.push('dispose');
+        if (remainingFailures-- > 0) {
+          throw new RetainedEventFlushError(new Error('temporary sqlite failure'));
+        }
+      },
+      bustCache: () => undefined,
+    } as AgentProvider;
+    const originalResolve = registry.resolveForSession.bind(registry);
+    registry.resolveForSession = (() => provider) as AgentRegistry['resolveForSession'];
+
+    try {
+      expect(service.archive(id).status).toBe('IDLE');
+      expect(calls).toEqual(['dispose']);
+      expect(service.get(id)?.status).toBe('IDLE');
+      const started = Date.now();
+      while (service.get(id)?.status !== 'ARCHIVED' && Date.now() - started < 1000) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(service.get(id)?.status).toBe('ARCHIVED');
+      expect(calls.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      registry.resolveForSession = originalResolve;
+    }
+  });
+
+  it('replaces a pending pause retry with a newer archive request', async () => {
+    const id = seedSession('IDLE');
+    let storageAvailable = false;
+    const provider = {
+      id: 'latest-lifecycle-intent',
+      name: 'Latest lifecycle intent',
+      capabilities: {
+        interrupt: false,
+        modelSwitch: 'none',
+        effortSwitch: 'none',
+        images: false,
+        steerWhileRunning: false,
+      },
+      isAvailable: async () => true,
+      listModels: async () => [],
+      run: async () => undefined,
+      steer: async () => undefined,
+      dispose: () => {
+        if (!storageAvailable) throw new RetainedEventFlushError(new Error('tail pending'));
+      },
+      bustCache: () => undefined,
+    } as AgentProvider;
+    const originalResolve = registry.resolveForSession.bind(registry);
+    registry.resolveForSession = (() => provider) as AgentRegistry['resolveForSession'];
+    try {
+      expect(service.pause(id).status).toBe('IDLE');
+      expect(service.archive(id).status).toBe('IDLE');
+      storageAvailable = true;
+      const started = Date.now();
+      while (service.get(id)?.status !== 'ARCHIVED' && Date.now() - started < 1_000) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(service.get(id)?.status).toBe('ARCHIVED');
+    } finally {
+      registry.resolveForSession = originalResolve;
+    }
+  });
+
+  it('flushes and fences retained IDLE events before pausing', async () => {
+    const id = seedSession('IDLE');
+    let disposeCalls = 0;
+    const provider = {
+      id: 'idle-pause-retry',
+      name: 'Idle pause retry',
+      capabilities: {
+        interrupt: false,
+        modelSwitch: 'none',
+        effortSwitch: 'none',
+        images: false,
+        steerWhileRunning: false,
+      },
+      isAvailable: async () => true,
+      listModels: async () => [],
+      run: async () => undefined,
+      steer: async () => undefined,
+      dispose: () => {
+        disposeCalls += 1;
+        if (disposeCalls === 1) throw new RetainedEventFlushError(new Error('idle tail pending'));
+      },
+      bustCache: () => undefined,
+    } as AgentProvider;
+    const originalResolve = registry.resolveForSession.bind(registry);
+    registry.resolveForSession = (() => provider) as AgentRegistry['resolveForSession'];
+
+    try {
+      expect(service.pause(id).status).toBe('IDLE');
+      const started = Date.now();
+      while (service.get(id)?.status !== 'PAUSED' && Date.now() - started < 1_000) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(disposeCalls).toBeGreaterThanOrEqual(2);
+      expect(service.get(id)?.status).toBe('PAUSED');
+    } finally {
+      registry.resolveForSession = originalResolve;
+    }
+  });
+
+  it('retries pause completion when status persistence fails after runtime disposal', async () => {
+    const id = seedSession('RUNNING');
+    let disposeCalls = 0;
+    const provider = {
+      id: 'pause-transition-retry',
+      name: 'Pause transition retry',
+      capabilities: {
+        interrupt: false,
+        modelSwitch: 'none',
+        effortSwitch: 'none',
+        images: false,
+        steerWhileRunning: false,
+      },
+      isAvailable: async () => true,
+      listModels: async () => [],
+      run: async () => undefined,
+      steer: async () => undefined,
+      dispose: () => {
+        disposeCalls += 1;
+      },
+      bustCache: () => undefined,
+    } as AgentProvider;
+    const originalResolve = registry.resolveForSession.bind(registry);
+    const originalAppend = events.append.bind(events);
+    let pauseAppendFailures = 1;
+    registry.resolveForSession = (() => provider) as AgentRegistry['resolveForSession'];
+    events.append = ((sessionId: string, type: string, payload: unknown) => {
+      if (type === 'status' && (payload as { status?: string }).status === 'PAUSED' && pauseAppendFailures-- > 0) {
+        throw new Error('pause status temporarily failed');
+      }
+      return originalAppend(sessionId, type, payload);
+    }) as EventsRepository['append'];
+
+    try {
+      expect(() => service.pause(id)).not.toThrow();
+      expect(service.get(id)?.status).toBe('RUNNING');
+      const started = Date.now();
+      while (service.get(id)?.status !== 'PAUSED' && Date.now() - started < 1_500) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(service.get(id)?.status).toBe('PAUSED');
+      expect(disposeCalls).toBeGreaterThanOrEqual(2);
+    } finally {
+      events.append = originalAppend as EventsRepository['append'];
+      registry.resolveForSession = originalResolve;
+    }
+  });
+
+  it('surfaces a permanent provider disposal failure instead of retrying forever', async () => {
+    const id = seedSession('IDLE');
+    let calls = 0;
+    const provider = {
+      id: 'broken-runtime',
+      name: 'Broken runtime',
+      capabilities: {
+        interrupt: false,
+        modelSwitch: 'none',
+        effortSwitch: 'none',
+        images: false,
+        steerWhileRunning: false,
+      },
+      isAvailable: async () => true,
+      listModels: async () => [],
+      run: async () => undefined,
+      steer: async () => undefined,
+      dispose: () => {
+        calls += 1;
+        throw new Error('runtime cannot dispose');
+      },
+      bustCache: () => undefined,
+    } as AgentProvider;
+    const originalResolve = registry.resolveForSession.bind(registry);
+    registry.resolveForSession = (() => provider) as AgentRegistry['resolveForSession'];
+
+    try {
+      expect(() => service.archive(id)).toThrow('runtime cannot dispose');
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(calls).toBe(1);
+    } finally {
+      registry.resolveForSession = originalResolve;
+    }
+  });
+
+  it('surfaces a permanent provider failure that follows a retained-tail retry', async () => {
+    const id = seedSession('IDLE');
+    let calls = 0;
+    const provider = {
+      id: 'retry-then-broken',
+      name: 'Retry then broken',
+      capabilities: {
+        interrupt: false,
+        modelSwitch: 'none',
+        effortSwitch: 'none',
+        images: false,
+        steerWhileRunning: false,
+      },
+      isAvailable: async () => true,
+      listModels: async () => [],
+      run: async () => undefined,
+      steer: async () => undefined,
+      dispose: () => {
+        calls += 1;
+        if (calls === 1) throw new RetainedEventFlushError(new Error('tail still pending'));
+        throw new Error('runtime failed after retry');
+      },
+      bustCache: () => undefined,
+    } as AgentProvider;
+    const originalResolve = registry.resolveForSession.bind(registry);
+    registry.resolveForSession = (() => provider) as AgentRegistry['resolveForSession'];
+
+    try {
+      expect(service.archive(id).status).toBe('IDLE');
+      const started = Date.now();
+      while (service.get(id)?.status !== 'ERROR' && Date.now() - started < 1_000) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(service.get(id)?.status).toBe('ERROR');
+      expect(events.list(id)).toContainEqual(
+        expect.objectContaining({
+          type: 'error',
+          payload: expect.objectContaining({ message: expect.stringContaining('runtime failed after retry') }),
+        }),
+      );
+    } finally {
+      registry.resolveForSession = originalResolve;
+    }
+  });
+
+  it('retries an atomic lifecycle transition when its status event append fails', async () => {
+    const id = seedSession('IDLE');
+    let disposeCalls = 0;
+    const provider = {
+      id: 'transition-retry',
+      name: 'Transition retry',
+      capabilities: {
+        interrupt: false,
+        modelSwitch: 'none',
+        effortSwitch: 'none',
+        images: false,
+        steerWhileRunning: false,
+      },
+      isAvailable: async () => true,
+      listModels: async () => [],
+      run: async () => undefined,
+      steer: async () => undefined,
+      dispose: () => {
+        disposeCalls += 1;
+        if (disposeCalls === 1) throw new RetainedEventFlushError(new Error('tail still pending'));
+      },
+      bustCache: () => undefined,
+    } as AgentProvider;
+    const originalResolve = registry.resolveForSession.bind(registry);
+    const originalAppend = events.append.bind(events);
+    let statusAppendFailures = 1;
+    registry.resolveForSession = (() => provider) as AgentRegistry['resolveForSession'];
+    events.append = ((sessionId: string, type: string, payload: unknown) => {
+      if (type === 'status' && (payload as { status?: string }).status === 'ARCHIVED' && statusAppendFailures-- > 0) {
+        throw new Error('status append temporarily failed');
+      }
+      return originalAppend(sessionId, type, payload);
+    }) as EventsRepository['append'];
+
+    try {
+      expect(service.archive(id).status).toBe('IDLE');
+      const started = Date.now();
+      while (service.get(id)?.status !== 'ARCHIVED' && Date.now() - started < 1_500) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(service.get(id)?.status).toBe('ARCHIVED');
+      expect(events.list(id).filter(
+        (event) => event.type === 'status' && (event.payload as { status?: string }).status === 'ARCHIVED',
+      )).toHaveLength(1);
+    } finally {
+      events.append = originalAppend as EventsRepository['append'];
+      registry.resolveForSession = originalResolve;
+    }
   });
 
   describe('per-session provider selection', () => {

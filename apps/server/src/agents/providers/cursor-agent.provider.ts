@@ -118,7 +118,7 @@ export class CursorAgentProvider extends BaseAgentProvider {
     }
   }
 
-  dispose(sessionId: string): void {
+  protected disposeRuntime(sessionId: string): void {
     const handle = this.activeSessions.get(sessionId);
     if (!handle) return;
     this.activeSessions.delete(sessionId);
@@ -208,7 +208,7 @@ export class CursorAgentProvider extends BaseAgentProvider {
         if (update.text) {
           active.accumulatedText += update.text;
           this.pushEvent(sessionId, 'assistant_delta', { delta: update.text }, context.emit);
-          this.touchPreview(sessionId, active.accumulatedText);
+          this.touchPreview(sessionId, active.accumulatedText, context.emit);
         }
         return;
       case 'thinking-delta':

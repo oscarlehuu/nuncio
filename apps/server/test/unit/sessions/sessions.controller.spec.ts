@@ -260,12 +260,19 @@ describe('SessionsController', () => {
     expect(restore).toHaveBeenCalledWith('s1');
   });
 
-  it('delete delegates to sessions.delete', () => {
-    const del = jest.fn();
+  it('delete delegates to sessions.delete and acknowledges only after completion', async () => {
+    let finishDelete: () => void = () => undefined;
+    const del = jest.fn(() => new Promise<void>((resolve) => { finishDelete = resolve; }));
     const service = { delete: del } as never;
     const controller = new SessionsController(service);
 
-    controller.delete('s1');
+    let result: unknown = 'pending';
+    const deleting = controller.delete('s1').then((value) => { result = value; });
+    await Promise.resolve();
+    expect(result).toBe('pending');
+    finishDelete();
+    await deleting;
+    expect(result).toEqual({ ok: true });
     expect(del).toHaveBeenCalledWith('s1');
   });
 

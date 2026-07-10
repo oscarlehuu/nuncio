@@ -207,7 +207,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
     }
   }
 
-  dispose(sessionId: string): void {
+  protected disposeRuntime(sessionId: string): void {
     const active = this.activeSessions.get(sessionId);
     if (!active) return;
     const activeTurnId = active.activeTurnId;
@@ -221,7 +221,6 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
         .catch(() => undefined);
     }
 
-    this.flushDeltas(sessionId);
     this.settleActiveSession(
       sessionId,
       active,
@@ -427,7 +426,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
       if (itemId !== undefined) active.currentAgentItemId = itemId;
       active.accumulatedText += piece;
       this.pushEvent(sessionId, 'assistant_delta', { delta: piece }, active.currentEmit);
-      this.touchPreview(sessionId, active.accumulatedText);
+      this.touchPreview(sessionId, active.accumulatedText, active.currentEmit);
       return;
     }
 
