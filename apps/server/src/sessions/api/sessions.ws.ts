@@ -208,6 +208,7 @@ export function attachSessionsWebSocketServer(
         let liveUnsub: () => void = () => {};
         let dropped = false;
         let replaying = true;
+        let acknowledged = false;
         let highWater = since;
         const pendingLive: SessionEvent[] = [];
         let pendingLiveBytes = 0;
@@ -255,6 +256,7 @@ export function attachSessionsWebSocketServer(
           // The subscription is live now. Acknowledge liveness before a possibly
           // large replay so foreground health checks cannot time out on backlog.
           send(ws, { id, result: { ok: true } });
+          acknowledged = true;
 
           for (const event of sessions.getEvents(
             sessionId,
@@ -274,7 +276,13 @@ export function attachSessionsWebSocketServer(
           replaying = false;
           liveUnsub();
           subscriptions.delete(sessionId);
-          send(ws, { id, error: errorOf(error) });
+          if (acknowledged) {
+            // The client already considers this subscription healthy. Closing is
+            // the only unambiguous signal that forces cursor-based recovery.
+            setImmediate(() => ws.terminate());
+          } else {
+            send(ws, { id, error: errorOf(error) });
+          }
         }
         return;
       }

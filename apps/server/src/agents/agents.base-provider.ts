@@ -403,30 +403,26 @@ export abstract class BaseAgentProvider implements AgentProvider {
     const retainedTimer = this.retainedEventTimers.get(sessionId);
     if (retainedTimer) clearTimeout(retainedTimer);
     this.retainedEventTimers.delete(sessionId);
-    this.retainedEvents.delete(sessionId);
+    const pending: RetainedEvent[] = [];
+    if (buffered) {
+      pending.push({
+        type: buffered.type,
+        payload: { ...buffered.base, delta: buffered.delta },
+        emit: buffered.emit,
+      });
+    }
+    pending.push(...(this.retainedEvents.get(sessionId) ?? []));
     try {
       this.sessions.updateStatus(sessionId, 'ERROR');
     } catch {
       // Storage/session state may already be unavailable; fencing still bounds memory.
     }
-    const terminal: RetainedEvent[] = [
+    pending.push(
       { type: 'error', payload: { message }, emit },
       { type: 'status', payload: { status: 'ERROR' }, emit },
-    ];
-    const pending: RetainedEvent[] = [];
-    for (const retained of terminal) {
-      try {
-        const event = this.events.append(sessionId, retained.type, retained.payload);
-        if (event.seq <= 0) throw new Error('Overflow terminal event did not commit');
-        retained.emit?.(event);
-      } catch {
-        pending.push(retained);
-      }
-    }
-    if (pending.length) {
-      this.retainedEvents.set(sessionId, pending);
-      this.scheduleRetainedEventFlush(sessionId);
-    }
+    );
+    this.retainedEvents.set(sessionId, pending);
+    this.scheduleRetainedEventFlush(sessionId);
     this.invalidateRun(sessionId);
     try {
       this.disposeRuntime(sessionId);
@@ -536,8 +532,10 @@ export abstract class BaseAgentProvider implements AgentProvider {
     this.runGenerations.set(sessionId, generation);
     const runContext = this.guardRunContext(sessionId, generation, context);
     try {
-      this.sessions.updateStatus(sessionId, 'RUNNING');
-      this.pushEvent(sessionId, 'status', { status: 'RUNNING' }, runContext.emit);
+      if (this.sessions.findById(sessionId)?.status !== 'RUNNING') {
+        this.sessions.updateStatus(sessionId, 'RUNNING');
+        this.pushEvent(sessionId, 'status', { status: 'RUNNING' }, runContext.emit);
+      }
       const images = eventImagesFromAttachments(runContext.attachments);
       // steerMeta (e.g. an auto-steer's origin/retryId) is stamped onto the
       // steer_message so consumers classify it explicitly, never by adjacency.

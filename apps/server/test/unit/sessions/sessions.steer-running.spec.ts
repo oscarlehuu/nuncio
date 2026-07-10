@@ -169,7 +169,7 @@ describe('SessionsService steer while RUNNING', () => {
     const provider = stubProvider({
       steer: async (sessionId: string, message: string, context: AgentRunContext) => {
         steerCalls.push(message);
-        sessions.updateStatus(sessionId, 'RUNNING');
+        if (sessions.findById(sessionId)?.status !== 'RUNNING') sessions.updateStatus(sessionId, 'RUNNING');
         if (steerCalls.length === 1) await runGate;
         sessions.updateStatus(sessionId, 'IDLE');
         context.emit?.(events.append(sessionId, 'status', { status: 'IDLE' }));
@@ -195,6 +195,30 @@ describe('SessionsService steer while RUNNING', () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     expect(steerCalls).toEqual(['first message', 'second message']);
+  });
+
+  it('claims RUNNING before provider availability so concurrent IDLE steers cannot overlap', async () => {
+    const created = sessions.create({ prompt: 'concurrent idle steers', provider: 'cursor' });
+    sessions.updateStatus(created.id, 'RUNNING');
+    sessions.updateStatus(created.id, 'IDLE');
+    const steer = jest.fn(async () => undefined);
+    const provider = stubProvider({ steer });
+    registry.resolveForSession = (() => provider) as AgentRegistry['resolveForSession'];
+    let releaseAvailability: () => void = () => undefined;
+    registry.resolveAvailableForSession = (async () => {
+      await new Promise<void>((resolve) => { releaseAvailability = resolve; });
+      return provider;
+    }) as AgentRegistry['resolveAvailableForSession'];
+
+    const first = service.steer(created.id, 'first');
+    await Promise.resolve();
+    expect(sessions.findById(created.id)?.status).toBe('RUNNING');
+    const second = service.steer(created.id, 'second');
+    releaseAvailability();
+    await Promise.all([first, second]);
+
+    expect(steer).toHaveBeenCalledTimes(1);
+    expect(events.list(created.id).filter((event) => event.type === 'steer_queued')).toHaveLength(1);
   });
 
   it('dedupes steer_message against hydrated user_message on transcript refresh', () => {
@@ -285,7 +309,10 @@ describe('SessionsService steer while RUNNING', () => {
 
   it('forces a hung run to IDLE when interrupt does not unwind it, then drains the queue', async () => {
     const id = seedRunning();
-    const steer = jest.fn(async (_sessionId: string, _message: string) => undefined);
+    const steer = jest.fn(async (sessionId: string, _message: string, context: AgentRunContext) => {
+      sessions.updateStatus(sessionId, 'IDLE');
+      context.emit?.(events.append(sessionId, 'status', { status: 'IDLE' }));
+    });
     installProvider(
       stubProvider({
         capabilities: {
@@ -527,7 +554,7 @@ describe('SessionsService steer while RUNNING', () => {
         ).onAgentEvent(id, settled);
       },
       steer: async (sessionId: string) => {
-        sessions.updateStatus(sessionId, 'RUNNING');
+        if (sessions.findById(sessionId)?.status !== 'RUNNING') sessions.updateStatus(sessionId, 'RUNNING');
         await new Promise<void>((resolve) => {
           releaseReplacement = resolve;
         });
@@ -556,7 +583,7 @@ describe('SessionsService steer while RUNNING', () => {
     installProvider(
       stubProvider({
         run: async (sessionId: string, _prompt: string, context: AgentRunContext) => {
-          sessions.updateStatus(sessionId, 'RUNNING');
+          if (sessions.findById(sessionId)?.status !== 'RUNNING') sessions.updateStatus(sessionId, 'RUNNING');
           context.emit?.(events.append(sessionId, 'status', { status: 'RUNNING' }));
           context.emit?.(events.append(sessionId, 'assistant_delta', { delta: 'partial' }));
           await new Promise(() => undefined);
@@ -584,7 +611,7 @@ describe('SessionsService steer while RUNNING', () => {
   it('retries only the stalled-run IDLE transition after a transient status append failure', async () => {
     installProvider(stubProvider({
       run: async (sessionId: string, _prompt: string, context: AgentRunContext) => {
-        sessions.updateStatus(sessionId, 'RUNNING');
+        if (sessions.findById(sessionId)?.status !== 'RUNNING') sessions.updateStatus(sessionId, 'RUNNING');
         context.emit?.(events.append(sessionId, 'status', { status: 'RUNNING' }));
         await new Promise(() => undefined);
       },
@@ -616,7 +643,7 @@ describe('SessionsService steer while RUNNING', () => {
     installProvider(
       stubProvider({
         run: async (sessionId: string, _prompt: string, context: AgentRunContext) => {
-          sessions.updateStatus(sessionId, 'RUNNING');
+          if (sessions.findById(sessionId)?.status !== 'RUNNING') sessions.updateStatus(sessionId, 'RUNNING');
           context.emit?.(events.append(sessionId, 'status', { status: 'RUNNING' }));
           await new Promise(() => undefined);
         },

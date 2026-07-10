@@ -463,8 +463,17 @@ export class SessionsService implements OnModuleDestroy {
     }
 
     this.refreshTranscriptIfNeeded(current);
-
-    const provider = await this.agents.resolveAvailableForSession(current);
+    // Claim RUNNING before the first await. A concurrent steer now observes the
+    // claim and follows the live-steer/queue path instead of starting a second
+    // provider turn that fences the first generation.
+    this.transition(id, 'RUNNING');
+    let provider: AgentProvider;
+    try {
+      provider = await this.agents.resolveAvailableForSession(current);
+    } catch (error) {
+      if (this.sessions.findById(id)?.status === 'RUNNING') this.transition(id, 'IDLE');
+      throw error;
+    }
 
     this.locallyProducing.add(id);
     try {

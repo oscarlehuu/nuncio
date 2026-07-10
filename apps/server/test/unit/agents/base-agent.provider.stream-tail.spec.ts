@@ -510,6 +510,9 @@ describe('BaseAgentProvider streamed-tail preservation', () => {
         for (let i = 0; i < 200; i += 1) overlapping.emitFrom(0, 'b'.repeat(2000));
       }).toThrow('Retained event buffer exceeded');
       expect(overlapping.released).toBe(1);
+      events.append = originalAppend as EventsRepository['append'];
+      overlapping.flushPendingEvents(created.id);
+      expect(events.list(created.id).some((event) => event.type === 'assistant_delta')).toBe(true);
       expect(events.list(created.id)).toContainEqual(
         expect.objectContaining({ type: 'error', payload: expect.objectContaining({ message: expect.stringContaining('Retained event buffer exceeded') }) }),
       );

@@ -206,6 +206,18 @@ describe('sessions WS relay', () => {
     await client.close();
   });
 
+  it('terminates an acknowledged socket when replay fails', async () => {
+    const fake = makeFakeSessions();
+    fake.getEvents = () => { throw new Error('replay storage failed'); };
+    const port = await startServer(fake);
+    const client = await connect(port);
+    let closed = false;
+    client.ws.addEventListener('close', () => { closed = true; });
+    client.send({ id: 1, method: 'subscribe', params: { sessionId: 'sess-1', since: 0 } });
+    await client.waitFor(() => client.responses.length === 1 && closed);
+    expect(client.responses[0]).toEqual({ id: 1, result: { ok: true } });
+  });
+
   it('buffers live events that land while the cursor replay is being read', async () => {
     const fake = makeFakeSessions([1, 2, 3]);
     const originalGetEvents = fake.getEvents.bind(fake);
