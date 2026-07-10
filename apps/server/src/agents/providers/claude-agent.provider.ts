@@ -252,12 +252,11 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     await active.query.applyFlagSettings({ effortLevel });
   }
 
-  dispose(sessionId: string): void {
+  protected disposeRuntime(sessionId: string): void {
     const active = this.activeSessions.get(sessionId);
     if (!active) return;
     this.activeSessions.delete(sessionId);
     this.interruptedSessions.delete(sessionId);
-    this.flushDeltas(sessionId);
     // A completed turn leaves the SDK-spawned CLI subprocess resident; aborting
     // is the only reliable teardown — it kills the child and unblocks the
     // in-flight generator. Closing the input queue alone does not reap it.
@@ -314,12 +313,39 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
       throw new Error('Runtime policy cannot change on an active Claude session.');
     }
     const safeContext = this.policySafeContext(context);
-    this.pushEvent(sessionId, 'steer_message', { text: message }, context.emit);
+    const generation = this.currentRunGeneration(sessionId);
+    const payload = { text: message };
+    // Reservation is durable input intent, not proof that the live SDK accepted it.
+    this.pushEvent(sessionId, 'steer_reserved', payload, context.emit);
+    try {
+      await this.waitForPendingEvents(sessionId);
+    } catch (error) {
+      if (error instanceof AgentRunCancelledError) return false;
+      throw error;
+    }
+    if (
+      !this.isCurrentRunGeneration(sessionId, generation) ||
+      this.activeSessions.get(sessionId) !== active ||
+      this.sessions.findById(sessionId)?.status !== 'RUNNING'
+    ) return false;
     // priority 'now' cuts the in-flight turn short and redirects; the truncated
     // turn emits its own terminal result that consume() must not treat as the
     // run's end.
     active.pendingRedirects += 1;
-    active.input.push(this.buildUserMessage(message, safeContext, true));
+    try {
+      active.input.push(this.buildUserMessage(message, safeContext, true));
+    } catch {
+      active.pendingRedirects -= 1;
+      return false;
+    }
+    this.pushEvent(sessionId, 'steer_message', payload, context.emit);
+    try {
+      await this.waitForPendingEvents(sessionId);
+    } catch (error) {
+      // Once the SDK accepted the redirect, a concurrent dispose must not cause
+      // the caller to enqueue and execute the same input a second time.
+      if (!(error instanceof AgentRunCancelledError)) throw error;
+    }
     return true;
   }
 
@@ -617,7 +643,9 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
           active.openTools.set(callId, mapped.payload.tool as string);
         }
         this.pushEvent(sessionId, mapped.type, mapped.payload, context.emit);
-        if (mapped.type === 'assistant_delta') this.touchPreview(sessionId, active.delta.accumulatedText);
+        if (mapped.type === 'assistant_delta') {
+          this.touchPreview(sessionId, active.delta.accumulatedText, context.emit);
+        }
       }
       return false;
     }

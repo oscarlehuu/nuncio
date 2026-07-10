@@ -190,6 +190,58 @@ describe('ClaudeAgentProvider', () => {
     expect(sessions.findById(created.id)?.status).toBe('IDLE');
   });
 
+  it('returns a persisted steer to the normal queue when the live turn ends during recovery', async () => {
+    let finishTurn: () => void = () => undefined;
+    provider.queryFactory = () => ({
+      async interrupt() {},
+      async setModel() {},
+      async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+        yield { type: 'system', subtype: 'init', session_id: 't-stale-steer' };
+        await new Promise<void>((resolve) => { finishTurn = resolve; });
+        yield { type: 'result', subtype: 'success', result: '' };
+      },
+    });
+    const created = sessions.create({ prompt: 'long turn', provider: 'claude', model: 'claude:haiku' });
+    const run = provider.run(created.id, created.prompt, {});
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const originalAppend = events.append.bind(events);
+    let blockReservation = true;
+    events.append = ((sessionId: string, type: string, payload: unknown, notify?: boolean) => {
+      if (type === 'steer_reserved' && blockReservation) throw new Error('storage unavailable');
+      return originalAppend(sessionId, type, payload, notify);
+    }) as EventsRepository['append'];
+
+    const steering = provider.steerMidRun(created.id, 'queue me after recovery', {});
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      finishTurn();
+      const retained = (provider as unknown as {
+        retainedEvents: Map<string, Array<{ type: string; payload: unknown }>>;
+      }).retainedEvents;
+      const started = Date.now();
+      while (
+        !retained.get(created.id)?.some((event) =>
+          event.type === 'status' && (event.payload as { status?: string }).status === 'IDLE') &&
+        Date.now() - started < 1_000
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      blockReservation = false;
+
+      expect(await steering).toBe(false);
+      await run;
+      expect(events.list(created.id).some((event) => event.type === 'steer_message')).toBe(false);
+      expect(events.list(created.id).some((event) => event.type === 'steer_reserved')).toBe(true);
+      expect(sessions.findById(created.id)?.status).toBe('IDLE');
+    } finally {
+      blockReservation = false;
+      events.append = originalAppend as EventsRepository['append'];
+      finishTurn();
+      await Promise.allSettled([steering, run]);
+    }
+  });
+
   it('two priority steers in one turn each swallow their truncated terminal', async () => {
     // Two `priority:'now'` steers cut the in-flight turn short twice. Each
     // truncated terminal is a redirect the run must swallow; only the FINAL

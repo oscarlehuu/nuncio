@@ -9,6 +9,7 @@ import {
 
 /** Initial window for the full session view; older history pages in on demand. */
 export const DETAIL_EVENT_TAIL = 1000;
+const BOOTSTRAP_RELAY_FALLBACK_MS = 1_000;
 
 type ScheduledFlush = {
   id: number;
@@ -50,7 +51,8 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const sinceRef = useRef(0);
   const subscriptionRef = useRef<SessionSubscription | null>(null);
-  const cancelledRef = useRef(false);
+  const generationRef = useRef(0);
+  const requestRef = useRef(0);
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
   const baseRef = useRef(base);
@@ -114,62 +116,89 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
       : fetchEvents(id, 0, baseRef.current);
   }, []);
 
-  const connect = useCallback(() => {
+  const isCurrent = useCallback((id: string, generation: number) => (
+    generationRef.current === generation && sessionIdRef.current === id
+  ), []);
+
+  const connect = useCallback((generation = generationRef.current) => {
     const activeSessionId = sessionIdRef.current;
-    if (!activeSessionId || cancelledRef.current) return;
+    if (!activeSessionId || !isCurrent(activeSessionId, generation)) return;
     subscriptionRef.current?.close();
     subscriptionRef.current = subscribeSessionEvents({
       url: sessionRelayUrl(baseRef.current),
       sessionId: activeSessionId,
       since: sinceRef.current,
+      tail: tailRef.current,
       onEvent,
     });
-  }, [onEvent]);
+  }, [isCurrent, onEvent]);
 
   const refetch = useCallback(async () => {
-    if (!sessionId || cancelledRef.current) return;
-    const initial = await fetchInitial(sessionId);
-    if (cancelledRef.current) return;
+    const id = sessionIdRef.current;
+    const generation = generationRef.current;
+    const request = ++requestRef.current;
+    if (!id) return;
+    const initial = await fetchInitial(id);
+    if (!isCurrent(id, generation) || requestRef.current !== request) return;
+    const pending = pendingEventsRef.current;
     cancelPendingEventFlush();
-    replaceEvents(initial);
-    sinceRef.current = initial.reduce((max, e) => Math.max(max, e.seq), 0);
-    connect();
-  }, [sessionId, connect, fetchInitial, replaceEvents, cancelPendingEventFlush]);
+    updateEvents((current) => mergeEvents(mergeEvents(current, pending), initial));
+    const fetchedSeq = initial.reduce((max, e) => Math.max(max, e.seq), 0);
+    sinceRef.current = Math.max(sinceRef.current, fetchedSeq);
+    connect(generation);
+  }, [connect, fetchInitial, isCurrent, updateEvents, cancelPendingEventFlush]);
 
   /** Page one window of history in before the oldest loaded event. */
   const loadEarlier = useCallback(async () => {
     const id = sessionIdRef.current;
-    if (!id || cancelledRef.current || loadingEarlierRef.current) return;
+    const generation = generationRef.current;
+    if (!id || loadingEarlierRef.current) return;
     const oldestSeq = eventsRef.current[0]?.seq ?? 0;
     if (oldestSeq <= 1) return;
     loadingEarlierRef.current = true;
     try {
       const earlier = await fetchEvents(id, 0, baseRef.current, { before: oldestSeq });
-      if (cancelledRef.current || sessionIdRef.current !== id) return;
+      if (!isCurrent(id, generation)) return;
       updateEvents((prev) => mergeEvents(prev, earlier));
     } finally {
       loadingEarlierRef.current = false;
     }
-  }, [updateEvents]);
+  }, [isCurrent, updateEvents]);
 
   useEffect(() => {
+    const generation = ++generationRef.current;
+    const request = ++requestRef.current;
+    cancelPendingEventFlush();
+    replaceEvents([]);
+    sinceRef.current = 0;
+    loadingEarlierRef.current = false;
+
     if (!sessionId) {
-      replaceEvents([]);
-      sinceRef.current = 0;
-      cancelledRef.current = false;
-      return;
+      return () => {
+        if (generationRef.current === generation) generationRef.current += 1;
+      };
     }
 
-    cancelledRef.current = false;
-    let cancelled = false;
+    const ensureConnected = () => {
+      if (isCurrent(sessionId, generation) && !subscriptionRef.current) connect(generation);
+    };
+    const fallbackTimer = window.setTimeout(ensureConnected, BOOTSTRAP_RELAY_FALLBACK_MS);
 
-    fetchInitial(sessionId).then((initial) => {
-      if (cancelled) return;
-      cancelPendingEventFlush();
-      replaceEvents(initial);
-      sinceRef.current = initial.reduce((max, e) => Math.max(max, e.seq), 0);
-      connect();
-    });
+    void fetchInitial(sessionId)
+      .then((initial) => {
+        if (!isCurrent(sessionId, generation) || requestRef.current !== request) return;
+        updateEvents((current) => mergeEvents(current, initial));
+        const fetchedSeq = initial.reduce((max, e) => Math.max(max, e.seq), 0);
+        sinceRef.current = Math.max(sinceRef.current, fetchedSeq);
+      })
+      .catch(() => {
+        // REST is only a bootstrap optimization. The relay still subscribes
+        // from seq 0 so durable replay can recover a transient fetch failure.
+      })
+      .finally(() => {
+        window.clearTimeout(fallbackTimer);
+        ensureConnected();
+      });
 
     const onVisibility = () => {
       if (document.visibilityState !== 'visible') return;
@@ -179,14 +208,14 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
     document.addEventListener('visibilitychange', onVisibility);
 
     return () => {
-      cancelled = true;
-      cancelledRef.current = true;
+      if (generationRef.current === generation) generationRef.current += 1;
+      window.clearTimeout(fallbackTimer);
       document.removeEventListener('visibilitychange', onVisibility);
       subscriptionRef.current?.close();
       subscriptionRef.current = null;
       cancelPendingEventFlush();
     };
-  }, [sessionId, base, connect, fetchInitial, replaceEvents, cancelPendingEventFlush]);
+  }, [sessionId, base, connect, fetchInitial, isCurrent, replaceEvents, updateEvents, cancelPendingEventFlush]);
 
   const hasEarlier = (events[0]?.seq ?? 0) > 1;
 

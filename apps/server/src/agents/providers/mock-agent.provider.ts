@@ -91,7 +91,7 @@ export class MockAgentProvider extends BaseAgentProvider {
     for (let i = 0; i < reply.length; i += 8) {
       const delta = reply.slice(i, i + 8);
       this.pushEvent(sessionId, 'assistant_delta', { delta }, context.emit);
-      this.touchPreview(sessionId, reply.slice(0, i + 8));
+      this.touchPreview(sessionId, reply.slice(0, i + 8), context.emit);
       await sleep(30);
     }
 

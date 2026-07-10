@@ -443,6 +443,34 @@ describe('CodexAgentProvider', () => {
     );
   });
 
+  it('fans out a Codex title notification that arrives just after turn completion', async () => {
+    const created = sessions.create({
+      id: 'session-codex-late-title',
+      prompt: 'Finish before naming this thread',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+    });
+    const emitted: Array<{ type: string; payload: unknown }> = [];
+
+    await provider.run(created.id, created.prompt, {
+      emit: (event) => emitted.push(event),
+      cwd: '/tmp/project',
+      model: created.model,
+    });
+    fakeClient.emitNotification({
+      method: 'thread/name/updated',
+      params: { threadId: 'codex-thread-1', threadName: 'Late but valid title' },
+    });
+
+    expect(sessions.findById(created.id)?.title).toBe('Late but valid title');
+    expect(emitted).toContainEqual(
+      expect.objectContaining({
+        type: 'session_title',
+        payload: { title: 'Late but valid title' },
+      }),
+    );
+  });
+
   it('flushes slow Codex deltas while the turn is still running', async () => {
     fakeClient.autoCompleteTurn = false;
     fakeClient.emitApprovalRequests = false;

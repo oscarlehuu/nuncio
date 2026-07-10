@@ -77,6 +77,33 @@ describe('subscribeSessionEvents', () => {
     expect(seen).toEqual([4, 5]);
   });
 
+  it('requests a bounded tail only while the cursor is still zero', () => {
+    subscribeSessionEvents({
+      url: 'ws://x/api/sessions/ws',
+      sessionId: 's1',
+      since: 0,
+      tail: 50,
+      onEvent: () => {},
+      webSocketFactory: factory,
+    } as Parameters<typeof subscribeSessionEvents>[0] & { tail: number });
+    const ws = FakeSocket.instances[0];
+    ws.open();
+    expect(ws.sent[0]).toMatchObject({
+      method: 'subscribe',
+      params: { sessionId: 's1', since: 0, tail: 50 },
+    });
+
+    ws.push({ channel: 's1', event: event(51) });
+    ws.push({ channel: 's1', behind: true });
+    expect(ws.sent[ws.sent.length - 1]).toEqual(
+      expect.objectContaining({
+        method: 'subscribe',
+        params: { sessionId: 's1', since: 51 },
+      }),
+    );
+    expect((ws.sent[ws.sent.length - 1]!.params as Record<string, unknown>).tail).toBeUndefined();
+  });
+
   it('reconnects after a drop and resubscribes from the last seen seq', () => {
     const seen: number[] = [];
     subscribeSessionEvents({
@@ -186,6 +213,41 @@ describe('subscribeSessionEvents', () => {
     expect(second.sent[0]).toMatchObject({ method: 'subscribe', params: { since: 2 } });
   });
 
+  it('confirms a live resubscribe without disturbing another in-flight RPC', async () => {
+    const sub = subscribeSessionEvents({
+      url: 'ws://x',
+      sessionId: 's1',
+      onEvent: () => {},
+      webSocketFactory: factory,
+    });
+    const ws = FakeSocket.instances[0];
+    ws.open();
+    const steering = sub.call('steer', { sessionId: 's1', message: 'keep me' });
+    const steerRequest = ws.sent[ws.sent.length - 1]!;
+    const health = sub.confirmResync(100);
+    const subscribeRequest = ws.sent[ws.sent.length - 1]!;
+
+    ws.push({ id: subscribeRequest.id, result: { ok: true } });
+    await expect(health).resolves.toBe(true);
+    ws.push({ id: steerRequest.id, result: { status: 'RUNNING' } });
+    await expect(steering).resolves.toEqual({ status: 'RUNNING' });
+  });
+
+  it('reports a half-open live resubscribe when its acknowledgement times out', async () => {
+    const sub = subscribeSessionEvents({
+      url: 'ws://x',
+      sessionId: 's1',
+      onEvent: () => {},
+      webSocketFactory: factory,
+    });
+    FakeSocket.instances[0].open();
+
+    const health = sub.confirmResync(100);
+    vi.advanceTimersByTime(100);
+
+    await expect(health).resolves.toBe(false);
+  });
+
   it('correlates RPC responses and rejects on server error', async () => {
     const sub = subscribeSessionEvents({
       url: 'ws://x',
@@ -268,6 +330,29 @@ describe('subscribeSessionEvents', () => {
     FakeSocket.instances[0].open();
     sub.close(); // deliberate teardown — an owner that reopens on close must not loop
     expect(closes).toBe(0);
+  });
+
+  it('rejects pending RPCs when intentional close settles asynchronously', async () => {
+    const sub = subscribeSessionEvents({
+      url: 'ws://x',
+      sessionId: 's1',
+      onEvent: () => {},
+      webSocketFactory: factory,
+    });
+    const ws = FakeSocket.instances[0];
+    ws.open();
+    ws.close = () => {
+      ws.closed = true;
+    };
+    const call = sub.call('steer', { sessionId: 's1', message: 'hi' });
+    let outcome: unknown = 'pending';
+    void call.catch((error) => { outcome = error; });
+
+    sub.close();
+    ws.fire('close', {});
+    await Promise.resolve();
+
+    expect(outcome).toMatchObject({ message: 'connection closed' });
   });
 
   it('fires onClose on a socket drop and still self-reconnects by default', () => {

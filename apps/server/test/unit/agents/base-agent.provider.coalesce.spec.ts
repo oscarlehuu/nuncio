@@ -142,6 +142,62 @@ describe('BaseAgentProvider delta coalescing', () => {
     expect(events.list(created.id).filter((e) => e.type === 'assistant_delta')).toHaveLength(0);
   });
 
+  it('keeps a synchronously failed delta append retryable and emits it exactly once', () => {
+    const created = sessions.create({ prompt: 'retry flush', provider: 'scripted' });
+    const emitted: Parameters<NonNullable<EventEmitter>>[0][] = [];
+    const originalAppend = events.append.bind(events);
+    let failNextDelta = true;
+    events.append = ((sessionId: string, type: string, payload: unknown) => {
+      if (type === 'assistant_delta' && failNextDelta) {
+        failNextDelta = false;
+        throw new Error('temporary sqlite failure');
+      }
+      return originalAppend(sessionId, type, payload);
+    }) as EventsRepository['append'];
+
+    try {
+      provider.bufferDelta(created.id, 'retry me', (event) => emitted.push(event));
+      expect(() => provider.flushPendingEvents(created.id)).toThrow('temporary sqlite failure');
+      provider.flushPendingEvents(created.id);
+    } finally {
+      events.append = originalAppend as EventsRepository['append'];
+    }
+
+    const deltas = events.list(created.id).filter((event) => event.type === 'assistant_delta');
+    expect(deltas).toHaveLength(1);
+    expect((deltas[0]!.payload as { delta: string }).delta).toBe('retry me');
+    expect(emitted.filter((event) => event.type === 'assistant_delta')).toHaveLength(1);
+  });
+
+  it('retries a quiet-timer append failure without losing or duplicating the tail', async () => {
+    const created = sessions.create({ prompt: 'timer retry', provider: 'scripted' });
+    const originalAppend = events.append.bind(events);
+    let failures = 1;
+    events.append = ((sessionId: string, type: string, payload: unknown) => {
+      if (type === 'assistant_delta' && failures-- > 0) {
+        throw new Error('temporary timer failure');
+      }
+      return originalAppend(sessionId, type, payload);
+    }) as EventsRepository['append'];
+
+    try {
+      provider.bufferDelta(created.id, 'timer tail');
+      const started = Date.now();
+      while (
+        events.list(created.id).filter((event) => event.type === 'assistant_delta').length === 0 &&
+        Date.now() - started < 1000
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    } finally {
+      events.append = originalAppend as EventsRepository['append'];
+    }
+
+    const deltas = events.list(created.id).filter((event) => event.type === 'assistant_delta');
+    expect(deltas).toHaveLength(1);
+    expect((deltas[0]!.payload as { delta: string }).delta).toBe('timer tail');
+  });
+
   it('does not merge thinking deltas into assistant deltas', async () => {
     provider.script = [
       { type: 'thinking_delta', payload: { thinkingId: 't1', delta: 'plan ' } },

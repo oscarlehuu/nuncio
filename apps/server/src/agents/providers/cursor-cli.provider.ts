@@ -52,7 +52,7 @@ export class CursorCliProvider extends BaseAgentProvider {
     return [];
   }
 
-  dispose(sessionId: string): void {
+  protected disposeRuntime(sessionId: string): void {
     const proc = this.activeProcesses.get(sessionId);
     if (proc) {
       proc.kill();
@@ -215,7 +215,7 @@ export class CursorCliProvider extends BaseAgentProvider {
         break;
       case 'assistant_message':
         this.pushEvent(sessionId, 'assistant_message', { text: event.text }, context.emit);
-        this.touchPreview(sessionId, event.text);
+        this.touchPreview(sessionId, event.text, context.emit);
         break;
       case 'tool_start': {
         const userInputPayload = buildUserInputRequestedPayload(

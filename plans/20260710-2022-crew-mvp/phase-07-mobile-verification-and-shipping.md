@@ -34,7 +34,7 @@ synchronized baseline documentation. Stable-release promotion is tracked separat
 ## Final local proof
 
 - [x] Server Crew unit suite: 194 passed; Crew HTTP e2e: 10 passed.
-- [x] Full server e2e: 39 passed; core: 345; web: 850; mobile: 74; scripts: 126.
+- [x] Full server e2e: 39 passed; core: 349; web: 859; mobile: 87; scripts: 126.
 - [x] `bun run gate:full` passed with build, lint/typecheck, unit, e2e, and browser layers.
 - [x] Headless real-browser smoke passed on desktop and narrow layouts without taking over the
   user's visible browser; Solo lifecycle and Crew pause/resume through terminal success passed.

@@ -6,7 +6,11 @@ import { SessionsRepository } from '../../sessions/persistence/sessions.reposito
 import { SettingsService } from '../../settings/settings.service';
 import type { ModelOptionDescriptorDto, ModelOptionsMap } from '../../models/model-options.types';
 import type { ModelProviderDto } from '../../models/models.types';
-import { AgentRunCancelledError, BaseAgentProvider } from '../agents.base-provider';
+import {
+  AgentRunCancelledError,
+  BaseAgentProvider,
+  RetainedEventFlushError,
+} from '../agents.base-provider';
 import type { AgentRunContext, EventEmitter } from '../agents.types';
 import {
   runtimePolicyKey,
@@ -226,7 +230,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
     }
   }
 
-  dispose(sessionId: string): void {
+  protected disposeRuntime(sessionId: string): void {
     const active = this.activeSessions.get(sessionId);
     if (!active) return;
     const activeTurnId = active.activeTurnId;
@@ -240,7 +244,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
         .catch(() => undefined);
     }
 
-    this.detachActiveSession(sessionId, active);
+    this.closeActiveSession(sessionId, active);
   }
 
   async interrupt(sessionId: string): Promise<void> {
@@ -255,18 +259,20 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
       });
     }
 
-    this.detachActiveSession(sessionId, active);
-    const current = this.sessions.findById(sessionId);
-    if (current?.status === 'RUNNING') {
-      this.sessions.updateStatus(sessionId, 'IDLE');
-      this.pushEvent(sessionId, 'status', { status: 'IDLE' }, active.currentEmit);
+    try {
+      this.flushPendingEvents(sessionId);
+    } catch (error) {
+      // The accepted tail remains queued on RetainedEventFlushError. Detach the
+      // acknowledged SDK turn and queue IDLE behind that tail instead of
+      // leaving a stopped runtime reported as active.
+      if (!(error instanceof RetainedEventFlushError)) throw error;
     }
+    this.closeActiveSession(sessionId, active);
+    this.pushEvent(sessionId, 'status', { status: 'IDLE' }, active.currentEmit);
   }
 
-  private detachActiveSession(sessionId: string, active: ActiveCodexSession): void {
+  private closeActiveSession(sessionId: string, active: ActiveCodexSession): void {
     if (this.activeSessions.get(sessionId) !== active) return;
-
-    this.flushDeltas(sessionId);
     this.settleActiveSession(
       sessionId,
       active,
@@ -516,7 +522,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
       if (itemId !== undefined) active.currentAgentItemId = itemId;
       active.accumulatedText += piece;
       this.pushEvent(sessionId, 'assistant_delta', { delta: piece }, active.currentEmit);
-      this.touchPreview(sessionId, active.accumulatedText);
+      this.touchPreview(sessionId, active.accumulatedText, active.currentEmit);
       return;
     }
 

@@ -306,7 +306,7 @@ workspace/lease authority, structured results, verifier/artifacts, recovery/succ
 transport/projections, and web/mobile surfaces. The local verification record is:
 
 - 194 Crew server unit tests and 10 Crew HTTP e2e tests passed;
-- the full 39-test server e2e layer, 345 core tests, 850 web tests, 74 mobile checks, and 126 script
+- the full 39-test server e2e layer, 349 core tests, 859 web tests, 87 mobile checks, and 126 script
   tests passed;
 - `bun run gate:full` passed, including the existing level-5 real-browser smoke in headless mode
   across Solo and Crew, desktop and narrow layouts, pause/resume, fixed gates, and terminal success;

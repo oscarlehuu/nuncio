@@ -14,6 +14,7 @@ import {
 
 @Injectable()
 export class TasksRepository {
+  private readonly cancellationReservations = new Set<string>();
   constructor(private readonly database: DatabaseService) {}
 
   create(input: CreateTaskDto): TaskDto {
@@ -114,20 +115,36 @@ export class TasksRepository {
   /** Atomically claim the oldest QUEUED task past its hold window, marking it RUNNING. */
   claimNextQueued(options: { includeCrewMembers?: boolean } = {}): TaskDto | null {
     const now = Date.now();
+    const candidates = this.database.db
+      .prepare<{ id: string }, [number, number]>(
+        `SELECT id FROM tasks
+         WHERE status = 'QUEUED'
+           AND (? = 1 OR execution_kind != 'crew-member')
+           AND (hold_until IS NULL OR hold_until <= ?)
+         ORDER BY created_at ASC, rowid ASC`,
+      )
+      .all(options.includeCrewMembers === false ? 0 : 1, now);
+    const candidate = candidates.find((row) => !this.cancellationReservations.has(row.id));
+    if (!candidate) return null;
     const row = this.database.db
-      .prepare<TaskRow, [number, number, number, number]>(
+      .prepare<TaskRow, [number, number, string]>(
         `UPDATE tasks SET status = 'RUNNING', started_at = ?, updated_at = ?
-         WHERE id = (
-           SELECT id FROM tasks
-           WHERE status = 'QUEUED'
-             AND (? = 1 OR execution_kind != 'crew-member')
-             AND (hold_until IS NULL OR hold_until <= ?)
-           ORDER BY created_at ASC, rowid ASC LIMIT 1
-         )
+         WHERE id = ? AND status = 'QUEUED'
          RETURNING *`,
       )
-      .get(now, now, options.includeCrewMembers === false ? 0 : 1, now);
+      .get(now, now, candidate.id);
     return row ? taskRowToDto(row) : null;
+  }
+
+  reserveCancellation(id: string): TaskDto | null {
+    const task = this.findById(id);
+    if (!task || task.status !== 'QUEUED') return null;
+    this.cancellationReservations.add(id);
+    return task;
+  }
+
+  releaseCancellation(id: string): void {
+    this.cancellationReservations.delete(id);
   }
 
   attachSession(id: string, sessionId: string): void {
@@ -178,7 +195,7 @@ export class TasksRepository {
    */
   updateWhileQueued(
     id: string,
-    patch: { provider?: string; model?: string; modelOptions?: ModelOptionsMap | null; holdUntil?: number },
+    patch: { provider?: string; model?: string; modelOptions?: ModelOptionsMap | null; holdUntil?: number | null },
   ): TaskDto | null {
     const sets: string[] = [];
     const values: Array<string | number | null> = [];
@@ -242,6 +259,7 @@ export class TasksRepository {
          RETURNING *`,
       )
       .get(now, now, id);
+    this.cancellationReservations.delete(id);
     return row ? taskRowToDto(row) : null;
   }
 

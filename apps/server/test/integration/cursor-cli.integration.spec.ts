@@ -42,7 +42,7 @@ suite('Cursor CLI handoff (integration)', () => {
     if (sessionId) {
       try {
         await service.archive(sessionId);
-        service.delete(sessionId);
+        await service.delete(sessionId);
       } catch {
         // best-effort cleanup
       }
