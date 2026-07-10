@@ -274,6 +274,110 @@ describe('SessionsService steer while RUNNING', () => {
     expect(steer.mock.calls[0]?.[1]).toBe('queued while hung');
   });
 
+  it('arms force-idle before awaiting a provider interrupt that hangs', async () => {
+    const id = seedRunning();
+    let releaseInterrupt: () => void = () => undefined;
+    const interrupt = jest.fn(
+      async () => new Promise<void>((resolve) => {
+        releaseInterrupt = resolve;
+      }),
+    );
+    installProvider(
+      stubProvider({
+        capabilities: {
+          interrupt: true,
+          modelSwitch: 'none',
+          effortSwitch: 'none',
+          images: false,
+          steerWhileRunning: false,
+        },
+        interrupt,
+      }),
+    );
+    (service as unknown as { interruptForceIdleMs: number }).interruptForceIdleMs = 20;
+
+    const interrupting = service.interrupt(id);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const statusWhileProviderHung = sessions.findById(id)?.status;
+    releaseInterrupt();
+    await interrupting;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(statusWhileProviderHung).toBe('IDLE');
+    expect(events.list(id).some((event) => event.type === 'interrupted')).toBe(false);
+  });
+
+  it('does not force-idle the run later when the provider interrupt rejects', async () => {
+    const id = seedRunning();
+    const dispose = jest.fn();
+    installProvider(
+      stubProvider({
+        capabilities: {
+          interrupt: true,
+          modelSwitch: 'none',
+          effortSwitch: 'none',
+          images: false,
+          steerWhileRunning: false,
+        },
+        interrupt: async () => {
+          throw new Error('interrupt failed');
+        },
+        dispose,
+      }),
+    );
+    (service as unknown as { interruptForceIdleMs: number }).interruptForceIdleMs = 20;
+
+    await expect(service.interrupt(id)).rejects.toThrow('interrupt failed');
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    expect(sessions.findById(id)?.status).toBe('RUNNING');
+    expect(dispose).not.toHaveBeenCalled();
+  });
+
+  it('cancels the old force-idle timer when the interrupted run settles', async () => {
+    const id = seedRunning();
+    let releaseReplacement: () => void = () => undefined;
+    const provider = stubProvider({
+      capabilities: {
+        interrupt: true,
+        modelSwitch: 'none',
+        effortSwitch: 'none',
+        images: false,
+        steerWhileRunning: false,
+      },
+      interrupt: async () => {
+        sessions.updateStatus(id, 'IDLE');
+        const settled = events.append(id, 'status', { status: 'IDLE' });
+        (
+          service as unknown as {
+            onAgentEvent: (sessionId: string, event: typeof settled) => void;
+          }
+        ).onAgentEvent(id, settled);
+      },
+      steer: async (sessionId: string) => {
+        sessions.updateStatus(sessionId, 'RUNNING');
+        await new Promise<void>((resolve) => {
+          releaseReplacement = resolve;
+        });
+        if (sessions.findById(sessionId)?.status === 'RUNNING') {
+          sessions.updateStatus(sessionId, 'IDLE');
+        }
+      },
+    });
+    installProvider(provider);
+    (service as unknown as { interruptForceIdleMs: number }).interruptForceIdleMs = 30;
+
+    await service.interrupt(id);
+    const replacement = service.steer(id, 'replacement after interrupt');
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const replacementStatus = sessions.findById(id)?.status;
+    releaseReplacement();
+    await replacement;
+
+    expect(replacementStatus).toBe('RUNNING');
+    expect(events.list(id).some((event) => event.type === 'interrupted')).toBe(true);
+  });
+
   it('auto force-idles a silent stalled run after a long timeout, then drains the queue', async () => {
     const steer = jest.fn(async (_sessionId: string, _message: string) => undefined);
     const dispose = jest.fn();
@@ -322,5 +426,57 @@ describe('SessionsService steer while RUNNING', () => {
     const dto = service.get(id);
     expect(dto?.supportsInterrupt).toBe(true);
     expect(dto?.supportsSteerWhileRunning).toBe(true);
+  });
+
+  it('keeps a direct mid-run steer in the bounded shutdown drain', async () => {
+    const internals = service as unknown as {
+      runPromises: Map<string, Promise<void>>;
+      pendingWork: Set<Promise<unknown>>;
+      locallyProducing: Set<string>;
+      shutdownDrainTimeoutMs: number;
+    };
+    // Earlier cases deliberately leave a never-resolving provider run behind.
+    // Remove that unrelated fixture so only this direct steer can hold close.
+    internals.runPromises.clear();
+    internals.pendingWork.clear();
+    internals.locallyProducing.clear();
+    const id = seedRunning();
+    let releaseSteer: () => void = () => undefined;
+    let startedSteer: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      startedSteer = resolve;
+    });
+    installProvider(
+      stubProvider({
+        capabilities: {
+          interrupt: true,
+          modelSwitch: 'none',
+          effortSwitch: 'none',
+          images: false,
+          steerWhileRunning: true,
+        },
+        steerMidRun: async () => {
+          startedSteer();
+          return new Promise<boolean>((resolve) => {
+            releaseSteer = () => resolve(true);
+          });
+        },
+        interrupt: async () => undefined,
+      }),
+    );
+    internals.shutdownDrainTimeoutMs = 1000;
+
+    const steering = service.steer(id, 'in-flight shutdown steer');
+    await started;
+    let closeSettled = false;
+    const closing = service.onModuleDestroy().then(() => {
+      closeSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const settledBeforeSteer = closeSettled;
+    releaseSteer();
+    await Promise.all([steering, closing]);
+
+    expect(settledBeforeSteer).toBe(false);
   });
 });

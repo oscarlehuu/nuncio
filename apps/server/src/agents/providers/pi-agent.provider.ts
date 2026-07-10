@@ -56,6 +56,7 @@ type PiSessionHandle = {
   modelRegistry: PiModelRegistry;
   prompt: (text: string, options?: PiPromptOptions) => Promise<void>;
   unsubscribe: () => void;
+  setEmit: (emit?: AgentRunContext['emit']) => void;
   resetAssistantText: () => void;
   getAssistantText: () => string;
   /** Turn-final assistant messages already emitted during the current prompt. */
@@ -146,8 +147,14 @@ export class PiAgentProvider extends BaseAgentProvider {
   }
 
   dispose(sessionId: string): void {
+    // Persist every accepted token before callbacks are fenced and the SDK
+    // subscription is removed. A transient append failure keeps the handle live
+    // so the retained base buffer can retry instead of being discarded.
+    this.flushPendingEvents(sessionId);
+    this.invalidateRun(sessionId);
     const handle = this.activeSessions.get(sessionId);
     if (!handle) return;
+    void handle.session.abort().catch(() => undefined);
     handle.unsubscribe();
     this.activeSessions.delete(sessionId);
     this.interruptedSessions.delete(sessionId);
@@ -257,6 +264,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       handle = await this.createPiSession(sessionId, context);
       this.activeSessions.set(sessionId, handle);
     }
+    handle.setEmit(context.emit);
 
     const images = piImagesFromAttachments(context);
     const promptOptions: PiPromptOptions = {
@@ -349,6 +357,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       this.sessions.updateProviderRuntimeState(sessionId, { providerThreadId: session.sessionFile });
     }
 
+    let currentEmit = context.emit;
     let assistantText = '';
     let assistantTurnsEmitted = 0;
     let lastTurnError: string | null = null;
@@ -369,7 +378,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       thinkingOpen = true;
       thinkingId = crypto.randomUUID();
       accumulatedThinking = '';
-      this.pushEvent(sessionId, 'thinking_start', { thinkingId }, context.emit);
+      this.pushEvent(sessionId, 'thinking_start', { thinkingId }, currentEmit);
     };
     const sealOpenTools = (emit?: AgentRunContext['emit']) => {
       for (const [callId, tool] of openTools) {
@@ -387,8 +396,8 @@ export class PiAgentProvider extends BaseAgentProvider {
         } | undefined;
         if (inner?.type === 'text_delta' && inner.delta) {
           assistantText += inner.delta;
-          this.pushEvent(sessionId, 'assistant_delta', { delta: inner.delta }, context.emit);
-          this.touchPreview(sessionId, assistantText);
+          this.pushEvent(sessionId, 'assistant_delta', { delta: inner.delta }, currentEmit);
+          this.touchPreview(sessionId, assistantText, currentEmit);
         }
         if (inner?.type === 'thinking_start') {
           ensureThinkingStarted();
@@ -400,13 +409,13 @@ export class PiAgentProvider extends BaseAgentProvider {
             sessionId,
             'thinking_delta',
             { thinkingId, delta: inner.delta },
-            context.emit,
+            currentEmit,
           );
         }
         if (inner?.type === 'thinking_end') {
           ensureThinkingStarted();
           const text = typeof inner.content === 'string' ? inner.content : accumulatedThinking;
-          this.pushEvent(sessionId, 'thinking_message', { thinkingId, text }, context.emit);
+          this.pushEvent(sessionId, 'thinking_message', { thinkingId, text }, currentEmit);
           resetThinking();
         }
       }
@@ -416,7 +425,7 @@ export class PiAgentProvider extends BaseAgentProvider {
         const userInputPayload = buildUserInputRequestedPayload(tool, event.args, callId);
         if (userInputPayload) {
           userInputRequests.add(callId);
-          this.pushEvent(sessionId, 'user_input_requested', userInputPayload, context.emit);
+          this.pushEvent(sessionId, 'user_input_requested', userInputPayload, currentEmit);
           return;
         }
         openTools.set(callId, tool);
@@ -425,7 +434,7 @@ export class PiAgentProvider extends BaseAgentProvider {
           sessionId,
           'tool_start',
           { callId, tool, ...(input !== undefined ? { input } : {}) },
-          context.emit,
+          currentEmit,
         );
       }
       if (event.type === 'tool_execution_end') {
@@ -443,7 +452,7 @@ export class PiAgentProvider extends BaseAgentProvider {
             isError: event.isError,
             ...(output !== undefined ? { output } : {}),
           },
-          context.emit,
+          currentEmit,
         );
       }
       if (event.type === 'message_end') {
@@ -471,14 +480,14 @@ export class PiAgentProvider extends BaseAgentProvider {
             if (text.trim()) {
               // Per-turn final message: mirrors the pi session file exactly, so
               // transcript refreshes dedupe instead of duplicating steered runs.
-              this.pushEvent(sessionId, 'assistant_message', { text }, context.emit);
+              this.pushEvent(sessionId, 'assistant_message', { text }, currentEmit);
               assistantTurnsEmitted += 1;
             }
           }
         }
       }
       if (event.type === 'agent_end') {
-        sealOpenTools(context.emit);
+        sealOpenTools(currentEmit);
       }
     });
 
@@ -487,6 +496,9 @@ export class PiAgentProvider extends BaseAgentProvider {
       modelRegistry,
       prompt: (prompt, options) => session.prompt(prompt, options as never),
       unsubscribe,
+      setEmit: (emit) => {
+        currentEmit = emit;
+      },
       resetAssistantText: () => {
         assistantText = '';
         assistantTurnsEmitted = 0;

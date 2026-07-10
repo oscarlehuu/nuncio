@@ -282,6 +282,39 @@ describe('SessionsService lifecycle (phase 3)', () => {
     });
   });
 
+  it('runs flush, generation invalidation, then dispose for a session lifecycle teardown', () => {
+    const id = seedSession('IDLE');
+    const calls: string[] = [];
+    const provider = {
+      id: 'ordered',
+      name: 'Ordered',
+      capabilities: {
+        interrupt: false,
+        modelSwitch: 'none',
+        effortSwitch: 'none',
+        images: false,
+        steerWhileRunning: false,
+      },
+      isAvailable: async () => true,
+      listModels: async () => [],
+      run: async () => undefined,
+      steer: async () => undefined,
+      flushPendingEvents: () => calls.push('flush'),
+      invalidateRun: () => calls.push('invalidate'),
+      dispose: () => calls.push('dispose'),
+      bustCache: () => undefined,
+    } as AgentProvider & { invalidateRun: (sessionId: string) => void };
+    const originalResolve = registry.resolveForSession.bind(registry);
+    registry.resolveForSession = (() => provider) as AgentRegistry['resolveForSession'];
+
+    try {
+      service.archive(id);
+      expect(calls).toEqual(['flush', 'invalidate', 'dispose']);
+    } finally {
+      registry.resolveForSession = originalResolve;
+    }
+  });
+
   describe('per-session provider selection', () => {
     it('defaults to cursor when provider omitted and cursor is available', async () => {
       const session = await service.create({ prompt: 'default provider task' });

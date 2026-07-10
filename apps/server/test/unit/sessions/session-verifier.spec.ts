@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -93,5 +93,54 @@ describe('runVerifyCommand', () => {
     );
     expect(result.outputTail.length).toBeLessThanOrEqual(4000);
     expect(result.outputTail).toContain('THE-END');
+  });
+
+  it('aborts the verifier process group so shell children cannot outlive cancellation', async () => {
+    const marker = join(workspace, 'orphan-marker');
+    const controller = new AbortController();
+    const started = Date.now();
+    const run = (
+      runVerifyCommand as unknown as (
+        command: { argv: string[]; display: string; source: 'setting' },
+        cwd: string,
+        timeoutMs: number,
+        signal: AbortSignal,
+      ) => Promise<unknown>
+    )(
+      {
+        argv: ['sh', '-c', `(sleep 0.35; echo orphan > "${marker}") & wait`],
+        display: 'spawn child',
+        source: 'setting',
+      },
+      workspace,
+      1200,
+      controller.signal,
+    );
+    setTimeout(() => controller.abort(), 40);
+    await run;
+    const elapsed = Date.now() - started;
+    await new Promise((resolve) => setTimeout(resolve, 450));
+
+    expect(elapsed).toBeLessThan(500);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('reaps background children after a normal shell exit and preserves output', async () => {
+    const marker = join(workspace, 'normal-exit-orphan-marker');
+    const started = Date.now();
+    const result = await runVerifyCommand(
+      {
+        argv: ['sh', '-c', `echo preserved-output; (sleep 0.7; echo orphan > "${marker}") &`],
+        display: 'spawn background child',
+        source: 'setting',
+      },
+      workspace,
+    );
+    const elapsed = Date.now() - started;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect(elapsed).toBeLessThan(650);
+    expect(result.outputTail).toContain('preserved-output');
+    expect(existsSync(marker)).toBe(false);
   });
 });

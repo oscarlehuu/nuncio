@@ -6,9 +6,9 @@ import { fullJitterBackoff } from '@nuncio/core/reconnect-backoff';
  * is wired. It reacts to the relay's socket lifecycle: a close triggers a
  * re-probe of the candidate URLs, switches the active URL when the winner moved,
  * and reopens (with full-jitter backoff while offline); a `server_shutdown`
- * notice freezes reconnection until AppState/NetInfo signals a fresh chance;
- * foregrounding or a network change kicks an immediate reconnect. It exposes a
- * coarse `state` for the UI status pill.
+ * notice pauses reconnection for a bounded cooldown; foregrounding or a network
+ * change kicks an immediate reconnect. It exposes a coarse `state` for the UI
+ * status pill.
  *
  * Every side effect is injected so the whole state machine runs under a fake
  * clock in unit tests — nothing here imports React Native.
@@ -41,12 +41,12 @@ export interface ConnectionManager {
   handleNotice: (notice: string) => void;
   /** Report that the relay socket opened — the connection is healthy. */
   handleOpen: () => void;
-  /** Report that the relay socket closed, so we re-probe / back off / freeze. */
+  /** Report that the relay socket closed, so we re-probe / back off / cool down. */
   handleClose: () => void;
   /**
    * Whether the relay may self-reconnect. Always false while a manager is wired:
    * the manager is the sole reconnect authority — a socket close routes through
-   * handleClose (probe → URL-switch → reopen, or freeze on server_shutdown), so
+   * handleClose (probe → URL-switch → reopen, or cooldown on server_shutdown), so
    * letting the relay ALSO self-schedule would double-reconnect and keep
    * hammering a deliberately-downed desktop. The relay's built-in reconnect is
    * for the unmanaged (web) caller only.
@@ -57,6 +57,8 @@ export interface ConnectionManager {
 }
 
 const SHUTDOWN_NOTICE = 'server_shutdown';
+const SHUTDOWN_COOLDOWN_MIN_MS = 1_000;
+const SHUTDOWN_COOLDOWN_JITTER_MS = 1_000;
 
 export function createConnectionManager(deps: ConnectionManagerDeps): ConnectionManager {
   const setTimer = deps.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
@@ -70,6 +72,7 @@ export function createConnectionManager(deps: ConnectionManagerDeps): Connection
   let activeUrl = deps.initialUrl;
   let attempt = 0;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let retryTimerToken = 0;
   let disposed = false;
   // A probe is async; if the network flips again mid-probe, only the latest run
   // may apply its result. This token invalidates stale in-flight probes.
@@ -84,6 +87,7 @@ export function createConnectionManager(deps: ConnectionManagerDeps): Connection
   };
 
   const clearRetry = () => {
+    retryTimerToken += 1;
     if (retryTimer !== null) {
       clearTimer(retryTimer);
       retryTimer = null;
@@ -94,8 +98,24 @@ export function createConnectionManager(deps: ConnectionManagerDeps): Connection
     if (disposed || retryTimer !== null) return;
     attempt += 1;
     const delay = fullJitterBackoff(attempt, { random: deps.random });
+    const token = ++retryTimerToken;
     retryTimer = setTimer(() => {
+      if (disposed || token !== retryTimerToken) return;
       retryTimer = null;
+      void reprobeAndReopen();
+    }, delay);
+  };
+
+  const scheduleShutdownRecovery = () => {
+    if (disposed || retryTimer !== null) return;
+    const draw = Math.max(0, Math.min(1, (deps.random ?? Math.random)()));
+    const delay = SHUTDOWN_COOLDOWN_MIN_MS + draw * SHUTDOWN_COOLDOWN_JITTER_MS;
+    const token = ++retryTimerToken;
+    retryTimer = setTimer(() => {
+      if (disposed || token !== retryTimerToken || state !== 'server-shutdown') return;
+      retryTimer = null;
+      attempt = 0;
+      setState('connecting');
       void reprobeAndReopen();
     }, delay);
   };
@@ -122,9 +142,8 @@ export function createConnectionManager(deps: ConnectionManagerDeps): Connection
     deps.reopen();
   };
 
-  // An external kick (app foregrounded) bypasses the backoff timer and thaws a
-  // server-shutdown freeze. It is a no-op while already healthy so foregrounding
-  // a working session doesn't churn the socket.
+  // An external kick bypasses the backoff timer and thaws a server-shutdown
+  // cooldown. Connected foreground recovery deliberately reopens below.
   const kick = () => {
     if (disposed || state === 'connected') return;
     clearRetry();
@@ -137,7 +156,7 @@ export function createConnectionManager(deps: ConnectionManagerDeps): Connection
   // still limps along (Wi-Fi→cellular makes a LAN URL dead but a Funnel URL
   // live). When connected, re-probe and act only on a genuine winner change so a
   // healthy connection on the same URL is left undisturbed (no state flip, no
-  // reopen). When NOT connected — including a server_shutdown freeze — a network
+  // reopen). When NOT connected — including a server_shutdown cooldown — a network
   // change is a recovery signal and thaws exactly like a foreground kick, so a
   // Tailscale/network recovery reconnects without needing the app foregrounded.
   const onNetworkChange = async (): Promise<void> => {
@@ -164,10 +183,11 @@ export function createConnectionManager(deps: ConnectionManagerDeps): Connection
     },
     handleNotice(notice) {
       if (notice !== SHUTDOWN_NOTICE) return; // unknown notices don't change state
-      // The desktop is going away deliberately; stop hammering it until the user
-      // or the network signals a fresh chance.
+      // Pause long enough for a deliberate restart, then probe automatically so
+      // a foreground phone cannot freeze forever without another OS signal.
       clearRetry();
       setState('server-shutdown');
+      scheduleShutdownRecovery();
     },
     handleOpen() {
       if (disposed) return;
@@ -189,7 +209,14 @@ export function createConnectionManager(deps: ConnectionManagerDeps): Connection
       unsubscribers.push(deps.subscribeNetInfo(() => void onNetworkChange()));
       unsubscribers.push(
         deps.subscribeAppState((active) => {
-          if (active) kick();
+          if (!active || disposed) return;
+          if (state === 'connected') {
+            // The OS can suspend a live-looking socket without a close event.
+            // The caller reopens from its monotonic last-seen cursor.
+            deps.reopen();
+            return;
+          }
+          kick();
         }),
       );
       // The caller has already opened the initial subscription at initialUrl;

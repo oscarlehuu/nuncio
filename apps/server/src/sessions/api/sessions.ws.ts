@@ -38,9 +38,14 @@ export interface SessionsWsOptions {
   maxBufferedBytes?: number;
   /** Test seam — production reads ws.bufferedAmount. */
   getBufferedAmount?: (ws: WebSocket) => number;
+  /** Ping cadence and missed-pong deadline; production keeps mobile NATs warm at 15s. */
+  heartbeatIntervalMs?: number;
+  /** Test seam for deterministic half-open simulation. */
+  getHeartbeatAlive?: (ws: WebSocket, observedAlive: boolean) => boolean;
 }
 
 const DEFAULT_MAX_BUFFERED_BYTES = 1_000_000;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
 
 function errorOf(err: unknown): RpcError {
   const maybe = err as { getStatus?: () => number; message?: unknown } | null;
@@ -51,8 +56,16 @@ function errorOf(err: unknown): RpcError {
 
 function send(ws: WebSocket, payload: unknown): void {
   if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(payload));
+    try {
+      ws.send(JSON.stringify(payload));
+    } catch {
+      ws.terminate();
+    }
   }
+}
+
+function serializedBytes(payload: unknown): number {
+  return Buffer.byteLength(JSON.stringify(payload));
 }
 
 /**
@@ -87,6 +100,7 @@ export function attachSessionsWebSocketServer(
   const wss = new WebSocketServer({ noServer: true });
   const maxBuffered = options?.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES;
   const bufferedAmount = options?.getBufferedAmount ?? ((socket: WebSocket) => socket.bufferedAmount);
+  const heartbeatIntervalMs = options?.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
 
   // Revocation must sever the live sockets a device opened, not just block future
   // upgrades; the registry maps each device to its open sockets for that purpose.
@@ -124,10 +138,27 @@ export function attachSessionsWebSocketServer(
 
   wss.on('connection', (ws: WebSocket) => {
     const subscriptions = new Map<string, () => void>();
-    // Keep NATed mobile connections alive across idle stretches.
+    let alive = true;
+    let tornDown = false;
+    ws.on('pong', () => {
+      alive = true;
+    });
+    // Keep NATed mobile connections alive and force half-open peers through the
+    // normal close/reconnect/cursor-replay path after one missed pong deadline.
     const heartbeat = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) ws.ping();
-    }, 15000);
+      if (ws.readyState !== WebSocket.OPEN) return;
+      const heartbeatAlive = options?.getHeartbeatAlive?.(ws, alive) ?? alive;
+      if (!heartbeatAlive) {
+        ws.terminate();
+        return;
+      }
+      alive = false;
+      try {
+        ws.ping();
+      } catch {
+        ws.terminate();
+      }
+    }, heartbeatIntervalMs);
 
     const deviceId = pendingDeviceId.get(ws);
     if (deviceId) {
@@ -136,6 +167,8 @@ export function attachSessionsWebSocketServer(
     }
 
     const teardown = () => {
+      if (tornDown) return;
+      tornDown = true;
       clearInterval(heartbeat);
       if (deviceId) deviceSockets.remove(deviceId, ws);
       for (const unsubscribe of subscriptions.values()) unsubscribe();
@@ -162,24 +195,26 @@ export function attachSessionsWebSocketServer(
         // client gets one small "behind" marker and recovers by resubscribing
         // from its last seen seq.
         for (const event of sessions.getEvents(sessionId, since)) {
-          if (bufferedAmount(ws) > maxBuffered) {
+          const push = { channel: sessionId, event };
+          if (bufferedAmount(ws) + serializedBytes(push) > maxBuffered) {
             send(ws, { channel: sessionId, behind: true });
             return;
           }
-          send(ws, { channel: sessionId, event });
+          send(ws, push);
         }
         let liveUnsub: () => void = () => {};
         let dropped = false;
         liveUnsub = sessions.subscribe(sessionId, (event) => {
           if (dropped) return;
-          if (bufferedAmount(ws) > maxBuffered) {
+          const push = { channel: sessionId, event };
+          if (bufferedAmount(ws) + serializedBytes(push) > maxBuffered) {
             dropped = true;
             liveUnsub();
             subscriptions.delete(sessionId);
             send(ws, { channel: sessionId, behind: true });
             return;
           }
-          send(ws, { channel: sessionId, event });
+          send(ws, push);
         });
         subscriptions.set(sessionId, liveUnsub);
         return;

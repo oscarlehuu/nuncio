@@ -91,6 +91,8 @@ export interface AgentProvider {
   interrupt?(sessionId: string): Promise<void>;
   setModel?(sessionId: string, model: string, options?: ModelOptionsMap | null): Promise<void>;
   dispose(sessionId: string): void;
+  /** Fence callbacks from the current provider run without changing the FSM. */
+  invalidateRun?(sessionId: string): void;
   /**
    * Synchronously flush any coalesced/buffered events for the session so they
    * reach the log before an externally-appended event is written at a later seq.

@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'bun:test';
 import { Test, TestingModule } from '@nestjs/testing';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AgentRegistry } from '../../../src/agents/agents.registry';
@@ -368,6 +368,37 @@ describe('verify-feedback loop: restart, priority, lifecycle, provider-agnostic'
     await booted.close();
     const elapsed = Date.now() - start;
     expect(elapsed).toBeLessThan(8000);
+  }, TEST_TIMEOUT_MS);
+
+  it('module close aborts an active verifier and its child before either can write later', async () => {
+    process.env[AUTO_STEER] = '0';
+    const marker = join(workspace, 'verifier-child-survived');
+    mkdirSync(join(workspace, '.nuncio'), { recursive: true });
+    writeFileSync(
+      join(workspace, '.nuncio', 'verify'),
+      `(sleep 0.8; echo orphan > "${marker}") & wait\n`,
+    );
+
+    const module = await buildCursorModule();
+    const service = module.get(SessionsService);
+    const events = module.get(EventsRepository);
+    const session = await service.create({
+      prompt: 'close during verify',
+      provider: 'cursor',
+      workspace,
+    });
+    await waitFor(
+      () => eventsOfType(events.list(session.id), 'verify_start').length === 1,
+      10000,
+    );
+
+    const started = Date.now();
+    await module.close();
+    const elapsed = Date.now() - started;
+    await new Promise((resolve) => setTimeout(resolve, 900));
+
+    expect(elapsed).toBeLessThan(500);
+    expect(existsSync(marker)).toBe(false);
   }, TEST_TIMEOUT_MS);
 
   it('no post-close DB write when a provider ignores abort and finishes after shutdown returns', async () => {

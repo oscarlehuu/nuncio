@@ -180,6 +180,27 @@ describe('relay + connection manager integration', () => {
     expect(h.manager.getState()).toBe('connected');
   });
 
+  it('a server_shutdown cooldown reopens the relay without AppState or NetInfo', async () => {
+    const h = wire({ probe: async () => 'http://a', candidateUrls: ['http://a'] });
+    const first = FakeSocket.instances[0];
+    first.open();
+    const socketsAfterOpen = FakeSocket.instances.length;
+
+    first.push({ notice: 'server_shutdown' });
+    first.close();
+    await h.tick();
+    expect(FakeSocket.instances.length).toBe(socketsAfterOpen);
+
+    h.fireTimers();
+    await h.tick();
+
+    const reopened = FakeSocket.instances[FakeSocket.instances.length - 1];
+    expect(FakeSocket.instances.length).toBeGreaterThan(socketsAfterOpen);
+    reopened.open();
+    expect(reopened.sent[0]).toMatchObject({ method: 'subscribe', params: { since: 0 } });
+    expect(h.manager.getState()).toBe('connected');
+  });
+
   it('an ordinary socket drop drives the manager to probe and reopen', async () => {
     const h = wire({ probe: async () => 'http://a', candidateUrls: ['http://a', 'http://b'] });
     const first = FakeSocket.instances[0];

@@ -85,15 +85,16 @@ describe('createConnectionManager', () => {
     expect(h.manager.getState()).toBe('connected');
   });
 
-  it('does not churn the socket when foregrounding a healthy session', async () => {
+  it('resyncs from the current cursor when foregrounding a healthy session', async () => {
     const h = harness();
     h.manager.start();
     h.open();
     expect(h.manager.getState()).toBe('connected');
-    h.appState(true); // already connected → kick is a no-op
+    h.appState(true);
     await h.tick();
-    expect(h.reopens()).toBe(0);
+    expect(h.reopens()).toBe(1);
     expect(h.onActiveUrl).toEqual([]);
+    expect(h.manager.getState()).toBe('connected');
   });
 
   it('on a drop, re-probes and reopens on the same URL without switching', async () => {
@@ -185,7 +186,7 @@ describe('createConnectionManager', () => {
     expect(h.timers.length).toBeLessThan(pendingTimers + 1);
   });
 
-  it('server_shutdown freezes reconnects until an external kick', async () => {
+  it('server_shutdown suppresses close recovery but arms a bounded cooldown', async () => {
     const h = harness();
     h.manager.start();
     h.open();
@@ -198,15 +199,53 @@ describe('createConnectionManager', () => {
     h.manager.handleClose();
     await h.tick();
     expect(h.manager.getState()).toBe('server-shutdown');
-    expect(h.timers.length).toBe(0);
+    expect(h.timers.length).toBe(1);
+    expect(h.timers[0]!.ms).toBeGreaterThanOrEqual(1_000);
+    expect(h.timers[0]!.ms).toBeLessThanOrEqual(2_000);
     expect(h.reopens()).toBe(0);
 
-    // AppState thaws it → probe + reopen.
+    // AppState may thaw it before the cooldown expires.
     h.appState(true);
     await h.tick();
     expect(h.reopens()).toBe(1);
     h.open();
     expect(h.manager.getState()).toBe('connected');
+
+    // A stale cooldown callback is inert after the external recovery.
+    h.fireTimers();
+    await h.tick();
+    expect(h.reopens()).toBe(1);
+  });
+
+  it('automatically probes again after server_shutdown without an OS signal', async () => {
+    const h = harness();
+    h.manager.start();
+    h.open();
+
+    h.manager.handleNotice('server_shutdown');
+    h.manager.handleClose();
+    expect(h.manager.getState()).toBe('server-shutdown');
+    expect(h.reopens()).toBe(0);
+
+    h.fireTimers();
+    await h.tick();
+
+    expect(h.reopens()).toBe(1);
+    h.open();
+    expect(h.manager.getState()).toBe('connected');
+  });
+
+  it('does not run a server_shutdown cooldown after disposal', async () => {
+    const h = harness();
+    h.manager.start();
+    h.open();
+    h.manager.handleNotice('server_shutdown');
+
+    h.manager.dispose();
+    h.fireTimers();
+    await h.tick();
+
+    expect(h.reopens()).toBe(0);
   });
 
   it('a NetInfo change thaws a server_shutdown freeze without AppState', async () => {

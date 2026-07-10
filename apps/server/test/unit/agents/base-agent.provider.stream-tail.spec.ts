@@ -55,6 +55,47 @@ class ScriptedTailProvider extends BaseAgentProvider {
   }
 }
 
+class OverlappingRunProvider extends BaseAgentProvider {
+  readonly id = 'overlapping';
+  readonly name = 'Overlapping';
+  readonly contexts: AgentRunContext[] = [];
+  private readonly releases: Array<() => void> = [];
+
+  async isAvailable(): Promise<boolean> {
+    return true;
+  }
+
+  async listModels(): Promise<[]> {
+    return [];
+  }
+
+  emitFrom(runIndex: number, delta: string): void {
+    this.pushEvent(
+      this.sessionId,
+      'assistant_delta',
+      { delta },
+      this.contexts[runIndex]?.emit,
+    );
+  }
+
+  release(runIndex: number): void {
+    this.releases[runIndex]?.();
+  }
+
+  sessionId = '';
+
+  protected async executePrompt(
+    sessionId: string,
+    _text: string,
+    _isSteer: boolean,
+    context: AgentRunContext,
+  ): Promise<void> {
+    this.sessionId = sessionId;
+    this.contexts.push(context);
+    await new Promise<void>((resolve) => this.releases.push(resolve));
+  }
+}
+
 describe('BaseAgentProvider streamed-tail preservation', () => {
   let module: TestingModule;
   let provider: ScriptedTailProvider;
@@ -172,5 +213,33 @@ describe('BaseAgentProvider streamed-tail preservation', () => {
     expect(deltas.length).toBe(1);
     expect(deltas[0]).toBe(seed + 'x');
     expect(deltas[0].length).toBe(DELTA_FLUSH_MAX_CHARS - 1);
+  });
+
+  it('drops callbacks from an older run generation after a replacement run starts', async () => {
+    const overlapping = new OverlappingRunProvider(sessions, events);
+    const created = sessions.create({ prompt: 'first run', provider: 'overlapping' });
+    const first = overlapping.run(created.id, created.prompt, { emit: () => {} });
+    while (overlapping.contexts.length < 1) await Promise.resolve();
+
+    // Simulate the service force-idling a provider that did not unwind, then
+    // starting the replacement run while the old SDK callback can still fire.
+    sessions.updateStatus(created.id, 'IDLE');
+    const second = overlapping.steer(created.id, 'replacement run', { emit: () => {} });
+    while (overlapping.contexts.length < 2) await Promise.resolve();
+
+    overlapping.emitFrom(0, 'stale callback');
+    overlapping.emitFrom(1, 'fresh callback');
+    overlapping.release(1);
+    await second;
+    overlapping.release(0);
+    await first;
+
+    const text = events
+      .list(created.id)
+      .filter((event) => event.type === 'assistant_delta')
+      .map((event) => (event.payload as { delta: string }).delta)
+      .join('');
+    expect(text).toBe('fresh callback');
+    expect(sessions.findById(created.id)?.status).toBe('IDLE');
   });
 });

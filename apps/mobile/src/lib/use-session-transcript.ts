@@ -15,6 +15,8 @@ type ScheduledFlush = {
   cancel: (id: number) => void;
 };
 
+const BOOTSTRAP_RELAY_FALLBACK_MS = 1_000;
+
 function mergeEvents(prev: SessionEvent[], incoming: SessionEvent[]): SessionEvent[] {
   if (incoming.length === 0) return prev;
   const seen = new Set(prev.map((event) => event.seq));
@@ -78,9 +80,12 @@ export function useSessionTranscript(sessionId: string | null) {
   }, [scheduleEventFlush]);
 
   useEffect(() => {
+    cancelPendingEventFlush();
+    setEvents([]);
+    sinceRef.current = 0;
+    setConnectionState('connecting');
+
     if (!sessionId) {
-      setEvents([]);
-      sinceRef.current = 0;
       return;
     }
     const connection = activeConnection();
@@ -88,13 +93,14 @@ export function useSessionTranscript(sessionId: string | null) {
 
     let cancelled = false;
     let cleanupManager: (() => void) | null = null;
+    let relayStarted = false;
 
     // A fresh subscription reads the LIVE active connection, so a URL switch (or
     // a rotated secret) reconnects with the current base URL and bearer. The
     // manager is the sole reconnect authority: socket open/close are reported to
     // it, and it drives every reopen (probe → URL-switch → reopen, back off while
-    // offline, freeze on server_shutdown). shouldReconnect keeps the relay from
-    // reconnecting behind it.
+    // offline, cool down on server_shutdown). shouldReconnect keeps the relay
+    // from reconnecting behind it.
     const openSubscription = () => {
       subscriptionRef.current?.close();
       const current = activeConnection() ?? connection;
@@ -121,36 +127,60 @@ export function useSessionTranscript(sessionId: string | null) {
       });
     };
 
-    fetchEvents(sessionId, 0).then((initial) => {
-      if (cancelled) return;
-      cancelPendingEventFlush();
-      setEvents(initial);
-      sinceRef.current = initial.reduce((max, e) => Math.max(max, e.seq), 0);
+    const startRelay = () => {
+      if (cancelled || relayStarted) return;
+      relayStarted = true;
+      let manager: ConnectionManager | null = null;
+      let unsubscribe: (() => void) | null = null;
+      try {
+        manager = createNativeConnectionManager({
+          candidateUrls: connection.candidateUrls ?? [connection.serverUrl],
+          initialUrl: connection.serverUrl,
+          onActiveUrl: (url) => {
+            applyConnection({ ...(activeConnection() ?? connection), serverUrl: url });
+          },
+          reopen: openSubscription,
+        });
+        managerRef.current = manager;
+        unsubscribe = manager.subscribe(setConnectionState);
+        openSubscription();
+        manager.start();
+        cleanupManager = () => {
+          unsubscribe?.();
+          manager?.dispose();
+        };
+      } catch {
+        unsubscribe?.();
+        manager?.dispose();
+        if (managerRef.current === manager) managerRef.current = null;
+        subscriptionRef.current?.close();
+        subscriptionRef.current = null;
+        relayStarted = false;
+        setConnectionState('offline');
+      }
+    };
 
-      // Create the manager BEFORE the first socket so its lifecycle hooks are
-      // live from the very first connection, not just after a race.
-      const manager = createNativeConnectionManager({
-        candidateUrls: connection.candidateUrls ?? [connection.serverUrl],
-        initialUrl: connection.serverUrl,
-        onActiveUrl: (url) => {
-          // Winner moved (network change): repoint the api client at the new base
-          // URL, keeping the same credential. The manager reopens the socket next.
-          applyConnection({ ...(activeConnection() ?? connection), serverUrl: url });
-        },
-        reopen: openSubscription,
-      });
-      managerRef.current = manager;
-      const unsubscribe = manager.subscribe(setConnectionState);
-      openSubscription();
-      manager.start();
-      cleanupManager = () => {
-        unsubscribe();
-        manager.dispose();
-      };
-    });
+    const fallbackTimer = setTimeout(startRelay, BOOTSTRAP_RELAY_FALLBACK_MS);
+
+    void (async () => {
+      try {
+        const initial = await fetchEvents(sessionId, 0);
+        if (cancelled) return;
+        setEvents((current) => mergeEvents(current, initial));
+        const fetchedSeq = initial.reduce((max, e) => Math.max(max, e.seq), 0);
+        sinceRef.current = Math.max(sinceRef.current, fetchedSeq);
+      } catch {
+        // REST bootstrap is optional: starting at seq 0 lets durable relay replay
+        // recover the full transcript after a transient HTTP failure.
+      }
+      if (cancelled) return;
+      clearTimeout(fallbackTimer);
+      startRelay();
+    })();
 
     return () => {
       cancelled = true;
+      clearTimeout(fallbackTimer);
       cleanupManager?.();
       managerRef.current = null;
       subscriptionRef.current?.close();

@@ -48,7 +48,11 @@ import { EventsRepository } from './persistence/events.repository';
 import { ProviderRequestsRepository } from './persistence/provider-requests.repository';
 import { SessionsRepository } from './persistence/sessions.repository';
 import { SteerQueueRepository } from './persistence/steer-queue.repository';
-import { resolveVerifyCommand, runVerifyCommand } from './session-verifier';
+import {
+  resolveVerifyCommand,
+  runVerifyCommand,
+  VERIFY_TIMEOUT_MS,
+} from './session-verifier';
 import {
   buildFeedbackMessage,
   decideNextStep,
@@ -105,7 +109,10 @@ export class SessionsService implements OnModuleDestroy {
   // Fire-and-forget async work (drained queued steers) tracked so shutdown can
   // await it before the DB handle is torn down.
   private readonly pendingWork = new Set<Promise<unknown>>();
+  private readonly verifierControllers = new Map<string, AbortController>();
   private readonly stalledRunTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly interruptForceIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly interruptAttempts = new Map<string, symbol>();
   private readonly transcriptWatchers = new Map<
     string,
     {
@@ -442,16 +449,18 @@ export class SessionsService implements OnModuleDestroy {
 
     this.locallyProducing.add(id);
     try {
-      await provider.steer(id, trimmed, {
+      const steering = provider.steer(id, trimmed, {
         ...this.buildAgentRunContext(current),
         attachments: persisted,
         forceResume: forceResume === true,
         ...(origin ? { steerOrigin: origin } : {}),
       });
+      this.trackPendingWork(steering);
+      await steering;
     } finally {
       this.locallyProducing.delete(id);
     }
-    void this.maybeVerify(id);
+    this.trackPendingWork(this.maybeVerify(id));
     return this.requireSession(id);
   }
 
@@ -489,14 +498,25 @@ export class SessionsService implements OnModuleDestroy {
     if (!provider.capabilities.steerWhileRunning || !provider.steerMidRun) return false;
     this.locallyProducing.add(session.id);
     try {
-      return await provider.steerMidRun(session.id, message, {
+      const steering = provider.steerMidRun(session.id, message, {
         ...this.buildAgentRunContext(session),
         attachments,
         ...(origin ? { steerOrigin: origin } : {}),
       });
+      this.trackPendingWork(steering);
+      return await steering;
     } finally {
       this.locallyProducing.delete(session.id);
     }
+  }
+
+  private trackPendingWork<T>(work: Promise<T>): Promise<T> {
+    this.pendingWork.add(work);
+    void work.then(
+      () => this.pendingWork.delete(work),
+      () => this.pendingWork.delete(work),
+    );
+    return work;
   }
 
   private enqueueSteer(
@@ -713,22 +733,53 @@ export class SessionsService implements OnModuleDestroy {
     if (!provider.capabilities.interrupt || !provider.interrupt) {
       throw new BadRequestException(`Interrupt not supported by provider ${provider.id}`);
     }
-    await provider.interrupt(id);
+    const attempt = Symbol(id);
+    this.armInterruptForceIdle(id, attempt);
+    try {
+      await provider.interrupt(id);
+    } catch (error) {
+      if (this.interruptAttempts.get(id) === attempt) this.clearInterruptForceIdleWatch(id);
+      throw error;
+    }
+    const current = this.sessions.findById(id);
+    if (this.interruptAttempts.get(id) !== attempt || this.destroyed || !current) return;
     this.appendAndEmit(id, 'interrupted', {});
+    if (current.status !== 'RUNNING') this.interruptAttempts.delete(id);
+  }
+
+  private armInterruptForceIdle(id: string, attempt: symbol): void {
+    this.clearInterruptForceIdleWatch(id);
+    this.interruptAttempts.set(id, attempt);
     // A hung provider stream can swallow the abort and leave the run pending
     // forever; if the session is still RUNNING after the grace period, drop
     // the zombie handle and force it idle so the user is never stuck.
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      if (this.interruptAttempts.get(id) !== attempt) return;
+      this.interruptAttempts.delete(id);
+      this.interruptForceIdleTimers.delete(id);
       try {
         const current = this.sessions.findById(id);
         if (current?.status !== 'RUNNING') return;
-        this.agents.resolveForSession(current).dispose(id);
+        this.disposeProviderSession(current);
         this.locallyProducing.delete(id);
         this.transition(id, 'IDLE');
       } catch {
         // Session deleted while the grace timer was pending — nothing to do.
       }
     }, this.interruptForceIdleMs);
+    this.interruptForceIdleTimers.set(id, timer);
+  }
+
+  private clearInterruptForceIdleWatch(id: string): void {
+    this.interruptAttempts.delete(id);
+    this.cancelInterruptForceIdleTimer(id);
+  }
+
+  private cancelInterruptForceIdleTimer(id: string): void {
+    const timer = this.interruptForceIdleTimers.get(id);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.interruptForceIdleTimers.delete(id);
   }
 
   async setSessionModel(
@@ -783,7 +834,7 @@ export class SessionsService implements OnModuleDestroy {
       throw new BadRequestException(`Cannot pause session in status ${session.status}`);
     }
     if (session.status === 'RUNNING') {
-      this.agents.resolveForSession(session).dispose(id);
+      this.disposeProviderSession(session);
     }
     this.cancelProviderRequests(id);
     this.transition(id, 'PAUSED');
@@ -795,7 +846,7 @@ export class SessionsService implements OnModuleDestroy {
     if (!canTransition(session.status, 'ARCHIVED')) {
       throw new BadRequestException(`Cannot archive session in status ${session.status}`);
     }
-    this.agents.resolveForSession(session).dispose(id);
+    this.disposeProviderSession(session);
     this.cancelProviderRequests(id);
     this.steerQueue.deleteForSession(id);
     this.transition(id, 'ARCHIVED');
@@ -827,12 +878,22 @@ export class SessionsService implements OnModuleDestroy {
     if (session.status !== 'ARCHIVED') {
       throw new BadRequestException(`Cannot delete session in status ${session.status}; archive first`);
     }
-    this.agents.resolveForSession(session).dispose(id);
+    this.disposeProviderSession(session);
     this.cancelProviderRequests(id);
     this.streams.delete(id);
     this.steerQueue.deleteForSession(id);
     this.media?.deleteSession(id);
     this.sessions.delete(id);
+  }
+
+  /** Preserve buffered output, fence stale callbacks, then release the SDK. */
+  private disposeProviderSession(session: SessionDto): void {
+    this.clearInterruptForceIdleWatch(session.id);
+    this.verifierControllers.get(session.id)?.abort();
+    const provider = this.agents.resolveForSession(session);
+    provider.flushPendingEvents?.(session.id);
+    provider.invalidateRun?.(session.id);
+    provider.dispose(session.id);
   }
 
   /** Raw bytes of a stored chat image, or null if the id is unknown/malformed. */
@@ -857,6 +918,11 @@ export class SessionsService implements OnModuleDestroy {
 
   async onModuleDestroy(): Promise<void> {
     this.destroyed = true;
+    for (const controller of this.verifierControllers.values()) controller.abort();
+    this.verifierControllers.clear();
+    for (const timer of this.interruptForceIdleTimers.values()) clearTimeout(timer);
+    this.interruptForceIdleTimers.clear();
+    this.interruptAttempts.clear();
     for (const timer of this.stalledRunTimers.values()) clearTimeout(timer);
     this.stalledRunTimers.clear();
     for (const entry of this.transcriptWatchers.values()) {
@@ -885,7 +951,7 @@ export class SessionsService implements OnModuleDestroy {
    * regardless. A hung provider must never hold the daemon's shutdown hostage.
    */
   private async drainInFlightForShutdown(): Promise<void> {
-    this.abortActiveTurns();
+    this.disposeActiveTurns();
     const deadline = Date.now() + this.shutdownDrainTimeoutMs;
     while (Date.now() < deadline) {
       const inFlight = [...this.runPromises.values(), ...this.pendingWork];
@@ -901,25 +967,15 @@ export class SessionsService implements OnModuleDestroy {
     }
   }
 
-  /** Ask every locally-producing session's provider to abort its active turn. */
-  private abortActiveTurns(): void {
+  /** Fence and release every locally-producing provider before the DB closes. */
+  private disposeActiveTurns(): void {
     for (const id of [...this.locallyProducing]) {
       const session = this.sessions.findById(id);
       if (!session) continue;
-      let provider;
       try {
-        provider = this.agents.resolveForSession(session);
+        this.disposeProviderSession(session);
       } catch {
-        continue;
-      }
-      try {
-        if (provider.capabilities.interrupt && provider.interrupt) {
-          void provider.interrupt(id).catch(() => undefined);
-        } else {
-          provider.dispose(id);
-        }
-      } catch {
-        // Best-effort abort — shutdown proceeds regardless.
+        // Best-effort teardown — shutdown proceeds regardless.
       }
     }
   }
@@ -1277,6 +1333,7 @@ export class SessionsService implements OnModuleDestroy {
   private transition(id: string, status: SessionStatus): void {
     this.sessions.updateStatus(id, status);
     this.updateStalledRunWatchForStatus(id, status);
+    if (status !== 'RUNNING') this.cancelInterruptForceIdleTimer(id);
     this.appendAndEmit(id, 'status', { status });
     if (status === 'IDLE') {
       setTimeout(() => this.drainSteerQueue(id), 0);
@@ -1293,6 +1350,12 @@ export class SessionsService implements OnModuleDestroy {
     id: string,
     event: { type: string; payload: unknown; seq?: number; createdAt?: number },
   ): void {
+    if (
+      event.type === 'status' &&
+      (event.payload as { status?: unknown } | null)?.status !== 'RUNNING'
+    ) {
+      this.cancelInterruptForceIdleTimer(id);
+    }
     if (typeof event.seq === 'number' && event.seq > 0) {
       this.emit(id, {
         seq: event.seq,
@@ -1359,7 +1422,7 @@ export class SessionsService implements OnModuleDestroy {
       return;
     }
     try {
-      this.agents.resolveForSession(session).dispose(id);
+      this.disposeProviderSession(session);
     } catch {
       // Provider lookup/dispose failure should not leave the UI wedged RUNNING.
     }
@@ -1464,10 +1527,12 @@ export class SessionsService implements OnModuleDestroy {
     }
 
     let result: VerifyResultPayload | null = null;
+    const controller = new AbortController();
+    this.verifierControllers.set(sessionId, controller);
     this.verifying.add(sessionId);
     try {
       this.appendAndEmit(sessionId, 'verify_start', { command: command.display });
-      const run = await runVerifyCommand(command, cwd);
+      const run = await runVerifyCommand(command, cwd, VERIFY_TIMEOUT_MS, controller.signal);
       // The verify command is a spawned shell that can outlive a shutdown; after
       // it resolves the DB handle may be closed. Bail before touching it.
       if (this.destroyed || !this.sessions.findById(sessionId)) return;
@@ -1486,6 +1551,9 @@ export class SessionsService implements OnModuleDestroy {
       };
       this.appendAndEmit(sessionId, 'verify_result', result);
     } finally {
+      if (this.verifierControllers.get(sessionId) === controller) {
+        this.verifierControllers.delete(sessionId);
+      }
       this.verifying.delete(sessionId);
     }
 

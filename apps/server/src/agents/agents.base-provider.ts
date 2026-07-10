@@ -32,7 +32,7 @@ interface DeltaBuffer {
   base: Record<string, unknown>;
   delta: string;
   emit?: EventEmitter;
-  timer: ReturnType<typeof setTimeout>;
+  timer: ReturnType<typeof setTimeout> | null;
 }
 
 interface PreviewBuffer {
@@ -87,7 +87,15 @@ export abstract class BaseAgentProvider implements AgentProvider {
     await this.runOrSteer(sessionId, message, true, context);
   }
 
-  dispose(_sessionId: string): void {}
+  dispose(sessionId: string): void {
+    this.flushPendingEvents(sessionId);
+    this.invalidateRun(sessionId);
+  }
+
+  /** Make every callback carrying the current run's guarded emitter stale. */
+  invalidateRun(sessionId: string): void {
+    this.runGenerations.set(sessionId, (this.runGenerations.get(sessionId) ?? 0) + 1);
+  }
 
   /** Default no-op; providers that cache availability/models override this. */
   bustCache(): void {}
@@ -101,6 +109,11 @@ export abstract class BaseAgentProvider implements AgentProvider {
 
   private readonly deltaBuffers = new Map<string, DeltaBuffer>();
   private readonly previewBuffers = new Map<string, PreviewBuffer>();
+  private readonly runGenerations = new Map<string, number>();
+  private readonly guardedEmitters = new WeakMap<
+    EventEmitter,
+    { sessionId: string; generation: number }
+  >();
 
   protected pushEvent(
     sessionId: string,
@@ -108,6 +121,7 @@ export abstract class BaseAgentProvider implements AgentProvider {
     payload: unknown,
     emit?: EventEmitter,
   ): void {
+    if (!this.isEmitterCurrent(sessionId, emit)) return;
     const delta = coalescableDelta(type, payload);
     if (delta === null) {
       // Non-delta events flush first so transcript ordering is preserved.
@@ -125,21 +139,15 @@ export abstract class BaseAgentProvider implements AgentProvider {
 
     const current = this.deltaBuffers.get(sessionId);
     if (!current) {
-      this.deltaBuffers.set(sessionId, {
+      const next: DeltaBuffer = {
         type,
         base,
         delta,
         emit,
-        timer: setTimeout(() => {
-          try {
-            this.flushDeltas(sessionId);
-          } catch {
-            // Shutdown race: the database can close while a quiet-stream flush
-            // timer is still pending. Synchronous flushes still throw loudly.
-            this.deltaBuffers.delete(sessionId);
-          }
-        }, DELTA_FLUSH_MS),
-      });
+        timer: null,
+      };
+      this.deltaBuffers.set(sessionId, next);
+      this.scheduleDeltaFlush(sessionId, next);
       return;
     }
     current.delta += delta;
@@ -163,17 +171,45 @@ export abstract class BaseAgentProvider implements AgentProvider {
   protected flushDeltas(sessionId: string): void {
     const buffered = this.deltaBuffers.get(sessionId);
     if (!buffered) return;
-    clearTimeout(buffered.timer);
-    this.deltaBuffers.delete(sessionId);
-    const event = this.events.append(sessionId, buffered.type, {
-      ...buffered.base,
-      delta: buffered.delta,
-    });
+    if (buffered.timer) clearTimeout(buffered.timer);
+    buffered.timer = null;
+    let event;
+    try {
+      event = this.events.append(sessionId, buffered.type, {
+        ...buffered.base,
+        delta: buffered.delta,
+      });
+    } catch (error) {
+      // Keep the exact buffer in place. Timer and synchronous failures are both
+      // retryable; deletion happens only after append has committed.
+      if (this.deltaBuffers.get(sessionId) === buffered) {
+        this.scheduleDeltaFlush(sessionId, buffered);
+      }
+      throw error;
+    }
+    if (this.deltaBuffers.get(sessionId) === buffered) {
+      this.deltaBuffers.delete(sessionId);
+    }
+    // append already committed; always fan it out even if an append test hook
+    // synchronously installed the session's next buffer.
     buffered.emit?.(event);
   }
 
+  private scheduleDeltaFlush(sessionId: string, buffered: DeltaBuffer): void {
+    if (buffered.timer) clearTimeout(buffered.timer);
+    buffered.timer = setTimeout(() => {
+      buffered.timer = null;
+      try {
+        this.flushDeltas(sessionId);
+      } catch {
+        // flushDeltas retained the buffer and scheduled the bounded retry.
+      }
+    }, DELTA_FLUSH_MS);
+  }
+
   /** Update the session-list preview without turning every raw token into a DB write. */
-  protected touchPreview(sessionId: string, preview: string): void {
+  protected touchPreview(sessionId: string, preview: string, emit?: EventEmitter): void {
+    if (!this.isEmitterCurrent(sessionId, emit)) return;
     const buffered = this.previewBuffers.get(sessionId);
     if (buffered) {
       buffered.preview = preview;
@@ -223,24 +259,31 @@ export abstract class BaseAgentProvider implements AgentProvider {
     isSteer: boolean,
     context: AgentRunContext,
   ): Promise<void> {
+    // Starting a replacement run fences every callback from the previous SDK
+    // turn. Flush its already-accepted tail first so fencing never loses text.
+    this.flushPendingEvents(sessionId);
+    const generation = (this.runGenerations.get(sessionId) ?? 0) + 1;
+    this.runGenerations.set(sessionId, generation);
+    const runContext = this.guardRunContext(sessionId, generation, context);
     try {
       this.sessions.updateStatus(sessionId, 'RUNNING');
-      this.pushEvent(sessionId, 'status', { status: 'RUNNING' }, context.emit);
-      const images = eventImagesFromAttachments(context.attachments);
+      this.pushEvent(sessionId, 'status', { status: 'RUNNING' }, runContext.emit);
+      const images = eventImagesFromAttachments(runContext.attachments);
       // steerMeta (e.g. an auto-steer's origin/retryId) is stamped onto the
       // steer_message so consumers classify it explicitly, never by adjacency.
       const steerMeta =
         isSteer
-          ? { ...(context.steerOrigin ? { origin: context.steerOrigin } : {}), ...(context.steerMeta ?? {}) }
+          ? { ...(runContext.steerOrigin ? { origin: runContext.steerOrigin } : {}), ...(runContext.steerMeta ?? {}) }
           : undefined;
       this.pushEvent(
         sessionId,
         isSteer ? 'steer_message' : 'user_message',
         { text, ...(images ? { images } : {}), ...(steerMeta ?? {}) },
-        context.emit,
+        runContext.emit,
       );
 
-      await this.executePrompt(sessionId, text, isSteer, context);
+      await this.executePrompt(sessionId, text, isSteer, runContext);
+      if (!this.isRunCurrent(sessionId, generation)) return;
       this.flushPreview(sessionId);
 
       // The session may have been deleted (e.g. user deleted an archived
@@ -250,12 +293,39 @@ export abstract class BaseAgentProvider implements AgentProvider {
       const current = this.sessions.findById(sessionId);
       if (!current || current.status !== 'RUNNING') return;
       this.sessions.updateStatus(sessionId, 'IDLE');
-      this.pushEvent(sessionId, 'status', { status: 'IDLE' }, context.emit);
+      this.pushEvent(sessionId, 'status', { status: 'IDLE' }, runContext.emit);
     } catch (error) {
+      if (!this.isRunCurrent(sessionId, generation)) return;
       this.flushPreview(sessionId);
       if (error instanceof AgentRunCancelledError) return;
-      this.handleError(sessionId, error, context.emit);
+      this.handleError(sessionId, error, runContext.emit);
+    } finally {
+      if (this.isRunCurrent(sessionId, generation)) this.invalidateRun(sessionId);
     }
+  }
+
+  private guardRunContext(
+    sessionId: string,
+    generation: number,
+    context: AgentRunContext,
+  ): AgentRunContext {
+    const upstream = context.emit;
+    const guarded: EventEmitter = (event) => {
+      if (this.isRunCurrent(sessionId, generation)) upstream?.(event);
+    };
+    this.guardedEmitters.set(guarded, { sessionId, generation });
+    return { ...context, emit: guarded };
+  }
+
+  private isRunCurrent(sessionId: string, generation: number): boolean {
+    return this.runGenerations.get(sessionId) === generation;
+  }
+
+  private isEmitterCurrent(sessionId: string, emit?: EventEmitter): boolean {
+    if (!emit) return true;
+    const guard = this.guardedEmitters.get(emit);
+    return !guard ||
+      (guard.sessionId === sessionId && this.isRunCurrent(sessionId, guard.generation));
   }
 
   private handleError(sessionId: string, error: unknown, emit?: EventEmitter): void {
