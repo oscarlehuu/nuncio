@@ -26,7 +26,7 @@ function registryModel(provider = 'anthropic', id = 'model-1') {
     id,
     name: `Model ${id}`,
     reasoning: true,
-    thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high' },
+    thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high', max: 'max' },
   };
 }
 
@@ -197,6 +197,15 @@ describe('PiAgentProvider', () => {
     expect(setThinkingLevelMock).toHaveBeenCalledWith('high');
   });
 
+  it('setModel applies Max when the active Pi model advertises it', async () => {
+    const created = sessions.create({ prompt: 'switch to max', provider: 'pi' });
+    await provider.run(created.id, created.prompt, { emit: () => {} });
+
+    await provider.setModel(created.id, 'anthropic:model-1', { thinkingLevel: 'max' });
+
+    expect(setThinkingLevelMock).toHaveBeenCalledWith('max');
+  });
+
   it('setModel no-ops without an active session', async () => {
     await provider.setModel('no-such-session', 'anthropic:model-1', { thinkingLevel: 'high' });
     expect(setModelMock).not.toHaveBeenCalled();
@@ -318,6 +327,43 @@ describe('PiAgentProvider', () => {
     expect(
       emitted.some((e) => e.type === 'assistant_message' && e.payload.text === '(no response)'),
     ).toBe(false);
+  });
+
+  it('settles successfully when Pi auto-retries after an assistant error', async () => {
+    const emitted: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    promptBehavior = async () => {
+      subscribedHandler?.({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          stopReason: 'error',
+          errorMessage: 'temporary upstream failure',
+          content: [],
+        },
+      });
+      subscribedHandler?.({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          stopReason: 'stop',
+          content: [{ type: 'text', text: 'Recovered after retry' }],
+        },
+      });
+    };
+    const created = sessions.create({ prompt: 'retry this turn', provider: 'pi' });
+
+    await provider.run(created.id, created.prompt, {
+      emit: (event) => emitted.push(event as { type: string; payload: Record<string, unknown> }),
+    });
+
+    expect(sessions.findById(created.id)?.status).toBe('IDLE');
+    expect(emitted).toContainEqual(
+      expect.objectContaining({
+        type: 'assistant_message',
+        payload: { text: 'Recovered after retry' },
+      }),
+    );
+    expect(emitted.some((event) => event.type === 'error')).toBe(false);
   });
 
   it('omits image options when there are no attachments', async () => {

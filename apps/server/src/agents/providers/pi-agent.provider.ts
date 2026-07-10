@@ -461,6 +461,9 @@ export class PiAgentProvider extends BaseAgentProvider {
             // error path so the session lands in ERROR with an error event.
             lastTurnError = message.errorMessage || 'Model call failed.';
           } else if (message.stopReason !== 'aborted') {
+            // Pi may emit a failed attempt before an automatic retry succeeds.
+            // Settlement follows the latest non-aborted assistant completion.
+            lastTurnError = null;
             const text = (message.content ?? [])
               .filter((block) => block?.type === 'text' && typeof block.text === 'string')
               .map((block) => block.text)

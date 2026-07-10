@@ -2,4 +2,4 @@
 "nuncio": patch
 ---
 
-Improved Codex GPT-5.6 controls by labeling Ultra as multi-agent and resetting reasoning choices a selected model no longer supports.
+Added current GPT-5.6 controls across Codex and Pi, including Codex Ultra multi-agent labeling, Pi Max thinking, safe model-switch resets, and successful Pi auto-retry recovery.
