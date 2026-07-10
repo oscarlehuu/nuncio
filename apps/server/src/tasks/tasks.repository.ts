@@ -13,6 +13,7 @@ import {
 
 @Injectable()
 export class TasksRepository {
+  private readonly cancellationReservations = new Set<string>();
   constructor(private readonly database: DatabaseService) {}
 
   create(input: CreateTaskDto): TaskDto {
@@ -102,18 +103,34 @@ export class TasksRepository {
   /** Atomically claim the oldest QUEUED task past its hold window, marking it RUNNING. */
   claimNextQueued(): TaskDto | null {
     const now = Date.now();
+    const candidates = this.database.db
+      .prepare<{ id: string }, [number]>(
+        `SELECT id FROM tasks
+         WHERE status = 'QUEUED' AND (hold_until IS NULL OR hold_until <= ?)
+         ORDER BY created_at ASC, rowid ASC`,
+      )
+      .all(now);
+    const candidate = candidates.find((row) => !this.cancellationReservations.has(row.id));
+    if (!candidate) return null;
     const row = this.database.db
-      .prepare<TaskRow, [number, number, number]>(
+      .prepare<TaskRow, [number, number, string]>(
         `UPDATE tasks SET status = 'RUNNING', started_at = ?, updated_at = ?
-         WHERE id = (
-           SELECT id FROM tasks
-           WHERE status = 'QUEUED' AND (hold_until IS NULL OR hold_until <= ?)
-           ORDER BY created_at ASC, rowid ASC LIMIT 1
-         )
+         WHERE id = ? AND status = 'QUEUED'
          RETURNING *`,
       )
-      .get(now, now, now);
+      .get(now, now, candidate.id);
     return row ? taskRowToDto(row) : null;
+  }
+
+  reserveCancellation(id: string): TaskDto | null {
+    const task = this.findById(id);
+    if (!task || task.status !== 'QUEUED') return null;
+    this.cancellationReservations.add(id);
+    return task;
+  }
+
+  releaseCancellation(id: string): void {
+    this.cancellationReservations.delete(id);
   }
 
   attachSession(id: string, sessionId: string): void {
@@ -227,6 +244,7 @@ export class TasksRepository {
          RETURNING *`,
       )
       .get(now, now, id);
+    this.cancellationReservations.delete(id);
     return row ? taskRowToDto(row) : null;
   }
 

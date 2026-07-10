@@ -549,6 +549,10 @@ export abstract class BaseAgentProvider implements AgentProvider {
         { text, ...(images ? { images } : {}), ...(steerMeta ?? {}) },
         runContext.emit,
       );
+      // Never let the SDK perform workspace side effects before the initiating
+      // input is reconstructable from the durable event log.
+      await this.waitForPendingEvents(sessionId);
+      if (!this.isRunCurrent(sessionId, generation)) return;
 
       await this.executePrompt(sessionId, text, isSteer, runContext);
       if (!this.isRunCurrent(sessionId, generation)) return;

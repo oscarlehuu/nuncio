@@ -1002,6 +1002,7 @@ describe('TasksService', () => {
         const cancelling = service.cancel(victim.id);
         await new Promise((resolve) => setTimeout(resolve, 20));
         expect(repo.claimNextQueued()).toBeNull();
+        expect(repo.findById(victim.id)?.holdUntil).toBeNull();
         storageAvailable = true;
         expect((await cancelling).status).toBe('CANCELLED');
       } finally {

@@ -362,6 +362,33 @@ describe('SessionsService lifecycle (phase 3)', () => {
       expect(disposeSpy).toHaveBeenCalledWith(id);
       disposeSpy.mockRestore();
     });
+
+    it('surfaces a permanent media cleanup failure instead of retrying forever', async () => {
+      const id = await seedArchivedWithEvents();
+      const internals = service as unknown as { media?: { deleteSession: (sessionId: string) => void } };
+      const originalMedia = internals.media;
+      let cleanupCalls = 0;
+      internals.media = { deleteSession: () => {
+        cleanupCalls += 1;
+        throw new Error('immutable media directory');
+      } };
+      try {
+        service.delete(id);
+        const started = Date.now();
+        while (!events.list(id).some((event) => event.type === 'error') && Date.now() - started < 1_000) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        expect(events.list(id)).toContainEqual(expect.objectContaining({
+          type: 'error',
+          payload: expect.objectContaining({ message: expect.stringContaining('immutable media directory') }),
+        }));
+        const callsAfterSurface = cleanupCalls;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        expect(cleanupCalls).toBe(callsAfterSurface);
+      } finally {
+        internals.media = originalMedia;
+      }
+    });
   });
 
   it('delegates lifecycle teardown once to provider-owned disposal', () => {

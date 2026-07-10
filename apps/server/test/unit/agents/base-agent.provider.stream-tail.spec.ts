@@ -26,6 +26,7 @@ class ScriptedTailProvider extends BaseAgentProvider {
   readonly id = 'scripted-tail';
   readonly name = 'Scripted Tail';
   script: Step[] = [];
+  executions = 0;
 
   constructor(sessions: SessionsRepository, events: EventsRepository) {
     super(sessions, events);
@@ -45,6 +46,7 @@ class ScriptedTailProvider extends BaseAgentProvider {
     _isSteer: boolean,
     context: AgentRunContext,
   ): Promise<void> {
+    this.executions += 1;
     for (const step of this.script) {
       if ('throw' in step) {
         // A provider stream that dies mid-message: deltas are already buffered
@@ -462,6 +464,25 @@ describe('BaseAgentProvider streamed-tail preservation', () => {
     events.append = originalAppend as EventsRepository['append'];
     expect(sessions.findById(created.id)?.status).toBe('IDLE');
     expect(rowStatusAtFanout).toEqual(['IDLE']);
+  });
+
+  it('does not invoke the provider until the initiating input event is durable', async () => {
+    provider.script = [{ type: 'assistant_message', payload: { text: 'after input' } }];
+    provider.executions = 0;
+    const created = sessions.create({ prompt: 'durable input first', provider: 'scripted-tail' });
+    const originalAppend = events.append.bind(events);
+    let blockInput = true;
+    events.append = ((sessionId: string, type: string, payload: unknown, notify?: boolean) => {
+      if (type === 'user_message' && blockInput) throw new Error('input storage unavailable');
+      return originalAppend(sessionId, type, payload, notify);
+    }) as EventsRepository['append'];
+    const running = provider.run(created.id, created.prompt, { emit: () => {} });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(provider.executions).toBe(0);
+    blockInput = false;
+    await running;
+    events.append = originalAppend as EventsRepository['append'];
+    expect(provider.executions).toBe(1);
   });
 
   it('keeps later deltas in bounded ordered chunks while a full buffer retries', async () => {

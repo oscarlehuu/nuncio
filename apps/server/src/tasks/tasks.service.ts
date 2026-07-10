@@ -300,9 +300,8 @@ export class TasksService implements OnModuleDestroy {
 
   async cancel(id: string): Promise<TaskDto> {
     const task = this.requireTask(id);
-    const reserved = this.tasks.updateWhileQueued(id, { holdUntil: Number.MAX_SAFE_INTEGER });
+    const reserved = this.tasks.reserveCancellation(id);
     if (!reserved) throw new BadRequestException('Only queued tasks can be cancelled');
-    const previousHold = task.holdUntil ?? null;
     // A cancelled task is QUEUED and never ran, so it has no child session and
     // needs no async snapshot — build the digest synchronously so the cancel and
     // the parent-log append commit as one atomic unit.
@@ -328,7 +327,7 @@ export class TasksService implements OnModuleDestroy {
     } catch (error) {
       // The digest/cancel transaction did not commit. Release the cancellation
       // lease so normal task execution can resume instead of stranding the row.
-      this.tasks.updateWhileQueued(id, { holdUntil: previousHold });
+      this.tasks.releaseCancellation(id);
       this.pump();
       throw error;
     }

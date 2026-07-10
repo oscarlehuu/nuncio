@@ -70,6 +70,13 @@ type StreamListener = (event: SessionEvent) => void;
 
 const DEFAULT_BACKFILL_LIMIT = 200;
 
+class PermanentLifecycleCleanupError extends Error {
+  constructor(readonly cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = 'PermanentLifecycleCleanupError';
+  }
+}
+
 /** Trailing events scanned to decide whether a run is blocked on your input. */
 const PENDING_SCAN_TAIL = 200;
 const DEFAULT_STALLED_RUN_FORCE_IDLE_MS = 30 * 60 * 1000;
@@ -485,6 +492,9 @@ export class SessionsService implements OnModuleDestroy {
       });
       this.trackPendingWork(steering);
       await steering;
+    } catch (error) {
+      if (this.sessions.findById(id)?.status === 'RUNNING') this.transition(id, 'IDLE');
+      throw error;
     } finally {
       this.locallyProducing.delete(id);
     }
@@ -1078,7 +1088,11 @@ export class SessionsService implements OnModuleDestroy {
     this.cancelProviderRequests(id);
     this.streams.delete(id);
     this.steerQueue.deleteForSession(id);
-    this.media?.deleteSession(id);
+    try {
+      this.media?.deleteSession(id);
+    } catch (error) {
+      throw new PermanentLifecycleCleanupError(error);
+    }
     this.sessions.delete(id);
   }
 
@@ -1174,7 +1188,16 @@ export class SessionsService implements OnModuleDestroy {
         try {
           finish();
           return;
-        } catch {
+        } catch (error) {
+          if (error instanceof PermanentLifecycleCleanupError) {
+            try {
+              this.surfaceLifecycleRetryFailure(current, operation, error.cause);
+              return;
+            } catch {
+              // Retry only until the permanent cleanup failure is durably visible.
+              continue;
+            }
+          }
           // The lifecycle transition + status event commit atomically below.
           // A transient persistence failure therefore leaves the old status in
           // place and is safe to retry without losing the requested operation.

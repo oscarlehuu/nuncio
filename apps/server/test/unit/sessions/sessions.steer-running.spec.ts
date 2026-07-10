@@ -221,6 +221,18 @@ describe('SessionsService steer while RUNNING', () => {
     expect(events.list(created.id).filter((event) => event.type === 'steer_queued')).toHaveLength(1);
   });
 
+  it('returns an IDLE claim when provider preflight flush rejects', async () => {
+    const created = sessions.create({ prompt: 'preflight flush failure', provider: 'cursor' });
+    sessions.updateStatus(created.id, 'RUNNING');
+    sessions.updateStatus(created.id, 'IDLE');
+    installProvider(stubProvider({
+      steer: async () => { throw new RetainedEventFlushError(new Error('tail still pending')); },
+    }));
+
+    await expect(service.steer(created.id, 'retry later')).rejects.toThrow('tail still pending');
+    expect(sessions.findById(created.id)?.status).toBe('IDLE');
+  });
+
   it('dedupes steer_message against hydrated user_message on transcript refresh', () => {
     const created = sessions.create({ prompt: 'dedupe test', provider: 'cursor' });
     events.append(created.id, 'steer_message', { text: 'follow the plan' });
