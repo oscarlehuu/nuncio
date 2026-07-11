@@ -209,37 +209,19 @@ describe('HomeView', () => {
     expect(bar).toContainElement(model);
   });
 
-  it('shows Codex approval mode inside the prompt frame, with the model in the composer bar', async () => {
+  it('keeps Codex on the shared model picker without exposing permission controls', async () => {
     const { container } = render(
       <HomeView
         sessionCount={0}
         onSubmit={vi.fn()}
         providers={CODEX_ONLY_PROVIDERS}
-        approvalMode="full-access"
-        onApprovalModeChange={vi.fn()}
       />,
     );
 
-    const approval = await screen.findByRole('button', { name: /approval mode: full access/i });
     const model = await screen.findByRole('button', { name: /gpt 5.5/i });
-    expect(container.querySelector('.home-composer-prompt-frame')).toContainElement(approval);
+    expect(screen.queryByRole('button', { name: /approval mode/i })).toBeNull();
     expect(container.querySelector('.home-composer-bar')).toContainElement(model);
     expect(container.querySelector('.home-composer-prompt-frame')).not.toContainElement(model);
-  });
-
-  it('hides approval mode for non-Codex engines even when an approval handler exists', async () => {
-    render(
-      <HomeView
-        sessionCount={0}
-        onSubmit={vi.fn()}
-        providers={CURSOR_AND_PI}
-        approvalMode="full-access"
-        onApprovalModeChange={vi.fn()}
-      />,
-    );
-
-    expect(await screen.findByRole('button', { name: /haiku/i })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /approval mode/i })).toBeNull();
   });
 
   it('forwards the selected project and branch as local workspace by default', async () => {
@@ -336,15 +318,15 @@ describe('HomeView', () => {
     expect(screen.getByRole('radio', { name: 'Solo' })).toHaveAttribute('aria-checked', 'true');
   });
 
-  it('Crew mode hides Solo model and Codex approval controls', async () => {
+  it('Crew mode swaps the Solo model for the configured crew profile', async () => {
     render(
       <HomeView sessionCount={0} onSubmit={vi.fn()} providers={CODEX_ONLY_PROVIDERS}
-        onApprovalModeChange={vi.fn()} onCrewCreated={vi.fn()} />,
+        onCrewCreated={vi.fn()} />,
     );
     expect(await screen.findByRole('button', { name: /gpt 5.5/i })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('radio', { name: 'Crew' }));
     expect(screen.queryByRole('button', { name: /gpt 5.5/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /approval mode/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: CREW_PROFILE.name })).toBeInTheDocument();
   });
 
   it('replaces the Solo workspace choice with a fixed Crew worktree indicator', async () => {

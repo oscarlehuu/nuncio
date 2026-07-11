@@ -11,10 +11,8 @@ import {
 import { BranchPicker } from './branch-picker';
 import { ModelPicker } from './model-picker';
 import { ProjectPicker } from './project-picker';
-import { ApprovalModePicker, type ApprovalMode } from './approval-mode-picker';
 import { WorkspaceModePicker, type WorkspaceMode } from './workspace-mode-picker';
 import { cn } from '@/lib/utils';
-import { isCodexApprovalEngine } from '../lib/codex-approval-engine';
 import { defaultOptionsForModel } from '../lib/model-picker-catalog';
 import type { ModelOptionsMap } from '../lib/model-options';
 import {
@@ -77,8 +75,6 @@ interface HomeViewProps {
     attachments?: MessageAttachment[],
   ) => Promise<void>;
   onContinueOnMobile?: () => void;
-  approvalMode?: ApprovalMode;
-  onApprovalModeChange?: (mode: ApprovalMode) => void | Promise<void>;
   loading?: boolean;
   /** Lead-owned routing callback after the Crew task is durably created. */
   onCrewCreated?: (taskId: string) => void;
@@ -91,8 +87,6 @@ export function HomeView({
   providers,
   onSubmit,
   onContinueOnMobile,
-  approvalMode = 'full-access',
-  onApprovalModeChange,
   loading,
   onCrewCreated,
 }: HomeViewProps) {
@@ -127,9 +121,6 @@ export function HomeView({
     [provider, catalog, crew.mode],
   );
   const useWorktree = workspaceMode === 'worktree';
-  const showApprovalMode =
-    crew.mode === 'solo' && !!onApprovalModeChange && isCodexApprovalEngine(provider, model);
-
   useEffect(() => {
     if (!catalogLoaded || !providers) return;
     const lookup = modelById(catalog);
@@ -300,15 +291,6 @@ export function HomeView({
                 embedded ? 'min-h-[60px] pt-3' : 'min-h-[112px] pt-5',
               )}
             />
-            {showApprovalMode ? (
-              <div className="home-composer-prompt-controls flex items-center gap-2 px-4 pb-1">
-                <ApprovalModePicker
-                  value={approvalMode}
-                  onChange={onApprovalModeChange}
-                  surface="embedded"
-                />
-              </div>
-            ) : null}
             {crew.mode === 'crew' ? (
               <ResolvedCrewPreview
                 resolution={crew.resolution}
@@ -334,6 +316,7 @@ export function HomeView({
                   onChange={handleModelChange}
                   providers={providers}
                   variant="text"
+                  compact
                 />
               ) : (
                 <CrewProfilePicker

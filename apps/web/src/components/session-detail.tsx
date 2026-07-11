@@ -29,7 +29,6 @@ import { deriveVerifyStatus } from '../lib/derive-verify-status';
 import { VerifyChip } from './verify-chip';
 import { projectDisplayName } from '../lib/projects';
 import { FALLBACK_PROVIDERS, modelById, prettyModelName, type ModelProvider } from '../lib/model-providers';
-import { isCodexApprovalEngine } from '../lib/codex-approval-engine';
 import { useContextUsage } from '../lib/use-context-usage';
 import { resolveTranscriptLinkTarget } from '../lib/transcript-link-target';
 import {
@@ -44,7 +43,6 @@ import { Transcript } from './session-transcript';
 import { PendingUserInputBanner } from './pending-user-input-banner';
 import { SubagentsPanel } from './subagents-panel';
 import { QueuedSteersPanel } from './queued-steers-panel';
-import { ApprovalModePicker, type ApprovalMode } from './approval-mode-picker';
 import { BrowserPanel, getDesktopBrowserBridge } from './browser-panel';
 import { FileExplorerPanel } from './file-explorer-panel';
 import { ChunkErrorBoundary } from './chunk-error-boundary';
@@ -110,8 +108,6 @@ interface SessionDetailProps {
   onContinueOnMobile?: () => void;
   /** Cursor IDE may still be running this CLI handoff chat on the host. */
   machineActive?: boolean;
-  approvalMode?: ApprovalMode;
-  onApprovalModeChange?: (mode: ApprovalMode) => void | Promise<void>;
   onRespondProviderRequest?: (
     requestId: string,
     decision: ProviderRequestDecision,
@@ -218,8 +214,6 @@ export function SessionDetail({
   onOpenSession,
   onContinueOnMobile,
   machineActive = false,
-  approvalMode = 'full-access',
-  onApprovalModeChange,
   onRespondProviderRequest,
   steering,
   lifecycleBusy,
@@ -292,8 +286,6 @@ export function SessionDetail({
   const hasPendingUserInput = pendingUserInput.length > 0;
   const interactionSupported = session.supportsInteraction ?? false;
   const providerLabel = session.provider === 'cursor' ? 'Cursor' : session.provider === 'pi' ? 'Pi' : session.provider;
-  const showApprovalMode =
-    !managedByCrew && !!onApprovalModeChange && isCodexApprovalEngine(session.provider, session.model);
   const steerWhileRunning = session.supportsSteerWhileRunning ?? false;
   const canAttachImages = !managedByCrew && (session.supportsImages ?? false) && !isArchived;
   const steerDisabled =
@@ -927,14 +919,6 @@ export function SessionDetail({
                 {modelName}
               </span>
               <ContextUsageButton usage={contextUsage} />
-              {showApprovalMode ? (
-                <ApprovalModePicker
-                  value={approvalMode}
-                  onChange={onApprovalModeChange}
-                  disabled={lifecycleBusy}
-                  surface="embedded"
-                />
-              ) : null}
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
               {isRunning && (

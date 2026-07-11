@@ -107,7 +107,7 @@ describe('ClaudeAgentProvider', () => {
       modelOptions: { effort: 'high' },
     });
     expect(capturedOptions?.model).toBe('sonnet');
-    expect(capturedOptions?.permissionMode).toBe('acceptEdits');
+    expect(capturedOptions?.permissionMode).toBe('bypassPermissions');
     expect(capturedOptions?.settingSources).toEqual([]);
     expect(capturedOptions?.includePartialMessages).toBe(true);
     expect(capturedOptions?.effort).toBe('high');
@@ -354,10 +354,10 @@ describe('ClaudeAgentProvider', () => {
   });
 
   describe('permission mode setting', () => {
-    it('defaults to acceptEdits when unset', async () => {
+    it('defaults to bypassPermissions when unset', async () => {
       const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
       await provider.run(created.id, 'hi', { cwd: '/tmp/ws', model: 'claude:haiku' });
-      expect(capturedOptions?.permissionMode).toBe('acceptEdits');
+      expect(capturedOptions?.permissionMode).toBe('bypassPermissions');
     });
 
     it('honours a configured mode and busts on setting change', async () => {
@@ -367,14 +367,14 @@ describe('ClaudeAgentProvider', () => {
       expect(capturedOptions?.permissionMode).toBe('plan');
     });
 
-    it('falls back to acceptEdits for an unknown value (e.g. stale env override)', async () => {
+    it('falls back to bypassPermissions for an unknown value (e.g. stale env override)', async () => {
       // The settings service validates the enum on write, so an out-of-band value
       // only reaches the resolver via env; guard against it there.
       process.env.NUNCIO_CLAUDE_PERMISSION_MODE = 'garbage';
       provider.bustCache();
       const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
       await provider.run(created.id, 'hi', { cwd: '/tmp/ws', model: 'claude:haiku' });
-      expect(capturedOptions?.permissionMode).toBe('acceptEdits');
+      expect(capturedOptions?.permissionMode).toBe('bypassPermissions');
     });
 
     it('an explicit read-only policy overrides global bypass and denies mutation before approval', async () => {

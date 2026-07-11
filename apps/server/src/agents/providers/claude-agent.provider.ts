@@ -59,7 +59,7 @@ import { InputQueue } from './claude-agent.input-queue';
 import { buildClaudeRuntimePolicyOptions } from './claude-runtime-policy';
 
 const CLAUDE_MODEL_PREFIX = 'claude:';
-const DEFAULT_PERMISSION_MODE: ClaudePermissionMode = 'acceptEdits';
+const DEFAULT_PERMISSION_MODE: ClaudePermissionMode = 'bypassPermissions';
 const VALID_PERMISSION_MODES: ReadonlySet<ClaudePermissionMode> = new Set([
   'default',
   'acceptEdits',

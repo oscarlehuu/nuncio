@@ -25,15 +25,12 @@ import { SessionTile } from './session-tile';
 import { MaximizeTransition } from './maximize-transition';
 import { RemoteSessionTile } from './remote-session-tile';
 import { GridSlotComposer } from './grid-slot-composer';
-import type { ApprovalMode } from './approval-mode-picker';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 interface GridViewProps {
   sessions: Session[];
   providers: ModelProvider[];
-  approvalMode: ApprovalMode;
-  onApprovalModeChange: (mode: ApprovalMode) => void | Promise<void>;
   onRespondProviderRequest: (
     id: string,
     requestId: string,
@@ -250,8 +247,6 @@ export function GridView(props: GridViewProps) {
             <MaximizedSession
               session={session}
               providers={providers}
-              approvalMode={props.approvalMode}
-              onApprovalModeChange={props.onApprovalModeChange}
               onRespondProviderRequest={(requestId, decision) =>
                 props.onRespondProviderRequest(session.id, requestId, decision)
               }
@@ -443,8 +438,6 @@ function SlotComposerCell({
 interface MaximizedSessionProps {
   session: Session;
   providers: ModelProvider[];
-  approvalMode: ApprovalMode;
-  onApprovalModeChange: (mode: ApprovalMode) => void | Promise<void>;
   onRespondProviderRequest: (
     requestId: string,
     decision: ProviderRequestDecision,
@@ -466,8 +459,6 @@ interface MaximizedSessionProps {
 function MaximizedSession({
   session,
   providers,
-  approvalMode,
-  onApprovalModeChange,
   onRespondProviderRequest,
   onSteer,
   onPause,
@@ -534,8 +525,6 @@ function MaximizedSession({
         onDelete={onDelete}
         onRename={onRename}
         onOpenSession={onOpenSession}
-        approvalMode={approvalMode}
-        onApprovalModeChange={onApprovalModeChange}
         onRespondProviderRequest={onRespondProviderRequest}
         steering={steering}
         lifecycleBusy={lifecycleBusy}
