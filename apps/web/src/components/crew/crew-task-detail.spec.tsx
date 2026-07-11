@@ -65,6 +65,15 @@ describe('CrewTaskDetail', () => {
     expect(screen.queryByText(/transcript|reasoning/i)).not.toBeInTheDocument();
   });
 
+  it('wraps the run title and shows a human profile revision without the raw snapshot id', async () => {
+    render(<MemoryRouter><CrewTaskDetail taskId="t1" /></MemoryRouter>);
+    const heading = await screen.findByRole('heading', { name: 'Ship Crew' });
+    expect(heading.className).toMatch(/line-clamp-2/);
+    expect(heading.className).not.toMatch(/\btruncate\b/);
+    expect(screen.getByText(/profile revision 3/i)).toBeInTheDocument();
+    expect(screen.queryByText(/\bp1\b/)).toBeNull();
+  });
+
   it('loads the requested immutable run and exposes every run in task history', async () => {
     vi.mocked(fetchCrewTask).mockResolvedValue({
       task: { id: 't1', objective: 'Ship Crew', projectPath: '/repo', baseBranch: 'main', createdAt: 1, updatedAt: 2 },

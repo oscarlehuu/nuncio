@@ -14,7 +14,7 @@ export function CrewEvidencePanel({ run }: { run: CrewRunDetailDto }) {
   const selected = artifacts.find(({ artifact }) => artifact.id === selectedId) ?? null;
   if (!artifacts.length && !blocker) return null;
   return (
-    <section aria-labelledby="crew-readable-evidence" className="min-w-0 rounded-xl border bg-card p-4">
+    <section aria-labelledby="crew-readable-evidence" className="min-w-0 rounded-xl border bg-card p-4 shadow-e1 surface-lit">
       <h2 id="crew-readable-evidence" className="font-semibold text-foreground">Readable evidence</h2>
       {blocker ? (
         <div className="mt-3 rounded-lg border border-destructive/40 bg-destructive/5 p-3">

@@ -10,7 +10,9 @@ import {
 } from '@nuncio/core/crew-api';
 import { fetchModels } from '../../lib/api';
 import type { ModelProvider } from '../../lib/model-providers';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { CrewRosterLine } from './crew-roster-line';
 import { EditCrewProfileDialog } from './edit-crew-profile-dialog';
 
 export function CrewProfilesSettingsSection() {
@@ -88,7 +90,15 @@ export function CrewProfilesSettingsSection() {
             <li key={profile.id} className="flex min-w-0 items-center gap-3 p-4">
               <div className="min-w-0 flex-1">
                 <p className="truncate font-medium" title={profile.name}>{profile.name}</p>
-                <p className="truncate text-ui-sm text-muted-foreground">Quality · revision {profile.revision} · {profile.definition.bindings.foreman.model} → {profile.definition.bindings.builder.model} → Verify → {profile.definition.bindings.reviewer.model}</p>
+                <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
+                  <Badge variant="secondary">revision {profile.revision}</Badge>
+                  <CrewRosterLine
+                    foreman={profile.definition.bindings.foreman.label || profile.definition.bindings.foreman.model}
+                    builder={profile.definition.bindings.builder.label || profile.definition.bindings.builder.model}
+                    reviewer={profile.definition.bindings.reviewer.label || profile.definition.bindings.reviewer.model}
+                    className="min-w-0"
+                  />
+                </div>
               </div>
               <Button variant="outline" className="min-h-11" onClick={() => setEditing(profile)}>Edit</Button>
               <Button variant="ghost" size="icon" className="size-11" aria-label={`Delete ${profile.name}`} onClick={() => void remove(profile)}><Trash2 /></Button>

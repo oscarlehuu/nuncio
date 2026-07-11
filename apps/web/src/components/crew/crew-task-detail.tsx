@@ -120,7 +120,7 @@ export function CrewTaskDetail({ taskId, runId, onBack, onOpenSession }: CrewTas
       <div className="mx-auto flex w-full max-w-[900px] min-w-0 flex-col gap-4">
         <header className="flex min-w-0 items-center gap-3">
           {onBack ? <Button variant="ghost" size="icon" className="size-11 shrink-0" aria-label="Back" onClick={onBack}><ArrowLeft /></Button> : null}
-          <div className="min-w-0 flex-1"><h1 className="truncate text-lg font-semibold" title={task.objective}>{task.objective}</h1><p className="truncate text-ui-sm text-muted-foreground">Profile snapshot · {projection.run.profileSnapshot.sourceProfileId ?? 'Quality default'} · revision {projection.run.profileSnapshot.sourceProfileRevision ?? 0}</p></div>
+          <div className="min-w-0 flex-1"><h1 className="line-clamp-2 text-lg font-semibold" title={task.objective}>{task.objective}</h1><p className="truncate text-ui-sm text-muted-foreground" title={`Snapshot ${projection.run.profileSnapshot.sourceProfileId ?? 'default'}`}>Profile revision {projection.run.profileSnapshot.sourceProfileRevision ?? 0}</p></div>
         </header>
         <CrewRunHistory taskId={taskId} runs={runHistory} selectedRunId={projection.run.id} />
         <CrewRunProgress steps={projection.steps} />

@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CrewProfilesSettingsSection } from './crew-profiles-settings-section';
-import { createCrewProfile, deleteCrewProfile, fetchCrewProfiles, updateCrewProfile } from '@nuncio/core/crew-api';
+import { createCrewProfile, deleteCrewProfile, fetchCrewProfiles, updateCrewProfile, type CrewProfileDto } from '@nuncio/core/crew-api';
 
 vi.mock('@nuncio/core/crew-api', () => ({
   createCrewProfile: vi.fn(), deleteCrewProfile: vi.fn(), fetchCrewProfiles: vi.fn(), updateCrewProfile: vi.fn(),
@@ -26,6 +26,32 @@ describe('CrewProfilesSettingsSection', () => {
     expect(screen.getByText(/nuncio tester/i)).toBeInTheDocument();
     expect(screen.getByRole('spinbutton', { name: /max verify retries/i })).toHaveValue(2);
     expect(screen.getByRole('spinbutton', { name: /max review retries/i })).toHaveValue(2);
+  });
+
+  it('renders a saved profile with a revision badge and the shared roster (no Quality/Verify literals)', async () => {
+    const profile = {
+      id: 'p1', name: 'Quality Crew', revision: 2,
+      presetId: 'quality', createdAt: 1, updatedAt: 2,
+      definition: {
+        bindings: {
+          foreman: { provider: 'mock', model: 'mock:foreman', label: 'Fable' },
+          builder: { provider: 'mock', model: 'mock:builder', label: 'Sol' },
+          reviewer: { provider: 'mock', model: 'mock:reviewer', label: 'Opus' },
+        },
+        policy: { verifyCommand: null, maxVerifyRetries: 2, maxReviewRetries: 2, strictFreshFinalReviewer: true },
+      },
+    } satisfies CrewProfileDto;
+    vi.mocked(fetchCrewProfiles).mockResolvedValue([profile]);
+    render(<CrewProfilesSettingsSection />);
+    expect(await screen.findByText('Quality Crew')).toBeInTheDocument();
+    const roster = screen.getByLabelText(/crew roster/i);
+    expect(roster).toHaveTextContent('Fable');
+    expect(roster).toHaveTextContent('Sol');
+    expect(roster).toHaveTextContent('Opus');
+    expect(roster).not.toHaveTextContent('mock:foreman');
+    expect(roster).toHaveTextContent('Nuncio Tester');
+    expect(roster).not.toHaveTextContent('Verify');
+    expect(screen.getByText(/revision 2/i)).toBeInTheDocument();
   });
 
   it('shows a load error with retry instead of a false empty state', async () => {

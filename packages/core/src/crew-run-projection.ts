@@ -14,7 +14,7 @@ export const CREW_PHASES: readonly CrewRunPhase[] = ['PLAN', 'BUILD', 'VERIFY', 
 export interface CrewRunProjection {
   run: CrewRunDetailDto;
   summary: string;
-  steps: Array<{ phase: CrewRunPhase; state: 'complete' | 'current' | 'upcoming' }>;
+  steps: Array<{ phase: CrewRunPhase; state: 'complete' | 'current' | 'upcoming' | 'unknown' | 'failed' | 'cancelled' }>;
   actions: Array<'pause' | 'resume' | 'cancel' | 'clarification' | 'extra-verify-round' | 'extra-review-round' | 'successor'>;
 }
 
@@ -161,7 +161,14 @@ export function projectCrewRun(base: CrewRunDetailDto, events: CrewEventDto[] = 
     run.revision = event.seq;
   }
   const current = CREW_PHASES.indexOf(run.phase);
-  const steps = CREW_PHASES.map((phase, index) => ({ phase, state: index < current ? 'complete' as const : index === current ? 'current' as const : 'upcoming' as const }));
+  const succeeded = run.status === 'TERMINAL' && run.outcome === 'SUCCEEDED';
+  const unsuccessful = run.status === 'TERMINAL' && (run.outcome === 'FAILED' || run.outcome === 'CANCELLED');
+  const steps = CREW_PHASES.map((phase, index) => ({
+    phase,
+    state: succeeded ? 'complete' as const
+      : unsuccessful ? (phase === 'DONE' ? run.outcome!.toLowerCase() as 'failed' | 'cancelled' : 'unknown' as const)
+        : index < current ? 'complete' as const : index === current ? 'current' as const : 'upcoming' as const,
+  }));
   const round = run.phase === 'VERIFY' ? ` · round ${run.verifyRetriesUsed + 1}/${run.maxVerifyRetries + run.verifyExtraRounds + 1}` : run.phase === 'REVIEW' ? ` · round ${run.reviewRetriesUsed + 1}/${run.maxReviewRetries + run.reviewExtraRounds + 1}` : '';
   return { run, steps, actions: actionsFor(run), summary: `${title(run.phase)} · ${title(run.status)}${round}` };
 }

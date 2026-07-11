@@ -48,6 +48,28 @@ describe('projectCrewRun', () => {
     expect(projection.steps.find((step) => step.phase === 'BUILD')?.state).toBe('complete');
   });
 
+  it('marks every fixed phase complete once the run is terminal', () => {
+    const terminal = base('DONE', 'TERMINAL');
+    terminal.outcome = 'SUCCEEDED';
+
+    expect(projectCrewRun(terminal).steps.map((step) => step.state))
+      .toEqual(CREW_PHASES.map(() => 'complete'));
+  });
+
+  it.each(['FAILED', 'CANCELLED'] as const)(
+    'settles a %s terminal run without claiming unfinished phases completed',
+    (outcome) => {
+      const terminal = base('DONE', 'TERMINAL');
+      terminal.outcome = outcome;
+
+      const states = projectCrewRun(terminal).steps.map((step) => step.state);
+      expect(states).not.toContain('current');
+      expect(states).not.toContain('complete');
+      expect(states.slice(0, -1)).toEqual(CREW_PHASES.slice(0, -1).map(() => 'unknown'));
+      expect(states.at(-1)).toBe(outcome.toLowerCase());
+    },
+  );
+
   it('RECOVERING and BLOCKED_PROVIDER preserve the active phase', () => {
     const projected = projectCrewRun(base('BUILD'), [
       event(2, 'recovery_started', {}),
