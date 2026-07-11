@@ -28,16 +28,18 @@ export async function runCrewSmoke({ page, baseUrl, dataDir, record, waitFor }) 
   setup.detail = `repo=${repo}, profile=${profile.profile.id}`;
 
   const create = record('crew: select Crew/project/profile and delegate through the UI');
+  await page.evaluate(() => localStorage.removeItem('nuncio-project-preference'));
   await page.goto(`${baseUrl}/new`, { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: /No repo/i }).click();
   await waitFor(async () => (await page.getByText(repo, { exact: true }).count()) > 0, {
     label: 'Crew fixture in project picker',
   });
   await page.getByText(repo, { exact: true }).click();
-  await page.getByRole('radio', { name: 'Crew', exact: true }).click();
-  const profileSelect = page.getByLabel('Crew profile');
-  await waitFor(async () => !(await profileSelect.isDisabled()), { label: 'Crew profile picker' });
-  await profileSelect.selectOption(profile.profile.id);
+  await page.getByRole('switch', { name: 'Crew', exact: true }).click();
+  const profilePicker = page.getByRole('button', { name: /Crew profile:/i });
+  await waitFor(async () => (await profilePicker.count()) === 1 && await profilePicker.isEnabled(), {
+    label: 'Crew profile picker',
+  });
   await waitFor(async () => (await page.getByText('Ready', { exact: true }).count()) > 0, {
     label: 'Crew profile to resolve Ready',
   });

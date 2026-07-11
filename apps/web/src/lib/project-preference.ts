@@ -3,7 +3,7 @@ import { recordRecentProject } from './projects';
 export const PROJECT_PREFERENCE_STORAGE_KEY = 'nuncio-project-preference';
 export const MAX_RECENT_PROJECTS = 8;
 
-const NUNCIO_SESSION_BRANCH_PATTERN = /^nuncio\/[0-9a-f]{8}-/i;
+const NUNCIO_SESSION_BRANCH_PATTERN = /^(?:[^/]+\/)?nuncio\/[0-9a-f]{8}-/i;
 
 export type RecentProject = {
   path: string;

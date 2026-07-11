@@ -13,7 +13,7 @@ export interface CrewBranch {
   isCurrent: boolean;
 }
 
-const NUNCIO_SESSION_BRANCH = /^nuncio\/[0-9a-f]{8}-/i;
+const NUNCIO_SESSION_BRANCH = /^(?:[^/]+\/)?nuncio\/[0-9a-f]{8}-/i;
 
 export async function fetchCrewProjects(): Promise<CrewProject[]> {
   const response = await apiFetch('/api/projects');

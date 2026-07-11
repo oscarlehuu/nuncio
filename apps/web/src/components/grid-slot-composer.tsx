@@ -358,6 +358,7 @@ export function GridSlotComposer({
               projectPath={projectPath}
               value={baseBranch}
               onChange={handleBranchChange}
+              apiBase={remoteBase}
             />
             <WorkspaceModePicker
               value={workspaceMode}

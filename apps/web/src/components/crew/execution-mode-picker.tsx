@@ -1,4 +1,5 @@
-import { Users, User } from 'lucide-react';
+import { Users } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 
 export type ExecutionMode = 'solo' | 'crew';
@@ -10,34 +11,22 @@ export function ExecutionModePicker({
   value: ExecutionMode;
   onChange: (mode: ExecutionMode) => void;
 }) {
+  const enabled = value === 'crew';
   return (
     <div
-      role="radiogroup"
-      aria-label="Execution mode"
-      data-density="compact"
-      className="flex shrink-0 items-center rounded-md bg-muted/45 p-0.5"
+      className={cn(
+        'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-1.5 text-ui font-medium transition-colors',
+        enabled ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+      )}
     >
-      {([
-        ['solo', 'Solo', User],
-        ['crew', 'Crew', Users],
-      ] as const).map(([mode, label, Icon]) => (
-        <button
-          key={mode}
-          type="button"
-          role="radio"
-          aria-checked={value === mode}
-          onClick={() => onChange(mode)}
-          className={cn(
-            'flex h-9 items-center gap-1.5 rounded-[5px] px-2.5 text-ui font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-            value === mode
-              ? 'bg-background text-foreground shadow-e0'
-              : 'text-muted-foreground hover:text-foreground',
-          )}
-        >
-          <Icon className="size-3.5" />
-          {label}
-        </button>
-      ))}
+      <Users aria-hidden className="size-3.5" />
+      <label htmlFor="crew-mode-toggle" className="cursor-pointer">Crew</label>
+      <Switch
+        id="crew-mode-toggle"
+        aria-label="Crew"
+        checked={enabled}
+        onCheckedChange={(checked) => onChange(checked ? 'crew' : 'solo')}
+      />
     </div>
   );
 }

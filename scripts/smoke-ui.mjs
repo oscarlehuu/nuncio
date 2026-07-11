@@ -17,8 +17,8 @@
 //
 // Usage: bun run test:smoke-ui        (build web bundle only if missing)
 //        bun run test:smoke-ui --build (force a fresh web build first)
-import { mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { ensureWebBuild, findFreePort, repoRoot, startServer } from './smoke-ui-stack.mjs';
 import { runCrewSmoke } from './lib/crew-smoke-flow.mjs';
@@ -36,6 +36,17 @@ function record(name) {
   const step = { name, ok: false };
   steps.push(step);
   return step;
+}
+
+async function git(cwd, ...args) {
+  const process = Bun.spawn(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });
+  const [code, stdout, stderr] = await Promise.all([
+    process.exited,
+    new Response(process.stdout).text(),
+    new Response(process.stderr).text(),
+  ]);
+  if (code !== 0) throw new Error(`git ${args.join(' ')} failed: ${stderr.trim()}`);
+  return stdout.trim();
 }
 
 /** Poll `fn` until it returns truthy or the timeout elapses. */
@@ -61,6 +72,23 @@ async function main() {
   const port = await findFreePort();
   const server = await startServer({ port });
   const { baseUrl } = server;
+  const smokeProjectPath = join(server.dataDir, 'smoke-project');
+  await mkdir(smokeProjectPath, { recursive: true });
+  await git(smokeProjectPath, 'init', '-b', 'main');
+  await git(smokeProjectPath, 'config', 'user.email', 'smoke@nuncio.local');
+  await git(smokeProjectPath, 'config', 'user.name', 'Nuncio Smoke');
+  await writeFile(join(smokeProjectPath, 'README.md'), '# smoke project\n');
+  await git(smokeProjectPath, 'add', 'README.md');
+  await git(smokeProjectPath, 'commit', '-m', 'init');
+  const smokeHead = await git(smokeProjectPath, 'rev-parse', 'HEAD');
+  await git(smokeProjectPath, 'update-ref', 'refs/remotes/origin/main', smokeHead);
+  await git(smokeProjectPath, 'update-ref', 'refs/remotes/origin/dev', smokeHead);
+  await git(
+    smokeProjectPath,
+    'symbolic-ref',
+    'refs/remotes/origin/HEAD',
+    'refs/remotes/origin/main',
+  );
 
   let browser;
   let cleaned = false;
@@ -112,9 +140,68 @@ async function main() {
       ...(CHROME_EXECUTABLE ? { executablePath: CHROME_EXECUTABLE } : { channel: CHROME_CHANNEL }),
       headless: true,
     });
-    const context = await browser.newContext({ baseURL: baseUrl });
+    const context = await browser.newContext({
+      baseURL: baseUrl,
+      colorScheme: 'dark',
+      reducedMotion: 'reduce',
+    });
     page = await context.newPage();
     browserStep.ok = true;
+
+    const composerStep = record('composer: remote refs and compact Crew controls work at desktop + mobile');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${baseUrl}/new`, { waitUntil: 'domcontentloaded' });
+    const projectTrigger = page.getByRole('button', { name: 'No repo', exact: true });
+    await waitFor(() => projectTrigger.count(), { label: 'new-session project picker' });
+    await projectTrigger.click();
+    const projectOption = page.getByRole('option').filter({ hasText: basename(smokeProjectPath) });
+    await waitFor(async () => (await projectOption.count()) === 1, { label: 'smoke project option' });
+    await projectOption.click();
+
+    const branchResponse = await fetch(
+      `${baseUrl}/api/projects/branches?path=${encodeURIComponent(smokeProjectPath)}`,
+    );
+    const branches = await branchResponse.json();
+    const currentBranch = branches.find((branch) => branch.isCurrent)?.name;
+    const remoteBranch = branches.find((branch) => branch.name.startsWith('origin/'))?.name;
+    if (!currentBranch || !remoteBranch) {
+      throw new Error(`branch catalog missing current/remote refs: ${JSON.stringify(branches)}`);
+    }
+    const branchTrigger = page.getByRole('button', { name: currentBranch, exact: true });
+    await waitFor(() => branchTrigger.count(), { label: 'selected base branch' });
+    await branchTrigger.click();
+    const remoteBranchOption = page.getByRole('option', { name: remoteBranch, exact: true });
+    await waitFor(() => remoteBranchOption.count(), { label: 'remote branch option' });
+    await page.screenshot({ path: join(ARTIFACTS_DIR, 'branch-picker-remote-refs.png'), fullPage: true });
+    await page.keyboard.press('Escape');
+
+    const crewSwitch = page.getByRole('switch', { name: 'Crew', exact: true });
+    await waitFor(() => crewSwitch.count(), { label: 'Crew switch' });
+    if (await crewSwitch.getAttribute('aria-checked') !== 'false') {
+      throw new Error('fresh composer must start with Crew off');
+    }
+    await crewSwitch.click();
+    await waitFor(
+      async () => (await page.getByRole('link', { name: 'Set up Crew', exact: true }).count()) === 1,
+      { label: 'compact empty Crew setup action' },
+    );
+    if (await page.getByText('No Crew profile', { exact: false }).count()) {
+      throw new Error('legacy Crew empty-state card is still visible');
+    }
+    if (await page.getByText('Crew worktree', { exact: false }).count()) {
+      throw new Error('Crew worktree implementation detail is still visible');
+    }
+    await page.screenshot({ path: join(ARTIFACTS_DIR, 'crew-composer-empty-desktop.png'), fullPage: true });
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const fitsViewport = await page.locator('html').evaluate(
+      (element) => element.scrollWidth <= element.clientWidth,
+    );
+    if (!fitsViewport) throw new Error('Crew composer overflows the 390px viewport');
+    await page.screenshot({ path: join(ARTIFACTS_DIR, 'crew-composer-empty-mobile.png'), fullPage: true });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    composerStep.ok = true;
+    composerStep.detail = `current=${currentBranch}, remote=${remoteBranch}`;
 
     // 3) Open the session in the UI and assert the streamed assistant text.
     const streamStep = record('stream: assistant reply appears in the transcript');

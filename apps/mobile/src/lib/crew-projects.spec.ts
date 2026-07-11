@@ -30,6 +30,8 @@ describe('fetchCrewProjects', () => {
       { name: 'main', isDefault: true, isCurrent: false },
       { name: 'release', isDefault: false, isCurrent: true },
       { name: 'nuncio/deadbeef-run-generated', isDefault: false, isCurrent: false },
+      { name: 'origin/nuncio/deadbeef-remote-generated', isDefault: false, isCurrent: false },
+      { name: 'origin/feature/remote', isDefault: false, isCurrent: false },
     ];
     apiFetch.mockResolvedValue({ ok: true, json: async () => branches });
 
@@ -40,6 +42,8 @@ describe('fetchCrewProjects', () => {
     expect(preferredCrewBaseBranch(branches)).toBe('release');
     expect(preferredCrewBaseBranch(branches, 'main')).toBe('main');
     expect(preferredCrewBaseBranch(branches, 'nuncio/deadbeef-run-generated')).toBe('release');
+    expect(preferredCrewBaseBranch(branches, 'origin/nuncio/deadbeef-remote-generated')).toBe('release');
+    expect(preferredCrewBaseBranch(branches, 'origin/feature/remote')).toBe('origin/feature/remote');
   });
 
   it('surfaces branch loading failure instead of resolving the default silently', async () => {
