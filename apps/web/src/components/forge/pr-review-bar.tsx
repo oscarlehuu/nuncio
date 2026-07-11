@@ -78,7 +78,7 @@ export function PrReviewBar({ path, number, capabilities, onSubmitted }: PrRevie
       </Button>
 
       <Dialog open={pendingEvent !== null} onOpenChange={(open) => !open && setPendingEvent(null)}>
-        <DialogContent>
+        <DialogContent preventOutsideDismiss>
           <DialogHeader>
             <DialogTitle>{pendingEvent ? EVENT_LABELS[pendingEvent].title : ''}</DialogTitle>
             <DialogDescription>

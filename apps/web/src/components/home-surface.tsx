@@ -2,7 +2,6 @@ import { useNavigate } from 'react-router-dom';
 import type { MessageAttachment } from '../lib/api';
 import type { ModelProvider } from '../lib/model-providers';
 import type { ModelOptionsMap } from '../lib/model-options';
-import type { ApprovalMode } from './approval-mode-picker';
 import { AttentionQueue } from './attention-queue';
 import { DigestCard } from './digest-card';
 import { HomeView } from './home-view';
@@ -23,8 +22,6 @@ interface HomeSurfaceProps {
     attachments?: MessageAttachment[],
   ) => Promise<void>;
   onContinueOnMobile?: () => void;
-  approvalMode?: ApprovalMode;
-  onApprovalModeChange?: (mode: ApprovalMode) => void | Promise<void>;
   loading?: boolean;
   onCrewCreated?: (taskId: string) => void;
   /** Increment to focus the composer (the new-agent shortcut). */
@@ -39,8 +36,6 @@ export function HomeSurface({
   providers,
   onSubmit,
   onContinueOnMobile,
-  approvalMode,
-  onApprovalModeChange,
   loading,
   onCrewCreated,
   composerFocusKey,
@@ -68,8 +63,6 @@ export function HomeSurface({
             providers={providers}
             onSubmit={onSubmit}
             onContinueOnMobile={onContinueOnMobile}
-            approvalMode={approvalMode}
-            onApprovalModeChange={onApprovalModeChange}
             loading={loading}
             onCrewCreated={onCrewCreated}
           />

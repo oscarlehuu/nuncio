@@ -64,7 +64,7 @@ export function EditCrewProfileDialog({ profile, open, providers, onOpenChange, 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] max-w-xl overflow-y-auto">
+      <DialogContent preventOutsideDismiss className="max-h-[85vh] max-w-xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{profile ? `Edit ${profile.name}` : 'New Crew profile'}</DialogTitle>
           <DialogDescription>Quality uses one writer, deterministic verification, and an independent reviewer.</DialogDescription>

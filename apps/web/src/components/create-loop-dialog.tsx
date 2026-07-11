@@ -165,7 +165,7 @@ export function CreateLoopDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent preventOutsideDismiss className="max-w-lg">
         <DialogHeader>
           <DialogTitle>New loop</DialogTitle>
           <DialogDescription>

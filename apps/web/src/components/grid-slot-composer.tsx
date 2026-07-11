@@ -373,6 +373,7 @@ export function GridSlotComposer({
                 setModelOptions(options ?? {});
               }}
               providers={activeProviders}
+              compact
             />
             <Button
               type="button"

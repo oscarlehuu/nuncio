@@ -50,6 +50,7 @@ describe('CreateLoopDialog', () => {
 
   it('disables create until a goal is entered', async () => {
     render(<CreateLoopDialog open onOpenChange={vi.fn()} onCreated={vi.fn()} />);
+    expect(screen.getByRole('dialog')).toHaveAttribute('data-outside-dismiss', 'blocked');
     const create = screen.getByRole('button', { name: /create loop/i });
     expect(create).toBeDisabled();
     await userEvent.type(screen.getByLabelText('Goal'), 'Nightly dependency bump');

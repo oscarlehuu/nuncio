@@ -68,6 +68,10 @@ describe('SettingsService', () => {
       expect(service.resolve('NUNCIO_WORKSPACES_DIR')).toBe('~/.nuncio/workspaces');
     });
 
+    it('defaults Claude to trusted workspace execution', () => {
+      expect(service.resolve('NUNCIO_CLAUDE_PERMISSION_MODE')).toBe('bypassPermissions');
+    });
+
     it('honours altEnvVar when envVar is absent (PI_AGENT_DIR / PI_CODING_AGENT_DIR)', () => {
       delete process.env.PI_CODING_AGENT_DIR;
       process.env.PI_AGENT_DIR = '/custom/pi';

@@ -11,7 +11,12 @@ export function ExecutionModePicker({
   onChange: (mode: ExecutionMode) => void;
 }) {
   return (
-    <div role="radiogroup" aria-label="Execution mode" className="flex shrink-0 rounded-lg border border-border bg-muted/20 p-0.5">
+    <div
+      role="radiogroup"
+      aria-label="Execution mode"
+      data-density="compact"
+      className="flex shrink-0 items-center rounded-md bg-muted/45 p-0.5"
+    >
       {([
         ['solo', 'Solo', User],
         ['crew', 'Crew', Users],
@@ -23,8 +28,10 @@ export function ExecutionModePicker({
           aria-checked={value === mode}
           onClick={() => onChange(mode)}
           className={cn(
-            'flex min-h-11 items-center gap-1.5 rounded-md px-3 text-ui font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-            value === mode ? 'bg-background text-foreground shadow-e0' : 'text-muted-foreground',
+            'flex h-9 items-center gap-1.5 rounded-[5px] px-2.5 text-ui font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            value === mode
+              ? 'bg-background text-foreground shadow-e0'
+              : 'text-muted-foreground hover:text-foreground',
           )}
         >
           <Icon className="size-3.5" />

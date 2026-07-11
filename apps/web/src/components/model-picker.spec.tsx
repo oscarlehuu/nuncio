@@ -624,4 +624,53 @@ describe('ModelPicker', () => {
     expect(screen.getByPlaceholderText(/search models/i)).toBeInTheDocument();
     expect(screen.queryByTestId('model-picker-provider-submenu')).not.toBeInTheDocument();
   });
+
+  it('uses the same compact trigger grammar for chat and engine-model modes', () => {
+    const { unmount } = render(
+      <ModelPicker
+        value="anthropic:claude-haiku-4-5"
+        onChange={vi.fn()}
+        providers={[PI_PROVIDER]}
+        variant="text"
+        compact
+      />,
+    );
+
+    const chatTrigger = screen.getByRole('button', { name: /claude haiku 4\.5/i });
+    expect(chatTrigger).toHaveAttribute('data-slot', 'model-picker-trigger');
+    expect(chatTrigger).toHaveAttribute('data-density', 'compact');
+    unmount();
+
+    render(
+      <ModelPicker
+        pairMode="engine+model"
+        engine="pi"
+        model="anthropic:claude-haiku-4-5"
+        onPairChange={vi.fn()}
+        providers={[PI_PROVIDER]}
+        variant="text"
+        compact
+      />,
+    );
+
+    const pairTrigger = screen.getByRole('button', { name: /engine and model: pi · claude haiku 4\.5/i });
+    expect(pairTrigger).toHaveAttribute('data-slot', 'model-picker-trigger');
+    expect(pairTrigger).toHaveAttribute('data-density', 'compact');
+  });
+
+  it('uses compact height instead of retaining the boxed default height', () => {
+    render(
+      <ModelPicker
+        value="anthropic:claude-haiku-4-5"
+        onChange={vi.fn()}
+        providers={[PI_PROVIDER]}
+        variant="boxed"
+        compact
+      />,
+    );
+
+    const trigger = screen.getByRole('button', { name: /claude haiku 4\.5/i });
+    expect(trigger).toHaveClass('h-7');
+    expect(trigger).not.toHaveClass('h-8');
+  });
 });

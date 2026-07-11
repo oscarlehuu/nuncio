@@ -107,6 +107,7 @@ export function SubagentRow({
           modelOptions={task.modelOptions ?? undefined}
           providers={providers}
           variant="boxed"
+          compact
           disabled={busy}
           onChange={(modelId, providerId, modelOptions) =>
             void onChangeModel(task.id, providerId, modelId, modelOptions)

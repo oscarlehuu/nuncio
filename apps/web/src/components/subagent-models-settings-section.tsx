@@ -73,6 +73,7 @@ export function SubagentModelsSettingsSection({ value, onUpdate }: SubagentModel
                     value={map[provider.id] ?? ''}
                     providers={[provider]}
                     variant="text"
+                    compact
                     onChange={(modelId) => commit(setSubagentModel(map, provider.id, modelId))}
                   />
                   {hasOverride && (

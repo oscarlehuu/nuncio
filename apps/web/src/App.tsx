@@ -31,7 +31,6 @@ import { useProviderUpdateNotifications } from './lib/use-provider-update-notifi
 import { HomeSurface } from './components/home-surface';
 import { GridView } from './components/grid-view';
 import { ChunkErrorBoundary } from './components/chunk-error-boundary';
-import type { ApprovalMode } from './components/approval-mode-picker';
 import { HandoffPicker } from './components/handoff-picker';
 import { DesktopSidebarHoverRail, DesktopSidebarPinned } from './components/desktop-sidebar-shell';
 import { SessionDetail } from './components/session-detail';
@@ -151,11 +150,6 @@ export default function App() {
   const archivedErrorShown = useRef(false);
   const steeringSessionIdRef = useRef<string | null>(null);
   const steeringTokenRef = useRef(0);
-  const approvalMode: ApprovalMode =
-    settings.find((setting) => setting.key === 'NUNCIO_CODEX_RUNTIME_MODE')?.value ===
-    'approval-required'
-      ? 'approval-required'
-      : 'full-access';
 
   const refresh = useCallback(async () => {
     try {
@@ -574,20 +568,6 @@ export default function App() {
     }
   }, [refreshModels]);
 
-  const handleApprovalModeChange = useCallback(async (mode: ApprovalMode) => {
-    try {
-      const updated = await updateSetting('NUNCIO_CODEX_RUNTIME_MODE', mode);
-      setSettings((prev) =>
-        prev.some((s) => s.key === updated.key)
-          ? prev.map((s) => (s.key === updated.key ? updated : s))
-          : [...prev, updated],
-      );
-      toast.success(`Saved ${updated.label}`);
-    } catch {
-      toast.error('Failed to save approval mode');
-    }
-  }, []);
-
   const handleRespondProviderRequest = useCallback(
     async (requestId: string, decision: ProviderRequestDecision) => {
       if (!activeId) return;
@@ -687,8 +667,6 @@ export default function App() {
                 providers={providers}
                 onSubmit={handleCreate}
                 onContinueOnMobile={() => openHandoff()}
-                approvalMode={approvalMode}
-                onApprovalModeChange={handleApprovalModeChange}
                 loading={creating}
                 onCrewCreated={(taskId) => navigate(`/crew/${taskId}`)}
                 composerFocusKey={composerFocusKey}
@@ -714,8 +692,6 @@ export default function App() {
                 sessions={gridSessions}
                 projectFilterName={gridProjectName}
                 providers={providers}
-                approvalMode={approvalMode}
-                onApprovalModeChange={handleApprovalModeChange}
                 onRespondProviderRequest={async (id, requestId, decision) => {
                   try {
                     await respondProviderRequest(id, requestId, decision);
@@ -749,8 +725,6 @@ export default function App() {
                 archivedSessions={archivedSessions}
                 listsReady={listsReady}
                 providers={providers}
-                approvalMode={approvalMode}
-                onApprovalModeChange={handleApprovalModeChange}
                 onRespondProviderRequest={handleRespondProviderRequest}
                 onSteer={handleSteer}
                 onPause={handlePause}
@@ -921,8 +895,6 @@ interface SessionRouteProps {
   archivedSessions: Session[];
   listsReady: boolean;
   providers: ModelProvider[];
-  approvalMode: ApprovalMode;
-  onApprovalModeChange: (mode: ApprovalMode) => void | Promise<void>;
   onRespondProviderRequest: (
     requestId: string,
     decision: ProviderRequestDecision,
@@ -948,8 +920,6 @@ function SessionRoute({
   archivedSessions,
   listsReady,
   providers,
-  approvalMode,
-  onApprovalModeChange,
   onRespondProviderRequest,
   onSteer,
   onPause,
@@ -1067,8 +1037,6 @@ function SessionRoute({
       onContinueOnMobile={() =>
         onContinueOnMobile(session.projectPath ?? session.workspace ?? undefined)
       }
-      approvalMode={approvalMode}
-      onApprovalModeChange={onApprovalModeChange}
       onRespondProviderRequest={onRespondProviderRequest}
       steering={steering}
       lifecycleBusy={lifecycleBusy}
