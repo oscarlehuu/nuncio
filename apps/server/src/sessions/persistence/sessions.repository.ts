@@ -2,6 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { v4 as uuidv4 } from 'uuid';
 import { DatabaseService } from '../../db/database.service';
 import {
+  parseAgentRuntimePolicy,
+  stringifyAgentRuntimePolicy,
+} from '../../agents/agent-runtime-policy';
+import {
   parseModelOptionsJson,
   stringifyModelOptions,
   type ModelOptionsMap,
@@ -31,6 +35,11 @@ function parsePullRequestNumber(raw: number | string | null): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function parseVerifyOwner(raw: string): 'session' | 'crew' {
+  if (raw === 'session' || raw === 'crew') return raw;
+  throw new Error(`Stored session verify owner is invalid: ${raw}`);
+}
+
 function toDto(row: SessionRow): SessionDto {
   return {
     id: row.id,
@@ -49,6 +58,8 @@ function toDto(row: SessionRow): SessionDto {
     providerThreadId: row.provider_thread_id ?? null,
     providerActiveTurnId: row.provider_active_turn_id ?? null,
     providerState: parseProviderStateJson(row.provider_state_json),
+    runtimePolicy: parseAgentRuntimePolicy(row.runtime_policy_json),
+    verifyOwner: parseVerifyOwner(row.verify_owner),
     cursorBackend: row.cursor_backend === 'cli' ? 'cli' : row.cursor_backend === 'sdk' ? 'sdk' : null,
     cursorChatId: row.cursor_chat_id ?? null,
     forgeProvider: row.forge_provider ?? null,
@@ -82,6 +93,15 @@ export class SessionsRepository {
     const sql = includeArchived
       ? 'SELECT * FROM sessions ORDER BY updated_at DESC'
       : "SELECT * FROM sessions WHERE status != 'ARCHIVED' ORDER BY updated_at DESC";
+    const rows = this.database.db.prepare<SessionRow, []>(sql).all();
+    return rows.map(toDto);
+  }
+
+  /** Public projections omit internal Crew member sessions by construction. */
+  listUserFacing(includeArchived = false): SessionDto[] {
+    const sql = includeArchived
+      ? "SELECT * FROM sessions WHERE verify_owner = 'session' ORDER BY updated_at DESC"
+      : "SELECT * FROM sessions WHERE verify_owner = 'session' AND status != 'ARCHIVED' ORDER BY updated_at DESC";
     const rows = this.database.db.prepare<SessionRow, []>(sql).all();
     return rows.map(toDto);
   }
@@ -146,6 +166,8 @@ export class SessionsRepository {
       provider_thread_id: input.providerThreadId ?? null,
       provider_active_turn_id: input.providerActiveTurnId ?? null,
       provider_state_json: stringifyProviderState(input.providerState),
+      runtime_policy_json: stringifyAgentRuntimePolicy(input.runtimePolicy),
+      verify_owner: input.verifyOwner ?? 'session',
       cursor_backend: input.cursorBackend ?? null,
       cursor_chat_id: input.cursorChatId ?? null,
       forge_provider: null,
@@ -210,6 +232,8 @@ export class SessionsRepository {
       provider_thread_id: isPi ? input.providerThreadId : null,
       provider_active_turn_id: null,
       provider_state_json: null,
+      runtime_policy_json: null,
+      verify_owner: 'session',
       cursor_backend: isPi ? null : 'cli',
       cursor_chat_id: isPi ? null : 'cursorChatId' in input ? input.cursorChatId : null,
       forge_provider: null,
@@ -363,11 +387,12 @@ export class SessionsRepository {
           id, title, status, provider, model, model_options, workspace, prompt, preview,
           project_path, base_branch, worktree_path, branch,
           provider_thread_id, provider_active_turn_id, provider_state_json,
+          runtime_policy_json, verify_owner,
           cursor_backend, cursor_chat_id,
           forge_provider, pull_request_url, pull_request_number, pull_request_state, forge_status,
           parent_session_id, origin_task_id, prior_session_id,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -386,6 +411,8 @@ export class SessionsRepository {
         row.provider_thread_id,
         row.provider_active_turn_id,
         row.provider_state_json,
+        row.runtime_policy_json,
+        row.verify_owner,
         row.cursor_backend,
         row.cursor_chat_id,
         row.forge_provider,

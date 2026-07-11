@@ -21,6 +21,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { ensureWebBuild, findFreePort, repoRoot, startServer } from './smoke-ui-stack.mjs';
+import { runCrewSmoke } from './lib/crew-smoke-flow.mjs';
 
 const FORCE_BUILD = process.argv.includes('--build');
 const CHROME_EXECUTABLE = process.env.NUNCIO_SMOKE_CHROME_EXECUTABLE?.trim();
@@ -248,8 +249,10 @@ async function main() {
     });
     lineageStep.ok = true;
 
+    await runCrewSmoke({ page, baseUrl, dataDir: server.dataDir, record, waitFor });
+
     // Proof summary.
-    console.log('\n[smoke] PASS — level-5 UI smoke (create → stream → steer → archive + delegation on mock)');
+    console.log('\n[smoke] PASS — level-5 UI smoke (Solo lifecycle + delegation + Crew workflow on mock)');
     console.log(`  base URL: ${baseUrl}  (data dir: ${server.dataDir})`);
     for (const s of steps) {
       console.log(`  ✓ ${s.name}${s.detail ? ` — ${s.detail}` : ''}`);

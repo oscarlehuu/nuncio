@@ -32,7 +32,13 @@ const KIND_META: Record<string, AttentionKindMeta> = {
   'pr-review': { label: 'PR review', icon: GitPullRequestArrow, tone: 'info' },
   anomaly: { label: 'Anomaly', icon: Radar, tone: 'neutral' },
   'dispatcher-proposal': { label: 'Dispatcher proposal', icon: ListChecks, tone: 'info' },
+  'crew-blocked': { label: 'Crew blocked', icon: ShieldQuestion, tone: 'warning' },
+  'crew-run-blocked': { label: 'Crew blocked', icon: ShieldQuestion, tone: 'warning' },
 };
+
+export function isCrewAttentionKind(kind: string): boolean {
+  return kind === 'crew-blocked' || kind === 'crew-run-blocked';
+}
 
 export function attentionKindMeta(kind: string): AttentionKindMeta {
   return (
@@ -95,6 +101,14 @@ export function openTargetFor(item: AttentionItemDto): OpenTarget | null {
   const sessionId = payloadString(p, 'sessionId');
   const loopId = payloadString(p, 'loopId');
   const url = payloadString(p, 'url');
+
+  if (isCrewAttentionKind(item.kind)) {
+    const taskId = payloadString(p, 'crewTaskId') ?? item.subjectId;
+    const runId = payloadString(p, 'crewRunId');
+    return {
+      to: `/crew/${encodeURIComponent(taskId)}${runId ? `?run=${encodeURIComponent(runId)}` : ''}`,
+    };
+  }
 
   switch (item.kind) {
     case 'permission':

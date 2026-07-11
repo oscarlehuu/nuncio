@@ -3,9 +3,18 @@ import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'n
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 import { SettingsService } from '../settings/settings.service';
+import {
+  readBoundedGitBlobs,
+} from './git-checkpoint-blob-validation';
+import { validateGitCheckpointRange } from './git-checkpoint-range-validation';
+import { inspectGitWorkspaceBoundary } from './git-workspace-boundary';
+import { checkpointGitWorkspace } from './git-workspace-checkpoint';
 import type {
   BranchDto,
   CommitResultDto,
+  GitBoundaryExpectation,
+  GitBoundaryInspectionDto,
+  GitCheckpointResultDto,
   GitDiffDto,
   GitFileChange,
   GitStatusDto,
@@ -27,19 +36,29 @@ function sanitizeSlug(slug: string): string {
     .replace(/^-|-$/g, '') || 'task';
 }
 
-async function git(args: string[], cwd?: string): Promise<string> {
+async function git(
+  args: string[], cwd?: string, env?: Record<string, string | undefined>,
+): Promise<string> {
   const proc = Bun.spawn(['git', ...args], {
     cwd,
+    ...(env ? { env } : {}),
     stdout: 'pipe',
     stderr: 'pipe',
   });
   const code = await proc.exited;
-  const stdout = (await new Response(proc.stdout).text()).trim();
+  const rawStdout = await new Response(proc.stdout).text();
+  // NUL-delimited path output is a binary-safe protocol. Trimming it mutates
+  // legitimate leading/trailing whitespace in filenames before secret scans.
+  const stdout = args.includes('-z') ? rawStdout : rawStdout.trim();
   const stderr = (await new Response(proc.stderr).text()).trim();
   if (code !== 0) {
     throw new Error(stderr || stdout || `git ${args.join(' ')} failed`);
   }
   return stdout;
+}
+
+async function gitWithIndex(args: string[], cwd: string, indexPath: string): Promise<string> {
+  return git(args, cwd, { ...process.env, GIT_INDEX_FILE: indexPath });
 }
 
 async function gitAllowExit(args: string[], cwd: string, allowedExitCodes: number[]): Promise<string> {
@@ -55,6 +74,16 @@ async function gitAllowExit(args: string[], cwd: string, allowedExitCodes: numbe
     throw new Error(stderr || stdout || `git ${args.join(' ')} failed`);
   }
   return stdout;
+}
+
+async function gitIsAncestor(ancestor: string, descendant: string, cwd: string): Promise<boolean> {
+  const proc = Bun.spawn(['git', '--no-replace-objects', 'merge-base', '--is-ancestor', ancestor, descendant], {
+    cwd,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const code = await proc.exited;
+  return code === 0;
 }
 
 function isGitRepo(dir: string): boolean {
@@ -241,6 +270,41 @@ export class GitService {
     } catch {
       return null;
     }
+  }
+
+  /** Read-only validation of a Crew-owned Git workspace boundary. */
+  async inspectBoundary(
+    path: string,
+    expectation: string | GitBoundaryExpectation = {},
+  ): Promise<GitBoundaryInspectionDto> {
+    const normalizedExpectation = typeof expectation === 'string' || !expectation.expectedCanonicalPath
+      ? expectation
+      : { ...expectation, expectedCanonicalPath: expandHome(expectation.expectedCanonicalPath) };
+    return inspectGitWorkspaceBoundary(expandHome(path), normalizedExpectation, {
+      git: (args, cwd) => git(args, cwd),
+      isAncestor: gitIsAncestor,
+    });
+  }
+
+  /** Validate committed Builder output from one exact durable head to current HEAD. */
+  async validateCheckpointRange(path: string, fromHead: string, toHead: string): Promise<void> {
+    return validateGitCheckpointRange(expandHome(path), fromHead, toHead, {
+      // Builder-controlled refs/replace must not rewrite the graph or blobs that
+      // the acceptance scan sees.
+      git: (args, cwd) => git(['--no-replace-objects', ...args], cwd),
+      isAncestor: gitIsAncestor,
+      readBlobs: readBoundedGitBlobs,
+    });
+  }
+
+  /** Commit only the current workspace's changes; never pushes or rewrites. */
+  async checkpoint(path: string, message: string): Promise<GitCheckpointResultDto> {
+    return checkpointGitWorkspace(expandHome(path), message, {
+      git: (args, cwd) => git(args, cwd),
+      gitWithIndex,
+      isAncestor: gitIsAncestor,
+      readBlobs: readBoundedGitBlobs,
+    });
   }
 
   async listBranches(projectPath: string): Promise<BranchDto[]> {

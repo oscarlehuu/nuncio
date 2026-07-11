@@ -1,12 +1,21 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { EventsRepository } from '../../sessions/persistence/events.repository';
 import { SessionsRepository } from '../../sessions/persistence/sessions.repository';
 import { SettingsService } from '../../settings/settings.service';
 import type { ModelOptionDescriptorDto, ModelOptionsMap } from '../../models/model-options.types';
 import type { ModelProviderDto } from '../../models/models.types';
-import { AgentRunCancelledError, BaseAgentProvider } from '../agents.base-provider';
+import {
+  AgentRunCancelledError,
+  BaseAgentProvider,
+  RetainedEventFlushError,
+} from '../agents.base-provider';
 import type { AgentRunContext, EventEmitter } from '../agents.types';
+import {
+  runtimePolicyKey,
+  runtimeToolsForPolicy,
+} from '../agent-runtime-policy';
 import { appendRuntimeToolInstructions, type AgentRuntimeTools } from '../tools/agent-runtime-tools.types';
 import {
   buildCodexDynamicTools,
@@ -26,6 +35,7 @@ import {
   type CodexCliCommandRunner,
   type CodexCliResolution,
 } from './codex-cli-resolver';
+import { mapCodexRuntimePolicy } from './codex-runtime-policy';
 
 type CodexRuntimeMode = 'approval-required' | 'full-access';
 
@@ -93,10 +103,24 @@ interface ActiveCodexSession {
   >;
   completedTurns: Map<string, { status: string; errorMessage?: string; error?: Error }>;
   unsubscribers: Array<() => void>;
+  runtimePolicyKey: string;
+  dynamicToolSurface: string | undefined;
 }
 
 const DEFAULT_CODEX_REASONING_EFFORT = 'medium';
 const DEFAULT_CODEX_REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const;
+
+function isDefinitiveCodexResumeError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /runtime tool definitions do not match the persisted codex thread/i.test(message) ||
+    /(?:thread|conversation)(?: id)?[^\n]{0,160}(?:not found|does not exist|no longer exists|unknown|missing|incompatible)/i.test(message) ||
+    /(?:no such|unknown|missing|incompatible) (?:codex )?(?:thread|conversation)(?: id)?/i.test(message) ||
+    /(?:invalid|malformed) (?:codex )?(?:thread|conversation)(?: id)?/i.test(message) ||
+    /(?:thread|conversation)(?: id)? (?:is )?(?:invalid|malformed)/i.test(message) ||
+    /(?:cwd|workspace|rollout path).*(?:mismatch|does not match|incompatible)/i.test(message)
+  );
+}
 
 const FALLBACK_CODEX_MODELS: ModelProviderDto[] = [
   {
@@ -132,6 +156,17 @@ const FALLBACK_CODEX_MODELS: ModelProviderDto[] = [
 export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDestroy {
   readonly id = 'codex';
   readonly name = 'Codex';
+  readonly capabilities = {
+    interrupt: true,
+    modelSwitch: 'none',
+    effortSwitch: 'none',
+    images: false,
+    steerWhileRunning: false,
+    runtimePolicies: [
+      { filesystem: 'read-only', network: 'disabled' },
+      { filesystem: 'workspace-write', network: 'disabled' },
+    ],
+  } as const;
 
   private readonly activeSessions = new Map<string, ActiveCodexSession>();
   private cachedAvailable?: boolean;
@@ -221,6 +256,35 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
         .catch(() => undefined);
     }
 
+    this.closeActiveSession(sessionId, active);
+  }
+
+  async interrupt(sessionId: string): Promise<void> {
+    const active = this.activeSessions.get(sessionId);
+    if (!active) return;
+    const activeTurnId = active.activeTurnId;
+
+    if (activeTurnId) {
+      await active.client.request('turn/interrupt', {
+        threadId: active.codexThreadId,
+        turnId: activeTurnId,
+      });
+    }
+
+    try {
+      this.flushPendingEvents(sessionId);
+    } catch (error) {
+      // The accepted tail remains queued on RetainedEventFlushError. Detach the
+      // acknowledged SDK turn and queue IDLE behind that tail instead of
+      // leaving a stopped runtime reported as active.
+      if (!(error instanceof RetainedEventFlushError)) throw error;
+    }
+    this.closeActiveSession(sessionId, active);
+    this.pushEvent(sessionId, 'status', { status: 'IDLE' }, active.currentEmit);
+  }
+
+  private closeActiveSession(sessionId: string, active: ActiveCodexSession): void {
+    if (this.activeSessions.get(sessionId) !== active) return;
     this.settleActiveSession(
       sessionId,
       active,
@@ -242,9 +306,10 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
     context: AgentRunContext,
   ): Promise<void> {
     const active = await this.ensureSession(sessionId, context);
+    const runtimeTools = runtimeToolsForPolicy(context.runtimePolicy, context.tools);
     active.currentEmit = context.emit;
     active.requestProviderApproval = context.requestProviderApproval;
-    active.runtimeTools = context.tools;
+    active.runtimeTools = runtimeTools;
     active.accumulatedText = '';
     active.currentAgentItemId = undefined;
 
@@ -254,7 +319,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
     const turnInput = [
       {
         type: 'text' as const,
-        text: appendRuntimeToolInstructions(text, context.tools),
+        text: appendRuntimeToolInstructions(text, runtimeTools),
         text_elements: [] as [],
       },
     ];
@@ -272,7 +337,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
             ...(model ? { model } : {}),
             ...(effort ? { effort } : {}),
             ...(serviceTier ? { serviceTier } : {}),
-            ...this.turnRuntimeOverrides(),
+            ...this.turnRuntimeOverrides(context.runtimePolicy),
           });
 
     const turnId = this.readTurnId(turn);
@@ -287,20 +352,34 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
 
   private async ensureSession(sessionId: string, context: AgentRunContext): Promise<ActiveCodexSession> {
     const existing = this.activeSessions.get(sessionId);
-    if (existing) return existing;
+    if (existing) {
+      if (existing.runtimePolicyKey !== runtimePolicyKey(context.runtimePolicy)) {
+        throw new Error('Runtime policy cannot change on an active Codex session.');
+      }
+      const nextSurface = codexDynamicToolSurface(
+        runtimeToolsForPolicy(context.runtimePolicy, context.tools),
+      );
+      if (existing.dynamicToolSurface !== nextSurface) {
+        throw new Error('Runtime tool definitions cannot change on an active Codex thread.');
+      }
+      return existing;
+    }
 
     const cwd = this.resolveCwd(context);
+    const runtimeTools = runtimeToolsForPolicy(context.runtimePolicy, context.tools);
     const client = this.createClient(cwd, await this.resolveBinaryPathForRun());
     const active: ActiveCodexSession = {
       client,
       codexThreadId: '',
       currentEmit: context.emit,
       requestProviderApproval: context.requestProviderApproval,
-      runtimeTools: context.tools,
+      runtimeTools,
       accumulatedText: '',
       completions: new Map(),
       completedTurns: new Map(),
       unsubscribers: [],
+      runtimePolicyKey: runtimePolicyKey(context.runtimePolicy),
+      dynamicToolSurface: codexDynamicToolSurface(runtimeTools),
     };
 
     active.unsubscribers.push(
@@ -317,13 +396,23 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
       client.onClose((error) => this.failActiveSession(sessionId, active, error)),
     );
 
+    let resumeCandidate = false;
     try {
       await client.initialize();
       const session = this.sessions.findById(sessionId);
       const model = this.resolveModel(context.model);
-      const runtime = this.threadRuntimeOverrides();
-      const dynamicTools = buildCodexDynamicTools(context.tools);
+      const runtime = this.threadRuntimeOverrides(context.runtimePolicy);
+      const dynamicTools = buildCodexDynamicTools(runtimeTools);
       const persistedThreadId = session?.providerThreadId;
+      resumeCandidate = Boolean(persistedThreadId);
+      const persistedToolSurface = asString(session?.providerState?.codexDynamicToolSurface);
+      if (
+        persistedThreadId &&
+        persistedToolSurface !== active.dynamicToolSurface &&
+        (persistedToolSurface !== undefined || active.dynamicToolSurface !== undefined)
+      ) {
+        throw new Error('Runtime tool definitions do not match the persisted Codex thread.');
+      }
       const response = persistedThreadId
         ? await client.request<CodexThreadOpenResponse>('thread/resume', {
             threadId: persistedThreadId,
@@ -335,6 +424,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
             ...(model ? { model } : {}),
             cwd,
             ...runtime,
+            ...(context.runtimePolicy ? { allowProviderModelFallback: false } : {}),
             experimentalRawEvents: false,
             ...(dynamicTools ? { dynamicTools } : {}),
           });
@@ -347,12 +437,24 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
       active.codexThreadId = codexThreadId;
       this.sessions.updateProviderRuntimeState(sessionId, {
         providerThreadId: codexThreadId,
-        providerState: { resumeCursor: { threadId: codexThreadId } },
+        providerState: {
+          ...(this.sessions.findById(sessionId)?.providerState ?? {}),
+          resumeCursor: { threadId: codexThreadId },
+          ...(active.dynamicToolSurface
+            ? { codexDynamicToolSurface: active.dynamicToolSurface }
+            : {}),
+        },
       });
       this.syncThreadName(sessionId, active, this.readThreadName(response), codexThreadId, context.emit);
       this.activeSessions.set(sessionId, active);
       return active;
     } catch (error) {
+      if (resumeCandidate && isDefinitiveCodexResumeError(error)) {
+        this.sessions.updateProviderRuntimeState(sessionId, {
+          providerThreadId: null,
+          providerActiveTurnId: null,
+        });
+      }
       for (const unsubscribe of active.unsubscribers) unsubscribe();
       client.close();
       throw error;
@@ -381,7 +483,13 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
         active.codexThreadId = threadId;
         this.sessions.updateProviderRuntimeState(sessionId, {
           providerThreadId: threadId,
-          providerState: { resumeCursor: { threadId } },
+          providerState: {
+            ...(this.sessions.findById(sessionId)?.providerState ?? {}),
+            resumeCursor: { threadId },
+            ...(active.dynamicToolSurface
+              ? { codexDynamicToolSurface: active.dynamicToolSurface }
+              : {}),
+          },
         });
       }
       return;
@@ -634,6 +742,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
   }
 
   private resolveCwd(context: AgentRunContext): string {
+    if (context.runtimePolicy) return mapCodexRuntimePolicy(context.runtimePolicy).workspaceRoot;
     return (
       context.cwd ??
       context.workspace ??
@@ -655,20 +764,16 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
       : 'full-access';
   }
 
-  private threadRuntimeOverrides(): {
-    approvalPolicy: 'untrusted' | 'never';
-    sandbox: 'read-only' | 'danger-full-access';
-  } {
+  private threadRuntimeOverrides(contextPolicy: AgentRunContext['runtimePolicy']) {
+    if (contextPolicy) return mapCodexRuntimePolicy(contextPolicy).thread;
     if (this.runtimeMode() === 'approval-required') {
       return { approvalPolicy: 'untrusted', sandbox: 'read-only' };
     }
     return { approvalPolicy: 'never', sandbox: 'danger-full-access' };
   }
 
-  private turnRuntimeOverrides(): {
-    approvalPolicy: 'untrusted' | 'never';
-    sandboxPolicy: { type: 'readOnly' | 'dangerFullAccess' };
-  } {
+  private turnRuntimeOverrides(contextPolicy: AgentRunContext['runtimePolicy']) {
+    if (contextPolicy) return mapCodexRuntimePolicy(contextPolicy).turn;
     if (this.runtimeMode() === 'approval-required') {
       return { approvalPolicy: 'untrusted', sandboxPolicy: { type: 'readOnly' } };
     }
@@ -877,4 +982,11 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
+}
+
+function codexDynamicToolSurface(runtimeTools: AgentRuntimeTools | undefined): string | undefined {
+  const definitions = buildCodexDynamicTools(runtimeTools);
+  return definitions
+    ? createHash('sha256').update(JSON.stringify(definitions)).digest('hex')
+    : undefined;
 }

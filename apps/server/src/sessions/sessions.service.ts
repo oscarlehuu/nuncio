@@ -13,7 +13,17 @@ import { homedir } from 'node:os';
 import { v4 as uuidv4 } from 'uuid';
 import { AgentRegistry } from '../agents/agents.registry';
 import { RetainedEventFlushError } from '../agents/agents.base-provider';
-import type { AgentAttachment, AgentProvider, AgentRunContext } from '../agents/agents.types';
+import {
+  assertRuntimePolicyCapabilitySupported,
+  assertRuntimePolicySupported,
+  runtimeToolsForPolicy,
+} from '../agents/agent-runtime-policy';
+import type {
+  AgentAttachment,
+  AgentProvider,
+  AgentRunContext,
+  AgentRuntimePolicy,
+} from '../agents/agents.types';
 import { AgentToolRegistry } from '../agents/tools/agent-tool-registry';
 import { MediaStore } from './media.store';
 import { CursorLocalSessionsService } from '../cursor-local/cursor-local-sessions.service';
@@ -34,6 +44,7 @@ import { deriveHasPendingInput } from './domain/derive-pending-input';
 import type { SessionEventType } from './domain/events.types';
 import type {
   CreateSessionDto,
+  ContinueExistingSessionDto,
   HandoffSessionDto,
   ProviderRequestDecision,
   ProviderRequestInput,
@@ -115,6 +126,10 @@ interface LifecycleRetry {
   failure?: unknown;
 }
 
+interface CrewStartAttempt {
+  cancelled: boolean;
+}
+
 @Injectable()
 export class SessionsService implements OnModuleDestroy {
   private readonly streams = new Map<string, EventEmitter>();
@@ -124,6 +139,8 @@ export class SessionsService implements OnModuleDestroy {
   private readonly verifying = new Set<string>();
   private readonly runPromises = new Map<string, Promise<void>>();
   private readonly startingSteers = new Set<string>();
+  private readonly crewStartAttempts = new Map<string, Set<CrewStartAttempt>>();
+  private readonly crewQuiesceCounts = new Map<string, number>();
   private readonly drainingSteerQueues = new Set<string>();
   // Verify-feedback loop settlement: resolves when the loop reaches a terminal
   // state (green verify / needs-attention / no-command). Task-lane consumers
@@ -190,7 +207,9 @@ export class SessionsService implements OnModuleDestroy {
   }
 
   list(includeArchived = false): SessionDto[] {
-    return this.sessions.list(includeArchived).map((session) => this.enrichSession(session));
+    return this.sessions
+      .listUserFacing(includeArchived)
+      .map((session) => this.enrichSession(session));
   }
 
   get(id: string): SessionDto | null {
@@ -243,7 +262,7 @@ export class SessionsService implements OnModuleDestroy {
 
   /** Append new transcript turns from disk; emits transcript_refreshed when rows land. */
   refreshTranscript(id: string): { added: number } {
-    const session = this.requireSession(id);
+    const session = this.requirePublicMutableSession(id);
     if (this.locallyProducing.has(id)) return { added: 0 };
     const before = this.events.list(id, 0).length;
     this.refreshTranscriptIfNeeded(session);
@@ -253,7 +272,12 @@ export class SessionsService implements OnModuleDestroy {
 
   async create(input: CreateSessionDto): Promise<SessionDto> {
     const providerId = input.provider?.trim() || (await this.agents.defaultId());
-    await this.agents.getAvailable(providerId);
+    const provider = await this.agents.getAvailable(providerId);
+    try {
+      assertRuntimePolicyCapabilitySupported(input.runtimePolicy, provider.capabilities);
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : String(error));
+    }
 
     const id = uuidv4().slice(0, 8);
     let workspace = input.workspace?.trim() || undefined;
@@ -282,6 +306,12 @@ export class SessionsService implements OnModuleDestroy {
       }
     }
 
+    const runtimePolicy = this.validateRuntimePolicy(
+      provider,
+      input.runtimePolicy,
+      worktreePath ?? workspace,
+    );
+
     // The single choke point for the first prompt: handoff brief → project
     // facts → the user's prompt. Both this path and TasksService.execute() (via
     // input.contextBrief) compose here, so the order is guaranteed in one place.
@@ -302,6 +332,7 @@ export class SessionsService implements OnModuleDestroy {
       baseBranch,
       worktreePath,
       branch,
+      runtimePolicy,
       cursorBackend: 'sdk',
     });
     // B4: materialize the engine's native context file into the worktree now
@@ -452,7 +483,106 @@ export class SessionsService implements OnModuleDestroy {
     return this.enrichSession(refreshed);
   }
 
+  /**
+   * Continue one durable session in place and wait for its turn plus the
+   * session-owned verification loop. Provider thread, workspace, and runtime
+   * policy all come from the persisted session row.
+   */
+  async continueExistingSession(
+    id: string,
+    input: ContinueExistingSessionDto,
+  ): Promise<SessionDto> {
+    const current = this.requireSession(id);
+    if (current.status !== 'IDLE' && current.status !== 'PAUSED' && current.status !== 'ERROR') {
+      throw new BadRequestException(`Cannot continue session in status ${current.status}`);
+    }
+    const prompt = composeSessionPreamble({
+      ...(input.contextBrief ? { brief: renderHandoffBrief(input.contextBrief) } : {}),
+      prompt: input.prompt,
+    });
+
+    this.armVerifySettlement(id);
+    try {
+      await this.steerInternal(
+        id,
+        prompt,
+        input.forceResume ?? (current.status === 'ERROR'),
+        input.attachments,
+        input.origin,
+      );
+      await this.awaitVerifySettled(id);
+      return this.requireSession(id);
+    } catch (error) {
+      this.settleVerify(id);
+      throw error;
+    }
+  }
+
+  /** Stop a Crew member handle without exposing pause/interrupt controls publicly. */
+  async quiesceCrewSession(id: string): Promise<SessionDto> {
+    const session = this.requireSession(id);
+    if (session.verifyOwner !== 'crew') {
+      throw new BadRequestException('Session is not Crew-owned');
+    }
+    this.beginCrewQuiescence(id);
+    try {
+      const provider = this.agents.resolveForSession(session);
+      await provider.quiesce(id);
+      if (session.status === 'RUNNING') this.appendAndEmit(id, 'interrupted', { owner: 'crew' });
+      this.locallyProducing.delete(id);
+      this.cancelProviderRequests(id);
+      this.steerQueue.deleteForSession(id);
+      this.settleVerify(id);
+      if (this.sessions.findById(id)?.status === 'RUNNING') this.transition(id, 'IDLE');
+      return this.requireSession(id);
+    } finally {
+      this.endCrewQuiescence(id);
+    }
+  }
+
+  private beginCrewQuiescence(id: string): void {
+    this.crewQuiesceCounts.set(id, (this.crewQuiesceCounts.get(id) ?? 0) + 1);
+    for (const attempt of this.crewStartAttempts.get(id) ?? []) attempt.cancelled = true;
+  }
+
+  private endCrewQuiescence(id: string): void {
+    const remaining = (this.crewQuiesceCounts.get(id) ?? 1) - 1;
+    if (remaining > 0) this.crewQuiesceCounts.set(id, remaining);
+    else this.crewQuiesceCounts.delete(id);
+  }
+
+  private beginCrewStart(session: SessionDto): CrewStartAttempt | null {
+    if (session.verifyOwner !== 'crew') return null;
+    const attempt = { cancelled: (this.crewQuiesceCounts.get(session.id) ?? 0) > 0 };
+    const attempts = this.crewStartAttempts.get(session.id) ?? new Set<CrewStartAttempt>();
+    attempts.add(attempt);
+    this.crewStartAttempts.set(session.id, attempts);
+    return attempt;
+  }
+
+  private endCrewStart(id: string, attempt: CrewStartAttempt | null): void {
+    if (!attempt) return;
+    const attempts = this.crewStartAttempts.get(id);
+    attempts?.delete(attempt);
+    if (attempts?.size === 0) this.crewStartAttempts.delete(id);
+  }
+
+  private canStartCrewAttempt(attempt: CrewStartAttempt | null): boolean {
+    return attempt?.cancelled !== true;
+  }
+
   async steer(
+    id: string,
+    message: string,
+    forceResume?: boolean,
+    attachments?: AgentAttachment[],
+    origin?: string,
+  ): Promise<SessionDto> {
+    this.requirePublicMutableSession(id);
+    return this.steerInternal(id, message, forceResume, attachments, origin);
+  }
+
+  private async steerInternal(
     id: string,
     message: string,
     forceResume?: boolean,
@@ -486,6 +616,12 @@ export class SessionsService implements OnModuleDestroy {
     // concurrent steer queues, while provider/preflight failure preserves the
     // exact prior state (CREATED, IDLE, PAUSED, or ERROR).
     this.startingSteers.add(id);
+    const crewStart = this.beginCrewStart(current);
+    if (!this.canStartCrewAttempt(crewStart)) {
+      this.startingSteers.delete(id);
+      this.endCrewStart(id, crewStart);
+      return this.requireSession(id);
+    }
     let provider: AgentProvider;
     try {
       provider = await this.trackPendingWork(this.agents.resolveAvailableForSession(current));
@@ -494,8 +630,14 @@ export class SessionsService implements OnModuleDestroy {
       }
     } catch (error) {
       this.startingSteers.delete(id);
+      this.endCrewStart(id, crewStart);
       this.scheduleSteerDrainAfterFailedStart(id, current.status);
       throw error;
+    }
+    if (!this.canStartCrewAttempt(crewStart)) {
+      this.startingSteers.delete(id);
+      this.endCrewStart(id, crewStart);
+      return this.requireSession(id);
     }
 
     this.locallyProducing.add(id);
@@ -514,6 +656,7 @@ export class SessionsService implements OnModuleDestroy {
       throw error;
     } finally {
       this.startingSteers.delete(id);
+      this.endCrewStart(id, crewStart);
       this.locallyProducing.delete(id);
       if (startFailed) this.scheduleSteerDrainAfterFailedStart(id, current.status);
     }
@@ -799,6 +942,16 @@ export class SessionsService implements OnModuleDestroy {
     // Drain timers can outlive the service; after shutdown the database is
     // closed, so touching the queue would throw from a detached timer.
     if (this.destroyed || this.drainingSteerQueues.has(id)) return;
+    // A requested pause/archive/delete owns the session even while retained
+    // events or the status write are retrying. Never let an older queue timer
+    // restart provider work before that lifecycle intent settles.
+    if (this.lifecycleRetries.has(id)) return;
+    // Crew owns every continuation of its hidden member Sessions. A stale
+    // generic queue row must remain inert for owner reconciliation instead of
+    // entering the public steer path and retrying forever after authorization
+    // rejects it.
+    const owner = this.sessions.findById(id);
+    if (!owner || owner.verifyOwner === 'crew') return;
 
     // Skip any leading task-digest wakes that must not restart an ERROR/PAUSED
     // session, then deliver the first eligible row. Skipping is atomic (row
@@ -873,7 +1026,12 @@ export class SessionsService implements OnModuleDestroy {
       // A user lifecycle action (especially pause/archive) wins over an older
       // delivery retry. The durable row remains for a later explicit resume.
       if (this.sessions.findById(id)?.status === authorizedStatus) {
-        setTimeout(() => this.drainSteerQueue(id), 250);
+        setTimeout(() => {
+          if (
+            !this.destroyed &&
+            this.sessions.findById(id)?.status === authorizedStatus
+          ) this.drainSteerQueue(id);
+        }, 250);
       }
     });
   }
@@ -909,7 +1067,7 @@ export class SessionsService implements OnModuleDestroy {
   private interruptForceIdleMs = 5000;
 
   async interrupt(id: string): Promise<void> {
-    const session = this.requireSession(id);
+    const session = this.requirePublicMutableSession(id);
     const provider = this.agents.resolveForSession(session);
     if (!provider.capabilities.interrupt || !provider.interrupt) {
       throw new BadRequestException(`Interrupt not supported by provider ${provider.id}`);
@@ -1059,7 +1217,7 @@ export class SessionsService implements OnModuleDestroy {
     model: string,
     options?: ModelOptionsMap | null,
   ): Promise<SessionDto> {
-    const session = this.requireSession(id);
+    const session = this.requirePublicMutableSession(id);
     const trimmed = model?.trim();
     if (!trimmed) throw new BadRequestException('model is required');
     const provider = this.agents.resolveForSession(session);
@@ -1076,7 +1234,7 @@ export class SessionsService implements OnModuleDestroy {
     requestId: string,
     body: RespondInteractionDto,
   ): Promise<{ ok: true }> {
-    const session = this.requireSession(id);
+    const session = this.requirePublicMutableSession(id);
     const trimmedRequestId = requestId?.trim();
     if (!trimmedRequestId) {
       throw new BadRequestException('requestId is required');
@@ -1101,7 +1259,7 @@ export class SessionsService implements OnModuleDestroy {
   }
 
   pause(id: string): SessionDto {
-    const session = this.requireSession(id);
+    const session = this.requirePublicMutableSession(id);
     if (!canTransition(session.status, 'PAUSED')) {
       throw new BadRequestException(`Cannot pause session in status ${session.status}`);
     }
@@ -1114,7 +1272,7 @@ export class SessionsService implements OnModuleDestroy {
   }
 
   archive(id: string): SessionDto {
-    const session = this.requireSession(id);
+    const session = this.requirePublicMutableSession(id);
     if (!canTransition(session.status, 'ARCHIVED')) {
       throw new BadRequestException(`Cannot archive session in status ${session.status}`);
     }
@@ -1123,7 +1281,7 @@ export class SessionsService implements OnModuleDestroy {
   }
 
   restore(id: string): SessionDto {
-    const session = this.requireSession(id);
+    const session = this.requirePublicMutableSession(id);
     if (session.status !== 'ARCHIVED') {
       throw new BadRequestException(`Cannot restore session in status ${session.status}`);
     }
@@ -1136,14 +1294,14 @@ export class SessionsService implements OnModuleDestroy {
     if (!trimmed) {
       throw new BadRequestException('Title cannot be empty');
     }
-    this.requireSession(id);
+    this.requirePublicMutableSession(id);
     const updated = this.sessions.updateTitle(id, trimmed);
     if (!updated) throw new NotFoundException(`Session ${id} not found`);
     return this.enrichSession(updated);
   }
 
   async delete(id: string): Promise<void> {
-    const session = this.requireSession(id);
+    const session = this.requirePublicMutableSession(id);
     if (session.status !== 'ARCHIVED') {
       throw new BadRequestException(`Cannot delete session in status ${session.status}; archive first`);
     }
@@ -1551,6 +1709,7 @@ export class SessionsService implements OnModuleDestroy {
     if (decision !== 'approve' && decision !== 'deny') {
       throw new BadRequestException('decision must be approve or deny');
     }
+    this.requirePublicMutableSession(sessionId);
     const safeDecision: ProviderRequestDecision = decision;
 
     if (!this.providerRequestRecords.findPending(sessionId, requestId)) {
@@ -1795,6 +1954,14 @@ export class SessionsService implements OnModuleDestroy {
     return this.enrichSession(session);
   }
 
+  private requirePublicMutableSession(id: string): SessionDto {
+    const session = this.requireSession(id);
+    if (session.verifyOwner === 'crew') {
+      throw new BadRequestException('Crew-owned sessions are read-only outside Crew controls');
+    }
+    return session;
+  }
+
   private enrichSession(session: SessionDto): SessionDto {
     let provider;
     try {
@@ -1831,8 +1998,12 @@ export class SessionsService implements OnModuleDestroy {
     return error instanceof BadRequestException && error.message === `Unknown agent provider ${providerId}`;
   }
 
-  private buildAgentRunContext(session: SessionDto): AgentRunContext {
+  private buildAgentRunContext(
+    session: SessionDto,
+    provider: AgentProvider = this.agents.resolveForSession(session),
+  ): AgentRunContext {
     const workspace = session.worktreePath ?? session.workspace ?? undefined;
+    const runtimePolicy = this.validateRuntimePolicy(provider, session.runtimePolicy, workspace);
     const transcriptMtimeMs =
       session.cursorBackend === 'cli' && session.cursorChatId && workspace
         ? this.cursorLocal.transcriptMtime(session.cursorChatId, workspace)
@@ -1852,18 +2023,34 @@ export class SessionsService implements OnModuleDestroy {
       model: session.model,
       modelOptions: session.modelOptions,
       workspace,
-      cwd: session.worktreePath ?? undefined,
+      cwd: session.worktreePath ?? (runtimePolicy ? workspace : undefined),
       cursorChatId: session.cursorChatId,
       transcriptMtimeMs,
       chatStoreMtimeMs,
       transcriptTurnEnded,
-      tools: this.agentTools?.forSession({
-        sessionId: session.id,
-        projectPath: session.projectPath,
-        provider: session.provider,
-        model: session.model,
-      }),
+      tools: runtimeToolsForPolicy(
+        runtimePolicy,
+        this.agentTools?.forSession({
+          sessionId: session.id,
+          projectPath: session.projectPath,
+          provider: session.provider,
+          model: session.model,
+        }),
+      ),
+      runtimePolicy,
     };
+  }
+
+  private validateRuntimePolicy(
+    provider: AgentProvider,
+    policy: AgentRuntimePolicy | null | undefined,
+    workspace?: string | null,
+  ): AgentRuntimePolicy | undefined {
+    try {
+      return assertRuntimePolicySupported(policy, provider.capabilities, workspace);
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : String(error));
+    }
   }
 
   private transition(id: string, status: SessionStatus): void {
@@ -2042,18 +2229,22 @@ export class SessionsService implements OnModuleDestroy {
   private startRun(session: SessionDto, attachments?: AgentAttachment[]): void {
     if (session.cursorBackend === 'cli') return;
     const persisted = this.persistImageAttachments(session.id, attachments);
+    const crewStart = this.beginCrewStart(session);
     this.locallyProducing.add(session.id);
     // Arm loop settlement before the run so a task can awaitVerifySettled and
     // wait for the whole verify-feedback loop, not just the first turn+verify.
     this.armVerifySettlement(session.id);
     const run = (async () => {
       try {
+        if (!this.canStartCrewAttempt(crewStart)) return;
         const provider = await this.agents.resolveAvailableForSession(session);
+        if (!this.canStartCrewAttempt(crewStart)) return;
         await provider.run(session.id, session.prompt, {
           ...this.buildAgentRunContext(session),
           attachments: persisted,
         });
       } finally {
+        this.endCrewStart(session.id, crewStart);
         this.locallyProducing.delete(session.id);
       }
       await this.maybeVerify(session.id);
@@ -2088,6 +2279,10 @@ export class SessionsService implements OnModuleDestroy {
     if (this.verifying.has(sessionId)) return;
     const session = this.sessions.findById(sessionId);
     if (!session || session.status !== 'IDLE') {
+      this.settleVerify(sessionId);
+      return;
+    }
+    if (session.verifyOwner === 'crew') {
       this.settleVerify(sessionId);
       return;
     }
@@ -2194,6 +2389,10 @@ export class SessionsService implements OnModuleDestroy {
       this.settleVerify(sessionId);
       return;
     }
+    if (session.verifyOwner === 'crew') {
+      this.settleVerify(sessionId);
+      return;
+    }
     const { enabled, maxRounds } = this.verifyFeedbackConfig(session.projectPath ?? null);
     if (!enabled) {
       this.settleVerify(sessionId);
@@ -2249,6 +2448,10 @@ export class SessionsService implements OnModuleDestroy {
       this.settleVerify(sessionId);
       return;
     }
+    if (session.verifyOwner === 'crew') {
+      this.settleVerify(sessionId);
+      return;
+    }
     let provider;
     try {
       // Sync resolve — no availability await before the claim, so the RUNNING
@@ -2299,6 +2502,7 @@ export class SessionsService implements OnModuleDestroy {
   private resumeVerifyLoops(): void {
     for (const session of this.sessions.list(false)) {
       if (session.status !== 'IDLE') continue;
+      if (session.verifyOwner === 'crew') continue;
       // Per-session gate: a project override may enable the loop even when the
       // global setting is off (and vice versa). resumeOneVerifyLoop re-checks via
       // driveVerifyFeedback, but skipping the disabled ones here avoids needless

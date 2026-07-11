@@ -124,7 +124,7 @@ export class DispatcherService implements OnModuleInit {
   }
 
   private collectSources(): DispatcherRuleSources {
-    const sessions = this.sessions?.list(true) ?? [];
+    const sessions = this.sessions?.listUserFacing(true) ?? [];
     const projects = this.projects?.list() ?? [];
     const loops = this.loops?.list() ?? [];
     return {

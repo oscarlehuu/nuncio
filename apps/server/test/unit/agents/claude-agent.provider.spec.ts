@@ -1,9 +1,14 @@
 import { beforeEach, afterEach, describe, it, expect } from 'bun:test';
 import { Test, TestingModule } from '@nestjs/testing';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ClaudeAgentProvider } from '../../../src/agents/providers/claude-agent.provider';
+import { defineCrewRuntimeTool } from '../../../src/agents/tools/agent-runtime-tools-policy';
+import {
+  CLAUDE_RUNTIME_MCP_SERVER,
+  type ClaudeMcpToolDefinition,
+} from '../../../src/agents/tools/claude-runtime-tools.adapter';
 import type {
   ClaudeQuery,
   ClaudeQueryOptions,
@@ -303,7 +308,49 @@ describe('ClaudeAgentProvider', () => {
       providerThreadId: 't1',
     });
     await provider.run(created.id, 'hi', { cwd: '/tmp/ws', model: 'claude:haiku' });
-    expect(sessions.findById(created.id)?.status).toBe('ERROR');
+    const failed = sessions.findById(created.id)!;
+    expect(failed.status).toBe('ERROR');
+    expect(failed.providerThreadId).toBeNull();
+    expect(provider.canResumeThread(failed)).toBe(false);
+  });
+
+  it('preserves a resumed thread after a transient iterator failure and retries it natively', async () => {
+    const resumeOptions: Array<string | undefined> = [];
+    let attempt = 0;
+    provider.queryFactory = ({ options }) => {
+      resumeOptions.push(options.resume);
+      attempt += 1;
+      if (attempt === 1) {
+        return {
+          async interrupt() {},
+          async setModel() {},
+          async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+            yield { type: 'system', subtype: 'init', session_id: 'durable-thread' };
+            throw new Error('temporary Claude transport failure');
+          },
+        };
+      }
+      return new CapturingQuery('durable-thread');
+    };
+    const created = sessions.create({
+      prompt: 'continue',
+      provider: 'claude',
+      model: 'claude:haiku',
+      providerThreadId: 'durable-thread',
+    });
+
+    await provider.run(created.id, 'continue', { cwd: '/tmp/ws', model: 'claude:haiku' });
+    expect(sessions.findById(created.id)).toMatchObject({
+      status: 'ERROR',
+      providerThreadId: 'durable-thread',
+    });
+
+    await provider.steer(created.id, 'retry', { cwd: '/tmp/ws', model: 'claude:haiku' });
+    expect(resumeOptions).toEqual(['durable-thread', 'durable-thread']);
+    expect(sessions.findById(created.id)).toMatchObject({
+      status: 'IDLE',
+      providerThreadId: 'durable-thread',
+    });
   });
 
   describe('permission mode setting', () => {
@@ -329,6 +376,131 @@ describe('ClaudeAgentProvider', () => {
       await provider.run(created.id, 'hi', { cwd: '/tmp/ws', model: 'claude:haiku' });
       expect(capturedOptions?.permissionMode).toBe('acceptEdits');
     });
+
+    it('an explicit read-only policy overrides global bypass and denies mutation before approval', async () => {
+      const workspaceRoot = mkdtempSync(join(tmpdir(), 'nuncio-claude-policy-'));
+      process.env.NUNCIO_CLAUDE_PERMISSION_MODE = 'bypassPermissions';
+      provider.bustCache();
+      try {
+        const created = sessions.create({
+          prompt: 'review only',
+          provider: 'claude',
+          model: 'claude:haiku',
+          providerThreadId: 'existing-policy-thread',
+        });
+        await provider.run(created.id, 'review only', {
+          cwd: workspaceRoot,
+          model: 'claude:haiku',
+          runtimePolicy: {
+            filesystem: 'read-only',
+            workspaceRoot,
+            network: 'disabled',
+          },
+          requestProviderApproval: async () => ({ requestId: 'must-not-ask', decision: 'approve' }),
+        });
+
+        const policyOptions = capturedOptions as ClaudeQueryOptions & {
+          tools?: string[];
+          hooks?: {
+            PreToolUse?: Array<{
+              hooks: Array<(input: unknown, toolUseId?: string) => Promise<Record<string, unknown>>>;
+            }>;
+          };
+        };
+        expect(provider.capabilities.runtimePolicies).toContainEqual({
+          filesystem: 'read-only',
+          network: 'disabled',
+        });
+        expect(policyOptions.permissionMode).toBe('default');
+        expect(policyOptions.resume).toBe('existing-policy-thread');
+        expect(policyOptions.tools).toEqual(['Read', 'Grep', 'Glob']);
+        const hook = policyOptions.hooks?.PreToolUse?.[0]?.hooks[0];
+        expect(hook).toBeFunction();
+        const denied = await hook!({
+          hook_event_name: 'PreToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: join(workspaceRoot, 'forbidden.txt'), content: 'no' },
+        });
+        expect(denied).toMatchObject({
+          hookSpecificOutput: {
+            permissionDecision: 'deny',
+          },
+        });
+      } finally {
+        rmSync(workspaceRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('workspace-write allows in-root edits but denies siblings, symlinks, and shell', async () => {
+      const workspaceRoot = mkdtempSync(join(tmpdir(), 'nuncio-claude-workspace-'));
+      const sibling = mkdtempSync(join(tmpdir(), 'nuncio-claude-sibling-'));
+      symlinkSync(sibling, join(workspaceRoot, 'escape'), 'dir');
+      mkdirSync(join(workspaceRoot, '.git'));
+      writeFileSync(join(workspaceRoot, '.git', 'config'), '[core]\n');
+      try {
+        const created = sessions.create({ prompt: 'build', provider: 'claude', model: 'claude:haiku' });
+        await provider.run(created.id, 'build', {
+          cwd: workspaceRoot,
+          model: 'claude:haiku',
+          runtimePolicy: {
+            filesystem: 'workspace-write',
+            workspaceRoot,
+            network: 'disabled',
+          },
+        });
+
+        const options = capturedOptions as ClaudeQueryOptions & { tools?: string[] };
+        expect(options.tools).toEqual(['Read', 'Grep', 'Glob', 'Edit', 'Write']);
+        await expect(
+          options.canUseTool(
+            'Write',
+            { file_path: join(workspaceRoot, 'inside.txt'), content: 'ok' },
+            { requestId: 'inside' },
+          ),
+        ).resolves.toMatchObject({ behavior: 'allow' });
+        await expect(
+          options.canUseTool(
+            'Read',
+            { file_path: join(workspaceRoot, '.git', 'config') },
+            { requestId: 'git-read' },
+          ),
+        ).resolves.toMatchObject({ behavior: 'allow' });
+        await expect(
+          options.canUseTool(
+            'Write',
+            { file_path: join(workspaceRoot, '.git', 'config'), content: 'corrupt' },
+            { requestId: 'git-write' },
+          ),
+        ).resolves.toMatchObject({ behavior: 'deny', message: expect.stringContaining('Git metadata') });
+        await expect(
+          options.canUseTool(
+            'Write',
+            { file_path: join(workspaceRoot, '.git'), content: 'corrupt pointer' },
+            { requestId: 'git-pointer-write' },
+          ),
+        ).resolves.toMatchObject({ behavior: 'deny', message: expect.stringContaining('Git metadata') });
+        await expect(
+          options.canUseTool(
+            'Write',
+            { file_path: join(sibling, 'outside.txt'), content: 'no' },
+            { requestId: 'outside' },
+          ),
+        ).resolves.toMatchObject({ behavior: 'deny' });
+        await expect(
+          options.canUseTool(
+            'Write',
+            { file_path: join(workspaceRoot, 'escape', 'outside.txt'), content: 'no' },
+            { requestId: 'symlink' },
+          ),
+        ).resolves.toMatchObject({ behavior: 'deny' });
+        await expect(
+          options.canUseTool('Bash', { command: 'curl example.com' }, { requestId: 'shell' }),
+        ).resolves.toMatchObject({ behavior: 'deny' });
+      } finally {
+        rmSync(workspaceRoot, { recursive: true, force: true });
+        rmSync(sibling, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('runtime tools → in-process MCP server', () => {
@@ -353,6 +525,122 @@ describe('ClaudeAgentProvider', () => {
       await provider.run(created.id, 'hi', { cwd: '/tmp/ws', model: 'claude:haiku' });
       expect(capturedOptions?.mcpServers).toBeUndefined();
       expect(capturedOptions?.appendSystemPrompt).toBeUndefined();
+    });
+
+    it('drops unrestricted runtime tools when an explicit policy is active', async () => {
+      const workspaceRoot = mkdtempSync(join(tmpdir(), 'nuncio-claude-no-runtime-tools-'));
+      try {
+        const create = (opts: { name: string }) => ({ type: 'sdk' as const, name: opts.name, instance: {} });
+        provider.createSdkMcpServer = create as never;
+        const created = sessions.create({ prompt: 'review', provider: 'claude', model: 'claude:haiku' });
+        await provider.run(created.id, 'review', {
+          cwd: workspaceRoot,
+          model: 'claude:haiku',
+          runtimePolicy: {
+            filesystem: 'read-only',
+            workspaceRoot,
+            network: 'disabled',
+          },
+          tools: {
+            systemPromptAppend: 'Open the browser.',
+            tools: [{ name: 'browser_open', inputSchema: {}, execute: async () => 'opened' }],
+          },
+        });
+        expect(capturedOptions?.mcpServers).toBeUndefined();
+        expect(capturedOptions?.appendSystemPrompt).toBeUndefined();
+      } finally {
+        rmSync(workspaceRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('explicit policies allow only exact trusted Crew MCP submission names', async () => {
+      for (const testCase of [
+        { filesystem: 'read-only' as const, toolName: 'submit_plan', builtins: ['Read', 'Grep', 'Glob'] },
+        {
+          filesystem: 'workspace-write' as const,
+          toolName: 'submit_build',
+          builtins: ['Read', 'Grep', 'Glob', 'Edit', 'Write'],
+        },
+      ]) {
+        const workspaceRoot = mkdtempSync(join(tmpdir(), `nuncio-claude-${testCase.toolName}-`));
+        const calls: Array<Record<string, unknown>> = [];
+        let definitions: ClaudeMcpToolDefinition[] = [];
+        try {
+          provider.createSdkMcpServer = ((options: {
+            name: string;
+            tools: ClaudeMcpToolDefinition[];
+          }) => {
+            definitions = options.tools;
+            return { type: 'sdk' as const, name: options.name, instance: {} };
+          }) as never;
+          const security = {
+            network: 'disabled' as const,
+            workspaceMutation: 'none' as const,
+            runtimePolicies: [
+              { filesystem: 'read-only' as const, network: 'disabled' as const },
+              { filesystem: 'workspace-write' as const, network: 'disabled' as const },
+            ],
+            scope: 'crew-internal' as const,
+          };
+          const trusted = defineCrewRuntimeTool({
+            name: testCase.toolName,
+            inputSchema: { type: 'object', properties: { marker: { type: 'string' } } },
+            security,
+            execute: async (input: Record<string, unknown>) => {
+              calls.push(input);
+              return `stored ${testCase.toolName}`;
+            },
+          });
+          const created = sessions.create({
+            prompt: testCase.toolName,
+            provider: 'claude',
+            model: 'claude:haiku',
+          });
+
+          await provider.run(created.id, created.prompt, {
+            cwd: workspaceRoot,
+            model: 'claude:haiku',
+            runtimePolicy: {
+              filesystem: testCase.filesystem,
+              workspaceRoot,
+              network: 'disabled',
+            },
+            tools: {
+              tools: [
+                trusted,
+                {
+                  name: 'forged_submit',
+                  inputSchema: {},
+                  security,
+                  execute: async () => 'must not run',
+                },
+                { name: 'browser_open', inputSchema: {}, execute: async () => 'unsafe' },
+              ],
+            },
+          });
+
+          const exactMcpName = `mcp__${CLAUDE_RUNTIME_MCP_SERVER}__${testCase.toolName}`;
+          const options = capturedOptions as ClaudeQueryOptions & { tools?: string[] };
+          expect(options.tools).toEqual([...testCase.builtins, exactMcpName]);
+          expect(definitions.map((definition) => definition.name)).toEqual([testCase.toolName]);
+          await expect(
+            options.canUseTool(exactMcpName, { marker: testCase.toolName }, { requestId: 'crew-safe' }),
+          ).resolves.toMatchObject({ behavior: 'allow' });
+          await expect(
+            options.canUseTool(
+              `mcp__${CLAUDE_RUNTIME_MCP_SERVER}__browser_open`,
+              {},
+              { requestId: 'browser-unsafe' },
+            ),
+          ).resolves.toMatchObject({ behavior: 'deny' });
+
+          const result = await definitions[0]!.handler({ marker: testCase.toolName });
+          expect(calls).toEqual([{ marker: testCase.toolName }]);
+          expect(result.content).toEqual([{ type: 'text', text: `stored ${testCase.toolName}` }]);
+        } finally {
+          rmSync(workspaceRoot, { recursive: true, force: true });
+        }
+      }
     });
   });
 
@@ -403,9 +691,83 @@ describe('ClaudeAgentProvider', () => {
       })) as never;
       provider.queryFactory = multiTurnQuery(records) as never;
       const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
-      await provider.run(created.id, 'first', { cwd: '/tmp/ws', model: 'claude:haiku', tools: toolset('verify') });
-      await provider.steer(created.id, 'second', { cwd: '/tmp/ws', model: 'claude:haiku', tools: toolset('verify') });
+      const tools = toolset('verify');
+      await provider.run(created.id, 'first', { cwd: '/tmp/ws', model: 'claude:haiku', tools });
+      await provider.steer(created.id, 'second', { cwd: '/tmp/ws', model: 'claude:haiku', tools });
       expect(records).toHaveLength(0);
+    });
+
+    it('refreshes stable Crew MCP definitions so a follow-up executes the current closure', async () => {
+      const workspaceRoot = mkdtempSync(join(tmpdir(), 'nuncio-claude-crew-refresh-'));
+      const records: Array<Record<string, unknown>> = [];
+      const definitionBatches: ClaudeMcpToolDefinition[][] = [];
+      const calls: string[] = [];
+      try {
+        provider.createSdkMcpServer = ((opts: {
+          name: string;
+          tools: ClaudeMcpToolDefinition[];
+        }) => {
+          definitionBatches.push(opts.tools);
+          return { type: 'sdk' as const, name: opts.name, instance: {} };
+        }) as never;
+        provider.queryFactory = multiTurnQuery(records) as never;
+        const created = sessions.create({
+          prompt: 'plan',
+          provider: 'claude',
+          model: 'claude:haiku',
+        });
+        const runtimePolicy = {
+          filesystem: 'read-only' as const,
+          workspaceRoot,
+          network: 'disabled' as const,
+        };
+        const crewTools = (revision: number) => ({
+          tools: ['plan', 'synthesis'].map((kind) => defineCrewRuntimeTool({
+            name: `submit_${kind}`,
+            inputSchema: {
+              type: 'object',
+              properties: { contextRevision: { type: 'integer' } },
+            },
+            security: {
+              network: 'disabled' as const,
+              workspaceMutation: 'none' as const,
+              runtimePolicies: [
+                { filesystem: 'read-only' as const, network: 'disabled' as const },
+              ],
+              scope: 'crew-internal' as const,
+            },
+            execute: async () => {
+              calls.push(`${kind}:${revision}`);
+              return `${kind} revision ${revision}`;
+            },
+          })),
+        });
+
+        await provider.run(created.id, 'plan revision one', {
+          cwd: workspaceRoot,
+          model: 'claude:haiku',
+          runtimePolicy,
+          tools: crewTools(1),
+        });
+        await provider.steer(created.id, 'synthesize revision two', {
+          cwd: workspaceRoot,
+          model: 'claude:haiku',
+          runtimePolicy,
+          tools: crewTools(2),
+        });
+
+        expect(records).toHaveLength(1);
+        expect(definitionBatches).toHaveLength(2);
+        const synthesis = definitionBatches[1]?.find(
+          (definition) => definition.name === 'submit_synthesis',
+        );
+        expect(await synthesis?.handler({ contextRevision: 2 })).toMatchObject({
+          content: [{ type: 'text', text: 'synthesis revision 2' }],
+        });
+        expect(calls).toEqual(['synthesis:2']);
+      } finally {
+        rmSync(workspaceRoot, { recursive: true, force: true });
+      }
     });
 
     it('rebuilds and pushes setMcpServers when the follow-up toolset changed', async () => {

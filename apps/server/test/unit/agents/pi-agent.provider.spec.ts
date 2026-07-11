@@ -16,6 +16,8 @@ let promptCalls: Array<{ text: string; options: unknown }> = [];
 let promptBehavior: ((text: string, options?: unknown) => Promise<void>) | null = null;
 let isStreaming = false;
 let subscribedHandler: ((event: { type: string; [key: string]: unknown }) => void) | null = null;
+let sessionOpenError: Error | null = null;
+let createSessionCalls = 0;
 const abortMock = mock(async () => undefined);
 const steerMock = mock(async (_text: string, _images?: unknown) => undefined);
 const setModelMock = mock(async (_model: unknown) => undefined);
@@ -45,36 +47,42 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
     }),
   },
   SessionManager: {
-    open: (path: string, sessionDir: undefined, cwd?: string) => ({ kind: 'open', path, sessionDir, cwd }),
-  },
-  createAgentSession: () => ({
-    session: {
-      sessionFile: fakeSessionFile,
-      get model() {
-        return registryModel();
-      },
-      get thinkingLevel() {
-        return 'medium';
-      },
-      get isStreaming() {
-        return isStreaming;
-      },
-      subscribe: (handler: (event: { type: string; [key: string]: unknown }) => void) => {
-        subscribedHandler = handler;
-        return () => {
-          if (subscribedHandler === handler) subscribedHandler = null;
-        };
-      },
-      prompt: async (text: string, options?: unknown) => {
-        promptCalls.push({ text, options });
-        await promptBehavior?.(text, options);
-      },
-      abort: abortMock,
-      steer: steerMock,
-      setModel: setModelMock,
-      setThinkingLevel: setThinkingLevelMock,
+    open: (path: string, sessionDir: undefined, cwd?: string) => {
+      if (sessionOpenError) throw sessionOpenError;
+      return { kind: 'open', path, sessionDir, cwd };
     },
-  }),
+  },
+  createAgentSession: () => {
+    createSessionCalls += 1;
+    return {
+      session: {
+        sessionFile: fakeSessionFile,
+        get model() {
+          return registryModel();
+        },
+        get thinkingLevel() {
+          return 'medium';
+        },
+        get isStreaming() {
+          return isStreaming;
+        },
+        subscribe: (handler: (event: { type: string; [key: string]: unknown }) => void) => {
+          subscribedHandler = handler;
+          return () => {
+            if (subscribedHandler === handler) subscribedHandler = null;
+          };
+        },
+        prompt: async (text: string, options?: unknown) => {
+          promptCalls.push({ text, options });
+          await promptBehavior?.(text, options);
+        },
+        abort: abortMock,
+        steer: steerMock,
+        setModel: setModelMock,
+        setThinkingLevel: setThinkingLevelMock,
+      },
+    };
+  },
   getAgentDir: () => '/tmp/fake-pi',
 }));
 
@@ -112,6 +120,8 @@ describe('PiAgentProvider', () => {
     promptBehavior = null;
     isStreaming = false;
     subscribedHandler = null;
+    sessionOpenError = null;
+    createSessionCalls = 0;
     abortMock.mockClear();
     steerMock.mockClear();
     setModelMock.mockClear();
@@ -126,6 +136,10 @@ describe('PiAgentProvider', () => {
       effortSwitch: 'in-session',
       images: true,
       steerWhileRunning: true,
+      runtimePolicies: [
+        { filesystem: 'read-only', network: 'disabled' },
+        { filesystem: 'workspace-write', network: 'disabled' },
+      ],
     });
   });
 
@@ -312,6 +326,29 @@ describe('PiAgentProvider', () => {
     expect(steerMock).toHaveBeenCalledTimes(1);
     expect(steerMock.mock.calls[0]?.[0]).toBe('change course');
     expect(emitted.some((e) => e.type === 'steer_message')).toBe(true);
+  });
+
+  it('steers a Solo run when stable tool definitions are rebuilt with fresh closures', async () => {
+    const runtimeTools = () => ({
+      systemPromptAppend: 'Use the session browser tool when needed.',
+      tools: [{
+        name: 'browser_state',
+        description: 'Read the current browser state.',
+        inputSchema: { type: 'object', properties: {} },
+        execute: async () => 'state',
+      }],
+    });
+    const created = sessions.create({ prompt: 'browse during a long task', provider: 'pi' });
+    await provider.run(created.id, created.prompt, { emit: () => {}, tools: runtimeTools() });
+
+    isStreaming = true;
+    const handled = await provider.steerMidRun(created.id, 'check the next page', {
+      emit: () => {},
+      tools: runtimeTools(),
+    });
+
+    expect(handled).toBe(true);
+    expect(steerMock).toHaveBeenCalledWith('check the next page', undefined);
   });
 
   it('does not invoke the live SDK steer until its durable reservation recovers', async () => {
@@ -656,5 +693,20 @@ describe('PiAgentProvider', () => {
     } finally {
       sessions.updateProviderRuntimeState = originalUpdate;
     }
+  });
+
+  it('invalidates a Pi thread that cannot be opened instead of silently starting fresh', async () => {
+    const created = sessions.create({
+      prompt: 'resume stale Pi thread', provider: 'pi', providerThreadId: '/tmp/stale-pi-session.jsonl',
+    });
+    sessionOpenError = new Error('session file is gone');
+
+    await provider.run(created.id, created.prompt, { emit: () => {} });
+
+    const failed = sessions.findById(created.id)!;
+    expect(failed.status).toBe('ERROR');
+    expect(failed.providerThreadId).toBeNull();
+    expect(provider.canResumeThread(failed)).toBe(false);
+    expect(createSessionCalls).toBe(0);
   });
 });

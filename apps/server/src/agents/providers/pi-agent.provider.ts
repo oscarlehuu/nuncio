@@ -13,15 +13,18 @@ import { EventsRepository } from '../../sessions/persistence/events.repository';
 import { SessionsRepository } from '../../sessions/persistence/sessions.repository';
 import { SettingsService } from '../../settings/settings.service';
 import type { AgentRunContext, InteractionResponse } from '../agents.types';
+import { runtimePolicyKey, runtimeToolsForPolicy } from '../agent-runtime-policy';
 import { AgentRunCancelledError, BaseAgentProvider } from '../agents.base-provider';
 import { eventImagesFromAttachments } from '../agents.attachments';
 import {
   appendRuntimeToolInstructions,
   asToolInput,
   normalizeAgentRuntimeToolResult,
+  type AgentRuntimeTool,
   type AgentRuntimeTools,
 } from '../tools/agent-runtime-tools.types';
 import { piThinkingDescriptors, resolvePiThinkingLevel } from './pi-thinking.helpers';
+import { buildPiRuntimePolicyOptions } from './pi-runtime-policy';
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent');
 
@@ -49,6 +52,7 @@ type PiLiveSession = {
   readonly model?: PiRegistryModel;
   readonly thinkingLevel?: string;
   readonly isStreaming?: boolean;
+  dispose?: () => void;
 };
 
 type PiSessionHandle = {
@@ -64,7 +68,14 @@ type PiSessionHandle = {
   /** Error message of a turn that failed (stopReason 'error'), if any. */
   getTurnError: () => string | null;
   sealOpenTools: (emit?: AgentRunContext['emit']) => void;
+  runtimePolicyKey: string;
+  runtimeToolSnapshot: PiRuntimeToolSnapshot;
 };
+
+type PiRuntimeToolSnapshot = Array<{
+  definition: string;
+  execute: AgentRuntimeTool['execute'];
+}>;
 
 function piImagesFromAttachments(context: AgentRunContext): PiImageContent[] {
   return (context.attachments ?? [])
@@ -100,6 +111,10 @@ export class PiAgentProvider extends BaseAgentProvider {
     effortSwitch: 'in-session',
     images: true,
     steerWhileRunning: true,
+    runtimePolicies: [
+      { filesystem: 'read-only', network: 'disabled' },
+      { filesystem: 'workspace-write', network: 'disabled' },
+    ],
   } as const;
   private readonly activeSessions = new Map<string, PiSessionHandle>();
   private readonly interruptedSessions = new Set<string>();
@@ -151,6 +166,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     if (!handle) return;
     void handle.session.abort().catch(() => undefined);
     handle.unsubscribe();
+    handle.session.dispose?.();
     this.activeSessions.delete(sessionId);
     this.interruptedSessions.delete(sessionId);
   }
@@ -174,6 +190,11 @@ export class PiAgentProvider extends BaseAgentProvider {
   ): Promise<boolean> {
     const handle = this.activeSessions.get(sessionId);
     if (!handle || !handle.session.isStreaming) return false;
+    this.assertRuntimePolicyUnchanged(handle, context);
+    const runtimeTools = runtimeToolsForPolicy(context.runtimePolicy, context.tools);
+    if (!samePiRuntimeTools(handle.runtimeToolSnapshot, runtimeTools, context.runtimePolicy != null)) {
+      throw new Error('Runtime tools cannot change during an active Pi turn.');
+    }
     const generation = this.currentRunGeneration(sessionId);
     const eventImages = eventImagesFromAttachments(context.attachments);
     const payload = {
@@ -286,10 +307,22 @@ export class PiAgentProvider extends BaseAgentProvider {
     isSteer: boolean,
     context: AgentRunContext,
   ): Promise<void> {
+    const runtimeTools = runtimeToolsForPolicy(context.runtimePolicy, context.tools);
     let handle = this.activeSessions.get(sessionId);
     if (!handle) {
-      handle = await this.createPiSession(sessionId, context);
+      handle = await this.createPiSession(sessionId, context, runtimeTools);
       this.activeSessions.set(sessionId, handle);
+    } else {
+      this.assertRuntimePolicyUnchanged(handle, context);
+      if (!samePiRuntimeTools(handle.runtimeToolSnapshot, runtimeTools, context.runtimePolicy != null)) {
+        if (handle.session.isStreaming) {
+          throw new Error('Runtime tools cannot change during an active Pi turn.');
+        }
+        handle.unsubscribe();
+        handle.session.dispose?.();
+        handle = await this.createPiSession(sessionId, context, runtimeTools);
+        this.activeSessions.set(sessionId, handle);
+      }
     }
     handle.setEmit(context.emit);
 
@@ -304,7 +337,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     let interrupted = false;
     try {
       await handle.prompt(
-        appendRuntimeToolInstructions(text, context.tools),
+        appendRuntimeToolInstructions(text, runtimeTools),
         Object.keys(promptOptions).length ? promptOptions : undefined,
       );
     } catch (error) {
@@ -350,31 +383,75 @@ export class PiAgentProvider extends BaseAgentProvider {
   private async createPiSession(
     sessionId: string,
     context: AgentRunContext,
+    runtimeTools = runtimeToolsForPolicy(context.runtimePolicy, context.tools),
   ): Promise<PiSessionHandle> {
     const pi = await this.loadSdk();
     const agentDir = this.resolveAgentDir(pi);
     const authStorage = pi.AuthStorage.create(join(agentDir, 'auth.json'));
     const modelRegistry = pi.ModelRegistry.create(authStorage, join(agentDir, 'models.json'));
     const model = resolveModelId(context.model, (provider, id) => modelRegistry.find(provider, id));
+    if (context.runtimePolicy && context.model?.trim() && !model) {
+      throw new Error(
+        `Pi model "${context.model.trim()}" is unavailable; explicit runtime policy forbids fallback.`,
+      );
+    }
     const thinkingLevel = resolvePiThinkingLevel(context.modelOptions, model);
+    const policyOptions = context.runtimePolicy
+      ? buildPiRuntimePolicyOptions(context.runtimePolicy, pi)
+      : undefined;
+    const cwd = policyOptions?.workspaceRoot ?? context.cwd;
+    const resourceLoader = policyOptions
+      ? new pi.DefaultResourceLoader({
+          cwd: policyOptions.workspaceRoot,
+          agentDir,
+          noExtensions: true,
+          noSkills: true,
+          noPromptTemplates: true,
+          noThemes: true,
+          noContextFiles: true,
+        })
+      : undefined;
+    await resourceLoader?.reload();
     const persistedFile = this.sessions.findById(sessionId)?.providerThreadId ?? null;
     let resumeManager: ReturnType<typeof pi.SessionManager.open> | undefined;
     if (persistedFile) {
       try {
-        resumeManager = pi.SessionManager.open(persistedFile, undefined, context.cwd);
-      } catch {
-        resumeManager = undefined;
+        resumeManager = pi.SessionManager.open(persistedFile, undefined, cwd);
+      } catch (error) {
+        this.sessions.updateProviderRuntimeState(sessionId, {
+          providerThreadId: null,
+          providerActiveTurnId: null,
+        });
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new Error(`Cannot resume Pi session: ${reason}`);
       }
     }
-    const customTools = buildPiCustomTools(context.cwd, pi, context.tools);
+    const runtimeCustomTools = buildPiRuntimeTools(
+      runtimeTools,
+      pi.defineTool,
+    );
+    const customTools = policyOptions
+      ? [...policyOptions.customTools, ...runtimeCustomTools]
+      : buildPiCustomTools(context.cwd, pi, context.tools);
+    // Pi 0.80.6 treats `tools` as the allowlist for built-ins AND customTools.
+    // Include the already-vetted Crew definitions or the SDK silently removes
+    // submit_* from the registry despite receiving it in customTools.
+    const policyToolNames = policyOptions
+      ? [...new Set([
+          ...policyOptions.toolNames,
+          ...(runtimeTools?.tools.map((tool) => tool.name) ?? []),
+        ])]
+      : undefined;
     const { session } = await pi.createAgentSession({
       agentDir,
-      ...(context.cwd ? { cwd: context.cwd } : {}),
+      ...(cwd ? { cwd } : {}),
       ...(resumeManager ? { sessionManager: resumeManager } : {}),
       authStorage,
       modelRegistry,
-      // No `tools` allowlist: match pi CLI defaults (read/bash/edit/write active)
-      // and keep extension-registered tools (foreman, subagent, ...) enabled.
+      ...(resourceLoader ? { resourceLoader } : {}),
+      // Solo keeps Pi's defaults. Explicit policy uses an allowlist and omits
+      // bash because host-shell confinement plus disabled network is unprovable.
+      ...(policyToolNames ? { tools: policyToolNames } : {}),
       ...(customTools ? { customTools: customTools as never } : {}),
       ...(model ? { model } : {}),
       ...(thinkingLevel ? { thinkingLevel } : {}),
@@ -536,7 +613,18 @@ export class PiAgentProvider extends BaseAgentProvider {
       getAssistantTurnsEmitted: () => assistantTurnsEmitted,
       getTurnError: () => lastTurnError,
       sealOpenTools,
+      runtimePolicyKey: runtimePolicyKey(context.runtimePolicy),
+      runtimeToolSnapshot: snapshotPiRuntimeTools(runtimeTools),
     };
+  }
+
+  private assertRuntimePolicyUnchanged(
+    handle: PiSessionHandle,
+    context: AgentRunContext,
+  ): void {
+    if (handle.runtimePolicyKey !== runtimePolicyKey(context.runtimePolicy)) {
+      throw new Error('Runtime policy cannot change on an active Pi session.');
+    }
   }
 
   private fromRegistry(modelRegistry: PiModelRegistry): ModelProviderDto[] {
@@ -667,5 +755,24 @@ function buildPiRuntimeTools(
         };
       },
     }),
+  );
+}
+
+function snapshotPiRuntimeTools(runtimeTools: AgentRuntimeTools | undefined): PiRuntimeToolSnapshot {
+  return (runtimeTools?.tools ?? []).map((tool) => ({
+    definition: JSON.stringify([tool.name, tool.description ?? null, tool.inputSchema]),
+    execute: tool.execute,
+  }));
+}
+
+function samePiRuntimeTools(
+  snapshot: PiRuntimeToolSnapshot,
+  runtimeTools: AgentRuntimeTools | undefined,
+  requireExecuteIdentity: boolean,
+): boolean {
+  const next = snapshotPiRuntimeTools(runtimeTools);
+  return snapshot.length === next.length && snapshot.every(
+    (tool, index) => tool.definition === next[index]?.definition
+      && (!requireExecuteIdentity || tool.execute === next[index]?.execute),
   );
 }

@@ -70,7 +70,7 @@ export class ObservabilityService {
   }
 
   private sources(): ObservabilitySources {
-    const sessions = this.sessions.list(true);
+    const sessions = this.sessions.listUserFacing(true);
     return {
       sessions,
       eventsBySession: Object.fromEntries(

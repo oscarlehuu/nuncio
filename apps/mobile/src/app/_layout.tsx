@@ -3,7 +3,8 @@ import { useEffect } from 'react';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as Notifications from 'expo-notifications';
-import { sessionIdFromNotification } from '../lib/push-registration';
+import { notificationPath } from '../lib/crew-navigation';
+import { notificationTargetFromNotification } from '../lib/push-registration';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -19,8 +20,8 @@ export default function RootLayout() {
 
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
-      const sessionId = sessionIdFromNotification(response);
-      if (sessionId) router.push(`/session/${sessionId}`);
+      const target = notificationTargetFromNotification(response);
+      if (target) router.push(notificationPath(target));
     });
     return () => sub.remove();
   }, [router]);

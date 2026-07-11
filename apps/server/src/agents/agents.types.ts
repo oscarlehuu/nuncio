@@ -26,6 +26,20 @@ export interface AgentCapabilities {
   images: boolean;
   /** Whether the provider can inject a steer message into a run that is already streaming. */
   steerWhileRunning: boolean;
+  /** Explicit per-session policies this adapter enforces without relying on prompt instructions. */
+  runtimePolicies?: readonly AgentRuntimePolicySupport[];
+}
+
+export type AgentRuntimeFilesystemPolicy = 'read-only' | 'workspace-write';
+
+export interface AgentRuntimePolicySupport {
+  filesystem: AgentRuntimeFilesystemPolicy;
+  network: 'disabled';
+}
+
+/** Immutable safety boundary applied to every run/resume of one session. */
+export interface AgentRuntimePolicy extends AgentRuntimePolicySupport {
+  workspaceRoot: string;
 }
 
 export interface AgentAttachment {
@@ -73,6 +87,8 @@ export interface AgentRunContext {
   requestProviderApproval?: (request: ProviderRequestInput) => Promise<ProviderRequestResult>;
   /** Session-bound runtime tools that providers adapt into SDK-native tool contracts. */
   tools?: AgentRuntimeTools;
+  /** Explicit policy; absence deliberately preserves the provider's current Solo defaults. */
+  runtimePolicy?: AgentRuntimePolicy | null;
 }
 
 export interface AgentProvider {
@@ -88,6 +104,13 @@ export interface AgentProvider {
    * no active in-process run to steer (caller falls back to queueing).
    */
   steerMidRun?(sessionId: string, message: string, context: AgentRunContext): Promise<boolean>;
+  /**
+   * Stop the session's active producer and resolve only after the provider has
+   * acknowledged interruption and detached its local handle. Once resolved,
+   * the provider must not emit more events or mutate the workspace for that
+   * turn. Reject when that guarantee cannot be established.
+   */
+  quiesce(sessionId: string): Promise<void>;
   interrupt?(sessionId: string): Promise<void>;
   setModel?(sessionId: string, model: string, options?: ModelOptionsMap | null): Promise<void>;
   dispose(sessionId: string): void;

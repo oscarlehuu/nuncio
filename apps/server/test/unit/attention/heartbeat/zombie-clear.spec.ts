@@ -26,6 +26,7 @@ describe('zombie item auto-clear', () => {
   const eventAt = new Map<string, number>();
   const fakeSessions = {
     list: () => [...sessionRows.values()],
+    listUserFacing: () => [...sessionRows.values()],
     findById: (id: string) => sessionRows.get(id) ?? null,
   };
   const fakeEvents = { latestEventAt: (id: string) => eventAt.get(id) ?? null };

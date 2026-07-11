@@ -13,6 +13,7 @@ export function stubAgentProvider(
     listModels: async () => [],
     run: async () => undefined,
     steer: async () => undefined,
+    quiesce: async () => undefined,
     dispose: () => undefined,
     bustCache: () => undefined,
   };

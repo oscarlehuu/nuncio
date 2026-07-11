@@ -26,9 +26,16 @@ class FakeCodexClient extends EventEmitter implements CodexAppServerClientLike {
   closed = false;
   private script: { deltas: string[]; fail: boolean } = { deltas: [], fail: false };
   private turnSeq = 0;
+  private stallTurn = false;
 
   arrange(deltas: string[], fail: boolean): void {
     this.script = { deltas, fail };
+    this.stallTurn = false;
+  }
+
+  arrangeInterrupt(): void {
+    this.script = { deltas: [], fail: false };
+    this.stallTurn = true;
   }
 
   async initialize(): Promise<void> {}
@@ -55,14 +62,16 @@ class FakeCodexClient extends EventEmitter implements CodexAppServerClientLike {
             params: { threadId: 'codex-thread-1', turnId, itemId: 'item-1', delta },
           });
         }
-        this.emitNotification({
-          method: 'turn/completed',
-          params: {
-            turn: this.script.fail
-              ? { id: turnId, status: 'failed', error: { message: 'codex turn failed' } }
-              : { id: turnId, status: 'completed' },
-          },
-        });
+        if (!this.stallTurn) {
+          this.emitNotification({
+            method: 'turn/completed',
+            params: {
+              turn: this.script.fail
+                ? { id: turnId, status: 'failed', error: { message: 'codex turn failed' } }
+                : { id: turnId, status: 'completed' },
+            },
+          });
+        }
       });
       return { turn: { id: turnId } } as T;
     }
@@ -134,8 +143,21 @@ describe('CodexAgentProvider contract', () => {
     successFinalText: 'Codex stream 世界',
     arrangeSuccess: (deltas) => fakeClient.arrange(deltas, false),
     arrangeError: () => fakeClient.arrange([], true),
-    // Codex declares interrupt off (dispose issues turn/interrupt, but no
-    // interrupt() method surfaces the capability) — declared-off contract leg.
-    exercisesInterrupt: false,
+    exercisesInterrupt: true,
+    arrangeAndInterrupt: async (sessionId, emit) => {
+      fakeClient.arrangeInterrupt();
+      const run = provider.run(sessionId, 'interruptible', {
+        cwd: '/tmp/project',
+        model: 'codex:gpt-5.5',
+        emit,
+      });
+      const started = Date.now();
+      while (!sessions.findById(sessionId)?.providerActiveTurnId) {
+        if (Date.now() - started > 1_000) throw new Error('Codex turn did not start');
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      await provider.interrupt(sessionId);
+      await run;
+    },
   }));
 });
