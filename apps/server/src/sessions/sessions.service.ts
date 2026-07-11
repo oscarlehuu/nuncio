@@ -942,6 +942,10 @@ export class SessionsService implements OnModuleDestroy {
     // Drain timers can outlive the service; after shutdown the database is
     // closed, so touching the queue would throw from a detached timer.
     if (this.destroyed || this.drainingSteerQueues.has(id)) return;
+    // A requested pause/archive/delete owns the session even while retained
+    // events or the status write are retrying. Never let an older queue timer
+    // restart provider work before that lifecycle intent settles.
+    if (this.lifecycleRetries.has(id)) return;
     // Crew owns every continuation of its hidden member Sessions. A stale
     // generic queue row must remain inert for owner reconciliation instead of
     // entering the public steer path and retrying forever after authorization
@@ -1022,7 +1026,12 @@ export class SessionsService implements OnModuleDestroy {
       // A user lifecycle action (especially pause/archive) wins over an older
       // delivery retry. The durable row remains for a later explicit resume.
       if (this.sessions.findById(id)?.status === authorizedStatus) {
-        setTimeout(() => this.drainSteerQueue(id), 250);
+        setTimeout(() => {
+          if (
+            !this.destroyed &&
+            this.sessions.findById(id)?.status === authorizedStatus
+          ) this.drainSteerQueue(id);
+        }, 250);
       }
     });
   }

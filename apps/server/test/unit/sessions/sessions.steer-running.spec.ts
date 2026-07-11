@@ -441,6 +441,69 @@ describe('SessionsService steer while RUNNING', () => {
     expect(service.steerQueueRepository.peekNext(created.id)?.message).toBe('stay paused');
   });
 
+  it('cancels an already-scheduled queue retry when the user pauses during backoff', async () => {
+    const created = sessions.create({ prompt: 'pause during retry backoff', provider: 'cursor' });
+    sessions.updateStatus(created.id, 'RUNNING');
+    sessions.updateStatus(created.id, 'IDLE');
+    service.steerQueueRepository.enqueue(created.id, 'stay paused after failure');
+    const steer = jest.fn(async () => {
+      throw new RetainedEventFlushError(new Error('delivery failed'));
+    });
+    installProvider(stubProvider({ steer }));
+
+    service.scheduleSteerDrain(created.id);
+    const started = Date.now();
+    while (steer.mock.calls.length < 1 && Date.now() - started < 1_000) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    service.pause(created.id);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect(sessions.findById(created.id)?.status).toBe('PAUSED');
+    expect(steer).toHaveBeenCalledTimes(1);
+    expect(service.steerQueueRepository.peekNext(created.id)?.message)
+      .toBe('stay paused after failure');
+  });
+
+  it('keeps a queue retry blocked while the requested pause is still pending', async () => {
+    const created = sessions.create({ prompt: 'pending pause during backoff', provider: 'cursor' });
+    sessions.updateStatus(created.id, 'RUNNING');
+    sessions.updateStatus(created.id, 'IDLE');
+    service.steerQueueRepository.enqueue(created.id, 'wait for pending pause');
+    let teardownBlocked = true;
+    const steer = jest.fn(async () => {
+      throw new RetainedEventFlushError(new Error('delivery failed'));
+    });
+    installProvider(stubProvider({
+      steer,
+      dispose: () => {
+        if (teardownBlocked) throw new RetainedEventFlushError(new Error('tail pending'));
+      },
+    }));
+
+    service.scheduleSteerDrain(created.id);
+    const started = Date.now();
+    while (steer.mock.calls.length < 1 && Date.now() - started < 1_000) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(service.pause(created.id).status).toBe('IDLE');
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(steer).toHaveBeenCalledTimes(1);
+      expect(service.steerQueueRepository.peekNext(created.id)?.message)
+        .toBe('wait for pending pause');
+    } finally {
+      teardownBlocked = false;
+      const settling = Date.now();
+      while (sessions.findById(created.id)?.status !== 'PAUSED' && Date.now() - settling < 1_000) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    }
+    expect(sessions.findById(created.id)?.status).toBe('PAUSED');
+  });
+
   it('backs off one failed queue delivery instead of scheduling a zero-delay retry', async () => {
     const created = sessions.create({ prompt: 'queue backoff', provider: 'cursor' });
     sessions.updateStatus(created.id, 'RUNNING');
@@ -460,6 +523,9 @@ describe('SessionsService steer while RUNNING', () => {
 
     expect(steer).toHaveBeenCalledTimes(1);
     expect(service.steerQueueRepository.peekNext(created.id)?.message).toBe('retry later');
+    // Keep this intentionally durable row inert after the assertion; the
+    // scheduled retry must observe the newer lifecycle state.
+    service.pause(created.id);
   });
 
   it('tracks availability preflight and prevents provider work after shutdown starts', async () => {

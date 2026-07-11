@@ -141,7 +141,11 @@ function linuxLaunch(
   executable: string, command: string, cwd: string, tempDir: string, env: Record<string, string>,
   dependencyRoot: string | null,
 ): CrewSandboxLaunch {
-  const argv = [executable, '--die-with-parent', '--unshare-all', '--new-session', '--clearenv'];
+  // Run the verifier command as PID 1 so bubblewrap does not leave a readable
+  // helper process in the sandbox's /proc tree with pre-clearenv state.
+  const argv = [
+    executable, '--die-with-parent', '--unshare-all', '--new-session', '--as-pid-1', '--clearenv',
+  ];
   for (const root of LINUX_HOST_READ_ROOTS) {
     if (existsSync(root)) argv.push('--ro-bind', root, root);
   }

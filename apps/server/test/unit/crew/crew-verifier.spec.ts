@@ -237,7 +237,7 @@ describe('CrewCommandRunner', () => {
   it('maps Linux verification to an isolated bubblewrap argv without an unsandboxed shell fallback', () => {
     const launch = buildCrewSandboxLaunch('true', process.cwd(), 'linux', '/usr/bin/true');
     expect(launch.argv).toEqual(expect.arrayContaining([
-      '/usr/bin/true', '--unshare-all', '--clearenv', '--bind', '/tmp', '--chdir', '/workspace', '/bin/sh', '-c', 'true',
+      '/usr/bin/true', '--unshare-all', '--as-pid-1', '--clearenv', '--bind', '/tmp', '--chdir', '/workspace', '/bin/sh', '-c', 'true',
     ]));
   });
 
