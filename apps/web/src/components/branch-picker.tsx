@@ -24,9 +24,17 @@ interface BranchPickerProps {
   onChange: (branch: string) => void;
   /** 'boxed' = composer toolbar chip; 'text' = borderless Cursor context label. */
   variant?: 'boxed' | 'text';
+  /** Origin-absolute API base when browsing a project on another hub machine. */
+  apiBase?: string;
 }
 
-export function BranchPicker({ projectPath, value, onChange, variant = 'boxed' }: BranchPickerProps) {
+export function BranchPicker({
+  projectPath,
+  value,
+  onChange,
+  variant = 'boxed',
+  apiBase = '',
+}: BranchPickerProps) {
   const asText = variant === 'text';
   const [branches, setBranches] = useState<Branch[]>([]);
   const [open, setOpen] = useState(false);
@@ -46,7 +54,7 @@ export function BranchPicker({ projectPath, value, onChange, variant = 'boxed' }
     let cancelled = false;
     setLoading(true);
     setLoadError(false);
-    void fetchBranches(projectPath)
+    void fetchBranches(projectPath, apiBase)
       .then((items) => {
         if (cancelled) return;
         const baseBranches = items.filter((branch) => !isNuncioSessionBranch(branch.name));
@@ -76,7 +84,7 @@ export function BranchPicker({ projectPath, value, onChange, variant = 'boxed' }
     return () => {
       cancelled = true;
     };
-  }, [projectPath, onChange]);
+  }, [apiBase, projectPath, onChange]);
 
   const safeValue = isNuncioSessionBranch(value) ? undefined : value;
   const selected = branches.find((branch) => branch.name === safeValue);

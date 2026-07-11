@@ -39,7 +39,6 @@ import {
   type ModelProvider,
 } from '../lib/model-providers';
 import { CrewProfilePicker } from './crew/crew-profile-picker';
-import { CrewWorktreeIndicator } from './crew/crew-worktree-indicator';
 import { ExecutionModePicker } from './crew/execution-mode-picker';
 import { ResolvedCrewPreview } from './crew/resolved-crew-preview';
 import { useCrewComposer } from './crew/use-crew-composer';
@@ -233,17 +232,19 @@ export function HomeView({
             onChange={handleBranchChange}
             variant="text"
           />
-          <span aria-hidden className="text-muted-foreground/40 select-none">
-            ·
-          </span>
           {crew.mode === 'solo' ? (
-            <WorkspaceModePicker
-              value={workspaceMode}
-              onChange={setWorkspaceMode}
-              disabled={!projectPath}
-              variant="text"
-            />
-          ) : <CrewWorktreeIndicator />}
+            <>
+              <span aria-hidden className="text-muted-foreground/40 select-none">
+                ·
+              </span>
+              <WorkspaceModePicker
+                value={workspaceMode}
+                onChange={setWorkspaceMode}
+                disabled={!projectPath}
+                variant="text"
+              />
+            </>
+          ) : null}
         </div>
 
         <div
@@ -324,6 +325,7 @@ export function HomeView({
                   value={crew.profileId}
                   onChange={crew.setProfileId}
                   disabled={crew.loadingProfiles || crew.resolving || crew.submitting}
+                  loading={crew.loadingProfiles}
                 />
               )}
             </div>

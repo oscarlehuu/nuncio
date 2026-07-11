@@ -101,6 +101,66 @@ describe('GitService', () => {
     expect(branches.find((b) => b.name === 'main')?.isDefault).toBe(true);
   });
 
+  it('listBranches includes qualified remote-only refs without exposing remote HEAD', async () => {
+    const head = await readGitAsync(repoA, ['rev-parse', 'HEAD']);
+    await runGitAsync(repoA, ['update-ref', 'refs/remotes/origin/main', head]);
+    await runGitAsync(repoA, ['update-ref', 'refs/remotes/origin/feature/remote', head]);
+    await runGitAsync(repoA, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
+
+    const branches = await service.listBranches(repoA);
+
+    expect(branches.map((branch) => branch.name)).toEqual([
+      'main',
+      'origin/feature/remote',
+    ]);
+    expect(branches.some((branch) => branch.name === 'origin/HEAD')).toBe(false);
+    expect(branches.find((branch) => branch.name === 'main')).toMatchObject({
+      isCurrent: true,
+      isDefault: true,
+    });
+  });
+
+  it('listBranches marks the symbolic default for a non-origin remote', async () => {
+    const repo = join(rootsDir, 'remote-default', 'project');
+    await initRepo(repo);
+    const head = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+    await runGitAsync(repo, ['update-ref', 'refs/remotes/upstream/feature', head]);
+    await runGitAsync(repo, ['update-ref', 'refs/remotes/upstream/main', head]);
+    await runGitAsync(repo, ['symbolic-ref', 'refs/remotes/upstream/HEAD', 'refs/remotes/upstream/main']);
+    await runGitAsync(repo, ['checkout', '--detach', head]);
+    await runGitAsync(repo, ['branch', '-D', 'main']);
+
+    const branches = await service.listBranches(repo);
+
+    expect(branches.map((branch) => branch.name)).toEqual([
+      'upstream/feature',
+      'upstream/main',
+    ]);
+    expect(branches.find((branch) => branch.name === 'upstream/main')).toMatchObject({
+      isCurrent: false,
+      isDefault: true,
+    });
+    expect(branches.find((branch) => branch.name === 'upstream/feature')?.isDefault).toBe(false);
+  });
+
+  it('listBranches keeps a remote tracking ref when it diverges from its local branch', async () => {
+    const repo = join(rootsDir, 'divergent-remote', 'project');
+    await initRepo(repo);
+    await runGitAsync(repo, ['checkout', '-b', 'remote-newer']);
+    writeFileSync(join(repo, 'remote.txt'), 'newer remote commit\n');
+    await runGitAsync(repo, ['add', 'remote.txt']);
+    await runGitAsync(repo, ['commit', '-m', 'remote advances']);
+    const remoteHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+    await runGitAsync(repo, ['checkout', 'main']);
+    await runGitAsync(repo, ['branch', '-D', 'remote-newer']);
+    await runGitAsync(repo, ['update-ref', 'refs/remotes/origin/main', remoteHead]);
+    await runGitAsync(repo, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
+
+    const branches = await service.listBranches(repo);
+
+    expect(branches.map((branch) => branch.name)).toEqual(['main', 'origin/main']);
+  });
+
   it('listBranches resolves subdir to repo root via rev-parse', async () => {
     const subdir = join(repoA, 'src');
     mkdirSync(subdir, { recursive: true });

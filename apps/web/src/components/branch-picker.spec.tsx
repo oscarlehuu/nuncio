@@ -38,7 +38,7 @@ describe('BranchPicker', () => {
     render(<ControlledPicker />);
 
     await waitFor(() => {
-      expect(mockFetchBranches).toHaveBeenCalledWith('/code/nuncio');
+      expect(mockFetchBranches).toHaveBeenCalledWith('/code/nuncio', '');
     });
 
     await waitFor(async () => {
@@ -50,6 +50,32 @@ describe('BranchPicker', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /develop/i })).toBeInTheDocument();
+    });
+  });
+
+  it('uses the selected machine API base and preserves qualified remote branches', async () => {
+    mockFetchBranches.mockResolvedValue([
+      { name: 'main', isDefault: true, isCurrent: true },
+      { name: 'origin/feature/remote', isDefault: false, isCurrent: false },
+    ]);
+
+    function ControlledPicker() {
+      const [branch, setBranch] = useState<string | undefined>('origin/feature/remote');
+      return (
+        <BranchPicker
+          projectPath="/code/nuncio"
+          value={branch}
+          onChange={setBranch}
+          apiBase="/m/studio"
+        />
+      );
+    }
+
+    render(<ControlledPicker />);
+
+    await waitFor(() => {
+      expect(mockFetchBranches).toHaveBeenCalledWith('/code/nuncio', '/m/studio');
+      expect(screen.getByRole('button', { name: /origin\/feature\/remote/i })).toBeInTheDocument();
     });
   });
 
@@ -77,6 +103,7 @@ describe('BranchPicker', () => {
     mockFetchBranches.mockResolvedValue([
       { name: 'main', isDefault: true, isCurrent: false },
       { name: 'nuncio/028ea01c-what-is-your-model', isDefault: false, isCurrent: true },
+      { name: 'origin/nuncio/028ea01c-remote-generated', isDefault: false, isCurrent: false },
       { name: 'develop', isDefault: false, isCurrent: false },
     ]);
 
@@ -98,6 +125,9 @@ describe('BranchPicker', () => {
     await userEvent.click(screen.getByRole('button', { name: /main/i }));
     expect(
       screen.queryByRole('option', { name: /nuncio\/028ea01c-what-is-your-model/i }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole('option', { name: /origin\/nuncio\/028ea01c-remote-generated/i }),
     ).toBeNull();
     expect(screen.getByRole('option', { name: /^develop$/i })).toBeInTheDocument();
   });
