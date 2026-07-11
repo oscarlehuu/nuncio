@@ -84,6 +84,16 @@ describe('buildCrewRunViewModel', () => {
     expect(view.actions).not.toContain('accept-exception');
   });
 
+  it.each(['FAILED', 'CANCELLED'] as const)('settles terminal %s progress without a current step', async (outcome) => {
+    const module = (await import('./crew-run-view-model')) as Record<string, unknown>;
+    const build = module.buildCrewRunViewModel as (value: CrewRunDetailDto) => {
+      steps: Array<{ label: string; state: string }>;
+    };
+    const view = build(run({ phase: 'DONE', status: 'TERMINAL', outcome }));
+    expect(view.steps.some((step) => step.state === 'current')).toBe(false);
+    expect(view.steps.find((step) => step.label === 'Done')?.state).toBe(outcome.toLowerCase());
+  });
+
   it('keeps failed evidence visible when the workspace head advances', async () => {
     const module = (await import('./crew-run-view-model')) as Record<string, unknown>;
     const build = module.buildCrewRunViewModel as (

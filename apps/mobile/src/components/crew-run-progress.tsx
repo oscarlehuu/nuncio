@@ -15,13 +15,17 @@ export function CrewRunProgress({ steps }: CrewRunProgressProps) {
                 ? 'border-primary bg-primary'
                 : step.state === 'current'
                   ? 'border-primary bg-secondary'
+                  : step.state === 'failed'
+                    ? 'border-destructive bg-destructive/10'
+                    : step.state === 'cancelled'
+                      ? 'border-border bg-muted'
                   : 'border-border bg-card'
             }`}
           >
             <Text
               className={step.state === 'complete' ? 'text-primary-foreground' : 'text-foreground'}
             >
-              {step.state === 'complete' ? '✓' : index + 1}
+              {step.state === 'complete' ? '✓' : step.state === 'failed' ? '×' : step.state === 'cancelled' ? '—' : index + 1}
             </Text>
           </View>
           <Text
@@ -30,6 +34,9 @@ export function CrewRunProgress({ steps }: CrewRunProgressProps) {
           >
             {step.label}
             {step.state === 'current' ? ' · current' : ''}
+            {step.state === 'unknown' ? ' · completion unknown' : ''}
+            {step.state === 'failed' ? ' · failed' : ''}
+            {step.state === 'cancelled' ? ' · cancelled' : ''}
           </Text>
         </View>
       ))}

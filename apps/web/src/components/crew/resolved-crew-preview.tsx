@@ -1,4 +1,7 @@
+import { Check, Circle, TriangleAlert } from 'lucide-react';
 import type { ResolvedCrewProfileDto } from '@nuncio/core/crew-api';
+import { cn } from '@/lib/utils';
+import { CrewRosterLine } from './crew-roster-line';
 
 export function ResolvedCrewPreview({
   resolution,
@@ -27,17 +30,27 @@ export function ResolvedCrewPreview({
   const label = (role: keyof typeof bindings) => bindings[role].label || bindings[role].model;
   return (
     <Preview tone="success" title="Ready">
-      <span className="break-words">{label('foreman')} → {label('builder')} → Nuncio Tester → {label('reviewer')}</span>
+      <CrewRosterLine foreman={label('foreman')} builder={label('builder')} reviewer={label('reviewer')} className="mt-0.5" />
     </Preview>
   );
 }
 
-function Preview({ tone, title, children }: { tone: 'muted' | 'error' | 'warning' | 'success'; title: string; children: React.ReactNode }) {
-  const toneClass = tone === 'error' ? 'border-destructive/40 text-destructive' : tone === 'warning' ? 'border-warning/40 text-warning' : tone === 'success' ? 'border-success/30 text-foreground' : 'border-border text-muted-foreground';
+const TONES = {
+  muted: { cls: 'border-border text-muted-foreground', Icon: Circle },
+  error: { cls: 'border-destructive/40 bg-destructive/5 text-destructive', Icon: TriangleAlert },
+  warning: { cls: 'border-warning/40 bg-warning/5 text-warning', Icon: TriangleAlert },
+  success: { cls: 'border-success/30 bg-success/5 text-foreground', Icon: Check },
+} as const;
+
+function Preview({ tone, title, children }: { tone: keyof typeof TONES; title: string; children: React.ReactNode }) {
+  const { cls, Icon } = TONES[tone];
   return (
-    <div className={`mx-4 mb-2 min-w-0 rounded-lg border px-3 py-2 text-ui-sm ${toneClass}`}>
-      <strong className="mr-2">{title}</strong>
-      <span className="text-muted-foreground">{children}</span>
+    <div className={cn('mx-4 mb-2 flex min-w-0 items-start gap-2 rounded-lg border px-3 py-2 text-ui-sm', cls)}>
+      <Icon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+      <div className="min-w-0 flex-1">
+        <strong className="mr-2">{title}</strong>
+        {children}
+      </div>
     </div>
   );
 }

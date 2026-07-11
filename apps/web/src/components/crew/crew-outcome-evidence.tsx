@@ -16,7 +16,7 @@ export function CrewOutcomeEvidence({ run }: { run: CrewRunDetailDto }) {
     );
   }
   return (
-    <section aria-labelledby="crew-outcome-heading" className="rounded-xl border bg-card px-4 py-4">
+    <section aria-labelledby="crew-outcome-heading" className="rounded-xl border bg-card px-4 py-4 shadow-e1 surface-lit">
       <h2 id="crew-outcome-heading" className="font-semibold text-foreground">Outcome</h2>
       <p className="mt-2 text-body text-foreground">{evidence.summary}</p>
       <h3 className="mt-4 text-ui-sm font-semibold text-muted-foreground">Foreman verification summary</h3>
