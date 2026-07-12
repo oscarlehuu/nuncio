@@ -7,6 +7,10 @@ import type { RelayPathHealth } from './relay.types';
 const DEFAULT_INTERVAL_MS = 60_000;
 type DownProbe = RelayPathHealth & { status: 'down' };
 
+function isDownProbe(probe: RelayPathHealth): probe is DownProbe {
+  return probe.status === 'down';
+}
+
 @Injectable()
 export class RelayWatchdogService implements OnModuleInit, OnModuleDestroy {
   failureThreshold = 3;
@@ -48,7 +52,7 @@ export class RelayWatchdogService implements OnModuleInit, OnModuleDestroy {
         return;
       }
       // Guardrail: neither healthy nor indeterminate observations can reach recovery.
-      if (probe.status !== 'down') {
+      if (!isDownProbe(probe)) {
         this.failures = 0;
         return;
       }

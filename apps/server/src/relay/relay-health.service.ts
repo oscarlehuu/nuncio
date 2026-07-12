@@ -47,7 +47,7 @@ export class RelayHealthService {
   private lanAddress(): string | null {
     for (const entries of Object.values(this.networkInterfacesFn())) {
       for (const entry of entries ?? []) {
-        const ipv4 = entry.family === 'IPv4' || entry.family === 4;
+        const ipv4 = entry.family === 'IPv4';
         if (!ipv4 || entry.internal || entry.address.startsWith('169.254.')) continue;
         const match = /^100\.(\d{1,3})\./.exec(entry.address);
         if (match && Number(match[1]) >= 64 && Number(match[1]) <= 127) continue;
