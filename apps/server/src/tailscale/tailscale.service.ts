@@ -1,6 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { SettingsService } from '../settings/settings.service';
 import type { TailscalePeerDto, TailscaleStatusDto } from './tailscale.types';
+import {
+  publishedRelayStatusFromConfig,
+  type PublishedRelayStatus,
+} from './tailscale-serve-config';
+
+export { publishedRelayStatusFromConfig, type PublishedRelayStatus } from './tailscale-serve-config';
 
 export const TAILSCALE_AUTO_TRUST_KEY = 'NUNCIO_TAILSCALE_AUTO_TRUST';
 
@@ -225,6 +231,19 @@ export class TailscaleService {
 
     const peerUserId = await this.whoisUserId(bin, addr);
     return peerUserId !== null && peerUserId === selfUserId;
+  }
+
+  /** Current Serve/Funnel publication for the daemon port; never changes host config. */
+  async publishedRelayStatus(port: number): Promise<PublishedRelayStatus> {
+    const bin = await this.resolveBin();
+    if (!bin) return { serve: false, funnel: false };
+    const result = await this.exec([bin, 'serve', 'status', '--json']);
+    if (!result.ok) return { serve: false, funnel: false };
+    try {
+      return publishedRelayStatusFromConfig(JSON.parse(result.stdout), port);
+    } catch {
+      return { serve: false, funnel: false };
+    }
   }
 
   /**

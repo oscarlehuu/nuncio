@@ -9,5 +9,6 @@ import { PairingService } from './pairing.service';
   imports: [DevicesModule, TailscaleModule],
   controllers: [PairingController],
   providers: [PairingService, CandidateUrlsService],
+  exports: [CandidateUrlsService],
 })
 export class PairingModule {}

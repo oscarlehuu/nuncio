@@ -65,6 +65,7 @@ describe('CandidateUrlsService LAN enumeration', () => {
     const service = makeService(['192.168.1.20']);
     const result = await service.build();
     expect(result.urls).toContain('http://192.168.1.20:4321');
+    expect(result.endpoints).toEqual({ lan: ['http://192.168.1.20:4321'] });
   });
 
   it('defaults to port 3000 when PORT is unset', async () => {
@@ -108,6 +109,37 @@ describe('CandidateUrlsService LAN enumeration', () => {
 });
 
 describe('CandidateUrlsService MagicDNS + hints', () => {
+  it('discovers a published ladder without running serve or funnel mutations', async () => {
+    const mutations: string[] = [];
+    const tailscale = {
+      status: async () => ({
+        installed: true,
+        running: true,
+        autoTrust: true,
+        tailnet: 'example.ts.net',
+        self: { hostName: 'mac', dnsName: 'mac.ts.net', ips: [], os: 'macOS', loginName: 'x@' },
+        peers: [],
+      }),
+      publishedRelayStatus: async () => ({ serve: true, funnel: true }),
+      enableServe: async () => {
+        mutations.push('serve');
+        return true;
+      },
+      enableFunnel: async () => {
+        mutations.push('funnel');
+        return { ok: true as const };
+      },
+    } as unknown as TailscaleService;
+    const service = makeService(['192.168.1.20'], tailscale);
+
+    expect(await service.discover()).toEqual({
+      lan: ['http://192.168.1.20:3000'],
+      tailnet: 'https://mac.ts.net',
+      funnel: 'https://mac.ts.net',
+    });
+    expect(mutations).toEqual([]);
+  });
+
   it('offline: no https URL, offline hint present', async () => {
     const service = makeService(['192.168.1.20'], fakeTailscale({ running: false }));
     const result = await service.build();
@@ -123,6 +155,11 @@ describe('CandidateUrlsService MagicDNS + hints', () => {
     const result = await service.build();
     expect(result.urls).toContain('https://mac.tailnet.ts.net');
     expect(result.hints).toEqual([]);
+    expect(result.endpoints).toEqual({
+      lan: ['http://192.168.1.20:3000'],
+      tailnet: 'https://mac.tailnet.ts.net',
+      funnel: 'https://mac.tailnet.ts.net',
+    });
   });
 
   it('strips a trailing dot from the MagicDNS name', async () => {
@@ -158,6 +195,10 @@ describe('CandidateUrlsService MagicDNS + hints', () => {
     expect(result.hints).toContain(
       'Tailscale Funnel unavailable — remote access needs Tailscale on the phone',
     );
+    expect(result.endpoints).toEqual({
+      lan: ['http://192.168.1.20:3000'],
+      tailnet: 'https://mac.tailnet.ts.net',
+    });
   });
 
   it('funnel generic failure: same funnel hint (phone still needs Tailscale)', async () => {

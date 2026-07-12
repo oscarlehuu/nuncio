@@ -106,6 +106,12 @@ export class DevicesService implements DeviceValidator {
     return false;
   }
 
+  /** Read-only revocation check for short-lived credentials bound to a device id. */
+  isActive(deviceId: string): boolean {
+    const row = this.devices.findById(deviceId);
+    return row !== null && row.revoked_at === null;
+  }
+
   /**
    * Rotates the calling device's secret. `prev` is set to the secret that just
    * authenticated (not any newer unclaimed one), so a client that rotated but

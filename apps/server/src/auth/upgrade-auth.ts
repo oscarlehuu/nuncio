@@ -1,16 +1,24 @@
 import { isLoopbackAddress } from '../terminal/loopback';
-import { isAuthorizedRequest, type AuthRequestLike, type TokenValidator } from './auth-request';
+import {
+  bearerToken,
+  isAuthorizedRequest,
+  type AuthRequestLike,
+  type TokenValidator,
+} from './auth-request';
 import { deviceAuthDecision, type DeviceValidator } from './device-token';
+import type {
+  ConnectionTicketScope,
+  ConnectionTicketVerifier,
+} from '../relay/connection-ticket.service';
 
 export interface RemoteTrust {
   isTrustedRemote(remoteAddress: unknown): Promise<boolean>;
 }
 
 /**
- * The outcome of a WS upgrade check. `deviceId` is set only when the connection
- * was authorized by an `nd1.` device bearer — callers use it to tag the socket
- * so a later revoke of that device can sever the live connection, not just block
- * future upgrades.
+ * The outcome of a WS upgrade check. `deviceId` is set when the connection was
+ * authorized by an `nd1.` device bearer or an `rt1.` connection ticket — callers
+ * use it to tag the socket so a later revoke can sever the live connection.
  */
 export interface UpgradeAuthorization {
   authorized: boolean;
@@ -34,6 +42,8 @@ export async function authorizeUpgrade(
   authTokens?: TokenValidator,
   trust?: RemoteTrust,
   devices?: DeviceValidator,
+  tickets?: ConnectionTicketVerifier,
+  ticketScope?: ConnectionTicketScope,
 ): Promise<UpgradeAuthorization> {
   if (isLoopbackAddress(req.socket?.remoteAddress)) {
     return { authorized: true };
@@ -44,6 +54,18 @@ export async function authorizeUpgrade(
   }
   if (device.kind === 'reject') {
     return { authorized: false };
+  }
+  const bearer = bearerToken(req.headers?.authorization);
+  if (bearer?.startsWith('rt1.')) {
+    // Global access tokens predate tickets and accept arbitrary text. Preserve a
+    // configured token that happens to share this prefix before treating it as
+    // the dedicated ticket scheme; cookies still cannot rescue an invalid ticket.
+    if (authTokens?.isValidToken(bearer)) return { authorized: true };
+    if (!tickets || !ticketScope) return { authorized: false };
+    const ticket = tickets.verify(bearer, ticketScope);
+    return ticket
+      ? { authorized: true, deviceId: ticket.deviceId }
+      : { authorized: false };
   }
   if (authTokens && isAuthorizedRequest(req, authTokens)) {
     return { authorized: true };
@@ -64,6 +86,8 @@ export async function isAuthorizedUpgrade(
   authTokens?: TokenValidator,
   trust?: RemoteTrust,
   devices?: DeviceValidator,
+  tickets?: ConnectionTicketVerifier,
+  ticketScope?: ConnectionTicketScope,
 ): Promise<boolean> {
-  return (await authorizeUpgrade(req, authTokens, trust, devices)).authorized;
+  return (await authorizeUpgrade(req, authTokens, trust, devices, tickets, ticketScope)).authorized;
 }

@@ -7,6 +7,13 @@ type NetworkInterfacesFn = () => NodeJS.Dict<NetworkInterfaceInfo[]>;
 export interface CandidateUrls {
   urls: string[];
   hints: string[];
+  endpoints: RelayEndpoints;
+}
+
+export interface RelayEndpoints {
+  lan: string[];
+  tailnet?: string;
+  funnel?: string;
 }
 
 // A QR encodes 2-4 URLs + a code (~200-350 bytes for a comfortable scan); cap LAN
@@ -38,16 +45,39 @@ export class CandidateUrlsService {
 
   async build(): Promise<CandidateUrls> {
     const port = Number(process.env.PORT ?? 3000);
-    const urls: string[] = [];
+    const lan = this.lanUrls(port);
+    const urls = [...lan];
     const hints: string[] = [];
+    const endpoints: RelayEndpoints = { lan };
 
-    for (const address of lanIpv4Addresses(this.networkInterfacesFn()).slice(0, MAX_LAN_URLS)) {
-      urls.push(`http://${address}:${port}`);
+    await this.appendMagicDns(port, urls, hints, endpoints);
+
+    return { urls, hints, endpoints };
+  }
+
+  /** Reads the current published ladder without enabling or changing Serve/Funnel. */
+  async discover(): Promise<RelayEndpoints> {
+    const port = Number(process.env.PORT ?? 3000);
+    const endpoints: RelayEndpoints = { lan: this.lanUrls(port) };
+    try {
+      const [status, published] = await Promise.all([
+        this.tailscale.status(),
+        this.tailscale.publishedRelayStatus(port),
+      ]);
+      if (!status.running || !status.self?.dnsName || !published.serve) return endpoints;
+      const url = `https://${stripTrailingDot(status.self.dnsName)}`;
+      endpoints.tailnet = url;
+      if (published.funnel) endpoints.funnel = url;
+    } catch {
+      // LAN remains usable when Tailscale status/config discovery fails.
     }
+    return endpoints;
+  }
 
-    await this.appendMagicDns(port, urls, hints);
-
-    return { urls, hints };
+  private lanUrls(port: number): string[] {
+    return lanIpv4Addresses(this.networkInterfacesFn())
+      .slice(0, MAX_LAN_URLS)
+      .map((address) => `http://${address}:${port}`);
   }
 
   /**
@@ -55,7 +85,12 @@ export class CandidateUrlsService {
    * (error, rejection, or a hung CLI that hit its deadline) degrades to LAN-only
    * with the offline hint — pairing/start must never throw or hang on this.
    */
-  private async appendMagicDns(port: number, urls: string[], hints: string[]): Promise<void> {
+  private async appendMagicDns(
+    port: number,
+    urls: string[],
+    hints: string[],
+    endpoints: RelayEndpoints,
+  ): Promise<void> {
     let status: Awaited<ReturnType<TailscaleService['status']>>;
     try {
       status = await this.tailscale.status();
@@ -88,7 +123,9 @@ export class CandidateUrlsService {
       return;
     }
 
-    urls.push(`https://${stripTrailingDot(status.self.dnsName)}`);
+    const tailnetUrl = `https://${stripTrailingDot(status.self.dnsName)}`;
+    urls.push(tailnetUrl);
+    endpoints.tailnet = tailnetUrl;
 
     // Funnel makes the same URL reachable from outside the tailnet. On denial (or a
     // rejection) the URL stays (works over Tailscale) but we warn the phone needs it.
@@ -100,7 +137,9 @@ export class CandidateUrlsService {
     }
     if (!funnelOk) {
       hints.push(HINT_FUNNEL_UNAVAILABLE);
+      return;
     }
+    endpoints.funnel = tailnetUrl;
   }
 }
 
