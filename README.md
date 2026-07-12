@@ -63,7 +63,7 @@ To add a changelog entry for your PR:
 bun run changeset        # select "nuncio", pick minor/patch, write a release-note-style summary
 ```
 
-Merging PRs triggers a `chore: release version` PR that bumps the version and updates `CHANGELOG.md`; merging that PR cuts the release (git tag + GitHub Release). See [`.changeset/README.md`](.changeset/README.md) and [AGENTS.md → Releases & changelog](AGENTS.md) for the full workflow.
+Merging PRs triggers a `chore: release version` PR that bumps the version and updates `CHANGELOG.md`; merging that PR creates the tag and a draft GitHub Release, then publishes it after the signed desktop assets and updater manifest upload. See [`.changeset/README.md`](.changeset/README.md) and [AGENTS.md → Releases & changelog](AGENTS.md) for the full workflow.
 
 ## Branch model
 

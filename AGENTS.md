@@ -177,7 +177,7 @@ bun run add-changeset patch "…"   # create a changeset fragment (preferred for
 bun run check-changeset           # verify PR will pass CI changeset gate
 bun run changeset                 # interactive alternative for humans
 bun run version      # consume pending changesets → bump root version + update CHANGELOG.md + sync server/web (opens via CI)
-bun run release      # create v<version> git tag + GitHub Release from the matching CHANGELOG.md section (runs in CI)
+bun run release      # create v<version> tag + draft GitHub Release; desktop CI publishes after assets upload
 ```
 
 Per-workspace (via `bun run --filter`):
@@ -250,7 +250,7 @@ bun run changeset                        # interactive alternative for humans
 **Cutting a release (automated via `.github/workflows/release.yml`):**
 
 1. PRs with changesets merge to `main` → the `changesets/action` opens a **"chore: release version"** PR that runs `bun run version` (bumps root + syncs server/web + prepends a `## <version>` section to `CHANGELOG.md`).
-2. Merge that Version PR → the action runs `bun run release`, which creates the `v<version>` git tag and a GitHub Release with the matching changelog section as the body. `scripts/release.mjs` is idempotent (no-ops if the tag exists).
+2. Merge that Version PR → the action runs `bun run release`, which creates the `v<version>` git tag and a draft GitHub Release with the matching changelog section as the body. Stable desktop CI uploads the signed app + updater manifest, then publishes the release. `scripts/release.mjs` is idempotent (no-ops if the tag exists).
 
 **Manual release (local):** `bun run version` then `bun run release` (requires `gh auth login`).
 

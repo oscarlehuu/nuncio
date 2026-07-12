@@ -196,6 +196,17 @@ describe('desktop updater menu indicator', () => {
     expect(mod.getUpdaterState().status).toBe('idle');
   });
 
+  test('an unrelated 404 remains an updater error', async () => {
+    const { mod, listeners, state } = loadUpdater();
+    mod.checkForUpdates();
+    listeners['error'](new Error('HttpError: 404 while fetching an unrelated release asset'));
+    await Promise.resolve();
+
+    expect(state.dialogs).toHaveLength(1);
+    expect(state.dialogs[0].type).toBe('error');
+    expect(mod.getUpdaterState().status).toBe('error');
+  });
+
   test('clicking the ready item installs; the ready dialog "Restart now" also installs', async () => {
     const { mod, listeners, state } = loadUpdater();
     state.dialogResponse = 0; // "Restart now"

@@ -1,5 +1,6 @@
-import { describe, expect, it, beforeEach, afterEach } from 'bun:test';
+import { describe, expect, it, beforeEach, afterEach, spyOn } from 'bun:test';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync } from 'node:fs';
+import fs from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -255,6 +256,67 @@ describe('loadLocalSpendLines from fixtures', () => {
 
     const second = await loadLocalSpendLines('claude', { ...ctx, nowMs: now + 1_000 });
     expect(second).toEqual(first);
+  });
+
+  it('does not let an older forced scan overwrite newer cached samples', async () => {
+    const projectDir = join(root, '.claude', 'projects', 'demo');
+    mkdirSync(projectDir, { recursive: true });
+    const transcript = join(projectDir, 'session.jsonl');
+    const now = Date.now();
+    writeFileSync(transcript, '', 'utf8');
+
+    let resolveFirst!: (value: string) => void;
+    let resolveSecond!: (value: string) => void;
+    let markFirstReadStarted!: () => void;
+    const firstReadStarted = new Promise<void>((resolve) => {
+      markFirstReadStarted = resolve;
+    });
+    const firstRead = new Promise<string>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const secondRead = new Promise<string>((resolve) => {
+      resolveSecond = resolve;
+    });
+    const originalReadFile = fs.readFile.bind(fs);
+    const readFile = spyOn(fs, 'readFile');
+    let transcriptReads = 0;
+    readFile.mockImplementation(async (path, ...args) => {
+      if (String(path) !== transcript) {
+        return originalReadFile(path, ...args) as never;
+      }
+      transcriptReads += 1;
+      if (transcriptReads === 1) markFirstReadStarted();
+      return (transcriptReads === 1 ? firstRead : secondRead) as never;
+    });
+
+    const line = (tokens: number) =>
+      `${JSON.stringify({
+        type: 'assistant',
+        timestamp: new Date(now - 1_000).toISOString(),
+        requestId: `request-${tokens}`,
+        message: { id: `message-${tokens}`, usage: { input_tokens: tokens, output_tokens: 0 } },
+      })}\n`;
+    const ctx: ProviderUsageContext = {
+      homeDir: root,
+      env: {},
+      platform: process.platform,
+      nowMs: now,
+    };
+
+    try {
+      const older = loadLocalSpendLines('claude', ctx, { forceRefresh: true });
+      await firstReadStarted;
+      const newer = loadLocalSpendLines('claude', ctx, { forceRefresh: true });
+      resolveSecond(line(22));
+      expect((await newer).find((entry) => entry.label === 'Today')?.value).toContain('22');
+      resolveFirst(line(11));
+      expect((await older).find((entry) => entry.label === 'Today')?.value).toContain('11');
+
+      const cached = await loadLocalSpendLines('claude', ctx);
+      expect(cached.find((entry) => entry.label === 'Today')?.value).toContain('22');
+    } finally {
+      readFile.mockRestore();
+    }
   });
 
   it('builds usage history days across providers', async () => {

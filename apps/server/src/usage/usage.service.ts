@@ -22,6 +22,7 @@ interface CacheEntry {
 @Injectable()
 export class UsageService {
   private readonly cache = new Map<string, CacheEntry>();
+  private readonly requestGenerations = new Map<string, number>();
 
   buildContext(overrides: Partial<ProviderUsageContext> = {}): ProviderUsageContext {
     return {
@@ -65,16 +66,18 @@ export class UsageService {
   /** Test/helper: clear the in-memory TTL cache. */
   clearCache(): void {
     this.cache.clear();
+    this.requestGenerations.clear();
   }
 
   private async enrichWithLocalSpend(
     snapshot: UsageSnapshotDto,
     ctx: ProviderUsageContext,
+    options: { forceRefresh?: boolean },
   ): Promise<UsageSnapshotDto> {
     if (snapshot.status !== 'ok') {
       return snapshot;
     }
-    const localLines = await loadLocalSpendLines(snapshot.provider, ctx);
+    const localLines = await loadLocalSpendLines(snapshot.provider, ctx, options);
     if (localLines.length === 0) {
       return snapshot;
     }
@@ -101,6 +104,9 @@ export class UsageService {
     }
 
     const previousOk = existing?.value?.status === 'ok' ? existing.value : null;
+    const generation = (this.requestGenerations.get(cacheKey) ?? 0) + 1;
+    this.requestGenerations.set(cacheKey, generation);
+    const isLatestRequest = () => this.requestGenerations.get(cacheKey) === generation;
 
     const pending = fetcher
       .fetch(ctx)
@@ -110,19 +116,23 @@ export class UsageService {
       .then(async (value) => {
         const status = value.status;
         if (status !== 'ok' && previousOk) {
-          this.cache.set(cacheKey, {
-            expiresAtMs: Date.now() + LIVE_USAGE_TTL_MS,
-            value: previousOk,
-            pending: null,
-          });
+          if (isLatestRequest()) {
+            this.cache.set(cacheKey, {
+              expiresAtMs: Date.now() + LIVE_USAGE_TTL_MS,
+              value: previousOk,
+              pending: null,
+            });
+          }
           return previousOk;
         }
-        const enriched = await this.enrichWithLocalSpend(value, ctx);
-        this.cache.set(cacheKey, {
-          expiresAtMs: status === 'ok' ? Date.now() + LIVE_USAGE_TTL_MS : 0,
-          value: enriched,
-          pending: null,
-        });
+        const enriched = await this.enrichWithLocalSpend(value, ctx, options);
+        if (isLatestRequest()) {
+          this.cache.set(cacheKey, {
+            expiresAtMs: status === 'ok' ? Date.now() + LIVE_USAGE_TTL_MS : 0,
+            value: enriched,
+            pending: null,
+          });
+        }
         return enriched;
       });
 

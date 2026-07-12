@@ -5,7 +5,11 @@ import {
   type UsageProviderId,
   type UsageSnapshotDto,
 } from '@nuncio/core/usage-api';
-import { resolveUsageProvider, usageNeedsAuthHint } from '@nuncio/core/usage-resolve';
+import {
+  findUsageSnapshotForProvider,
+  resolveUsageProvider,
+  usageNeedsAuthHint,
+} from '@nuncio/core/usage-resolve';
 
 const PROVIDER_LABEL: Record<UsageProviderId, string> = {
   claude: 'Claude',
@@ -111,9 +115,7 @@ export function QuotaSheetTrigger({ activeProvider, model }: QuotaSheetProps) {
     return [active, ...snapshots.filter((s) => s.provider !== resolvedProvider)];
   }, [snapshots, resolvedProvider]);
 
-  const activeSnap = isUsageProviderId(resolvedProvider)
-    ? snapshots.find((s) => s.provider === resolvedProvider) ?? null
-    : ordered[0] ?? null;
+  const activeSnap = findUsageSnapshotForProvider(snapshots, resolvedProvider);
   const primary = primaryLimit(activeSnap);
   const used = primary?.usedPercent;
   const reset = formatResetCountdown(primary?.resetsAt);

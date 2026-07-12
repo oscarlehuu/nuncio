@@ -1,4 +1,4 @@
-import type { UsageProviderId } from './usage-api';
+import type { UsageProviderId, UsageSnapshotDto } from './usage-api';
 
 const CLAUDE_MODEL_RE = /anthropic|claude|cliproxy|fable/i;
 
@@ -20,6 +20,15 @@ export function resolveUsageProvider(
     }
   }
   return null;
+}
+
+/** Return only the snapshot explicitly resolved for this session/model. */
+export function findUsageSnapshotForProvider(
+  snapshots: ReadonlyArray<UsageSnapshotDto>,
+  provider: UsageProviderId | null,
+): UsageSnapshotDto | null {
+  if (provider === null) return null;
+  return snapshots.find((snapshot) => snapshot.provider === provider) ?? null;
 }
 
 export function usageSignInCommand(provider: UsageProviderId): string {

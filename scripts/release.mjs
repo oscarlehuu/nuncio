@@ -5,7 +5,8 @@
  *   2. Skip if git tag `v<version>` already exists (idempotent — safe to re-run).
  *   3. Extract the matching `## <version>` section from CHANGELOG.md as the release body.
  *   4. Create + push the `v<version>` git tag.
- *   5. Create a GitHub Release with the changelog section as the body (via `gh`).
+ *   5. Create a draft GitHub Release with the changelog section as the body.
+ *      The desktop build publishes it after signed assets and manifests upload.
  *
  * Run after `bun run version` has bumped versions and updated CHANGELOG.md.
  * In CI this runs inside changesets/action's `publish` step once the version PR is merged.
@@ -64,8 +65,8 @@ try {
 }
 console.log(`created + pushed ${tag}`);
 
-// 4. Create the GitHub Release.
-const gh = spawnSync('gh', ['release', 'create', tag, '--title', tag, '--notes', notes], {
+// 4. Create the draft GitHub Release. Publishing is the desktop build's final step.
+const gh = spawnSync('gh', ['release', 'create', tag, '--title', tag, '--notes', notes, '--draft'], {
   cwd: root,
   encoding: 'utf8',
 });
@@ -75,4 +76,4 @@ if (gh.status !== 0) {
   console.error('The tag was pushed; create the release manually if needed.');
   process.exit(1);
 }
-console.log(`created GitHub Release ${tag}`);
+console.log(`created draft GitHub Release ${tag}`);

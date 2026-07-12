@@ -46,6 +46,7 @@ interface DailyBucket {
 interface SamplesCacheEntry {
   expiresAtMs: number;
   fingerprint: string;
+  generation: number;
   samples: TokenSample[];
   pending: Promise<TokenSample[]> | null;
 }
@@ -545,10 +546,15 @@ async function loadProviderSamples(
   if (!options.forceRefresh && existing?.pending) {
     return existing.pending;
   }
+  const generation = (existing?.generation ?? 0) + 1;
+  const isLatestRequest = () => samplesCache.get(cacheKey)?.generation === generation;
 
   const pending = (async () => {
     try {
       const { fingerprint, samples } = await collectProviderSamples(provider, ctx);
+      if (!isLatestRequest()) {
+        return samples;
+      }
       // Mtime fingerprint: if files unchanged and we have a prior entry, reuse samples.
       if (
         !options.forceRefresh &&
@@ -559,6 +565,7 @@ async function loadProviderSamples(
         samplesCache.set(cacheKey, {
           expiresAtMs: Date.now() + LOCAL_SPEND_CACHE_TTL_MS,
           fingerprint,
+          generation,
           samples: existing.samples,
           pending: null,
         });
@@ -567,17 +574,21 @@ async function loadProviderSamples(
       samplesCache.set(cacheKey, {
         expiresAtMs: Date.now() + LOCAL_SPEND_CACHE_TTL_MS,
         fingerprint,
+        generation,
         samples,
         pending: null,
       });
       return samples;
     } catch {
-      samplesCache.set(cacheKey, {
-        expiresAtMs: 0,
-        fingerprint: 'error',
-        samples: [],
-        pending: null,
-      });
+      if (isLatestRequest()) {
+        samplesCache.set(cacheKey, {
+          expiresAtMs: 0,
+          fingerprint: 'error',
+          generation,
+          samples: [],
+          pending: null,
+        });
+      }
       return [];
     }
   })();
@@ -585,6 +596,7 @@ async function loadProviderSamples(
   samplesCache.set(cacheKey, {
     expiresAtMs: existing?.expiresAtMs ?? 0,
     fingerprint: existing?.fingerprint ?? '',
+    generation,
     samples: existing?.samples ?? [],
     pending,
   });

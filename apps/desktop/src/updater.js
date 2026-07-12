@@ -34,7 +34,7 @@ function resolveChannel() {
 // latest-version resolution failures.
 function isNoPublishedUpdateError(err) {
   const msg = String(err?.message ?? err);
-  return /latest[-.]mac\.yml|no published versions|unable to find latest version|httperror: 404|status code:? 404/i.test(
+  return /(?:latest|dev)[-.]mac\.yml|no published versions|unable to find latest version/i.test(
     msg,
   );
 }
