@@ -1,4 +1,6 @@
-import { BadRequestException, Inject, Injectable, OnModuleDestroy } from '@nestjs/common';
+import {
+  BadRequestException, Inject, Injectable, OnModuleDestroy, Optional, ServiceUnavailableException,
+} from '@nestjs/common';
 import { BrowserToolService } from '../browser/browser-tool.service';
 import type { SessionDto } from '../sessions/domain/sessions.types';
 import { MediaStore } from '../sessions/media.store';
@@ -6,6 +8,7 @@ import {
   EVIDENCE_CHROMIUM,
   EVIDENCE_GIT_HEAD,
   type CaptureEvidenceDto,
+  type BrowserCaptureEvidenceDto,
   type EvidenceBrowser,
   type EvidenceBrowserServer,
   type EvidenceCaptureResult,
@@ -13,6 +16,7 @@ import {
   type EvidenceGitHeadReader,
   type EvidencePhase,
 } from './evidence.types';
+import { SimulatorEvidenceCaptureService } from './simulator-evidence-capture.service';
 
 const VIEWPORT = { width: 1440, height: 900 } as const;
 const NAVIGATION_TIMEOUT_MS = 15_000;
@@ -33,6 +37,7 @@ export class EvidenceCaptureService implements OnModuleDestroy {
     private readonly media: MediaStore,
     @Inject(EVIDENCE_GIT_HEAD) private readonly readHead: EvidenceGitHeadReader,
     private readonly browserTools: BrowserToolService,
+    @Optional() private readonly simulator?: SimulatorEvidenceCaptureService,
   ) {}
 
   capture(session: SessionDto, input: CaptureEvidenceDto): Promise<EvidenceCaptureResult> {
@@ -63,44 +68,67 @@ export class EvidenceCaptureService implements OnModuleDestroy {
     targetRevision: number,
   ): Promise<EvidenceCaptureResult> {
     this.assertCaptureCurrent(session.id, targetRevision);
-    const allowedOrigin = await this.resolveAllowedOrigin(session.id);
-    const target = this.resolveTarget(input, allowedOrigin);
+    if (input.phase !== 'before' && input.phase !== 'after') {
+      throw new BadRequestException('phase must be before or after');
+    }
     const cwd = session.worktreePath ?? session.workspace ?? session.projectPath;
     if (!cwd) throw new BadRequestException('Session has no workspace to witness');
     const headBefore = await this.readHead(cwd);
     if (!headBefore) throw new BadRequestException('Session workspace has no readable git HEAD');
     this.assertCaptureCurrent(session.id, targetRevision);
 
-    const server = await this.chromium.launchServer({ channel: 'chrome', headless: true });
-    this.activeServers.add(server);
-    let browser: EvidenceBrowser | undefined;
-    const bytes = await (async () => {
-      try {
-        this.assertCaptureCurrent(session.id, targetRevision);
-        browser = await this.chromium.connect(server.wsEndpoint());
-        const page = await browser.newPage({ viewport: VIEWPORT });
-        await page.goto(target.href, { waitUntil: 'load', timeout: NAVIGATION_TIMEOUT_MS });
-        target.route = this.resolveFinalRoute(page.url(), allowedOrigin);
-        return await page.screenshot({ type: 'png', fullPage: true });
-      } finally {
-        await this.closeRuntime(browser, server);
-        this.activeServers.delete(server);
-      }
-    })();
+    const captured = input.target === 'simulator'
+      ? await this.captureSimulator()
+      : await this.captureBrowser(session.id, input, targetRevision);
     const workspaceHead = await this.readHead(cwd);
     if (!workspaceHead || workspaceHead !== headBefore) {
       throw new BadRequestException('Workspace HEAD changed during evidence capture');
     }
     this.assertCaptureCurrent(session.id, targetRevision);
 
-    this.knownTargets.set(session.id, { url: allowedOrigin, route: target.route });
-    const ref = { id: this.media.write(session.id, bytes.toString('base64')), mimeType: 'image/png' as const };
+    if ('origin' in captured) {
+      this.knownTargets.set(session.id, { url: captured.origin, route: captured.route });
+    }
+    const ref = { id: this.media.write(session.id, captured.bytes.toString('base64')),
+      mimeType: 'image/png' as const };
     return {
       ...(input.phase === 'before' ? { beforeRef: ref } : { afterRef: ref }),
-      route: target.route,
-      viewport: { w: VIEWPORT.width, h: VIEWPORT.height },
+      route: captured.route,
+      viewport: captured.viewport,
       workspaceHead,
     };
+  }
+
+  private async captureSimulator() {
+    if (!this.simulator) throw new ServiceUnavailableException('Simulator capture is unavailable');
+    const result = await this.simulator.captureScreenshot();
+    if (!result.ok) throw new ServiceUnavailableException(result.reason);
+    return result;
+  }
+
+  private async captureBrowser(
+    sessionId: string,
+    input: BrowserCaptureEvidenceDto,
+    targetRevision: number,
+  ) {
+    const allowedOrigin = await this.resolveAllowedOrigin(sessionId);
+    const target = this.resolveTarget(input, allowedOrigin);
+    const server = await this.chromium.launchServer({ channel: 'chrome', headless: true });
+    this.activeServers.add(server);
+    let browser: EvidenceBrowser | undefined;
+    try {
+      this.assertCaptureCurrent(sessionId, targetRevision);
+      browser = await this.chromium.connect(server.wsEndpoint());
+      const page = await browser.newPage({ viewport: VIEWPORT });
+      await page.goto(target.href, { waitUntil: 'load', timeout: NAVIGATION_TIMEOUT_MS });
+      target.route = this.resolveFinalRoute(page.url(), allowedOrigin);
+      const bytes = await page.screenshot({ type: 'png', fullPage: true });
+      return { bytes, route: target.route,
+        viewport: { w: VIEWPORT.width, h: VIEWPORT.height }, origin: allowedOrigin };
+    } finally {
+      await this.closeRuntime(browser, server);
+      this.activeServers.delete(server);
+    }
   }
 
   private async resolveAllowedOrigin(sessionId: string): Promise<string> {
@@ -120,10 +148,7 @@ export class EvidenceCaptureService implements OnModuleDestroy {
     }
   }
 
-  private resolveTarget(input: CaptureEvidenceDto, allowedOrigin: string) {
-    if (input.phase !== 'before' && input.phase !== 'after') {
-      throw new BadRequestException('phase must be before or after');
-    }
+  private resolveTarget(input: BrowserCaptureEvidenceDto, allowedOrigin: string) {
     const base = this.httpUrl(input.url, 'url');
     if (base.origin !== allowedOrigin) throw new BadRequestException('url must match the session preview origin');
     const target = input.route ? new URL(input.route, base) : base;

@@ -42,7 +42,7 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 - **Cross-machine grid (hub mode)** — grid slots can target any tailnet machine reachable through the hub: pick a machine in the slot composer to browse its projects, use its model catalog, and start or attach sessions there; remote tiles stream and steer live against that machine, show a reconnect state while it is down, and maximize into the session on the machine's own page
 - **Inspector dock** — the session side panel (source control + pull request, files, terminal, browser on desktop) remembers whether it was open and its last tab across visits; the source-control tab now includes opening a PR, watching its checks, and reviewing the session worktree diff.
 - **Diff review + hunk steering** — the session **Changes** panel shows structured worktree diffs with honest caps for binary, lockfile, too-large, and omitted files; tap a hunk, leave a comment, and Nuncio sends it back through the existing steer path, queued if the session is still running.
-- **Screenshot evidence capture** — capture a session preview route with real headless Chrome, bind the PNG to the workspace's exact Git HEAD, and keep only opaque media references in the durable transcript event.
+- **Screenshot evidence capture** — capture a session preview route with real headless Chrome or a booted iOS Simulator with `xcrun simctl`, bind the PNG to the workspace's exact Git HEAD, and keep only opaque media references in the durable transcript event. Simulator capture capability is explicit and degrades with a clear reason off macOS or without `xcrun`.
 - **Nuncio MCP server** — expose read-mostly Nuncio context plus constrained task enqueue / loop pause tools to local agent hosts over stdio with `bun run mcp`; the server is a thin proxy over the running daemon and never calls model APIs.
 
 ## Screenshots
@@ -312,7 +312,7 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 | POST | `/api/sessions/:id/refresh-transcript` | Append new turns from the on-disk Cursor/Pi transcript; emits `transcript_refreshed` via SSE when rows land |
 | GET | `/api/sessions/:id/stream?since=` | SSE stream; for handoff sessions, the server watches the external transcript file and streams new rows live |
 | POST | `/api/sessions/:id/steer` | Steer agent `{ "message": "...", "forceResume?": true, "attachments?": [...] }` — `forceResume` skips the active-run guard for CLI handoff sessions |
-| POST | `/api/sessions/:id/evidence` | Capture the session's already-open preview `{ "url": "http://localhost:5173", "route?": "/app", "phase": "before\|after" }` in headless system Chrome. The requested and final redirect origins must match that session's registered browser target; returns the PNG media ref, normalized route, viewport, and exact workspace HEAD while appending `evidence_captured` |
+| POST | `/api/sessions/:id/evidence` | Capture browser evidence with `{ "target?": "browser", "url": "http://localhost:5173", "route?": "/app", "phase": "before\|after" }` or a booted iOS Simulator with `{ "target": "simulator", "phase": "before\|after" }`. Both store through `MediaStore`, return the same PNG ref/route/viewport/workspace-HEAD shape, and append `evidence_captured`; unavailable Simulator capability returns a clear error and appends nothing. |
 | POST | `/api/sessions/:id/interrupt` | Interrupt a live run when the provider advertises `capabilities.interrupt` (Pi supports this without disposing the session) |
 | PATCH | `/api/sessions/:id/model` | Persist a session model/options update `{ "model": "provider:model", "options?": { ... } }`; providers with in-session switching (Pi) apply it live |
 | POST | `/api/sessions/:id/interactions/:requestId/respond` | Submit answers for a live interactive tool prompt `{ "answers": [...], "resolvedBy": "user\|skip" }` |
@@ -396,7 +396,7 @@ apps/
   server/
     src/
       agents/        AgentProvider interface + BaseAgentProvider + AgentRegistry + providers/ (pi, codex, cursor, claude)
-      evidence/      provider-neutral headless preview capture + Git HEAD witness
+      evidence/      browser/simulator screenshot capture + Git HEAD witness
       crew/          fixed Crew workflow, profile resolver, runner/recovery, context, artifacts, gates, persistence
       provider-updates/ optional Pi/Codex CLI version checks + user-triggered update endpoint
       sessions/      api/ · domain/ (types, fsm) · persistence/ (repositories) + service + module

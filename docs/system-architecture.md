@@ -856,6 +856,19 @@ not present a streamed remote-browser viewport there.
 normal external Chrome window for the dock. The browser dock is available only
 through the desktop bridge.
 
+## Evidence capture targets
+
+`EvidenceCaptureService` serializes captures and binds every successful PNG to the workspace's
+unchanged Git HEAD. Browser capture remains the default and preserves its registered-origin and
+redirect checks. The `simulator` target gates on macOS plus `xcrun --find simctl`, then runs
+`xcrun simctl io booted screenshot <temporary-png>`. The command boundary is injected, temporary
+files are always removed, and PNG dimensions become the shared evidence viewport.
+
+Both targets write bytes through `MediaStore` and emit the same ref-only `evidence_captured`
+payload. An unavailable capability is a no-op with a clear reason and no event. The simulator
+driver is the future seam for `recordVideo`; Maestro installation and verify-command wiring are
+owned by orchestration and intentionally remain outside this capture service.
+
 ## Desktop server profiles (connect the shell to a remote nuncio)
 
 The Electron shell can load either its own local daemon or a saved remote nuncio server

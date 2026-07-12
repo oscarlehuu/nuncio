@@ -127,7 +127,15 @@ export class SessionsController {
 
   @Post(':id/evidence')
   async captureEvidence(@Param('id') id: string, @Body() body: CaptureEvidenceDto) {
-    if (!body?.url || !body?.phase) throw new BadRequestException('url and phase are required');
+    if (body?.phase !== 'before' && body?.phase !== 'after') {
+      throw new BadRequestException('phase must be before or after');
+    }
+    if (body.target !== undefined && body.target !== 'browser' && body.target !== 'simulator') {
+      throw new BadRequestException('target must be browser or simulator');
+    }
+    if (body.target !== 'simulator' && !body.url) {
+      throw new BadRequestException('url is required for browser evidence');
+    }
     const session = this.sessions.requirePublicMutableSession(id);
     if (!this.evidence) throw new BadRequestException('Evidence capture is unavailable');
     const captured = await this.evidence.capture(session, body);

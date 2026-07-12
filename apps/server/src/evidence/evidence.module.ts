@@ -5,11 +5,13 @@ import { SessionsPersistenceModule } from '../sessions/sessions.persistence.modu
 import { EvidenceCaptureService } from './evidence-capture.service';
 import { readEvidenceGitHead } from './evidence-git-head';
 import { EVIDENCE_CHROMIUM, EVIDENCE_GIT_HEAD } from './evidence.types';
+import { SimulatorEvidenceCaptureService } from './simulator-evidence-capture.service';
 
 @Module({
   imports: [BrowserModule, SessionsPersistenceModule],
   providers: [
     EvidenceCaptureService,
+    SimulatorEvidenceCaptureService,
     { provide: EVIDENCE_CHROMIUM, useValue: chromium },
     { provide: EVIDENCE_GIT_HEAD, useValue: readEvidenceGitHead },
   ],
