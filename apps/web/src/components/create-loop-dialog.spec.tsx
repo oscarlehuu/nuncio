@@ -23,7 +23,7 @@ import type { ModelProvider } from '../lib/model-providers';
 const PROVIDERS: ModelProvider[] = [
   {
     id: 'pi',
-    name: 'Pi',
+    name: 'Nuncio Engine',
     groups: [{ id: 'g', name: 'g', models: [{ id: 'claude-fable-5', name: 'Fable 5' }] }],
   },
 ];

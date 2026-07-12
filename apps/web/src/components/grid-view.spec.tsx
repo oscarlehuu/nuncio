@@ -77,7 +77,7 @@ vi.mock('../lib/use-active-run', () => ({
 import { GridView } from './grid-view';
 
 const PROVIDERS: ModelProvider[] = [
-  { id: 'pi', name: 'Pi', groups: [{ id: 'pi', name: 'Pi', models: [{ id: 'pi:default', name: 'Pi' }] }] },
+  { id: 'pi', name: 'Nuncio Engine', groups: [{ id: 'pi', name: 'Pi', models: [{ id: 'pi:default', name: 'Pi' }] }] },
 ];
 
 function fakeSession(over: Partial<Session> = {}): Session {

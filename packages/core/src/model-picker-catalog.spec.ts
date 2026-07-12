@@ -17,7 +17,7 @@ const OPUS_MODEL: FlatModel = {
   id: 'anthropic:claude-opus-4-6',
   name: 'Claude Opus 4.6',
   providerId: 'pi',
-  providerName: 'Pi',
+  providerName: 'Nuncio Engine',
   groupId: 'anthropic',
   groupName: 'Anthropic',
   options: [
