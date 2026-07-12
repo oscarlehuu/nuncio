@@ -34,10 +34,12 @@ export function TranscriptBlockView({
   block,
   sessionId = null,
   canRespond = false,
+  sessionLoaded = true,
 }: {
   block: TranscriptBlock;
   sessionId?: string | null;
   canRespond?: boolean;
+  sessionLoaded?: boolean;
 }) {
   switch (block.kind) {
     case 'user':
@@ -64,7 +66,14 @@ export function TranscriptBlockView({
         </View>
       );
     case 'user_input':
-      return <QuestionCard block={block} sessionId={sessionId} canRespond={canRespond} />;
+      return (
+        <QuestionCard
+          block={block}
+          sessionId={sessionId}
+          canRespond={canRespond}
+          sessionLoaded={sessionLoaded}
+        />
+      );
     case 'plan':
       return <PlanBlockView items={block.items} />;
     case 'provider_request':

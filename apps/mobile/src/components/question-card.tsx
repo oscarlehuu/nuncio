@@ -26,11 +26,18 @@ interface QuestionCardProps {
   sessionId: string | null;
   /** Provider supports phone answers AND this client may mutate the session. */
   canRespond: boolean;
+  /** The session record has loaded, so canRespond reflects real capability. */
+  sessionLoaded: boolean;
 }
 
-export function QuestionCard({ block, sessionId, canRespond }: QuestionCardProps) {
+export function QuestionCard({ block, sessionId, canRespond, sessionLoaded }: QuestionCardProps) {
   if (block.resolvedBy) {
     return <AnsweredCard block={block} />;
+  }
+  // Until the session loads we don't yet know whether this client can answer, so
+  // show a neutral pending shell rather than flashing the "answer from web" state.
+  if (!sessionLoaded) {
+    return <WaitingCard block={block} loading />;
   }
   if (!canRespond || !sessionId) {
     return <WaitingCard block={block} />;
@@ -75,7 +82,8 @@ function PendingCard({ block, sessionId }: { block: UserInputBlock; sessionId: s
   const total = questions.length;
   const question = questions[questionIndex];
   const selectedIds = selections[question?.id ?? ''] ?? [];
-  const currentAnswered = question ? questionAnswered(selections, question) : false;
+  const currentAnswered = question ? questionAnswered(selections, notes, question) : false;
+  const readyToSubmit = allAnswered(selections, notes, questions);
   const isLast = questionIndex >= total - 1;
 
   const choose = (option: UserInputQuestion['options'][number]) => {
@@ -186,10 +194,10 @@ function PendingCard({ block, sessionId }: { block: UserInputBlock; sessionId: s
         {isLast ? (
           <Pressable
             accessibilityRole="button"
-            disabled={submitting || !allAnswered(selections, questions)}
+            disabled={submitting || !readyToSubmit}
             onPress={() => void resolve(buildAnswers(questions, selections, notes), 'user')}
             className={`min-h-11 flex-1 items-center justify-center rounded-lg px-4 active:opacity-90 ${
-              submitting || !allAnswered(selections, questions) ? 'bg-muted' : 'bg-primary'
+              submitting || !readyToSubmit ? 'bg-muted' : 'bg-primary'
             }`}
           >
             {submitting ? (
@@ -276,16 +284,22 @@ function AnsweredCard({ block }: { block: UserInputBlock }) {
   );
 }
 
-/** Pending, but this client can't answer (inspect-only or provider can't take phone input). */
-function WaitingCard({ block }: { block: UserInputBlock }) {
+/**
+ * Pending, but this client isn't answering yet: either the session record is
+ * still loading (`loading` — capability unknown, so no CTA) or this client can't
+ * answer at all (inspect-only / provider can't take phone input).
+ */
+function WaitingCard({ block, loading = false }: { block: UserInputBlock; loading?: boolean }) {
   return (
     <View className="my-1.5 rounded-lg bg-card px-4 py-3" style={{ borderWidth: 1, borderColor: AMBER }}>
-      <Eyebrow label="Waiting on an answer" color={AMBER} />
+      <Eyebrow label="Needs your answer" color={AMBER} />
       {block.title ? <Text className="mt-1 text-sm font-semibold text-foreground">{block.title}</Text> : null}
       <Text className="mt-1 text-sm text-muted-foreground">
         {block.questions[0]?.prompt ?? 'The agent is blocked on a question.'}
       </Text>
-      <Text className="mt-2 text-xs text-muted-foreground">Answer it from the web app.</Text>
+      {loading ? null : (
+        <Text className="mt-2 text-xs text-muted-foreground">Answer it from the web app.</Text>
+      )}
     </View>
   );
 }

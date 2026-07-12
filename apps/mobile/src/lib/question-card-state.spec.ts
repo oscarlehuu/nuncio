@@ -44,14 +44,17 @@ describe('toggleOption', () => {
 });
 
 describe('answered gates', () => {
-  it('questionAnswered needs a selection', () => {
-    expect(questionAnswered({}, single)).toBe(false);
-    expect(questionAnswered({ q1: ['a'] }, single)).toBe(true);
+  it('questionAnswered accepts a selection or a note', () => {
+    expect(questionAnswered({}, {}, single)).toBe(false);
+    expect(questionAnswered({ q1: ['a'] }, {}, single)).toBe(true);
+    expect(questionAnswered({}, { q1: 'the Other… path' }, single)).toBe(true);
+    expect(questionAnswered({}, { q1: '   ' }, single)).toBe(false);
   });
 
-  it('allAnswered requires every question chosen', () => {
-    expect(allAnswered({ q1: ['a'] }, [single, multi])).toBe(false);
-    expect(allAnswered({ q1: ['a'], q2: ['x'] }, [single, multi])).toBe(true);
+  it('allAnswered requires every question chosen or noted', () => {
+    expect(allAnswered({ q1: ['a'] }, {}, [single, multi])).toBe(false);
+    expect(allAnswered({ q1: ['a'], q2: ['x'] }, {}, [single, multi])).toBe(true);
+    expect(allAnswered({ q1: ['a'] }, { q2: 'other' }, [single, multi])).toBe(true);
   });
 });
 
@@ -61,8 +64,14 @@ describe('buildAnswers', () => {
     expect(answers).toEqual([{ questionId: 'q1', selectedOptionIds: ['a'], freeText: 'keep it small' }]);
   });
 
-  it('drops a note with no selection', () => {
-    expect(buildAnswers([single], {}, { q1: 'lonely note' })).toEqual([]);
+  it('emits the free-text-only shape for a note with no selection', () => {
+    expect(buildAnswers([single], {}, { q1: 'lonely note' })).toEqual([
+      { questionId: 'q1', selectedOptionIds: [], freeText: 'lonely note' },
+    ]);
+  });
+
+  it('omits a question with neither selection nor note', () => {
+    expect(buildAnswers([single], {}, { q1: '   ' })).toEqual([]);
   });
 
   it('omits freeText when the note is blank', () => {

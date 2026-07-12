@@ -40,6 +40,7 @@ export default function SessionDetail() {
   const { events, steer, connectionState } = useSessionTranscript(sessionId);
   const blocks = useTranscriptBlocks(events);
   const access = crewMemberSessionAccess(session);
+  const sessionLoaded = session !== null;
   const canRespond = access.canMutate && session?.supportsInteraction === true;
 
   const reloadSession = useCallback(() => {
@@ -148,10 +149,15 @@ export default function SessionDetail() {
         ref={listRef}
         className="flex-1 px-3"
         data={blocks}
-        extraData={canRespond}
-        keyExtractor={(_, i) => String(i)}
+        extraData={`${canRespond}:${sessionLoaded}`}
+        keyExtractor={(item) => item.key}
         renderItem={({ item }) => (
-          <TranscriptBlockView block={item} sessionId={sessionId} canRespond={canRespond} />
+          <TranscriptBlockView
+            block={item}
+            sessionId={sessionId}
+            canRespond={canRespond}
+            sessionLoaded={sessionLoaded}
+          />
         )}
         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
       />

@@ -23,19 +23,33 @@ export function toggleOption(
   return [optionId];
 }
 
-/** A question is answerable-complete once it has at least one selected option. */
-export function questionAnswered(selections: SelectionMap, question: UserInputQuestion): boolean {
-  return (selections[question.id]?.length ?? 0) > 0;
+/**
+ * A question is answered once it has a selected option OR a non-empty note.
+ * A bare note is the "Other…" path — a valid free-text answer with no option.
+ */
+export function questionAnswered(
+  selections: SelectionMap,
+  notes: NoteMap,
+  question: UserInputQuestion,
+): boolean {
+  const hasSelection = (selections[question.id]?.length ?? 0) > 0;
+  const hasNote = (notes[question.id]?.trim().length ?? 0) > 0;
+  return hasSelection || hasNote;
 }
 
-/** Submit gate: every question in the request needs a selection. */
-export function allAnswered(selections: SelectionMap, questions: UserInputQuestion[]): boolean {
-  return questions.every((question) => questionAnswered(selections, question));
+/** Submit gate: every question in the request needs a selection or a note. */
+export function allAnswered(
+  selections: SelectionMap,
+  notes: NoteMap,
+  questions: UserInputQuestion[],
+): boolean {
+  return questions.every((question) => questionAnswered(selections, notes, question));
 }
 
 /**
- * Build the wire answers. A note with no selection is dropped (the agent asked
- * for a choice); a note alongside a selection rides along as freeText.
+ * Build the wire answers. A note rides along with a selection as freeText, and
+ * a note alone emits the free-text-only shape ({ selectedOptionIds: [], freeText }).
+ * A question with neither is omitted.
  */
 export function buildAnswers(
   questions: UserInputQuestion[],
@@ -46,9 +60,7 @@ export function buildAnswers(
   for (const question of questions) {
     const selectedOptionIds = selections[question.id] ?? [];
     const freeText = notes[question.id]?.trim();
-    // A note only rides along with a chosen option; a bare note is not a valid
-    // answer to a question that asked for a choice, so it is dropped.
-    if (selectedOptionIds.length === 0) continue;
+    if (selectedOptionIds.length === 0 && !freeText) continue;
     answers.push({
       questionId: question.id,
       selectedOptionIds,
