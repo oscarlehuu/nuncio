@@ -1,6 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { SettingsService } from '../settings/settings.service';
-import type { TailscalePeerDto, TailscaleStatusDto } from './tailscale.types';
+import type {
+  TailscaleFunnelProbe,
+  TailscalePeerDto,
+  TailscaleStatusDto,
+} from './tailscale.types';
 
 export const TAILSCALE_AUTO_TRUST_KEY = 'NUNCIO_TAILSCALE_AUTO_TRUST';
 
@@ -258,6 +262,27 @@ export class TailscaleService {
     const stderr = result.stderr ?? '';
     this.logCliFailure('funnel', stderr);
     return { ok: false, reason: isFunnelAclDenial(stderr) ? 'acl' : 'error' };
+  }
+
+  /** Read-only Funnel configuration probe. Errors are unknown, never evidence of down. */
+  async probeFunnel(): Promise<TailscaleFunnelProbe> {
+    const bin = await this.resolveBin();
+    if (!bin) return { status: 'unknown', reason: 'tailscale CLI unavailable' };
+    const result = await this.exec([bin, 'funnel', 'status', '--json']);
+    if (!result.ok) return { status: 'unknown', reason: 'funnel status probe failed' };
+    try {
+      const parsed = JSON.parse(result.stdout) as { AllowFunnel?: unknown };
+      if (!parsed.AllowFunnel || typeof parsed.AllowFunnel !== 'object') {
+        return { status: 'unknown', reason: 'unrecognized funnel status' };
+      }
+      const enabled = Object.values(parsed.AllowFunnel as Record<string, unknown>)
+        .some((value) => value === true);
+      return enabled
+        ? { status: 'up' }
+        : { status: 'down', reason: 'funnel is not configured' };
+    } catch {
+      return { status: 'unknown', reason: 'invalid funnel status response' };
+    }
   }
 
   private logCliFailure(command: string, stderr: string | undefined): void {

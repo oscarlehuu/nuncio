@@ -703,6 +703,19 @@ apps/server/src/tailscale/
   tailscale.module.ts      imports SettingsModule, exported to AuthModule + main.ts (terminal WS)
 ```
 
+### Relay health and Funnel watchdog (`apps/server/src/relay/`)
+
+`GET /api/relay/health` probes a LAN-interface health URL, the MagicDNS health URL, and read-only
+Funnel configuration. Each path reports `up`, `down`, or conservative `unknown` plus
+the last probe latency and timestamp. A local request to the MagicDNS hostname cannot prove that
+the public Funnel route works, so command errors and unrecognized CLI output remain `unknown`.
+
+The daemon watchdog is deliberately one-way: only a typed, explicit Funnel `down` result can
+reach `enableFunnel(port)`. `up` and `unknown` return before mutation, and the watchdog has no
+disable, reset, or teardown dependency. Failed recovery is retried on the watchdog cadence;
+persistent failure raises one deduplicated `relay-down` Attention condition, cleared after a
+later healthy probe.
+
 - **Toggle:** setting `NUNCIO_TAILSCALE_AUTO_TRUST` (registry, boolean, default `'1'`). Resolved
   per request via `SettingsService.resolve` — flipping it in Settings applies immediately, no
   restart. `'0'` disables all tailscale trust.

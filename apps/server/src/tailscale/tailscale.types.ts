@@ -28,3 +28,8 @@ export interface TailscaleStatusDto {
   self: TailscaleSelfDto | null;
   peers: TailscalePeerDto[];
 }
+
+export type TailscaleFunnelProbe =
+  | { status: 'up' }
+  | { status: 'down'; reason: string }
+  | { status: 'unknown'; reason: string };

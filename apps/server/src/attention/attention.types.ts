@@ -10,6 +10,7 @@ export type AttentionKind =
   | 'permission'
   | 'credential-expiring'
   | 'verify-dead'
+  | 'relay-down'
   | 'tripped-breaker'
   | 'crew-blocked'
   | 'zombie-session'
@@ -33,6 +34,7 @@ export const SEVERITY_BY_KIND: Readonly<Record<AttentionKind, number>> = {
   permission: 7,
   'credential-expiring': 6,
   'verify-dead': 5,
+  'relay-down': 5,
   'tripped-breaker': 4,
   'crew-blocked': 4,
   'zombie-session': 3,
