@@ -289,6 +289,7 @@ apps/
         models.static.ts       STATIC_MODEL_PROVIDERS (Pi fallback when no auth)
         models.service.ts      aggregates from AgentRegistry
       provider-updates/  optional Pi/Codex CLI version advisories + user-triggered updates
+      usage/             first-party Claude/Codex/Cursor subscription quota probes (local CLI creds)
       settings/          DB-backed env config (settings store)
         settings.types.ts        SettingDefinition, SettingDto, UpdateSettingDto
         settings.registry.ts     SETTING_DEFINITIONS (declarative catalog) + getSettingDefinition/isSecretSetting
@@ -439,6 +440,9 @@ The event contract is **shared** across providers (emitted via `BaseAgentProvide
 | POST | `/api/sessions/:id/restore` | un-archive → IDLE (no-op on the agent loop; the next steer rebuilds it from the event log) |
 | DELETE | `/api/sessions/:id` | permanent; rejects unless the session is `ARCHIVED` (archive first). Disposes the agent handle, drops the in-memory SSE bus, and cascades the event log in one transaction |
 | GET | `/api/models` | aggregates `listModels()` across `AgentRegistry.available()` (Pi `ModelRegistry` when authed, Codex `model/list` when logged in, Cursor `Cursor.models.list()` when `CURSOR_API_KEY` set, else static Pi fallback) |
+| GET | `/api/usage` | live Claude / Codex / Cursor subscription quotas from local CLI logins (`?forceRefresh=1\|true` bypasses the 60s TTL cache); Today / Last 30 Days local token lines when archives have usage |
+| GET | `/api/usage/history` | last N local calendar days of token totals per provider (Settings chart/heatmap; default/max 90; `?days=1..90`, `?forceRefresh=1\|true`) |
+| GET | `/api/usage/:provider` | single-provider quota snapshot (`claude` \| `codex` \| `cursor`); 404 for unknown ids |
 | GET | `/api/provider-updates` | best-effort Pi/Codex CLI version advisory; disabled by `NUNCIO_PROVIDER_UPDATE_CHECKS=0` |
 | POST | `/api/provider-updates/:provider/update` | user-triggered allowlisted update for `pi` or `codex` only; never runs arbitrary command strings |
 | GET | `/api/settings` | list all settings (catalog metadata + `hasValue` + `source` + masked/raw `value`; secrets masked, never raw) |

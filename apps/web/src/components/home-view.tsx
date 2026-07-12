@@ -26,7 +26,10 @@ import { projectDisplayName } from '../lib/projects';
 import { type MessageAttachment } from '../lib/api';
 import { useComposerAttachments } from '../lib/use-composer-attachments';
 import { AttachButton, AttachmentTray } from './attachment-tray';
+import { QuotaChip } from './quota-chip';
 import { takeComposerDraft } from '../lib/composer-draft';
+import { useProviderUsage } from '../lib/use-provider-usage';
+import { resolveUsageProvider } from '../lib/usage-display';
 import {
   loadProjectPreference,
   isNuncioSessionBranch,
@@ -198,6 +201,8 @@ export function HomeView({
   }, [projectPath]);
 
   const canSend = Boolean(prompt.trim()) && !loading && catalogLoaded && !!model && !!provider;
+  const usageProvider = resolveUsageProvider(provider, model);
+  const { snapshots: usageSnapshots, reload: reloadUsage } = useProviderUsage(usageProvider);
 
   return (
     <section
@@ -305,6 +310,11 @@ export function HomeView({
                 variant="text"
               />
             </div>
+            <QuotaChip
+              activeProvider={usageProvider}
+              snapshots={usageSnapshots}
+              onOpen={() => void reloadUsage(true)}
+            />
             {onContinueOnMobile ? (
               <TooltipProvider>
                 <Tooltip>

@@ -24,6 +24,7 @@ import { useSessionTranscript } from '../../lib/use-session-transcript';
 import { useTranscriptBlocks } from '../../lib/use-transcript-blocks';
 import { TranscriptBlockView } from '../../components/transcript-block-view';
 import { ConnectionPill } from '../../components/connection-pill';
+import { QuotaSheetTrigger } from '../../components/quota-sheet';
 
 export default function SessionDetail() {
   const router = useRouter();
@@ -130,6 +131,7 @@ export default function SessionDetail() {
             {session ? statusLabel(session.status) : '…'}
           </Text>
         </View>
+        <QuotaSheetTrigger activeProvider={session?.provider} model={session?.model} />
         <ConnectionPill state={connectionState} />
         <Pressable onPress={showActions} className="px-2 py-1">
           <Text className="text-xl text-muted-foreground">⋯</Text>

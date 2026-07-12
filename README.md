@@ -22,7 +22,7 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 - **Heartbeat + digest** — Nuncio runs local self-checks for forge credentials and zombie sessions, reconciles the fleet and attention collectors on a cadence, and sends morning/evening digest pushes backed by an in-app digest view with real windowed counts, timeline highlights, and per-project summary lines.
 - **Observability + timeline** — derive honest metrics and timeline facts from existing durable rows at `/api/observability/*` and `/api/timeline`: turns, steers, verify outcomes, run durations, tasks, loop runs, attention, digests, and provider/project/day rollups. Token and cost fields stay `null` unless a provider reports structured usage.
 - **Dispatcher proposals** — every evening, Nuncio drafts tomorrow's plan from durable attention, verify, task, loop, and PR facts as a dispatcher proposal; approve it in one tap to create queued tasks idempotently.
-- **Fleet home** — `/` is now the Home cockpit: the latest digest entry point, attention queue, and one red/yellow/green project-health row per repo with reasons, counts, recent activity, verify signal, and the top thing to handle. **Workbench** is the drill-down at `/grid?project=...`; the new-session composer lives at `/new`.
+- **Home cockpit** — `/` is now the latest digest entry point and attention queue only. Fleet health stays available as a data layer for future project pages, while **Workbench** remains the multi-session grid at `/grid`; the new-session composer lives at `/new`.
 - **Forge-aware project picker** — browse your GitHub/GitLab repos straight from the project picker (via your existing CLI credentials) and clone one directly into `NUNCIO_CLONE_DIR`; public repos clone anonymously first, while private clones inject a one-shot credential header for that single `git clone` that never persists into the repo
 - **Pause / archive / restore / delete** — suspend a running session, retire it to the Archived tab, restore it back to IDLE, or permanently delete it; a session FSM enforces valid transitions and a confirm dialog guards deletes
 - **Real-time + replay** — WebSocket relay (subscribe/steer on one duplex channel, gap-free resume via the event-log cursor — see [docs/ws-relay-contract.md](docs/ws-relay-contract.md)) plus the SSE stream and cursor replay endpoints for API consumers; live bursts are batched client-side so long answers stay smooth
@@ -312,6 +312,9 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 | POST | `/api/tasks/:id/retry` | Clone a finished task back into the queue |
 | DELETE | `/api/tasks/:id` | Delete a terminal task row |
 | GET | `/api/models` | Model catalog (aggregated from available providers, including per-provider `capabilities`) |
+| GET | `/api/usage` | Live subscription quotas for Claude / Codex / Cursor (reads local CLI logins; `?forceRefresh=true` bypasses TTL cache). Claude / Codex / Cursor also append Today + Last 30 Days token totals when local logs expose usage (Cursor best-effort). |
+| GET | `/api/usage/history` | Last N days (default 90, max 90) of local token totals per provider for Settings analytics (`?days=` + `?forceRefresh=true`) |
+| GET | `/api/usage/:provider` | Single-provider quota snapshot (`claude` \| `codex` \| `cursor`) |
 | GET | `/api/provider-updates` | Check Pi/Codex CLI versions and return optional update metadata |
 | POST | `/api/provider-updates/:provider/update` | Run an allowlisted user-triggered update for `pi` or `codex` when supported |
 | GET | `/api/settings` | List all settings with section categories (secrets masked, never raw) |
