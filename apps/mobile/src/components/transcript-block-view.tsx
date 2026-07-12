@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import type { TranscriptBlock } from '@nuncio/core/transcript-build-blocks';
 import { MarkdownText } from './markdown-text';
+import { PlanBlockView } from './plan-block-view';
+import { QuestionCard } from './question-card';
 
 function ToolRow({ block }: { block: Extract<TranscriptBlock, { kind: 'tool' }> }) {
   const color =
@@ -28,7 +30,15 @@ function ThinkingRow({ block }: { block: Extract<TranscriptBlock, { kind: 'think
   );
 }
 
-export function TranscriptBlockView({ block }: { block: TranscriptBlock }) {
+export function TranscriptBlockView({
+  block,
+  sessionId = null,
+  canRespond = false,
+}: {
+  block: TranscriptBlock;
+  sessionId?: string | null;
+  canRespond?: boolean;
+}) {
   switch (block.kind) {
     case 'user':
       return (
@@ -54,14 +64,9 @@ export function TranscriptBlockView({ block }: { block: TranscriptBlock }) {
         </View>
       );
     case 'user_input':
-      return (
-        <View className="my-1.5 rounded-lg border border-border bg-card px-3 py-2">
-          <Text className="text-sm text-foreground">
-            {block.resolvedBy ? 'Question answered' : 'The agent asked a question — answer it from the web app for now.'}
-          </Text>
-          {block.title ? <Text className="mt-1 text-xs text-muted-foreground">{block.title}</Text> : null}
-        </View>
-      );
+      return <QuestionCard block={block} sessionId={sessionId} canRespond={canRespond} />;
+    case 'plan':
+      return <PlanBlockView items={block.items} />;
     case 'provider_request':
       return (
         <View className="my-1.5 rounded-lg border border-border bg-card px-3 py-2">

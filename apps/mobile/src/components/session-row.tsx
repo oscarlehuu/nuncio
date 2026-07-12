@@ -10,7 +10,15 @@ const STATUS_COLOR: Record<Session['status'], string> = {
   ERROR: '#ef4444',
 };
 
-export function SessionRow({ session, onPress }: { session: Session; onPress: () => void }) {
+export function SessionRow({
+  session,
+  steps,
+  onPress,
+}: {
+  session: Session;
+  steps?: string | null;
+  onPress: () => void;
+}) {
   return (
     <Pressable
       onPress={onPress}
@@ -26,6 +34,7 @@ export function SessionRow({ session, onPress }: { session: Session; onPress: ()
         <Text className="mt-0.5 text-xs text-muted-foreground" numberOfLines={1}>
           {session.provider}
           {session.model ? ` · ${session.model}` : ''} · {relativeTime(session.updatedAt)}
+          {steps ? ` · ${steps}` : ''}
         </Text>
       </View>
     </Pressable>

@@ -14,6 +14,8 @@ import {
 import { secureStore } from '../lib/secure-store-adapter';
 import { registerForPush } from '../lib/push-registration';
 import { rotateDeviceSecret } from '../lib/rotate-secret';
+import { useSessionPlans } from '../lib/use-session-plans';
+import { planStepsLabel } from '../lib/session-plan-progress';
 import { CrewRunRow } from '../components/crew-run-row';
 import { SessionRow } from '../components/session-row';
 
@@ -86,6 +88,8 @@ export default function SessionList() {
     return [...sessionItems, ...crewItems].sort((a, b) => b.updatedAt - a.updatedAt || a.key.localeCompare(b.key));
   }, [crewRows, sessions]);
 
+  const sessionPlans = useSessionPlans(sessions);
+
   const unpair = useCallback(async () => {
     await clearConnection(secureStore);
     router.replace('/pairing');
@@ -132,8 +136,13 @@ export default function SessionList() {
       <FlatList
         data={items}
         keyExtractor={(item) => item.key}
+        extraData={sessionPlans}
         renderItem={({ item }) => item.kind === 'session'
-          ? <SessionRow session={item.session} onPress={() => router.push(`/session/${item.session.id}`)} />
+          ? <SessionRow
+              session={item.session}
+              steps={planStepsLabel(sessionPlans.get(item.session.id))}
+              onPress={() => router.push(`/session/${item.session.id}`)}
+            />
           : <CrewRunRow row={item.row} onPress={() => router.push(crewTaskPath(item.row.taskId))} />}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor="#9ca3af" />}
         ListEmptyComponent={refreshing ? null : (
