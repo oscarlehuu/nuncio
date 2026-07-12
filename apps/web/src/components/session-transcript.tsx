@@ -343,6 +343,8 @@ function RenderItemView({
       );
     case 'task_completed':
       return <TaskDigestCard digest={block.digest} onOpenSession={onOpenSession} />;
+    case 'evidence':
+      return null;
     case 'error':
       return <ErrorRow message={block.message} />;
     default: {

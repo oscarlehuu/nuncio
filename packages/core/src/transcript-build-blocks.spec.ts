@@ -259,6 +259,50 @@ describe('buildTranscriptBlocks', () => {
     }]);
   });
 
+  it('folds before and after evidence and marks divergent workspace heads stale', () => {
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'evidence_captured', {
+        beforeRef: { id: 'a'.repeat(32), mimeType: 'image/png' },
+        route: '/app', viewport: { w: 1440, h: 900 }, workspaceHead: 'head-a',
+      }),
+      ev(2, 'evidence_captured', {
+        afterRef: { id: 'b'.repeat(32), mimeType: 'image/png' },
+        route: '/app', viewport: { w: 1440, h: 900 }, workspaceHead: 'head-b',
+      }),
+    ]);
+    expect(blocks).toEqual([{
+      kind: 'evidence', key: 'evidence-1', stale: true,
+      evidence: {
+        beforeRef: { id: 'a'.repeat(32), mimeType: 'image/png' },
+        afterRef: { id: 'b'.repeat(32), mimeType: 'image/png' },
+        route: '/app', viewport: { w: 1440, h: 900 }, workspaceHead: 'head-b',
+      },
+    }]);
+  });
+
+  it('folds same-head pairs without stale and keeps after-only evidence', () => {
+    const paired = buildTranscriptBlocks([
+      ev(1, 'evidence_captured', {
+        beforeRef: { id: 'a'.repeat(32), mimeType: 'image/png' },
+        route: '/app', viewport: { w: 1440, h: 900 }, workspaceHead: 'head-a',
+      }),
+      ev(2, 'evidence_captured', {
+        afterRef: { id: 'b'.repeat(32), mimeType: 'image/png' },
+        route: '/app', viewport: { w: 1440, h: 900 }, workspaceHead: 'head-a',
+      }),
+    ]);
+    expect(paired).toHaveLength(1);
+    expect(paired[0]).not.toHaveProperty('stale');
+    expect(paired[0]).toMatchObject({ evidence: { beforeRef: {}, afterRef: {}, workspaceHead: 'head-a' } });
+
+    const afterOnly = buildTranscriptBlocks([ev(3, 'evidence_captured', {
+      afterRef: { id: 'c'.repeat(32), mimeType: 'image/png' },
+      route: '/app', viewport: { w: 1440, h: 900 }, workspaceHead: 'head-c',
+    })]);
+    expect(afterOnly).toHaveLength(1);
+    expect(afterOnly[0]).toMatchObject({ kind: 'evidence', key: 'evidence-3', evidence: { afterRef: {} } });
+  });
+
   it('folds inline answers from user_input_resolved into the block', () => {
     const questions = [{ id: 'q1', prompt: 'Pick', options: [{ id: 'a', label: 'A' }] }];
     const answers = [{ questionId: 'q1', selectedOptionIds: ['a'], freeText: 'note' }];

@@ -226,8 +226,9 @@ describe('SessionsController', () => {
     const capture = jest.fn(async () => result);
     const appendOrchestrationEvent = jest.fn();
     const current = makeSession({ worktreePath: '/repo' });
+    const requirePublicMutableSession = jest.fn(() => current);
     const controller = new SessionsController(
-      { get: () => current, appendOrchestrationEvent } as never,
+      { requirePublicMutableSession, appendOrchestrationEvent } as never,
       { capture } as never,
     );
 
@@ -238,16 +239,57 @@ describe('SessionsController', () => {
       url: 'http://localhost:5173', route: '/app', phase: 'before',
     });
     expect(appendOrchestrationEvent).toHaveBeenCalledWith('s1', 'evidence_captured', result);
+    expect(requirePublicMutableSession).toHaveBeenCalledWith('s1');
   });
 
   it('rejects evidence capture for a missing session', async () => {
     const controller = new SessionsController(
-      { get: () => null } as never,
+      { requirePublicMutableSession: () => { throw new NotFoundException('Session not found'); } } as never,
       { capture: jest.fn() } as never,
     );
     await expect(controller.captureEvidence('missing', {
       url: 'http://localhost:5173', phase: 'after',
     })).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('rejects Crew-owned evidence mutation before capture or append', async () => {
+    const capture = jest.fn();
+    const appendOrchestrationEvent = jest.fn();
+    const controller = new SessionsController({
+      requirePublicMutableSession: () => {
+        throw new BadRequestException('Crew-owned sessions are read-only outside Crew controls');
+      },
+      appendOrchestrationEvent,
+    } as never, { capture } as never);
+    await expect(controller.captureEvidence('crew-member', {
+      url: 'http://localhost:5173', phase: 'before',
+    })).rejects.toBeInstanceOf(BadRequestException);
+    expect(capture).not.toHaveBeenCalled();
+    expect(appendOrchestrationEvent).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing evidence body with BadRequestException', async () => {
+    const controller = new SessionsController({
+      requirePublicMutableSession: () => makeSession(),
+    } as never, { capture: jest.fn() } as never);
+    await expect(controller.captureEvidence('s1', null as never))
+      .rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('forgets known evidence targets after archive succeeds', () => {
+    const archive = jest.fn(() => makeSession({ status: 'ARCHIVED' }));
+    const forget = jest.fn();
+    const controller = new SessionsController({ archive } as never, { forget } as never);
+    expect(controller.archive('s1')).toMatchObject({ status: 'ARCHIVED' });
+    expect(forget).toHaveBeenCalledWith('s1');
+  });
+
+  it('keeps known evidence targets when archive fails', () => {
+    const archive = jest.fn(() => { throw new BadRequestException('cannot archive'); });
+    const forget = jest.fn();
+    const controller = new SessionsController({ archive } as never, { forget } as never);
+    expect(() => controller.archive('s1')).toThrow(BadRequestException);
+    expect(forget).not.toHaveBeenCalled();
   });
 
   it('events throws NotFoundException when the session is missing', () => {

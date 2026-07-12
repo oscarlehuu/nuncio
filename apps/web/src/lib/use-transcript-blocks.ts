@@ -22,6 +22,7 @@ function isSafeBoundary(state: ParserState): boolean {
   if (state.openTools.size > 0) return false;
   if (state.pendingInteractive.size > 0) return false;
   if (state.legacyStack.length > 0) return false;
+  if (state.pendingEvidenceBeforeKey) return false;
   for (const request of state.providerRequests.values()) {
     if (request.status !== 'resolved') return false;
   }
@@ -48,6 +49,7 @@ function cloneParserState(state: ParserState): ParserState {
     lastSeq: state.lastSeq,
     assistantStartSeq: state.assistantStartSeq,
     thinkingStartSeq: state.thinkingStartSeq,
+    pendingEvidenceBeforeKey: state.pendingEvidenceBeforeKey,
   };
 }
 

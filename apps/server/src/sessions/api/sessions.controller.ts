@@ -127,8 +127,8 @@ export class SessionsController {
 
   @Post(':id/evidence')
   async captureEvidence(@Param('id') id: string, @Body() body: CaptureEvidenceDto) {
-    const session = this.sessions.get(id);
-    if (!session) throw new NotFoundException('Session not found');
+    if (!body?.url || !body?.phase) throw new BadRequestException('url and phase are required');
+    const session = this.sessions.requirePublicMutableSession(id);
     if (!this.evidence) throw new BadRequestException('Evidence capture is unavailable');
     const captured = await this.evidence.capture(session, body);
     this.sessions.appendOrchestrationEvent(id, 'evidence_captured', captured);
@@ -170,7 +170,9 @@ export class SessionsController {
 
   @Post(':id/archive')
   archive(@Param('id') id: string) {
-    return this.sessions.archive(id);
+    const archived = this.sessions.archive(id);
+    this.evidence?.forget(id);
+    return archived;
   }
 
   @Post(':id/restore')

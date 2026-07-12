@@ -60,7 +60,7 @@ export type TranscriptBlock =
       key: string;
       items: PlanItem[];
     }
-  | { kind: 'evidence'; key: string; evidence: EvidenceCapturedPayload }
+  | { kind: 'evidence'; key: string; evidence: EvidenceCapturedPayload; stale?: true }
   | {
       kind: 'provider_request';
       key: string;
@@ -257,6 +257,7 @@ export interface ParserState {
   assistantStartSeq: number | null;
   /** Same for the open thinking buffer. */
   thinkingStartSeq: number | null;
+  pendingEvidenceBeforeKey: string | null;
 }
 
 export function createParserState(): ParserState {
@@ -276,6 +277,7 @@ export function createParserState(): ParserState {
     lastSeq: 0,
     assistantStartSeq: null,
     thinkingStartSeq: null,
+    pendingEvidenceBeforeKey: null,
   };
 }
 
@@ -465,7 +467,27 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
     flushThinking(state);
     const evidence = normalizeEvidenceCapturedPayload(payload);
     if (evidence) {
-      state.out.push({ kind: 'evidence', key: `evidence-${event.seq}`, evidence });
+      const key = `evidence-${event.seq}`;
+      if (evidence.beforeRef) {
+        state.out.push({ kind: 'evidence', key, evidence });
+        state.pendingEvidenceBeforeKey = key;
+      } else if (state.pendingEvidenceBeforeKey) {
+        const index = state.out.findIndex((block) => block.key === state.pendingEvidenceBeforeKey);
+        const before = state.out[index];
+        if (before?.kind === 'evidence' && before.evidence.beforeRef) {
+          state.out[index] = {
+            kind: 'evidence',
+            key: before.key,
+            evidence: { ...evidence, beforeRef: before.evidence.beforeRef },
+            ...(before.evidence.workspaceHead !== evidence.workspaceHead ? { stale: true } : {}),
+          };
+        } else {
+          state.out.push({ kind: 'evidence', key, evidence });
+        }
+        state.pendingEvidenceBeforeKey = null;
+      } else {
+        state.out.push({ kind: 'evidence', key, evidence });
+      }
     }
     return;
   }

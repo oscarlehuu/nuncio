@@ -13,6 +13,7 @@ export type EvidenceCaptureResult = EvidenceCapturedPayload;
 export interface EvidencePage {
   goto(url: string, options: { waitUntil: 'load'; timeout: number }): Promise<unknown>;
   screenshot(options: { type: 'png'; fullPage: true }): Promise<Buffer>;
+  url(): string;
 }
 
 export interface EvidenceBrowser {
@@ -20,8 +21,15 @@ export interface EvidenceBrowser {
   close(): Promise<void>;
 }
 
+export interface EvidenceBrowserServer {
+  wsEndpoint(): string;
+  close(): Promise<void>;
+  kill(): Promise<void>;
+}
+
 export interface EvidenceChromium {
-  launch(options: { channel: 'chrome'; headless: true }): Promise<EvidenceBrowser>;
+  launchServer(options: { channel: 'chrome'; headless: true }): Promise<EvidenceBrowserServer>;
+  connect(wsEndpoint: string): Promise<EvidenceBrowser>;
 }
 
 export type EvidenceGitHeadReader = (cwd: string) => Promise<string | null>;
