@@ -2,7 +2,15 @@ import { Pressable, Text, View } from 'react-native';
 import { relativeTime, statusLabel, type Session } from '@nuncio/core/api';
 import { ATTENTION_COLOR, SessionStatusDot } from './session-status-dot';
 
-export function SessionRow({ session, onPress }: { session: Session; onPress: () => void }) {
+export function SessionRow({
+  session,
+  steps,
+  onPress,
+}: {
+  session: Session;
+  steps?: string | null;
+  onPress: () => void;
+}) {
   const pendingInput = session.status === 'RUNNING' && session.pendingInput === true;
   return (
     <Pressable
@@ -25,6 +33,7 @@ export function SessionRow({ session, onPress }: { session: Session; onPress: ()
           )}
           {' · '}
           {relativeTime(session.updatedAt)}
+          {!pendingInput && steps ? ` · ${steps}` : ''}
         </Text>
       </View>
     </Pressable>

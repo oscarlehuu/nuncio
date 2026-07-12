@@ -27,7 +27,7 @@ import { ConnectionPill } from '../../components/connection-pill';
 import { QuotaSheetTrigger } from '../../components/quota-sheet';
 import { ATTENTION_COLOR, SessionStatusDot } from '../../components/session-status-dot';
 import { crewMemberSessionAccess } from '../../lib/crew-member-session';
-import { deriveNeedsInput } from '../../lib/session-pending-input';
+import { deriveNeedsInput, latestSessionStatus } from '../../lib/session-pending-input';
 
 export default function SessionDetail() {
   const router = useRouter();
@@ -42,10 +42,16 @@ export default function SessionDetail() {
   const { events, steer, connectionState } = useSessionTranscript(sessionId);
   const blocks = useTranscriptBlocks(events);
   const access = crewMemberSessionAccess(session);
+  const sessionLoaded = session !== null;
+  const canRespond = access.canMutate && session?.supportsInteraction === true;
   const needsInput = useMemo(
     () => deriveNeedsInput(events, session?.status, session?.pendingInput),
     [events, session?.status, session?.pendingInput],
   );
+  // The event tail is authoritative over the (possibly stale) session row, and
+  // only a live RUNNING session is actually awaiting your answer — a pending
+  // question on any other status must not raise the amber alarm.
+  const sessionRunning = (latestSessionStatus(events) ?? session?.status) === 'RUNNING';
 
   const reloadSession = useCallback(() => {
     if (!sessionId) return;
@@ -164,8 +170,17 @@ export default function SessionDetail() {
         ref={listRef}
         className="flex-1 px-3"
         data={blocks}
-        keyExtractor={(_, i) => String(i)}
-        renderItem={({ item }) => <TranscriptBlockView block={item} />}
+        extraData={`${canRespond}:${sessionLoaded}:${sessionRunning}`}
+        keyExtractor={(item) => item.key}
+        renderItem={({ item }) => (
+          <TranscriptBlockView
+            block={item}
+            sessionId={sessionId}
+            canRespond={canRespond}
+            sessionLoaded={sessionLoaded}
+            sessionRunning={sessionRunning}
+          />
+        )}
         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
       />
 
