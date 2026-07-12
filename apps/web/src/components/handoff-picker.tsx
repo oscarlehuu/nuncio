@@ -180,7 +180,7 @@ export function HandoffPicker({
       const session = await handoffSession(handoffInput);
       onImported(session.id);
       onOpenChange(false);
-      toast.success(`Imported ${selected.source === 'pi' ? 'Pi' : 'Cursor'} chat`);
+      toast.success(`Imported ${selected.source === 'pi' ? 'Nuncio Engine' : 'Cursor'} chat`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Import failed');
     } finally {

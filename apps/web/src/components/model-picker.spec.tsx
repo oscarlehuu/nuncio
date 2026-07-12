@@ -8,7 +8,7 @@ import type { ModelOptionsMap } from '../lib/model-options';
 
 const PI_PROVIDER: ModelProvider = {
   id: 'pi',
-  name: 'Pi',
+  name: 'Nuncio Engine',
   groups: [
     {
       id: 'g1',
@@ -204,7 +204,7 @@ describe('ModelPicker', () => {
     const chipRow = await screen.findByRole('group', { name: /filter by cli/i });
     expect(chipRow).toBeInTheDocument();
     // Chips are icon-only — accessible name is the provider (or All), not visible text labels.
-    expect(within(chipRow).queryByText(/^Pi$/i)).not.toBeInTheDocument();
+    expect(within(chipRow).queryByText(/^Nuncio Engine$/i)).not.toBeInTheDocument();
     expect(within(chipRow).queryByText(/^Claude$/i)).not.toBeInTheDocument();
     await userEvent.click(within(chipRow).getByRole('button', { name: /^claude$/i }));
 
@@ -264,7 +264,7 @@ describe('ModelPicker', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /claude haiku 4\.5/i }));
     expect(await screen.findByPlaceholderText(/search models/i)).toBeInTheDocument();
-    expect(screen.getAllByText('Pi').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Nuncio Engine').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Cursor').length).toBeGreaterThan(0);
     expect(screen.queryByTestId('model-picker-provider-submenu')).not.toBeInTheDocument();
     const composer = await screen.findByRole('menuitem', { name: /composer 2\.5/i });
@@ -404,7 +404,7 @@ describe('ModelPicker', () => {
     await userEvent.click(screen.getByRole('button', { name: /claude haiku 4\.5/i }));
 
     // Section headers keep provider names; filter chips are icons (aria-label only).
-    const headers = await screen.findAllByText('Pi');
+    const headers = await screen.findAllByText('Nuncio Engine');
     const cursorHeaders = await screen.findAllByText('Cursor');
     expect(headers.length).toBeGreaterThan(0);
     expect(cursorHeaders.length).toBeGreaterThan(0);
@@ -416,7 +416,7 @@ describe('ModelPicker', () => {
   it('shows a header per group when pi has more than one group', async () => {
     const multiGroupPi: ModelProvider = {
       id: 'pi',
-      name: 'Pi',
+      name: 'Nuncio Engine',
       groups: [
         {
           id: 'g1',
@@ -470,7 +470,7 @@ describe('ModelPicker', () => {
     await userEvent.click(
       screen.getByRole('button', { name: /engine and model: inherit from project · default model/i }),
     );
-    expect(await screen.findByRole('menuitem', { name: /pi provider default/i })).toBeInTheDocument();
+    expect(await screen.findByRole('menuitem', { name: /nuncio engine provider default/i })).toBeInTheDocument();
     expect(screen.queryByTestId('model-picker-provider-submenu')).not.toBeInTheDocument();
   });
 
@@ -490,7 +490,7 @@ describe('ModelPicker', () => {
       />,
     );
 
-    await userEvent.click(screen.getByRole('button', { name: /engine and model: pi · claude haiku 4\.5/i }));
+    await userEvent.click(screen.getByRole('button', { name: /engine and model: nuncio engine · claude haiku 4\.5/i }));
     await userEvent.click(await screen.findByRole('menuitem', { name: /cursor provider default/i }));
 
     expect(onPairChange).toHaveBeenCalledWith('cursor', null);
@@ -513,7 +513,7 @@ describe('ModelPicker', () => {
     );
 
     expect(
-      screen.getByRole('button', { name: /engine and model: pi · ghost-model-9/i }),
+      screen.getByRole('button', { name: /engine and model: nuncio engine · ghost-model-9/i }),
     ).toBeInTheDocument();
     expect(onPairChange).not.toHaveBeenCalled();
   });
@@ -678,7 +678,7 @@ describe('ModelPicker', () => {
       />,
     );
 
-    const pairTrigger = screen.getByRole('button', { name: /engine and model: pi · claude haiku 4\.5/i });
+    const pairTrigger = screen.getByRole('button', { name: /engine and model: nuncio engine · claude haiku 4\.5/i });
     expect(pairTrigger).toHaveAttribute('data-slot', 'model-picker-trigger');
     expect(pairTrigger).toHaveAttribute('data-density', 'compact');
   });

@@ -12,8 +12,10 @@
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
-        }
-      }
+        },
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "bundleIdentifier": "com.lilgroup.nuncio"
     },
     "android": {
       "adaptiveIcon": {
@@ -23,7 +25,12 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "usesCleartextTraffic": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.lilgroup.nuncio",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "output": "static",
@@ -45,11 +52,19 @@
         {
           "cameraPermission": "Nuncio uses the camera to scan the pairing QR code shown on your desktop."
         }
-      ]
+      ],
+      "expo-dev-client"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "a53ce285-2c10-4ddf-81ab-1a44af287d05"
+      }
+    },
+    "owner": "lehuunghia.oscar"
   }
 }

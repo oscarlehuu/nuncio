@@ -1,0 +1,28 @@
+{
+  "cli": { "version": ">= 20.0.0", "appVersionSource": "remote" },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "ios": { "simulator": false },
+      "channel": "development"
+    },
+    "preview": {
+      "distribution": "internal",
+      "channel": "preview"
+    },
+    "production": {
+      "autoIncrement": true,
+      "channel": "production"
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "ascApiKeyPath": "/Users/a1241968/Desktop/Oscar/AppStoreAPI/AuthKey_77G324T46F.p8",
+        "ascApiKeyId": "77G324T46F",
+        "ascApiKeyIssuerId": "4c17d337-1631-45c1-b951-f46eae44269b"
+      }
+    }
+  }
+}

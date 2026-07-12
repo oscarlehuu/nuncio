@@ -13,7 +13,7 @@ vi.mock('../lib/api', async () => {
 const PROVIDERS: ModelProvider[] = [
   {
     id: 'pi',
-    name: 'Pi',
+    name: 'Nuncio Engine',
     groups: [
       {
         id: 'g',
@@ -34,7 +34,7 @@ describe('SubagentModelsSettingsSection', () => {
     render(<SubagentModelsSettingsSection value={null} onUpdate={onUpdate} />);
 
     // Row per provider appears once models load.
-    await screen.findByText('Pi');
+    await screen.findByText('Nuncio Engine');
     // Open the borderless picker (its label starts as "Select model" while unset),
     // then choose a model from the flat panel.
     await userEvent.click(screen.getByRole('button', { name: /select model/i }));
@@ -62,7 +62,7 @@ describe('SubagentModelsSettingsSection', () => {
     );
 
     // The clear affordance only appears once an override is set.
-    const clear = await screen.findByRole('button', { name: /clear pi subagent model/i });
+    const clear = await screen.findByRole('button', { name: /clear nuncio engine subagent model/i });
     await userEvent.click(clear);
 
     // Empty map serializes to '' — the setting reads as unset.
@@ -72,7 +72,7 @@ describe('SubagentModelsSettingsSection', () => {
   it('has no clear affordance when a provider has no override', async () => {
     vi.mocked(fetchModels).mockResolvedValue(PROVIDERS);
     render(<SubagentModelsSettingsSection value={null} onUpdate={vi.fn(async () => {})} />);
-    await screen.findByText('Pi');
-    expect(screen.queryByRole('button', { name: /clear pi subagent model/i })).toBeNull();
+    await screen.findByText('Nuncio Engine');
+    expect(screen.queryByRole('button', { name: /clear nuncio engine subagent model/i })).toBeNull();
   });
 });

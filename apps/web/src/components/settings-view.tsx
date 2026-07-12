@@ -99,8 +99,8 @@ const PROVIDER_METAS: Record<string, ProviderMetaInfo> = {
   },
   pi: {
     id: 'pi',
-    name: 'Pi',
-    description: 'Install or manage the Pi CLI and agent directory',
+    name: 'Nuncio Engine',
+    description: 'Install or manage the Pi CLI and Nuncio Engine agent directory',
     primaryKey: 'PI_AGENT_DIR',
   },
   codex: {
