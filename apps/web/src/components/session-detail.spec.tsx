@@ -453,6 +453,46 @@ describe('SessionDetail', () => {
     expect(onRespondProviderRequest).toHaveBeenCalledWith('req-1', 'approve');
   });
 
+  it('keeps Crew-owned member sessions inspect-only while preserving the transcript', async () => {
+    const crewOwner = { verifyOwner: 'crew' } as unknown as Partial<Session>;
+    const events: SessionEvent[] = [
+      {
+        seq: 1,
+        type: 'provider_request',
+        payload: {
+          requestId: 'req-crew',
+          provider: 'codex',
+          method: 'exec/approval',
+          status: 'pending',
+          params: { command: 'git status' },
+        },
+        createdAt: Date.now(),
+      },
+    ];
+
+    await renderDetail(
+      { ...crewOwner, status: 'RUNNING', provider: 'codex', model: 'codex:gpt-5.5' },
+      events,
+      undefined,
+      {
+        onRename: vi.fn(),
+        onDelete: vi.fn(),
+        onRestore: vi.fn(),
+        onContinueOnMobile: vi.fn(),
+        onRespondProviderRequest: vi.fn(),
+      },
+    );
+
+    expect(screen.getByText('git status')).toBeInTheDocument();
+    expect(screen.getByText(/managed by crew/i)).toBeInTheDocument();
+    expect(screen.getByText(/inspect-only member session/i)).toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: /send|stop session|session actions/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /approve request|approval mode/i })).toBeNull();
+    await userEvent.click(screen.getByTestId('session-title'));
+    expect(screen.queryByTestId('rename-input')).toBeNull();
+  });
+
   it('marks provider approval requests as resolved', async () => {
     const events: SessionEvent[] = [
       {
@@ -897,8 +937,8 @@ describe('SessionDetail', () => {
     expect(screen.getByText('unknown:model-x')).toBeInTheDocument();
   });
 
-  it('shows approval mode in the steer composer for Codex sessions only', async () => {
-    const codexView = await renderDetail(
+  it('does not expose a per-session permission picker for Codex', async () => {
+    await renderDetail(
       { provider: 'codex', model: 'codex:gpt-5.5' },
       NO_EVENTS,
       [
@@ -914,31 +954,6 @@ describe('SessionDetail', () => {
           ],
         },
       ],
-      { approvalMode: 'full-access', onApprovalModeChange: vi.fn() },
-    );
-    const approval = screen.getByRole('button', { name: /approval mode: full access/i });
-    expect(approval).toBeInTheDocument();
-    expect(approval).toHaveAttribute('data-variant', 'ghost');
-    expect(approval).not.toHaveClass('composer-picker-trigger');
-    codexView.unmount();
-
-    await renderDetail(
-      { provider: 'cursor', model: 'cursor:composer-2.5' },
-      NO_EVENTS,
-      [
-        {
-          id: 'cursor',
-          name: 'Cursor',
-          groups: [
-            {
-              id: 'cursor',
-              name: 'Cursor',
-              models: [{ id: 'cursor:composer-2.5', name: 'Composer 2.5' }],
-            },
-          ],
-        },
-      ],
-      { approvalMode: 'full-access', onApprovalModeChange: vi.fn() },
     );
     expect(screen.queryByRole('button', { name: /approval mode/i })).toBeNull();
   });

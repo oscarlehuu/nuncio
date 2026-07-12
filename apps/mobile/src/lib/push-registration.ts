@@ -39,10 +39,33 @@ export async function registerForPush(): Promise<boolean> {
   }
 }
 
-/** sessionId carried in the push payload, for tap-through navigation. */
+export type NotificationTarget =
+  | { kind: 'crew'; taskId: string; runId: string | null }
+  | { kind: 'session'; sessionId: string };
+
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+/** Resolve notification navigation without letting a member-session id hide its CrewTask. */
+export function notificationTargetFromNotification(
+  response: Notifications.NotificationResponse,
+): NotificationTarget | null {
+  const data = response.notification.request.content.data as
+    | { crewTaskId?: unknown; crewRunId?: unknown; sessionId?: unknown }
+    | undefined;
+  const taskId = nonEmptyString(data?.crewTaskId);
+  if (taskId) {
+    return { kind: 'crew', taskId, runId: nonEmptyString(data?.crewRunId) };
+  }
+  const sessionId = nonEmptyString(data?.sessionId);
+  return sessionId ? { kind: 'session', sessionId } : null;
+}
+
+/** sessionId carried in older push payloads, retained for API compatibility. */
 export function sessionIdFromNotification(
   response: Notifications.NotificationResponse,
 ): string | null {
-  const data = response.notification.request.content.data as { sessionId?: unknown } | undefined;
-  return typeof data?.sessionId === 'string' ? data.sessionId : null;
+  const target = notificationTargetFromNotification(response);
+  return target?.kind === 'session' ? target.sessionId : null;
 }

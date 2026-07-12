@@ -2,6 +2,7 @@ import { Global, Injectable, OnModuleDestroy } from '@nestjs/common';
 import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
+import { ensureCrewSchema } from '../crew/persistence/crew-schema';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -20,6 +21,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   provider_thread_id TEXT,
   provider_active_turn_id TEXT,
   provider_state_json TEXT,
+  runtime_policy_json TEXT,
+  verify_owner TEXT NOT NULL DEFAULT 'session',
   forge_provider TEXT,
   pull_request_url TEXT,
   pull_request_number INTEGER,
@@ -102,6 +105,7 @@ export class DatabaseService implements OnModuleDestroy {
     this.db.exec('PRAGMA journal_mode = WAL');
     this.db.exec(SCHEMA);
     this.migrate();
+    ensureCrewSchema(this);
   }
 
   onModuleDestroy() {
@@ -166,6 +170,14 @@ export class DatabaseService implements OnModuleDestroy {
       if (!sessionColumns.some((entry) => entry.name === column)) {
         this.db.exec(`ALTER TABLE sessions ADD COLUMN ${column} TEXT`);
       }
+    }
+
+    if (!sessionColumns.some((column) => column.name === 'runtime_policy_json')) {
+      this.db.exec('ALTER TABLE sessions ADD COLUMN runtime_policy_json TEXT');
+    }
+
+    if (!sessionColumns.some((column) => column.name === 'verify_owner')) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN verify_owner TEXT NOT NULL DEFAULT 'session'");
     }
 
     // Session lineage: tree parentage (parent_session_id / origin_task_id) and
@@ -392,6 +404,13 @@ export class DatabaseService implements OnModuleDestroy {
         session_id TEXT,
         outcome_json TEXT,
         hold_until INTEGER,
+        crew_run_id TEXT,
+        crew_member_key TEXT,
+        crew_phase TEXT,
+        crew_attempt_key TEXT,
+        execution_kind TEXT NOT NULL DEFAULT 'session',
+        runtime_policy_json TEXT,
+        verify_owner TEXT NOT NULL DEFAULT 'session',
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         started_at INTEGER,
@@ -417,6 +436,13 @@ export class DatabaseService implements OnModuleDestroy {
       ['context_json', 'TEXT'],
       ['notify_policy', 'TEXT'],
       ['tag', 'TEXT'],
+      ['crew_run_id', 'TEXT'],
+      ['crew_member_key', 'TEXT'],
+      ['crew_phase', 'TEXT'],
+      ['crew_attempt_key', 'TEXT'],
+      ['execution_kind', "TEXT NOT NULL DEFAULT 'session'"],
+      ['runtime_policy_json', 'TEXT'],
+      ['verify_owner', "TEXT NOT NULL DEFAULT 'session'"],
     ] as const;
 
     for (const [column, type] of taskColumnDefinitions) {
@@ -428,6 +454,10 @@ export class DatabaseService implements OnModuleDestroy {
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_tasks_parent_session
       ON tasks(parent_session_id, created_at)
+    `);
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_tasks_crew_run
+      ON tasks(crew_run_id, created_at)
     `);
 
     this.db.exec(`

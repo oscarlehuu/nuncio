@@ -13,6 +13,7 @@ Nuncio is a **self-hosted, Devin-style web app for delegating tasks to AI agents
 - **Deployment model:** single process on a personal Mac, exposed over **Tailscale HTTPS** so the phone (or friends on the tailnet) can reach it. No VPS, no public domain.
 - **Distribution:** open source — friends/colleagues self-host on their own machines. MIT.
 - **Mental model:** async-first. A session is a self-contained task (not a realtime chat). Create → agent runs in background → stream/review → steer/pause/archive.
+- **Execution modes:** Solo is one user-selected provider session. Crew is a separate durable workspace harness above Tasks/Sessions: one saved profile binds Foreman, Builder, and Reviewer engines while Nuncio owns the fixed workflow, deterministic verify gate, recovery, and authority boundary.
 - **Agent harness is provider-agnostic by design.** Pi SDK is the **inaugural** provider — the architecture is meant to host any agent SDK (Cursor, OpenAI/Claude agents, …) behind one common contract. See [Agent providers](#agent-providers).
 - **Runtime:** Bun (server, build, tests). See [Bun runtime](#bun-runtime).
 
@@ -35,7 +36,7 @@ Nuncio is a **self-hosted, Devin-style web app for delegating tasks to AI agents
 
 Grounding in what exists today:
 
-- **Server (`apps/server`):** `bun test`. Specs are grouped by domain under `apps/server/test/unit/<domain>/` (e.g. `test/unit/agents/`, `test/unit/sessions/`, `test/unit/models/`, `test/unit/db/`) plus `test/unit/app.spec.ts` (HTTP via `supertest`); e2e in `test/e2e/app.e2e-spec.ts`; real-provider integration in `test/integration/`. Run `bun run test` (unit), `bun run test:e2e` (e2e), `bun run test:integration` (real Pi, gated on `~/.pi/agent/auth.json`), and `bun run test:integration:codex` (real Codex app-server, gated on `codex login status`).
+- **Server (`apps/server`):** `bun test`. Specs are grouped by domain under `apps/server/test/unit/<domain>/` (e.g. `test/unit/agents/`, `test/unit/crew/`, `test/unit/sessions/`, `test/unit/models/`, `test/unit/db/`) plus `test/unit/app.spec.ts` (HTTP via `supertest`); e2e in `test/e2e/app.e2e-spec.ts` and `test/e2e/crew.e2e-spec.ts`; real-provider integration in `test/integration/`. Run `bun run test` (unit), `bun run test:e2e` (both e2e suites), `bun run test:integration` (real Pi, gated on `~/.pi/agent/auth.json`), and `bun run test:integration:codex` (real Codex app-server, gated on `codex login status`).
 - **Frontend (`apps/web`):** Vitest (jsdom + Testing Library) is wired — `bun run --filter @nuncio/web test` runs `vitest run`, specs co-located as `*.spec.tsx`. For frontend changes, keep `bun run --filter @nuncio/web build` + `bun run --filter @nuncio/web lint` + `bun run --filter @nuncio/web test` green and verify visual changes against `mockup.html` (and the light/dark toggle). TDD applies end-to-end — write the failing spec first, watch it fail, then implement.
 
 Bugs: write a test that reproduces the bug (red), then fix (green). No bug fix without a regression test. Refactors: keep existing tests green throughout — if a refactor requires changing tests, it isn't a refactor, it's a behavior change; split it.
@@ -185,7 +186,7 @@ Per-workspace (via `bun run --filter`):
 ```bash
 bun run --filter @nuncio/server build            # nest build
 bun run --filter @nuncio/server test             # bun test test/unit/
-bun run --filter @nuncio/server test:e2e         # bun test test/e2e/app.e2e-spec.ts
+bun run --filter @nuncio/server test:e2e         # app + forced-Mock Crew HTTP e2e
 bun run --filter @nuncio/server test:integration # bun test test/integration/ (real Pi, opt-in)
 bun run --filter @nuncio/server test:integration:codex # real Codex app-server smoke
 bun run --filter @nuncio/server test:integration:claude # real Claude Agent SDK smoke (opt-in)
@@ -284,6 +285,15 @@ apps/
         sessions.service.ts              orchestrator; injects repos + AgentRegistry
         sessions.module.ts               imports AgentsModule + SessionsPersistenceModule
         sessions.persistence.module.ts   exports repositories (shared by Sessions + Agents modules)
+      crew/              provider-neutral Quality Crew workspace harness
+        domain/                 CrewRun reducer, fixed tuple/event contract, typed results
+        persistence/            profiles, tasks, runs/events, member sessions/results, artifacts, writer leases
+        api/crew.controller.ts  profile/task/run REST boundary; no generic transition endpoint
+        crew-runner.service.ts  drives PLAN → BUILD → VERIFY → REVIEW → SYNTHESIZE → DONE
+        crew-recovery.service.ts  reconciles durable runs, workspaces, members, and interrupted verification
+        crew-context.service.ts  bounded full/delta role envelopes; never shares hidden reasoning
+        crew-runtime-tools.service.ts  structured submit/read-artifact tools with live authority validation
+        crew-verifier.service.ts  Nuncio-owned, full-HEAD-bound command evidence
       models/            model catalog (thin: aggregates listModels() across available providers)
         models.types.ts        ModelProviderDto/ModelGroupDto/ModelItemDto
         models.static.ts       STATIC_MODEL_PROVIDERS (Pi fallback when no auth)
@@ -313,7 +323,8 @@ apps/
       db/                DatabaseService (Global, bun:sqlite, schema bootstrap + guarded ALTER migration; exposes dataDir)
     test/
       unit/<domain>/     bun test unit specs grouped by domain (agents/, sessions/, models/, db/) + app.spec.ts
-      e2e/app.e2e-spec.ts        e2e over HTTP (simulated cursor provider; run via bun run test:e2e)
+      e2e/app.e2e-spec.ts        existing HTTP e2e (simulated Cursor)
+      e2e/crew.e2e-spec.ts       full fixed workflow in a real worktree (forced Mock)
       integration/pi-agent.integration.spec.ts  real-Pi integration (gated on ~/.pi/agent/auth.json; opt-in)
       integration/codex-agent.integration.spec.ts real-Codex integration (gated on codex login; opt-in)
       integration/claude-agent.integration.spec.ts real-Claude Agent SDK integration (gated on a logged-in Claude Code / ANTHROPIC_API_KEY; opt-in via NUNCIO_CLAUDE_INTEGRATION=1)
@@ -324,6 +335,7 @@ apps/
       components/
         ui/              shadcn primitives (Radix-based) — generated, rarely hand-edited
         browser-panel, home-view, session-detail, sidebar, model-picker, project-picker, branch-picker, status-dot  (feature components)
+        crew/             Solo/Crew mode, profiles, immutable run history, progress, gates, members, outcomes
         settings-view, changelog-view                                        (full-page views reached from sidebar footer)
       App.tsx            top-level state + view routing (home / session / settings / changelog)
       vite.config.ts     includes the `virtual:changelog` plugin (loads root CHANGELOG.md at build time)
@@ -332,11 +344,11 @@ apps/
       main.js            supervises daemon, owns native BrowserView dock + node-pty terminal IPC
       preload.js         exposes narrow `window.nuncioDesktop` bridge (browser, terminal, notify)
   mobile/                Expo app (SDK 57, Expo Router, NativeWind) — pairing, session list/create, WS transcript + steer, push
-    src/app/             _layout, index (list), new, pairing, session/[id]
+    src/app/             _layout, index (list), new, pairing, session/[id], crew/[taskId]
     src/lib/             connection-store (SecureStore pairing), use-session-transcript (WS + AppState resync), push-registration
     tailwind-colors.js   GENERATED hex parity artifact of core design tokens (theme-tokens.spec.ts enforces)
 packages/
-  core/                  @nuncio/core — portable client layer shared by web + mobile: api.ts + model-*/handoff-*/transcript
+  core/                  @nuncio/core — portable client layer shared by web + mobile: api.ts + crew/model/handoff/transcript
                          modules (moved from apps/web/src/lib, specs moved too), http.ts (injectable baseUrl/headers/fetch),
                          session-relay-client.ts (WS subscribe/steer, gap-free resume), design-tokens.ts (oklch source,
                          design-tokens.spec.ts pins it to apps/web/src/index.css)
@@ -374,9 +386,27 @@ ERROR   → RUNNING | IDLE | ARCHIVED
 
 `ARCHIVED` is recoverable: `restore()` transitions it back to `IDLE` (the agent loop was disposed at archive time, so the next steer spins up a fresh provider session; the event log keeps the prior conversation). Permanent removal goes through `delete()`, which is restricted to `ARCHIVED` sessions — archive first, then delete. `archive()` and `delete()` both dispose the session's agent handle via `agents.get(session.provider).dispose(id)` (routes through the provider); `delete()` also drops the in-memory SSE bus and cascades the event log via a single transaction.
 
+### Crew workspace harness
+
+Crew is not another Session FSM and does not merge provider transcripts. `CrewTask` is the stable user request; each `CrewRun` is an immutable execution revision with its own profile snapshot, append-only events, bounded shared context, members, evidence, and exact Git head. Existing Task rows and provider Sessions are lower-level member attempts. Crew-owned rows are hidden from public task/session lists; member Session detail/events remain readable, but every public mutation path (including WS steer) rejects them.
+
+The only MVP workflow is:
+
+```text
+PLAN → BUILD → VERIFY → REVIEW → SYNTHESIZE → DONE
+```
+
+The Crew reducer is the sole state authority. Foreman may propose a plan or material clarification; Builder is the only member granted the one writer lease; Nuncio checkpoints the settled Builder workspace and runs the frozen project verify command; Reviewer is read-only and judges a deterministic current-head diff; Foreman synthesizes only after current green verify and blocker-free review. Review warnings remain visible but non-blocking. Separate verify/review retry caps default to 2. There is no exception, waived gate, optional gate, approval, publish, push, PR, merge, deploy, or arbitrary-DAG path in MVP.
+
+Every role binding is frozen in the run snapshot and must advertise the exact runtime policy (`read-only/disabled-network` or `workspace-write/disabled-network`). Pi, Codex, and Claude adapters enforce those policies through their native tool/sandbox surfaces; no provider/model fallback is silent. The same healthy Builder session continues across feedback rounds. A strict profile may create a fresh final Reviewer after a review loop. Terminal runs never reopen: a user change creates a successor from the reconciled prior full HEAD and may reuse only compatible healthy Foreman/Builder sessions in the same retained worktree.
+
+Recovery replays the aggregate, validates canonical path/branch/full HEAD/cleanliness, and idempotently reconciles the entire Builder settlement chain (durable intent → checkpoint → result → lease release) before resuming the same provider thread or recording a linked fresh member. A crash-created deterministic worktree is adopted only at the exact frozen base SHA, never at an unexpected descendant. It never resets, checks out over, or guesses around a dirty/diverged workspace. Redacted verify/diff artifacts are retained up to explicit safety caps (overflow fails closed); list APIs expose bounded summaries while detail APIs expose only sanitized metadata and bounded structured outcomes. See [`docs/crew-workspace-harness.md`](docs/crew-workspace-harness.md) and [`docs/crew-run-authority-and-state-machine.md`](docs/crew-run-authority-and-state-machine.md).
+
+All Crew controls and runner transitions share one per-run serialization chain. Pause/cancel abort Verify first, then recheck exact revision, quiesce tasks/provider handles, release the writer lease, and only then persist the control event. Never enqueue a member outside that chain, accept generic task/multitask mutations under a Crew-owned Session, or turn an owner-aborted/infrastructure Verify artifact into a failed gate.
+
 ### Agent providers
 
-The harness is provider-agnostic: an `AgentProvider` runs/steers/disposes a session and knows its own model catalog. **Pi is the inaugural provider**, with Codex and Cursor registered alongside it; future SDKs should implement the same contract.
+The harness is provider-agnostic: an `AgentProvider` runs/steers/disposes a session and knows its own model catalog. **Pi is the inaugural provider**, with Codex, Cursor, and Claude registered alongside it; future SDKs should implement the same contract.
 
 **Generic-first checklist — run it before writing ANY provider/engine code:**
 
@@ -387,7 +417,7 @@ The harness is provider-agnostic: an `AgentProvider` runs/steers/disposes a sess
 
 **Today (Pi + Codex + Cursor + Claude, abstracted):** the `apps/server/src/agents/` module defines the `AgentProvider` interface (`agents.types.ts`), a `BaseAgentProvider` abstract class (`agents.base-provider.ts`) using the template-method pattern, and an `AgentRegistry` (`agents.registry.ts`). `BaseAgentProvider.run()`/`steer()` own the shared orchestration (set RUNNING → push user/steer message → `executePrompt()` → set IDLE, with unified error handling); concrete providers implement only `executePrompt()`. `PiAgentProvider` runs the Pi SDK in-process and keeps a `Map<sessionId, PiSessionHandle>` alive after the first run so `steer()` reuses the same Pi session; it token-streams via `session.subscribe()` `text_delta` → `assistant_delta`. `CodexAgentProvider` runs the local `codex app-server` over stdio, persists `provider_thread_id`/`provider_active_turn_id`, maps `item/agentMessage/delta` → `assistant_delta`, and resumes stored Codex threads on follow-up. `CursorAgentProvider` runs `@cursor/sdk` local runtime in-process (`await Agent.create` + `send({ onDelta })` + `wait`), token-streams via `onDelta` `text-delta` → `assistant_delta` (and `tool-call-started`/`completed` → `tool_start`/`tool_end`), and reuses the same agent handle per session for steer. `ClaudeAgentProvider` runs the Claude Agent SDK's `query()` in streaming-input mode (the SDK spawns and manages a bundled Claude Code CLI subprocess per session), streams `stream_event` text/thinking deltas → `assistant_delta`/`thinking_delta`, maps `canUseTool` → Nuncio approval cards, and persists the SDK `session_id` as `provider_thread_id` for cwd-scoped resume. The `EventEmitter` type lives in `agents.types.ts`. See [Token streaming](#token-streaming-per-provider-delta-sources) for the per-provider delta sources behind the shared event contract.
 
-**Claude provider quirks.** Auth is CLI-first, disable-not-prompt: availability rides a logged-in Claude Code keychain (the SDK's bundled binary answers `auth status`, no system install required) or an explicit `ANTHROPIC_API_KEY` (which takes precedence and skips the login probe) — Nuncio never presents an OAuth flow. Resume is **cwd-scoped**: always pass the session's immutable workspace as `cwd`; a moved/evicted workspace surfaces as a clean cannot-resume error, not a crash. `settingSources` is empty by default so no `~/.claude` plugins/hooks/`CLAUDE.md` leak into a session (documented toggle for later). Permission mode defaults to `acceptEdits` via `NUNCIO_CLAUDE_PERMISSION_MODE` (`default`/`acceptEdits`/`plan`/`bypassPermissions`), with `canUseTool` gating everything else — never bare-list a tool in `allowedTools` (that shadows the callback). Images are supported (base64 blocks on the user message). Override the CLI path with `NUNCIO_CLAUDE_BIN`. The SDK `Query` is a single-pass AsyncGenerator — the provider drives one stable iterator across turns (never a fresh `for await` per turn, which would finalize the generator and silence follow-up steers); `dispose()` aborts the controller to reap the resident subprocess.
+**Claude provider quirks.** Auth is CLI-first, disable-not-prompt: availability rides a logged-in Claude Code keychain (the SDK's bundled binary answers `auth status`, no system install required) or an explicit `ANTHROPIC_API_KEY` (which takes precedence and skips the login probe) — Nuncio never presents an OAuth flow. Resume is **cwd-scoped**: always pass the session's immutable workspace as `cwd`; a moved/evicted workspace surfaces as a clean cannot-resume error, not a crash. `settingSources` is empty by default so no `~/.claude` plugins/hooks/`CLAUDE.md` leak into a session (documented toggle for later). Trusted workspaces default to `bypassPermissions` via `NUNCIO_CLAUDE_PERMISSION_MODE` (`default`/`acceptEdits`/`plan`/`bypassPermissions`); approval-bearing overrides use `canUseTool` to route pending actions through the shared transcript cards — never bare-list a tool in `allowedTools` (that shadows the callback). Images are supported (base64 blocks on the user message). Override the CLI path with `NUNCIO_CLAUDE_BIN`. The SDK `Query` is a single-pass AsyncGenerator — the provider drives one stable iterator across turns (never a fresh `for await` per turn, which would finalize the generator and silence follow-up steers); `dispose()` aborts the controller to reap the resident subprocess.
 
 `SessionsService` injects `AgentRegistry` and resolves the provider **per-session** from `sessions.provider` on `create`/`steer`/`archive`. `CreateSessionDto.provider?` defaults to `registry.defaultId()` (cursor if `CURSOR_API_KEY` set, else codex if the CLI is logged in, else pi if authed; throws `503` when none is configured); unavailable providers are rejected at create time. `ModelsService` is thin — it aggregates `listModels()` across `registry.available()`. See [Agent provider abstraction](#agent-provider-abstraction) for what shipped vs. what remains.
 
@@ -612,7 +642,7 @@ Nuncio runs on **Bun** (≥ 1.3) — server, build, and tests. Bun replaces npm,
 
 **better-sqlite3 → bun:sqlite:** Bun blocks `better-sqlite3` at `dlopen` ([oven-sh/bun#4290](https://github.com/oven-sh/bun/issues/4290)), so the server uses the built-in `bun:sqlite`. `DatabaseService` does `require('bun:sqlite')` (tsc-friendly without bun-types; `db` typed `any`), opens `data/nuncio.db`, sets WAL via `db.exec('PRAGMA journal_mode = WAL')`. The repositories use the same `prepare/all/get/run` API. **One API difference:** `bun:sqlite` named params require a prefix in the object key (`{@id}`/`{$id}`), unlike better-sqlite3's unprefixed `{id}` — Nuncio uses **positional `?`** to avoid this; do not reintroduce named `@param` with unprefixed keys (it silently binds NULL under bun:sqlite).
 
-**jest → bun test:** `jest`/`ts-jest` removed; tests run via `bun test`. `@types/jest` is kept for test-global typing (`bun test` is jest-API-compatible at runtime: `describe/it/expect/beforeAll/...`). Layout: `bun test test/unit/` (unit), `bun run test:e2e` (e2e over HTTP, simulated cursor provider), `bun run test:integration` (real-Pi, gated on `~/.pi/agent/auth.json`, opt-in), `bun run test:integration:codex` (real Codex app-server, gated on `codex login status`, opt-in).
+**jest → bun test:** `jest`/`ts-jest` removed; tests run via `bun test`. `@types/jest` is kept for test-global typing (`bun test` is jest-API-compatible at runtime: `describe/it/expect/beforeAll/...`). Layout: `bun test test/unit/` (unit), `bun run test:e2e` (existing simulated-Cursor HTTP suite plus forced-Mock Crew workflow), `bun run test:integration` (real-Pi, gated on `~/.pi/agent/auth.json`, opt-in), `bun run test:integration:codex` (real Codex app-server, gated on `codex login status`, opt-in).
 
 **Scripts:** workspaces use `bun run --filter @nuncio/<pkg> <script>` (not npm `-w`). Server `dev`/`start` run TS through `scripts/run-server.mjs`, which resolves the shared env file before spawning Bun (`bun --watch src/main.ts` / `bun src/main.ts`); `start:prod` is `bun run dist/main.js`. **Do not use `node dist/main`** — `bun:sqlite` only exists in the Bun runtime. `nest build` (tsc) stays for the `build` step (runtime-agnostic).
 
@@ -716,10 +746,10 @@ Minimal web GUI for coding agents (Codex, Claude, Cursor, OpenCode). Synara fork
 - This `github-gitlab-integration` worktree uses non-conflicting ports API 3002 / web 5175 via a gitignored root `.env` (shared `NUNCIO_DATA_DIR=~/.nuncio/data`); start with `bun --env-file=./.env run dev` so Vite picks up the port/proxy. Main checkout owns 3000/5173, cline-sdk 3001/5174.
 - `gh` and `glab` CLIs are installed and authenticated on this machine (gh as `oscarlehuu`, glab as `oscar.lehuu`); forge providers fall back to CLI tokens (`gh auth token`, `glab auth status -t`) when no PAT is set.
 - Forge integration shipped: `apps/server/src/forges/` module (ForgeProvider/BaseForgeProvider/ForgeRegistry mirroring the agent triad), `GITHUB_*`/`GITLAB_*` settings keys, `GET /api/forges` status, session-scoped git + PR routes, and signature-verified `POST /api/webhooks/forge/:provider`.
-- Pi SDK is `@earendil-works/pi-coding-agent@^0.80.2`; v0.80.2 exposes `session.sessionFile` getter, `SessionManager.open/create/inMemory`, `abort()`, `setModel()`, `setThinkingLevel()`, and `PromptOptions.images`/`steer(text, images?)`. `getDefaultSessionDir` is NOT a public export — omit `sessionManager` in `createAgentSession` for new sessions so the SDK builds the dir under the configured `agentDir`.
+- Pi SDK is `@earendil-works/pi-coding-agent@^0.80.6`; v0.80.6 exposes `session.sessionFile` getter, `SessionManager.open/create/inMemory`, `abort()`, `setModel()`, `setThinkingLevel()`, and `PromptOptions.images`/`steer(text, images?)`. `getDefaultSessionDir` is NOT a public export — omit `sessionManager` in `createAgentSession` for new sessions so the SDK builds the dir under the configured `agentDir`.
 - Synara reference repo is cloned at sibling `Oscar/synara` (not in-repo).
 - Pi provider `cliproxyapi` (`anthropic-messages`, `forceAdaptiveThinking: true`) routes Claude (`claude-opus-4-8`, `claude-sonnet-4-6`) via CLIProxyAPI, configured in `~/.pi/agent/models.json`; user's default is `cliproxyapi/claude-opus-4-8`.
-- Pi has no `max` thinking level (ceiling `xhigh`; levels `off/minimal/low/medium/high/xhigh`). Reaching Anthropic `max` effort needs a per-model remap (Opus 4.8 supports low/medium/high/xhigh/max; Sonnet 4.6 supports low/medium/high/max, no xhigh).
+- Pi thinking levels are `off/minimal/low/medium/high/xhigh/max`. Standard levels through `high` are available unless explicitly mapped to `null`; extended `xhigh` and `max` require explicit non-null `thinkingLevelMap` entries. Pi `max` remains a single-agent thinking level and must never be translated to Codex `ultra`, which activates multi-agent delegation.
 - `session.setModel()` persists the default model to the real `~/.pi/agent/settings.json` (global config shared with the `pi` CLI) — by design, but it mutates global state.
 - Nuncio's phone client is a thin client (agent runs on the Mac; the phone streams the WS relay + sends steer over Tailscale). The native mobile track SHIPPED as `apps/mobile` (Expo) — it supersedes the earlier "PWA is the mobile app" position; push notifications (the reason to go native) ride Expo's push service via the server-side device-token registry. The PWA remains as the remote web surface.
 - The user's active Pi agent config (`~/.pi/agent`) has Foreman removed — only the `AskUserQuestion` extension is kept, and `~/.pi/agent/AGENTS.md` is now a minimal AskUserQuestion-only file (backups under `~/.pi/agent/backups/`).

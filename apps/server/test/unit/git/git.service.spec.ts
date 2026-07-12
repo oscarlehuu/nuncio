@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { DatabaseModule } from '../../../src/db/database.module';
@@ -16,9 +16,27 @@ async function runGitAsync(cwd: string, args: string[]): Promise<void> {
   }
 }
 
-async function initRepo(dir: string, branch = 'main'): Promise<void> {
+async function readGitAsync(cwd: string, args: string[]): Promise<string> {
+  const proc = Bun.spawn(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });
+  const code = await proc.exited;
+  const stdout = (await new Response(proc.stdout).text()).trim();
+  if (code !== 0) {
+    const stderr = await new Response(proc.stderr).text();
+    throw new Error(`git ${args.join(' ')} failed: ${stderr}`);
+  }
+  return stdout;
+}
+
+async function initRepo(
+  dir: string,
+  branch = 'main',
+  objectFormat: 'sha1' | 'sha256' = 'sha1',
+): Promise<void> {
   mkdirSync(dir, { recursive: true });
-  await runGitAsync(dir, ['init', '-b', branch]);
+  await runGitAsync(dir, [
+    'init', '-b', branch,
+    ...(objectFormat === 'sha256' ? ['--object-format=sha256'] : []),
+  ]);
   writeFileSync(join(dir, 'README.md'), '# test\n');
   await runGitAsync(dir, ['add', 'README.md']);
   await runGitAsync(dir, ['config', 'user.email', 'test@nuncio.local']);
@@ -81,6 +99,66 @@ describe('GitService', () => {
     const branches = await service.listBranches(repoA);
     expect(branches.some((b) => b.name === 'main')).toBe(true);
     expect(branches.find((b) => b.name === 'main')?.isDefault).toBe(true);
+  });
+
+  it('listBranches includes qualified remote-only refs without exposing remote HEAD', async () => {
+    const head = await readGitAsync(repoA, ['rev-parse', 'HEAD']);
+    await runGitAsync(repoA, ['update-ref', 'refs/remotes/origin/main', head]);
+    await runGitAsync(repoA, ['update-ref', 'refs/remotes/origin/feature/remote', head]);
+    await runGitAsync(repoA, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
+
+    const branches = await service.listBranches(repoA);
+
+    expect(branches.map((branch) => branch.name)).toEqual([
+      'main',
+      'origin/feature/remote',
+    ]);
+    expect(branches.some((branch) => branch.name === 'origin/HEAD')).toBe(false);
+    expect(branches.find((branch) => branch.name === 'main')).toMatchObject({
+      isCurrent: true,
+      isDefault: true,
+    });
+  });
+
+  it('listBranches marks the symbolic default for a non-origin remote', async () => {
+    const repo = join(rootsDir, 'remote-default', 'project');
+    await initRepo(repo);
+    const head = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+    await runGitAsync(repo, ['update-ref', 'refs/remotes/upstream/feature', head]);
+    await runGitAsync(repo, ['update-ref', 'refs/remotes/upstream/main', head]);
+    await runGitAsync(repo, ['symbolic-ref', 'refs/remotes/upstream/HEAD', 'refs/remotes/upstream/main']);
+    await runGitAsync(repo, ['checkout', '--detach', head]);
+    await runGitAsync(repo, ['branch', '-D', 'main']);
+
+    const branches = await service.listBranches(repo);
+
+    expect(branches.map((branch) => branch.name)).toEqual([
+      'upstream/feature',
+      'upstream/main',
+    ]);
+    expect(branches.find((branch) => branch.name === 'upstream/main')).toMatchObject({
+      isCurrent: false,
+      isDefault: true,
+    });
+    expect(branches.find((branch) => branch.name === 'upstream/feature')?.isDefault).toBe(false);
+  });
+
+  it('listBranches keeps a remote tracking ref when it diverges from its local branch', async () => {
+    const repo = join(rootsDir, 'divergent-remote', 'project');
+    await initRepo(repo);
+    await runGitAsync(repo, ['checkout', '-b', 'remote-newer']);
+    writeFileSync(join(repo, 'remote.txt'), 'newer remote commit\n');
+    await runGitAsync(repo, ['add', 'remote.txt']);
+    await runGitAsync(repo, ['commit', '-m', 'remote advances']);
+    const remoteHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+    await runGitAsync(repo, ['checkout', 'main']);
+    await runGitAsync(repo, ['branch', '-D', 'remote-newer']);
+    await runGitAsync(repo, ['update-ref', 'refs/remotes/origin/main', remoteHead]);
+    await runGitAsync(repo, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
+
+    const branches = await service.listBranches(repo);
+
+    expect(branches.map((branch) => branch.name)).toEqual(['main', 'origin/main']);
   });
 
   it('listBranches resolves subdir to repo root via rev-parse', async () => {
@@ -449,4 +527,454 @@ describe('GitService', () => {
       expect(info).toEqual({ host: 'github.com', owner: 'octo', repo: 'nuncio' });
     });
   });
+
+  describe('Crew workspace boundary and checkpoint', () => {
+    let repo: string;
+
+    beforeEach(async () => {
+      repo = mkdtempSync(join(tmpdir(), 'nuncio-crew-boundary-'));
+      await initRepo(repo);
+    });
+
+    afterEach(() => {
+      rmSync(repo, { recursive: true, force: true });
+    });
+
+    it('reports canonical path, branch, full HEAD, cleanliness, and ancestry', async () => {
+      const initialHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+      writeFileSync(join(repo, 'next.txt'), 'next\n');
+      await runGitAsync(repo, ['add', 'next.txt']);
+      await runGitAsync(repo, ['commit', '-m', 'next']);
+
+      const result = await service.inspectBoundary(repo, {
+        expectedBranch: 'main',
+        expectedAncestorHead: initialHead,
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        exists: true,
+        symlink: false,
+        canonicalPath: realpathSync.native(repo),
+        branch: 'main',
+        clean: true,
+        reachable: true,
+        reason: null,
+      });
+      expect(result.fullHead).toMatch(/^[0-9a-f]{40}$/);
+    });
+
+    it('returns structured failures for missing, symlinked, and wrong-branch workspaces', async () => {
+      const missing = await service.inspectBoundary(join(repo, 'missing'));
+      expect(missing).toMatchObject({ ok: false, exists: false, reason: 'missing' });
+
+      const link = `${repo}-link`;
+      symlinkSync(repo, link, 'dir');
+      try {
+        const symlinked = await service.inspectBoundary(link);
+        expect(symlinked).toMatchObject({ ok: false, exists: true, symlink: true, reason: 'symlink' });
+      } finally {
+        rmSync(link, { force: true });
+      }
+
+      const wrongBranch = await service.inspectBoundary(repo, 'develop');
+      expect(wrongBranch).toMatchObject({
+        ok: false,
+        exists: true,
+        branch: 'main',
+        reason: 'branch-mismatch',
+      });
+    });
+
+    it('rejects a workspace reached through a symlinked parent component', async () => {
+      const linkedParent = `${repo}-parent-link`;
+      symlinkSync(resolve(repo, '..'), linkedParent, 'dir');
+      try {
+        const result = await service.inspectBoundary(join(linkedParent, repo.split('/').at(-1)!));
+        expect(result).toMatchObject({
+          ok: false,
+          exists: true,
+          symlink: true,
+          reason: 'symlink',
+        });
+      } finally {
+        rmSync(linkedParent, { force: true });
+      }
+    });
+
+    it('marks a workspace unreachable when HEAD diverges from the recorded ancestor', async () => {
+      writeFileSync(join(repo, 'main-only.txt'), 'main\n');
+      await runGitAsync(repo, ['add', 'main-only.txt']);
+      await runGitAsync(repo, ['commit', '-m', 'main only']);
+      const mainHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+      const rootHead = await readGitAsync(repo, ['rev-parse', 'HEAD^']);
+      await runGitAsync(repo, ['checkout', '-b', 'side', rootHead]);
+      writeFileSync(join(repo, 'side-only.txt'), 'side\n');
+      await runGitAsync(repo, ['add', 'side-only.txt']);
+      await runGitAsync(repo, ['commit', '-m', 'side only']);
+
+      const result = await service.inspectBoundary(repo, { expectedAncestorHead: mainHead });
+      expect(result).toMatchObject({
+        ok: false,
+        branch: 'side',
+        reachable: false,
+        reason: 'head-diverged',
+      });
+    });
+
+    it('checkpoints dirty workspace changes with a deterministic local commit and full SHA', async () => {
+      writeFileSync(join(repo, 'crew-output.txt'), 'result\n');
+
+      const checkpoint = await service.checkpoint(repo, 'crew: builder checkpoint');
+
+      expect(checkpoint).toMatchObject({ committed: true, clean: true });
+      expect(checkpoint.fullHead).toMatch(/^[0-9a-f]{40}$/);
+      expect(await readGitAsync(repo, ['show', '--format=%s', '--no-patch', 'HEAD']))
+        .toBe('crew: builder checkpoint');
+
+      await expect(service.checkpoint(repo, 'unused clean checkpoint')).resolves.toEqual({
+        fullHead: checkpoint.fullHead,
+        clean: true,
+        committed: false,
+      });
+    });
+
+    it('rejects a sensitive path already committed by the Builder in the exact descendant range', async () => {
+      const fromHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+      writeFileSync(join(repo, '.env'), 'DATABASE_PASSWORD=do-not-commit\n');
+      await runGitAsync(repo, ['add', '.env']);
+      await runGitAsync(repo, ['commit', '-m', 'builder self-commit']);
+      const toHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+
+      await expect(validateCheckpointRange(service, repo, fromHead, toHead))
+        .rejects.toThrow('Sensitive paths');
+    });
+
+    it('rejects high-confidence secret content in an ordinary self-committed file', async () => {
+      const fromHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+      const secret = `sk-proj-${'A1b2C3d4'.repeat(8)}`;
+      writeFileSync(join(repo, 'src-config.ts'), `export const apiKey = '${secret}';\n`);
+      await runGitAsync(repo, ['add', 'src-config.ts']);
+      await runGitAsync(repo, ['commit', '-m', 'builder source commit']);
+      const toHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+
+      const message = await validateCheckpointRange(service, repo, fromHead, toHead).then(
+        () => 'unexpected success',
+        (error: unknown) => error instanceof Error ? error.message : String(error),
+      );
+      expect(message).toContain('Potential secret content');
+      expect(message).toContain('src-config.ts');
+      expect(message).not.toContain(secret);
+    });
+
+    it('rejects a high-confidence secret retained only in the direct Builder commit message', async () => {
+      const fromHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+      const secret = `sk-proj-${'A1b2C3d4'.repeat(8)}`;
+      writeFileSync(join(repo, 'safe-message-output.ts'), "export const result = 'safe';\n");
+      await runGitAsync(repo, ['add', 'safe-message-output.ts']);
+      await runGitAsync(repo, ['commit', '-m', `builder note ${secret}`]);
+      const toHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+
+      const message = await validateCheckpointRange(service, repo, fromHead, toHead).then(
+        () => 'unexpected success',
+        (error: unknown) => error instanceof Error ? error.message : String(error),
+      );
+      expect(message).toContain('Potential secret content');
+      expect(message).toContain('commit message');
+      expect(message).not.toContain(secret);
+    });
+
+    it('fails closed for a self-committed symlink or an oversized descendant blob', async () => {
+      let fromHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+      symlinkSync('../outside-workspace', join(repo, 'linked-output'));
+      await runGitAsync(repo, ['add', 'linked-output']);
+      await runGitAsync(repo, ['commit', '-m', 'builder symlink commit']);
+      let toHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+      await expect(validateCheckpointRange(service, repo, fromHead, toHead))
+        .rejects.toThrow('could not safely inspect');
+
+      rmSync(join(repo, 'linked-output'));
+      await runGitAsync(repo, ['add', 'linked-output']);
+      await runGitAsync(repo, ['commit', '-m', 'remove symlink']);
+      fromHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+      writeFileSync(join(repo, 'oversized-output.txt'), 'x'.repeat(1_048_577));
+      await runGitAsync(repo, ['add', 'oversized-output.txt']);
+      await runGitAsync(repo, ['commit', '-m', 'builder oversized commit']);
+      toHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+      await expect(validateCheckpointRange(service, repo, fromHead, toHead))
+        .rejects.toThrow('could not safely inspect');
+    });
+
+    it('validates only a clean current descendant range and accepts bounded ordinary blobs', async () => {
+      const fromHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+      writeFileSync(join(repo, 'safe-output.ts'), "export const status = 'green';\n");
+      await runGitAsync(repo, ['add', 'safe-output.ts']);
+      await runGitAsync(repo, ['commit', '-m', 'builder safe commit']);
+      const toHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+
+      await expect(validateCheckpointRange(service, repo, fromHead, toHead)).resolves.toBeUndefined();
+      await expect(validateCheckpointRange(service, repo, fromHead, fromHead))
+        .rejects.toThrow('boundary');
+      writeFileSync(join(repo, 'dirty-after-head.txt'), 'not committed\n');
+      await expect(validateCheckpointRange(service, repo, fromHead, toHead))
+        .rejects.toThrow('boundary');
+    });
+
+    it('accepts a clean deletion-only descendant range with no final blobs to scan', async () => {
+      const fromHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+      rmSync(join(repo, 'README.md'));
+      await runGitAsync(repo, ['add', 'README.md']);
+      await runGitAsync(repo, ['commit', '-m', 'builder deletion commit']);
+      const toHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+
+      await expect(validateCheckpointRange(service, repo, fromHead, toHead)).resolves.toBeUndefined();
+    });
+
+    it('rejects add-then-delete secrets retained in multi-commit Builder history', async () => {
+      const fromHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+      const secret = `sk-proj-${'A1b2C3d4'.repeat(8)}`;
+      writeFileSync(join(repo, 'temporary-secret.ts'), `export const token = '${secret}';\n`);
+      await runGitAsync(repo, ['add', 'temporary-secret.ts']);
+      await runGitAsync(repo, ['commit', '-m', 'builder adds secret']);
+      rmSync(join(repo, 'temporary-secret.ts'));
+      await runGitAsync(repo, ['add', 'temporary-secret.ts']);
+      await runGitAsync(repo, ['commit', '-m', 'builder deletes secret']);
+      const toHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+
+      await expect(validateCheckpointRange(service, repo, fromHead, toHead))
+        .rejects.toThrow('single linear commit');
+    });
+
+    it('rejects nonlinear or merged Builder history instead of scanning only the final tree', async () => {
+      const fromHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+      await runGitAsync(repo, ['checkout', '-b', 'builder-side']);
+      writeFileSync(join(repo, 'side.ts'), 'export const side = true;\n');
+      await runGitAsync(repo, ['add', 'side.ts']);
+      await runGitAsync(repo, ['commit', '-m', 'builder side commit']);
+      await runGitAsync(repo, ['checkout', 'main']);
+      writeFileSync(join(repo, 'main.ts'), 'export const main = true;\n');
+      await runGitAsync(repo, ['add', 'main.ts']);
+      await runGitAsync(repo, ['commit', '-m', 'builder main commit']);
+      await runGitAsync(repo, ['merge', '--no-ff', 'builder-side', '-m', 'builder merge']);
+      const toHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+
+      await expect(validateCheckpointRange(service, repo, fromHead, toHead))
+        .rejects.toThrow('single linear commit');
+    });
+
+    it('validates the actual commit graph instead of a Builder-controlled replacement ref', async () => {
+      const fromHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+      const secret = `sk-proj-${'A1b2C3d4'.repeat(8)}`;
+      writeFileSync(join(repo, 'replaced-secret.ts'), `export const token = '${secret}';\n`);
+      await runGitAsync(repo, ['add', 'replaced-secret.ts']);
+      await runGitAsync(repo, ['commit', '-m', 'builder secret commit']);
+      rmSync(join(repo, 'replaced-secret.ts'));
+      await runGitAsync(repo, ['add', 'replaced-secret.ts']);
+      await runGitAsync(repo, ['commit', '-m', 'builder delete commit']);
+      const toHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+      const finalTree = await readGitAsync(repo, ['rev-parse', `${toHead}^{tree}`]);
+      const replacement = await readGitAsync(repo, [
+        'commit-tree', finalTree, '-p', fromHead, '-m', 'conceal Builder history',
+      ]);
+      await runGitAsync(repo, ['replace', toHead, replacement]);
+
+      await expect(validateCheckpointRange(service, repo, fromHead, toHead))
+        .rejects.toThrow('single linear commit');
+    });
+
+    it('validates a direct SHA-256 descendant with 64-character object ids', async () => {
+      rmSync(repo, { recursive: true, force: true });
+      await initRepo(repo, 'main', 'sha256');
+      const fromHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+      writeFileSync(join(repo, 'safe-sha256.ts'), "export const result = 'safe';\n");
+      await runGitAsync(repo, ['add', 'safe-sha256.ts']);
+      await runGitAsync(repo, ['commit', '-m', 'builder sha256 commit']);
+      const toHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+
+      expect(fromHead).toHaveLength(64);
+      expect(toHead).toHaveLength(64);
+      await expect(validateCheckpointRange(service, repo, fromHead, toHead)).resolves.toBeUndefined();
+    });
+
+    it('refuses to commit without repository-local identity', async () => {
+      await runGitAsync(repo, ['config', '--local', '--unset', 'user.name']);
+      await runGitAsync(repo, ['config', '--local', '--unset', 'user.email']);
+      writeFileSync(join(repo, 'unowned.txt'), 'no identity\n');
+
+      await expect(service.checkpoint(repo, 'must fail')).rejects.toThrow('local Git identity');
+      expect(await readGitAsync(repo, ['rev-list', '--count', 'HEAD'])).toBe('1');
+    });
+
+    it('fails closed before staging obvious sensitive files, including already-staged paths', async () => {
+      writeFileSync(join(repo, '.env'), 'SECRET=do-not-commit\n');
+      mkdirSync(join(repo, 'secrets'));
+      writeFileSync(join(repo, 'secrets', 'private.pem'), 'private\n');
+
+      await expect(service.checkpoint(repo, 'must reject secrets')).rejects.toThrow('Sensitive paths');
+      expect(await readGitAsync(repo, ['diff', '--cached', '--name-only'])).toBe('');
+      expect(await readGitAsync(repo, ['rev-list', '--count', 'HEAD'])).toBe('1');
+
+      await runGitAsync(repo, ['add', '.env']);
+      await expect(service.checkpoint(repo, 'must reject staged secret')).rejects.toThrow('Sensitive paths');
+      expect(await readGitAsync(repo, ['rev-list', '--count', 'HEAD'])).toBe('1');
+    });
+
+    it('allows clearly documented sample credential filenames', async () => {
+      writeFileSync(join(repo, '.env.example'), 'TOKEN=example\n');
+      writeFileSync(join(repo, 'credentials.sample.json'), '{}\n');
+      writeFileSync(join(repo, 'private-key.template.pem'), 'example\n');
+      writeFileSync(join(repo, 'client.example.p12'), 'example\n');
+
+      await expect(service.checkpoint(repo, 'add credential examples')).resolves.toMatchObject({
+        committed: true,
+        clean: true,
+      });
+    });
+
+    it('rejects common secret containers and reports every blocked path', async () => {
+      const paths = [
+        '.envrc',
+        '.npmrc',
+        '.git-credentials',
+        'client.p12',
+        'client.pfx',
+        'trust.jks',
+        'signing.keystore',
+      ];
+      for (const path of paths) writeFileSync(join(repo, path), 'secret\n');
+
+      const message = await service.checkpoint(repo, 'must reject containers').then(
+        () => 'unexpected success',
+        (error: unknown) => error instanceof Error ? error.message : String(error),
+      );
+      for (const path of paths) expect(message).toContain(path);
+      expect(await readGitAsync(repo, ['diff', '--cached', '--name-only'])).toBe('');
+    });
+
+    it('rejects a secret added to an ordinary tracked source file without staging it', async () => {
+      mkdirSync(join(repo, 'src'));
+      writeFileSync(join(repo, 'src/config.ts'), "export const mode = 'safe';\n");
+      await runGitAsync(repo, ['add', 'src/config.ts']);
+      await runGitAsync(repo, ['commit', '-m', 'add config']);
+      const secret = `sk-proj-${'A1b2C3d4'.repeat(8)}`;
+      writeFileSync(join(repo, 'src/config.ts'), `export const apiKey = '${secret}';\n`);
+
+      const message = await service.checkpoint(repo, 'must reject source secret').then(
+        () => 'unexpected success',
+        (error: unknown) => error instanceof Error ? error.message : String(error),
+      );
+
+      expect(message).toContain('Potential secret content');
+      expect(message).toContain('src/config.ts');
+      expect(message).not.toContain(secret);
+      expect(await readGitAsync(repo, ['diff', '--cached', '--name-only'])).toBe('');
+      expect(await readGitAsync(repo, ['rev-list', '--count', 'HEAD'])).toBe('2');
+    });
+
+    it('scans exact staged blobs before a clean filter can create checkpoint history', async () => {
+      const secret = `sk-proj-${'A1b2C3d4'.repeat(8)}`;
+      await runGitAsync(repo, ['config', 'filter.nuncio-secret.clean', `sed 's/SAFE/${secret}/g'`]);
+      await runGitAsync(repo, ['config', 'filter.nuncio-secret.required', 'true']);
+      writeFileSync(join(repo, '.gitattributes'), 'filtered.txt filter=nuncio-secret\n');
+      writeFileSync(join(repo, 'filtered.txt'), 'SAFE\n');
+
+      const message = await service.checkpoint(repo, 'must scan staged bytes').then(
+        () => 'unexpected success',
+        (error: unknown) => error instanceof Error ? error.message : String(error),
+      );
+
+      expect(message).toContain('Potential secret content');
+      expect(message).toContain('filtered.txt');
+      expect(message).not.toContain(secret);
+      expect(await readGitAsync(repo, ['rev-list', '--count', 'HEAD'])).toBe('1');
+      expect(await readGitAsync(repo, ['diff', '--cached', '--name-only'])).toBe('');
+    });
+
+    it('rejects a secret in an untracked ordinary file while allowing placeholders', async () => {
+      const secret = `ghp_${'aB3d'.repeat(9)}`;
+      writeFileSync(join(repo, 'scratch.ts'), `export const token = '${secret}';\n`);
+
+      const message = await service.checkpoint(repo, 'must reject untracked secret').then(
+        () => 'unexpected success',
+        (error: unknown) => error instanceof Error ? error.message : String(error),
+      );
+      expect(message).toContain('Potential secret content');
+      expect(message).toContain('scratch.ts');
+      expect(message).not.toContain(secret);
+      expect(await readGitAsync(repo, ['diff', '--cached', '--name-only'])).toBe('');
+
+      rmSync(join(repo, 'scratch.ts'));
+      writeFileSync(
+        join(repo, 'placeholder.ts'),
+        "export const openai = 'sk-proj-placeholder';\n" +
+        "export const longOpenai = 'sk-proj-placeholderplaceholderplaceholderplaceholder';\n" +
+        "export const github = 'ghp_example';\n",
+      );
+      await expect(service.checkpoint(repo, 'allow documented placeholders')).resolves.toMatchObject({
+        committed: true,
+        clean: true,
+      });
+    });
+
+    it('does not exempt a credential merely because random-looking token data contains a marker word', async () => {
+      const secret = `sk-proj-example${'A1b2C3d4'.repeat(6)}`;
+      writeFileSync(join(repo, 'embedded-marker.ts'), `export const token = '${secret}';\n`);
+
+      const message = await service.checkpoint(repo, 'must reject embedded marker token').then(
+        () => 'unexpected success',
+        (error: unknown) => error instanceof Error ? error.message : String(error),
+      );
+      expect(message).toContain('Potential secret content');
+      expect(message).toContain('embedded-marker.ts');
+      expect(message).not.toContain(secret);
+    });
+
+    it('scans the exact NUL-delimited Git path when a filename contains surrounding whitespace', async () => {
+      const path = ' leading-secret.ts ';
+      const secret = `sk-proj-${'A1b2C3d4'.repeat(8)}`;
+      writeFileSync(join(repo, path), `export const token = '${secret}';\n`);
+
+      const message = await service.checkpoint(repo, 'must reject whitespace path secret').then(
+        () => 'unexpected success',
+        (error: unknown) => error instanceof Error ? error.message : String(error),
+      );
+
+      expect(message).toContain('Potential secret content');
+      expect(message).toContain(path);
+      expect(message).not.toContain(secret);
+      expect(await readGitAsync(repo, ['diff', '--cached', '--name-only'])).toBe('');
+      expect(await readGitAsync(repo, ['rev-list', '--count', 'HEAD'])).toBe('1');
+    });
+
+    it('fails closed before staging a changed symlink', async () => {
+      const outside = `${repo}-outside.txt`;
+      writeFileSync(outside, 'outside workspace\n');
+      symlinkSync(outside, join(repo, 'linked-config.ts'));
+      try {
+        await expect(service.checkpoint(repo, 'must reject symlink'))
+          .rejects.toThrow('could not safely inspect candidate paths: linked-config.ts');
+        expect(await readGitAsync(repo, ['diff', '--cached', '--name-only'])).toBe('');
+      } finally {
+        rmSync(outside, { force: true });
+      }
+    });
+
+    it('fails closed when a checkpoint candidate exceeds the bounded content scan', async () => {
+      writeFileSync(join(repo, 'oversized.txt'), 'x'.repeat(1_048_577));
+
+      await expect(service.checkpoint(repo, 'must reject scan overflow'))
+        .rejects.toThrow('could not safely inspect candidate paths: oversized.txt');
+      expect(await readGitAsync(repo, ['diff', '--cached', '--name-only'])).toBe('');
+      expect(await readGitAsync(repo, ['rev-list', '--count', 'HEAD'])).toBe('1');
+    });
+  });
 });
+
+function validateCheckpointRange(
+  service: GitService,
+  path: string,
+  fromHead: string,
+  toHead: string,
+): Promise<void> {
+  return service.validateCheckpointRange(path, fromHead, toHead);
+}

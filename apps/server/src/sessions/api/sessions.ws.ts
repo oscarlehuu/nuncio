@@ -16,7 +16,7 @@ export const SESSIONS_WS_PATH = '/api/sessions/ws';
  */
 export interface SessionRelayService {
   get(id: string): unknown;
-  getEvents(id: string, since?: number): SessionEvent[];
+  getEvents(id: string, since?: number, options?: { tail?: number }): SessionEvent[];
   subscribe(id: string, listener: (event: SessionEvent) => void): () => void;
   steer(id: string, message: string, forceResume?: boolean): Promise<unknown>;
 }
@@ -38,9 +38,15 @@ export interface SessionsWsOptions {
   maxBufferedBytes?: number;
   /** Test seam — production reads ws.bufferedAmount. */
   getBufferedAmount?: (ws: WebSocket) => number;
+  /** Ping cadence and missed-pong deadline; production keeps mobile NATs warm at 15s. */
+  heartbeatIntervalMs?: number;
+  /** Test seam for deterministic half-open simulation. */
+  getHeartbeatAlive?: (ws: WebSocket, observedAlive: boolean) => boolean;
 }
 
 const DEFAULT_MAX_BUFFERED_BYTES = 1_000_000;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
+const MAX_INITIAL_TAIL = 10_000;
 
 function errorOf(err: unknown): RpcError {
   const maybe = err as { getStatus?: () => number; message?: unknown } | null;
@@ -51,8 +57,16 @@ function errorOf(err: unknown): RpcError {
 
 function send(ws: WebSocket, payload: unknown): void {
   if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(payload));
+    try {
+      ws.send(JSON.stringify(payload));
+    } catch {
+      ws.terminate();
+    }
   }
+}
+
+function serializedBytes(payload: unknown): number {
+  return Buffer.byteLength(JSON.stringify(payload));
 }
 
 /**
@@ -87,6 +101,7 @@ export function attachSessionsWebSocketServer(
   const wss = new WebSocketServer({ noServer: true });
   const maxBuffered = options?.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES;
   const bufferedAmount = options?.getBufferedAmount ?? ((socket: WebSocket) => socket.bufferedAmount);
+  const heartbeatIntervalMs = options?.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
 
   // Revocation must sever the live sockets a device opened, not just block future
   // upgrades; the registry maps each device to its open sockets for that purpose.
@@ -124,10 +139,27 @@ export function attachSessionsWebSocketServer(
 
   wss.on('connection', (ws: WebSocket) => {
     const subscriptions = new Map<string, () => void>();
-    // Keep NATed mobile connections alive across idle stretches.
+    let alive = true;
+    let tornDown = false;
+    ws.on('pong', () => {
+      alive = true;
+    });
+    // Keep NATed mobile connections alive and force half-open peers through the
+    // normal close/reconnect/cursor-replay path after one missed pong deadline.
     const heartbeat = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) ws.ping();
-    }, 15000);
+      if (ws.readyState !== WebSocket.OPEN) return;
+      const heartbeatAlive = options?.getHeartbeatAlive?.(ws, alive) ?? alive;
+      if (!heartbeatAlive) {
+        ws.terminate();
+        return;
+      }
+      alive = false;
+      try {
+        ws.ping();
+      } catch {
+        ws.terminate();
+      }
+    }, heartbeatIntervalMs);
 
     const deviceId = pendingDeviceId.get(ws);
     if (deviceId) {
@@ -136,6 +168,8 @@ export function attachSessionsWebSocketServer(
     }
 
     const teardown = () => {
+      if (tornDown) return;
+      tornDown = true;
       clearInterval(heartbeat);
       if (deviceId) deviceSockets.remove(deviceId, ws);
       for (const unsubscribe of subscriptions.values()) unsubscribe();
@@ -154,34 +188,104 @@ export function attachSessionsWebSocketServer(
         }
         const rawSince = Number(params.since ?? 0);
         const since = Number.isFinite(rawSince) ? rawSince : 0;
+        const rawTail = Number(params.tail);
+        if (
+          since === 0 &&
+          params.tail !== undefined &&
+          (!Number.isSafeInteger(rawTail) || rawTail <= 0 || rawTail > MAX_INITIAL_TAIL)
+        ) {
+          send(ws, { id, error: { code: 400, message: `tail must be an integer from 1 to ${MAX_INITIAL_TAIL}` } });
+          return;
+        }
+        const tail =
+          since === 0 && Number.isSafeInteger(rawTail) && rawTail > 0
+            ? rawTail
+            : undefined;
         // Resubscribe replaces the previous subscription (drop-to-cursor recovery).
         subscriptions.get(sessionId)?.();
-        send(ws, { id, result: { ok: true } });
+        subscriptions.delete(sessionId);
 
-        // A subscription that outruns the socket is dropped, not buffered: the
-        // client gets one small "behind" marker and recovers by resubscribing
-        // from its last seen seq.
-        for (const event of sessions.getEvents(sessionId, since)) {
-          if (bufferedAmount(ws) > maxBuffered) {
-            send(ws, { channel: sessionId, behind: true });
-            return;
-          }
-          send(ws, { channel: sessionId, event });
-        }
         let liveUnsub: () => void = () => {};
         let dropped = false;
-        liveUnsub = sessions.subscribe(sessionId, (event) => {
+        let replaying = true;
+        let acknowledged = false;
+        let highWater = since;
+        const pendingLive: SessionEvent[] = [];
+        let pendingLiveBytes = 0;
+        const dropSubscription = () => {
           if (dropped) return;
-          if (bufferedAmount(ws) > maxBuffered) {
-            dropped = true;
+          dropped = true;
+          liveUnsub();
+          subscriptions.delete(sessionId);
+          send(ws, { channel: sessionId, behind: true });
+        };
+        const pushEvent = (event: SessionEvent): boolean => {
+          if (event.seq <= highWater) return true;
+          const push = { channel: sessionId, event };
+          if (bufferedAmount(ws) + serializedBytes(push) > maxBuffered) {
+            dropSubscription();
+            return false;
+          }
+          highWater = event.seq;
+          send(ws, push);
+          return true;
+        };
+
+        try {
+          // Install live delivery before reading the replay. Events arriving
+          // during that read are held briefly, then deduped by seq after it.
+          liveUnsub = sessions.subscribe(sessionId, (event) => {
+            if (dropped) return;
+            if (replaying) {
+              const bytes = serializedBytes({ channel: sessionId, event });
+              if (bufferedAmount(ws) + pendingLiveBytes + bytes > maxBuffered) {
+                dropSubscription();
+                return;
+              }
+              pendingLiveBytes += bytes;
+              pendingLive.push(event);
+              return;
+            }
+            pushEvent(event);
+          });
+          if (dropped) {
             liveUnsub();
-            subscriptions.delete(sessionId);
-            send(ws, { channel: sessionId, behind: true });
             return;
           }
-          send(ws, { channel: sessionId, event });
-        });
-        subscriptions.set(sessionId, liveUnsub);
+          subscriptions.set(sessionId, liveUnsub);
+          // The subscription is live now. Acknowledge liveness before a possibly
+          // large replay so foreground health checks cannot time out on backlog.
+          send(ws, { id, result: { ok: true } });
+          acknowledged = true;
+
+          for (const event of sessions.getEvents(
+            sessionId,
+            since,
+            tail !== undefined ? { tail } : undefined,
+          )) {
+            if (!pushEvent(event)) return;
+          }
+
+          replaying = false;
+          pendingLive.sort((a, b) => a.seq - b.seq);
+          for (const event of pendingLive) {
+            pendingLiveBytes -= serializedBytes({ channel: sessionId, event });
+            if (!pushEvent(event)) return;
+          }
+          pendingLive.length = 0;
+          pendingLiveBytes = 0;
+        } catch (error) {
+          replaying = false;
+          liveUnsub();
+          subscriptions.delete(sessionId);
+          if (acknowledged) {
+            // The client already considers this subscription healthy. Closing is
+            // the only unambiguous signal that forces cursor-based recovery.
+            setImmediate(() => ws.terminate());
+          } else {
+            send(ws, { id, error: errorOf(error) });
+          }
+        }
         return;
       }
 
@@ -221,7 +325,9 @@ export function attachSessionsWebSocketServer(
       } catch {
         return;
       }
-      void handle(msg);
+      void handle(msg).catch((error) => {
+        send(ws, { id: msg.id, error: errorOf(error) });
+      });
     });
 
     ws.on('close', teardown);

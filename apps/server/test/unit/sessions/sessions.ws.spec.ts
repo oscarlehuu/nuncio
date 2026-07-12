@@ -29,7 +29,10 @@ function makeFakeSessions(seed: number[] = []): FakeSessions {
     steerCalls: [],
     steerImpl: async (id) => ({ id, status: 'RUNNING' }),
     get: (id) => (id === 'sess-1' ? { id } : undefined),
-    getEvents: (_id, since = 0) => events.filter((e) => e.seq > since),
+    getEvents: (_id, since = 0, options?: { tail?: number }) => {
+      const replay = events.filter((event) => event.seq > since);
+      return options?.tail === undefined ? replay : replay.slice(-options.tail);
+    },
     subscribe: (_id, listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -50,6 +53,7 @@ interface TestClient {
   ws: WebSocket;
   responses: Array<{ id: unknown; result?: unknown; error?: { code: number; message: string } }>;
   events: SessionEvent[];
+  frames: Array<'response' | 'event' | 'behind'>;
   send(msg: unknown): void;
   waitFor(pred: () => boolean, ms?: number): Promise<void>;
   close(): Promise<void>;
@@ -62,6 +66,7 @@ function connect(port: number): Promise<TestClient> {
       ws,
       responses: [],
       events: [],
+      frames: [],
       send: (msg) => ws.send(JSON.stringify(msg)),
       waitFor: (pred, ms = 2000) =>
         new Promise<void>((res, rej) => {
@@ -82,8 +87,12 @@ function connect(port: number): Promise<TestClient> {
     ws.addEventListener('message', (e) => {
       const msg = JSON.parse(String(e.data));
       if ('channel' in msg) {
-        if (msg.event) client.events.push(msg.event as SessionEvent);
+        if (msg.event) {
+          client.frames.push('event');
+          client.events.push(msg.event as SessionEvent);
+        } else if (msg.behind) client.frames.push('behind');
       } else {
+        client.frames.push('response');
         client.responses.push(msg);
       }
     });
@@ -121,6 +130,36 @@ afterEach(() => {
 });
 
 describe('sessions WS relay', () => {
+  it('terminates a half-open client that misses the pong deadline', async () => {
+    const fake = makeFakeSessions();
+    const port = await startServer(fake, {
+      heartbeatIntervalMs: 20,
+      getHeartbeatAlive: () => false,
+    });
+    const ws = new WsClient(`ws://127.0.0.1:${port}${SESSIONS_WS_PATH}`);
+    await new Promise<void>((resolve, reject) => {
+      ws.on('open', resolve);
+      ws.on('error', reject);
+    });
+
+    const closed = await Promise.race([
+      new Promise<boolean>((resolve) => ws.once('close', () => resolve(true))),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 250)),
+    ]);
+    if (!closed) ws.terminate();
+    expect(closed).toBe(true);
+  });
+
+  it('keeps a responsive client open across repeated heartbeat intervals', async () => {
+    const fake = makeFakeSessions();
+    const port = await startServer(fake, { heartbeatIntervalMs: 20 });
+    const client = await connect(port);
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(client.ws.readyState).toBe(WebSocket.OPEN);
+    await client.close();
+  });
+
   it('resumes gap-free across a dropped socket (replay + live, no dupes)', async () => {
     const fake = makeFakeSessions([1, 2, 3]);
     const port = await startServer(fake);
@@ -154,6 +193,127 @@ describe('sessions WS relay', () => {
     client.send({ id: 1, method: 'subscribe', params: { sessionId: 'sess-1', since: 2 } });
     await client.waitFor(() => client.events.length === 2);
     expect(client.events.map((e) => e.seq)).toEqual([3, 4]);
+    await client.close();
+  });
+
+  it('acknowledges a live subscription before replaying its backlog', async () => {
+    const fake = makeFakeSessions(Array.from({ length: 50 }, (_, index) => index + 1));
+    const port = await startServer(fake);
+    const client = await connect(port);
+    client.send({ id: 1, method: 'subscribe', params: { sessionId: 'sess-1', since: 0 } });
+    await client.waitFor(() => client.responses.length === 1 && client.events.length === 50);
+    expect(client.frames[0]).toBe('response');
+    await client.close();
+  });
+
+  it('terminates an acknowledged socket when replay fails', async () => {
+    const fake = makeFakeSessions();
+    fake.getEvents = () => { throw new Error('replay storage failed'); };
+    const port = await startServer(fake);
+    const client = await connect(port);
+    let closed = false;
+    client.ws.addEventListener('close', () => { closed = true; });
+    client.send({ id: 1, method: 'subscribe', params: { sessionId: 'sess-1', since: 0 } });
+    await client.waitFor(() => client.responses.length === 1 && closed);
+    expect(client.responses[0]).toEqual({ id: 1, result: { ok: true } });
+  });
+
+  it('buffers live events that land while the cursor replay is being read', async () => {
+    const fake = makeFakeSessions([1, 2, 3]);
+    const originalGetEvents = fake.getEvents.bind(fake);
+    let injected = false;
+    fake.getEvents = (...args) => {
+      const replay = originalGetEvents(...args);
+      if (!injected) {
+        injected = true;
+        fake.emit({ seq: 4, type: 'assistant_delta', payload: { delta: 'race' }, createdAt: 4 });
+      }
+      return replay;
+    };
+    const port = await startServer(fake);
+    const client = await connect(port);
+
+    client.send({ id: 1, method: 'subscribe', params: { sessionId: 'sess-1', since: 0 } });
+    await client.waitFor(() => client.events.length === 4);
+    expect(client.events.map((event) => event.seq)).toEqual([1, 2, 3, 4]);
+    await client.close();
+  });
+
+  it('applies the outbound byte cap while synchronous subscribe events are staged', async () => {
+    const fake = makeFakeSessions();
+    fake.subscribe = (_id, listener) => {
+      for (let seq = 1; seq <= 3; seq += 1) {
+        listener({
+          seq,
+          type: 'assistant_delta',
+          payload: { delta: 'x'.repeat(70) },
+          createdAt: seq,
+        });
+      }
+      return () => {};
+    };
+    const port = await startServer(fake, {
+      maxBufferedBytes: 250,
+      getBufferedAmount: () => 0,
+    });
+    const client = await connect(port);
+    const behind: unknown[] = [];
+    client.ws.addEventListener('message', (event) => {
+      const message = JSON.parse(String(event.data));
+      if (message.behind) behind.push(message);
+    });
+
+    client.send({ id: 1, method: 'subscribe', params: { sessionId: 'sess-1', since: 0 } });
+    await client.waitFor(() => behind.length === 1);
+    expect(client.events).toEqual([]);
+    expect(client.responses).toEqual([]);
+    await client.close();
+  });
+
+  it('does not acknowledge subscribe when installing the live listener fails', async () => {
+    const fake = makeFakeSessions([1]);
+    fake.subscribe = () => {
+      throw new Error('listener install failed');
+    };
+    const port = await startServer(fake);
+    const client = await connect(port);
+
+    client.send({ id: 11, method: 'subscribe', params: { sessionId: 'sess-1', since: 0 } });
+    await client.waitFor(() => client.responses.length === 1);
+    expect(client.responses[0]).toEqual({
+      id: 11,
+      error: { code: 500, message: 'listener install failed' },
+    });
+    await client.close();
+  });
+
+  it('bounds an initial cursor-zero replay to the requested tail window', async () => {
+    const fake = makeFakeSessions([1, 2, 3, 4, 5]);
+    const port = await startServer(fake);
+    const client = await connect(port);
+    client.send({
+      id: 1,
+      method: 'subscribe',
+      params: { sessionId: 'sess-1', since: 0, tail: 2 },
+    });
+
+    await client.waitFor(() => client.events.length === 2);
+    expect(client.events.map((event) => event.seq)).toEqual([4, 5]);
+    await client.close();
+  });
+
+  it('rejects an out-of-range initial tail without killing the connection', async () => {
+    const fake = makeFakeSessions([1, 2, 3]);
+    const port = await startServer(fake);
+    const client = await connect(port);
+
+    client.send({ id: 1, method: 'subscribe', params: { sessionId: 'sess-1', since: 0, tail: 1e20 } });
+    await client.waitFor(() => client.responses.length === 1);
+    expect(client.responses[0]?.error).toMatchObject({ code: 400 });
+
+    client.send({ id: 2, method: 'subscribe', params: { sessionId: 'sess-1', since: 0, tail: 2 } });
+    await client.waitFor(() => client.events.length === 2);
+    expect(client.events.map((event) => event.seq)).toEqual([2, 3]);
     await client.close();
   });
 
@@ -218,7 +378,7 @@ describe('sessions WS relay', () => {
     const fake = makeFakeSessions([1]);
     let buffered = 0;
     const port = await startServer(fake, {
-      maxBufferedBytes: 100,
+      maxBufferedBytes: 1000,
       getBufferedAmount: () => buffered,
     });
     const client = await connect(port);
@@ -250,6 +410,27 @@ describe('sessions WS relay', () => {
     await client.close();
   });
 
+  it('counts the next serialized event toward the outbound byte cap', async () => {
+    const fake = makeFakeSessions([1]);
+    const port = await startServer(fake, {
+      maxBufferedBytes: 100,
+      getBufferedAmount: () => 99,
+    });
+    const client = await connect(port);
+    const behind: unknown[] = [];
+    client.ws.addEventListener('message', (event) => {
+      const message = JSON.parse(String(event.data));
+      if (message.behind) behind.push(message);
+    });
+
+    client.send({ id: 1, method: 'subscribe', params: { sessionId: 'sess-1', since: 0 } });
+    await client.waitFor(() => behind.length === 1);
+
+    expect(client.events).toEqual([]);
+    expect(behind).toHaveLength(1);
+    await client.close();
+  });
+
   it('sends the behind marker mid-replay and loses no event across the resubscribe cycle', async () => {
     // The overflow can trip during the initial cursor replay, not only on live
     // pushes. When it does the client gets one behind marker; a resubscribe from
@@ -258,7 +439,7 @@ describe('sessions WS relay', () => {
     const fake = makeFakeSessions([1, 2, 3, 4, 5]);
     let buffered = 0;
     const port = await startServer(fake, {
-      maxBufferedBytes: 100,
+      maxBufferedBytes: 1000,
       getBufferedAmount: () => buffered,
     });
     const client = await connect(port);
@@ -293,7 +474,7 @@ describe('sessions WS relay', () => {
     const fake = makeFakeSessions([1]);
     let buffered = 0;
     const port = await startServer(fake, {
-      maxBufferedBytes: 100,
+      maxBufferedBytes: 1000,
       getBufferedAmount: () => buffered,
     });
     const client = await connect(port);

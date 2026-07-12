@@ -74,7 +74,7 @@ export class FleetService implements OnModuleInit {
   /** Derive the fold inputs from durable rows (called fresh per GET — no cache). */
   private gatherSources(): FleetSources {
     const projects = this.projects?.list() ?? [];
-    const sessions = this.sessions?.list(false) ?? [];
+    const sessions = this.sessions?.listUserFacing(false) ?? [];
     const loops = this.loops?.list() ?? [];
 
     const activePaths = new Set<string>();

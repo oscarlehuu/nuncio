@@ -5,6 +5,7 @@ import { FleetModule } from './attention/fleet/fleet.module';
 import { AuthModule } from './auth/auth.module';
 import { BrowserModule } from './browser/browser.module';
 import { ContextModule } from './context/context.module';
+import { CrewModule } from './crew/crew.module';
 import { CursorLocalModule } from './cursor-local/cursor-local.module';
 import { DatabaseModule } from './db/database.module';
 import { DevicesModule } from './devices/devices.module';
@@ -48,6 +49,7 @@ import { UsageModule } from './usage/usage.module';
     ProviderUpdatesModule,
     BrowserModule,
     ContextModule,
+    CrewModule,
     CursorLocalModule,
     ForgesModule,
     FsModule,

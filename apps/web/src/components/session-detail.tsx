@@ -29,7 +29,6 @@ import { deriveVerifyStatus } from '../lib/derive-verify-status';
 import { VerifyChip } from './verify-chip';
 import { projectDisplayName } from '../lib/projects';
 import { FALLBACK_PROVIDERS, modelById, prettyModelName, type ModelProvider } from '../lib/model-providers';
-import { isCodexApprovalEngine } from '../lib/codex-approval-engine';
 import { useContextUsage } from '../lib/use-context-usage';
 import { resolveTranscriptLinkTarget } from '../lib/transcript-link-target';
 import {
@@ -47,7 +46,6 @@ import { Transcript } from './session-transcript';
 import { PendingUserInputBanner } from './pending-user-input-banner';
 import { SubagentsPanel } from './subagents-panel';
 import { QueuedSteersPanel } from './queued-steers-panel';
-import { ApprovalModePicker, type ApprovalMode } from './approval-mode-picker';
 import { BrowserPanel, getDesktopBrowserBridge } from './browser-panel';
 import { FileExplorerPanel } from './file-explorer-panel';
 import { ChunkErrorBoundary } from './chunk-error-boundary';
@@ -113,8 +111,6 @@ interface SessionDetailProps {
   onContinueOnMobile?: () => void;
   /** Cursor IDE may still be running this CLI handoff chat on the host. */
   machineActive?: boolean;
-  approvalMode?: ApprovalMode;
-  onApprovalModeChange?: (mode: ApprovalMode) => void | Promise<void>;
   onRespondProviderRequest?: (
     requestId: string,
     decision: ProviderRequestDecision,
@@ -221,8 +217,6 @@ export function SessionDetail({
   onOpenSession,
   onContinueOnMobile,
   machineActive = false,
-  approvalMode = 'full-access',
-  onApprovalModeChange,
   onRespondProviderRequest,
   steering,
   lifecycleBusy,
@@ -281,6 +275,7 @@ export function SessionDetail({
   }, [panelOpen, activeTool, scmSegment]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const managedByCrew = session.verifyOwner === 'crew';
   const streaming = session.status === 'RUNNING';
   const isRunning = session.status === 'RUNNING';
   const isArchived = session.status === 'ARCHIVED';
@@ -294,19 +289,18 @@ export function SessionDetail({
   const hasPendingUserInput = pendingUserInput.length > 0;
   const interactionSupported = session.supportsInteraction ?? false;
   const providerLabel = session.provider === 'cursor' ? 'Cursor' : session.provider === 'pi' ? 'Pi' : session.provider;
-  const showApprovalMode =
-    !!onApprovalModeChange && isCodexApprovalEngine(session.provider, session.model);
   const steerWhileRunning = session.supportsSteerWhileRunning ?? false;
-  const canAttachImages = (session.supportsImages ?? false) && !isArchived;
+  const canAttachImages = !managedByCrew && (session.supportsImages ?? false) && !isArchived;
   const steerDisabled =
+    managedByCrew ||
     session.status === 'ARCHIVED' ||
     steering ||
     lifecycleBusy ||
     hasPendingUserInput;
-  const showHeaderPause = session.status !== 'PAUSED' && !isArchived;
-  const canArchive = !isArchived;
-  const canRestore = isArchived && !!onRestore;
-  const canDelete = isArchived && !!onDelete;
+  const showHeaderPause = !managedByCrew && session.status !== 'PAUSED' && !isArchived;
+  const canArchive = !managedByCrew && !isArchived;
+  const canRestore = !managedByCrew && isArchived && !!onRestore;
+  const canDelete = !managedByCrew && isArchived && !!onDelete;
 
   const catalog = providers && providers.length > 0 ? providers : FALLBACK_PROVIDERS;
   const entry = useMemo(
@@ -319,6 +313,7 @@ export function SessionDetail({
       ? session.model
       : session.provider === 'cursor' ? 'Cursor' : session.provider === 'pi' ? 'Pi' : 'Default';
   const showContinueOnMobile =
+    !managedByCrew &&
     session.provider === 'cursor' &&
     session.cursorBackend !== 'cli' &&
     !!onContinueOnMobile;
@@ -558,7 +553,7 @@ export function SessionDetail({
 
   const handleRenameSave = async () => {
     const trimmed = titleDraft.trim();
-    if (!trimmed || !onRename) {
+    if (managedByCrew || !trimmed || !onRename) {
       setEditingTitle(false);
       setTitleDraft('');
       return;
@@ -612,12 +607,16 @@ export function SessionDetail({
   const childRefs = lineage?.children ?? [];
 
   return (
-    <section className="flex-1 flex min-h-0">
+    <section
+      className="flex-1 flex min-h-0"
+      data-testid="session-detail"
+      data-session-status={session.status}
+    >
       <TooltipProvider>
       <div className="flex-1 min-w-0 flex flex-col min-h-0">
       <header className="shrink-0 relative flex items-center gap-3 px-4 md:px-5 py-3 border-b border-border bg-card min-h-[52px]">
         <div className="flex-1 min-w-0 flex justify-center items-center">
-          {editingTitle ? (
+          {editingTitle && !managedByCrew ? (
             <div className="flex items-center gap-1.5 max-w-[60%]">
               <Input
                 value={titleDraft}
@@ -658,23 +657,23 @@ export function SessionDetail({
               <TooltipTrigger asChild>
                 <button
                   type="button"
-                  className="group flex items-center gap-1.5 max-w-[50%] cursor-text"
+                  className={`group flex items-center gap-1.5 max-w-[50%] ${managedByCrew ? '' : 'cursor-text'}`}
                   onClick={() => {
-                    if (!onRename) return;
+                    if (managedByCrew || !onRename) return;
                     setTitleDraft(session.title);
                     setEditingTitle(true);
                   }}
                   data-testid="session-title"
                 >
                   <span className="font-medium truncate text-sm text-center">{session.title}</span>
-                  {onRename && (
+                  {!managedByCrew && onRename && (
                     <Pencil className="size-3 text-muted-foreground/0 group-hover:text-muted-foreground transition-colors shrink-0" />
                   )}
                 </button>
               </TooltipTrigger>
               <TooltipContent className="max-w-[400px]">
                 <p className="text-xs">{session.title}</p>
-                {onRename && <p className="text-ui-xs text-muted-foreground mt-0.5">Click to rename</p>}
+                {!managedByCrew && onRename && <p className="text-ui-xs text-muted-foreground mt-0.5">Click to rename</p>}
               </TooltipContent>
             </Tooltip>
           )}
@@ -690,7 +689,7 @@ export function SessionDetail({
 
         <div className="absolute right-4 md:right-5 top-1/2 -translate-y-1/2 flex items-center gap-1">
           {headerActions}
-          <Tooltip>
+          {!managedByCrew && <Tooltip>
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
@@ -708,7 +707,7 @@ export function SessionDetail({
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">Panel</TooltipContent>
-          </Tooltip>
+          </Tooltip>}
 
           {(showContinueOnMobile || showHeaderPause || canArchive || canRestore || canDelete) && (
             <DropdownMenu>
@@ -807,7 +806,9 @@ export function SessionDetail({
             pendingRequestIds={pendingRequestIds}
             respondingRequestId={respondingRequestId}
             onRespondProviderRequest={
-              onRespondProviderRequest ? handleRespondProviderRequest : undefined
+              !managedByCrew && onRespondProviderRequest
+                ? handleRespondProviderRequest
+                : undefined
             }
             onLinkClick={handleTranscriptLinkClick}
             onOpenSession={onOpenSession}
@@ -815,7 +816,15 @@ export function SessionDetail({
         </div>
       </div>
 
-      <div className="shrink-0 px-4 md:px-5 pt-2.5 pb-3 md:pb-4">
+      {managedByCrew ? (
+        <div className="shrink-0 border-t border-border bg-card px-4 py-3 md:px-5">
+          <div className="mx-auto max-w-[760px]">
+            <p className="text-ui-sm font-semibold text-foreground">Managed by Crew</p>
+            <p className="mt-0.5 text-ui-sm text-muted-foreground">Inspect-only member session</p>
+          </div>
+        </div>
+      ) : (
+        <div className="shrink-0 px-4 md:px-5 pt-2.5 pb-3 md:pb-4">
         <SubagentsPanel
           tasks={childTasks}
           providers={providers}
@@ -920,14 +929,6 @@ export function SessionDetail({
                 snapshots={usageSnapshots}
                 onOpen={() => void reloadUsage(true)}
               />
-              {showApprovalMode ? (
-                <ApprovalModePicker
-                  value={approvalMode}
-                  onChange={onApprovalModeChange}
-                  disabled={lifecycleBusy}
-                  surface="embedded"
-                />
-              ) : null}
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
               {isRunning && (
@@ -983,11 +984,12 @@ export function SessionDetail({
             )}
           </div>
         </div>
-      </div>
+        </div>
+      )}
 
       </div>
 
-      {(panelOpen || terminalMounted) && (
+      {!managedByCrew && (panelOpen || terminalMounted) && (
         <aside
           className={
             activeTool === 'browser'
@@ -1134,7 +1136,7 @@ export function SessionDetail({
       )}
       </TooltipProvider>
 
-      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+      <Dialog open={!managedByCrew && confirmDelete} onOpenChange={setConfirmDelete}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Delete session</DialogTitle>

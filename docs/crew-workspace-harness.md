@@ -1,476 +1,335 @@
 # Crew Workspace Harness
 
-**Status:** proposed design baseline; not shipped.  
-**Last updated:** 2026-07-10.  
-**Decision companion:** [CrewRun authority boundary and state machine](crew-run-authority-and-state-machine.md).
+**Status:** implemented and verified for the `dev` integration lane. This is not a claim that Crew
+is in a stable release.
+**Last synchronized:** 2026-07-11.
+**Authority companion:** [CrewRun Authority Boundary and State Machine](crew-run-authority-and-state-machine.md).
 
-## Purpose
+## Purpose and fixed scope
 
-Nuncio should support two execution modes:
+Nuncio has two execution modes:
 
-- **Solo** runs one provider session selected by the user.
-- **Crew** runs a provider-neutral workflow whose members may use different engines and models.
+- **Solo** remains the default for every fresh composer and preserves the existing provider/model
+  picker and request shape.
+- **Crew** selects a saved Quality profile and runs one fixed local workflow:
+  `PLAN -> BUILD -> VERIFY -> REVIEW -> SYNTHESIZE -> DONE`.
 
-Crew mode makes Nuncio a **provider-neutral workspace and crew harness**. Nuncio owns the outer
-loop: roles, task routing, shared workspace, context handoff, verification, review, recovery,
-budgets, and human attention. Each provider still owns its inner model loop, tools, compaction,
-and conversation runtime.
+Crew is a provider-neutral outer harness above ordinary Nuncio Tasks and Sessions. Providers own
+their model loops and thread state. Nuncio owns durable workflow state, permissions, one worktree,
+one writer lease, context projection, deterministic verification, review validity, retry budgets,
+recovery, Attention, and terminal outcomes.
 
-This keeps the design consistent with the product vision: Nuncio does not call raw model APIs or
-replace Claude Agent SDK, Codex app-server, Cursor SDK, or Pi. It coordinates those runtimes on
-the user's machine.
+The MVP has no configurable workflow graph and performs no outbound forge or deployment action.
+Verify and review are mandatory.
 
-## Agreed product model
+## Profile resolution
 
-### Solo versus Crew
+The only preset is `quality`. A profile binds three model members:
 
-The new-task surface keeps the existing engine and model picker in Solo mode:
+| Role | Runtime policy | Purpose |
+|---|---|---|
+| Foreman | `read-only`, network disabled | Plan and synthesize |
+| Builder | `workspace-write`, network disabled | Implement and fix |
+| Reviewer | `read-only`, network disabled | Return structured findings |
+| Nuncio Tester | deterministic read-only process | Run the configured verify command |
 
-```text
-Mode: Solo
-Engine: Codex
-Model: GPT-5.6 Sol
-```
+Pi, Codex, and Claude are configurable role providers. `mock` exists only in explicitly enabled
+source-test runs. The Builder and Reviewer must not use the same provider/model pair.
 
-Crew mode replaces the per-run model picker with a saved crew profile:
+Resolution has exactly two public states:
 
-```text
-Mode: Crew
-Profile: Oscar Quality Crew
+- `ready`: every frozen provider/model exists, each adapter advertises the required runtime
+  policy with network disabled, Builder and Reviewer are independent, a verify command resolves,
+  and the host verifier sandbox is available.
+- `needs_setup`: one or more of those requirements is missing.
 
-Resolved team
-Fable -> Sol -> Verify -> Opus
-```
+Nuncio never silently changes a provider or model. A missing frozen binding blocks the run.
 
-An advanced disclosure may allow a temporary run override. A run override never mutates the saved
-profile.
+Resolution order is run override, project override, saved profile, then fixed Quality policy
+defaults. Each `CrewRun` stores an immutable snapshot containing the resolved bindings, runtime
+policies, verify command, separate verify/review retry caps, reviewer-freshness setting, profile
+id/revision, and resolution time. Editing a saved profile affects only later runs.
 
-### Preset versus profile
+Quality defaults are:
 
-A **preset** is a Nuncio-supplied template describing intent, role requirements, workflow, and
-policy defaults. It should prefer capabilities over hard-coded provider ids.
+- `maxVerifyRetries = 2`;
+- `maxReviewRetries = 2`;
+- `strictFreshFinalReviewer = true`;
+- a project/profile/global verify command must resolve before the profile is ready.
 
-```yaml
-id: quality
-roles:
-  foreman:
-    requires: [reasoning, delegation, tool-calling]
-  builder:
-    requires: [coding, workspace-write]
-  tester:
-    requires: [command-execution]
-  reviewer:
-    requires: [code-review, read-only]
-    independentFrom: builder
-workflow: [plan, build, verify, review, complete]
-```
+For a project-level `.nuncio/verify`, task creation checks that the file is tracked at the exact
+selected base SHA; an untracked file or a file that exists only on another branch cannot make the
+profile ready. Nuncio invokes the tracked script with `sh`, so it does not require an executable
+bit. Project and profile command overrides remain trusted configuration and take precedence.
 
-A **profile** is a user's saved, validated binding of a preset to engines and models available on
-their machine.
+Crew checkpoints require a repository-local Git identity because Nuncio will not borrow ambient
+global author metadata for autonomous commits. Configure it once in each target repository with
+`git config --local user.name "Your Name"` and
+`git config --local user.email "you@example.com"` before delegating build work.
 
-```yaml
-id: oscar-quality
-basedOn: quality
-members:
-  foreman: { provider: claude, model: claude-fable-5 }
-  builder: { provider: codex, model: gpt-5.6-sol }
-  reviewer: { provider: claude, model: claude-opus-4-8 }
-policy:
-  maxFixRounds: 2
-  requireVerify: true
-  requireReview: true
-```
+## Fixed execution loop
 
-Provider adapters advertise capabilities and live models. Profile editing only offers compatible
-bindings. A profile resolves to one of three states:
+### Plan
 
-- **Ready:** all requested bindings and guarantees are available.
-- **Adjusted:** a declared fallback is active and the change is visible.
-- **Needs setup:** a required capability or independence guarantee cannot be met.
+The read-only Foreman receives a bounded role envelope and submits a structured plan. Nuncio
+automatically accepts a plan that stays inside the fixed roles and policy. A material unresolved
+decision moves the same phase to `BLOCKED_USER/material_clarification`; the user response updates
+the durable context revision and queues Plan again.
 
-Provider changes must not happen silently. A model update within an explicitly allowed family may
-be automatic; switching provider, dropping read-only enforcement, or losing reviewer independence
-requires user confirmation or blocks a strict profile.
+### Build
 
-### Settings hierarchy
+Nuncio grants the single writer lease only to `builder:primary`. The same Builder Session and
+provider thread are reused for verify and review feedback rounds when resumable. Build completion
+is accepted only after Nuncio independently confirms the canonical worktree, expected branch,
+reachable full Git head, and structured Builder result. The Builder must leave a committed head;
+model prose cannot establish a gate.
 
-Configuration resolves in this order:
+### Verify
 
-```text
-run override
-  > project override
-  > saved crew profile
-  > preset defaults
-  > declared capability fallback
-```
+Nuncio runs the frozen verify command itself. It records exit status, timeout, spawn failure,
+combined-output overflow, duration, pre/post workspace boundary evidence, full head, and a redacted
+verify-log artifact. A pass requires exit code zero, no timeout/abort/spawn error/overflow, and an
+unchanged clean workspace boundary.
 
-Settings are split by concern:
+A failure returns to the same Builder while the verify retry budget remains. The initial attempt
+does not consume the cap; at most two automated verify-fix retries occur by default. Cap exhaustion
+blocks for the user. An approved extra round adds exactly one round for that gate and returns to
+Build.
 
-1. **Engines:** connection, availability, model catalog, permissions, and capabilities.
-2. **Crew profiles:** role bindings, fallback policy, limits, and required gates.
-3. **Projects:** default profile, verify command, workspace policy, and project-specific overrides.
-4. **New task:** Solo or Crew, profile selection, resolved-team preview, and temporary overrides.
+### Review
 
-Every CrewRun stores an immutable resolved profile snapshot. Editing a profile affects new runs,
-not work already in progress.
+Before Reviewer execution, Nuncio captures a deterministic diff from the run base head to the
+current head. A truncated diff fails closed and cannot be treated as reviewable evidence.
 
-Crew profiles are different from the existing engine **PromptProfile**:
+The read-only Reviewer returns typed findings tied to the current head. `warning` findings stay
+visible but do not block. A `blocker` returns to the same Builder while the independent review
+retry budget remains; the fixed sequence then passes through Verify again.
 
-| Concept | Question it answers |
-|---|---|
-| Crew preset/profile | Which roles, engines, workflow, permissions, and gates make up the team? |
-| PromptProfile | How does one provider/model receive briefs, facts, digests, and tool guidance? |
+The existing Reviewer Session is reused during the feedback loop. When
+`strictFreshFinalReviewer` is enabled, a fresh linked Reviewer incarnation is created only after a
+review-fix loop has produced a blocker-free reused-reviewer result. A clean first review does not
+create an unnecessary fresh Reviewer.
 
-The Crew resolver chooses the member. PromptProfile renders that member's provider-native context.
+### Synthesize and Done
 
-### Provider direction
+The Foreman produces a structured synthesis. Before terminal success, Nuncio rechecks:
 
-Crew orchestration does not require Pi. A direct Claude Agent SDK foreman can delegate to a direct
-Codex app-server builder through Nuncio's provider-neutral tools and task layer. Pi may remain an
-optional provider while direct Claude and Codex paths mature; deleting or deprecating Pi is a
-separate product and ADR decision, not a requirement of Crew mode.
+- canonical clean worktree, branch, and current full head;
+- current, intact, passing verify artifact;
+- current, complete workspace-diff artifact;
+- current blocker-free review result;
+- fresh final Reviewer lineage when the strict post-feedback rule applies.
 
-## Backend model
+Only then does the reducer enter `DONE/TERMINAL/SUCCEEDED`. Other terminal outcomes are
+`FAILED` and `CANCELLED`.
 
-### Shared truth, not shared hidden context
+## Context and member-session semantics
 
-Models cannot share hidden reasoning state or provider KV caches. They should not receive identical
-full transcripts either. Nuncio owns a durable **CrewContext spine**, and each member receives a
-small role-specific projection.
+Models do not share hidden reasoning, provider caches, or merged transcripts. The durable shared
+spine consists of the run objective, context revisions, decisions, structured results, current
+workspace head, gate evidence, artifact references, retry counters, and prior failure summary.
 
-```text
-                       CrewContext
-        objective - decisions - artifacts - workspace
-            verify - review - status - revisions
-                          |
-             +------------+------------+
-             |            |            |
-          Foreman       Builder      Reviewer
-          projection    projection   projection
-```
+Each member receives a role-specific bounded envelope:
 
-The conversation inside each provider remains private working memory. CrewContext is the shared
-source of truth.
+- Foreman: objective, decisions, member state, open questions, and bounded evidence;
+- Builder: accepted goal, current head, prior verify/review failure, and write authority;
+- Reviewer: requirements, deterministic diff, verify evidence, and read authority;
+- Tester: the frozen command and exact workspace boundary, executed by Nuncio rather than a model.
 
-```ts
-interface CrewContext {
-  runId: string;
-  revision: number;
-  objective: string;
-  constraints: string[];
-  decisions: Decision[];
-  workspace: WorkspaceRef;
-  artifacts: ArtifactRef[];
-  memberResults: MemberResult[];
-  verify: VerifyResult | null;
-  review: ReviewResult | null;
-  openQuestions: string[];
+Member work is scheduled through ordinary durable Tasks and Sessions with Crew correlation fields.
+A logical member keeps a current incarnation plus explicit `priorMemberSessionId` lineage.
+Healthy sessions receive context deltas. A missing or non-resumable thread creates a linked
+replacement with the same frozen provider/model; it does not trigger a provider change.
+
+Session memory is continuity, not authority. Git, append-only Crew events, structured results, and
+artifact integrity remain authoritative.
+
+A successor normally re-resolves the saved profile. If that profile was deleted after the prior
+run, Nuncio re-resolves the prior immutable snapshot instead, preserving the same provider/model
+bindings without silently selecting a replacement profile.
+
+## Workspace and write authority
+
+Every active run owns one retained worktree and branch. The run records the canonical worktree
+path, base branch/head, branch, and current full head.
+
+- Exactly one writer lease may exist per run.
+- Only `builder:primary` may acquire it.
+- Foreman and Reviewer receive read-only provider policies.
+- Nuncio Tester runs separately under the verifier sandbox.
+- Runtime writes cannot escape the canonical worktree or mutate `.git` metadata.
+- A head change invalidates older verify and review evidence.
+- Reconciliation never resets, checks out, deletes, or silently adopts an unexpected workspace.
+
+Parallel writers and merge coordination are outside this baseline.
+
+## Provider runtime-policy enforcement
+
+Explicit Crew policy is stored on the ordinary Session and applied on every run and resume:
+
+- **Pi:** exposes only path-confined read/grep/list tools for read-only members and adds confined
+  edit/write tools for Builder; shell is omitted because Pi cannot honestly provide a
+  network-disabled arbitrary shell.
+- **Codex:** maps to app-server read-only or workspace-write sandbox policy with network disabled,
+  approval policy `never`, exact cwd, and one runtime workspace root.
+- **Claude:** exposes only allowlisted read or read/write file tools, enforces canonical paths in a
+  `PreToolUse` hook and permission callback, and admits only independently trusted Crew tools.
+
+Unsupported enforcement rejects before prompting. Solo Sessions with no explicit runtime policy
+retain their existing provider behavior.
+
+## Deterministic verifier sandbox
+
+The verifier refuses to run without a supported host sandbox. It checks the frozen full Git head,
+then prepares an exact-head disposable Git snapshot instead of running inside the canonical Crew
+worktree. Ignored files, generated output, and verifier writes are discarded with that snapshot.
+
+Already installed Bun or pnpm dependencies may be projected from another Git worktree only when
+the root lockfile bytes match. Dependency stores are mounted read-only and workspace-package links
+resolve to the frozen snapshot. These installed bytes are trusted-host input: the boundary protects
+against Crew members and the verifier mutating them, but it does not cryptographically attest
+changes made by the machine owner or another host process.
+
+Supported host sandboxes are:
+
+- macOS: Seatbelt through `/usr/bin/sandbox-exec`;
+- Linux: bubblewrap through `/usr/bin/bwrap`.
+
+Readiness runs and caches a minimal sandbox probe; binary existence alone is not enough. A host
+that cannot actually apply Seatbelt or bubblewrap resolves `needs_setup` before a run is created.
+On macOS, file data is denied globally outside the disposable snapshot, isolated temp/cache,
+read-only dependency store, Nuncio's executable directory, and narrowly required system runtime
+paths. Host locations such as the user's home, sibling temp files, `/private/etc`, and `/Library`
+remain unreadable. Both modes disable network, protect Git metadata and dependency stores, and
+constrain filesystem access. Nuncio never falls back to an unsandboxed command.
+
+Combined stdout/stderr uses a shared byte budget: 16 MiB by default, with the runner accepting no
+configuration above 64 MiB. Overflow terminates the process group and fails verification. Timeout
+or cancellation also kills the process group. Snapshot preparation and command execution share one
+owner abort signal and total deadline; preparation failure is infrastructure evidence and does not
+consume a verify-fix retry.
+
+## Redacted artifacts and progressive reads
+
+Nuncio retains the complete captured verify output and current workspace diff up to their
+fail-closed bounds. Before writing a `0600` artifact file, it redacts high-confidence secrets,
+API keys, forge tokens, Bearer values, and secret-like environment assignments. Metadata stores
+SHA-256 and byte count; every range read rechecks both before returning bytes.
+
+Public run detail exposes only allowlisted metadata. It never exposes the storage path, verify
+command, or cwd.
+
+`GET /api/crew-runs/:runId/artifacts/:artifactId?offset=<byte>&limit=<bytes>` returns:
+
+```json
+{
+  "range": {
+    "artifactId": "…",
+    "offset": 0,
+    "nextOffset": 16384,
+    "eof": false,
+    "text": "…"
+  }
 }
 ```
 
-Every published result records `basedOnRevision` and `workspaceHead`. A stale verify or review
-result is automatically invalid when the workspace head changes.
+The default chunk is 16,384 bytes and the maximum is 65,536. Offsets are run-scoped,
+non-negative, and must align to UTF-8 character boundaries. `nextOffset` is the server-provided
+byte cursor; clients never derive progress from JavaScript string length. Web and mobile viewers
+are bounded, progressive, retryable, and show loading/error/end states.
 
-### Role-specific context envelopes
+## Durability, recovery, and resume
 
-A fresh member receives a bounded envelope, not the parent transcript:
+`CrewTask` is the stable user intention. `CrewRun` is one immutable execution revision with an
+append-only event stream, projected tuple, context revision, profile snapshot, workspace lineage,
+member lineage, results, and artifacts. Commands use expected-revision compare-and-swap; event and
+attempt idempotency keys prevent duplicate advancement.
 
-```ts
-interface ContextEnvelope {
-  runId: string;
-  contextRevision: number;
-  role: CrewRole;
-  goal: string;
-  constraints: string[];
-  relevantDecisions: Decision[];
-  workspaceRef: WorkspaceRef;
-  artifactRefs: ArtifactRef[];
-  doneCriteria: string[];
-  verifyCommand?: string;
-  previousAttempt?: AttemptSummary;
-}
-```
+Recovery is layered:
 
-Views differ by role:
+1. Clients resume the Crew event cursor with `since`; clients render server projection rather
+   than inferring state from member transcripts.
+2. On daemon boot, Crew task claiming remains closed until every queued Crew attempt is reconciled.
+   Terminal, orphaned, wrong-role, stale-revision, and stale-member attempts are cancelled before
+   ordinary task workers may claim them; reconciliation failure keeps the queue fail-closed.
+3. Nuncio scans every non-terminal run, verifies event replay equals the stored projection, and
+   reconciles the canonical worktree/branch/full head.
+4. Builder recovery idempotently finishes the complete durable settlement chain before comparing
+   heads or scheduling work: accepted intent, Git checkpoint (including a crash-created clean
+   descendant), finalized structured result, then writer-lease release. Crashes at either side of
+   result persistence converge without a duplicate commit or stale lease.
+5. A resumable provider Session is continued. Otherwise Nuncio creates a linked member
+   incarnation with the same frozen binding and current context/workspace.
+6. An interrupted Verify may be queued again only after the exact current head and clean boundary
+   are re-established. Build recovery and an acknowledged BUILD pause may preserve a dirty
+   in-progress worktree only through the explicit recovery marker.
+7. A pre-existing deterministic worktree is adopted only when its full HEAD equals the frozen base
+   SHA. Missing, moved, symlinked, diverged, descendant, stale, or unavailable state blocks in
+   Attention; it is not silently repaired or rerouted.
 
-| Role | Default context |
-|---|---|
-| Foreman | Objective, decisions, member status, bounded digests, open questions |
-| Builder | Bounded goal, affected paths, current workspace, latest verify/review feedback |
-| Tester | Acceptance criteria, changed paths, head SHA, verify command |
-| Reviewer | Requirements, decisions, diff, verify evidence; never builder reasoning |
+Pause preserves phase. Provider loss preserves phase in `BLOCKED_PROVIDER`; restoration passes
+through `RECOVERING`. Cancellation quiesces member tasks/provider handles, aborts verification,
+releases the writer lease, and creates an immutable terminal run.
+Pause, cancel, resume, clarification, and extra-round commands serialize with member enqueue and
+settlement on the same per-run chain. An owner-aborted Verify emits no gate result, is excluded from
+gate projection, and consumes no retry; stale competing controls fail their exact revision check.
 
-Agents escalate progressively through context tools:
+## Successor runs
 
-```text
-summary
-  -> artifact metadata
-  -> bounded artifact range/search
-  -> compact events since seq
-  -> raw transcript only as a last resort
-```
+A terminal run never reopens. A user change request creates one successor under the same
+`CrewTask`, linked by `priorRunId` and exact expected base head. The prior snapshot, plan,
+decisions, synthesis, and gate evidence are copied as bounded history; the retained clean worktree
+becomes the successor base and all new gates start invalid.
 
-The current `HandoffBrief`, project facts, compact event reader, and completion digest are the
-starting primitives. Crew mode should consolidate them behind a CrewContext service rather than
-introducing another parallel context system.
+Healthy Foreman and Builder Sessions may continue only when provider, model, policy, workspace,
+and resumability still match. Reviewer continuity is not reused across successor runs. The prior
+run, its events, results, and artifacts remain unchanged.
 
-### Artifacts and failure packets
+## API and client surfaces
 
-Complete command output is stored as a redacted artifact. A fixed line count is only a preview,
-never a correctness boundary.
+The additive REST surface is:
 
-```ts
-interface VerifyArtifact {
-  command: string;
-  cwd: string;
-  exitCode: number;
-  durationMs: number;
-  workspaceHead: string;
-  fullLogRef: string;
-  logHash: string;
-  failingTests: string[];
-  primaryErrors: ErrorExcerpt[];
-}
-```
+- profile preset/CRUD/resolve under `/api/crew/presets` and `/api/crew/profiles`;
+- task creation/history/successor under `/api/crew/tasks`;
+- a bounded latest-per-task run-summary list under `/api/crew-runs` (`limit` defaults to 20 and
+  caps at 100; `offset` paginates) that excludes snapshots, context, and host paths;
+- full run detail/events/artifact ranges under `/api/crew-runs/:id`;
+- guarded pause, resume, cancel, clarification, and gate-specific extra-round commands.
 
-The builder first receives a structured failure packet: failing cases, primary causal excerpts,
-and the full-log reference. It can search or read further ranges on demand. Logs are redacted
-before storage, scoped to the run/project, and deleted by retention policy.
+Web/PWA and Expo both default to Solo, require a server-resolved `ready` profile before Crew
+creation, and let the user choose the exact base branch before that resolution is accepted. They
+show the fixed phase order, member Sessions, current gate evidence, recovery/blocker state,
+immutable history, and valid commands. They do not resolve provider/model bindings locally.
+Crew lifecycle pushes are emitted from the Crew aggregate with both `crewTaskId` and `crewRunId`;
+hidden member Session pushes are suppressed so notification navigation preserves run identity.
 
-Machine-verifiable fields such as branch, head SHA, diff, exit code, and check result are produced
-by Nuncio. Model prose is supplementary and must not overwrite deterministic evidence.
+## Sau đó build thêm
 
-### Member sessions
+These are deferred and are not part of the implemented baseline:
 
-Session identity belongs to a logical member incarnation, not merely a model:
+1. **Custom member prompts** and project-specific role prompt editing.
+2. **DAG workflows and custom roles**, including multiple writers and an integration/merge role.
+3. **Publish/PR/deploy actions** and their explicit authority, journaling, and reconciliation.
+4. **Provider/model fallback only if separately approved** as a new visible policy; never silently.
+5. **Deeper read coverage** beyond current bounded context, artifact metadata/ranges, and compact
+   evidence, after clear demand and privacy limits are defined.
+6. **Cleanup/retention automation** for worktrees, member Sessions, provider threads, events, and
+   artifacts. Current Crew resources are retained.
+7. **Content-attested dependency snapshots or a CAS** for deployments that must distrust other
+   host processes, beyond the current byte-equal-lockfile and read-only trusted-host boundary.
 
-```text
-CrewRun 123
-  foreman:primary  -> Claude session F1
-  builder:primary  -> Codex session B1
-  reviewer:primary -> Claude session R1
-  tester:runner    -> deterministic process; no model session required
-```
+## Verification state
 
-The same builder session is reused for verify and review feedback rounds. A second parallel
-builder gets a different member session even when it uses the same model.
+The implementation includes unit contracts for reducer, profile resolution, runtime policies,
+workspace/lease authority, structured results, verifier/artifacts, recovery/successors, API, core
+transport/projections, and web/mobile surfaces. The local verification record is:
 
-```ts
-interface CrewMemberSession {
-  id: string;
-  crewRunId: string;
-  memberKey: string;
-  provider: string;
-  model: string;
-  sessionId: string;
-  providerThreadId: string | null;
-  priorMemberSessionId: string | null;
-  lifecycle: 'active' | 'idle-reusable' | 'dormant' | 'archived' | 'purged';
-  lastSeenContextRevision: number;
-  lastSeenWorkspaceHead: string;
-  contextHealth: 'healthy' | 'compacted' | 'degraded';
-  lastUsedAt: number;
-}
-```
+- 204 Crew server unit tests and 10 Crew HTTP e2e tests passed;
+- the full 39-test server e2e layer, 350 core tests, 861 web tests, 89 mobile checks, and 126 script
+  tests passed;
+- `bun run gate:full` passed, including the existing level-5 real-browser smoke in headless mode
+  across Solo and Crew, desktop and narrow layouts, pause/resume, fixed gates, and terminal success;
+- independent high-reasoning review findings were regression-tested and addressed; the final
+  follow-up review found no actionable correctness regressions.
 
-For the same healthy member, Nuncio sends a context delta into the existing provider thread. A
-fresh or degraded member gets a successor session linked by `priorMemberSessionId` and seeded from
-a checkpoint plus artifact references.
-
-Session memory is optimistic context; Git and CrewContext remain authoritative. Before a follow-up,
-Nuncio compares `lastSeenWorkspaceHead` with the current head and reports any external delta.
-
-### Workspace policy
-
-MVP uses one CrewRun-owned worktree and one writer lease:
-
-| Role | Workspace permission |
-|---|---|
-| Foreman | read/context/delegate |
-| Builder | exclusive write lease |
-| Tester | read plus allowlisted verify commands |
-| Reviewer | read-only |
-
-This avoids merge coordination during the first implementation. Any workspace change invalidates
-verify/review evidence tied to an older head.
-
-Parallel writers require isolated worktrees and an explicit integration stage; that belongs in
-the later roadmap.
-
-### Recovery and resume
-
-Recovery has three independent layers:
-
-1. **Client reconnect:** replay append-only events from the last `seq`; the daemon keeps working.
-2. **Provider reconnect:** preserve the member attempt, reconnect/resume the provider thread, and
-   reconcile the workspace before sending a recovery delta.
-3. **Daemon/machine restart:** rebuild non-terminal CrewRuns from SQLite events, provider thread
-   ids, context checkpoints, durable queues, artifacts, and worktrees.
-
-Nuncio promises recovery from the latest durable boundary, not the exact middle of token generation
-or an arbitrary external side effect.
-
-```ts
-type RecoveryDecision =
-  | 'reconnect-live-turn'
-  | 'resume-provider-thread'
-  | 'resume-from-workspace'
-  | 'create-successor-session'
-  | 'needs-attention';
-```
-
-Each external side effect uses an operation journal and an idempotency/reconciliation strategy.
-After a crash, an operation with `tool_start` but no durable result is `unknown`, not automatically
-retried. Git pushes, PR creation, deploys, and other writes are queried before retry; irreconcilable
-operations surface in Attention.
-
-### Lifecycle and cleanup
-
-Disposing a live provider handle is not deleting its durable thread. Resources have separate
-retention:
-
-- live subprocess/socket: dispose after the stage or an idle timeout;
-- provider thread reference: retain while the member may be continued;
-- CrewContext and event log: retain for audit and restart recovery;
-- worktree/branch: retain through review and acceptance;
-- artifacts/logs: retain by explicit policy;
-- provider transcript: purge only through a provider-specific delete capability when requested.
-
-A completed task followed by a user change request creates a successor run linked to the completed
-run. It may reuse healthy Fable/Sol member sessions while keeping the previous run immutable and
-auditable. If a provider thread is missing or unhealthy, the successor starts from the final
-checkpoint and current Git state.
-
-## MVP baseline
-
-The first Crew implementation should deliberately stay narrow:
-
-```text
-Orchestrator: Nuncio deterministic workflow
-Foreman:      configurable; Fable profile default
-Builder:      configurable; Sol profile default
-Tester:       deterministic verify command
-Reviewer:     configurable, read-only
-
-Workspace:    one shared CrewRun worktree
-Writers:      one at a time
-Context:      role envelope + progressive artifact reads
-Feedback:     reuse the same builder member session
-Completion:   green verify + no blocking review findings
-Recovery:     provider thread, then context/workspace successor fallback
-Publishing:   explicit user approval when enabled
-```
-
-MVP deliverables:
-
-1. Solo/Crew mode and resolved profile snapshot.
-2. Preset/profile/project resolution against live provider capabilities.
-3. CrewTask, CrewRun, CrewMemberSession, context events, and artifact records.
-4. Deterministic CrewRun reducer and transition guards.
-5. Shared worktree with an exclusive writer lease.
-6. Structured member result and verify/review contracts tied to head SHA.
-7. `continueMember`, hibernate/restore, recovery scan, and successor-session fallback.
-8. Full-log artifacts with bounded failure packets and progressive reads.
-9. Crew UI showing stage, members, gates, attention, and recovery state.
-10. Restart, stale-result, retry, context-budget, and side-effect idempotency tests.
-
-MVP is a fixed guarded coding workflow, not a general DAG/workflow engine. Profiles may enable or
-skip declared gates, but they do not define arbitrary nodes, transitions, or recursive delegation.
-
-## Build later ("sau đó build thêm")
-
-These are intentional extensions, not MVP dependencies:
-
-1. **Parallel writers:** isolated member worktrees plus an integration/merge role.
-2. **Dynamic role creation:** foreman-proposed specialists beyond roles declared by the profile.
-3. **Provider-native nested agents:** optional inner fan-out inside Claude or Codex without making
-   provider-specific lineage the shared Crew contract.
-4. **Adaptive routing:** latency/cost/quality-aware role selection with visible fallback evidence.
-5. **Semantic retrieval:** embeddings or RAG for large decision/document history after structured
-   facts, refs, and lexical search prove insufficient.
-6. **Advanced caching:** provider-specific cache keys/breakpoints and cache-read/write telemetry.
-7. **Multiple reviewers:** security, correctness, UX, and docs lanes with a deterministic merge of
-   findings.
-8. **Distributed execution:** members running on different Nuncio machines through the existing
-   hub model.
-9. **Autonomous publishing:** policy-gated push, PR/MR creation, merge, deploy, and rollback.
-10. **Learning and eval routing:** profile suggestions based on measured success, token use,
-    latency, human intervention, and resume quality.
-11. **Profile sharing:** import/export or marketplace packaging once the profile schema stabilizes.
-12. **True cross-provider purge:** provider thread deletion, artifact lifecycle, and compliance
-    audit across every adapter.
-
-## Evaluation and success metrics
-
-Crew complexity is justified only if it beats an appropriate Solo baseline. Evaluate representative
-tasks in both modes:
-
-```text
-Solo Sol
-versus
-Fable foreman -> Sol builder -> Verify -> independent reviewer
-```
-
-Track:
-
-- task and verify success rate;
-- blocking defects found after the builder reports completion;
-- automated fix/review rounds;
-- human interventions and overrides;
-- input/output and cached-token usage when providers report it;
-- wall-clock time and queue wait;
-- stale-result rejections and writer conflicts;
-- recovery success after client disconnect, provider loss, and daemon termination;
-- duplicated or unknown external side effects;
-- context-envelope and artifact-read bytes per role.
-
-The default profile should remain simple when Crew adds cost or latency without a material quality
-gain. Evaluation is a product gate, not a post-launch analytics task.
-
-## Current foundations and known gaps
-
-Reusable foundations already present:
-
-- provider-neutral `AgentProvider` and capability registry;
-- persistent session/provider thread ids;
-- append-only event log and cursor replay;
-- durable task and steer queues;
-- handoff brief and project facts;
-- budgeted cross-session reads and completion digests;
-- verify feedback loop rebuilt from durable events;
-- worktrees, diffs, forge actions, and Attention.
-
-Important gaps before Crew can claim restart-safe end-to-end behavior:
-
-- a `RUNNING` task at daemon boot currently becomes terminal `FAILED: daemon_restart`; Crew needs
-  `interrupted -> recovering` reconciliation;
-- task cleanup policy is persisted, but reviewed-task worktree/provider transcript cleanup is not a
-  complete lifecycle service;
-- task retry currently clones a fresh task/session instead of continuing a healthy member session;
-- completion digest still falls back to assistant prose instead of a required structured member
-  result;
-- no CrewRun-owned workspace/write lease or head-bound verify/review invalidation exists yet;
-- no operation journal protects arbitrary external side effects from crash-time duplication.
-
-## Non-goals
-
-- Do not build a raw model API harness inside Nuncio.
-- Do not copy full transcripts between providers by default.
-- Do not treat model claims as proof that tests, reviews, or publication succeeded.
-- Do not hard-code Fable, Sol, Claude, Codex, or Pi in the shared session/task/UI layers.
-- Do not permit multiple writers in one worktree concurrently.
-- Do not build arbitrary profile-defined DAGs in the MVP.
-- Do not promise exactly-once execution for arbitrary tools; use idempotency and reconciliation.
-
-## Open product decisions
-
-The following remain user decisions and are not locked by this document:
-
-1. Whether a normal plan proceeds automatically or needs approval for selected profiles.
-2. Whether every successful reviewed run requires a final human acceptance step.
-3. Which finding severities block completion and how many fix/review rounds are allowed.
-4. How long completed member threads, logs, and worktrees remain resumable.
-5. Whether Pi remains visible as an optional provider, becomes legacy-hidden, or is removed.
-6. Which authentication paths are supported for distributed/self-hosted Claude and Codex usage.
-7. Whether a user change request creates a new top-level task or a successor run under the same
-   task; the companion state-machine draft recommends a successor run.
+GitHub records `dev` PR/CI integration separately. Stable promotion remains outside this baseline.

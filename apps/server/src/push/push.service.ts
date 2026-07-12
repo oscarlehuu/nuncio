@@ -105,8 +105,11 @@ export class PushService implements OnModuleInit, OnModuleDestroy {
     if (recipients.length === 0) return;
 
     const row = this.database.db
-      .prepare<{ title: string }, [string]>('SELECT title FROM sessions WHERE id = ?')
+      .prepare<{ title: string; verify_owner: string }, [string]>(
+        'SELECT title, verify_owner FROM sessions WHERE id = ?',
+      )
       .get(sessionId);
+    if (row?.verify_owner === 'crew') return;
     const content = pushContentFor(event, row?.title ?? 'Session');
     if (!content) return;
 

@@ -110,7 +110,7 @@ export class HeartbeatService implements OnModuleInit {
           attentionItems: this.attentionItems?.list() ?? [],
           // Archived-INCLUSIVE: a session completed-and-archived before the digest
           // fires is still a completion (finding #3) — list(false) would hide it.
-          sessions: this.sessions?.list(true) ?? [],
+          sessions: this.sessions?.listUserFacing(true) ?? [],
           latestEventAt: (id) => this.events?.latestEventAt(id) ?? null,
           maxRunsPerDay: 24,
         },
@@ -150,7 +150,7 @@ export class HeartbeatService implements OnModuleInit {
     if (this.sessions && this.events) {
       this.infra.runningSessions = () =>
         this.sessions!
-          .list(false)
+          .listUserFacing(false)
           .filter((s) => s.status === 'RUNNING')
           .map((s) => ({
             id: s.id,
@@ -288,7 +288,7 @@ export class HeartbeatService implements OnModuleInit {
   }
 
   private observabilitySources(): ObservabilitySources {
-    const sessions = this.sessions?.list(true) ?? [];
+    const sessions = this.sessions?.listUserFacing(true) ?? [];
     return {
       sessions,
       eventsBySession: Object.fromEntries(

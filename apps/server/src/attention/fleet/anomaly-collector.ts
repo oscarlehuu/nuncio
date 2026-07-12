@@ -82,7 +82,7 @@ export class AnomalyCollector implements OnModuleInit {
     if (this.sessions) {
       this.runningSessions = () =>
         this.sessions!
-          .list(false)
+          .listUserFacing(false)
           .filter((s) => s.status === 'RUNNING')
           .map((s) => ({
             id: s.id,

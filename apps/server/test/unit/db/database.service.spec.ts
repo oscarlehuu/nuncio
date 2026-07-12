@@ -27,6 +27,8 @@ describe('DatabaseService schema + migration', () => {
     expect(cols.map((column) => column.name)).toContain('provider_thread_id');
     expect(cols.map((column) => column.name)).toContain('provider_active_turn_id');
     expect(cols.map((column) => column.name)).toContain('provider_state_json');
+    expect(cols.map((column) => column.name)).toContain('runtime_policy_json');
+    expect(cols.map((column) => column.name)).toContain('verify_owner');
   });
 
   it('fresh schema includes provider request persistence', () => {
@@ -54,6 +56,123 @@ describe('DatabaseService schema + migration', () => {
       'created_at',
       'resolved_at',
     ]);
+  });
+
+  it('fresh schema includes the durable Crew aggregate tables', () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-crew-fresh-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
+
+    db = new DatabaseService();
+    const tables = db.db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .all() as Array<{ name: string }>;
+    expect(tables.map((table) => table.name)).toEqual(
+      expect.arrayContaining([
+        'crew_profiles',
+        'crew_tasks',
+        'crew_runs',
+        'crew_events',
+        'crew_member_sessions',
+        'crew_member_results',
+        'crew_artifacts',
+        'crew_writer_leases',
+      ]),
+    );
+  });
+
+  it('adds the Crew aggregate to an existing database without changing session rows', () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-crew-migrate-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
+
+    const oldDb = new Database(join(dataDir, 'nuncio.db'));
+    oldDb.exec(
+      `CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'CREATED',
+        prompt TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+    );
+    oldDb
+      .prepare(
+        `INSERT INTO sessions (id, title, status, prompt, created_at, updated_at)
+         VALUES ('existing', 'Existing', 'IDLE', 'keep me', 1, 2)`,
+      )
+      .run();
+    oldDb.close();
+
+    db = new DatabaseService();
+    const crewTable = db.db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'crew_runs'")
+      .get() as { name: string } | null;
+    const existing = db.db.prepare('SELECT prompt FROM sessions WHERE id = ?').get('existing') as {
+      prompt: string;
+    };
+    expect(crewTable?.name).toBe('crew_runs');
+    expect(existing.prompt).toBe('keep me');
+  });
+
+  it('adds durable Crew correlation to fresh and existing task rows', () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-task-crew-migrate-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
+
+    const oldDb = new Database(join(dataDir, 'nuncio.db'));
+    oldDb.exec(
+      `CREATE TABLE tasks (
+        id TEXT PRIMARY KEY,
+        prompt TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'QUEUED',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+    );
+    oldDb
+      .prepare(
+        `INSERT INTO tasks (id, prompt, status, created_at, updated_at)
+         VALUES ('existing-task', 'keep task', 'QUEUED', 1, 2)`,
+      )
+      .run();
+    oldDb.close();
+
+    db = new DatabaseService();
+    const columns = db.db.prepare('PRAGMA table_info(tasks)').all() as Array<{
+      name: string;
+      dflt_value: string | null;
+    }>;
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        'crew_run_id',
+        'crew_member_key',
+        'crew_phase',
+        'crew_attempt_key',
+        'execution_kind',
+        'runtime_policy_json',
+        'verify_owner',
+      ]),
+    );
+    expect(columns.find((column) => column.name === 'execution_kind')?.dflt_value).toBe("'session'");
+    expect(columns.find((column) => column.name === 'verify_owner')?.dflt_value).toBe("'session'");
+    const existing = db.db
+      .prepare(
+        `SELECT prompt, crew_attempt_key, execution_kind, runtime_policy_json, verify_owner
+         FROM tasks WHERE id = ?`,
+      )
+      .get('existing-task') as {
+        prompt: string;
+        crew_attempt_key: string | null;
+        execution_kind: string;
+        runtime_policy_json: string | null;
+        verify_owner: string;
+      };
+    expect(existing).toEqual({
+      prompt: 'keep task',
+      crew_attempt_key: null,
+      execution_kind: 'session',
+      runtime_policy_json: null,
+      verify_owner: 'session',
+    });
   });
 
   it('defaults provider to pi when omitted on insert', () => {
@@ -106,10 +225,13 @@ describe('DatabaseService schema + migration', () => {
     expect(cols.map((column) => column.name)).toContain('provider_thread_id');
     expect(cols.map((column) => column.name)).toContain('provider_active_turn_id');
     expect(cols.map((column) => column.name)).toContain('provider_state_json');
+    expect(cols.map((column) => column.name)).toContain('runtime_policy_json');
+    expect(cols.map((column) => column.name)).toContain('verify_owner');
 
     const row = db.db
       .prepare(
-        `SELECT provider, provider_thread_id, provider_active_turn_id, provider_state_json
+        `SELECT provider, provider_thread_id, provider_active_turn_id, provider_state_json,
+                runtime_policy_json, verify_owner
          FROM sessions WHERE id = ?`,
       )
       .get('old') as {
@@ -117,11 +239,15 @@ describe('DatabaseService schema + migration', () => {
       provider_thread_id: string | null;
       provider_active_turn_id: string | null;
       provider_state_json: string | null;
+      runtime_policy_json: string | null;
+      verify_owner: string;
     };
     expect(row.provider).toBe('pi');
     expect(row.provider_thread_id).toBeNull();
     expect(row.provider_active_turn_id).toBeNull();
     expect(row.provider_state_json).toBeNull();
+    expect(row.runtime_policy_json).toBeNull();
+    expect(row.verify_owner).toBe('session');
   });
 
   it('migrates a pre-existing loops table by adding the engine + name columns', () => {

@@ -57,6 +57,67 @@ describe('SessionsRepository', () => {
     expect(s.model).toBeNull();
     expect(s.projectPath).toBeNull();
     expect(s.branch).toBeNull();
+    expect(s.runtimePolicy).toBeNull();
+    expect(s.verifyOwner).toBe('session');
+  });
+
+  it('persists runtime policy and crew-owned verification across repository reads', () => {
+    const runtimePolicy = {
+      filesystem: 'workspace-write' as const,
+      workspaceRoot: '/tmp/nuncio-crew-workspace',
+      network: 'disabled' as const,
+    };
+    const created = repo.create({
+      prompt: 'crew member',
+      workspace: runtimePolicy.workspaceRoot,
+      runtimePolicy,
+      verifyOwner: 'crew',
+    });
+
+    expect(created.runtimePolicy).toEqual(runtimePolicy);
+    expect(created.verifyOwner).toBe('crew');
+    expect(repo.findById(created.id)).toMatchObject({ runtimePolicy, verifyOwner: 'crew' });
+  });
+
+  it('restores policy, verification owner, and provider thread after a database restart', async () => {
+    const restartDir = mkdtempSync(join(tmpdir(), 'nuncio-policy-restart-'));
+    const runtimePolicy = {
+      filesystem: 'read-only' as const,
+      workspaceRoot: '/tmp/nuncio-restart-workspace',
+      network: 'disabled' as const,
+    };
+    let first: TestingModule | undefined;
+    let second: TestingModule | undefined;
+    try {
+      process.env.NUNCIO_DATA_DIR = restartDir;
+      first = await Test.createTestingModule({
+        imports: [DatabaseModule, SessionsPersistenceModule],
+      }).compile();
+      first.get(SessionsRepository).create({
+        id: 'policy-restart',
+        prompt: 'resume safely',
+        provider: 'codex',
+        providerThreadId: 'thread-policy-1',
+        runtimePolicy,
+        verifyOwner: 'crew',
+      });
+      await first.close();
+      first = undefined;
+
+      second = await Test.createTestingModule({
+        imports: [DatabaseModule, SessionsPersistenceModule],
+      }).compile();
+      expect(second.get(SessionsRepository).findById('policy-restart')).toMatchObject({
+        providerThreadId: 'thread-policy-1',
+        runtimePolicy,
+        verifyOwner: 'crew',
+      });
+    } finally {
+      await first?.close();
+      await second?.close();
+      process.env.NUNCIO_DATA_DIR = dataDir;
+      rmSync(restartDir, { recursive: true, force: true });
+    }
   });
 
   it('uses the full first prompt line as the session title without truncating it', () => {

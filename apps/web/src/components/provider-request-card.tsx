@@ -48,13 +48,13 @@ export function ProviderRequestCard({
             {detail}
           </code>
         ) : null}
-        {pending ? (
+        {pending && onRespond ? (
           <div className="mt-3 flex gap-2">
             <Button
               type="button"
               size="sm"
               onClick={() => void onRespond?.(request.requestId, 'approve')}
-              disabled={!onRespond || responding}
+              disabled={responding}
               aria-label="Approve request"
               className="gap-1.5"
             >
@@ -66,7 +66,7 @@ export function ProviderRequestCard({
               size="sm"
               variant="outline"
               onClick={() => void onRespond?.(request.requestId, 'deny')}
-              disabled={!onRespond || responding}
+              disabled={responding}
               aria-label="Deny request"
               className="gap-1.5"
             >

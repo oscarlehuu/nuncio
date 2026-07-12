@@ -109,8 +109,6 @@ function gridElement(sessions: Session[], over: Partial<Parameters<typeof GridVi
     <GridView
       sessions={sessions}
       providers={PROVIDERS}
-      approvalMode="full-access"
-      onApprovalModeChange={vi.fn()}
       onRespondProviderRequest={vi.fn()}
       onSteerSession={vi.fn()}
       onPauseSession={vi.fn()}

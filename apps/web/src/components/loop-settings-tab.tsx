@@ -100,6 +100,7 @@ export function LoopSettingsTab({
               providerDefaultOption
               autoPick={false}
               variant="text"
+              compact
             />
           </div>
         </div>

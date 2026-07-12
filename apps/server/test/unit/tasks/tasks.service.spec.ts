@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AgentsModule } from '../../../src/agents/agents.module';
+import { RetainedEventFlushError } from '../../../src/agents/agents.base-provider';
 import { CursorLocalModule } from '../../../src/cursor-local/cursor-local.module';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { DatabaseService } from '../../../src/db/database.service';
@@ -102,6 +103,183 @@ describe('TasksService', () => {
     expect(events.list(done.sessionId!).some((e) => e.type === 'user_message')).toBe(true);
   });
 
+  it('defers queued Crew members until the Crew execution owner marks itself ready', async () => {
+    const task = service.enqueue({
+      prompt: 'resume only after Crew bootstrap',
+      executionKind: 'crew-member',
+      crewRunId: 'crew-run-boot-gate',
+      crewMemberKey: 'builder:primary',
+      sessionId: 'missing-until-owner-ready',
+      verifyOwner: 'crew',
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(repo.findById(task.id)?.status).toBe('QUEUED');
+
+    service.markCrewQueueReconciled();
+    service.markCrewExecutionReady();
+    const settled = await waitForStatus(task.id, ['DONE', 'FAILED']);
+    expect(settled.status).toBe('FAILED');
+  });
+
+  it('refuses to open Crew claims before boot queue reconciliation is acknowledged', async () => {
+    const restarted = await buildModule();
+    try {
+      const restartedService = restarted.get(TasksService);
+      const restartedRepo = restarted.get(TasksRepository);
+      const task = restartedService.enqueue({
+        prompt: 'must remain gated',
+        executionKind: 'crew-member',
+        crewRunId: 'crew-run-unreconciled',
+        crewMemberKey: 'builder:primary',
+        verifyOwner: 'crew',
+      });
+
+      expect(() => restartedService.markCrewExecutionReady()).toThrow('reconciliation');
+      expect(restartedRepo.findById(task.id)?.status).toBe('QUEUED');
+    } finally {
+      await restarted.close();
+    }
+  });
+
+  it('hides Crew member rows from public lists and rejects public task mutations', () => {
+    const crew = repo.create({
+      prompt: 'internal builder attempt',
+      executionKind: 'crew-member',
+      crewRunId: 'crew-run-hidden',
+      crewMemberKey: 'builder:primary',
+      sessionId: 'crew-hidden-session',
+      holdUntil: Date.now() + 60_000,
+      verifyOwner: 'crew',
+    });
+    const solo = repo.create({ prompt: 'visible task', holdUntil: Date.now() + 60_000 });
+
+    expect(service.list().map((task) => task.id)).toContain(solo.id);
+    expect(service.list().map((task) => task.id)).not.toContain(crew.id);
+    expect(service.listInternal().map((task) => task.id)).toContain(crew.id);
+    for (const mutate of [
+      () => service.update(crew.id, { model: 'mock:builder' }),
+      () => service.startNow(crew.id),
+      () => service.cancel(crew.id),
+      () => service.retry(crew.id),
+      () => service.markReviewed(crew.id),
+      () => service.delete(crew.id),
+    ]) {
+      expect(mutate).toThrow('Crew-owned tasks can only be changed through Crew controls');
+    }
+    expect(repo.findById(crew.id)?.status).toBe('QUEUED');
+  });
+
+  it('idempotently cancels an active Crew task through the internal owner seam', () => {
+    const crew = repo.create({
+      prompt: 'active internal builder attempt',
+      executionKind: 'crew-member',
+      crewRunId: 'crew-run-active-cancel',
+      crewMemberKey: 'builder:primary',
+      sessionId: 'crew-active-session',
+      verifyOwner: 'crew',
+    });
+    expect(repo.claimNextQueued({ includeCrewMembers: true })?.id).toBe(crew.id);
+
+    expect(service.cancelCrewMember(crew.id)).toMatchObject({
+      id: crew.id,
+      status: 'CANCELLED',
+    });
+    expect(service.cancelCrewMember(crew.id)).toMatchObject({
+      id: crew.id,
+      status: 'CANCELLED',
+    });
+    expect(repo.findById(crew.id)?.status).toBe('CANCELLED');
+  });
+
+  it('rejects generic enqueue under a Crew-owned parent even without a new worktree', async () => {
+    const parent = await sessions.create({
+      prompt: 'owned Builder', provider: 'cursor', workspace, verifyOwner: 'crew',
+    });
+    expect(() => service.enqueue({
+      prompt: 'escape Crew authority', parentSessionId: parent.id, role: 'subagent',
+      workspace, useWorktree: false, holdUntil: Date.now() + 60_000,
+    })).toThrow('Crew-owned sessions cannot delegate generic tasks');
+    expect(service.list(parent.id)).toHaveLength(0);
+  });
+
+  it('rejects explicit multitask under a Crew-owned parent even when useWorktree is false', async () => {
+    const parent = await sessions.create({
+      prompt: 'owned Reviewer', provider: 'cursor', workspace, verifyOwner: 'crew',
+    });
+    await expect(service.startMultitask({
+      parentSessionId: parent.id, prompts: ['escape review authority'], useWorktree: false,
+    })).rejects.toThrow('Crew-owned sessions cannot delegate generic tasks');
+    expect(service.list(parent.id)).toHaveLength(0);
+  });
+
+  it('rejects steer-queue multitask under a Crew-owned parent before claiming messages', async () => {
+    const parent = await sessions.create({
+      prompt: 'owned Foreman', provider: 'cursor', workspace, verifyOwner: 'crew',
+    });
+    const steerQueue = module.get(SteerQueueRepository);
+    steerQueue.enqueue(parent.id, 'escape Foreman authority');
+    const steerSpy = jest.spyOn(sessions, 'steer');
+    try {
+      await expect(service.startMultitaskFromQueue(parent.id))
+        .rejects.toThrow('Crew-owned sessions cannot delegate generic tasks');
+      await sessions.awaitRun(parent.id);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(steerSpy).not.toHaveBeenCalled();
+      expect(steerQueue.count(parent.id)).toBe(1);
+      expect(events.list(parent.id).some((event) => event.type === 'steer_queue_cleared')).toBe(false);
+      expect(events.list(parent.id).some(
+        (event) => event.type === 'error' && String((event.payload as { message?: string }).message)
+          .includes('Queued message failed to send'),
+      )).toBe(false);
+    } finally {
+      steerSpy.mockRestore();
+    }
+  });
+
+  it('runs a Crew member task by continuing its exact existing session', async () => {
+    writeVerifyScript('exit 0\n');
+    const existing = await sessions.create({
+      prompt: 'initial builder turn',
+      provider: 'cursor',
+      workspace,
+      verifyOwner: 'crew',
+    });
+    await sessions.awaitRun(existing.id);
+    const beforeIds = sessions.list(true).map((session) => session.id);
+
+    service.markCrewExecutionReady();
+
+    const task = service.enqueue({
+      prompt: 'continue the same builder',
+      executionKind: 'crew-member',
+      crewRunId: 'crew-run-exact',
+      crewMemberKey: 'builder-exact',
+      crewPhase: 'build',
+      sessionId: existing.id,
+      verifyOwner: 'crew',
+    });
+
+    const done = await waitForStatus(task.id, ['DONE', 'FAILED']);
+    expect(done).toMatchObject({
+      status: 'DONE',
+      sessionId: existing.id,
+      executionKind: 'crew-member',
+      crewRunId: 'crew-run-exact',
+      crewMemberKey: 'builder-exact',
+      crewPhase: 'build',
+    });
+    expect(sessions.list(true).map((session) => session.id)).toEqual(beforeIds);
+    const messages = events.list(existing.id).filter(
+      (event) => event.type === 'user_message' || event.type === 'steer_message',
+    );
+    expect(messages).toHaveLength(2);
+    expect(messages.at(-1)?.payload).toEqual(expect.objectContaining({
+      text: expect.stringContaining('continue the same builder'),
+    }));
+  });
+
   it('runs tasks one at a time: the second stays QUEUED while the first runs', async () => {
     writeVerifyScript('sleep 0.5\nexit 0\n');
     const first = service.enqueue({ prompt: 'slow first', provider: 'cursor', workspace });
@@ -129,7 +307,7 @@ describe('TasksService', () => {
     const victim = service.enqueue({ prompt: 'cancel me', provider: 'cursor', workspace });
 
     await waitForStatus(blocker.id, ['RUNNING']);
-    const cancelled = service.cancel(victim.id);
+    const cancelled = await service.cancel(victim.id);
     expect(cancelled.status).toBe('CANCELLED');
 
     await waitForStatus(blocker.id, ['DONE', 'FAILED']);
@@ -142,7 +320,7 @@ describe('TasksService', () => {
   it('cancel rejects tasks that already run', async () => {
     const task = service.enqueue({ prompt: 'too late', provider: 'cursor', workspace });
     await waitForStatus(task.id, ['DONE', 'FAILED']);
-    expect(() => service.cancel(task.id)).toThrow(BadRequestException);
+    await expect(service.cancel(task.id)).rejects.toThrow(BadRequestException);
   });
 
   it('cancel fires the finish hook so settlement consumers (loops) fold the terminal task', async () => {
@@ -153,7 +331,7 @@ describe('TasksService', () => {
 
     const finished: string[] = [];
     service.onTaskFinished((t) => finished.push(`${t.id}:${t.status}`));
-    service.cancel(victim.id);
+    await service.cancel(victim.id);
 
     expect(finished).toContain(`${victim.id}:CANCELLED`);
   });
@@ -512,7 +690,7 @@ describe('TasksService', () => {
         const task = result.tasks[0]!;
         const windowSeconds = Math.round((task.holdUntil! - before) / 1000);
         expect(windowSeconds).toBe(expectedSeconds);
-        service.cancel(task.id);
+        await service.cancel(task.id);
       }
     } finally {
       settings.clear('NUNCIO_MULTITASK_COUNTDOWN_SECONDS');
@@ -525,7 +703,7 @@ describe('TasksService', () => {
     const updated = service.update(task!.id, { provider: 'pi', model: 'pi:new-model' });
     expect(updated.provider).toBe('pi');
     expect(updated.model).toBe('pi:new-model');
-    service.cancel(task!.id);
+    await service.cancel(task!.id);
   });
 
   it('update re-arms the hold with holdSeconds', async () => {
@@ -534,7 +712,7 @@ describe('TasksService', () => {
     const before = Date.now();
     const updated = service.update(task!.id, { holdSeconds: 120 });
     expect(Math.round((updated.holdUntil! - before) / 1000)).toBe(120);
-    service.cancel(task!.id);
+    await service.cancel(task!.id);
   });
 
   it('update rejects a non-queued task, a non-held re-arm, and an unknown id', async () => {
@@ -544,7 +722,7 @@ describe('TasksService', () => {
 
     const notHeld = repo.create({ prompt: 'no hold', provider: 'cursor' });
     expect(() => service.update(notHeld.id, { holdSeconds: 30 })).toThrow(BadRequestException);
-    service.cancel(notHeld.id);
+    await service.cancel(notHeld.id);
 
     expect(() => service.update('missing', { model: 'x' })).toThrow(NotFoundException);
   });
@@ -566,7 +744,7 @@ describe('TasksService', () => {
     // Non-string provider/model are rejected too.
     expect(() => service.update(task!.id, { provider: 123 as never })).toThrow(BadRequestException);
     expect(() => service.update(task!.id, { model: {} as never })).toThrow(BadRequestException);
-    service.cancel(task!.id);
+    await service.cancel(task!.id);
   });
 
   it('does not arm a wake timer for an already-expired hold at full concurrency', async () => {
@@ -613,7 +791,7 @@ describe('TasksService', () => {
     // A queued-but-unheld task cannot be "started now".
     const unheld = repo.create({ prompt: 'unheld', provider: 'cursor' });
     expect(() => service.startNow(unheld.id)).toThrow(BadRequestException);
-    service.cancel(unheld.id);
+    await service.cancel(unheld.id);
   });
 
   it('pump wake timer promotes a held task to RUNNING without any extra API call', async () => {
@@ -781,6 +959,32 @@ describe('TasksService', () => {
       expect(all[all.length - 1]!.type).toBe('task_completed');
     });
 
+    it('does not append or notify when a terminal settlement is replayed', async () => {
+      const parent = await sessions.create({ prompt: 'duplicate parent', provider: 'cursor', workspace });
+      await sessions.awaitRun(parent.id);
+      const queued = repo.create({
+        prompt: 'duplicate child',
+        role: 'subagent',
+        parentSessionId: parent.id,
+      });
+      const running = repo.claimNextQueued();
+      expect(running?.id).toBe(queued.id);
+      repo.finish(queued.id, 'DONE', { sessionStatus: 'IDLE' });
+      const before = events.list(parent.id).filter((event) => event.type === 'task_completed').length;
+
+      const replay = await (service as unknown as {
+        finishWithDigest(
+          task: TaskDto,
+          status: 'DONE' | 'FAILED',
+          childSessionId: string | null,
+          outcome: Record<string, unknown>,
+        ): Promise<TaskDto | null>;
+      }).finishWithDigest(running!, 'FAILED', null, { reason: 'duplicate' });
+
+      expect(replay).toBeNull();
+      expect(events.list(parent.id).filter((event) => event.type === 'task_completed')).toHaveLength(before);
+    });
+
     it('starts explicit-brief multitask children immediately and appends the parent digest', async () => {
       writeVerifyScript('exit 0\n');
       const parent = await sessions.create({ prompt: 'parent', provider: 'cursor', workspace });
@@ -926,6 +1130,146 @@ describe('TasksService', () => {
       // reconciles into a FAILED task + FAILED digest (covered by the boot test).
     });
 
+    it('retries task completion after a transient retained parent-tail flush failure', async () => {
+      writeVerifyScript('exit 0\n');
+      const parent = await sessions.create({ prompt: 'retry parent tail', provider: 'cursor', workspace });
+      const originalFlush = sessions.flushParentBuffer.bind(sessions);
+      let flushAttempts = 0;
+      const flushSpy = jest.spyOn(sessions, 'flushParentBuffer').mockImplementation((id: string) => {
+        flushAttempts += 1;
+        if (flushAttempts === 1) throw new RetainedEventFlushError(new Error('database temporarily busy'));
+        originalFlush(id);
+      });
+
+      try {
+        const child = service.enqueue({
+          prompt: 'finish after parent tail recovers',
+          provider: 'cursor',
+          workspace,
+          role: 'subagent',
+          parentSessionId: parent.id,
+        });
+
+        const done = await waitForStatus(child.id, ['DONE', 'FAILED'], 2_000);
+        expect(done.status).toBe('DONE');
+        expect(flushAttempts).toBeGreaterThanOrEqual(2);
+        expect(events.list(parent.id).some((event) => event.type === 'task_completed')).toBe(true);
+      } finally {
+        flushSpy.mockRestore();
+      }
+    });
+
+    it('retries cancellation after a transient retained parent-tail flush failure', async () => {
+      const parent = await sessions.create({ prompt: 'cancel retry parent', provider: 'cursor', workspace });
+      const victim = repo.create({
+        prompt: 'cancel after parent tail recovers',
+        provider: 'cursor',
+        workspace,
+        role: 'subagent',
+        parentSessionId: parent.id,
+      });
+      const originalFlush = sessions.flushParentBuffer.bind(sessions);
+      let flushAttempts = 0;
+      const flushSpy = jest.spyOn(sessions, 'flushParentBuffer').mockImplementation((id: string) => {
+        flushAttempts += 1;
+        if (flushAttempts === 1) throw new RetainedEventFlushError(new Error('database temporarily busy'));
+        originalFlush(id);
+      });
+
+      try {
+        const cancelled = await service.cancel(victim.id);
+        expect(cancelled.status).toBe('CANCELLED');
+        expect(flushAttempts).toBeGreaterThanOrEqual(2);
+        expect(events.list(parent.id).some((event) => event.type === 'task_completed')).toBe(true);
+      } finally {
+        flushSpy.mockRestore();
+      }
+    });
+
+    it('reserves a queued cancellation while the parent tail is recovering', async () => {
+      const parent = await sessions.create({ prompt: 'cancel reservation parent', provider: 'cursor', workspace });
+      const victim = repo.create({
+        prompt: 'must never launch after cancel',
+        provider: 'cursor',
+        workspace,
+        role: 'subagent',
+        parentSessionId: parent.id,
+      });
+      const originalFlush = sessions.flushParentBuffer.bind(sessions);
+      let storageAvailable = false;
+      const flushSpy = jest.spyOn(sessions, 'flushParentBuffer').mockImplementation((sessionId: string) => {
+        if (!storageAvailable) throw new RetainedEventFlushError(new Error('tail pending'));
+        originalFlush(sessionId);
+      });
+      try {
+        const cancelling = service.cancel(victim.id);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(repo.claimNextQueued()).toBeNull();
+        expect(repo.findById(victim.id)?.holdUntil).toBeNull();
+        storageAvailable = true;
+        expect((await cancelling).status).toBe('CANCELLED');
+      } finally {
+        storageAvailable = true;
+        flushSpy.mockRestore();
+      }
+    });
+
+    it('releases a cancellation reservation when digest preparation throws', async () => {
+      const parent = await sessions.create({ prompt: 'cancel prep parent', provider: 'cursor', workspace });
+      const victim = repo.create({
+        prompt: 'cancel prep failure',
+        provider: 'cursor',
+        workspace,
+        role: 'subagent',
+        parentSessionId: parent.id,
+      });
+      const getSpy = jest.spyOn(sessions, 'get').mockImplementation(() => {
+        throw new Error('parent read failed');
+      });
+      try {
+        await expect(service.cancel(victim.id)).rejects.toThrow('parent read failed');
+      } finally {
+        getSpy.mockRestore();
+      }
+      expect(repo.claimNextQueued()?.id).toBe(victim.id);
+      repo.finish(victim.id, 'FAILED', { reason: 'test_cleanup' });
+    });
+
+    it('flushes a delta buffered during the retry await before a cancellation digest', async () => {
+      const parent = await sessions.create({ prompt: 'cancel ordering parent', provider: 'cursor', workspace });
+      const victim = repo.create({
+        prompt: 'cancel with concurrent parent output',
+        provider: 'cursor',
+        workspace,
+        role: 'subagent',
+        parentSessionId: parent.id,
+      });
+      let pendingDelta = false;
+      let flushCalls = 0;
+      const flushSpy = jest.spyOn(sessions, 'flushParentBuffer').mockImplementation((id: string) => {
+        flushCalls += 1;
+        if (pendingDelta) {
+          pendingDelta = false;
+          events.append(id, 'assistant_delta', { delta: 'concurrent parent output' });
+          return;
+        }
+        if (flushCalls === 1) queueMicrotask(() => { pendingDelta = true; });
+      });
+
+      try {
+        await service.cancel(victim.id);
+        // Expose the ordering bug on implementations that fail to perform the
+        // final adjacent flush themselves.
+        if (pendingDelta) sessions.flushParentBuffer(parent.id);
+        const ordered = events.list(parent.id).filter(
+          (event) => event.type === 'assistant_delta' || event.type === 'task_completed',
+        );
+        expect(ordered.map((event) => event.type)).toEqual(['assistant_delta', 'task_completed']);
+      } finally {
+        flushSpy.mockRestore();
+      }
+    });
+
     it('a flushed parent delta survives even when the digest transaction rolls back', async () => {
       writeVerifyScript('exit 0\n');
       const parent = await sessions.create({ prompt: 'flush-durable parent', provider: 'cursor', workspace });
@@ -1018,7 +1362,7 @@ describe('TasksService', () => {
       await waitForStatus(blocker.id, ['RUNNING']);
       const finished: string[] = [];
       const unsubscribe = service.onTaskFinished((task) => finished.push(`${task.id}:${task.status}`));
-      service.cancel(victim.id);
+      await service.cancel(victim.id);
       unsubscribe();
 
       const payload = await waitForEventType(parent.id, 'task_completed');

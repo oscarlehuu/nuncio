@@ -1,4 +1,4 @@
-import type { AgentAttachment } from '../../agents/agents.types';
+import type { AgentAttachment, AgentRuntimePolicy } from '../../agents/agents.types';
 import type { ModelOptionsMap } from '../../models/model-options.types';
 import type { HandoffBrief } from '../../orchestration/handoff-brief.types';
 
@@ -27,6 +27,8 @@ export interface SessionRow {
   provider_thread_id: string | null;
   provider_active_turn_id: string | null;
   provider_state_json: string | null;
+  runtime_policy_json: string | null;
+  verify_owner: string;
   cursor_backend: string | null;
   cursor_chat_id: string | null;
   forge_provider: string | null;
@@ -114,6 +116,8 @@ export interface SessionDto {
   providerThreadId: string | null;
   providerActiveTurnId: string | null;
   providerState: Record<string, unknown> | null;
+  runtimePolicy?: AgentRuntimePolicy | null;
+  verifyOwner?: SessionVerifyOwner;
   cursorBackend: 'sdk' | 'cli' | null;
   cursorChatId: string | null;
   forgeProvider?: string | null;
@@ -183,6 +187,9 @@ export interface CreateSessionDto {
   providerThreadId?: string | null;
   providerActiveTurnId?: string | null;
   providerState?: Record<string, unknown> | null;
+  runtimePolicy?: AgentRuntimePolicy | null;
+  /** Crew owns verification for member sessions; ordinary sessions retain the Solo verifier. */
+  verifyOwner?: SessionVerifyOwner;
   cursorBackend?: 'sdk' | 'cli' | null;
   cursorChatId?: string | null;
   /** Lineage: the parent session and originating task (set by the task runner, not the public API). */
@@ -192,10 +199,21 @@ export interface CreateSessionDto {
   contextBrief?: HandoffBrief;
 }
 
+export type SessionVerifyOwner = 'session' | 'crew';
+
 export interface SteerSessionDto {
   message: string;
   forceResume?: boolean;
   attachments?: AgentAttachment[];
+}
+
+/** Internal generic turn API for durable runners continuing one exact session. */
+export interface ContinueExistingSessionDto {
+  prompt: string;
+  contextBrief?: HandoffBrief;
+  attachments?: AgentAttachment[];
+  forceResume?: boolean;
+  origin?: string;
 }
 
 export interface SetSessionModelDto {

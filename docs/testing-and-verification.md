@@ -67,8 +67,8 @@ row that applies. Name specs by scenario (`steer-while-running.spec.ts` style), 
 | 1 | **State × event matrix** | For *each* FSM state, what does *each* API verb do? Don't test only the happy path's state. | steer while RUNNING (queued), interrupt while IDLE (409), delete while not ARCHIVED (rejected) |
 | 2 | **Projection lag / races** | Derived state (composer enabled, status dot, unread) is computed from events — can it lag or contradict the source state? | *Real bug:* session reached IDLE but the composer stayed locked for seconds — the UI projection trailed the status event. Test: after the IDLE event is appended, the enable-projection must flip **immediately**, no timer between |
 | 3 | **Restart / resume** | Kill the process mid-X. What must survive? What must be reconciled on boot? | queued steers restored on boot; sessions stuck RUNNING reconciled; stale provider approvals denied with reason |
-| 4 | **Reconnect / replay** | Drop the WS mid-stream. Is resume from `since=<seq>` gap-free and duplicate-free? | dedupe by seq; `behind` marker resubscribe; visibilitychange resync |
-| 5 | **Boundaries** | Empty, zero, huge, truncated. | empty prompt, 0 events, 4KB payload truncation, transcript with 10k events |
+| 4 | **Reconnect / replay** | Drop or half-open the WS mid-stream. Is resume from `since=<seq>` gap-free and duplicate-free? Can a late REST bootstrap/refetch overwrite a newer live event? | dedupe by seq; `behind` marker resubscribe; missed-pong termination; visibility/foreground resync; hung bootstrap fallback; late REST merge |
+| 5 | **Boundaries** | Empty, zero, huge, truncated. | empty prompt, 0 events, 4KB payload truncation, transcript with 10k events, slow consumer exceeding the relay buffer cap |
 | 6 | **Failure paths** | Provider unavailable, auth expired, git error, subprocess dies mid-run. Session must land ERROR/IDLE — never stuck RUNNING. | worktree git failure → no orphan session row; provider crash → ERROR + error event |
 | 7 | **Concurrency** | Two of the same thing at once. | two steers racing; watcher vs in-process producer (the `locallyProducing` guard); two tabs subscribed |
 | 8 | **Idempotency** | Run it twice. | re-import same handoff chat → same session; duplicate event append rejected/deduped |
@@ -82,6 +82,58 @@ in `packages/core` (pattern: `buildTranscriptBlocks()`). A pure `(events, status
 {composerEnabled, …}` function turns a timing bug into a table-driven unit test. If you find
 yourself needing a real browser + stopwatch to reproduce a state bug, that state should probably
 become a pure projection first.
+
+## Crew verification matrix
+
+Crew is a separate durable aggregate with a higher evidence bar than an ordinary Session. Run
+server unit commands from `apps/server`:
+
+```bash
+bun test test/unit/crew/
+bun test test/unit/agents/agent-runtime-policy.contract.spec.ts
+bun test test/unit/sessions/sessions.verify-gate.spec.ts
+bun run test:e2e
+bun run lint
+```
+
+Then run portable-client surfaces from the repository root:
+
+```bash
+bun run --filter @nuncio/core check
+bun run --filter @nuncio/web test
+bun run --filter @nuncio/web build
+bun run --filter @nuncio/web lint
+bun run --filter @nuncio/mobile check
+```
+
+The release gate remains `bun run gate`; final promotion proof remains `bun run gate:full` plus
+interactive acceptance where available. Report each layer separately rather than treating one
+package's green suite as full Crew proof.
+
+| Contract | Required proof |
+|---|---|
+| Fixed state machine | Exact six-phase happy path; illegal tuples/events; mandatory Verify/Review; terminal immutability; duplicate idempotency |
+| Profile readiness | Only `ready`/`needs_setup`; live Pi/Codex/Claude binding/model; independent Reviewer; exact runtime policy; verify command; cached operational host-sandbox probe, not binary existence |
+| Runtime authority | Read-only Foreman/Reviewer; workspace-write Builder; network disabled; path/symlink/`.git` escape denial; generic task/multitask rejects Crew-owned parents; policy persists through resume |
+| Workspace ownership | One worktree; one `builder:primary` lease; clean/reachable full-head boundaries; stale head invalidates gates |
+| Retry/freshness | Independent default 2/2 caps; same Builder Session; reused Reviewer in loop; strict fresh final Reviewer only after review feedback |
+| Deterministic Verify | Exit/timeout/spawn/abort/overflow; Seatbelt/bubblewrap refusal when absent or unusable; macOS host-data default deny; post-command boundary unchanged |
+| Artifacts | Redaction before storage; SHA/byte integrity; run scoping; fail-closed diff/output bounds; UTF-8-safe `nextOffset`; loading/error/end UI |
+| Recovery | Crash at every durable boundary including checkpoint→result→lease release; replay equals projection; no duplicate commit/task/result/event; exact-base worktree adoption; exact-head Verify rerun; dirty Build marker; provider loss blocks without substitution |
+| Successors | Exact prior revision/head; retained canonical worktree; new snapshot/gates; old run byte-stable; compatible Foreman/Builder continuation only |
+| Clients | Solo default; selected base branch participates in mobile/web readiness and creation; server-authored readiness; fixed phase order; valid expected-revision actions; aborted Verify is not failed; bounded latest-per-task summaries; current evidence only; narrow responsive layout |
+
+Runtime-policy adapter unit tests prove mapping and path/tool enforcement without spending model
+turns. When matching credentials exist, use the opt-in Pi/Codex/Claude integration suites with the
+cheapest available model to confirm the provider-native boundary. A missing credential is a
+reported skip, not permission to weaken the structural test.
+
+Crew HTTP e2e is part of `apps/server`'s `test:e2e` script
+(`app.e2e-spec.ts` plus `crew.e2e-spec.ts`). Browser smoke uses the existing
+`scripts/smoke-ui.mjs` stack and forced Mock provider; do not create a second harness. For visual
+acceptance, verify the 390 px mobile viewport, desktop viewport, current gate artifacts,
+member-session links, terminal successor action, and absence of controls outside the fixed local
+workflow.
 
 ## Provider conformance suite
 

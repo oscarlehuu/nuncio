@@ -1,8 +1,11 @@
 import type { ModelOptionsMap } from '../models/model-options.types';
 import type { HandoffBrief } from '../orchestration/handoff-brief.types';
+import type { AgentRuntimePolicy } from '../agents/agents.types';
+import type { SessionVerifyOwner } from '../sessions/domain/sessions.types';
 
 export type TaskStatus = 'QUEUED' | 'RUNNING' | 'DONE' | 'FAILED' | 'CANCELLED';
 export type TaskRole = 'standalone' | 'subagent';
+export type TaskExecutionKind = 'session' | 'crew-member';
 export type TaskCleanupPolicy = 'after-review' | 'manual' | 'never';
 export type TaskReviewState = 'awaiting_review' | 'reviewed';
 export type NotifyPolicy = 'event-only' | 'steer';
@@ -32,6 +35,13 @@ export interface TaskRow {
   context_json: string | null;
   notify_policy: string | null;
   tag: string | null;
+  crew_run_id: string | null;
+  crew_member_key: string | null;
+  crew_phase: string | null;
+  crew_attempt_key: string | null;
+  execution_kind: TaskExecutionKind;
+  runtime_policy_json: string | null;
+  verify_owner: string;
   created_at: number;
   updated_at: number;
   started_at: number | null;
@@ -60,6 +70,13 @@ export interface TaskDto {
   notifyPolicy?: NotifyPolicy | null;
   /** Routing tag (mechanical|review|design|research); persisted for C3, not yet routed on. */
   tag?: string | null;
+  executionKind?: TaskExecutionKind;
+  crewRunId?: string | null;
+  crewMemberKey?: string | null;
+  crewPhase?: string | null;
+  crewAttemptKey?: string | null;
+  runtimePolicy?: AgentRuntimePolicy | null;
+  verifyOwner?: SessionVerifyOwner;
   /** Derived at read time: the linked session is waiting on the user. */
   pendingInput?: boolean;
   /** When set, the pump must not claim this task until Date.now() >= holdUntil. */
@@ -86,6 +103,17 @@ export interface CreateTaskDto {
   contextBrief?: HandoffBrief;
   notifyPolicy?: NotifyPolicy;
   tag?: string;
+  /** Internal execution seam. Public task creation leaves the default `session`. */
+  executionKind?: TaskExecutionKind;
+  crewRunId?: string;
+  crewMemberKey?: string;
+  crewPhase?: string;
+  /** Exact owner attempt correlation; public task creation never forwards it. */
+  crewAttemptKey?: string;
+  /** Existing session correlation for an in-place Crew continuation. */
+  sessionId?: string;
+  runtimePolicy?: AgentRuntimePolicy;
+  verifyOwner?: SessionVerifyOwner;
 }
 
 export interface StartMultitaskDto {

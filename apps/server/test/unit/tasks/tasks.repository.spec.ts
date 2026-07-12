@@ -75,6 +75,36 @@ describe('TasksRepository', () => {
     expect(tasks.listByParentSession('parent123').map((child) => child.id)).toEqual([task.id]);
   });
 
+  it('round-trips durable Crew member execution correlation and runtime ownership', () => {
+    const runtimePolicy = {
+      filesystem: 'workspace-write' as const,
+      workspaceRoot: '/tmp/crew-workspace',
+      network: 'disabled' as const,
+    };
+    const task = tasks.create({
+      prompt: 'build the approved plan',
+      executionKind: 'crew-member',
+      crewRunId: 'crew-run-1',
+      crewMemberKey: 'builder-1',
+      crewPhase: 'build',
+      crewAttemptKey: 'runner:build:attempt:4',
+      sessionId: 'member-session-1',
+      runtimePolicy,
+      verifyOwner: 'crew',
+    });
+
+    expect(tasks.findById(task.id)).toMatchObject({
+      executionKind: 'crew-member',
+      crewRunId: 'crew-run-1',
+      crewMemberKey: 'builder-1',
+      crewPhase: 'build',
+      crewAttemptKey: 'runner:build:attempt:4',
+      sessionId: 'member-session-1',
+      runtimePolicy,
+      verifyOwner: 'crew',
+    });
+  });
+
   it('claims queued tasks in FIFO order and marks them RUNNING', () => {
     const first = tasks.create({ prompt: 'first' });
     const second = tasks.create({ prompt: 'second' });
@@ -90,6 +120,23 @@ describe('TasksRepository', () => {
     expect(tasks.claimNextQueued()).toBeNull();
   });
 
+  it('can defer Crew member claims until the Crew owner is ready', () => {
+    const crew = tasks.create({
+      prompt: 'resume after boot',
+      executionKind: 'crew-member',
+      crewRunId: 'run-boot',
+      crewMemberKey: 'builder:primary',
+      sessionId: 'crew-session',
+      verifyOwner: 'crew',
+    });
+    const solo = tasks.create({ prompt: 'ordinary queued work' });
+
+    expect(tasks.claimNextQueued({ includeCrewMembers: false })?.id).toBe(solo.id);
+    expect(tasks.findById(crew.id)?.status).toBe('QUEUED');
+    expect(tasks.claimNextQueued({ includeCrewMembers: false })).toBeNull();
+    expect(tasks.claimNextQueued({ includeCrewMembers: true })?.id).toBe(crew.id);
+  });
+
   it('records the linked session and the outcome on finish', () => {
     const task = tasks.create({ prompt: 'outcome test' });
     tasks.claimNextQueued();
@@ -103,6 +150,14 @@ describe('TasksRepository', () => {
     expect(finished?.sessionId).toBe('sess1234');
     expect(finished?.finishedAt).not.toBeNull();
     expect(finished?.outcome).toMatchObject({ sessionStatus: 'IDLE', verify: { ok: true } });
+  });
+
+  it('returns null when the same task settlement is replayed', () => {
+    const task = tasks.create({ prompt: 'settle once' });
+    tasks.claimNextQueued();
+    expect(tasks.finish(task.id, 'DONE', { sessionStatus: 'IDLE' })?.status).toBe('DONE');
+    expect(tasks.finish(task.id, 'FAILED', { reason: 'duplicate' })).toBeNull();
+    expect(tasks.findById(task.id)?.outcome).toEqual({ sessionStatus: 'IDLE' });
   });
 
   it('marks finished subagent tasks as awaiting review', () => {
@@ -144,15 +199,36 @@ describe('TasksRepository', () => {
       parentSessionId: 'parent123',
     });
     tasks.claimNextQueued();
+    const crew = tasks.create({
+      prompt: 'interrupted crew member',
+      executionKind: 'crew-member',
+      crewRunId: 'run-restart',
+      crewMemberKey: 'builder-restart',
+      crewPhase: 'build',
+      crewAttemptKey: 'runner:build:attempt:9',
+      sessionId: 'session-restart',
+      verifyOwner: 'crew',
+    });
+    tasks.claimNextQueued();
 
     const failed = tasks.failInterrupted('daemon_restart');
     const ids = failed.map((t) => t.id);
     expect(ids).toContain(task.id);
     expect(ids).toContain(subagent.id);
+    expect(ids).toContain(crew.id);
     expect(tasks.findById(task.id)?.status).toBe('FAILED');
     expect(tasks.findById(task.id)?.outcome).toMatchObject({ reason: 'daemon_restart' });
     expect(tasks.findById(subagent.id)?.status).toBe('FAILED');
     expect(tasks.findById(subagent.id)?.reviewState).toBe('awaiting_review');
+    expect(tasks.findById(crew.id)).toMatchObject({
+      status: 'FAILED',
+      outcome: { reason: 'daemon_restart' },
+      crewRunId: 'run-restart',
+      crewMemberKey: 'builder-restart',
+      crewPhase: 'build',
+      crewAttemptKey: 'runner:build:attempt:9',
+      sessionId: 'session-restart',
+    });
     expect(tasks.countRunning()).toBe(0);
   });
 

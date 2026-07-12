@@ -77,6 +77,7 @@ describe('SettingsView', () => {
     expect(within(nav).getByRole('button', { name: 'Usage' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'Source control' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'MCP & Tools' })).toBeInTheDocument();
+    expect(within(nav).getByRole('button', { name: 'Crew profiles' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'Remote access' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'General' })).toBeInTheDocument();
   });
@@ -179,6 +180,12 @@ describe('SettingsView', () => {
     // The pairing pane is shown immediately, not the default Appearance pane.
     expect(screen.getByRole('heading', { name: 'Remote access' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Appearance' })).not.toBeInTheDocument();
+  });
+
+  it('opens Crew profiles directly from the composer setup deep-link', async () => {
+    window.history.replaceState(null, '', '/settings?section=crew-profiles');
+    renderWithTheme(<SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />);
+    expect(screen.getByRole('heading', { name: 'Crew profiles' })).toBeInTheDocument();
   });
 
   it('falls back to Appearance when the ?section value is unknown', () => {

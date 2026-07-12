@@ -12,6 +12,7 @@ import {
   Settings2,
   SlidersHorizontal,
   Gauge,
+  UsersRound,
   Wrench,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -29,6 +30,7 @@ import { ProviderUpdateSettingsSection } from './provider-update-settings-sectio
 import { SubagentModelsSettingsSection } from './subagent-models-settings-section';
 import { UsageSettingsSection } from './usage-settings-section';
 import { SettingsSectionNav, type SettingsSectionNavItem } from './settings-section-nav';
+import { CrewProfilesSettingsSection } from './crew/crew-profiles-settings-section';
 
 interface SettingsViewProps {
   settings: Setting[];
@@ -52,6 +54,7 @@ type SettingsSectionId =
   | 'source-control'
   | 'mcp-tools'
   | 'agents'
+  | 'crew-profiles'
   | 'workspaces'
   | 'projects'
   | 'remote-access'
@@ -65,6 +68,7 @@ const SECTION_NAV_ITEMS: ReadonlyArray<SettingsSectionNavItem & { id: SettingsSe
   { id: 'source-control', label: 'Source control', icon: GitPullRequest },
   { id: 'mcp-tools', label: 'MCP & Tools', icon: Puzzle },
   { id: 'agents', label: 'Agents', icon: SlidersHorizontal },
+  { id: 'crew-profiles', label: 'Crew profiles', icon: UsersRound },
   { id: 'workspaces', label: 'Workspaces', icon: FolderGit2 },
   { id: 'projects', label: 'Projects', icon: FolderGit2 },
   { id: 'remote-access', label: 'Remote access', icon: Network },
@@ -338,6 +342,8 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
     const matchingNetwork = filterSettings(network, query);
     const matchingAdvanced = filterSettings(advanced, query);
     const matchingGeneral = filterSettings(general, query);
+    const crewProfilesMatch = ['crew profiles', 'crew', 'foreman', 'builder', 'reviewer']
+      .some((term) => term.includes(query) || query.includes(term));
 
     if (['cursor', 'pi', 'codex'].some((id) => renderProviderRow(id, query))) {
       resultSections.push(<div key="providers">{providerResult}</div>);
@@ -358,6 +364,7 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
     if (matchingAgents.length > 0 || subagentModelsMatch) {
       resultSections.push(<div key="agents">{renderAgentsSection(matchingAgents, '')}</div>);
     }
+    if (crewProfilesMatch) resultSections.push(<div key="crew-profiles"><CrewProfilesSettingsSection /></div>);
     if (matchingTools.length > 0) {
       resultSections.push(<div key="mcp-tools">{renderSettingGroup('MCP & Tools', matchingTools, '')}</div>);
     }
@@ -415,6 +422,8 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
         return renderSettingGroup('MCP & Tools', tools, 'No MCP or tool settings are available.');
       case 'agents':
         return renderAgentsSection(agents, 'No agent defaults are available.');
+      case 'crew-profiles':
+        return <CrewProfilesSettingsSection />;
       case 'workspaces':
         return renderSettingGroup('Workspaces', workspaces, 'No workspace settings are available.');
       case 'projects':

@@ -11,10 +11,8 @@ import {
 import { BranchPicker } from './branch-picker';
 import { ModelPicker } from './model-picker';
 import { ProjectPicker } from './project-picker';
-import { ApprovalModePicker, type ApprovalMode } from './approval-mode-picker';
 import { WorkspaceModePicker, type WorkspaceMode } from './workspace-mode-picker';
 import { cn } from '@/lib/utils';
-import { isCodexApprovalEngine } from '../lib/codex-approval-engine';
 import { defaultOptionsForModel } from '../lib/model-picker-catalog';
 import type { ModelOptionsMap } from '../lib/model-options';
 import {
@@ -43,6 +41,10 @@ import {
   pickDefaultModelSelection,
   type ModelProvider,
 } from '../lib/model-providers';
+import { CrewProfilePicker } from './crew/crew-profile-picker';
+import { ExecutionModePicker } from './crew/execution-mode-picker';
+import { ResolvedCrewPreview } from './crew/resolved-crew-preview';
+import { useCrewComposer } from './crew/use-crew-composer';
 
 /** Quiet starter prompts for the empty landing — click prefills the composer. */
 const STARTERS = [
@@ -75,9 +77,9 @@ interface HomeViewProps {
     attachments?: MessageAttachment[],
   ) => Promise<void>;
   onContinueOnMobile?: () => void;
-  approvalMode?: ApprovalMode;
-  onApprovalModeChange?: (mode: ApprovalMode) => void | Promise<void>;
   loading?: boolean;
+  /** Lead-owned routing callback after the Crew task is durably created. */
+  onCrewCreated?: (taskId: string) => void;
 }
 
 export function HomeView({
@@ -87,9 +89,8 @@ export function HomeView({
   providers,
   onSubmit,
   onContinueOnMobile,
-  approvalMode = 'full-access',
-  onApprovalModeChange,
   loading,
+  onCrewCreated,
 }: HomeViewProps) {
   const initialWorkspace = resolveWorkspacePreference();
   // One-shot prefill (e.g. "Start session from issue") wins over the sticky workspace.
@@ -104,6 +105,7 @@ export function HomeView({
   const [baseBranch, setBaseBranch] = useState<string | undefined>(initialWorkspace.baseBranch);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('local');
   const [dragActive, setDragActive] = useState(false);
+  const crew = useCrewComposer({ projectPath, baseBranch, onCreated: onCrewCreated });
   const imageAttachments = useComposerAttachments(setPrompt);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -117,13 +119,10 @@ export function HomeView({
   // Attach affordance follows the selected provider's declared capability, so it
   // lights up automatically as each provider gains image support.
   const canAttachImages = useMemo(
-    () => (provider ? (catalog.find((p) => p.id === provider)?.capabilities?.images ?? false) : false),
-    [provider, catalog],
+    () => crew.mode === 'solo' && (provider ? (catalog.find((p) => p.id === provider)?.capabilities?.images ?? false) : false),
+    [provider, catalog, crew.mode],
   );
   const useWorktree = workspaceMode === 'worktree';
-  const showApprovalMode =
-    !!onApprovalModeChange && isCodexApprovalEngine(provider, model);
-
   useEffect(() => {
     if (!catalogLoaded || !providers) return;
     const lookup = modelById(catalog);
@@ -145,7 +144,15 @@ export function HomeView({
 
   const handleSubmit = async () => {
     const text = prompt.trim();
-    if (!text || loading || !catalogLoaded || !model || !provider) return;
+    if (!text || loading) return;
+    if (crew.mode === 'crew') {
+      if (!crew.canSubmit) return;
+      await crew.submit(text);
+      setPrompt('');
+      setWorkspaceMode('local');
+      return;
+    }
+    if (!catalogLoaded || !model || !provider) return;
     const selected = modelById(catalog)[model];
     const hasConfigurable =
       (selected?.options?.length ?? 0) > 0 || (selected?.variants?.length ?? 0) > 0;
@@ -200,7 +207,9 @@ export function HomeView({
     if (projectPath) recordBranchSelection(projectPath, branch);
   }, [projectPath]);
 
-  const canSend = Boolean(prompt.trim()) && !loading && catalogLoaded && !!model && !!provider;
+  const canSend = Boolean(prompt.trim()) && !loading && (
+    crew.mode === 'crew' ? crew.canSubmit : catalogLoaded && !!model && !!provider
+  );
   const usageProvider = resolveUsageProvider(provider, model);
   const { snapshots: usageSnapshots, reload: reloadUsage } = useProviderUsage(usageProvider);
 
@@ -228,15 +237,19 @@ export function HomeView({
             onChange={handleBranchChange}
             variant="text"
           />
-          <span aria-hidden className="text-muted-foreground/40 select-none">
-            ·
-          </span>
-          <WorkspaceModePicker
-            value={workspaceMode}
-            onChange={setWorkspaceMode}
-            disabled={!projectPath}
-            variant="text"
-          />
+          {crew.mode === 'solo' ? (
+            <>
+              <span aria-hidden className="text-muted-foreground/40 select-none">
+                ·
+              </span>
+              <WorkspaceModePicker
+                value={workspaceMode}
+                onChange={setWorkspaceMode}
+                disabled={!projectPath}
+                variant="text"
+              />
+            </>
+          ) : null}
         </div>
 
         <div
@@ -284,14 +297,13 @@ export function HomeView({
                 embedded ? 'min-h-[60px] pt-3' : 'min-h-[112px] pt-5',
               )}
             />
-            {showApprovalMode ? (
-              <div className="home-composer-prompt-controls flex items-center gap-2 px-4 pb-1">
-                <ApprovalModePicker
-                  value={approvalMode}
-                  onChange={onApprovalModeChange}
-                  surface="embedded"
-                />
-              </div>
+            {crew.mode === 'crew' ? (
+              <ResolvedCrewPreview
+                resolution={crew.resolution}
+                loading={crew.loadingProfiles || crew.resolving}
+                error={crew.error}
+                needsProject={!projectPath}
+              />
             ) : null}
           </div>
           <div className="home-composer-bar flex items-center gap-2 px-4 pb-3.5 pt-1.5">
@@ -302,13 +314,25 @@ export function HomeView({
               />
             )}
             <div className="home-composer-pickers flex min-w-0 flex-1 items-center overflow-x-auto [&_button]:shrink-0">
-              <ModelPicker
-                value={model}
-                modelOptions={modelOptions}
-                onChange={handleModelChange}
-                providers={providers}
-                variant="text"
-              />
+              <ExecutionModePicker value={crew.mode} onChange={crew.setMode} />
+              {crew.mode === 'solo' ? (
+                <ModelPicker
+                  value={model}
+                  modelOptions={modelOptions}
+                  onChange={handleModelChange}
+                  providers={providers}
+                  variant="text"
+                  compact
+                />
+              ) : (
+                <CrewProfilePicker
+                  profiles={crew.profiles}
+                  value={crew.profileId}
+                  onChange={crew.setProfileId}
+                  disabled={crew.loadingProfiles || crew.resolving || crew.submitting}
+                  loading={crew.loadingProfiles}
+                />
+              )}
             </div>
             <QuotaChip
               activeProvider={usageProvider}

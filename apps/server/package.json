@@ -9,7 +9,7 @@
     "start": "bun ../../scripts/run-server.mjs",
     "start:prod": "bun run dist/main.js",
     "test": "bun test test/unit/",
-    "test:e2e": "bun test ./test/e2e/app.e2e-spec.ts",
+    "test:e2e": "bun test ./test/e2e/app.e2e-spec.ts ./test/e2e/crew.e2e-spec.ts",
     "test:integration": "bun test test/integration/",
     "test:integration:codex": "NUNCIO_CODEX_INTEGRATION=1 bun test test/integration/codex-agent.integration.spec.ts",
     "test:integration:claude": "NUNCIO_CLAUDE_INTEGRATION=1 bun test test/integration/claude-agent.integration.spec.ts",
@@ -18,7 +18,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.201",
     "@cursor/sdk": "^1.0.22",
-    "@earendil-works/pi-coding-agent": "^0.80.2",
+    "@earendil-works/pi-coding-agent": "^0.80.6",
     "@nestjs/common": "^11.0.1",
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",

@@ -1,10 +1,11 @@
 import { describe, expect, it, beforeEach, afterEach } from 'bun:test';
 import { Test, TestingModule } from '@nestjs/testing';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CodexAgentProvider } from '../../../src/agents/providers/codex-agent.provider';
+import { defineCrewRuntimeTool } from '../../../src/agents/tools/agent-runtime-tools-policy';
 import type {
   CodexAppServerClientLike,
   CodexServerNotification,
@@ -24,17 +25,53 @@ class FakeCodexClient extends EventEmitter implements CodexAppServerClientLike {
   autoCompleteTurn = true;
   emitApprovalRequests = true;
   suppressAutoDelta = false;
+  private interruptAcknowledgement: Promise<void> | undefined;
+  private acknowledgeInterrupt: (() => void) | undefined;
   threadStartName: string | null | undefined;
   threadResumeName: string | null | undefined;
+  threadResumeError: Error | undefined;
   modelListResponse: unknown = {
     data: [
       {
-        id: 'gpt-5.5',
-        displayName: 'GPT-5.5',
-        description: 'Codex model',
+        id: 'gpt-5.6-sol',
+        displayName: 'GPT-5.6 Sol',
+        description: 'Flagship GPT-5.6 model',
         supportedReasoningEfforts: [
+          { reasoningEffort: 'low' },
           { reasoningEffort: 'medium' },
+          { reasoningEffort: 'high' },
           { reasoningEffort: 'xhigh' },
+          { reasoningEffort: 'max' },
+          { reasoningEffort: 'ultra', description: 'Maximum reasoning with automatic task delegation' },
+        ],
+        defaultReasoningEffort: 'low',
+        supportsFastMode: true,
+      },
+      {
+        id: 'gpt-5.6-terra',
+        displayName: 'GPT-5.6 Terra',
+        description: 'Balanced GPT-5.6 model',
+        supportedReasoningEfforts: [
+          { reasoningEffort: 'low' },
+          { reasoningEffort: 'medium' },
+          { reasoningEffort: 'high' },
+          { reasoningEffort: 'xhigh' },
+          { reasoningEffort: 'max' },
+          { reasoningEffort: 'ultra', description: 'Maximum reasoning with automatic task delegation' },
+        ],
+        defaultReasoningEffort: 'medium',
+        supportsFastMode: true,
+      },
+      {
+        id: 'gpt-5.6-luna',
+        displayName: 'GPT-5.6 Luna',
+        description: 'Fast GPT-5.6 model',
+        supportedReasoningEfforts: [
+          { reasoningEffort: 'low' },
+          { reasoningEffort: 'medium' },
+          { reasoningEffort: 'high' },
+          { reasoningEffort: 'xhigh' },
+          { reasoningEffort: 'max' },
         ],
         defaultReasoningEffort: 'medium',
         supportsFastMode: true,
@@ -69,6 +106,7 @@ class FakeCodexClient extends EventEmitter implements CodexAppServerClientLike {
     }
 
     if (method === 'thread/resume') {
+      if (this.threadResumeError) throw this.threadResumeError;
       return {
         thread: this.threadPayload((params as { threadId: string }).threadId, this.threadResumeName),
       } as T;
@@ -105,6 +143,7 @@ class FakeCodexClient extends EventEmitter implements CodexAppServerClientLike {
     }
 
     if (method === 'turn/interrupt') {
+      await this.interruptAcknowledgement;
       return {} as T;
     }
 
@@ -151,6 +190,16 @@ class FakeCodexClient extends EventEmitter implements CodexAppServerClientLike {
       method: 'turn/completed',
       params: { turn: { id: 'turn-1', status: 'completed' } },
     });
+  }
+
+  delayInterruptAcknowledgement(): void {
+    this.interruptAcknowledgement = new Promise<void>((resolve) => {
+      this.acknowledgeInterrupt = resolve;
+    });
+  }
+
+  releaseInterruptAcknowledgement(): void {
+    this.acknowledgeInterrupt?.();
   }
 
   private threadPayload(id: string, name: string | null | undefined): { id: string; name?: string | null } {
@@ -240,6 +289,120 @@ describe('CodexAgentProvider', () => {
     });
   });
 
+  it('maps an explicit workspace-write policy to a network-disabled Codex sandbox', async () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'nuncio-codex-policy-'));
+    const canonicalRoot = realpathSync(workspaceRoot);
+    try {
+      const created = sessions.create({
+        id: 'session-policy-workspace-write',
+        prompt: 'Edit only this workspace',
+        provider: 'codex',
+        model: 'codex:gpt-5.5',
+      });
+      const runtimePolicy = {
+        filesystem: 'workspace-write' as const,
+        workspaceRoot,
+        network: 'disabled' as const,
+      };
+
+      await provider.run(created.id, created.prompt, {
+        model: created.model,
+        cwd: workspaceRoot,
+        runtimePolicy,
+        tools: {
+          systemPromptAppend: 'Use browser_open.',
+          tools: [{ name: 'browser_open', inputSchema: {}, execute: async () => 'opened' }],
+        },
+      });
+
+      expect(provider.capabilities.runtimePolicies).toContainEqual({
+        filesystem: 'workspace-write',
+        network: 'disabled',
+      });
+      expect(fakeClient.requests).toContainEqual({
+        method: 'thread/start',
+        params: {
+          model: 'gpt-5.5',
+          cwd: canonicalRoot,
+          runtimeWorkspaceRoots: [canonicalRoot],
+          approvalPolicy: 'never',
+          sandbox: 'workspace-write',
+          allowProviderModelFallback: false,
+          experimentalRawEvents: false,
+        },
+      });
+      expect(fakeClient.requests).toContainEqual({
+        method: 'turn/start',
+        params: {
+          threadId: 'codex-thread-1',
+          input: [{ type: 'text', text: 'Edit only this workspace', text_elements: [] }],
+          model: 'gpt-5.5',
+          cwd: canonicalRoot,
+          runtimeWorkspaceRoots: [canonicalRoot],
+          approvalPolicy: 'never',
+          sandboxPolicy: {
+            type: 'workspaceWrite',
+            writableRoots: [canonicalRoot],
+            networkAccess: false,
+            excludeTmpdirEnvVar: true,
+            excludeSlashTmp: true,
+          },
+        },
+      });
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('maps an explicit read-only policy to a network-disabled Codex sandbox', async () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'nuncio-codex-read-only-'));
+    const canonicalRoot = realpathSync(workspaceRoot);
+    try {
+      const created = sessions.create({
+        id: 'session-policy-read-only',
+        prompt: 'Review without edits',
+        provider: 'codex',
+        model: 'codex:gpt-5.5',
+        providerThreadId: 'existing-policy-thread',
+      });
+      await provider.run(created.id, created.prompt, {
+        model: created.model,
+        cwd: workspaceRoot,
+        runtimePolicy: {
+          filesystem: 'read-only',
+          workspaceRoot,
+          network: 'disabled',
+        },
+      });
+
+      expect(fakeClient.requests).toContainEqual({
+        method: 'thread/resume',
+        params: {
+          threadId: 'existing-policy-thread',
+          model: 'gpt-5.5',
+          cwd: canonicalRoot,
+          runtimeWorkspaceRoots: [canonicalRoot],
+          approvalPolicy: 'never',
+          sandbox: 'read-only',
+        },
+      });
+      expect(fakeClient.requests).toContainEqual({
+        method: 'turn/start',
+        params: {
+          threadId: 'existing-policy-thread',
+          input: [{ type: 'text', text: 'Review without edits', text_elements: [] }],
+          model: 'gpt-5.5',
+          cwd: canonicalRoot,
+          runtimeWorkspaceRoots: [canonicalRoot],
+          approvalPolicy: 'never',
+          sandboxPolicy: { type: 'readOnly', networkAccess: false },
+        },
+      });
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
   it('updates the Nuncio title from Codex thread name notifications', async () => {
     fakeClient.autoCompleteTurn = false;
     fakeClient.emitApprovalRequests = false;
@@ -276,6 +439,34 @@ describe('CodexAgentProvider', () => {
       expect.objectContaining({
         type: 'session_title',
         payload: { title: 'Diagnose empty release app' },
+      }),
+    );
+  });
+
+  it('fans out a Codex title notification that arrives just after turn completion', async () => {
+    const created = sessions.create({
+      id: 'session-codex-late-title',
+      prompt: 'Finish before naming this thread',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+    });
+    const emitted: Array<{ type: string; payload: unknown }> = [];
+
+    await provider.run(created.id, created.prompt, {
+      emit: (event) => emitted.push(event),
+      cwd: '/tmp/project',
+      model: created.model,
+    });
+    fakeClient.emitNotification({
+      method: 'thread/name/updated',
+      params: { threadId: 'codex-thread-1', threadName: 'Late but valid title' },
+    });
+
+    expect(sessions.findById(created.id)?.title).toBe('Late but valid title');
+    expect(emitted).toContainEqual(
+      expect.objectContaining({
+        type: 'session_title',
+        payload: { title: 'Late but valid title' },
       }),
     );
   });
@@ -432,7 +623,7 @@ describe('CodexAgentProvider', () => {
     expect(streamed.endsWith('\n')).toBe(false);
   });
 
-  it('lists Codex reasoning effort and fast priority options', async () => {
+  it('lists model-specific GPT-5.6 reasoning efforts and fast priority options', async () => {
     provider.commandRunner = async () => ({
       status: 0,
       stdout: 'ok',
@@ -440,20 +631,48 @@ describe('CodexAgentProvider', () => {
     });
 
     const providers = await provider.listModels();
-    const model = providers[0]?.groups?.[0]?.models?.[0];
+    const models = providers[0]?.groups?.[0]?.models ?? [];
+    const sol = models.find((model) => model.id === 'codex:gpt-5.6-sol');
+    const terra = models.find((model) => model.id === 'codex:gpt-5.6-terra');
+    const luna = models.find((model) => model.id === 'codex:gpt-5.6-luna');
 
-    expect(model?.id).toBe('codex:gpt-5.5');
-    expect(model?.options).toContainEqual({
+    expect(models.map((model) => model.id)).toEqual([
+      'codex:gpt-5.6-sol',
+      'codex:gpt-5.6-terra',
+      'codex:gpt-5.6-luna',
+    ]);
+    expect(sol?.options).toContainEqual({
       id: 'reasoningEffort',
       label: 'Reasoning',
       type: 'select',
-      defaultValue: 'medium',
+      defaultValue: 'low',
       options: [
-        { id: 'medium', label: 'medium', isDefault: true },
-        { id: 'xhigh', label: 'xhigh', isDefault: false },
+        { id: 'low', label: 'Low', isDefault: true },
+        { id: 'medium', label: 'Medium', isDefault: false },
+        { id: 'high', label: 'High', isDefault: false },
+        { id: 'xhigh', label: 'Extra High', isDefault: false },
+        { id: 'max', label: 'Max', isDefault: false },
+        { id: 'ultra', label: 'Ultra · Multi-agent', isDefault: false },
       ],
     });
-    expect(model?.options).toContainEqual({
+    const terraReasoning = terra?.options?.find((option) => option.id === 'reasoningEffort');
+    expect(terraReasoning?.defaultValue).toBe('medium');
+    expect(terraReasoning?.options?.at(-1)).toEqual({
+      id: 'ultra',
+      label: 'Ultra · Multi-agent',
+      isDefault: false,
+    });
+    expect(luna?.options?.find((option) => option.id === 'reasoningEffort')).toMatchObject({
+      defaultValue: 'medium',
+      options: [
+        { id: 'low', label: 'Low', isDefault: false },
+        { id: 'medium', label: 'Medium', isDefault: true },
+        { id: 'high', label: 'High', isDefault: false },
+        { id: 'xhigh', label: 'Extra High', isDefault: false },
+        { id: 'max', label: 'Max', isDefault: false },
+      ],
+    });
+    expect(sol?.options).toContainEqual({
       id: 'fast',
       label: 'Priority',
       type: 'boolean',
@@ -485,6 +704,35 @@ describe('CodexAgentProvider', () => {
         model: 'gpt-5.5',
         effort: 'xhigh',
         serviceTier: 'fast',
+        approvalPolicy: 'never',
+        sandboxPolicy: { type: 'dangerFullAccess' },
+      },
+    });
+  });
+
+  it('forwards GPT-5.6 Ultra through the app-server effort field', async () => {
+    const created = sessions.create({
+      id: 'session-ultra',
+      prompt: 'Delegate independent checks',
+      provider: 'codex',
+      model: 'codex:gpt-5.6-sol',
+      modelOptions: { reasoningEffort: 'ultra' },
+    });
+
+    await provider.run(created.id, created.prompt, {
+      emit: () => undefined,
+      cwd: '/tmp/project',
+      model: created.model,
+      modelOptions: created.modelOptions,
+    });
+
+    expect(fakeClient.requests).toContainEqual({
+      method: 'turn/start',
+      params: {
+        threadId: 'codex-thread-1',
+        input: [{ type: 'text', text: 'Delegate independent checks', text_elements: [] }],
+        model: 'gpt-5.6-sol',
+        effort: 'ultra',
         approvalPolicy: 'never',
         sandboxPolicy: { type: 'dangerFullAccess' },
       },
@@ -565,6 +813,70 @@ describe('CodexAgentProvider', () => {
         approvalPolicy: 'never',
         sandboxPolicy: { type: 'dangerFullAccess' },
       },
+    });
+  });
+
+  it('invalidates a Codex thread after thread/resume fails', async () => {
+    const created = sessions.create({
+      id: 'session-stale-resume',
+      prompt: 'Initial prompt',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+      providerThreadId: 'stale-codex-thread',
+    });
+    fakeClient.threadResumeError = new Error('thread not found');
+
+    await provider.steer(created.id, 'Continue', {
+      model: created.model,
+      cwd: '/tmp/project',
+    });
+
+    const failed = sessions.findById(created.id)!;
+    expect(failed.status).toBe('ERROR');
+    expect(failed.providerThreadId).toBeNull();
+    expect(provider.canResumeThread(failed)).toBe(false);
+    expect(fakeClient.requests.filter((request) => request.method === 'thread/start')).toHaveLength(0);
+  });
+
+  it('preserves a Codex thread after a transient resume transport failure', async () => {
+    const created = sessions.create({
+      id: 'session-transient-resume',
+      prompt: 'Initial prompt',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+      providerThreadId: 'durable-codex-thread',
+    });
+    fakeClient.threadResumeError = new Error('codex app-server disconnected');
+
+    await provider.steer(created.id, 'Continue', {
+      model: created.model,
+      cwd: '/tmp/project',
+    });
+
+    const failed = sessions.findById(created.id)!;
+    expect(failed.status).toBe('ERROR');
+    expect(failed.providerThreadId).toBe('durable-codex-thread');
+    expect(provider.canResumeThread(failed)).toBe(true);
+  });
+
+  it('does not treat an authentication error mentioning a thread as stale continuity', async () => {
+    const created = sessions.create({
+      id: 'session-auth-resume',
+      prompt: 'Initial prompt',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+      providerThreadId: 'auth-retry-thread',
+    });
+    fakeClient.threadResumeError = new Error('invalid credentials while resuming thread');
+
+    await provider.steer(created.id, 'Continue', {
+      model: created.model,
+      cwd: '/tmp/project',
+    });
+
+    expect(sessions.findById(created.id)).toMatchObject({
+      status: 'ERROR',
+      providerThreadId: 'auth-retry-thread',
     });
   });
 
@@ -708,6 +1020,81 @@ describe('CodexAgentProvider', () => {
     await run;
   });
 
+  it('resumes one Codex thread with a stable Crew tool surface and refreshed authority closures', async () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'nuncio-codex-tool-resume-'));
+    const runtimePolicy = {
+      filesystem: 'read-only' as const,
+      workspaceRoot,
+      network: 'disabled' as const,
+    };
+    try {
+      fakeClient.emitApprovalRequests = false;
+      fakeClient.suppressAutoDelta = true;
+      const created = sessions.create({
+        id: 'session-stable-crew-tools',
+        prompt: 'Plan revision one',
+        provider: 'codex',
+        model: 'codex:gpt-5.5',
+      });
+
+      await provider.run(created.id, created.prompt, {
+        model: created.model,
+        cwd: workspaceRoot,
+        runtimePolicy,
+        tools: stableForemanTools(1),
+      });
+
+      const firstThreadStart = fakeClient.requests.find((request) => request.method === 'thread/start');
+      expect(firstThreadStart?.params).toMatchObject({
+        allowProviderModelFallback: false,
+        dynamicTools: [
+          { name: 'submit_plan' },
+          { name: 'submit_synthesis' },
+        ],
+      });
+      expect(sessions.findById(created.id)?.providerState).toMatchObject({
+        codexDynamicToolSurface: expect.any(String),
+      });
+
+      provider.dispose(created.id);
+      const resumedClient = new FakeCodexClient();
+      resumedClient.autoCompleteTurn = false;
+      resumedClient.emitApprovalRequests = false;
+      resumedClient.suppressAutoDelta = true;
+      provider.clientFactory = () => resumedClient;
+
+      const resumed = provider.steer(created.id, 'Synthesize revision two', {
+        model: created.model,
+        cwd: workspaceRoot,
+        runtimePolicy,
+        tools: stableForemanTools(2),
+      });
+      await waitUntil(() => sessions.findById(created.id)?.providerActiveTurnId === 'turn-1');
+
+      const resumeRequest = resumedClient.requests.find((request) => request.method === 'thread/resume');
+      expect(resumeRequest?.params).not.toHaveProperty('dynamicTools');
+      resumedClient.emitServerRequest({
+        id: 'crew-tool-revision-2',
+        method: 'item/tool/call',
+        params: { tool: 'submit_synthesis', arguments: {} },
+      });
+      await waitUntil(() => resumedClient.responses.length === 1);
+      expect(resumedClient.responses[0]).toEqual({
+        id: 'crew-tool-revision-2',
+        result: {
+          contentItems: [{ type: 'inputText', text: 'submit_synthesis revision 2' }],
+          success: true,
+        },
+      });
+
+      resumedClient.completeTurn();
+      await resumed;
+      expect(sessions.findById(created.id)?.providerThreadId).toBe('codex-thread-1');
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
   it('moves the session to ERROR when app-server closes while waiting for turn completion', async () => {
     fakeClient.autoCompleteTurn = false;
     const created = sessions.create({
@@ -754,6 +1141,42 @@ describe('CodexAgentProvider', () => {
     await expect(settledWithin(run)).resolves.toBe('settled');
     expect(sessions.findById(created.id)?.status).toBe('PAUSED');
     expect(events.list(created.id).some((event) => event.type === 'error')).toBe(false);
+  });
+
+  it('awaits Codex turn/interrupt acknowledgement before settling and closing the active turn', async () => {
+    fakeClient.autoCompleteTurn = false;
+    fakeClient.delayInterruptAcknowledgement();
+    const created = sessions.create({
+      id: 'session-awaited-interrupt',
+      prompt: 'Keep writing until interruption is acknowledged',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+    });
+    const run = provider.run(created.id, created.prompt, {
+      model: created.model,
+      cwd: '/tmp/project',
+    });
+    await waitUntil(() => sessions.findById(created.id)?.providerActiveTurnId === 'turn-1');
+
+    let settled = false;
+    const interrupting = provider.interrupt(created.id).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+    expect(fakeClient.closed).toBe(false);
+
+    fakeClient.releaseInterruptAcknowledgement();
+    await interrupting;
+
+    expect(fakeClient.requests.at(-1)).toMatchObject({
+      method: 'turn/interrupt',
+      params: { threadId: 'codex-thread-1', turnId: 'turn-1' },
+    });
+    expect(fakeClient.closed).toBe(true);
+    await expect(settledWithin(run)).resolves.toBe('settled');
+    expect(sessions.findById(created.id)?.status).toBe('IDLE');
   });
 
   it('flushes buffered deltas before closing active Codex sessions on module destroy', async () => {
@@ -978,6 +1401,33 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
     }
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
+}
+
+function stableForemanTools(revision: number) {
+  const submissionSchema = {
+    type: 'object',
+    properties: {
+      runId: { type: 'string' },
+      contextRevision: { type: 'integer' },
+      result: { type: 'object' },
+    },
+    required: ['runId', 'contextRevision', 'result'],
+  };
+  const security = {
+    network: 'disabled' as const,
+    workspaceMutation: 'none' as const,
+    runtimePolicies: [{ filesystem: 'read-only' as const, network: 'disabled' as const }],
+    scope: 'crew-internal' as const,
+  };
+  return {
+    systemPromptAppend: `Use authority for context revision ${revision}.`,
+    tools: ['plan', 'synthesis'].map((kind) => defineCrewRuntimeTool({
+      name: `submit_${kind}`,
+      inputSchema: submissionSchema,
+      security,
+      execute: async () => `submit_${kind} revision ${revision}`,
+    })),
+  };
 }
 
 function destroyProvider(provider: CodexAgentProvider): void {

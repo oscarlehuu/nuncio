@@ -42,6 +42,34 @@ class ThrowingProvider extends BaseAgentProvider {
   }
 }
 
+class DelayedInterruptProvider extends ThrowingProvider {
+  override readonly capabilities = {
+    interrupt: true,
+    modelSwitch: 'none',
+    effortSwitch: 'none',
+    images: false,
+    steerWhileRunning: false,
+  } as const;
+
+  disposed = false;
+  private acknowledgeInterrupt: (() => void) | undefined;
+  private readonly interruptAcknowledged = new Promise<void>((resolve) => {
+    this.acknowledgeInterrupt = resolve;
+  });
+
+  async interrupt(): Promise<void> {
+    await this.interruptAcknowledged;
+  }
+
+  releaseInterrupt(): void {
+    this.acknowledgeInterrupt?.();
+  }
+
+  override dispose(): void {
+    this.disposed = true;
+  }
+}
+
 describe('BaseAgentProvider error path', () => {
   let module: TestingModule;
   let provider: ThrowingProvider;
@@ -86,6 +114,23 @@ describe('BaseAgentProvider error path', () => {
       images: false,
       steerWhileRunning: false,
     });
+  });
+
+  it('quiesce awaits an interrupt acknowledgement before disposing the provider handle', async () => {
+    const delayed = new DelayedInterruptProvider(sessions, events);
+    let settled = false;
+
+    const quiescing = delayed.quiesce('crew-session').then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+    expect(delayed.disposed).toBe(false);
+
+    delayed.releaseInterrupt();
+    await quiescing;
+    expect(delayed.disposed).toBe(true);
   });
 
   it('routes an executePrompt failure to ERROR status + error event', async () => {

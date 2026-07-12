@@ -90,7 +90,7 @@ export function EditProjectConfigDialog({
 
   return (
     <Dialog open={config !== null} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent preventOutsideDismiss className="max-w-md">
         <DialogHeader>
           <DialogTitle className="truncate">{config?.name}</DialogTitle>
           <DialogDescription>
