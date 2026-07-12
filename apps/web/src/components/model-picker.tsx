@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties, type ReactNode, type SyntheticEvent } from 'react';
-import { Check, ChevronDown, Search, Zap } from 'lucide-react';
+import { Check, ChevronDown, LayoutGrid, Search, Zap } from 'lucide-react';
 import {
   activeModelOptionBadges,
   booleanOptionsForModel,
@@ -33,6 +33,7 @@ import {
   type FlatModel,
   type ModelProvider,
 } from '../lib/model-providers';
+import { cn } from '@/lib/utils';
 import { ProviderIcon } from './provider-icon';
 import { FastLightningToggle } from './fast-lightning-toggle';
 import { ModelEffortSlider } from './model-effort-slider';
@@ -173,8 +174,6 @@ function ModelPlainRow({
   );
 }
 
-import { cn } from '@/lib/utils';
-
 function absorbMenuPointer(event: SyntheticEvent) {
   event.preventDefault();
   event.stopPropagation();
@@ -185,7 +184,8 @@ const MODEL_PANEL_STYLE = {
   maxWidth: 'calc(100vw - 24px)',
 } satisfies CSSProperties;
 
-const MODEL_PANEL_CLASS = 'max-h-[min(420px,var(--radix-dropdown-menu-content-available-height))] overflow-y-auto';
+const MODEL_PANEL_CLASS =
+  'flex max-h-[min(420px,var(--radix-dropdown-menu-content-available-height))] flex-col overflow-hidden';
 
 /* A provider with more models than this collapses to its first few plus an
  * "All N models" expander, so browsing stays one screen tall. */
@@ -197,6 +197,10 @@ interface CliChip {
   label: string;
 }
 
+function modelIsConfigurable(model: FlatModel): boolean {
+  return (model.options?.length ?? 0) > 0 || modelHasBooleanOptions(model);
+}
+
 function ModelPickerFlatContent({
   children,
   query,
@@ -204,6 +208,7 @@ function ModelPickerFlatContent({
   chips,
   activeChip = null,
   onChipChange,
+  footer,
 }: {
   children: ReactNode;
   query: string;
@@ -212,6 +217,8 @@ function ModelPickerFlatContent({
   chips?: CliChip[];
   activeChip?: string | null;
   onChipChange?: (id: string | null) => void;
+  /** Sticky options dock (effort / priority) for the active model — kept out of the list. */
+  footer?: ReactNode;
 }) {
   return (
     <DropdownMenuContent
@@ -222,7 +229,7 @@ function ModelPickerFlatContent({
       style={MODEL_PANEL_STYLE}
       className={cn(MODEL_PANEL_CLASS, 'w-[min(22rem,calc(100vw-24px))] p-0')}
     >
-      <div className="sticky top-0 z-10 border-b border-border/60 bg-popover p-2">
+      <div className="shrink-0 border-b border-border/60 bg-popover p-2">
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -241,23 +248,39 @@ function ModelPickerFlatContent({
                 <button
                   key={chip.id ?? 'all'}
                   type="button"
+                  aria-label={chip.label}
                   aria-pressed={active}
+                  title={chip.label}
                   onClick={() => onChipChange?.(chip.id)}
                   className={cn(
-                    'rounded-full border px-2.5 py-0.5 text-ui-sm transition-colors',
+                    'inline-flex size-7 items-center justify-center rounded-md border transition-colors',
                     active
                       ? 'border-foreground/40 bg-accent text-foreground'
                       : 'border-border text-muted-foreground hover:text-foreground',
                   )}
                 >
-                  {chip.label}
+                  {chip.id == null ? (
+                    <LayoutGrid className="size-3.5" aria-hidden />
+                  ) : (
+                    <ProviderIcon providerId={chip.id} className="size-3.5" />
+                  )}
                 </button>
               );
             })}
           </div>
         )}
       </div>
-      <div className="p-1">{children}</div>
+      <div data-testid="model-picker-list" className="min-h-0 flex-1 overflow-y-auto p-1">
+        {children}
+      </div>
+      {footer ? (
+        <div
+          data-testid="model-picker-options-footer"
+          className="shrink-0 border-t border-border/60 bg-popover"
+        >
+          {footer}
+        </div>
+      ) : null}
     </DropdownMenuContent>
   );
 }
@@ -279,7 +302,7 @@ function ModelOptionsPanel({
 
   return (
     <div
-      className="flex w-full flex-col gap-3 p-3"
+      className="flex w-full flex-col gap-3 px-3 py-2.5"
       onPointerDown={absorbMenuPointer}
       onClick={absorbMenuPointer}
     >
@@ -299,7 +322,7 @@ function ModelOptionsPanel({
 
       {showFast && (
         <>
-          {sliders.length > 0 && <div className="border-t border-border" />}
+          {sliders.length > 0 && <div className="border-t border-border/60" />}
           <button
             type="button"
             className="flex w-full items-center justify-between gap-2 rounded-sm px-1 py-1 text-left text-sm hover:bg-accent"
@@ -327,7 +350,7 @@ function ModelOptionsPanel({
       {otherBooleans.length > 0 && (
         <>
           {sliders.length > 0 || showFast ? (
-            <div className="border-t border-border pt-2" />
+            <div className="border-t border-border/60 pt-2" />
           ) : null}
           {otherBooleans.map((option) => {
             const checked = current[option.id] === true;
@@ -349,7 +372,7 @@ function ModelOptionsPanel({
       {menuSelects.map((option, idx) => (
         <div key={option.id}>
           {(idx > 0 || sliders.length > 0 || showFast || otherBooleans.length > 0) && (
-            <div className="mb-2 border-t border-border pt-2" />
+            <div className="mb-2 border-t border-border/60 pt-2" />
           )}
           <div className="mb-1 text-ui-sm font-medium text-muted-foreground">{option.label}</div>
           {(option.options ?? []).map((choice) => {
@@ -376,8 +399,6 @@ function ModelRows({
   models,
   value,
   modelOptions,
-  expandedModelId,
-  expandedOptions,
   onPick,
   onToggle,
   onExpand,
@@ -387,8 +408,6 @@ function ModelRows({
   models: FlatModel[];
   value: string;
   modelOptions?: ModelOptionsMap;
-  expandedModelId: string | null;
-  expandedOptions: ModelOptionsMap | null;
   onPick: (modelId: string, providerId: string, options?: ModelOptionsMap) => void;
   onToggle: (modelId: string, providerId: string, options: ModelOptionsMap) => void;
   onExpand: (modelId: string, options: ModelOptionsMap) => void;
@@ -426,48 +445,36 @@ function ModelRows({
             );
           });
         }
-        const configurable = (model.options?.length ?? 0) > 0 || modelHasBooleanOptions(model);
-        if (configurable) {
+        if (modelIsConfigurable(model)) {
           const active = value === model.id;
-          const expanded = expandedModelId === model.id;
           const current = active
             ? mergeOptionsForModel(model, modelOptions)
-            : expanded && expandedOptions
-              ? mergeOptionsForModel(model, expandedOptions)
-              : mergeOptionsForModel(model, plainRowOptions(model));
+            : mergeOptionsForModel(model, plainRowOptions(model));
           const fastOn = current.fast === true;
           const selectConfigurable = () => {
-            const next = mergeOptionsForModel(model, active ? current : plainRowOptions(model));
+            const next = mergeOptionsForModel(
+              model,
+              active ? mergeOptionsForModel(model, modelOptions) : plainRowOptions(model),
+            );
             onExpand(model.id, next);
             onToggle(model.id, model.providerId, next);
           };
-          const patchConfigurable = (next: ModelOptionsMap) => {
-            const merged = mergeOptionsForModel(model, next);
-            onExpand(model.id, merged);
-            onToggle(model.id, model.providerId, merged);
-          };
           return (
-            <div key={model.id}>
-              <DropdownMenuItem
-                onSelect={(event) => {
-                  event.preventDefault();
-                  selectConfigurable();
-                }}
-                className="gap-2"
-              >
-                <SelectionCheck active={active} />
-                <FastSlot model={model} active={fastOn} />
-                <ModelNameWithBadges
-                  name={prettyModelName(model.name)}
-                  badges={active ? activeModelOptionBadges(model, current) : []}
-                />
-              </DropdownMenuItem>
-              {(active || expanded) && (
-                <div className="mx-1 mb-1 rounded-md border border-border/60 bg-muted/20">
-                  <ModelOptionsPanel model={model} current={current} onPatch={patchConfigurable} />
-                </div>
-              )}
-            </div>
+            <DropdownMenuItem
+              key={model.id}
+              onSelect={(event) => {
+                event.preventDefault();
+                selectConfigurable();
+              }}
+              className="gap-2"
+            >
+              <SelectionCheck active={active} />
+              <FastSlot model={model} active={fastOn} />
+              <ModelNameWithBadges
+                name={prettyModelName(model.name)}
+                badges={active ? activeModelOptionBadges(model, current) : []}
+              />
+            </DropdownMenuItem>
           );
         }
         const rowOptions = plainRowOptions(model);
@@ -558,6 +565,26 @@ export function ModelPicker(props: ModelPickerProps) {
     setExpandedOptions(options);
   };
 
+  const seedOptionsDock = (modelId: string | undefined) => {
+    if (!modelId) {
+      setExpandedModelId(null);
+      setExpandedOptions(null);
+      return;
+    }
+    const model = lookup[modelId];
+    if (!model || !modelIsConfigurable(model)) {
+      setExpandedModelId(null);
+      setExpandedOptions(null);
+      return;
+    }
+    setExpandedModelId(model.id);
+    setExpandedOptions(
+      model.id === selectedModelId
+        ? mergeOptionsForModel(model, modelOptions)
+        : plainRowOptions(model),
+    );
+  };
+
   const visibleCatalog = cliFilter ? catalog.filter((p) => p.id === cliFilter) : catalog;
   // Filtering to one CLI means "show me that CLI's whole catalog" — no collapse.
   const collapseEnabled = !queryLower && !cliFilter;
@@ -590,6 +617,39 @@ export function ModelPicker(props: ModelPickerProps) {
       : 'default model'
     : '';
 
+  // Options dock targets the explicitly expanded model (after a row click), else
+  // the current selection when it is configurable — never mid-list.
+  const footerModel = !pair
+    ? (() => {
+        const candidate = expandedModelId ? lookup[expandedModelId] : selected;
+        if (!candidate || !modelIsConfigurable(candidate)) return null;
+        return candidate;
+      })()
+    : null;
+  const footerCurrent = footerModel
+    ? footerModel.id === selectedModelId
+      ? mergeOptionsForModel(footerModel, modelOptions)
+      : mergeOptionsForModel(footerModel, expandedOptions ?? plainRowOptions(footerModel))
+    : null;
+  const patchFooter = (next: ModelOptionsMap) => {
+    if (!footerModel || !chat) return;
+    const merged = mergeOptionsForModel(footerModel, next);
+    expandModel(footerModel.id, merged);
+    toggleBoolean(footerModel.id, footerModel.providerId, merged);
+  };
+
+  const rowPropsShared = {
+    value: selectedModelId,
+    modelOptions,
+    onPick: (modelId: string, providerId: string, options?: ModelOptionsMap) => {
+      setExpandedModelId(null);
+      setExpandedOptions(null);
+      pick(modelId, providerId, options);
+    },
+    onToggle: toggleBoolean,
+    onExpand: expandModel,
+  };
+
   return (
     <DropdownMenu
       open={open}
@@ -597,11 +657,19 @@ export function ModelPicker(props: ModelPickerProps) {
         if (disabled) return;
         if (next && !open) {
           onOpen?.();
-          if (!pair) setRecents(loadRecentModels());
+          if (!pair) {
+            setRecents(loadRecentModels());
+            seedOptionsDock(selectedModelId);
+          } else {
+            setExpandedModelId(null);
+            setExpandedOptions(null);
+          }
         }
         if (!next) {
           setCliFilter(null);
           setExpandedProviders(new Set());
+          setExpandedModelId(null);
+          setExpandedOptions(null);
         }
         setOpen(next);
       }}
@@ -668,6 +736,11 @@ export function ModelPicker(props: ModelPickerProps) {
         chips={[{ id: null, label: 'All' }, ...catalog.map((p) => ({ id: p.id, label: p.name }))]}
         activeChip={cliFilter}
         onChipChange={setCliFilter}
+        footer={
+          footerModel && footerCurrent ? (
+            <ModelOptionsPanel model={footerModel} current={footerCurrent} onPatch={patchFooter} />
+          ) : null
+        }
       >
         {pair?.inheritOption && (
           <>
@@ -684,16 +757,7 @@ export function ModelPicker(props: ModelPickerProps) {
             <DropdownMenuLabel className="px-2 pt-2 text-[11px] uppercase tracking-wide">
               Recent
             </DropdownMenuLabel>
-            <ModelRows
-              models={recentModels}
-              value={selectedModelId}
-              modelOptions={modelOptions}
-              expandedModelId={expandedModelId}
-              expandedOptions={expandedOptions}
-              onPick={pick}
-              onToggle={toggleBoolean}
-              onExpand={expandModel}
-            />
+            <ModelRows models={recentModels} {...rowPropsShared} />
           </>
         )}
         {visibleCatalog.map((p, idx) => {
@@ -710,9 +774,9 @@ export function ModelPicker(props: ModelPickerProps) {
           // Pair mode keeps a matching provider visible even with no models,
           // so its "Provider default" row stays selectable.
           if (flat.length === 0 && !(pair && providerMatches)) return null;
-          const rowProps = pair
+          const pairRowProps = pair
             ? {
-                plainRows: true,
+                plainRows: true as const,
                 isRowActive: (m: FlatModel) => pair.engine === m.providerId && pair.model === m.id,
               }
             : {};
@@ -755,17 +819,7 @@ export function ModelPicker(props: ModelPickerProps) {
               {pair?.providerDefaultOption && flat.length > 0 && <DropdownMenuSeparator />}
                   {collapsed ? (
                     <>
-                      <ModelRows
-                        models={featured}
-                        value={selectedModelId}
-                        modelOptions={modelOptions}
-                        expandedModelId={expandedModelId}
-                        expandedOptions={expandedOptions}
-                        onPick={pick}
-                        onToggle={toggleBoolean}
-                        onExpand={expandModel}
-                        {...rowProps}
-                      />
+                      <ModelRows models={featured} {...rowPropsShared} {...pairRowProps} />
                       <DropdownMenuItem
                         onSelect={(event) => {
                           event.preventDefault();
@@ -791,32 +845,12 @@ export function ModelPicker(props: ModelPickerProps) {
                           <div key={group.id}>
                             {groupIdx > 0 && <DropdownMenuSeparator />}
                             <DropdownMenuLabel>{group.name}</DropdownMenuLabel>
-                            <ModelRows
-                              models={groupModels}
-                              value={selectedModelId}
-                              modelOptions={modelOptions}
-                              expandedModelId={expandedModelId}
-                              expandedOptions={expandedOptions}
-                              onPick={pick}
-                              onToggle={toggleBoolean}
-                              onExpand={expandModel}
-                              {...rowProps}
-                            />
+                            <ModelRows models={groupModels} {...rowPropsShared} {...pairRowProps} />
                           </div>
                         );
                       })
                     : (
-                      <ModelRows
-                        models={flat}
-                        value={selectedModelId}
-                        modelOptions={modelOptions}
-                        expandedModelId={expandedModelId}
-                        expandedOptions={expandedOptions}
-                        onPick={pick}
-                        onToggle={toggleBoolean}
-                        onExpand={expandModel}
-                        {...rowProps}
-                      />
+                      <ModelRows models={flat} {...rowPropsShared} {...pairRowProps} />
                     )}
             </div>
           );
