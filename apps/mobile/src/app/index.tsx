@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FlatList, Pressable, RefreshControl, Text, View } from 'react-native';
+import { FlatList, Linking, Pressable, RefreshControl, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Redirect, useFocusEffect, useRouter } from 'expo-router';
 import { fetchArchivedSessions, fetchSessions, type Session } from '@nuncio/core/api';
@@ -32,12 +32,13 @@ export default function SessionList() {
   const [crewRows, setCrewRows] = useState<CrewRunRowModel[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pushDenied, setPushDenied] = useState(false);
 
   useEffect(() => {
     loadConnection(secureStore).then(async (loaded) => {
       if (loaded) {
         applyConnection(loaded);
-        void registerForPush();
+        registerForPush().then((result) => setPushDenied(result === 'permission-denied'));
         const outcome = await rotateDeviceSecret({
           config: loaded,
           store: secureStore,
@@ -115,6 +116,28 @@ export default function SessionList() {
           <Text className="text-xl text-primary-foreground">＋</Text>
         </Pressable>
       </View>
+
+      {pushDenied ? (
+        <View className="mx-4 mb-2 flex-row items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-2">
+          <Text className="flex-1 text-xs text-muted-foreground">
+            Notifications are off — approvals and questions won’t reach this phone.
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => void Linking.openSettings()}
+            className="min-h-11 justify-center px-1 active:opacity-70"
+          >
+            <Text className="text-xs font-semibold text-primary">Open Settings</Text>
+          </Pressable>
+          <Pressable
+            accessibilityLabel="Dismiss notifications hint"
+            onPress={() => setPushDenied(false)}
+            className="min-h-11 w-8 items-center justify-center active:opacity-60"
+          >
+            <Text className="text-base text-muted-foreground">×</Text>
+          </Pressable>
+        </View>
+      ) : null}
 
       <View className="flex-row gap-2 px-4 pb-2">
         {(['active', 'archived'] as const).map((item) => (
