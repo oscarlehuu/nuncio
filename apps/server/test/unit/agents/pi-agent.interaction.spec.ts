@@ -56,6 +56,10 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
       setThinkingLevel: () => undefined,
     },
   }),
+  SettingsManager: { create: () => ({}) },
+  DefaultResourceLoader: class {
+    async reload() {}
+  },
   getAgentDir: () => '/tmp/fake-pi',
 }));
 
@@ -193,10 +197,14 @@ describe('PiAgentProvider interaction', () => {
 
     const stored = events.list(created.id);
     const resolved = stored.find((e) => e.type === 'user_input_resolved');
-    expect(resolved?.payload).toEqual({ requestId: 'call-aq-3', resolvedBy: 'user' });
+    expect(resolved?.payload).toEqual({
+      requestId: 'call-aq-3',
+      resolvedBy: 'user',
+      answers: [{ questionId: 'q1', selectedOptionIds: ['a'] }],
+    });
     expect(stored.some((e) => e.type === 'steer_message')).toBe(true);
     expect(promptCalls[1]).toEqual({
-      text: 'Frontend',
+      text: 'Option 1 \u2014 Frontend',
       options: { streamingBehavior: 'steer' },
     });
     expect(sessions.findById(created.id)?.status).toBe('IDLE');
@@ -224,7 +232,7 @@ describe('PiAgentProvider interaction', () => {
     );
 
     expect(steerMock).toHaveBeenCalledTimes(1);
-    expect(steerMock.mock.calls[0]?.[0]).toBe('Frontend');
+    expect(steerMock.mock.calls[0]?.[0]).toBe('Option 1 \u2014 Frontend');
     expect(promptCalls).toHaveLength(1);
     const stored = events.list(created.id);
     expect(stored.some((e) => e.type === 'user_input_resolved')).toBe(true);

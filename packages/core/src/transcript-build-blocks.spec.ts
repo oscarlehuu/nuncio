@@ -7,10 +7,32 @@ import {
   workingIndicatorLabel,
   type TaskDigest,
 } from './transcript-build-blocks';
+import { parseInteractiveToolInput } from './interactive-tool-input';
 
 function ev(seq: number, type: string, payload: Record<string, unknown>): SessionEvent {
   return { seq, type, payload, createdAt: seq };
 }
+
+describe('parseInteractiveToolInput', () => {
+  it('matches server fallback ids without colliding with explicit positional ids', () => {
+    const parsed = parseInteractiveToolInput({
+      questions: [
+        {
+          id: 'q2',
+          prompt: 'First',
+          options: [
+            { id: '2', label: 'Alpha' },
+            { label: 'Beta' },
+          ],
+        },
+        { prompt: 'Second', options: [{ label: 'Gamma' }] },
+      ],
+    });
+
+    expect(parsed?.questions.map((question) => question.id)).toEqual(['q2', 'q2-2']);
+    expect(parsed?.questions[0]?.options.map((option) => option.id)).toEqual(['2', '2-2']);
+  });
+});
 
 describe('derivePendingQueuedSteers', () => {
   it('lists queued steers, drops delivered ones, and empties on clear', () => {
@@ -193,6 +215,40 @@ describe('buildTranscriptBlocks', () => {
       title: 'Title',
       questions,
       resolvedBy: 'user',
+    });
+  });
+
+  it('builds a plan block from plan_updated', () => {
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'plan_updated', {
+        items: [
+          { id: 'a', text: 'Read the code', status: 'done' },
+          { id: 'b', text: 'Write the fix', status: 'in_progress' },
+        ],
+      }),
+    ]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({
+      kind: 'plan',
+      items: [
+        { id: 'a', text: 'Read the code', status: 'done' },
+        { id: 'b', text: 'Write the fix', status: 'in_progress' },
+      ],
+    });
+  });
+
+  it('folds inline answers from user_input_resolved into the block', () => {
+    const questions = [{ id: 'q1', prompt: 'Pick', options: [{ id: 'a', label: 'A' }] }];
+    const answers = [{ questionId: 'q1', selectedOptionIds: ['a'], freeText: 'note' }];
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'user_input_requested', { requestId: 'r1', questions }),
+      ev(2, 'user_input_resolved', { requestId: 'r1', resolvedBy: 'user', answers }),
+    ]);
+    expect(blocks[0]).toMatchObject({
+      kind: 'user_input',
+      requestId: 'r1',
+      resolvedBy: 'user',
+      answers,
     });
   });
 

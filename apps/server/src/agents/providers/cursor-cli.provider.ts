@@ -84,7 +84,7 @@ export class CursorCliProvider extends BaseAgentProvider {
     this.pushEvent(
       sessionId,
       'user_input_resolved',
-      { requestId, resolvedBy: response.resolvedBy },
+      { requestId, resolvedBy: response.resolvedBy, answers: response.answers },
       context.emit,
     );
 

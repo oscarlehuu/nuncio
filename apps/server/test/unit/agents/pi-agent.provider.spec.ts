@@ -9,6 +9,7 @@ import { SessionsRepository } from '../../../src/sessions/persistence/sessions.r
 import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
 import { SettingsModule } from '../../../src/settings/settings.module';
+import { SettingsService } from '../../../src/settings/settings.service';
 
 let availableModelCount = 0;
 let fakeSessionFile = '/tmp/fake-pi/session.jsonl';
@@ -33,8 +34,29 @@ function registryModel(provider = 'anthropic', id = 'model-1') {
   };
 }
 
+let lastCreateSessionOptions: Record<string, unknown> | null = null;
+let lastLoaderOptions: Record<string, unknown> | null = null;
+let loaderReloadCalls = 0;
+
 mock.module('@earendil-works/pi-coding-agent', () => ({
   AuthStorage: { create: () => ({}) },
+  SettingsManager: { create: () => ({ kind: 'settings-manager' }) },
+  DefaultResourceLoader: class {
+    constructor(options: Record<string, unknown>) {
+      lastLoaderOptions = options;
+    }
+    async reload() {
+      loaderReloadCalls += 1;
+    }
+  },
+  defineTool: (tool: unknown) => tool,
+  createReadTool: () => ({ name: 'read' }),
+  createBashTool: () => ({ name: 'bash' }),
+  createEditTool: () => ({ name: 'edit' }),
+  createWriteTool: () => ({ name: 'write' }),
+  createGrepTool: () => ({ name: 'grep' }),
+  createFindTool: () => ({ name: 'find' }),
+  createLsTool: () => ({ name: 'ls' }),
   ModelRegistry: {
     create: () => ({
       getAvailable: () => Array.from({ length: availableModelCount }, (_, i) => ({
@@ -52,8 +74,9 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
       return { kind: 'open', path, sessionDir, cwd };
     },
   },
-  createAgentSession: () => {
+  createAgentSession: (options: Record<string, unknown>) => {
     createSessionCalls += 1;
+    lastCreateSessionOptions = options;
     return {
       session: {
         sessionFile: fakeSessionFile,
@@ -91,6 +114,7 @@ describe('PiAgentProvider', () => {
   let provider: PiAgentProvider;
   let sessions: SessionsRepository;
   let events: EventsRepository;
+  let settings: SettingsService;
   let dataDir: string;
 
   beforeAll(async () => {
@@ -105,6 +129,7 @@ describe('PiAgentProvider', () => {
     provider = module.get(PiAgentProvider);
     sessions = module.get(SessionsRepository);
     events = module.get(EventsRepository);
+    settings = module.get(SettingsService);
   });
 
   afterAll(async () => {
@@ -120,6 +145,9 @@ describe('PiAgentProvider', () => {
     promptBehavior = null;
     isStreaming = false;
     subscribedHandler = null;
+    lastCreateSessionOptions = null;
+    lastLoaderOptions = null;
+    loaderReloadCalls = 0;
     sessionOpenError = null;
     createSessionCalls = 0;
     abortMock.mockClear();
@@ -151,6 +179,35 @@ describe('PiAgentProvider', () => {
     availableModelCount = 1;
     provider.bustCache();
     expect(await provider.isAvailable()).toBe(true);
+  });
+
+  it('loads only allowlisted pi extensions through an engine resource loader', async () => {
+    const created = sessions.create({ prompt: 'allowlist probe', provider: 'pi' });
+    await provider.run(created.id, created.prompt, { emit: () => {} });
+
+    expect(loaderReloadCalls).toBe(1);
+    expect(lastCreateSessionOptions?.resourceLoader).toBeDefined();
+    expect(lastCreateSessionOptions?.settingsManager).toEqual({ kind: 'settings-manager' });
+    expect(lastLoaderOptions?.noExtensions).toBe(true);
+    const paths = lastLoaderOptions?.additionalExtensionPaths as string[];
+    expect(paths).toContain('/tmp/fake-pi/extensions/foreman');
+    expect(paths.some((p) => p.includes('claude-studio'))).toBe(false);
+  });
+
+  it('restores Pi default extension discovery only for the explicit full escape hatch', async () => {
+    const originalResolve = settings.resolve.bind(settings);
+    settings.resolve = ((key: string) =>
+      key === 'PI_EXTENSION_DISCOVERY' ? 'full' : originalResolve(key)) as SettingsService['resolve'];
+    const created = sessions.create({ prompt: 'full discovery probe', provider: 'pi' });
+
+    try {
+      await provider.run(created.id, created.prompt, { emit: () => {} });
+      expect(loaderReloadCalls).toBe(0);
+      expect(lastCreateSessionOptions?.resourceLoader).toBeUndefined();
+      expect(lastCreateSessionOptions?.settingsManager).toBeUndefined();
+    } finally {
+      settings.resolve = originalResolve as SettingsService['resolve'];
+    }
   });
 
   it('dispose is a no-op for an unknown session', () => {
@@ -595,6 +652,137 @@ describe('PiAgentProvider', () => {
         payload: { callId: 'call-1', tool: 'bash', isError: false, output: 'ok' },
       }),
     );
+  });
+
+  it('maps todo_write calls to plan_updated instead of tool blocks', async () => {
+    const emitted: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    promptBehavior = async () => {
+      subscribedHandler?.({
+        type: 'tool_execution_start',
+        toolCallId: 'todo-1',
+        toolName: 'todo_write',
+        args: {
+          items: [
+            { id: 'a', text: 'Read the code', status: 'done' },
+            { text: 'Write the fix', status: 'in_progress' },
+          ],
+        },
+      });
+      subscribedHandler?.({
+        type: 'tool_execution_end',
+        toolCallId: 'todo-1',
+        toolName: 'todo_write',
+        result: 'Todo list updated: 1/2 done.',
+        isError: false,
+      });
+    };
+    const created = sessions.create({ prompt: 'plan the work', provider: 'pi' });
+
+    await provider.run(created.id, created.prompt, {
+      emit: (event) => emitted.push(event as { type: string; payload: Record<string, unknown> }),
+    });
+
+    expect(emitted).toContainEqual(
+      expect.objectContaining({
+        type: 'plan_updated',
+        payload: {
+          items: [
+            { id: 'a', text: 'Read the code', status: 'done' },
+            { id: 'item-2', text: 'Write the fix', status: 'in_progress' },
+          ],
+        },
+      }),
+    );
+    expect(emitted.some((e) => e.type === 'tool_start' && e.payload.tool === 'todo_write')).toBe(
+      false,
+    );
+    expect(emitted.some((e) => e.type === 'tool_end' && e.payload.tool === 'todo_write')).toBe(
+      false,
+    );
+  });
+
+  it('routes plan updates through the current turn emitter on a reused Pi session', async () => {
+    const firstTurn: string[] = [];
+    const secondTurn: string[] = [];
+    const created = sessions.create({ prompt: 'reuse the session', provider: 'pi' });
+    await provider.run(created.id, created.prompt, {
+      emit: (event) => firstTurn.push(event.type),
+    });
+    promptBehavior = async () => {
+      subscribedHandler?.({
+        type: 'tool_execution_start',
+        toolCallId: 'todo-reused-session',
+        toolName: 'todo_write',
+        args: { items: [{ text: 'Use the latest emitter', status: 'in_progress' }] },
+      });
+      subscribedHandler?.({
+        type: 'tool_execution_end',
+        toolCallId: 'todo-reused-session',
+        toolName: 'todo_write',
+        result: 'ok',
+        isError: false,
+      });
+    };
+
+    await provider.steer(created.id, 'update the plan', {
+      emit: (event) => secondTurn.push(event.type),
+    });
+
+    expect(firstTurn.filter((type) => type === 'plan_updated')).toEqual([]);
+    expect(secondTurn.filter((type) => type === 'plan_updated')).toEqual(['plan_updated']);
+  });
+
+  it('clears suppressed plan call ids when a turn ends without tool_execution_end', async () => {
+    const created = sessions.create({ prompt: 'start an unfinished plan tool', provider: 'pi' });
+    promptBehavior = async () => {
+      subscribedHandler?.({
+        type: 'tool_execution_start',
+        toolCallId: 'reused-call-id',
+        toolName: 'todo_write',
+        args: { items: [{ text: 'First turn', status: 'in_progress' }] },
+      });
+    };
+    await provider.run(created.id, created.prompt, { emit: () => {} });
+
+    promptBehavior = async () => {
+      subscribedHandler?.({
+        type: 'tool_execution_start',
+        toolCallId: 'reused-call-id',
+        toolName: 'bash',
+        args: { command: 'bun test' },
+      });
+      subscribedHandler?.({
+        type: 'tool_execution_end',
+        toolCallId: 'reused-call-id',
+        toolName: 'bash',
+        result: 'ok',
+        isError: false,
+      });
+    };
+    const emitted: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    await provider.steer(created.id, 'reuse the call id', {
+      emit: (event) => emitted.push(event as { type: string; payload: Record<string, unknown> }),
+    });
+
+    expect(emitted).toContainEqual(
+      expect.objectContaining({
+        type: 'tool_end',
+        payload: expect.objectContaining({
+          callId: 'reused-call-id',
+          tool: 'bash',
+          output: 'ok',
+        }),
+      }),
+    );
+  });
+
+  it('registers the todo_write custom tool on the pi session', async () => {
+    const created = sessions.create({ prompt: 'tool check', provider: 'pi' });
+    await provider.run(created.id, created.prompt, { emit: () => {} });
+
+    const tools = (lastCreateSessionOptions?.customTools ?? []) as Array<{ name?: string }>;
+    expect(tools.some((tool) => tool.name === 'todo_write')).toBe(true);
+    expect(tools.some((tool) => tool.name === 'AskUserQuestion')).toBe(true);
   });
 
   it('emits Pi thinking events from message_update reasoning without adding it to assistant text', async () => {

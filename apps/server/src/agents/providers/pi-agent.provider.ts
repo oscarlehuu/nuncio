@@ -24,6 +24,13 @@ import {
   type AgentRuntimeTools,
 } from '../tools/agent-runtime-tools.types';
 import { piThinkingDescriptors, resolvePiThinkingLevel } from './pi-thinking.helpers';
+import { piEngineExtensionPaths } from '../pi-engine/extension-allowlist';
+import { buildTodoTool, TODO_TOOL_NAME } from '../pi-engine/todo-tool';
+import {
+  ASK_USER_QUESTION_TOOL_NAME,
+  buildAskUserQuestionTool,
+} from '../pi-engine/ask-user-question-tool';
+import { normalizePlanItems } from '../../sessions/domain/plan.types';
 import { buildPiRuntimePolicyOptions } from './pi-runtime-policy';
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent');
@@ -260,7 +267,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     this.pushEvent(
       sessionId,
       'user_input_resolved',
-      { requestId, resolvedBy: response.resolvedBy },
+      { requestId, resolvedBy: response.resolvedBy, answers: response.answers },
       context.emit,
     );
 
@@ -380,6 +387,29 @@ export class PiAgentProvider extends BaseAgentProvider {
     return this.settings.resolve('PI_AGENT_DIR') ?? pi.getAgentDir();
   }
 
+  /**
+   * Pi extension discovery is deny-by-default in nuncio sessions: global
+   * `~/.pi` extensions are written for the interactive CLI or rebind core
+   * tools to a fixed cwd, which breaks worktree sessions. Allowlisted
+   * extensions load through `additionalExtensionPaths`, so anything outside
+   * the list never executes. `PI_EXTENSION_DISCOVERY=full` restores pi's
+   * default discovery.
+   */
+  private async createEngineResources(pi: PiSdk, agentDir: string, cwd?: string) {
+    if (this.settings.resolve('PI_EXTENSION_DISCOVERY') === 'full') return undefined;
+    const resolvedCwd = cwd ?? process.cwd();
+    const settingsManager = pi.SettingsManager.create(resolvedCwd, agentDir);
+    const resourceLoader = new pi.DefaultResourceLoader({
+      cwd: resolvedCwd,
+      agentDir,
+      settingsManager,
+      noExtensions: true,
+      additionalExtensionPaths: piEngineExtensionPaths(agentDir),
+    });
+    await resourceLoader.reload();
+    return { resourceLoader, settingsManager };
+  }
+
   private async createPiSession(
     sessionId: string,
     context: AgentRunContext,
@@ -400,7 +430,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       ? buildPiRuntimePolicyOptions(context.runtimePolicy, pi)
       : undefined;
     const cwd = policyOptions?.workspaceRoot ?? context.cwd;
-    const resourceLoader = policyOptions
+    const policyResourceLoader = policyOptions
       ? new pi.DefaultResourceLoader({
           cwd: policyOptions.workspaceRoot,
           agentDir,
@@ -411,7 +441,7 @@ export class PiAgentProvider extends BaseAgentProvider {
           noContextFiles: true,
         })
       : undefined;
-    await resourceLoader?.reload();
+    await policyResourceLoader?.reload();
     const persistedFile = this.sessions.findById(sessionId)?.providerThreadId ?? null;
     let resumeManager: ReturnType<typeof pi.SessionManager.open> | undefined;
     if (persistedFile) {
@@ -430,9 +460,16 @@ export class PiAgentProvider extends BaseAgentProvider {
       runtimeTools,
       pi.defineTool,
     );
+    const engineTools = [
+      buildTodoTool(pi.defineTool as (tool: unknown) => unknown),
+      buildAskUserQuestionTool(pi.defineTool as (tool: unknown) => unknown),
+    ];
     const customTools = policyOptions
-      ? [...policyOptions.customTools, ...runtimeCustomTools]
-      : buildPiCustomTools(context.cwd, pi, context.tools);
+      ? [...policyOptions.customTools, ...runtimeCustomTools, ...engineTools]
+      : [...(buildPiCustomTools(context.cwd, pi, context.tools) ?? []), ...engineTools];
+    const engineResources = policyOptions
+      ? undefined
+      : await this.createEngineResources(pi, agentDir, context.cwd);
     // Pi 0.80.6 treats `tools` as the allowlist for built-ins AND customTools.
     // Include the already-vetted Crew definitions or the SDK silently removes
     // submit_* from the registry despite receiving it in customTools.
@@ -440,19 +477,22 @@ export class PiAgentProvider extends BaseAgentProvider {
       ? [...new Set([
           ...policyOptions.toolNames,
           ...(runtimeTools?.tools.map((tool) => tool.name) ?? []),
+          TODO_TOOL_NAME,
+          ASK_USER_QUESTION_TOOL_NAME,
         ])]
       : undefined;
     const { session } = await pi.createAgentSession({
       agentDir,
       ...(cwd ? { cwd } : {}),
       ...(resumeManager ? { sessionManager: resumeManager } : {}),
+      ...(engineResources ?? {}),
       authStorage,
       modelRegistry,
-      ...(resourceLoader ? { resourceLoader } : {}),
+      ...(policyResourceLoader ? { resourceLoader: policyResourceLoader } : {}),
       // Solo keeps Pi's defaults. Explicit policy uses an allowlist and omits
       // bash because host-shell confinement plus disabled network is unprovable.
       ...(policyToolNames ? { tools: policyToolNames } : {}),
-      ...(customTools ? { customTools: customTools as never } : {}),
+      customTools: customTools as never,
       ...(model ? { model } : {}),
       ...(thinkingLevel ? { thinkingLevel } : {}),
     });
@@ -471,6 +511,8 @@ export class PiAgentProvider extends BaseAgentProvider {
     const openTools = new Map<string, string>();
     /** Interactive tool calls surfaced as user_input_requested — no tool_start/tool_end pair. */
     const userInputRequests = new Set<string>();
+    /** todo_write calls surfaced as plan_updated — no tool_start/tool_end pair. */
+    const planToolCalls = new Set<string>();
 
     const resetThinking = () => {
       accumulatedThinking = '';
@@ -489,6 +531,8 @@ export class PiAgentProvider extends BaseAgentProvider {
         this.pushEvent(sessionId, 'tool_end', { callId, tool, isError: false }, emit);
       }
       openTools.clear();
+      userInputRequests.clear();
+      planToolCalls.clear();
     };
 
     const unsubscribe = session.subscribe((event: { type: string; [key: string]: unknown }) => {
@@ -532,6 +576,14 @@ export class PiAgentProvider extends BaseAgentProvider {
           this.pushEvent(sessionId, 'user_input_requested', userInputPayload, currentEmit);
           return;
         }
+        if (tool === TODO_TOOL_NAME) {
+          const items = normalizePlanItems((event.args as { items?: unknown } | undefined)?.items);
+          if (items) {
+            planToolCalls.add(callId);
+            this.pushEvent(sessionId, 'plan_updated', { items }, currentEmit);
+            return;
+          }
+        }
         openTools.set(callId, tool);
         const input = event.args !== undefined ? truncatePayload(event.args).value : undefined;
         this.pushEvent(
@@ -544,6 +596,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       if (event.type === 'tool_execution_end') {
         const callId = typeof event.toolCallId === 'string' ? event.toolCallId : undefined;
         if (callId && userInputRequests.delete(callId)) return;
+        if (callId && planToolCalls.delete(callId)) return;
         const tool = typeof event.toolName === 'string' ? event.toolName : 'unknown';
         if (callId) openTools.delete(callId);
         const output = event.result !== undefined ? truncatePayload(event.result).value : undefined;

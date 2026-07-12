@@ -38,13 +38,13 @@ describe('formatInteractionAnswers', () => {
     ).toBe('Skip');
   });
 
-  it('returns selected option label for a single question', () => {
+  it('returns the numbered option for a single question', () => {
     expect(
       formatInteractionAnswers(singleQuestion, {
         answers: [{ questionId: 'q1', selectedOptionIds: ['a'] }],
         resolvedBy: 'user',
       }),
-    ).toBe('Frontend');
+    ).toBe('Option 1 \u2014 Frontend');
   });
 
   it('comma-joins multiple selected options for a single question', () => {
@@ -56,10 +56,10 @@ describe('formatInteractionAnswers', () => {
           resolvedBy: 'user',
         },
       ),
-    ).toBe('Frontend, Backend');
+    ).toBe('Option 1 \u2014 Frontend, Option 2 \u2014 Backend');
   });
 
-  it('prefers freeText over selected options', () => {
+  it('appends freeText as a note when an option is also selected', () => {
     expect(
       formatInteractionAnswers(singleQuestion, {
         answers: [
@@ -67,7 +67,16 @@ describe('formatInteractionAnswers', () => {
         ],
         resolvedBy: 'user',
       }),
-    ).toBe('Custom answer');
+    ).toBe('Option 1 \u2014 Frontend (note: Custom answer)');
+  });
+
+  it('returns bare freeText when nothing is selected', () => {
+    expect(
+      formatInteractionAnswers(singleQuestion, {
+        answers: [{ questionId: 'q1', selectedOptionIds: [], freeText: 'Neither, use a worker' }],
+        resolvedBy: 'user',
+      }),
+    ).toBe('Neither, use a worker');
   });
 
   it('formats multiple questions as prompt: label lines', () => {
@@ -79,6 +88,6 @@ describe('formatInteractionAnswers', () => {
         ],
         resolvedBy: 'user',
       }),
-    ).toBe('Which lane?: Frontend\nPriority?: High');
+    ).toBe('Which lane?: Option 1 \u2014 Frontend\nPriority?: Option 1 \u2014 High');
   });
 });

@@ -48,7 +48,7 @@ describe('normalizeUserInput', () => {
     ).toBeUndefined();
   });
 
-  it('skips options missing id or label', () => {
+  it('skips options missing a label and numbers options without ids by position', () => {
     const result = normalizeUserInput('AskQuestion', {
       questions: [
         {
@@ -58,7 +58,48 @@ describe('normalizeUserInput', () => {
         },
       ],
     });
-    expect(result?.questions[0]?.options).toEqual([{ id: 'ok', label: 'Good' }]);
+    expect(result?.questions[0]?.options).toEqual([
+      { id: 'ok', label: 'Good' },
+      { id: '3', label: 'no id' },
+    ]);
+  });
+
+  it('defaults question and option ids by position', () => {
+    const result = normalizeUserInput('AskQuestion', {
+      questions: [
+        { prompt: 'Pick', options: [{ label: 'A' }, { label: 'B' }] },
+      ],
+    });
+    expect(result?.questions[0]).toEqual({
+      id: 'q1',
+      prompt: 'Pick',
+      options: [
+        { id: '1', label: 'A' },
+        { id: '2', label: 'B' },
+      ],
+    });
+  });
+
+  it('keeps generated question and option ids unique when positions collide with explicit ids', () => {
+    const result = normalizeUserInput('AskUserQuestion', {
+      questions: [
+        {
+          id: 'q2',
+          prompt: 'First',
+          options: [
+            { id: '2', label: 'Alpha' },
+            { label: 'Beta' },
+          ],
+        },
+        {
+          prompt: 'Second',
+          options: [{ label: 'Gamma' }],
+        },
+      ],
+    });
+
+    expect(result?.questions.map((question) => question.id)).toEqual(['q2', 'q2-2']);
+    expect(result?.questions[0]?.options.map((option) => option.id)).toEqual(['2', '2-2']);
   });
 
   it('parses askquestion lowercase SDK tool name', () => {

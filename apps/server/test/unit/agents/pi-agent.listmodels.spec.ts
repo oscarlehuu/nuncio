@@ -32,6 +32,10 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
       return fakeRegistry;
     },
   },
+  SettingsManager: { create: () => ({}) },
+  DefaultResourceLoader: class {
+    async reload() {}
+  },
   getAgentDir: () => '/tmp/fake-pi',
 }));
 

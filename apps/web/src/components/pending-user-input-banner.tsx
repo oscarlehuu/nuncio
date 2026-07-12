@@ -1,6 +1,8 @@
+import { Check, CircleHelp } from 'lucide-react';
 import { memo, useEffect, useState } from 'react';
 import type { InteractionResponse, PendingUserInput } from '@/lib/user-input.types';
 import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Tooltip,
   TooltipContent,
@@ -16,36 +18,34 @@ interface PendingUserInputBannerProps {
   onRespond?: (requestId: string, response: InteractionResponse) => void | Promise<void>;
 }
 
-type AnswersByRequest = Record<string, Record<string, string[]>>;
+interface QuestionDraft {
+  selectedOptionIds: string[];
+  freeText: string;
+  freeTextOpen: boolean;
+}
 
-function toggleSelection(
-  prev: AnswersByRequest,
-  requestId: string,
-  questionId: string,
-  optionId: string,
-  allowMultiple?: boolean,
-): AnswersByRequest {
-  const bucket = { ...(prev[requestId] ?? {}) };
-  const existing = bucket[questionId] ?? [];
-  if (allowMultiple) {
-    bucket[questionId] = existing.includes(optionId)
-      ? existing.filter((id) => id !== optionId)
-      : [...existing, optionId];
-  } else {
-    bucket[questionId] = [optionId];
-  }
-  return { ...prev, [requestId]: bucket };
+type DraftsByRequest = Record<string, Record<string, QuestionDraft>>;
+
+const EMPTY_DRAFT: QuestionDraft = { selectedOptionIds: [], freeText: '', freeTextOpen: false };
+
+function draftFor(drafts: DraftsByRequest, requestId: string, questionId: string): QuestionDraft {
+  return drafts[requestId]?.[questionId] ?? EMPTY_DRAFT;
+}
+
+function isAnswered(draft: QuestionDraft): boolean {
+  return draft.selectedOptionIds.length > 0 || draft.freeText.trim().length > 0;
 }
 
 export const PendingUserInputBanner = memo(function PendingUserInputBanner({
   pending,
-  providerLabel = 'this',
+  providerLabel = 'The agent',
   supported = false,
   onRespond,
 }: PendingUserInputBannerProps) {
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [questionIndex, setQuestionIndex] = useState(0);
-  const [answersByRequest, setAnswersByRequest] = useState<AnswersByRequest>({});
+  const [drafts, setDrafts] = useState<DraftsByRequest>({});
+  const [submittingRequestId, setSubmittingRequestId] = useState<string | null>(null);
 
   const current = pending.find((item) => item.requestId === activeRequestId) ?? pending[0];
   const activeId = current?.requestId;
@@ -59,130 +59,249 @@ export const PendingUserInputBanner = memo(function PendingUserInputBanner({
   }, [activeRequestId, current]);
 
   if (pending.length === 0 || !current || !activeId) return null;
-  const question = current.questions[questionIndex];
-  const totalQuestions = current.questions.length;
-  const selectedForQuestion = answersByRequest[activeId]?.[question?.id ?? ''] ?? [];
-  const hasSelection = selectedForQuestion.length > 0;
 
-  const toggleOption = (questionId: string, optionId: string, allowMultiple?: boolean) => {
-    if (!supported) return;
-    setAnswersByRequest((prev) =>
-      toggleSelection(prev, activeId, questionId, optionId, allowMultiple),
-    );
+  const questions = current.questions;
+  const question = questions[Math.min(questionIndex, questions.length - 1)];
+  if (!question) return null;
+  const answeredCount = questions.filter((q) => isAnswered(draftFor(drafts, activeId, q.id))).length;
+  const allAnswered = answeredCount === questions.length;
+  const draft = draftFor(drafts, activeId, question.id);
+  const submitting = submittingRequestId !== null;
+
+  const updateDraft = (questionId: string, update: (prev: QuestionDraft) => QuestionDraft) => {
+    if (!supported || submitting) return;
+    setDrafts((prev) => {
+      const bucket = prev[activeId] ?? {};
+      const next = update(bucket[questionId] ?? EMPTY_DRAFT);
+      return { ...prev, [activeId]: { ...bucket, [questionId]: next } };
+    });
   };
 
-  const submit = () => {
-    if (!supported || !onRespond) return;
-    const answers = Object.entries(answersByRequest[activeId] ?? {}).map(
-      ([questionId, selectedOptionIds]) => ({ questionId, selectedOptionIds }),
+  const advanceFrom = (index: number) => {
+    const nextUnanswered = questions.findIndex(
+      (q, i) => i > index && !isAnswered(draftFor(drafts, activeId, q.id)),
     );
-    void onRespond(activeId, { answers, resolvedBy: 'user' });
+    if (nextUnanswered >= 0) setQuestionIndex(nextUnanswered);
+    else if (index < questions.length - 1) setQuestionIndex(index + 1);
+  };
+
+  const toggleOption = (optionId: string) => {
+    updateDraft(question.id, (prev) => {
+      const selected = prev.selectedOptionIds.includes(optionId);
+      if (question.allowMultiple) {
+        return {
+          ...prev,
+          selectedOptionIds: selected
+            ? prev.selectedOptionIds.filter((id) => id !== optionId)
+            : [...prev.selectedOptionIds, optionId],
+        };
+      }
+      // Keep any free text — it becomes a note attached to the selection.
+      return { ...prev, selectedOptionIds: selected ? [] : [optionId] };
+    });
+    if (!question.allowMultiple) advanceFrom(questionIndex);
+  };
+
+  const respond = async (response: InteractionResponse) => {
+    if (!supported || !onRespond || submittingRequestId !== null) return;
+    const requestId = activeId;
+    setSubmittingRequestId(requestId);
+    try {
+      await onRespond(requestId, response);
+    } finally {
+      setSubmittingRequestId((currentId) => (currentId === requestId ? null : currentId));
+    }
+  };
+
+  const submit = async () => {
+    if (!allAnswered) return;
+    const answers = questions.map((q) => {
+      const d = draftFor(drafts, activeId, q.id);
+      const freeText = d.freeText.trim();
+      return {
+        questionId: q.id,
+        selectedOptionIds: d.selectedOptionIds,
+        ...(freeText ? { freeText } : {}),
+      };
+    });
+    await respond({ answers, resolvedBy: 'user' });
   };
 
   const skip = () => {
-    if (!supported || !onRespond) return;
-    void onRespond(activeId, { answers: [], resolvedBy: 'skip' });
+    void respond({ answers: [], resolvedBy: 'skip' });
   };
 
   return (
     <TooltipProvider>
       <div
-        className="mb-2 rounded-lg border border-border/60 bg-card/80 px-3 py-3"
+        className="mb-2 rounded-2xl border border-warning/50 bg-card px-4 py-3.5 shadow-e2 surface-lit"
         data-testid="pending-user-input-banner"
       >
-        {current.title && (
-          <p className="mb-2 text-ui-lg font-medium text-foreground">{current.title}</p>
-        )}
-        {totalQuestions > 1 && (
-          <p className="mb-2 text-ui-sm text-muted-foreground">
-            Question {questionIndex + 1} of {totalQuestions}
+        <div className="flex items-center gap-2">
+          <CircleHelp className="size-4 text-warning shrink-0" aria-hidden />
+          <p className="text-ui-lg font-medium text-foreground">
+            {current.title ?? `${providerLabel} needs your input`}
           </p>
-        )}
-        {question && (
-          <div className="flex flex-col gap-2">
-            {question.header && (
-              <span className="text-ui-sm uppercase tracking-wide text-muted-foreground">
-                {question.header}
-              </span>
-            )}
-            <p className="text-ui-lg text-foreground">{question.prompt}</p>
-            <div className="flex flex-col gap-1.5" role="listbox" aria-label={question.prompt}>
-              {question.options.map((option) => {
-                const selected = selectedForQuestion.includes(option.id);
-                return (
-                  <button
-                    key={option.id}
-                    type="button"
-                    role="option"
-                    aria-pressed={selected}
-                    disabled={!supported}
-                    onClick={() => toggleOption(question.id, option.id, question.allowMultiple)}
-                    className={cn(
-                      'rounded-md border px-3 py-2.5 min-h-[40px] text-left transition-colors',
-                      selected
-                        ? 'border-primary/60 bg-primary/10 ring-1 ring-primary/30'
-                        : 'border-border/50 bg-muted/20 hover:bg-muted/35',
-                      !supported && 'opacity-70 cursor-not-allowed hover:bg-muted/20',
-                    )}
-                  >
-                    <span className="text-ui-lg text-foreground">{option.label}</span>
-                    {option.description && (
-                      <span className="mt-0.5 block text-ui text-muted-foreground">
-                        {option.description}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
+          {questions.length > 1 && (
+            <span
+              className="ml-auto text-ui-sm text-muted-foreground"
+              data-testid="user-input-progress"
+            >
+              {answeredCount}/{questions.length} answered
+            </span>
+          )}
+        </div>
+
+        {questions.length > 1 && (
+          <div
+            className="mt-2.5 flex flex-wrap items-center gap-1.5"
+            role="tablist"
+            aria-label="Questions"
+          >
+            {questions.map((q, index) => {
+              const answered = isAnswered(draftFor(drafts, activeId, q.id));
+              const active = index === questionIndex;
+              return (
+                <button
+                  key={q.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setQuestionIndex(index)}
+                  className={cn(
+                    'flex items-center gap-1 rounded-full border px-2.5 py-1 text-ui-sm transition-colors',
+                    active
+                      ? 'border-foreground/50 bg-muted/50 text-foreground'
+                      : 'border-border/50 text-muted-foreground hover:bg-muted/30',
+                  )}
+                >
+                  {answered && <Check className="size-3" aria-hidden />}
+                  {q.header ?? `Question ${index + 1}`}
+                </button>
+              );
+            })}
           </div>
         )}
-        <div className="mt-3 flex items-center gap-2">
-          {questionIndex > 0 && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={!supported}
-              onClick={() => setQuestionIndex((i) => Math.max(0, i - 1))}
-            >
-              Back
-            </Button>
+
+        <div className="mt-3 flex flex-col gap-2">
+          {questions.length === 1 && question.header && (
+            <span className="text-ui-sm uppercase tracking-wide text-muted-foreground">
+              {question.header}
+            </span>
           )}
-          {questionIndex < totalQuestions - 1 ? (
-            <Button
+          <p className="text-ui-lg text-foreground">{question.prompt}</p>
+          <div className="flex flex-col gap-1.5" role="listbox" aria-label={question.prompt}>
+            {question.options.map((option, optionIndex) => {
+              const selected = draft.selectedOptionIds.includes(option.id);
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  disabled={!supported || submitting}
+                  onClick={() => toggleOption(option.id)}
+                  className={cn(
+                    'rounded-md border px-3 py-2.5 min-h-[40px] text-left transition-colors',
+                    selected
+                      ? 'border-foreground/50 bg-muted/50'
+                      : 'border-border/50 bg-muted/15 hover:bg-muted/35',
+                    !supported && 'opacity-70 cursor-not-allowed hover:bg-muted/15',
+                  )}
+                >
+                  <span className="flex items-center gap-2 text-ui-lg text-foreground">
+                    <span
+                      className={cn(
+                        'flex size-5 shrink-0 items-center justify-center rounded border text-ui-sm',
+                        selected
+                          ? 'border-foreground/60 text-foreground'
+                          : 'border-border/60 text-muted-foreground',
+                      )}
+                      aria-hidden
+                    >
+                      {selected ? <Check className="size-3" /> : optionIndex + 1}
+                    </span>
+                    {option.label}
+                  </span>
+                  {option.description && (
+                    <span className="mt-0.5 block pl-7 text-ui text-muted-foreground">
+                      {option.description}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+            <button
               type="button"
-              size="sm"
-              disabled={!supported || !hasSelection}
-              onClick={() => setQuestionIndex((i) => Math.min(totalQuestions - 1, i + 1))}
-            >
-              Next
-            </Button>
-          ) : (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span>
-                  <Button
-                    type="button"
-                    size="sm"
-                    disabled={!supported || !hasSelection}
-                    onClick={submit}
-                  >
-                    Submit
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              {!supported && (
-                <TooltipContent>
-                  Answering from phone is not yet supported for the {providerLabel} provider
-                </TooltipContent>
+              disabled={!supported || submitting}
+              data-testid="user-input-other"
+              onClick={() =>
+                updateDraft(question.id, (prev) => ({ ...prev, freeTextOpen: !prev.freeTextOpen }))
+              }
+              className={cn(
+                'rounded-md border border-dashed px-3 py-2.5 min-h-[40px] text-left transition-colors',
+                draft.freeTextOpen || draft.freeText.trim()
+                  ? 'border-foreground/50 bg-muted/50'
+                  : 'border-border/50 bg-transparent hover:bg-muted/25',
+                !supported && 'opacity-70 cursor-not-allowed',
               )}
-            </Tooltip>
+            >
+              <span className="text-ui-lg text-foreground">
+                {draft.selectedOptionIds.length > 0 ? 'Add a note…' : 'Other…'}
+              </span>
+              <span className="mt-0.5 block text-ui text-muted-foreground">
+                {draft.selectedOptionIds.length > 0
+                  ? 'Extra detail sent with your choice'
+                  : 'Type your own answer'}
+              </span>
+            </button>
+          </div>
+          {draft.freeTextOpen && (
+            <Textarea
+              autoFocus
+              value={draft.freeText}
+              disabled={!supported || submitting}
+              placeholder={
+                draft.selectedOptionIds.length > 0 ? 'Note for your choice…' : 'Your answer…'
+              }
+              data-testid="user-input-free-text-input"
+              onChange={(e) =>
+                updateDraft(question.id, (prev) => ({ ...prev, freeText: e.target.value }))
+              }
+              className="min-h-[64px]"
+            />
           )}
+        </div>
+
+        <div className="mt-3.5 flex items-center gap-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={!supported || !allAnswered || submitting}
+                  onClick={() => void submit()}
+                >
+                  Submit
+                </Button>
+              </span>
+            </TooltipTrigger>
+            {!supported && (
+              <TooltipContent>
+                Answering is not yet supported for the {providerLabel} provider
+              </TooltipContent>
+            )}
+          </Tooltip>
           {supported && (
-            <Button type="button" variant="ghost" size="sm" onClick={skip}>
-              Cancel
+            <Button type="button" variant="ghost" size="sm" disabled={submitting} onClick={skip}>
+              Skip
             </Button>
+          )}
+          {!allAnswered && questions.length > 1 && (
+            <span className="text-ui-sm text-muted-foreground">
+              Answer all questions to submit
+            </span>
           )}
         </div>
       </div>

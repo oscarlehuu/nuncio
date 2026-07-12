@@ -29,6 +29,7 @@ let fakeSessionFile = '/tmp/fake-pi/session.jsonl';
 
 const makePiSdkStub = () => ({
   AuthStorage: { create: () => ({}) },
+  SettingsManager: { create: () => ({}) },
   ModelRegistry: {
     create: () => ({
       getAvailable: () => [],
@@ -232,7 +233,7 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
         filesystem: 'read-only',
         network: 'disabled',
       });
-      expect(options.tools).toEqual(['read', 'grep', 'ls']);
+      expect(options.tools).toEqual(['read', 'grep', 'ls', 'todo_write', 'AskUserQuestion']);
       expect((options.resourceLoader as { options?: Record<string, unknown> }).options).toMatchObject({
         cwd: realpathSync(workspaceRoot),
         noExtensions: true,
@@ -247,6 +248,8 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
         'read',
         'grep',
         'ls',
+        'todo_write',
+        'AskUserQuestion',
       ]);
     } finally {
       rmSync(workspaceRoot, { recursive: true, force: true });
@@ -272,7 +275,15 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
       });
 
       const options = latestCreateOptions();
-      expect(options.tools).toEqual(['read', 'edit', 'write', 'grep', 'ls']);
+      expect(options.tools).toEqual([
+        'read',
+        'edit',
+        'write',
+        'grep',
+        'ls',
+        'todo_write',
+        'AskUserQuestion',
+      ]);
       const writeTool = (options.customTools as Array<{
         name: string;
         options?: { operations?: { writeFile(path: string, content: string): Promise<void> } };
@@ -367,10 +378,14 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
         expect(latestCreateOptions().tools).toEqual([
           ...testCase.builtins,
           testCase.toolName,
+          'todo_write',
+          'AskUserQuestion',
         ]);
         expect(customTools.map((tool) => tool.name)).toEqual([
           ...testCase.builtins,
           testCase.toolName,
+          'todo_write',
+          'AskUserQuestion',
         ]);
         expect(customTools.map((tool) => tool.name)).not.toContain('bash');
         expect(customTools.map((tool) => tool.name)).not.toContain('forged_submit');
@@ -420,7 +435,15 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
       });
       expect(createAgentSessionOptions).toHaveLength(1);
       expect((createAgentSessionOptions[0]!.customTools as Array<{ name: string }>).map((tool) => tool.name))
-        .toEqual(['read', 'grep', 'ls', 'submit_plan', 'submit_synthesis']);
+        .toEqual([
+          'read',
+          'grep',
+          'ls',
+          'submit_plan',
+          'submit_synthesis',
+          'todo_write',
+          'AskUserQuestion',
+        ]);
 
       await provider.steer(created.id, 'synthesize now', {
         cwd: canonicalRoot,
@@ -438,7 +461,15 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
         cwd: canonicalRoot,
       }]);
       expect((createAgentSessionOptions[1]!.customTools as Array<{ name: string }>).map((tool) => tool.name))
-        .toEqual(['read', 'grep', 'ls', 'submit_plan', 'submit_synthesis']);
+        .toEqual([
+          'read',
+          'grep',
+          'ls',
+          'submit_plan',
+          'submit_synthesis',
+          'todo_write',
+          'AskUserQuestion',
+        ]);
       const refreshedSynthesis = (createAgentSessionOptions[1]!.customTools as Array<{
         name: string;
         execute: (callId: string, input: Record<string, unknown>) => Promise<{
