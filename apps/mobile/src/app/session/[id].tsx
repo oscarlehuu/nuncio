@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -25,7 +25,9 @@ import { useTranscriptBlocks } from '../../lib/use-transcript-blocks';
 import { TranscriptBlockView } from '../../components/transcript-block-view';
 import { ConnectionPill } from '../../components/connection-pill';
 import { QuotaSheetTrigger } from '../../components/quota-sheet';
+import { ATTENTION_COLOR, SessionStatusDot } from '../../components/session-status-dot';
 import { crewMemberSessionAccess } from '../../lib/crew-member-session';
+import { deriveNeedsInput, latestSessionStatus } from '../../lib/session-pending-input';
 
 export default function SessionDetail() {
   const router = useRouter();
@@ -40,6 +42,16 @@ export default function SessionDetail() {
   const { events, steer, connectionState } = useSessionTranscript(sessionId);
   const blocks = useTranscriptBlocks(events);
   const access = crewMemberSessionAccess(session);
+  const sessionLoaded = session !== null;
+  const canRespond = access.canMutate && session?.supportsInteraction === true;
+  const needsInput = useMemo(
+    () => deriveNeedsInput(events, session?.status, session?.pendingInput),
+    [events, session?.status, session?.pendingInput],
+  );
+  // The event tail is authoritative over the (possibly stale) session row, and
+  // only a live RUNNING session is actually awaiting your answer — a pending
+  // question on any other status must not raise the amber alarm.
+  const sessionRunning = (latestSessionStatus(events) ?? session?.status) === 'RUNNING';
 
   const reloadSession = useCallback(() => {
     if (!sessionId) return;
@@ -125,14 +137,25 @@ export default function SessionDetail() {
         <Pressable onPress={() => router.back()}>
           <Text className="text-2xl text-muted-foreground">‹</Text>
         </Pressable>
-        <View className="flex-1">
-          <Text className="font-semibold text-foreground" numberOfLines={1}>
-            {session?.title || session?.prompt || 'Session'}
-          </Text>
-          <Text className="text-xs text-muted-foreground">
-            {session ? statusLabel(session.status) : '…'}
-            {access.managedByCrew ? ' · Managed by Crew' : ''}
-          </Text>
+        <View className="flex-1 flex-row items-start gap-2">
+          {session ? (
+            <View className="mt-1.5">
+              <SessionStatusDot status={session.status} pendingInput={needsInput} />
+            </View>
+          ) : null}
+          <View className="min-w-0 flex-1">
+            <Text className="font-semibold text-foreground" numberOfLines={1}>
+              {session?.title || session?.prompt || 'Session'}
+            </Text>
+            <Text className="text-xs text-muted-foreground" numberOfLines={1}>
+              {needsInput ? (
+                <Text style={{ color: ATTENTION_COLOR }}>Waiting for you</Text>
+              ) : (
+                session ? statusLabel(session.status) : '…'
+              )}
+              {access.managedByCrew ? ' · Managed by Crew' : ''}
+            </Text>
+          </View>
         </View>
         <QuotaSheetTrigger activeProvider={session?.provider} model={session?.model} />
         <ConnectionPill state={connectionState} />
@@ -147,8 +170,17 @@ export default function SessionDetail() {
         ref={listRef}
         className="flex-1 px-3"
         data={blocks}
-        keyExtractor={(_, i) => String(i)}
-        renderItem={({ item }) => <TranscriptBlockView block={item} />}
+        extraData={`${canRespond}:${sessionLoaded}:${sessionRunning}`}
+        keyExtractor={(item) => item.key}
+        renderItem={({ item }) => (
+          <TranscriptBlockView
+            block={item}
+            sessionId={sessionId}
+            canRespond={canRespond}
+            sessionLoaded={sessionLoaded}
+            sessionRunning={sessionRunning}
+          />
+        )}
         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
       />
 
