@@ -348,6 +348,7 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 | POST | `/api/sessions/:id/browser/input` | Send browser input `{ "type": "click\|text\|key\|scroll", ..., "target?": "auto\|in_app\|external" }` |
 | POST | `/api/push/register` | Register a device Expo push token `{ "token": "...", "platform?": "ios\|android", "deviceName?": "..." }`; the server pushes on session finish / needs-input / error |
 | POST | `/api/push/unregister` | Remove a device push token `{ "token": "..." }` |
+| POST | `/api/devices/:deviceId/push-token` | Register the paired device's Expo push token `{ "token": "ExponentPushToken[...]", "platform": "ios\|android" }` using its `Bearer nd1.<deviceId>.<deviceSecret>` credential; returns `{ "ok": true }` |
 
 ### Session FSM
 

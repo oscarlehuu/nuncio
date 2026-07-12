@@ -469,6 +469,22 @@ export class DatabaseService implements OnModuleDestroy {
       )
     `);
 
+    const pushTokenColumns = this.db
+      .prepare('PRAGMA table_info(push_tokens)')
+      .all() as Array<{ name: string }>;
+    if (!pushTokenColumns.some((column) => column.name === 'device_id')) {
+      this.db.exec('ALTER TABLE push_tokens ADD COLUMN device_id TEXT');
+    }
+    if (!pushTokenColumns.some((column) => column.name === 'notifications_enabled')) {
+      this.db.exec(
+        'ALTER TABLE push_tokens ADD COLUMN notifications_enabled INTEGER NOT NULL DEFAULT 1',
+      );
+    }
+    this.db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_push_tokens_device
+      ON push_tokens(device_id) WHERE device_id IS NOT NULL
+    `);
+
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS steer_queue (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
