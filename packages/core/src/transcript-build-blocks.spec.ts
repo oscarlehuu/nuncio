@@ -237,6 +237,28 @@ describe('buildTranscriptBlocks', () => {
     });
   });
 
+  it('builds a provider-neutral evidence block from evidence_captured', () => {
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'evidence_captured', {
+        afterRef: { id: '0123456789abcdef0123456789abcdef', mimeType: 'image/png' },
+        route: '/settings',
+        viewport: { w: 1440, h: 900 },
+        workspaceHead: 'deadbeef',
+      }),
+    ]);
+
+    expect(blocks).toEqual([{
+      kind: 'evidence',
+      key: 'evidence-1',
+      evidence: {
+        afterRef: { id: '0123456789abcdef0123456789abcdef', mimeType: 'image/png' },
+        route: '/settings',
+        viewport: { w: 1440, h: 900 },
+        workspaceHead: 'deadbeef',
+      },
+    }]);
+  });
+
   it('folds inline answers from user_input_resolved into the block', () => {
     const questions = [{ id: 'q1', prompt: 'Pick', options: [{ id: 'a', label: 'A' }] }];
     const answers = [{ questionId: 'q1', selectedOptionIds: ['a'], freeText: 'note' }];

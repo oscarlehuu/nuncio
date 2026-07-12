@@ -1,6 +1,10 @@
 import type { SessionEvent } from './api';
 import type { ProviderRequestDecision } from './api';
 import type { TranscriptImage } from './attachments';
+import {
+  normalizeEvidenceCapturedPayload,
+  type EvidenceCapturedPayload,
+} from './evidence.types';
 import type { UserInputAnswer, UserInputQuestion, UserInputResolvedBy } from './user-input.types';
 import { normalizePlanItems, type PlanItem } from './plan.types';
 import { summarizeToolCall, type ToolSummary } from './tool-summary';
@@ -56,6 +60,7 @@ export type TranscriptBlock =
       key: string;
       items: PlanItem[];
     }
+  | { kind: 'evidence'; key: string; evidence: EvidenceCapturedPayload }
   | {
       kind: 'provider_request';
       key: string;
@@ -452,6 +457,16 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
       key: `task-completed-${event.seq}`,
       digest: projectTaskDigest(payload),
     });
+    return;
+  }
+
+  if (event.type === 'evidence_captured') {
+    flushAssistant(state);
+    flushThinking(state);
+    const evidence = normalizeEvidenceCapturedPayload(payload);
+    if (evidence) {
+      state.out.push({ kind: 'evidence', key: `evidence-${event.seq}`, evidence });
+    }
     return;
   }
 

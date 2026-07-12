@@ -5,6 +5,7 @@ import {
   Delete,
   Get,
   NotFoundException,
+  Optional,
   Param,
   Patch,
   Post,
@@ -23,6 +24,8 @@ import type {
 } from '../domain/sessions.types';
 import { SessionsService } from '../sessions.service';
 import { sniffImageMime } from '../media.store';
+import { EvidenceCaptureService } from '../../evidence/evidence-capture.service';
+import type { CaptureEvidenceDto } from '../../evidence/evidence.types';
 
 function parsePositiveInt(value: string | undefined): number | undefined {
   if (!value) return undefined;
@@ -32,7 +35,10 @@ function parsePositiveInt(value: string | undefined): number | undefined {
 
 @Controller('sessions')
 export class SessionsController {
-  constructor(private readonly sessions: SessionsService) {}
+  constructor(
+    private readonly sessions: SessionsService,
+    @Optional() private readonly evidence?: EvidenceCaptureService,
+  ) {}
 
   @Get()
   list(@Query('includeArchived') includeArchived?: string) {
@@ -119,6 +125,16 @@ export class SessionsController {
     return this.sessions.steer(id, body?.message ?? '', body?.forceResume, body?.attachments);
   }
 
+  @Post(':id/evidence')
+  async captureEvidence(@Param('id') id: string, @Body() body: CaptureEvidenceDto) {
+    const session = this.sessions.get(id);
+    if (!session) throw new NotFoundException('Session not found');
+    if (!this.evidence) throw new BadRequestException('Evidence capture is unavailable');
+    const captured = await this.evidence.capture(session, body);
+    this.sessions.appendOrchestrationEvent(id, 'evidence_captured', captured);
+    return captured;
+  }
+
   @Post(':id/interrupt')
   interrupt(@Param('id') id: string) {
     return this.sessions.interrupt(id);
@@ -173,6 +189,7 @@ export class SessionsController {
   @Delete(':id')
   async delete(@Param('id') id: string) {
     await this.sessions.delete(id);
+    this.evidence?.forget(id);
     return { ok: true };
   }
 

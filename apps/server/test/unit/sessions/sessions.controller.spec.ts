@@ -218,6 +218,38 @@ describe('SessionsController', () => {
     expect(() => controller.get('nope')).toThrow(NotFoundException);
   });
 
+  it('captures evidence for an existing session and returns media refs', async () => {
+    const result = {
+      beforeRef: { id: '0123456789abcdef0123456789abcdef', mimeType: 'image/png' as const },
+      route: '/app', viewport: { w: 1440, h: 900 }, workspaceHead: 'abc123',
+    };
+    const capture = jest.fn(async () => result);
+    const appendOrchestrationEvent = jest.fn();
+    const current = makeSession({ worktreePath: '/repo' });
+    const controller = new SessionsController(
+      { get: () => current, appendOrchestrationEvent } as never,
+      { capture } as never,
+    );
+
+    await expect(controller.captureEvidence('s1', {
+      url: 'http://localhost:5173', route: '/app', phase: 'before',
+    })).resolves.toEqual(result);
+    expect(capture).toHaveBeenCalledWith(current, {
+      url: 'http://localhost:5173', route: '/app', phase: 'before',
+    });
+    expect(appendOrchestrationEvent).toHaveBeenCalledWith('s1', 'evidence_captured', result);
+  });
+
+  it('rejects evidence capture for a missing session', async () => {
+    const controller = new SessionsController(
+      { get: () => null } as never,
+      { capture: jest.fn() } as never,
+    );
+    await expect(controller.captureEvidence('missing', {
+      url: 'http://localhost:5173', phase: 'after',
+    })).rejects.toBeInstanceOf(NotFoundException);
+  });
+
   it('events throws NotFoundException when the session is missing', () => {
     const service = { get: () => null } as never;
     const controller = new SessionsController(service);
@@ -274,6 +306,16 @@ describe('SessionsController', () => {
     await deleting;
     expect(result).toEqual({ ok: true });
     expect(del).toHaveBeenCalledWith('s1');
+  });
+
+  it('forgets a captured preview target after session deletion', async () => {
+    const forget = jest.fn();
+    const controller = new SessionsController(
+      { delete: jest.fn(async () => undefined) } as never,
+      { forget } as never,
+    );
+    await controller.delete('s1');
+    expect(forget).toHaveBeenCalledWith('s1');
   });
 
   it('respondProviderRequest delegates to sessions.respondProviderRequest', () => {
