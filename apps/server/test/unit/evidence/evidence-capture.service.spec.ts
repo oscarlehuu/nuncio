@@ -6,6 +6,7 @@ import type { SessionDto } from '../../../src/sessions/domain/sessions.types';
 function session(over: Partial<SessionDto> = {}): SessionDto {
   return {
     id: 'session-1', worktreePath: '/repo/worktree', workspace: '/repo', projectPath: '/repo',
+    ...over,
   } as SessionDto;
 }
 
