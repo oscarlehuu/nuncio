@@ -91,6 +91,28 @@ export class PushRepository {
       >(
         `SELECT p.token, p.platform, p.device_name, p.device_id, p.notifications_enabled
          FROM push_tokens p
+         INNER JOIN devices d ON d.id = p.device_id
+         WHERE p.notifications_enabled = 1
+           AND d.revoked_at IS NULL`,
+      )
+      .all();
+    return rows.map((r) => this.toRow(r));
+  }
+
+  listEnabledIncludingLegacyUnbound(): PushTokenRow[] {
+    const rows = this.database.db
+      .prepare<
+        {
+          token: string;
+          platform: string | null;
+          device_name: string | null;
+          device_id: string | null;
+          notifications_enabled: number;
+        },
+        []
+      >(
+        `SELECT p.token, p.platform, p.device_name, p.device_id, p.notifications_enabled
+         FROM push_tokens p
          LEFT JOIN devices d ON d.id = p.device_id
          WHERE p.notifications_enabled = 1
            AND (p.device_id IS NULL OR (d.id IS NOT NULL AND d.revoked_at IS NULL))`,

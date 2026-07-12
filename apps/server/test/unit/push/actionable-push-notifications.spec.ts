@@ -153,6 +153,40 @@ describe('actionable session push contracts', () => {
     expect(sent.flat().map((message) => message.to)).toEqual(['ExponentPushToken[on]']);
   });
 
+  it('sends questions and approvals only to bound, non-revoked devices', async () => {
+    seedSession();
+    const active = devices.create('Active', 'ios');
+    const revoked = devices.create('Revoked', 'ios');
+    tokens.registerForDevice(active.id, 'ExponentPushToken[active]', 'ios');
+    tokens.registerForDevice(revoked.id, 'ExponentPushToken[revoked]', 'ios');
+    tokens.register('ExponentPushToken[legacy]', 'ios', 'Legacy');
+    devices.revoke(revoked.id);
+
+    await push.onSessionEvent('session-1', {
+      seq: 1,
+      createdAt: 1,
+      type: 'user_input_requested',
+      payload: {
+        requestId: 'question-secure',
+        questions: [
+          { id: 'continue', prompt: 'Continue?', options: [{ id: 'yes', label: 'Yes' }] },
+        ],
+      },
+    });
+    await push.onSessionEvent('session-1', {
+      seq: 2,
+      createdAt: 2,
+      type: 'provider_request',
+      payload: { requestId: 'approval-secure' },
+    });
+
+    expect(sent).toHaveLength(2);
+    expect(sent.map((batch) => batch.map((message) => message.to))).toEqual([
+      ['ExponentPushToken[active]'],
+      ['ExponentPushToken[active]'],
+    ]);
+  });
+
   it('does not throw into event persistence when the Expo SDK throws synchronously', () => {
     seedSession();
     const device = devices.create('Phone', 'ios');

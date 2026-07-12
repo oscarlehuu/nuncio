@@ -108,7 +108,7 @@ export class PushService implements OnModuleInit, OnModuleDestroy {
     body: string;
     data?: Record<string, unknown>;
   }): Promise<void> {
-    const messages = this.tokens.listEnabled().map((recipient) => ({
+    const messages = this.tokens.listEnabledIncludingLegacyUnbound().map((recipient) => ({
       to: recipient.token,
       title: content.title,
       body: content.body,
@@ -120,7 +120,9 @@ export class PushService implements OnModuleInit, OnModuleDestroy {
 
   async onSessionEvent(sessionId: string, event: SessionEvent): Promise<void> {
     if (!['status', 'user_input_requested', 'provider_request'].includes(event.type)) return;
-    const recipients = this.tokens.listEnabled();
+    const recipients = event.type === 'status'
+      ? this.tokens.listEnabledIncludingLegacyUnbound()
+      : this.tokens.listEnabled();
     if (recipients.length === 0) return;
 
     const row = this.database.db
