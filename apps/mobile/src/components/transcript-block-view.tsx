@@ -35,11 +35,13 @@ export function TranscriptBlockView({
   sessionId = null,
   canRespond = false,
   sessionLoaded = true,
+  sessionRunning = true,
 }: {
   block: TranscriptBlock;
   sessionId?: string | null;
   canRespond?: boolean;
   sessionLoaded?: boolean;
+  sessionRunning?: boolean;
 }) {
   switch (block.kind) {
     case 'user':
@@ -72,6 +74,7 @@ export function TranscriptBlockView({
           sessionId={sessionId}
           canRespond={canRespond}
           sessionLoaded={sessionLoaded}
+          sessionRunning={sessionRunning}
         />
       );
     case 'plan':

@@ -26,21 +26,34 @@ interface QuestionCardProps {
   sessionId: string | null;
   /** Provider supports phone answers AND this client may mutate the session. */
   canRespond: boolean;
-  /** The session record has loaded, so canRespond reflects real capability. */
+  /** The session record has loaded, so canRespond/sessionRunning are trustworthy. */
   sessionLoaded: boolean;
+  /** The session is live and actually blocked on you — the only amber-worthy case. */
+  sessionRunning: boolean;
 }
 
-export function QuestionCard({ block, sessionId, canRespond, sessionLoaded }: QuestionCardProps) {
+export function QuestionCard({
+  block,
+  sessionId,
+  canRespond,
+  sessionLoaded,
+  sessionRunning,
+}: QuestionCardProps) {
   if (block.resolvedBy) {
     return <AnsweredCard block={block} />;
   }
-  // Until the session loads we don't yet know whether this client can answer, so
-  // show a neutral pending shell rather than flashing the "answer from web" state.
+  // Until the session loads we don't know its status or our capability — show a
+  // calm mono shell, never a premature amber alarm or "answer from web" state.
   if (!sessionLoaded) {
-    return <WaitingCard block={block} loading />;
+    return <WaitingCard block={block} tone="mono" />;
+  }
+  // An open question on a non-RUNNING session is stale: color is a summons, so a
+  // paused/errored/archived session must stay mono, not raise the amber alarm.
+  if (!sessionRunning) {
+    return <WaitingCard block={block} tone="mono" hint="Not awaiting input right now." />;
   }
   if (!canRespond || !sessionId) {
-    return <WaitingCard block={block} />;
+    return <WaitingCard block={block} tone="amber" hint="Answer it from the web app." />;
   }
   return <PendingCard block={block} sessionId={sessionId} />;
 }
@@ -285,21 +298,32 @@ function AnsweredCard({ block }: { block: UserInputBlock }) {
 }
 
 /**
- * Pending, but this client isn't answering yet: either the session record is
- * still loading (`loading` — capability unknown, so no CTA) or this client can't
- * answer at all (inspect-only / provider can't take phone input).
+ * Pending, but this client isn't the one answering. `tone="amber"` is the live,
+ * actively-blocked case (RUNNING but can't answer here → point at the web app);
+ * `tone="mono"` is calm — the session record is still loading, or the request is
+ * stale on a non-RUNNING session, so no colour is a summons.
  */
-function WaitingCard({ block, loading = false }: { block: UserInputBlock; loading?: boolean }) {
+function WaitingCard({
+  block,
+  tone,
+  hint,
+}: {
+  block: UserInputBlock;
+  tone: 'amber' | 'mono';
+  hint?: string;
+}) {
+  const amber = tone === 'amber';
   return (
-    <View className="my-1.5 rounded-lg bg-card px-4 py-3" style={{ borderWidth: 1, borderColor: AMBER }}>
-      <Eyebrow label="Needs your answer" color={AMBER} />
+    <View
+      className={`my-1.5 rounded-lg bg-card px-4 py-3 ${amber ? '' : 'border border-border'}`}
+      style={amber ? { borderWidth: 1, borderColor: AMBER } : undefined}
+    >
+      <Eyebrow label={amber ? 'Needs your answer' : 'Question'} color={amber ? AMBER : undefined} />
       {block.title ? <Text className="mt-1 text-sm font-semibold text-foreground">{block.title}</Text> : null}
       <Text className="mt-1 text-sm text-muted-foreground">
         {block.questions[0]?.prompt ?? 'The agent is blocked on a question.'}
       </Text>
-      {loading ? null : (
-        <Text className="mt-2 text-xs text-muted-foreground">Answer it from the web app.</Text>
-      )}
+      {hint ? <Text className="mt-2 text-xs text-muted-foreground">{hint}</Text> : null}
     </View>
   );
 }
