@@ -1,11 +1,11 @@
 import { describe, it, expect, mock } from 'bun:test';
-import { STATIC_MODEL_PROVIDERS } from '../../../src/models/models.static';
 import { PiAgentProvider } from '../../../src/agents/providers/pi-agent.provider';
 
 type FakeModel = {
   provider: string;
   id: string;
   name: string;
+  input?: Array<'text' | 'image'>;
   cost?: { input: number; output: number };
   contextWindow?: number;
   reasoning?: boolean;
@@ -14,10 +14,11 @@ type FakeModel = {
 
 let availableModels: FakeModel[] = [];
 let throwOnCreate = false;
+let providerDisplayNames: Record<string, string> = {};
 
 const fakeRegistry = {
   getAvailable: () => availableModels,
-  getProviderDisplayName: (provider: string) => provider.toUpperCase(),
+  getProviderDisplayName: (provider: string) => providerDisplayNames[provider] ?? provider,
   find: (provider: string, id: string) =>
     (availableModels.find((m) => m.provider === provider && m.id === id) as unknown) ?? undefined,
 };
@@ -75,13 +76,13 @@ describe('PiAgentProvider.listModels', () => {
     expect(claude?.contextWindow).toBe(1_000_000);
   });
 
-  it('falls back to static providers when the registry has no available models', async () => {
+  it('returns an empty stable response when the registry has no available models', async () => {
     availableModels = [];
     throwOnCreate = false;
 
     const models = await makeProvider().listModels();
 
-    expect(models).toBe(STATIC_MODEL_PROVIDERS);
+    expect(models).toEqual([]);
   });
 
   it('exposes Max only when the Pi registry model explicitly supports it', async () => {
@@ -114,12 +115,87 @@ describe('PiAgentProvider.listModels', () => {
     ]);
   });
 
-  it('falls back to static providers when the SDK throws', async () => {
+  it('surfaces every configured registry provider with stable grouping and model capabilities', async () => {
+    providerDisplayNames = {
+      anthropic: 'Anthropic',
+      google: 'Google Gemini',
+      xai: 'xAI',
+    };
+    availableModels = [
+      {
+        provider: 'xai',
+        id: 'grok-4-fast',
+        name: 'Grok 4 Fast',
+        input: ['text'],
+        reasoning: true,
+        thinkingLevelMap: { minimal: null, xhigh: 'high', max: null },
+      },
+      {
+        provider: 'google',
+        id: 'gemini-2.5-flash',
+        name: 'Gemini 2.5 Flash',
+        input: ['text', 'image'],
+        reasoning: false,
+      },
+      {
+        provider: 'anthropic',
+        id: 'claude-sonnet',
+        name: 'Claude Sonnet',
+        input: ['text', 'image'],
+        reasoning: true,
+        thinkingLevelMap: { off: null, xhigh: null },
+      },
+      {
+        provider: 'google',
+        id: 'gemini-2.5-pro',
+        name: 'Gemini 2.5 Pro',
+        input: ['text', 'image'],
+        reasoning: true,
+        thinkingLevelMap: { low: null, xhigh: 'high' },
+      },
+    ];
+    throwOnCreate = false;
+
+    const providers = await makeProvider().listModels();
+    const groups = providers[0]?.groups ?? [];
+
+    expect(groups.map((group) => [group.id, group.name])).toEqual([
+      ['anthropic', 'Anthropic'],
+      ['google', 'Google Gemini'],
+      ['xai', 'xAI'],
+    ]);
+    expect(groups[1]?.models.map((model) => model.id)).toEqual([
+      'google:gemini-2.5-flash',
+      'google:gemini-2.5-pro',
+    ]);
+    expect(groups.some((group) => group.id === 'mistral')).toBe(false);
+
+    const flat = groups.flatMap((group) => group.models);
+    const geminiFlash = flat.find((model) => model.id === 'google:gemini-2.5-flash');
+    const grok = flat.find((model) => model.id === 'xai:grok-4-fast');
+    const claude = flat.find((model) => model.id === 'anthropic:claude-sonnet');
+    const geminiPro = flat.find((model) => model.id === 'google:gemini-2.5-pro');
+
+    expect(geminiFlash?.capabilities?.images).toBe(true);
+    expect(grok?.capabilities?.images).toBe(false);
+    expect(geminiFlash?.options).toBeUndefined();
+    expect(
+      grok?.options?.[0]?.options?.map((option) => option.id),
+    ).toEqual(['off', 'low', 'medium', 'high', 'xhigh']);
+    expect(
+      claude?.options?.[0]?.options?.map((option) => option.id),
+    ).toEqual(['minimal', 'low', 'medium', 'high']);
+    expect(
+      geminiPro?.options?.[0]?.options?.map((option) => option.id),
+    ).toEqual(['off', 'minimal', 'medium', 'high', 'xhigh']);
+  });
+
+  it('returns an empty stable response when the SDK throws', async () => {
     throwOnCreate = true;
 
     const models = await makeProvider().listModels();
 
-    expect(models).toBe(STATIC_MODEL_PROVIDERS);
+    expect(models).toEqual([]);
     throwOnCreate = false;
   });
 });

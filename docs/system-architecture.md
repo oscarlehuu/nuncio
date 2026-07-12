@@ -147,6 +147,8 @@ this.cachedAvailable = registry.getAvailable().length > 0;   // models with conf
 ```
 
 - `getAvailable()` returns models that have auth configured — the accurate "Pi can actually run a model" gate.
+- Empty registries and registry failures produce an empty model list; the server never invents
+  unauthenticated Pi models or triggers an auth prompt.
 - Env override is `PI_CODING_AGENT_DIR` (the SDK's own variable, not a nuncio-invented one).
 - The SDK is lazy-loaded (cached promise) so startup stays light. Availability is cached for the process lifetime.
 - `createAgentSession` is passed `agentDir`, `authStorage`, `modelRegistry`, and the resolved `model` (see below). Availability is cached for the process lifetime.
@@ -157,7 +159,13 @@ this.cachedAvailable = registry.getAvailable().length > 0;   // models with conf
 
 Pi SDK `0.80.6` supplies model-specific `thinkingLevelMap` metadata through the same catalog path. `piThinkingDescriptors()` treats `off` through `high` as baseline levels unless explicitly mapped to `null`; advanced `xhigh` and `max` levels require explicit non-null mappings. Nuncio persists and sends Pi's `max` value unchanged. It never translates it to Codex `ultra`, whose multi-agent semantics are provider-specific.
 
-`GET /api/models` also exposes `capabilities` per provider entry: `ModelsService.list()` (`models.service.ts`) sets `capabilities: entry.capabilities ?? provider.capabilities` on every `ModelProviderDto`, so the frontend can show/hide interrupt, in-session model/effort switch, and image-upload affordances per provider.
+Pi groups are generated for every provider returned by `ModelRegistry.getAvailable()`, named with
+`getProviderDisplayName()`, and sorted with their models before entering the API response. Each
+model's `input` metadata becomes `model.capabilities.images`; shared composers prefer that value
+over the provider-wide fallback so text-only Grok or custom models do not expose image upload while
+image-capable Gemini/Claude models do.
+
+`GET /api/models` also exposes `capabilities` per provider entry: `ModelsService.list()` (`models.service.ts`) sets `capabilities: entry.capabilities ?? provider.capabilities` on every `ModelProviderDto`, while models may narrow capabilities such as image input. The frontend uses the model value first and the provider value only as a compatibility fallback.
 
 ### Model context window (real vs. fallback)
 

@@ -245,6 +245,41 @@ describe('SessionDetail', () => {
     expect(withoutImages.queryByRole('button', { name: /attach image/i })).toBeNull();
   });
 
+  it('uses selected-model image metadata before the Pi provider-wide capability', async () => {
+    const providers: ModelProvider[] = [
+      {
+        id: 'pi',
+        name: 'Pi',
+        capabilities: { images: true },
+        groups: [
+          {
+            id: 'registry',
+            name: 'Registry',
+            models: [
+              { id: 'xai:grok', name: 'Grok', capabilities: { images: false } },
+              { id: 'google:gemini', name: 'Gemini', capabilities: { images: true } },
+            ],
+          },
+        ],
+      },
+    ];
+
+    const grok = await renderDetail(
+      { provider: 'pi', model: 'xai:grok', supportsImages: true },
+      NO_EVENTS,
+      providers,
+    );
+    expect(grok.queryByRole('button', { name: /attach image/i })).toBeNull();
+    grok.unmount();
+
+    const gemini = await renderDetail(
+      { provider: 'pi', model: 'google:gemini', supportsImages: true },
+      NO_EVENTS,
+      providers,
+    );
+    expect(gemini.queryByRole('button', { name: /attach image/i })).toBeInTheDocument();
+  });
+
   it('renders images the user attached to a prior message in the transcript', async () => {
     const events: SessionEvent[] = [
       {

@@ -37,6 +37,7 @@ import {
 } from '../lib/project-preference';
 import {
   modelById,
+  modelSupportsImages,
   normalizeModelCatalog,
   pickDefaultModelSelection,
   type ModelProvider,
@@ -116,11 +117,11 @@ export function HomeView({
 
   const catalogLoaded = Boolean(providers && providers.length > 0);
   const catalog = useMemo(() => normalizeModelCatalog(providers ?? []), [providers]);
-  // Attach affordance follows the selected provider's declared capability, so it
-  // lights up automatically as each provider gains image support.
+  // Prefer registry metadata for the selected model. Provider capability is a
+  // compatibility fallback for engines that do not report per-model metadata.
   const canAttachImages = useMemo(
-    () => crew.mode === 'solo' && (provider ? (catalog.find((p) => p.id === provider)?.capabilities?.images ?? false) : false),
-    [provider, catalog, crew.mode],
+    () => crew.mode === 'solo' && modelSupportsImages(catalog, provider, model),
+    [provider, model, catalog, crew.mode],
   );
   const useWorktree = workspaceMode === 'worktree';
   useEffect(() => {
@@ -129,6 +130,9 @@ export function HomeView({
     if (model && provider && lookup[model]) return;
     const resolved = resolveModelSelection(providers, loadModelPreference());
     if (resolved) {
+      if (!modelSupportsImages(catalog, resolved.providerId, resolved.modelId)) {
+        imageAttachments.clearWithTokens();
+      }
       setModel(resolved.modelId);
       setProvider(resolved.providerId);
       setModelOptions(resolved.modelOptions);
@@ -136,6 +140,9 @@ export function HomeView({
     }
     const picked = pickDefaultModelSelection(providers);
     if (picked) {
+      if (!modelSupportsImages(catalog, picked.providerId, picked.modelId)) {
+        imageAttachments.clearWithTokens();
+      }
       setModel(picked.modelId);
       setProvider(picked.providerId);
       setModelOptions(defaultOptionsForModel(lookup[picked.modelId]));
@@ -157,8 +164,8 @@ export function HomeView({
     const hasConfigurable =
       (selected?.options?.length ?? 0) > 0 || (selected?.variants?.length ?? 0) > 0;
     const optionsPayload = hasConfigurable ? modelOptions : undefined;
-    const stagedItems = imageAttachments.items;
-    const attachments = imageAttachments.attachments;
+    const stagedItems = canAttachImages ? imageAttachments.items : [];
+    const attachments = canAttachImages ? imageAttachments.attachments : [];
     imageAttachments.clear();
     try {
       await onSubmit(
@@ -184,6 +191,7 @@ export function HomeView({
     providerId: string,
     options?: ModelOptionsMap,
   ) => {
+    if (!modelSupportsImages(catalog, providerId, modelId)) imageAttachments.clearWithTokens();
     setModel(modelId);
     setProvider(providerId);
     const nextOptions = options ?? {};

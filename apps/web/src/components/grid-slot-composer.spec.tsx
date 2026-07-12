@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Session } from '../lib/api';
+import { saveModelPreference } from '../lib/model-preference';
 import type { ModelProvider } from '../lib/model-providers';
 
 // The pickers fetch projects/models over the network — stub them to tiny controls
@@ -15,7 +16,16 @@ vi.mock('./project-picker', () => ({
 }));
 
 vi.mock('./model-picker', () => ({
-  ModelPicker: () => <div>model-picker</div>,
+  ModelPicker: ({
+    onChange,
+  }: {
+    onChange: (modelId: string, providerId: string) => void;
+  }) => (
+    <div>
+      <button type="button" onClick={() => onChange('google:gemini', 'pi')}>pick-gemini</button>
+      <button type="button" onClick={() => onChange('xai:grok', 'pi')}>pick-grok</button>
+    </div>
+  ),
 }));
 
 // BranchPicker fetches base branches over the network — stub it so create/attach
@@ -90,6 +100,24 @@ const PROVIDERS: ModelProvider[] = [
   },
 ];
 
+const MIXED_IMAGE_PROVIDERS: ModelProvider[] = [
+  {
+    id: 'pi',
+    name: 'Pi',
+    capabilities: { images: true },
+    groups: [
+      {
+        id: 'registry',
+        name: 'Registry',
+        models: [
+          { id: 'google:gemini', name: 'Gemini', capabilities: { images: true } },
+          { id: 'xai:grok', name: 'Grok', capabilities: { images: false } },
+        ],
+      },
+    ],
+  },
+];
+
 function fakeSession(over: Partial<Session> = {}): Session {
   return {
     id: 'sess-live',
@@ -119,6 +147,65 @@ describe('GridSlotComposer', () => {
     localStorage.clear();
     vi.clearAllMocks();
     hubMocks.fetchHubMachines.mockResolvedValue({ hubMode: false, machines: [] });
+  });
+
+  it('updates image attachment gating when the selected Pi model changes', async () => {
+    const onCreate = vi.fn().mockResolvedValue(fakeSession());
+    const view = render(
+      <GridSlotComposer
+        providers={MIXED_IMAGE_PROVIDERS}
+        sessions={[]}
+        boundSessionIds={new Set()}
+        onCreate={onCreate}
+        onBind={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /pick-gemini/i }));
+    expect(screen.getByRole('button', { name: /attach image/i })).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText(/new session prompt/i), 'inspect this');
+    const fileInput = view.container.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(fileInput).not.toBeNull();
+    await userEvent.upload(fileInput!, new File(['png'], 'sample.png', { type: 'image/png' }));
+    await waitFor(() => expect(screen.getByTestId('attachment-tray')).toBeInTheDocument());
+    expect(screen.getByLabelText(/new session prompt/i)).toHaveValue('inspect this [image 1]');
+
+    await userEvent.click(screen.getByRole('button', { name: /pick-grok/i }));
+    expect(screen.queryByRole('button', { name: /attach image/i })).toBeNull();
+    expect(screen.queryByTestId('attachment-tray')).toBeNull();
+    expect(screen.getByLabelText(/new session prompt/i)).toHaveValue('inspect this');
+
+    await userEvent.click(screen.getByRole('button', { name: /start/i }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    expect(onCreate.mock.calls[0]?.[7]).toBeUndefined();
+  });
+
+  it('clears staged images and tokens when the catalog auto-resolves to a text-only model', async () => {
+    saveModelPreference({ modelId: 'google:gemini', providerId: 'pi' });
+    const props = {
+      sessions: [],
+      boundSessionIds: new Set<string>(),
+      onCreate: vi.fn().mockResolvedValue(fakeSession()),
+      onBind: vi.fn(),
+    };
+    const view = render(<GridSlotComposer {...props} providers={MIXED_IMAGE_PROVIDERS} />);
+
+    expect(await screen.findByRole('button', { name: /attach image/i })).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText(/new session prompt/i), 'inspect this');
+    const fileInput = view.container.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(fileInput).not.toBeNull();
+    await userEvent.upload(fileInput!, new File(['png'], 'sample.png', { type: 'image/png' }));
+    await waitFor(() => expect(screen.getByTestId('attachment-tray')).toBeInTheDocument());
+    expect(screen.getByLabelText(/new session prompt/i)).toHaveValue('inspect this [image 1]');
+
+    view.rerender(<GridSlotComposer {...props} providers={PROVIDERS} />);
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/new session prompt/i)).toHaveValue('inspect this'),
+    );
+    view.rerender(<GridSlotComposer {...props} providers={MIXED_IMAGE_PROVIDERS} />);
+    expect(await screen.findByRole('button', { name: /attach image/i })).toBeInTheDocument();
+    expect(screen.queryByTestId('attachment-tray')).toBeNull();
   });
 
   it('creates a session with the prompt + model + project, then binds the slot', async () => {
