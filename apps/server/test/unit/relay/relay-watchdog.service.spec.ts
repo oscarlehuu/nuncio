@@ -32,9 +32,17 @@ describe('RelayWatchdogService', () => {
     expect(h.raise).not.toHaveBeenCalled();
   });
 
-  it('re-enables only after an explicit down probe and confirms recovery', async () => {
-    const h = harness([snapshot('down'), snapshot('up')]);
+  it('does not enable a funnel that has never been observed up', async () => {
+    const h = harness([snapshot('down')]);
+    await h.service.tick();
+    expect(h.enableFunnel).not.toHaveBeenCalled();
+    expect(h.raise).not.toHaveBeenCalled();
+  });
+
+  it('re-enables a previously-up funnel after it drops and confirms recovery', async () => {
+    const h = harness([snapshot('up'), snapshot('down'), snapshot('up')]);
     h.enableFunnel.mockResolvedValue({ ok: true });
+    await h.service.tick();
     await h.service.tick();
     expect(h.enableFunnel).toHaveBeenCalledTimes(1);
     expect(h.enableFunnel).toHaveBeenCalledWith(3000);
@@ -45,14 +53,16 @@ describe('RelayWatchdogService', () => {
   it('does not act when the funnel is down but tailnet is not proven up', async () => {
     const down = snapshot('down');
     down.tailnet = path('unknown');
-    const h = harness([down]);
+    const h = harness([snapshot('up'), down]);
+    await h.service.tick();
     await h.service.tick();
     expect(h.enableFunnel).not.toHaveBeenCalled();
   });
 
   it('raises one dedupable attention condition after persistent restoration failure', async () => {
-    const h = harness([snapshot('down'), snapshot('down')]);
+    const h = harness([snapshot('up'), snapshot('down'), snapshot('down')]);
     h.service.failureThreshold = 2;
+    await h.service.tick();
     await h.service.tick();
     await h.service.tick();
     expect(h.enableFunnel).toHaveBeenCalledTimes(2);
@@ -61,6 +71,34 @@ describe('RelayWatchdogService', () => {
       kind: 'relay-down', subjectId: 'funnel',
       payload: expect.objectContaining({ attempts: 2, path: 'funnel' }),
     }));
+  });
+
+  it('preserves accumulated failures across an unknown probe', async () => {
+    const h = harness([snapshot('up'), snapshot('down'), snapshot('unknown'), snapshot('down')]);
+    h.service.failureThreshold = 2;
+    await h.service.tick();
+    await h.service.tick();
+    await h.service.tick();
+    await h.service.tick();
+    expect(h.raise).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'relay-down', payload: expect.objectContaining({ attempts: 2 }),
+    }));
+  });
+
+  it('keeps a raised relay-down alert through unknown and clears it only on up', async () => {
+    const h = harness([snapshot('up'), snapshot('down'), snapshot('unknown'), snapshot('up')]);
+    h.service.failureThreshold = 1;
+    await h.service.tick();
+    h.onConditionCleared.mockClear();
+    await h.service.tick();
+    expect(h.raise).toHaveBeenCalledTimes(1);
+
+    await h.service.tick();
+    expect(h.raise).toHaveBeenCalledTimes(1);
+    expect(h.onConditionCleared).not.toHaveBeenCalled();
+
+    await h.service.tick();
+    expect(h.onConditionCleared).toHaveBeenCalledWith('relay-down', 'funnel');
   });
 
   it('does not overlap probes or issue duplicate recovery commands', async () => {
@@ -95,9 +133,10 @@ describe('RelayWatchdogService', () => {
   });
 
   it('counts thrown recovery errors toward persistent-failure attention', async () => {
-    const h = harness([snapshot('down')]);
+    const h = harness([snapshot('up'), snapshot('down')]);
     h.service.failureThreshold = 1;
     h.enableFunnel.mockRejectedValue(new Error('spawn denied'));
+    await h.service.tick();
     await h.service.tick();
     expect(h.raise).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'relay-down', payload: expect.objectContaining({ reason: 'spawn denied' }),

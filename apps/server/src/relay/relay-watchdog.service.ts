@@ -16,6 +16,7 @@ export class RelayWatchdogService implements OnModuleInit, OnModuleDestroy {
   failureThreshold = 3;
   private failures = 0;
   private attentionRaised = false;
+  private funnelPreviouslyUp = false;
   private probing = false;
   private destroyed = false;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -48,14 +49,15 @@ export class RelayWatchdogService implements OnModuleInit, OnModuleDestroy {
       if (this.destroyed) return;
       const probe = health.funnel;
       if (probe.status === 'up') {
+        this.funnelPreviouslyUp = true;
         this.clearFailure();
         return;
       }
       // Guardrail: neither healthy nor indeterminate observations can reach recovery.
       if (!isDownProbe(probe)) {
-        this.failures = 0;
         return;
       }
+      if (!this.funnelPreviouslyUp) return;
       if (health.tailnet.status !== 'up') {
         this.recordFailure(probe, 'tailnet is not available');
         return;
