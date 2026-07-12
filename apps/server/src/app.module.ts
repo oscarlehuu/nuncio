@@ -25,6 +25,7 @@ import { PreferencesModule } from './preferences/preferences.module';
 import { PromptsModule } from './prompts/prompts.module';
 import { ProviderUpdatesModule } from './provider-updates/provider-updates.module';
 import { ProvisionModule } from './provision/provision.module';
+import { RelayModule } from './relay/relay.module';
 import { SchedulerModule } from './scheduler/scheduler.module';
 import { SessionsModule } from './sessions/sessions.module';
 import { SettingsModule } from './settings/settings.module';
@@ -63,6 +64,7 @@ import { UsageModule } from './usage/usage.module';
     PiLocalModule,
     PromptsModule,
     ProvisionModule,
+    RelayModule,
     SchedulerModule,
     SessionsModule,
     TailscaleModule,

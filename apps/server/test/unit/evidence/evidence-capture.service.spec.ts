@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ServiceUnavailableException } from '@nestjs/common';
 import { describe, expect, it, jest } from 'bun:test';
 import { EvidenceCaptureService } from '../../../src/evidence/evidence-capture.service';
 import type { SessionDto } from '../../../src/sessions/domain/sessions.types';
@@ -26,15 +26,22 @@ function harness() {
   const write = jest.fn(() => '0123456789abcdef0123456789abcdef');
   const readHead = jest.fn(async () => '0123456789abcdef');
   const browserState = jest.fn(async () => ({ connected: true, url: 'http://localhost:5173/app' }));
+  const simulatorCapture = jest.fn(async () => ({
+    ok: true as const,
+    bytes: Buffer.from('simulator png'),
+    viewport: { w: 1179, h: 2556 },
+    route: 'simulator://booted',
+  }));
   const service = new EvidenceCaptureService(
     { launchServer, connect } as never,
     { write } as never,
     readHead,
     { state: browserState } as never,
+    { captureScreenshot: simulatorCapture } as never,
   );
   return {
     service, launchServer, connect, newPage, goto, pageUrl, screenshot, close,
-    serverClose, kill, write, readHead, browserState,
+    serverClose, kill, write, readHead, browserState, simulatorCapture,
   };
 }
 
@@ -63,6 +70,48 @@ describe('EvidenceCaptureService', () => {
     expect(JSON.stringify(result)).not.toContain('png bytes');
     expect(h.close).toHaveBeenCalledTimes(1);
     expect(h.serverClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('captures Simulator bytes through the same media and evidence payload path', async () => {
+    const h = harness();
+    const result = await h.service.capture(session(), { target: 'simulator', phase: 'after' });
+
+    expect(h.simulatorCapture).toHaveBeenCalledTimes(1);
+    expect(h.launchServer).not.toHaveBeenCalled();
+    expect(h.write).toHaveBeenCalledWith(
+      'session-1', Buffer.from('simulator png').toString('base64'),
+    );
+    expect(result).toEqual({
+      afterRef: { id: '0123456789abcdef0123456789abcdef', mimeType: 'image/png' },
+      route: 'simulator://booted',
+      viewport: { w: 1179, h: 2556 },
+      workspaceHead: '0123456789abcdef',
+    });
+    expect(h.readHead).toHaveBeenCalledTimes(2);
+  });
+
+  it('no-ops unavailable Simulator capture with a clear reason and no media write', async () => {
+    const h = harness();
+    h.simulatorCapture.mockResolvedValue({
+      ok: false, reason: 'xcrun with simctl is unavailable',
+    } as never);
+    let thrown: unknown;
+    try {
+      await h.service.capture(session(), { target: 'simulator', phase: 'before' });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ServiceUnavailableException);
+    expect((thrown as Error).message).toBe('xcrun with simctl is unavailable');
+    expect(h.write).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid Simulator phase before invoking xcrun capture', async () => {
+    const h = harness();
+    await expect(h.service.capture(session(), {
+      target: 'simulator', phase: 'during' as never,
+    })).rejects.toBeInstanceOf(BadRequestException);
+    expect(h.simulatorCapture).not.toHaveBeenCalled();
   });
 
   it('remembers an explicit target for a later automatic after capture', async () => {

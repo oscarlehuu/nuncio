@@ -14,6 +14,18 @@ describe('evidence_captured event', () => {
     })).toBe(true);
   });
 
+  it('accepts the same payload shape from a booted Simulator capture', () => {
+    expect(isEvidenceCapturedEvent({
+      type: 'evidence_captured',
+      payload: {
+        afterRef: { id: 'fedcba9876543210fedcba9876543210', mimeType: 'image/png' },
+        route: 'simulator://booted',
+        viewport: { w: 1179, h: 2556 },
+        workspaceHead: 'abc123',
+      },
+    })).toBe(true);
+  });
+
   it('rejects inline screenshot bytes and malformed viewports', () => {
     expect(isEvidenceCapturedEvent({
       type: 'evidence_captured',

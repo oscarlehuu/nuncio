@@ -703,6 +703,19 @@ apps/server/src/tailscale/
   tailscale.module.ts      imports SettingsModule, exported to AuthModule + main.ts (terminal WS)
 ```
 
+### Relay health and Funnel watchdog (`apps/server/src/relay/`)
+
+`GET /api/relay/health` probes a LAN-interface health URL, the MagicDNS health URL, and read-only
+Funnel configuration. Each path reports `up`, `down`, or conservative `unknown` plus
+the last probe latency and timestamp. A local request to the MagicDNS hostname cannot prove that
+the public Funnel route works, so command errors and unrecognized CLI output remain `unknown`.
+
+The daemon watchdog is deliberately one-way: only a typed, explicit Funnel `down` result can
+reach `enableFunnel(port)`. `up` and `unknown` return before mutation, and the watchdog has no
+disable, reset, or teardown dependency. Failed recovery is retried on the watchdog cadence;
+persistent failure raises one deduplicated `relay-down` Attention condition, cleared after a
+later healthy probe.
+
 - **Toggle:** setting `NUNCIO_TAILSCALE_AUTO_TRUST` (registry, boolean, default `'1'`). Resolved
   per request via `SettingsService.resolve` — flipping it in Settings applies immediately, no
   restart. `'0'` disables all tailscale trust.
@@ -842,6 +855,19 @@ not present a streamed remote-browser viewport there.
 **Invariant:** never use the user's daily Chrome profile and never launch a
 normal external Chrome window for the dock. The browser dock is available only
 through the desktop bridge.
+
+## Evidence capture targets
+
+`EvidenceCaptureService` serializes captures and binds every successful PNG to the workspace's
+unchanged Git HEAD. Browser capture remains the default and preserves its registered-origin and
+redirect checks. The `simulator` target gates on macOS plus `xcrun --find simctl`, then runs
+`xcrun simctl io booted screenshot <temporary-png>`. The command boundary is injected, temporary
+files are always removed, and PNG dimensions become the shared evidence viewport.
+
+Both targets write bytes through `MediaStore` and emit the same ref-only `evidence_captured`
+payload. An unavailable capability is a no-op with a clear reason and no event. The simulator
+driver is the future seam for `recordVideo`; Maestro installation and verify-command wiring are
+owned by orchestration and intentionally remain outside this capture service.
 
 ## Desktop server profiles (connect the shell to a remote nuncio)
 

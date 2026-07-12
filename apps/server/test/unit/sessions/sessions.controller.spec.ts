@@ -1,4 +1,4 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { SessionsController } from '../../../src/sessions/api/sessions.controller';
 import type { SessionDto, SessionEvent } from '../../../src/sessions/domain/sessions.types';
 
@@ -242,6 +242,37 @@ describe('SessionsController', () => {
     expect(requirePublicMutableSession).toHaveBeenCalledWith('s1');
   });
 
+  it('captures simulator evidence without a URL and appends the shared event', async () => {
+    const result = {
+      afterRef: { id: '0123456789abcdef0123456789abcdef', mimeType: 'image/png' as const },
+      route: 'simulator://booted', viewport: { w: 1179, h: 2556 }, workspaceHead: 'abc123',
+    };
+    const capture = jest.fn(async () => result);
+    const appendOrchestrationEvent = jest.fn();
+    const current = makeSession({ worktreePath: '/repo' });
+    const controller = new SessionsController(
+      { requirePublicMutableSession: () => current, appendOrchestrationEvent } as never,
+      { capture } as never,
+    );
+
+    await expect(controller.captureEvidence('s1', {
+      target: 'simulator', phase: 'after',
+    })).resolves.toEqual(result);
+    expect(capture).toHaveBeenCalledWith(current, { target: 'simulator', phase: 'after' });
+    expect(appendOrchestrationEvent).toHaveBeenCalledWith('s1', 'evidence_captured', result);
+  });
+
+  it('appends no event when simulator capability is unavailable', async () => {
+    const appendOrchestrationEvent = jest.fn();
+    const controller = new SessionsController(
+      { requirePublicMutableSession: () => makeSession(), appendOrchestrationEvent } as never,
+      { capture: async () => { throw new ServiceUnavailableException('xcrun unavailable'); } } as never,
+    );
+    await expect(controller.captureEvidence('s1', { target: 'simulator', phase: 'before' }))
+      .rejects.toThrow('xcrun unavailable');
+    expect(appendOrchestrationEvent).not.toHaveBeenCalled();
+  });
+
   it('rejects evidence capture for a missing session', async () => {
     const controller = new SessionsController(
       { requirePublicMutableSession: () => { throw new NotFoundException('Session not found'); } } as never,
@@ -274,6 +305,17 @@ describe('SessionsController', () => {
     } as never, { capture: jest.fn() } as never);
     await expect(controller.captureEvidence('s1', null as never))
       .rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects an invalid simulator evidence phase before capture', async () => {
+    const capture = jest.fn();
+    const controller = new SessionsController({
+      requirePublicMutableSession: () => makeSession(),
+    } as never, { capture } as never);
+    await expect(controller.captureEvidence('s1', {
+      target: 'simulator', phase: 'during' as never,
+    })).rejects.toBeInstanceOf(BadRequestException);
+    expect(capture).not.toHaveBeenCalled();
   });
 
   it('forgets known evidence targets after archive succeeds', () => {

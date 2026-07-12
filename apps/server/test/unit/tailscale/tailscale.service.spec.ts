@@ -256,6 +256,29 @@ describe('TailscaleService.enableFunnel', () => {
   });
 });
 
+describe('TailscaleService.probeFunnel', () => {
+  it('reports up only when read-only status shows an enabled funnel', async () => {
+    const calls: string[][] = [];
+    const service = serviceWith(async (argv) => {
+      calls.push(argv);
+      if (argv[1] === 'version') return { ok: true, stdout: '1.98.3' };
+      return { ok: true, stdout: JSON.stringify({ AllowFunnel: { 'host.ts.net:443': true } }) };
+    });
+    expect(await service.probeFunnel()).toEqual({ status: 'up' });
+    expect(calls.at(-1)?.slice(1)).toEqual(['funnel', 'status', '--json']);
+  });
+
+  it('reports explicit empty status as down but command errors as unknown', async () => {
+    const down = serviceWith(async (argv) => argv[1] === 'version'
+      ? { ok: true, stdout: '1.98.3' }
+      : { ok: true, stdout: JSON.stringify({ AllowFunnel: {} }) });
+    expect(await down.probeFunnel()).toEqual({ status: 'down', reason: 'funnel is not configured' });
+
+    const unknown = serviceWith(fakeExec([], { installed: false }));
+    expect(await unknown.probeFunnel()).toEqual({ status: 'unknown', reason: 'tailscale CLI unavailable' });
+  });
+});
+
 describe('defaultExec deadline', () => {
   it('resolves not-ok within the timeout when the child hangs and ignores SIGTERM', async () => {
     // A shell that traps SIGTERM and sleeps forever models a wedged tailscale CLI.

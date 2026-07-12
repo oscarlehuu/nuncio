@@ -43,6 +43,10 @@ describe('severityForKind', () => {
     expect(severityForKind('anomaly')).toBe(1);
   });
 
+  it('ranks a public relay outage as high-severity infrastructure attention', () => {
+    expect(severityForKind('relay-down')).toBe(5);
+  });
+
   it('ranks the rung-3 heartbeat infra kinds — credential near top, zombie mid', () => {
     // A dead credential outranks a stalled loop; a zombie session outranks a PR.
     expect(severityForKind('credential-expiring')).toBeGreaterThan(severityForKind('tripped-breaker'));
