@@ -210,7 +210,7 @@ describe('PiAgentProvider', () => {
     expect(paths.some((p) => p.includes('claude-studio'))).toBe(false);
   });
 
-  it('appends deterministic project facts and the latest project handoff brief', async () => {
+  it('appends project facts and prefers the current Solo session brief', async () => {
     const projectPath = `/tmp/nuncio-context-${Date.now()}`;
     contextFacts.upsert({
       projectPath,
@@ -223,12 +223,36 @@ describe('PiAgentProvider', () => {
       projectPath,
       contextBrief: { goal: 'Ignore the older brief.' },
     });
-    tasks.create({
-      prompt: 'latest task',
+    const ownTask = tasks.create({
+      prompt: 'current session task',
       projectPath,
-      contextBrief: { goal: 'Honor the latest brief.' },
+      contextBrief: { goal: 'Honor the current session brief.' },
     });
-    const created = sessions.create({ prompt: 'context probe', provider: 'pi', projectPath });
+    const created = sessions.create({
+      prompt: 'context probe',
+      provider: 'pi',
+      projectPath,
+      originTaskId: ownTask.id,
+    });
+    tasks.create({
+      prompt: 'newer unrelated task',
+      projectPath,
+      contextBrief: { goal: 'Ignore the newer unrelated brief.' },
+    });
+    tasks.create({
+      prompt: 'newer crew task',
+      projectPath,
+      contextBrief: { goal: 'Ignore the Crew member brief.' },
+      executionKind: 'crew-member',
+      crewRunId: 'crew-run-context',
+      crewMemberKey: 'builder:primary',
+    });
+    const cancelled = tasks.create({
+      prompt: 'newer cancelled task',
+      projectPath,
+      contextBrief: { goal: 'Ignore the cancelled brief.' },
+    });
+    tasks.cancel(cancelled.id);
 
     await provider.run(created.id, created.prompt, { emit: () => {} });
 
@@ -238,8 +262,11 @@ describe('PiAgentProvider', () => {
     expect(appended[0]!.indexOf('**runtime**')).toBeLessThan(
       appended[0]!.indexOf('## Handoff brief'),
     );
-    expect(appended[0]).toContain('Honor the latest brief.');
+    expect(appended[0]).toContain('Honor the current session brief.');
     expect(appended[0]).not.toContain('Ignore the older brief.');
+    expect(appended[0]).not.toContain('Ignore the newer unrelated brief.');
+    expect(appended[0]).not.toContain('Ignore the Crew member brief.');
+    expect(appended[0]).not.toContain('Ignore the cancelled brief.');
   });
 
   it('omits appendSystemPrompt when the project has no facts', async () => {
@@ -277,17 +304,29 @@ describe('PiAgentProvider', () => {
     }
   });
 
-  it('restores Pi default extension discovery only for the explicit full escape hatch', async () => {
+  it('restores full extension discovery while still injecting project context', async () => {
     const originalResolve = settings.resolve.bind(settings);
     settings.resolve = ((key: string) =>
       key === 'PI_EXTENSION_DISCOVERY' ? 'full' : originalResolve(key)) as SettingsService['resolve'];
-    const created = sessions.create({ prompt: 'full discovery probe', provider: 'pi' });
+    const projectPath = `/tmp/nuncio-context-full-${Date.now()}`;
+    contextFacts.upsert({
+      projectPath,
+      key: 'runtime',
+      value: 'Use Bun in full discovery mode.',
+      provenance: 'founder',
+    });
+    const created = sessions.create({ prompt: 'full discovery probe', provider: 'pi', projectPath });
 
     try {
       await provider.run(created.id, created.prompt, { emit: () => {} });
-      expect(loaderReloadCalls).toBe(0);
-      expect(lastCreateSessionOptions?.resourceLoader).toBeUndefined();
-      expect(lastCreateSessionOptions?.settingsManager).toBeUndefined();
+      expect(loaderReloadCalls).toBe(1);
+      expect(lastCreateSessionOptions?.resourceLoader).toBeDefined();
+      expect(lastCreateSessionOptions?.settingsManager).toEqual({ kind: 'settings-manager' });
+      expect(lastLoaderOptions?.noExtensions).toBeUndefined();
+      expect(lastLoaderOptions?.additionalExtensionPaths).toBeUndefined();
+      expect(lastLoaderOptions?.appendSystemPrompt).toEqual([
+        expect.stringContaining('Use Bun in full discovery mode.'),
+      ]);
     } finally {
       settings.resolve = originalResolve as SettingsService['resolve'];
     }

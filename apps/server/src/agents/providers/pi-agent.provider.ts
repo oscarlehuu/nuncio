@@ -402,26 +402,29 @@ export class PiAgentProvider extends BaseAgentProvider {
    * tools to a fixed cwd, which breaks worktree sessions. Allowlisted
    * extensions load through `additionalExtensionPaths`, so anything outside
    * the list never executes. `PI_EXTENSION_DISCOVERY=full` restores pi's
-   * default discovery.
+   * default discovery without disabling Nuncio's project-context injection.
    */
   private async createEngineResources(pi: PiSdk, agentDir: string, sessionId: string, cwd?: string) {
-    if (this.settings.resolve('PI_EXTENSION_DISCOVERY') === 'full') return undefined;
     const resolvedCwd = cwd ?? process.cwd();
     const settingsManager = pi.SettingsManager.create(resolvedCwd, agentDir);
-    const projectPath = this.sessions.findById(sessionId)?.projectPath ?? null;
+    const session = this.sessions.findById(sessionId);
+    const projectPath = session?.projectPath ?? null;
     const configuredBudget = Number(this.settings.resolve('NUNCIO_CONTEXT_FACTS_MAX_BYTES'));
     const contextBudget = Number.isInteger(configuredBudget) && configuredBudget > 0
       ? Math.min(configuredBudget, NUNCIO_CONTEXT_MAX_BYTES)
       : NUNCIO_CONTEXT_MAX_BYTES;
     const context = this.settings.resolve('NUNCIO_CONTEXT_FACTS_INJECT') === 'off'
       ? ''
-      : (this.nuncioContext?.buildForProject(projectPath, contextBudget) ?? '');
+      : (this.nuncioContext?.buildForProject(projectPath, contextBudget, session?.originTaskId) ?? '');
+    const fullDiscovery = this.settings.resolve('PI_EXTENSION_DISCOVERY') === 'full';
     const resourceLoader = new pi.DefaultResourceLoader({
       cwd: resolvedCwd,
       agentDir,
       settingsManager,
-      noExtensions: true,
-      additionalExtensionPaths: piEngineExtensionPaths(agentDir),
+      ...(!fullDiscovery ? {
+        noExtensions: true,
+        additionalExtensionPaths: piEngineExtensionPaths(agentDir),
+      } : {}),
       ...(context ? { appendSystemPrompt: [context] } : {}),
     });
     await resourceLoader.reload();
