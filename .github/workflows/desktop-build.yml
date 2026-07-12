@@ -73,16 +73,28 @@ jobs:
       # Pre-create the release so electron-builder only uploads assets to it. Letting
       # electron-builder create it races across parallel uploads and 422s on a tag
       # that doesn't exist yet. For stable the Changesets release already exists.
-      - name: Ensure the GitHub release exists
+      # Created as a DRAFT: a published release with no latest-mac.yml makes every
+      # installed app's update check 404 for the whole build window, so it goes
+      # live only in the final step, after all assets are attached.
+      - name: Ensure the GitHub release exists (draft until assets upload)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="v${{ steps.ver.outputs.version }}"
+          if [ "${{ inputs.channel }}" = "dev" ]; then
+            # Sweep draft leftovers from cancelled dev runs — run-number tags are
+            # never reused, so a cancelled build's draft would linger forever.
+            gh release list --limit 50 --json tagName,isDraft \
+              --jq '.[] | select(.isDraft and (.tagName | test("-dev\\."))) | .tagName' |
+            while read -r STALE; do
+              [ "$STALE" = "$TAG" ] || gh release delete "$STALE" --yes
+            done
+          fi
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             PRERELEASE=""
             if [ "${{ inputs.channel }}" = "dev" ]; then PRERELEASE="--prerelease"; fi
             gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" \
-              --notes "Automated ${{ inputs.channel }} build of Nuncio." $PRERELEASE
+              --notes "Automated ${{ inputs.channel }} build of Nuncio." --draft $PRERELEASE
           fi
 
       - name: Build, sign, notarize, publish
@@ -98,3 +110,17 @@ jobs:
         run: |
           bun run build:resources
           bunx electron-builder --config electron-builder.config.cjs --publish always
+
+      # Flip the draft live only after every asset — including the updater
+      # manifest — is attached, so mid-build update checks see the previous
+      # release instead of a 404. The isDraft guard means an already-published
+      # release (stable, cut by Changesets) is never PATCHed, which would
+      # otherwise re-fire `release: published` and retrigger desktop-stable.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ steps.ver.outputs.version }}"
+          if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = "true" ]; then
+            gh release edit "$TAG" --draft=false
+          fi

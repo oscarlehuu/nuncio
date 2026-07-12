@@ -170,6 +170,32 @@ describe('desktop updater menu indicator', () => {
     expect(state.dialogs).toHaveLength(0);
   });
 
+  test('a manual check against a not-yet-published build shows a calm info dialog', async () => {
+    const { mod, listeners, state } = loadUpdater();
+    // The GitHub provider's mid-CI-upload failure: release exists, manifest missing.
+    mod.checkForUpdates();
+    listeners['error'](
+      new Error(
+        'Cannot find latest-mac.yml in the latest release artifacts (https://github.com/oscarlehuu/nuncio/releases.atom): HttpError: 404',
+      ),
+    );
+    await Promise.resolve();
+    expect(state.dialogs).toHaveLength(1);
+    expect(state.dialogs[0].type).toBe('info');
+    expect(state.dialogs[0].title).toBe('No update available yet');
+    // Back to the actionable idle label, not a stuck error state.
+    expect(mod.updaterMenuItem().label).toBe('Check for Updates…');
+    expect(mod.getUpdaterState().status).toBe('idle');
+  });
+
+  test('a background check against a not-yet-published build stays silent', async () => {
+    const { mod, listeners, state } = loadUpdater();
+    listeners['error'](new Error('No published versions on GitHub'));
+    await Promise.resolve();
+    expect(state.dialogs).toHaveLength(0);
+    expect(mod.getUpdaterState().status).toBe('idle');
+  });
+
   test('clicking the ready item installs; the ready dialog "Restart now" also installs', async () => {
     const { mod, listeners, state } = loadUpdater();
     state.dialogResponse = 0; // "Restart now"
