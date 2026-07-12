@@ -24,13 +24,13 @@ describe('useProviderUpdateNotifications', () => {
       providers: [
         {
           provider: 'pi',
-          name: 'Pi',
+          name: 'Nuncio Engine',
           currentVersion: '0.80.2',
           latestVersion: '0.80.3',
           status: 'behind_latest',
           canUpdate: true,
           updateCommand: 'pi update',
-          message: 'Pi has a newer CLI version available.',
+          message: 'Nuncio Engine has a newer CLI version available.',
           checkedAt: '2026-07-05T00:00:00.000Z',
           muted: false,
         },
@@ -53,7 +53,7 @@ describe('useProviderUpdateNotifications', () => {
     });
 
     expect(toast.info).toHaveBeenCalledWith(
-      'Pi CLI update available',
+      'Nuncio Engine CLI update available',
       expect.objectContaining({
         description: 'Review provider updates in Settings when ready.',
         action: expect.objectContaining({ label: 'Review' }),
@@ -101,13 +101,13 @@ describe('useProviderUpdateNotifications', () => {
       providers: [
         {
           provider: 'pi',
-          name: 'Pi',
+          name: 'Nuncio Engine',
           currentVersion: '0.80.2',
           latestVersion: '0.80.3',
           status: 'behind_latest',
           canUpdate: true,
           updateCommand: 'pi update',
-          message: 'Pi has a newer CLI version available.',
+          message: 'Nuncio Engine has a newer CLI version available.',
           checkedAt: '2026-07-05T00:00:00.000Z',
           muted: false,
         },
@@ -129,13 +129,13 @@ describe('useProviderUpdateNotifications', () => {
       providers: [
         {
           provider: 'pi',
-          name: 'Pi',
+          name: 'Nuncio Engine',
           currentVersion: '0.80.2',
           latestVersion: '0.80.3',
           status: 'behind_latest',
           canUpdate: true,
           updateCommand: 'pi update',
-          message: 'Pi has a newer CLI version available.',
+          message: 'Nuncio Engine has a newer CLI version available.',
           checkedAt: '2026-07-05T00:00:00.000Z',
           muted: true,
         },

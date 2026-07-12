@@ -23,7 +23,7 @@ import { withSimulatedCursorProvider } from '../../helpers/simulated-cursor-app'
 @Injectable()
 class LivePiProviderForWatchTest extends BaseAgentProvider {
   readonly id = 'pi';
-  readonly name = 'Pi';
+  readonly name = 'Nuncio Engine';
   static transcriptPath = '';
   static releaseRun: (() => void) | undefined;
 
@@ -36,7 +36,7 @@ class LivePiProviderForWatchTest extends BaseAgentProvider {
   }
 
   async listModels(): Promise<ModelProviderDto[]> {
-    return [{ id: 'pi', name: 'Pi', groups: [{ id: 'pi', name: 'Pi', models: [] }] }];
+    return [{ id: 'pi', name: 'Nuncio Engine', groups: [{ id: 'pi', name: 'Pi', models: [] }] }];
   }
 
   protected async executePrompt(

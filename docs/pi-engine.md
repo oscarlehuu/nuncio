@@ -1,8 +1,11 @@
 # Nuncio Engine (Pi Harness)
 
 **Status:** approved direction; loading recipe spike-verified 2026-07-11 against
-`@earendil-works/pi-coding-agent` 0.80.2. Step 0 (extension allowlist) implemented 2026-07-11;
-later steps not shipped.
+`@earendil-works/pi-coding-agent` 0.80.6. **Step 0** (extension allowlist) shipped 2026-07-11;
+**Step 1** (`nuncio-context` injection) shipped on `dev`. **Multi-provider model catalog**
+(auth-truthful `ModelRegistry` groups) and **provider-neutral evidence capture** (headless Chrome
+screenshots bound to workspace HEAD) also shipped on `dev`. Step 2 (in-repo extension factories)
+remains planned.
 **Companions:** [Crew workspace harness](crew-workspace-harness.md),
 [CrewRun authority and state machine](crew-run-authority-and-state-machine.md).
 
@@ -111,15 +114,17 @@ this recipe; use `noContextFiles`/`agentsFilesOverride` if the personal file sho
 
 ## Adoption path
 
-- **Step 0 — stop the leak. DONE (2026-07-11).** Nuncio sessions now pass an engine
+- **Step 0 — stop the leak. DONE (2026-07-11).** Nuncio Engine sessions now pass an engine
   `DefaultResourceLoader` with `noExtensions: true` + `additionalExtensionPaths` resolved from
   `PI_EXTENSION_ALLOWLIST` (`apps/server/src/agents/pi-engine/extension-allowlist.ts`) — chosen
   over a post-hoc `extensionsOverride` filter so denied extensions never even execute. Auth,
   models, settings, skills, and context files are untouched. Escape hatch: setting
   `PI_EXTENSION_DISCOVERY=full` restores pi default discovery. Verified: full unit suite plus a
   real-SDK session created with exactly the 12 allowlisted extensions.
-- **Step 1 — first extension: `nuncio-context`.** Inject project facts + HandoffBrief via
-  `appendSystemPrompt`. First time Pi knows it lives inside Nuncio. Measure against vanilla.
+- **Step 1 — first extension: `nuncio-context`. DONE (on `dev`).** `NuncioContextService`
+  (`apps/server/src/agents/pi-engine/nuncio-context.ts`) injects bounded project facts +
+  HandoffBrief via `appendSystemPrompt` on every Nuncio Engine session. Toggle via
+  `NUNCIO_CONTEXT_INJECTION`; facts come from the shared context-facts store.
 - **Step 2 — replace allowlisted paths with in-repo factories** once foreman/subagent are ported
   from `~/.pi/agent/extensions/` into the repo; deny-by-default remains unchanged.
 
@@ -135,6 +140,10 @@ Code layout: `apps/server/src/agents/pi-engine/` — one kebab-case file per ext
 lines, independently disableable. `pi-agent.provider.ts` upgrades in place to build the loader.
 
 ## Evidence capture (before/after proof)
+
+**Status on `dev`:** layer 1 (provider-neutral capture service) shipped — see
+`apps/server/src/evidence/evidence-capture.service.ts` and the session evidence API. Layers 2–3
+(Engine tool belt + done gate) remain on the Engine roadmap below.
 
 Principle: **harness-guaranteed, not model-hoped.** Three layers; layer 1 is provider-neutral and
 ships independently of Nuncio Engine (all engines benefit — candidate for the mobile sprint).
@@ -167,5 +176,6 @@ screenshots first, recordings/GIF tier-2.
 2. Which global extensions get ported into the repo (foreman, subagent) versus staying personal
    `.pi/` CLI-land (grok suite, pocketpi, statusline).
 3. Whether the personal `~/.pi/agent/AGENTS.md` should keep loading into Nuncio sessions.
-4. UI naming: whether the engine picker label stays "Pi" or becomes "Nuncio Engine".
+4. **UI naming: RESOLVED — the engine picker and settings copy present the `pi` slot as
+   "Nuncio Engine".** Internal id stays `pi`; only display strings changed.
 5. Lifetime of the `.pi/` discovery compat toggle after step 2.

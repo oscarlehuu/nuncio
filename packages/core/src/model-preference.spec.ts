@@ -13,7 +13,7 @@ import type { ModelProvider } from './model-providers';
 const CURSOR_AND_PI: ModelProvider[] = [
   {
     id: 'pi',
-    name: 'Pi',
+    name: 'Nuncio Engine',
     groups: [{ id: 'g', name: 'G', models: [{ id: 'anthropic:claude-haiku-4', name: 'Haiku' }] }],
   },
   {
