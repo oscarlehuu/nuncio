@@ -2,7 +2,6 @@ import { Injectable, Optional } from '@nestjs/common';
 import { join } from 'node:path';
 import type { ModelOptionsMap } from '../../models/model-options.types';
 import type { ModelGroupDto, ModelItemDto, ModelProviderDto } from '../../models/models.types';
-import { STATIC_MODEL_PROVIDERS } from '../../models/models.static';
 import { truncatePayload } from '../../sessions/domain/events.types';
 import { formatInteractionAnswers } from '../../sessions/domain/format-interaction-answers';
 import {
@@ -52,6 +51,7 @@ type PiRegistryModel = {
   reasoning?: boolean;
   thinkingLevelMap?: Record<string, string | null>;
   contextWindow?: number;
+  input?: Array<'text' | 'image'>;
 };
 
 type PiLiveSession = {
@@ -107,6 +107,7 @@ type PiModelRegistry = {
     contextWindow?: number;
     reasoning?: boolean;
     thinkingLevelMap?: Record<string, string | null>;
+    input?: Array<'text' | 'image'>;
   }>;
   find: (provider: string, id: string) => PiRegistryModel | undefined;
   getProviderDisplayName: (provider: string) => string;
@@ -173,7 +174,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       const modelRegistry = pi.ModelRegistry.create(authStorage, join(agentDir, 'models.json'));
       return this.fromRegistry(modelRegistry);
     } catch {
-      return STATIC_MODEL_PROVIDERS;
+      return [];
     }
   }
 
@@ -703,13 +704,14 @@ export class PiAgentProvider extends BaseAgentProvider {
 
   private fromRegistry(modelRegistry: PiModelRegistry): ModelProviderDto[] {
     const models = modelRegistry.getAvailable();
-    if (models.length === 0) return STATIC_MODEL_PROVIDERS;
+    if (models.length === 0) return [];
 
     const groupsByProvider = new Map<string, ModelItemDto[]>();
     for (const model of models) {
       const registryModel = modelRegistry.find(model.provider, model.id);
       const options = piThinkingDescriptors(registryModel ?? model);
       const contextWindow = registryModel?.contextWindow ?? model.contextWindow;
+      const input = registryModel?.input ?? model.input ?? ['text'];
       const validContextWindow =
         typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0
           ? contextWindow
@@ -720,6 +722,7 @@ export class PiAgentProvider extends BaseAgentProvider {
         sub: model.id,
         ...(validContextWindow !== undefined ? { contextWindow: validContextWindow } : {}),
         ...(options.length > 0 ? { options } : {}),
+        capabilities: { images: input.includes('image') },
       };
       if (model.cost) item.cost = `$${model.cost.input} / $${model.cost.output}`;
       groupsByProvider.set(model.provider, [...(groupsByProvider.get(model.provider) ?? []), item]);
@@ -731,9 +734,16 @@ export class PiAgentProvider extends BaseAgentProvider {
         id: providerId,
         name: modelRegistry.getProviderDisplayName(providerId),
         sub: 'Pi ModelRegistry',
-        models: groupModels,
+        models: groupModels.sort((left, right) =>
+          left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }) ||
+          left.id.localeCompare(right.id),
+        ),
       });
     }
+    groups.sort((left, right) =>
+      left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }) ||
+      left.id.localeCompare(right.id),
+    );
 
     return [
       {

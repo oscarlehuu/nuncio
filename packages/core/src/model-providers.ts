@@ -13,6 +13,7 @@ export interface ModelInfo {
   badge?: string;
   cost?: string;
   contextWindow?: number;
+  capabilities?: ModelProviderCapabilities;
   options?: ModelOptionDescriptor[];
   variants?: ModelVariant[];
 }
@@ -135,6 +136,19 @@ export function flattenProviders(providers: ModelProvider[]): FlatModel[] {
 
 export function modelById(providers: ModelProvider[]): Record<string, FlatModel> {
   return Object.fromEntries(flattenProviders(providers).map((m) => [m.id, m]));
+}
+
+export function modelSupportsImages(
+  providers: ModelProvider[],
+  providerId: string | undefined,
+  modelId: string | undefined,
+  fallback = false,
+): boolean {
+  if (!providerId) return fallback;
+  const provider = providers.find((entry) => entry.id === providerId);
+  if (!provider) return fallback;
+  const modelCapability = modelId ? modelById([provider])[modelId]?.capabilities?.images : undefined;
+  return modelCapability ?? provider.capabilities?.images ?? fallback;
 }
 
 export function providerMeta(

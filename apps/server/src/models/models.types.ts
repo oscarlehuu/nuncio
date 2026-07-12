@@ -14,6 +14,7 @@ export interface ModelItemDto {
   badge?: string;
   cost?: string;
   contextWindow?: number;
+  capabilities?: Pick<AgentCapabilities, 'images'>;
   options?: ModelOptionDescriptorDto[];
   variants?: ModelVariantDto[];
 }

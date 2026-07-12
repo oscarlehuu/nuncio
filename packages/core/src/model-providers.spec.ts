@@ -5,6 +5,7 @@ import {
   FALLBACK_PROVIDERS,
   flattenProviders,
   modelById,
+  modelSupportsImages,
   normalizeModelCatalog,
   pickDefaultModelSelection,
   prettyModelName,
@@ -57,6 +58,34 @@ describe('modelById', () => {
     expect(lookup[DEFAULT_MODEL_ID]).toBeDefined();
     expect(DEFAULT_MODEL_ID).toBe('claude-fable-5');
     expect(DEFAULT_PROVIDER_ID).toBe('pi');
+  });
+});
+
+describe('modelSupportsImages', () => {
+  const providers: ModelProvider[] = [
+    {
+      id: 'pi',
+      name: 'Pi',
+      capabilities: { images: true },
+      groups: [
+        {
+          id: 'mixed',
+          name: 'Mixed',
+          models: [
+            { id: 'xai:grok', name: 'Grok', capabilities: { images: false } },
+            { id: 'google:gemini', name: 'Gemini', capabilities: { images: true } },
+            { id: 'custom:unknown', name: 'Unknown' },
+          ],
+        },
+      ],
+    },
+  ];
+
+  it('prefers selected-model image metadata and falls back to provider capability', () => {
+    expect(modelSupportsImages(providers, 'pi', 'xai:grok')).toBe(false);
+    expect(modelSupportsImages(providers, 'pi', 'google:gemini')).toBe(true);
+    expect(modelSupportsImages(providers, 'pi', 'custom:unknown')).toBe(true);
+    expect(modelSupportsImages(providers, 'missing', 'missing:model')).toBe(false);
   });
 });
 

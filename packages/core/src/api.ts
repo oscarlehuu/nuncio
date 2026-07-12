@@ -1,7 +1,7 @@
 import { apiFetch } from './http';
 import type { ModelProvider } from './model-providers';
 import type { ModelOptionsMap } from './model-options';
-import { FALLBACK_PROVIDERS, normalizeModelCatalog } from './model-providers';
+import { normalizeModelCatalog } from './model-providers';
 
 export type { UserInputAnswer, InteractionResponse, PendingUserInput, UserInputQuestion, UserInputOption, UserInputResolvedBy } from './user-input.types';
 import type { InteractionResponse } from './user-input.types';
@@ -433,13 +433,13 @@ export async function renameSession(id: string, title: string): Promise<Session>
 export async function fetchModels(base = ''): Promise<ModelProvider[]> {
   try {
     const res = await apiFetch(`${base}/api/models`);
-    if (!res.ok) return normalizeModelCatalog(FALLBACK_PROVIDERS);
+    if (!res.ok) return [];
     const data = await res.json();
     if (Array.isArray(data)) return normalizeModelCatalog(data as ModelProvider[]);
     if (Array.isArray(data?.providers)) return normalizeModelCatalog(data.providers as ModelProvider[]);
-    return normalizeModelCatalog(FALLBACK_PROVIDERS);
+    return [];
   } catch {
-    return normalizeModelCatalog(FALLBACK_PROVIDERS);
+    return [];
   }
 }
 

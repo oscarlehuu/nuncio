@@ -29,6 +29,24 @@ const PI_ONLY_PROVIDERS: ModelProvider[] = [
   },
 ];
 
+const PI_MIXED_IMAGE_PROVIDERS: ModelProvider[] = [
+  {
+    id: 'pi',
+    name: 'Pi',
+    capabilities: { images: true },
+    groups: [
+      {
+        id: 'registry',
+        name: 'Registry',
+        models: [
+          { id: 'google:gemini', name: 'Gemini', capabilities: { images: true } },
+          { id: 'xai:grok', name: 'Grok', capabilities: { images: false } },
+        ],
+      },
+    ],
+  },
+];
+
 const CURSOR_AND_PI: ModelProvider[] = [
   ...PI_ONLY_PROVIDERS,
   {
@@ -294,6 +312,22 @@ describe('HomeView', () => {
       false,
       undefined,
     );
+  });
+
+  it('gates image attachment by the selected Pi registry model', async () => {
+    saveModelPreference({ modelId: 'xai:grok', providerId: 'pi' });
+    const grok = render(
+      <HomeView sessionCount={0} onSubmit={vi.fn()} providers={PI_MIXED_IMAGE_PROVIDERS} />,
+    );
+    expect(await screen.findByRole('button', { name: /grok/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /attach image/i })).toBeNull();
+    grok.unmount();
+
+    localStorage.clear();
+    saveModelPreference({ modelId: 'google:gemini', providerId: 'pi' });
+    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={PI_MIXED_IMAGE_PROVIDERS} />);
+    expect(await screen.findByRole('button', { name: /gemini/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /attach image/i })).toBeInTheDocument();
   });
 
   it('shows Continue on mobile icon in the composer bar when handler is provided', async () => {

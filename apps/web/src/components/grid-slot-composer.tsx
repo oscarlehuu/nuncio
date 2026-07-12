@@ -8,6 +8,7 @@ import { AttachButton, AttachmentTray } from './attachment-tray';
 import { currentMachine, fetchHubMachines, machineApiBase, type HubMachine } from '../lib/hub-api';
 import {
   modelById,
+  modelSupportsImages,
   normalizeModelCatalog,
   pickDefaultModelSelection,
   prettyModelName,
@@ -157,9 +158,8 @@ export function GridSlotComposer({
 
   const catalog = useMemo(() => normalizeModelCatalog(activeProviders), [activeProviders]);
   const canAttachImages = useMemo(
-    () =>
-      provider ? (activeProviders.find((p) => p.id === provider)?.capabilities?.images ?? false) : false,
-    [provider, activeProviders],
+    () => modelSupportsImages(catalog, provider, model),
+    [provider, model, catalog],
   );
   const catalogLoaded = activeProviders.length > 0;
 
@@ -204,7 +204,7 @@ export function GridSlotComposer({
     const text = prompt.trim();
     if (!text || submitting) return;
     setSubmitting(true);
-    const attachments = imageAttachments.attachments;
+    const attachments = canAttachImages ? imageAttachments.attachments : [];
     const attachmentsArg = attachments.length > 0 ? attachments : undefined;
     try {
       const selected = modelById(catalog)[model];
@@ -369,6 +369,7 @@ export function GridSlotComposer({
               value={model}
               modelOptions={modelOptions}
               onChange={(modelId, providerId, options) => {
+                if (!modelSupportsImages(catalog, providerId, modelId)) imageAttachments.clearWithTokens();
                 setModel(modelId);
                 setProvider(providerId);
                 setModelOptions(options ?? {});

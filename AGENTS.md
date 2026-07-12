@@ -296,7 +296,6 @@ apps/
         crew-verifier.service.ts  Nuncio-owned, full-HEAD-bound command evidence
       models/            model catalog (thin: aggregates listModels() across available providers)
         models.types.ts        ModelProviderDto/ModelGroupDto/ModelItemDto
-        models.static.ts       STATIC_MODEL_PROVIDERS (Pi fallback when no auth)
         models.service.ts      aggregates from AgentRegistry
       provider-updates/  optional Pi/Codex CLI version advisories + user-triggered updates
       usage/             first-party Claude/Codex/Cursor subscription quota probes (local CLI creds)
@@ -750,6 +749,9 @@ Minimal web GUI for coding agents (Codex, Claude, Cursor, OpenCode). Synara fork
 - Synara reference repo is cloned at sibling `Oscar/synara` (not in-repo).
 - Pi provider `cliproxyapi` (`anthropic-messages`, `forceAdaptiveThinking: true`) routes Claude (`claude-opus-4-8`, `claude-sonnet-4-6`) via CLIProxyAPI, configured in `~/.pi/agent/models.json`; user's default is `cliproxyapi/claude-opus-4-8`.
 - Pi thinking levels are `off/minimal/low/medium/high/xhigh/max`. Standard levels through `high` are available unless explicitly mapped to `null`; extended `xhigh` and `max` require explicit non-null `thinkingLevelMap` entries. Pi `max` remains a single-agent thinking level and must never be translated to Codex `ultra`, which activates multi-agent delegation.
+- Pi model discovery is auth-truthful: expose only `ModelRegistry.getAvailable()` entries, grouped
+  with registry display names. Empty/error results stay empty; never substitute static models or
+  prompt for credentials. Per-model `input` metadata gates image upload before provider defaults.
 - `session.setModel()` persists the default model to the real `~/.pi/agent/settings.json` (global config shared with the `pi` CLI) — by design, but it mutates global state.
 - Nuncio's phone client is a thin client (agent runs on the Mac; the phone streams the WS relay + sends steer over Tailscale). The native mobile track SHIPPED as `apps/mobile` (Expo) — it supersedes the earlier "PWA is the mobile app" position; push notifications (the reason to go native) ride Expo's push service via the server-side device-token registry. The PWA remains as the remote web surface.
 - The user's active Pi agent config (`~/.pi/agent`) has Foreman removed — only the `AskUserQuestion` extension is kept, and `~/.pi/agent/AGENTS.md` is now a minimal AskUserQuestion-only file (backups under `~/.pi/agent/backups/`).

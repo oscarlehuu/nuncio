@@ -20,6 +20,7 @@ export function useComposerAttachments(setText: Dispatch<SetStateAction<string>>
     addFromDataTransfer: baseAddFromDataTransfer,
     hasImages: baseHasImages,
     remove: baseRemove,
+    clear: baseClear,
     items,
   } = base;
 
@@ -50,6 +51,15 @@ export function useComposerAttachments(setText: Dispatch<SetStateAction<string>>
     [items, baseRemove, setText],
   );
 
+  /** Drop every staged image and its prompt token when a model capability changes. */
+  const clearWithTokens = useCallback(() => {
+    const labels = items.map((item) => item.label);
+    baseClear();
+    if (labels.length > 0) {
+      setText((text) => labels.reduce((next, label) => stripImageToken(next, label), text));
+    }
+  }, [items, baseClear, setText]);
+
   const handlePaste = useCallback(
     (
       event: { clipboardData: DataTransfer | null; preventDefault: () => void },
@@ -68,5 +78,5 @@ export function useComposerAttachments(setText: Dispatch<SetStateAction<string>>
     [addFromDataTransfer, baseHasImages],
   );
 
-  return { ...base, addFiles, addFromDataTransfer, handlePaste, remove };
+  return { ...base, addFiles, addFromDataTransfer, handlePaste, remove, clearWithTokens };
 }
