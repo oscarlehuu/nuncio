@@ -34,7 +34,7 @@ import type { ModelProvider } from '../lib/model-providers';
 const PROVIDERS: ModelProvider[] = [
   {
     id: 'pi',
-    name: 'Pi',
+    name: 'Nuncio Engine',
     groups: [{ id: 'g', name: 'g', models: [{ id: 'claude-fable-5', name: 'Fable 5' }] }],
   },
   {
@@ -217,7 +217,7 @@ describe('LoopDetailView', () => {
     renderDetail();
     await waitFor(() =>
       expect(
-        screen.getByRole('button', { name: /engine and model: pi · fable 5/i }),
+        screen.getByRole('button', { name: /engine and model: nuncio engine · fable 5/i }),
       ).toBeInTheDocument(),
     );
   });
@@ -236,7 +236,7 @@ describe('LoopDetailView', () => {
     renderDetail();
     await waitFor(() =>
       expect(
-        screen.getByRole('button', { name: /engine and model: pi · ghost-model-9/i }),
+        screen.getByRole('button', { name: /engine and model: nuncio engine · ghost-model-9/i }),
       ).toBeInTheDocument(),
     );
   });
@@ -244,7 +244,7 @@ describe('LoopDetailView', () => {
   it('picking a different engine resets the model to the provider default', async () => {
     vi.mocked(fetchLoop).mockResolvedValue(loop({ engine: 'pi', model: 'claude-fable-5' }));
     renderDetail();
-    const trigger = await screen.findByRole('button', { name: /engine and model: pi · fable 5/i });
+    const trigger = await screen.findByRole('button', { name: /engine and model: nuncio engine · fable 5/i });
     await userEvent.click(trigger);
     await userEvent.click(await screen.findByRole('menuitem', { name: /cursor provider default/i }));
     expect(
@@ -256,7 +256,7 @@ describe('LoopDetailView', () => {
     vi.mocked(fetchLoop).mockResolvedValue(loop({ engine: 'pi', model: null }));
     renderDetail();
     const trigger = await screen.findByRole('button', {
-      name: /engine and model: pi · default model/i,
+      name: /engine and model: nuncio engine · default model/i,
     });
     const save = screen.getByRole('button', { name: 'Save' });
     expect(save).toBeDisabled();
@@ -289,7 +289,7 @@ describe('LoopDetailView', () => {
   it('an engine change PATCHes {engine} WITHOUT a model key (server clears the model)', async () => {
     vi.mocked(fetchLoop).mockResolvedValue(loop({ engine: 'pi', model: 'claude-fable-5' }));
     renderDetail();
-    const trigger = await screen.findByRole('button', { name: /engine and model: pi · fable 5/i });
+    const trigger = await screen.findByRole('button', { name: /engine and model: nuncio engine · fable 5/i });
     await userEvent.click(trigger);
     await userEvent.click(await screen.findByRole('menuitem', { name: /cursor provider default/i }));
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));

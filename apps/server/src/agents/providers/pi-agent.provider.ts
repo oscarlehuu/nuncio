@@ -116,7 +116,7 @@ type PiModelRegistry = {
 @Injectable()
 export class PiAgentProvider extends BaseAgentProvider {
   readonly id = 'pi';
-  readonly name = 'Pi';
+  readonly name = 'Nuncio Engine';
   readonly capabilities = {
     interrupt: true,
     modelSwitch: 'in-session',

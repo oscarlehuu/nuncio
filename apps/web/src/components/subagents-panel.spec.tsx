@@ -165,7 +165,7 @@ describe('SubagentsPanel', () => {
     const providers = [
       {
         id: 'pi',
-        name: 'Pi',
+        name: 'Nuncio Engine',
         groups: [
           {
             id: 'g',

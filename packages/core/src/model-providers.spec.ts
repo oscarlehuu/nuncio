@@ -19,7 +19,7 @@ describe('flattenProviders', () => {
     const providers: ModelProvider[] = [
       {
         id: 'pi',
-        name: 'Pi',
+        name: 'Nuncio Engine',
         groups: [
           { id: 'g1', name: 'G1', models: [{ id: 'm1', name: 'M1' }, { id: 'm2', name: 'M2' }] },
         ],
@@ -31,7 +31,7 @@ describe('flattenProviders', () => {
     expect(flat[0]).toMatchObject({
       id: 'm1',
       providerId: 'pi',
-      providerName: 'Pi',
+      providerName: 'Nuncio Engine',
       groupId: 'g1',
       groupName: 'G1',
     });
@@ -46,7 +46,7 @@ describe('flattenProviders', () => {
 describe('modelById', () => {
   it('maps model id → flat model', () => {
     const lookup = modelById([
-      { id: 'pi', name: 'Pi', groups: [{ id: 'g', name: 'G', models: [{ id: 'm1', name: 'M1' }] }] },
+      { id: 'pi', name: 'Nuncio Engine', groups: [{ id: 'g', name: 'G', models: [{ id: 'm1', name: 'M1' }] }] },
     ]);
     expect(lookup['m1'].name).toBe('M1');
     expect(lookup['m1'].providerId).toBe('pi');
@@ -65,7 +65,7 @@ describe('modelSupportsImages', () => {
   const providers: ModelProvider[] = [
     {
       id: 'pi',
-      name: 'Pi',
+      name: 'Nuncio Engine',
       capabilities: { images: true },
       groups: [
         {
@@ -138,7 +138,7 @@ describe('sanitizeCursorModels', () => {
 describe('sortModelProviders', () => {
   it('orders pi before cursor regardless of input order', () => {
     const providers: ModelProvider[] = [
-      { id: 'pi', name: 'Pi', groups: [{ id: 'g', name: 'G', models: [{ id: 'm1', name: 'M1' }] }] },
+      { id: 'pi', name: 'Nuncio Engine', groups: [{ id: 'g', name: 'G', models: [{ id: 'm1', name: 'M1' }] }] },
       { id: 'cursor', name: 'Cursor', groups: [{ id: 'g', name: 'G', models: [{ id: 'm2', name: 'M2' }] }] },
     ];
     expect(sortModelProviders(providers).map((p) => p.id)).toEqual(['pi', 'cursor']);
@@ -147,7 +147,7 @@ describe('sortModelProviders', () => {
   it('sorts unknown providers after known ones alphabetically', () => {
     const providers: ModelProvider[] = [
       { id: 'zulu', name: 'Zulu', groups: [{ id: 'g', name: 'G', models: [{ id: 'm0', name: 'M0' }] }] },
-      { id: 'pi', name: 'Pi', groups: [{ id: 'g', name: 'G', models: [{ id: 'm1', name: 'M1' }] }] },
+      { id: 'pi', name: 'Nuncio Engine', groups: [{ id: 'g', name: 'G', models: [{ id: 'm1', name: 'M1' }] }] },
       { id: 'cursor', name: 'Cursor', groups: [{ id: 'g', name: 'G', models: [{ id: 'm2', name: 'M2' }] }] },
     ];
     expect(sortModelProviders(providers).map((p) => p.id)).toEqual(['pi', 'cursor', 'zulu']);
@@ -189,7 +189,7 @@ describe('sortModelProviders', () => {
     const providers: ModelProvider[] = [
       {
         id: 'pi',
-        name: 'Pi',
+        name: 'Nuncio Engine',
         groups: [
           { id: 'z', name: 'Zulu', models: [{ id: 'm-z', name: 'Z Model' }] },
           { id: 'a', name: 'Alpha', models: [{ id: 'm-a', name: 'A Model' }] },
@@ -206,7 +206,7 @@ describe('normalizeModelCatalog', () => {
     const providers: ModelProvider[] = [
       {
         id: 'pi',
-        name: 'Pi',
+        name: 'Nuncio Engine',
         groups: [{ id: 'g', name: 'G', models: [{ id: 'pi:m', name: 'pi-model' }] }],
       },
       {
@@ -237,7 +237,7 @@ describe('pickDefaultModelSelection', () => {
   const piOnly: ModelProvider[] = [
     {
       id: 'pi',
-      name: 'Pi',
+      name: 'Nuncio Engine',
       groups: [{ id: 'g', name: 'G', models: [{ id: 'anthropic:claude-haiku-4', name: 'Haiku' }] }],
     },
   ];

@@ -95,7 +95,7 @@ const HUB_MACHINES = {
 const PROVIDERS: ModelProvider[] = [
   {
     id: 'pi',
-    name: 'Pi',
+    name: 'Nuncio Engine',
     groups: [{ id: 'pi', name: 'Pi', models: [{ id: 'pi:default', name: 'Pi Default' }] }],
   },
 ];
@@ -103,7 +103,7 @@ const PROVIDERS: ModelProvider[] = [
 const MIXED_IMAGE_PROVIDERS: ModelProvider[] = [
   {
     id: 'pi',
-    name: 'Pi',
+    name: 'Nuncio Engine',
     capabilities: { images: true },
     groups: [
       {
