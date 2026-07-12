@@ -17,6 +17,9 @@ const PROVIDER_LABEL: Record<UsageProviderId, string> = {
   cursor: 'Cursor',
 };
 
+const USAGE_BAR_HIGH = '#f59e0b';
+const USAGE_BAR_CRITICAL = '#f5605b';
+
 type PercentMode = 'used' | 'left';
 
 function isUsageProviderId(value: string | null | undefined): value is UsageProviderId {
@@ -33,6 +36,17 @@ function primaryLimit(snapshot: UsageSnapshotDto | null) {
 
 function displayPercent(used: number, mode: PercentMode): number {
   return Math.round(mode === 'left' ? Math.max(0, 100 - used) : used);
+}
+
+function formatQuotaLabel(usedPercent: number, mode: PercentMode): string {
+  const value = displayPercent(usedPercent, mode);
+  return `${value}% ${mode}`;
+}
+
+function usageBarColor(usedPercent: number): string {
+  if (usedPercent > 90) return USAGE_BAR_CRITICAL;
+  if (usedPercent > 70) return USAGE_BAR_HIGH;
+  return '#e4e4e4';
 }
 
 function formatResetCountdown(resetsAt: string | undefined): string | null {
@@ -69,6 +83,40 @@ function freshestUpdatedAt(snapshots: UsageSnapshotDto[]): string | null {
     }
   }
   return best;
+}
+
+function PercentModeToggle({
+  mode,
+  onChange,
+}: {
+  mode: PercentMode;
+  onChange: (mode: PercentMode) => void;
+}) {
+  return (
+    <View
+      className="mt-3 flex-row rounded-lg border border-border/60 p-0.5"
+      accessibilityRole="tablist"
+    >
+      {(['used', 'left'] as const).map((option) => {
+        const selected = mode === option;
+        return (
+          <Pressable
+            key={option}
+            accessibilityRole="tab"
+            accessibilityState={{ selected }}
+            onPress={() => onChange(option)}
+            className={`flex-1 items-center rounded-md px-3 py-1.5 ${selected ? 'bg-muted' : ''}`}
+          >
+            <Text
+              className={`text-xs font-medium capitalize ${selected ? 'text-foreground' : 'text-muted-foreground'}`}
+            >
+              {option}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
 }
 
 interface QuotaSheetProps {
@@ -125,8 +173,9 @@ export function QuotaSheetTrigger({ activeProvider, model }: QuotaSheetProps) {
     return null;
   }
 
-  const shown = displayPercent(used, mode);
-  const chipLabel = reset ? `${shown}% · ${reset}` : `${shown}%`;
+  const chipLabel = reset
+    ? `${formatQuotaLabel(used, mode)} · ${reset}`
+    : formatQuotaLabel(used, mode);
 
   return (
     <>
@@ -139,74 +188,115 @@ export function QuotaSheetTrigger({ activeProvider, model }: QuotaSheetProps) {
         accessibilityLabel="Provider quota"
         testID="quota-chip"
       >
-        <Text className="text-xs tabular-nums text-muted-foreground">{chipLabel}</Text>
+        <Text className="font-mono text-xs tabular-nums text-muted-foreground">{chipLabel}</Text>
       </Pressable>
 
       <Modal visible={open} animationType="slide" transparent onRequestClose={() => setOpen(false)}>
-        <Pressable className="flex-1 bg-black/40" onPress={() => setOpen(false)} />
-        <View className="max-h-[70%] rounded-t-2xl border-t border-border bg-background px-4 pb-10 pt-3">
-          <View className="mb-3 items-center">
-            <View className="mb-2 h-1 w-10 rounded-full bg-muted" />
-            <Text className="text-base font-semibold text-foreground">Provider quota</Text>
-            <View className="mt-2 flex-row gap-2">
-              {(['used', 'left'] as const).map((option) => (
-                <Pressable
-                  key={option}
-                  onPress={() => setMode(option)}
-                  className={`rounded-full px-3 py-1 ${mode === option ? 'bg-muted' : ''}`}
-                >
-                  <Text className="text-xs capitalize text-foreground">{option}</Text>
-                </Pressable>
-              ))}
-            </View>
+        <Pressable className="flex-1 bg-black/50" onPress={() => setOpen(false)} />
+        <View className="max-h-[75%] rounded-t-2xl border-t border-border bg-background px-5 pb-10 pt-3">
+          <View className="mb-4 items-center">
+            <View className="mb-3 h-1 w-10 rounded-full bg-muted" />
+            <Text className="text-lg font-semibold text-foreground">Provider quota</Text>
+            <Text className="mt-1 text-center text-xs text-muted-foreground">
+              Subscription limits from your local CLI logins
+            </Text>
+            <PercentModeToggle mode={mode} onChange={setMode} />
           </View>
-          {error ? <Text className="mb-2 text-sm text-destructive">{error}</Text> : null}
-          <ScrollView>
-            {ordered.map((snapshot) => (
-              <View key={snapshot.provider} className="mb-4 border-b border-border pb-3">
-                <Text className="mb-1 font-medium text-foreground">
-                  {PROVIDER_LABEL[snapshot.provider]}
-                  {snapshot.planName ? ` · ${snapshot.planName}` : ''}
-                </Text>
-                {snapshot.status === 'ok' ? (
-                  snapshot.limits.map((limit) => (
-                    <View key={limit.window} className="mb-1 flex-row justify-between">
-                      <Text className="text-sm text-muted-foreground">{limit.window}</Text>
-                      <Text className="text-sm tabular-nums text-foreground">
-                        {typeof limit.usedPercent === 'number'
-                          ? `${displayPercent(limit.usedPercent, mode)}% ${mode}`
-                          : '—'}
-                        {limit.resetsAt ? ` · ${formatResetCountdown(limit.resetsAt) ?? ''}` : ''}
-                      </Text>
-                    </View>
-                  ))
-                ) : (
-                  <Text className="text-sm text-muted-foreground">
-                    {snapshot.detail ?? usageNeedsAuthHint(snapshot.provider)}
-                  </Text>
-                )}
-                {snapshot.usageLines.map((line) => (
-                  <View key={line.label} className="mt-1">
-                    <View className="flex-row justify-between">
-                      <Text className="text-sm text-muted-foreground">{line.label}</Text>
-                      <Text className="text-sm text-foreground">{line.value}</Text>
-                    </View>
-                    {line.subtitle ? (
-                      <Text className="text-xs text-muted-foreground">{line.subtitle}</Text>
+
+          {error ? (
+            <Text className="mb-3 text-sm text-destructive">{error}</Text>
+          ) : null}
+
+          <ScrollView className="mb-3" showsVerticalScrollIndicator={false}>
+            {ordered.map((snapshot) => {
+              const emphasized =
+                isUsageProviderId(resolvedProvider) && snapshot.provider === resolvedProvider;
+              return (
+                <View
+                  key={snapshot.provider}
+                  className={`mb-3 rounded-xl border p-3 ${
+                    emphasized ? 'border-border bg-card' : 'border-border/50 bg-background'
+                  }`}
+                >
+                  <Text className="mb-2 text-sm font-semibold text-foreground">
+                    {PROVIDER_LABEL[snapshot.provider]}
+                    {snapshot.planName ? (
+                      <Text className="font-normal text-muted-foreground"> · {snapshot.planName}</Text>
                     ) : null}
-                  </View>
-                ))}
-              </View>
-            ))}
+                  </Text>
+
+                  {snapshot.status === 'ok' ? (
+                    snapshot.limits.map((limit) => {
+                      const usedPercent = limit.usedPercent;
+                      const hasPercent = typeof usedPercent === 'number';
+                      const resetLabel = limit.resetsAt
+                        ? formatResetCountdown(limit.resetsAt)
+                        : null;
+                      return (
+                        <View key={limit.window} className="mb-3 last:mb-0">
+                          <View className="mb-1 flex-row items-baseline justify-between gap-3">
+                            <Text className="flex-1 text-sm text-muted-foreground">{limit.window}</Text>
+                            <Text className="shrink-0 font-mono text-sm tabular-nums text-foreground">
+                              {hasPercent ? formatQuotaLabel(usedPercent, mode) : '—'}
+                              {resetLabel ? (
+                                <Text className="font-mono text-xs text-muted-foreground">
+                                  {' '}
+                                  · {resetLabel}
+                                </Text>
+                              ) : null}
+                            </Text>
+                          </View>
+                          {hasPercent ? (
+                            <View className="h-1.5 overflow-hidden rounded-full bg-muted/60">
+                              <View
+                                style={{
+                                  width: `${Math.min(100, Math.max(0, usedPercent))}%`,
+                                  backgroundColor: usageBarColor(usedPercent),
+                                }}
+                                className="h-full rounded-full"
+                              />
+                            </View>
+                          ) : null}
+                        </View>
+                      );
+                    })
+                  ) : (
+                    <Text className="text-sm text-muted-foreground">
+                      {snapshot.detail ?? usageNeedsAuthHint(snapshot.provider)}
+                    </Text>
+                  )}
+
+                  {snapshot.usageLines.length > 0 ? (
+                    <View className="mt-3 border-t border-border/40 pt-2">
+                      {snapshot.usageLines.map((line) => (
+                        <View key={line.label} className="mb-2 last:mb-0">
+                          <View className="flex-row items-baseline justify-between gap-3">
+                            <Text className="text-sm text-muted-foreground">{line.label}</Text>
+                            <Text className="shrink-0 font-mono text-sm tabular-nums text-foreground">
+                              {line.value}
+                            </Text>
+                          </View>
+                          {line.subtitle ? (
+                            <Text className="mt-0.5 text-xs text-muted-foreground">{line.subtitle}</Text>
+                          ) : null}
+                        </View>
+                      ))}
+                    </View>
+                  ) : null}
+                </View>
+              );
+            })}
           </ScrollView>
+
           {sharedUpdated ? (
-            <Text className="mb-2 text-center text-xs text-muted-foreground">
+            <Text className="mb-3 text-center font-mono text-xs tabular-nums text-muted-foreground">
               Updated {formatUpdatedAgo(sharedUpdated)}
             </Text>
           ) : null}
+
           <Pressable
             onPress={() => setOpen(false)}
-            className="mt-2 items-center rounded-lg bg-muted px-4 py-3"
+            className="items-center rounded-xl bg-muted px-4 py-3"
           >
             <Text className="font-medium text-foreground">Close</Text>
           </Pressable>
