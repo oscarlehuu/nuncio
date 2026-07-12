@@ -10,6 +10,13 @@ import { EventsRepository } from '../../../src/sessions/persistence/events.repos
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
 import { SettingsModule } from '../../../src/settings/settings.module';
 import { SettingsService } from '../../../src/settings/settings.service';
+import { ContextModule } from '../../../src/context/context.module';
+import { ContextFactsRepository } from '../../../src/context/context-facts.repository';
+import {
+  NuncioContextRepository,
+  NuncioContextService,
+} from '../../../src/agents/pi-engine/nuncio-context';
+import { TasksRepository } from '../../../src/tasks/tasks.repository';
 
 let availableModelCount = 0;
 let fakeSessionFile = '/tmp/fake-pi/session.jsonl';
@@ -115,6 +122,8 @@ describe('PiAgentProvider', () => {
   let sessions: SessionsRepository;
   let events: EventsRepository;
   let settings: SettingsService;
+  let contextFacts: ContextFactsRepository;
+  let tasks: TasksRepository;
   let dataDir: string;
 
   beforeAll(async () => {
@@ -122,14 +131,21 @@ describe('PiAgentProvider', () => {
     process.env.NUNCIO_DATA_DIR = dataDir;
 
     module = await Test.createTestingModule({
-      imports: [DatabaseModule, SessionsPersistenceModule, SettingsModule],
-      providers: [PiAgentProvider],
+      imports: [DatabaseModule, SessionsPersistenceModule, SettingsModule, ContextModule],
+      providers: [
+        PiAgentProvider,
+        NuncioContextRepository,
+        NuncioContextService,
+        TasksRepository,
+      ],
     }).compile();
 
     provider = module.get(PiAgentProvider);
     sessions = module.get(SessionsRepository);
     events = module.get(EventsRepository);
     settings = module.get(SettingsService);
+    contextFacts = module.get(ContextFactsRepository);
+    tasks = module.get(TasksRepository);
   });
 
   afterAll(async () => {
@@ -192,6 +208,73 @@ describe('PiAgentProvider', () => {
     const paths = lastLoaderOptions?.additionalExtensionPaths as string[];
     expect(paths).toContain('/tmp/fake-pi/extensions/foreman');
     expect(paths.some((p) => p.includes('claude-studio'))).toBe(false);
+  });
+
+  it('appends deterministic project facts and the latest project handoff brief', async () => {
+    const projectPath = `/tmp/nuncio-context-${Date.now()}`;
+    contextFacts.upsert({
+      projectPath,
+      key: 'runtime',
+      value: 'Use Bun for all commands.',
+      provenance: 'founder',
+    });
+    tasks.create({
+      prompt: 'older task',
+      projectPath,
+      contextBrief: { goal: 'Ignore the older brief.' },
+    });
+    tasks.create({
+      prompt: 'latest task',
+      projectPath,
+      contextBrief: { goal: 'Honor the latest brief.' },
+    });
+    const created = sessions.create({ prompt: 'context probe', provider: 'pi', projectPath });
+
+    await provider.run(created.id, created.prompt, { emit: () => {} });
+
+    const appended = lastLoaderOptions?.appendSystemPrompt as string[];
+    expect(appended).toHaveLength(1);
+    expect(appended[0]!.startsWith('## Nuncio project context')).toBe(true);
+    expect(appended[0]!.indexOf('**runtime**')).toBeLessThan(
+      appended[0]!.indexOf('## Handoff brief'),
+    );
+    expect(appended[0]).toContain('Honor the latest brief.');
+    expect(appended[0]).not.toContain('Ignore the older brief.');
+  });
+
+  it('omits appendSystemPrompt when the project has no facts', async () => {
+    const projectPath = `/tmp/nuncio-context-empty-${Date.now()}`;
+    tasks.create({
+      prompt: 'brief without facts',
+      projectPath,
+      contextBrief: { goal: 'A brief alone must not emit scaffolding.' },
+    });
+    const created = sessions.create({ prompt: 'empty context probe', provider: 'pi', projectPath });
+
+    await provider.run(created.id, created.prompt, { emit: () => {} });
+
+    expect(lastLoaderOptions?.appendSystemPrompt).toBeUndefined();
+  });
+
+  it('honors the project-facts injection kill-switch', async () => {
+    const projectPath = `/tmp/nuncio-context-disabled-${Date.now()}`;
+    contextFacts.upsert({
+      projectPath,
+      key: 'private-rule',
+      value: 'This must stay out of the loader.',
+      provenance: 'founder',
+    });
+    const originalResolve = settings.resolve.bind(settings);
+    settings.resolve = ((key: string) =>
+      key === 'NUNCIO_CONTEXT_FACTS_INJECT' ? 'off' : originalResolve(key)) as SettingsService['resolve'];
+    const created = sessions.create({ prompt: 'disabled context probe', provider: 'pi', projectPath });
+
+    try {
+      await provider.run(created.id, created.prompt, { emit: () => {} });
+      expect(lastLoaderOptions?.appendSystemPrompt).toBeUndefined();
+    } finally {
+      settings.resolve = originalResolve as SettingsService['resolve'];
+    }
   });
 
   it('restores Pi default extension discovery only for the explicit full escape hatch', async () => {
