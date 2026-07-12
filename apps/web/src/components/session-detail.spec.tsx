@@ -103,6 +103,13 @@ vi.mock('../lib/api', async () => {
   };
 });
 
+vi.mock('../lib/usage-api', () => ({
+  fetchProviderUsage: vi.fn(async () => []),
+  fetchProviderUsageSnapshot: vi.fn(async () => {
+    throw new Error('not mocked');
+  }),
+}));
+
 function makeSession(overrides: Partial<Session> = {}): Session {
   return {
     id: 's1',

@@ -24,6 +24,7 @@ import { useSessionTranscript } from '../../lib/use-session-transcript';
 import { useTranscriptBlocks } from '../../lib/use-transcript-blocks';
 import { TranscriptBlockView } from '../../components/transcript-block-view';
 import { ConnectionPill } from '../../components/connection-pill';
+import { QuotaSheetTrigger } from '../../components/quota-sheet';
 import { crewMemberSessionAccess } from '../../lib/crew-member-session';
 
 export default function SessionDetail() {
@@ -133,6 +134,7 @@ export default function SessionDetail() {
             {access.managedByCrew ? ' · Managed by Crew' : ''}
           </Text>
         </View>
+        <QuotaSheetTrigger activeProvider={session?.provider} model={session?.model} />
         <ConnectionPill state={connectionState} />
         {access.canMutate ? (
           <Pressable onPress={showActions} className="px-2 py-1">

@@ -27,6 +27,18 @@ function resolveChannel() {
   return app.getVersion().includes('-dev') ? 'dev' : 'latest';
 }
 
+// electron-updater reports "the release/manifest isn't published yet" as an
+// error, but to the founder it just means there's nothing to install right now
+// — e.g. CI created the release and is still uploading latest-mac.yml. Matches
+// the GitHub provider's missing-manifest 404, empty release list, and
+// latest-version resolution failures.
+function isNoPublishedUpdateError(err) {
+  const msg = String(err?.message ?? err);
+  return /(?:latest|dev)[-.]mac\.yml|no published versions|unable to find latest version/i.test(
+    msg,
+  );
+}
+
 function setState(patch) {
   state = { ...state, ...patch };
   notifyStateChange(getUpdaterState());
@@ -100,6 +112,22 @@ function initAutoUpdater({
     log(`[updater] error: ${err?.message ?? err}`);
     const wasManual = manualCheck;
     manualCheck = false;
+    if (isNoPublishedUpdateError(err)) {
+      // Not a failure — there's just nothing installable right now (e.g. CI is
+      // mid-upload). Stay quiet in the background; a manual check gets a calm
+      // info dialog instead of an error with a stack.
+      setState({ status: 'idle', percent: 0 });
+      if (wasManual) {
+        dialog.showMessageBox({
+          type: 'info',
+          buttons: ['OK'],
+          title: 'No update available yet',
+          message: 'No update is available right now.',
+          detail: 'A new build may still be uploading — try again in a few minutes.',
+        });
+      }
+      return;
+    }
     setState({ status: 'error', percent: 0 });
     if (wasManual) {
       dialog.showMessageBox({

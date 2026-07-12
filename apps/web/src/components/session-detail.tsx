@@ -38,6 +38,9 @@ import {
   type ScmSegment,
 } from '../lib/inspector-preference';
 import { ContextUsageButton } from './context-usage-button';
+import { QuotaChip } from './quota-chip';
+import { useProviderUsage } from '../lib/use-provider-usage';
+import { resolveUsageProvider } from '../lib/usage-display';
 import { ScmPanel } from './forge/scm-panel';
 import { Transcript } from './session-transcript';
 import { PendingUserInputBanner } from './pending-user-input-banner';
@@ -317,6 +320,8 @@ export function SessionDetail({
   const repoName = projectDisplayName(session.projectPath) ?? projectDisplayName(session.workspace);
   const branchName = session.branch;
   const contextUsage = useContextUsage(events, entry?.contextWindow);
+  const usageProvider = resolveUsageProvider(session.provider, session.model);
+  const { snapshots: usageSnapshots, reload: reloadUsage } = useProviderUsage(usageProvider);
 
   useStickToBottom(scrollRef, events.length, { resetKey: session.id });
 
@@ -919,6 +924,11 @@ export function SessionDetail({
                 {modelName}
               </span>
               <ContextUsageButton usage={contextUsage} />
+              <QuotaChip
+                activeProvider={usageProvider}
+                snapshots={usageSnapshots}
+                onOpen={() => void reloadUsage(true)}
+              />
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
               {isRunning && (

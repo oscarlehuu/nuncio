@@ -190,7 +190,7 @@ describe('ModelPicker', () => {
     expect(screen.queryByRole('menuitem', { name: /show all 8 claude models/i })).not.toBeInTheDocument();
   });
 
-  it('filters to one CLI via the chip row and shows its full catalog', async () => {
+  it('filters to one CLI via icon chips and shows its full catalog', async () => {
     render(
       <ModelPicker
         value="anthropic:claude-haiku-4-5"
@@ -203,15 +203,40 @@ describe('ModelPicker', () => {
 
     const chipRow = await screen.findByRole('group', { name: /filter by cli/i });
     expect(chipRow).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: /^claude$/i }));
+    // Chips are icon-only — accessible name is the provider (or All), not visible text labels.
+    expect(within(chipRow).queryByText(/^Pi$/i)).not.toBeInTheDocument();
+    expect(within(chipRow).queryByText(/^Claude$/i)).not.toBeInTheDocument();
+    await userEvent.click(within(chipRow).getByRole('button', { name: /^claude$/i }));
 
     // Filtered to the Claude CLI: Pi's models leave, and the collapse is off.
     expect(screen.queryByRole('menuitem', { name: /claude haiku 4\.5/i })).not.toBeInTheDocument();
     expect(await screen.findByRole('menuitem', { name: /claude model 7/i })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: /show all 8 claude models/i })).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: /^all$/i }));
+    await userEvent.click(within(chipRow).getByRole('button', { name: /^all$/i }));
     expect(await screen.findByRole('menuitem', { name: /claude haiku 4\.5/i })).toBeInTheDocument();
+  });
+
+  it('docks reasoning and priority controls in a sticky footer, not mid-list', async () => {
+    render(
+      <ModelPicker
+        value="codex:gpt-5.6-sol"
+        modelOptions={{ fast: false, reasoningEffort: 'medium' }}
+        onChange={vi.fn()}
+        providers={[CODEX_PROVIDER, PI_PROVIDER]}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /gpt-5\.6 sol/i }));
+
+    const footer = await screen.findByTestId('model-picker-options-footer');
+    expect(within(footer).getByRole('slider', { name: /reasoning effort/i })).toBeInTheDocument();
+    expect(within(footer).getByRole('button', { name: /turn on fast mode/i })).toBeInTheDocument();
+
+    const gptRow = screen.getByRole('menuitem', { name: /gpt-5\.6 sol/i });
+    expect(within(gptRow).queryByRole('slider')).not.toBeInTheDocument();
+    // List rows after the selected model stay siblings — no options card nested between them.
+    expect(gptRow.parentElement?.querySelector('[data-testid="model-picker-options-footer"]')).toBeNull();
   });
 
   it('shows a green lightning indicator when fast is on', () => {
@@ -248,7 +273,7 @@ describe('ModelPicker', () => {
     expect(onChange).toHaveBeenCalledWith('cursor:composer-2.5', 'cursor', { fast: false });
   });
 
-  it('toggles fast via the lightning control in the options panel', async () => {
+  it('toggles fast via the lightning control in the sticky options footer', async () => {
     const onChange = vi.fn();
     function Harness() {
       const [opts, setOpts] = useState<ModelOptionsMap>({ fast: false });
@@ -378,11 +403,9 @@ describe('ModelPicker', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /claude haiku 4\.5/i }));
 
-    // Group headers only — the CLI chip row repeats the provider names as buttons.
-    const headers = (await screen.findAllByText('Pi')).filter((el) => el.closest('button') === null);
-    const cursorHeaders = (await screen.findAllByText('Cursor')).filter(
-      (el) => el.closest('button') === null,
-    );
+    // Section headers keep provider names; filter chips are icons (aria-label only).
+    const headers = await screen.findAllByText('Pi');
+    const cursorHeaders = await screen.findAllByText('Cursor');
     expect(headers.length).toBeGreaterThan(0);
     expect(cursorHeaders.length).toBeGreaterThan(0);
     expect(
@@ -539,8 +562,9 @@ describe('ModelPicker', () => {
     );
 
     const panel = await screen.findByTestId('model-picker-flat-panel');
-    expect(panel).toHaveClass('max-h-[min(420px,var(--radix-dropdown-menu-content-available-height))]', 'overflow-y-auto');
+    expect(panel).toHaveClass('max-h-[min(420px,var(--radix-dropdown-menu-content-available-height))]');
     expect(panel.getAttribute('style')).toContain('min-width: min(22rem, calc(100vw - 24px))');
+    expect(screen.getByTestId('model-picker-list')).toHaveClass('overflow-y-auto');
     expect(screen.getByPlaceholderText(/search models/i)).toBeInTheDocument();
     expect(screen.queryByTestId('model-picker-provider-submenu')).not.toBeInTheDocument();
   });
@@ -620,7 +644,8 @@ describe('ModelPicker', () => {
     await userEvent.click(screen.getByRole('button', { name: /claude haiku 4\.5/i }));
 
     const panel = await screen.findByTestId('model-picker-flat-panel');
-    expect(panel).toHaveClass('max-h-[min(420px,var(--radix-dropdown-menu-content-available-height))]', 'overflow-y-auto');
+    expect(panel).toHaveClass('max-h-[min(420px,var(--radix-dropdown-menu-content-available-height))]');
+    expect(screen.getByTestId('model-picker-list')).toHaveClass('overflow-y-auto');
     expect(screen.getByPlaceholderText(/search models/i)).toBeInTheDocument();
     expect(screen.queryByTestId('model-picker-provider-submenu')).not.toBeInTheDocument();
   });

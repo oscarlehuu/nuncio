@@ -31,6 +31,7 @@ import { TailscaleModule } from './tailscale/tailscale.module';
 import { TasksModule } from './tasks/tasks.module';
 import { TerminalModule } from './terminal/terminal.module';
 import { PushModule } from './push/push.module';
+import { UsageModule } from './usage/usage.module';
 
 @Module({
   imports: [
@@ -66,6 +67,7 @@ import { PushModule } from './push/push.module';
     TasksModule,
     TerminalModule,
     ObservabilityModule,
+    UsageModule,
   ],
 })
 export class AppModule {}

@@ -11,6 +11,7 @@ import {
   Search,
   Settings2,
   SlidersHorizontal,
+  Gauge,
   UsersRound,
   Wrench,
 } from 'lucide-react';
@@ -27,6 +28,7 @@ import { GeneralSettingsSection } from './general-settings-section';
 import { RemoteAccessSettingsSection } from './remote-access-settings-section';
 import { ProviderUpdateSettingsSection } from './provider-update-settings-section';
 import { SubagentModelsSettingsSection } from './subagent-models-settings-section';
+import { UsageSettingsSection } from './usage-settings-section';
 import { SettingsSectionNav, type SettingsSectionNavItem } from './settings-section-nav';
 import { CrewProfilesSettingsSection } from './crew/crew-profiles-settings-section';
 
@@ -48,6 +50,7 @@ type SettingsSectionId =
   | 'general'
   | 'appearance'
   | 'providers'
+  | 'usage'
   | 'source-control'
   | 'mcp-tools'
   | 'agents'
@@ -61,6 +64,7 @@ const SECTION_NAV_ITEMS: ReadonlyArray<SettingsSectionNavItem & { id: SettingsSe
   { id: 'general', label: 'General', icon: Settings2 },
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'providers', label: 'Providers', icon: Bot },
+  { id: 'usage', label: 'Usage', icon: Gauge },
   { id: 'source-control', label: 'Source control', icon: GitPullRequest },
   { id: 'mcp-tools', label: 'MCP & Tools', icon: Puzzle },
   { id: 'agents', label: 'Agents', icon: SlidersHorizontal },
@@ -410,6 +414,8 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
         return <AppearanceSettingsSection />;
       case 'providers':
         return renderProviderGroup('Providers', ['cursor', 'pi', 'codex'], true);
+      case 'usage':
+        return <UsageSettingsSection />;
       case 'source-control':
         return renderProviderGroup('Source control', ['github', 'gitlab']);
       case 'mcp-tools':
@@ -431,6 +437,10 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
         );
       case 'advanced':
         return renderSettingGroup('Advanced', advanced, 'No advanced settings are available.');
+      default: {
+        const _exhaustive: never = activeSection;
+        return _exhaustive;
+      }
     }
   };
 

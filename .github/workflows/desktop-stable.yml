@@ -1,19 +1,16 @@
 name: Desktop Stable
 
-# When a stable GitHub Release is published (the `v x.y.z` release cut by the
-# Changesets release workflow on main), build the signed + notarized stable app
-# and attach its .dmg/.zip + updater manifest so "Nuncio" auto-updates.
-# Skips prereleases (those are the dev channel, handled by desktop-dev).
+# Manual retry for a stable desktop build. The normal release path calls the
+# reusable build directly while the GitHub Release is still a draft, then the
+# build publishes it only after the updater manifest and signed assets exist.
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   stable:
-    if: ${{ !github.event.release.prerelease }}
     uses: ./.github/workflows/desktop-build.yml
     with:
       channel: stable

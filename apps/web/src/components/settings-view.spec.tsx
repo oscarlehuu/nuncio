@@ -74,6 +74,7 @@ describe('SettingsView', () => {
     const nav = screen.getByRole('navigation', { name: /settings sections/i });
     expect(within(nav).getByRole('button', { name: 'Appearance' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'Providers' })).toBeInTheDocument();
+    expect(within(nav).getByRole('button', { name: 'Usage' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'Source control' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'MCP & Tools' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'Crew profiles' })).toBeInTheDocument();

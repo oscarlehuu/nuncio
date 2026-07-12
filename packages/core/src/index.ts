@@ -26,3 +26,5 @@ export * from './transcript-build-blocks';
 export * from './user-input.types';
 export * from './session-relay-client';
 export * from './session-diff-api';
+export * from './usage-api';
+export * from './usage-resolve';

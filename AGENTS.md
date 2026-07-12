@@ -178,7 +178,7 @@ bun run add-changeset patch "…"   # create a changeset fragment (preferred for
 bun run check-changeset           # verify PR will pass CI changeset gate
 bun run changeset                 # interactive alternative for humans
 bun run version      # consume pending changesets → bump root version + update CHANGELOG.md + sync server/web (opens via CI)
-bun run release      # create v<version> git tag + GitHub Release from the matching CHANGELOG.md section (runs in CI)
+bun run release      # create v<version> tag + draft GitHub Release; desktop CI publishes after assets upload
 ```
 
 Per-workspace (via `bun run --filter`):
@@ -251,7 +251,7 @@ bun run changeset                        # interactive alternative for humans
 **Cutting a release (automated via `.github/workflows/release.yml`):**
 
 1. PRs with changesets merge to `main` → the `changesets/action` opens a **"chore: release version"** PR that runs `bun run version` (bumps root + syncs server/web + prepends a `## <version>` section to `CHANGELOG.md`).
-2. Merge that Version PR → the action runs `bun run release`, which creates the `v<version>` git tag and a GitHub Release with the matching changelog section as the body. `scripts/release.mjs` is idempotent (no-ops if the tag exists).
+2. Merge that Version PR → the action runs `bun run release`, which creates the `v<version>` git tag and a draft GitHub Release with the matching changelog section as the body. Stable desktop CI uploads the signed app + updater manifest, then publishes the release. `scripts/release.mjs` is idempotent (no-ops if the tag exists).
 
 **Manual release (local):** `bun run version` then `bun run release` (requires `gh auth login`).
 
@@ -299,6 +299,7 @@ apps/
         models.static.ts       STATIC_MODEL_PROVIDERS (Pi fallback when no auth)
         models.service.ts      aggregates from AgentRegistry
       provider-updates/  optional Pi/Codex CLI version advisories + user-triggered updates
+      usage/             first-party Claude/Codex/Cursor subscription quota probes (local CLI creds)
       settings/          DB-backed env config (settings store)
         settings.types.ts        SettingDefinition, SettingDto, UpdateSettingDto
         settings.registry.ts     SETTING_DEFINITIONS (declarative catalog) + getSettingDefinition/isSecretSetting
@@ -469,6 +470,9 @@ The event contract is **shared** across providers (emitted via `BaseAgentProvide
 | POST | `/api/sessions/:id/restore` | un-archive → IDLE (no-op on the agent loop; the next steer rebuilds it from the event log) |
 | DELETE | `/api/sessions/:id` | permanent; rejects unless the session is `ARCHIVED` (archive first). Disposes the agent handle, drops the in-memory SSE bus, and cascades the event log in one transaction |
 | GET | `/api/models` | aggregates `listModels()` across `AgentRegistry.available()` (Pi `ModelRegistry` when authed, Codex `model/list` when logged in, Cursor `Cursor.models.list()` when `CURSOR_API_KEY` set, else static Pi fallback) |
+| GET | `/api/usage` | live Claude / Codex / Cursor subscription quotas from local CLI logins (`?forceRefresh=1\|true` bypasses the 60s TTL cache); Today / Last 30 Days local token lines when archives have usage |
+| GET | `/api/usage/history` | last N local calendar days of token totals per provider (Settings chart/heatmap; default/max 90; `?days=1..90`, `?forceRefresh=1\|true`) |
+| GET | `/api/usage/:provider` | single-provider quota snapshot (`claude` \| `codex` \| `cursor`); 404 for unknown ids |
 | GET | `/api/provider-updates` | best-effort Pi/Codex CLI version advisory; disabled by `NUNCIO_PROVIDER_UPDATE_CHECKS=0` |
 | POST | `/api/provider-updates/:provider/update` | user-triggered allowlisted update for `pi` or `codex` only; never runs arbitrary command strings |
 | GET | `/api/settings` | list all settings (catalog metadata + `hasValue` + `source` + masked/raw `value`; secrets masked, never raw) |
