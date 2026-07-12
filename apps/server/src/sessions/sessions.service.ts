@@ -1954,7 +1954,7 @@ export class SessionsService implements OnModuleDestroy {
     return this.enrichSession(session);
   }
 
-  private requirePublicMutableSession(id: string): SessionDto {
+  requirePublicMutableSession(id: string): SessionDto {
     const session = this.requireSession(id);
     if (session.verifyOwner === 'crew') {
       throw new BadRequestException('Crew-owned sessions are read-only outside Crew controls');

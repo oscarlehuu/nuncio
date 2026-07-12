@@ -1,8 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { join } from 'node:path';
 import type { ModelOptionsMap } from '../../models/model-options.types';
 import type { ModelGroupDto, ModelItemDto, ModelProviderDto } from '../../models/models.types';
-import { STATIC_MODEL_PROVIDERS } from '../../models/models.static';
 import { truncatePayload } from '../../sessions/domain/events.types';
 import { formatInteractionAnswers } from '../../sessions/domain/format-interaction-answers';
 import {
@@ -32,6 +31,10 @@ import {
 } from '../pi-engine/ask-user-question-tool';
 import { normalizePlanItems } from '../../sessions/domain/plan.types';
 import { buildPiRuntimePolicyOptions } from './pi-runtime-policy';
+import {
+  NUNCIO_CONTEXT_MAX_BYTES,
+  NuncioContextService,
+} from '../pi-engine/nuncio-context';
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent');
 
@@ -48,6 +51,7 @@ type PiRegistryModel = {
   reasoning?: boolean;
   thinkingLevelMap?: Record<string, string | null>;
   contextWindow?: number;
+  input?: Array<'text' | 'image'>;
 };
 
 type PiLiveSession = {
@@ -103,6 +107,7 @@ type PiModelRegistry = {
     contextWindow?: number;
     reasoning?: boolean;
     thinkingLevelMap?: Record<string, string | null>;
+    input?: Array<'text' | 'image'>;
   }>;
   find: (provider: string, id: string) => PiRegistryModel | undefined;
   getProviderDisplayName: (provider: string) => string;
@@ -111,7 +116,7 @@ type PiModelRegistry = {
 @Injectable()
 export class PiAgentProvider extends BaseAgentProvider {
   readonly id = 'pi';
-  readonly name = 'Pi';
+  readonly name = 'Nuncio Engine';
   readonly capabilities = {
     interrupt: true,
     modelSwitch: 'in-session',
@@ -128,7 +133,12 @@ export class PiAgentProvider extends BaseAgentProvider {
   private piSdkPromise?: Promise<PiSdk>;
   private cachedAvailable?: boolean;
 
-  constructor(sessions: SessionsRepository, events: EventsRepository, private readonly settings: SettingsService) {
+  constructor(
+    sessions: SessionsRepository,
+    events: EventsRepository,
+    private readonly settings: SettingsService,
+    @Optional() private readonly nuncioContext?: NuncioContextService,
+  ) {
     super(sessions, events);
   }
 
@@ -164,7 +174,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       const modelRegistry = pi.ModelRegistry.create(authStorage, join(agentDir, 'models.json'));
       return this.fromRegistry(modelRegistry);
     } catch {
-      return STATIC_MODEL_PROVIDERS;
+      return [];
     }
   }
 
@@ -393,18 +403,30 @@ export class PiAgentProvider extends BaseAgentProvider {
    * tools to a fixed cwd, which breaks worktree sessions. Allowlisted
    * extensions load through `additionalExtensionPaths`, so anything outside
    * the list never executes. `PI_EXTENSION_DISCOVERY=full` restores pi's
-   * default discovery.
+   * default discovery without disabling Nuncio's project-context injection.
    */
-  private async createEngineResources(pi: PiSdk, agentDir: string, cwd?: string) {
-    if (this.settings.resolve('PI_EXTENSION_DISCOVERY') === 'full') return undefined;
+  private async createEngineResources(pi: PiSdk, agentDir: string, sessionId: string, cwd?: string) {
     const resolvedCwd = cwd ?? process.cwd();
     const settingsManager = pi.SettingsManager.create(resolvedCwd, agentDir);
+    const session = this.sessions.findById(sessionId);
+    const projectPath = session?.projectPath ?? null;
+    const configuredBudget = Number(this.settings.resolve('NUNCIO_CONTEXT_FACTS_MAX_BYTES'));
+    const contextBudget = Number.isInteger(configuredBudget) && configuredBudget > 0
+      ? Math.min(configuredBudget, NUNCIO_CONTEXT_MAX_BYTES)
+      : NUNCIO_CONTEXT_MAX_BYTES;
+    const context = this.settings.resolve('NUNCIO_CONTEXT_FACTS_INJECT') === 'off'
+      ? ''
+      : (this.nuncioContext?.buildForProject(projectPath, contextBudget, session?.originTaskId) ?? '');
+    const fullDiscovery = this.settings.resolve('PI_EXTENSION_DISCOVERY') === 'full';
     const resourceLoader = new pi.DefaultResourceLoader({
       cwd: resolvedCwd,
       agentDir,
       settingsManager,
-      noExtensions: true,
-      additionalExtensionPaths: piEngineExtensionPaths(agentDir),
+      ...(!fullDiscovery ? {
+        noExtensions: true,
+        additionalExtensionPaths: piEngineExtensionPaths(agentDir),
+      } : {}),
+      ...(context ? { appendSystemPrompt: [context] } : {}),
     });
     await resourceLoader.reload();
     return { resourceLoader, settingsManager };
@@ -469,7 +491,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       : [...(buildPiCustomTools(context.cwd, pi, context.tools) ?? []), ...engineTools];
     const engineResources = policyOptions
       ? undefined
-      : await this.createEngineResources(pi, agentDir, context.cwd);
+      : await this.createEngineResources(pi, agentDir, sessionId, context.cwd);
     // Pi 0.80.6 treats `tools` as the allowlist for built-ins AND customTools.
     // Include the already-vetted Crew definitions or the SDK silently removes
     // submit_* from the registry despite receiving it in customTools.
@@ -682,13 +704,14 @@ export class PiAgentProvider extends BaseAgentProvider {
 
   private fromRegistry(modelRegistry: PiModelRegistry): ModelProviderDto[] {
     const models = modelRegistry.getAvailable();
-    if (models.length === 0) return STATIC_MODEL_PROVIDERS;
+    if (models.length === 0) return [];
 
     const groupsByProvider = new Map<string, ModelItemDto[]>();
     for (const model of models) {
       const registryModel = modelRegistry.find(model.provider, model.id);
       const options = piThinkingDescriptors(registryModel ?? model);
       const contextWindow = registryModel?.contextWindow ?? model.contextWindow;
+      const input = registryModel?.input ?? model.input ?? ['text'];
       const validContextWindow =
         typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0
           ? contextWindow
@@ -699,6 +722,7 @@ export class PiAgentProvider extends BaseAgentProvider {
         sub: model.id,
         ...(validContextWindow !== undefined ? { contextWindow: validContextWindow } : {}),
         ...(options.length > 0 ? { options } : {}),
+        capabilities: { images: input.includes('image') },
       };
       if (model.cost) item.cost = `$${model.cost.input} / $${model.cost.output}`;
       groupsByProvider.set(model.provider, [...(groupsByProvider.get(model.provider) ?? []), item]);
@@ -710,9 +734,16 @@ export class PiAgentProvider extends BaseAgentProvider {
         id: providerId,
         name: modelRegistry.getProviderDisplayName(providerId),
         sub: 'Pi ModelRegistry',
-        models: groupModels,
+        models: groupModels.sort((left, right) =>
+          left.name.localeCompare(right.name, 'en', { sensitivity: 'base' }) ||
+          left.id.localeCompare(right.id, 'en'),
+        ),
       });
     }
+    groups.sort((left, right) =>
+      left.name.localeCompare(right.name, 'en', { sensitivity: 'base' }) ||
+      left.id.localeCompare(right.id, 'en'),
+    );
 
     return [
       {

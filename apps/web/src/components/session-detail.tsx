@@ -28,7 +28,14 @@ import { useStickToBottom } from '../lib/use-stick-to-bottom';
 import { deriveVerifyStatus } from '../lib/derive-verify-status';
 import { VerifyChip } from './verify-chip';
 import { projectDisplayName } from '../lib/projects';
-import { FALLBACK_PROVIDERS, modelById, prettyModelName, type ModelProvider } from '../lib/model-providers';
+import {
+  FALLBACK_PROVIDERS,
+  modelById,
+  modelSupportsImages,
+  prettyModelName,
+  providerMeta,
+  type ModelProvider,
+} from '../lib/model-providers';
 import { useContextUsage } from '../lib/use-context-usage';
 import { resolveTranscriptLinkTarget } from '../lib/transcript-link-target';
 import {
@@ -288,9 +295,13 @@ export function SessionDetail({
   );
   const hasPendingUserInput = pendingUserInput.length > 0;
   const interactionSupported = session.supportsInteraction ?? false;
-  const providerLabel = session.provider === 'cursor' ? 'Cursor' : session.provider === 'pi' ? 'Pi' : session.provider;
+  const catalog = providers && providers.length > 0 ? providers : FALLBACK_PROVIDERS;
+  const providerLabel = providerMeta(session.provider, catalog).name;
   const steerWhileRunning = session.supportsSteerWhileRunning ?? false;
-  const canAttachImages = !managedByCrew && (session.supportsImages ?? false) && !isArchived;
+  const canAttachImages =
+    !managedByCrew &&
+    modelSupportsImages(catalog, session.provider, session.model ?? undefined, session.supportsImages ?? false) &&
+    !isArchived;
   const steerDisabled =
     managedByCrew ||
     session.status === 'ARCHIVED' ||
@@ -302,7 +313,6 @@ export function SessionDetail({
   const canRestore = !managedByCrew && isArchived && !!onRestore;
   const canDelete = !managedByCrew && isArchived && !!onDelete;
 
-  const catalog = providers && providers.length > 0 ? providers : FALLBACK_PROVIDERS;
   const entry = useMemo(
     () => (session.model ? modelById(catalog)[session.model] : undefined),
     [catalog, session.model],
@@ -311,7 +321,11 @@ export function SessionDetail({
     ? prettyModelName(entry.name)
     : session.model && session.model !== 'Composer'
       ? session.model
-      : session.provider === 'cursor' ? 'Cursor' : session.provider === 'pi' ? 'Pi' : 'Default';
+      : session.provider === 'cursor'
+        ? 'Cursor'
+        : session.provider === 'pi'
+          ? providerMeta('pi', catalog).name
+          : 'Default';
   const showContinueOnMobile =
     !managedByCrew &&
     session.provider === 'cursor' &&

@@ -24,8 +24,26 @@ vi.mock('@nuncio/core/crew-api', () => ({
 const PI_ONLY_PROVIDERS: ModelProvider[] = [
   {
     id: 'pi',
-    name: 'Pi',
+    name: 'Nuncio Engine',
     groups: [{ id: 'g', name: 'G', models: [{ id: 'anthropic:claude-haiku-4', name: 'Haiku' }] }],
+  },
+];
+
+const PI_MIXED_IMAGE_PROVIDERS: ModelProvider[] = [
+  {
+    id: 'pi',
+    name: 'Nuncio Engine',
+    capabilities: { images: true },
+    groups: [
+      {
+        id: 'registry',
+        name: 'Registry',
+        models: [
+          { id: 'google:gemini', name: 'Gemini', capabilities: { images: true } },
+          { id: 'xai:grok', name: 'Grok', capabilities: { images: false } },
+        ],
+      },
+    ],
   },
 ];
 
@@ -77,9 +95,10 @@ const READY = {
   issues: [],
 };
 
-vi.mock('../lib/api', () => ({
-  fetchModels: vi.fn().mockResolvedValue([]),
-}));
+vi.mock('../lib/api', async () => {
+  const actual = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+  return { ...actual, fetchModels: vi.fn().mockResolvedValue([]) };
+});
 
 vi.mock('./project-picker', () => ({
   ProjectPicker: ({ value, onChange }: { value?: string; onChange: (path: string) => void }) => (
@@ -294,6 +313,50 @@ describe('HomeView', () => {
       false,
       undefined,
     );
+  });
+
+  it('gates image attachment by the selected Pi registry model', async () => {
+    saveModelPreference({ modelId: 'xai:grok', providerId: 'pi' });
+    const grok = render(
+      <HomeView sessionCount={0} onSubmit={vi.fn()} providers={PI_MIXED_IMAGE_PROVIDERS} />,
+    );
+    expect(await screen.findByRole('button', { name: /grok/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /attach image/i })).toBeNull();
+    grok.unmount();
+
+    localStorage.clear();
+    saveModelPreference({ modelId: 'google:gemini', providerId: 'pi' });
+    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={PI_MIXED_IMAGE_PROVIDERS} />);
+    expect(await screen.findByRole('button', { name: /gemini/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /attach image/i })).toBeInTheDocument();
+  });
+
+  it('clears staged images and tokens when the catalog auto-resolves to a text-only model', async () => {
+    saveModelPreference({ modelId: 'google:gemini', providerId: 'pi' });
+    const view = render(
+      <HomeView sessionCount={0} onSubmit={vi.fn()} providers={PI_MIXED_IMAGE_PROVIDERS} />,
+    );
+
+    expect(await screen.findByRole('button', { name: /attach image/i })).toBeInTheDocument();
+    await userEvent.type(screen.getByPlaceholderText(/ask nuncio/i), 'inspect this');
+    const fileInput = view.container.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(fileInput).not.toBeNull();
+    await userEvent.upload(fileInput!, new File(['png'], 'sample.png', { type: 'image/png' }));
+    await waitFor(() => expect(screen.getByTestId('attachment-tray')).toBeInTheDocument());
+    expect(screen.getByPlaceholderText(/ask nuncio/i)).toHaveValue('inspect this [image 1]');
+
+    view.rerender(
+      <HomeView sessionCount={0} onSubmit={vi.fn()} providers={PI_ONLY_PROVIDERS} />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText(/ask nuncio/i)).toHaveValue('inspect this'),
+    );
+    view.rerender(
+      <HomeView sessionCount={0} onSubmit={vi.fn()} providers={PI_MIXED_IMAGE_PROVIDERS} />,
+    );
+    expect(await screen.findByRole('button', { name: /attach image/i })).toBeInTheDocument();
+    expect(screen.queryByTestId('attachment-tray')).toBeNull();
   });
 
   it('shows Continue on mobile icon in the composer bar when handler is provided', async () => {

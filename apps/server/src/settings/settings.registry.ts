@@ -86,9 +86,9 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     category: 'provider',
     providerId: 'pi',
     type: 'path',
-    label: 'Pi agent directory',
+    label: 'Nuncio Engine agent directory',
     description:
-      'Path to the Pi agent config root. Nuncio only needs Pi installed; manage Pi itself with the `pi` CLI. Default: ~/.pi/agent.',
+      'Path to the Nuncio Engine agent config root. Nuncio only needs the `pi` CLI installed; manage Pi itself with the `pi` CLI. Default: ~/.pi/agent.',
     envVar: 'PI_CODING_AGENT_DIR',
     altEnvVar: 'PI_AGENT_DIR',
   },
@@ -97,9 +97,9 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     category: 'provider',
     providerId: 'pi',
     type: 'string',
-    label: 'Pi extension discovery',
+    label: 'Nuncio Engine extension discovery',
     description:
-      'Nuncio sessions load only an allowlisted set of Pi extensions so CLI-oriented ones cannot alter daemon behavior. Set to "full" to restore Pi\'s default discovery (~/.pi and project .pi).',
+      'Nuncio Engine sessions load only an allowlisted set of Pi extensions so CLI-oriented ones cannot alter daemon behavior. Set to "full" to restore Pi\'s default discovery (~/.pi and project .pi).',
     envVar: 'PI_EXTENSION_DISCOVERY',
   },
   {
@@ -506,9 +506,9 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     key: 'NUNCIO_PROMPT_PROFILE_PI',
     category: 'agents',
     type: 'string',
-    label: 'Prompt profile override (Pi)',
+    label: 'Prompt profile override (Nuncio Engine)',
     description:
-      'A full prompt-profile document (markdown with YAML frontmatter + named ## sections: brief-wrapper, facts-wrapper, digest-wrapper, tools-preamble, idioms) that overrides the repo profile for the Pi engine. See apps/server/prompt-profiles/README.md for the format. Empty uses the repo profile / pass-through default.',
+      'A full prompt-profile document (markdown with YAML frontmatter + named ## sections: brief-wrapper, facts-wrapper, digest-wrapper, tools-preamble, idioms) that overrides the repo profile for the Nuncio Engine. See apps/server/prompt-profiles/README.md for the format. Empty uses the repo profile / pass-through default.',
     envVar: 'NUNCIO_PROMPT_PROFILE_PI',
   },
   {

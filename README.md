@@ -41,6 +41,7 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 - **Cross-machine grid (hub mode)** — grid slots can target any tailnet machine reachable through the hub: pick a machine in the slot composer to browse its projects, use its model catalog, and start or attach sessions there; remote tiles stream and steer live against that machine, show a reconnect state while it is down, and maximize into the session on the machine's own page
 - **Inspector dock** — the session side panel (source control + pull request, files, terminal, browser on desktop) remembers whether it was open and its last tab across visits; the source-control tab now includes opening a PR, watching its checks, and reviewing the session worktree diff.
 - **Diff review + hunk steering** — the session **Changes** panel shows structured worktree diffs with honest caps for binary, lockfile, too-large, and omitted files; tap a hunk, leave a comment, and Nuncio sends it back through the existing steer path, queued if the session is still running.
+- **Screenshot evidence capture** — capture a session preview route with real headless Chrome, bind the PNG to the workspace's exact Git HEAD, and keep only opaque media references in the durable transcript event.
 - **Nuncio MCP server** — expose read-mostly Nuncio context plus constrained task enqueue / loop pause tools to local agent hosts over stdio with `bun run mcp`; the server is a thin proxy over the running daemon and never calls model APIs.
 
 ## Screenshots
@@ -139,11 +140,11 @@ bun run build   # build server + web
 
 ### Pi credentials
 
-Nuncio drives the [Pi SDK](https://github.com/earendil-works/pi) in-process. Log in with the `pi` CLI first so `~/.pi/agent/auth.json` exists — it holds your API key **or** OAuth/subscription tokens (OpenAI, Anthropic). Override the agent directory with `PI_CODING_AGENT_DIR`. When no provider is configured at all, session creation returns `503`; for hermetic testing without any credentials in a source checkout, start the server with `NUNCIO_FORCE_MOCK=1` to register the built-in **Mock** provider (used by `bun run test:smoke-ui`). Packaged desktop builds set `NUNCIO_PACKAGED=1`, ignore that flag, and never register Mock.
+Nuncio drives the [Pi SDK](https://github.com/earendil-works/pi) in-process. Start `pi`, run `/login`, and choose each provider you want Pi to use (for example Anthropic, OpenAI, Google, or xAI). Pi writes the resulting API-key or OAuth/subscription credentials to `~/.pi/agent/auth.json`; Nuncio only reads that Pi-managed file and never stores provider keys or opens an auth prompt. Override the agent directory with `PI_CODING_AGENT_DIR`. Restart the Nuncio daemon after changing Pi logins: only providers with currently available registry models appear in the picker, grouped under **Nuncio Engine** (internal id `pi`) using Pi registry display names. When no provider is configured at all, session creation returns `503`; for hermetic testing without any credentials in a source checkout, start the server with `NUNCIO_FORCE_MOCK=1` to register the built-in **Mock** provider (used by `bun run test:smoke-ui`). Packaged desktop builds set `NUNCIO_PACKAGED=1`, ignore that flag, and never register Mock.
 
-Daemon Pi sessions deny extension discovery by default and load only Nuncio's explicit allowlist from the Pi agent directory. Set `PI_EXTENSION_DISCOVERY=full` only when you intentionally want Pi's normal global and project extension discovery for Solo sessions; explicit Crew runtime-policy sessions remain hermetic.
+Nuncio Engine sessions deny extension discovery by default and load only Nuncio's explicit allowlist from the Pi agent directory. Set `PI_EXTENSION_DISCOVERY=full` only when you intentionally want Pi's normal global and project extension discovery for Solo sessions; explicit Crew runtime-policy sessions remain hermetic. Nuncio Engine injects bounded project facts and HandoffBrief context via `nuncio-context` (`appendSystemPrompt`) on every session unless disabled.
 
-Nuncio uses Pi SDK `0.80.6` model metadata directly, so authenticated GPT-5.6 models appear without a Nuncio allowlist. Standard thinking levels through **High** are available unless a model marks one unsupported; **Extra High** and **Max** appear only when that exact model advertises them. Pi **Max** remains a single-agent thinking level and is not renamed to Codex **Ultra**, which activates multi-agent delegation. If Pi automatically retries a failed attempt and later completes successfully, Nuncio now settles the session from that successful completion instead of surfacing the earlier transient error.
+Nuncio uses Pi SDK `0.80.6` model metadata directly, so authenticated Gemini, Grok, GPT, Claude, and other registry models appear without a Nuncio allowlist. Standard thinking levels through **High** are available unless a model marks one unsupported; **Extra High** and **Max** appear only when that exact model advertises them. Image upload is enabled only when the selected registry model advertises image input. Pi **Max** remains a single-agent thinking level and is not renamed to Codex **Ultra**, which activates multi-agent delegation. If Pi automatically retries a failed attempt and later completes successfully, Nuncio now settles the session from that successful completion instead of surfacing the earlier transient error.
 
 ### Cursor credentials
 
@@ -309,6 +310,7 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 | POST | `/api/sessions/:id/refresh-transcript` | Append new turns from the on-disk Cursor/Pi transcript; emits `transcript_refreshed` via SSE when rows land |
 | GET | `/api/sessions/:id/stream?since=` | SSE stream; for handoff sessions, the server watches the external transcript file and streams new rows live |
 | POST | `/api/sessions/:id/steer` | Steer agent `{ "message": "...", "forceResume?": true, "attachments?": [...] }` — `forceResume` skips the active-run guard for CLI handoff sessions |
+| POST | `/api/sessions/:id/evidence` | Capture the session's already-open preview `{ "url": "http://localhost:5173", "route?": "/app", "phase": "before\|after" }` in headless system Chrome. The requested and final redirect origins must match that session's registered browser target; returns the PNG media ref, normalized route, viewport, and exact workspace HEAD while appending `evidence_captured` |
 | POST | `/api/sessions/:id/interrupt` | Interrupt a live run when the provider advertises `capabilities.interrupt` (Pi supports this without disposing the session) |
 | PATCH | `/api/sessions/:id/model` | Persist a session model/options update `{ "model": "provider:model", "options?": { ... } }`; providers with in-session switching (Pi) apply it live |
 | POST | `/api/sessions/:id/interactions/:requestId/respond` | Submit answers for a live interactive tool prompt `{ "answers": [...], "resolvedBy": "user\|skip" }` |
@@ -393,6 +395,7 @@ apps/
   server/
     src/
       agents/        AgentProvider interface + BaseAgentProvider + AgentRegistry + providers/ (pi, codex, cursor, claude)
+      evidence/      provider-neutral headless preview capture + Git HEAD witness
       crew/          fixed Crew workflow, profile resolver, runner/recovery, context, artifacts, gates, persistence
       provider-updates/ optional Pi/Codex CLI version checks + user-triggered update endpoint
       sessions/      api/ · domain/ (types, fsm) · persistence/ (repositories) + service + module
