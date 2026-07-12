@@ -4,6 +4,7 @@ import { relativeTime, type AttentionItemDto } from '../lib/api';
 import {
   attentionKindMeta,
   openTargetFor,
+  isCrewAttentionKind,
   TONE_ACCENT,
   TONE_CHIP,
   type OpenTarget,
@@ -17,11 +18,12 @@ interface AttentionRowProps {
   busy?: boolean;
   onOpen: (target: OpenTarget) => void;
   onApprove: (id: string, proposalCount: number) => void;
+  onAck: (id: string) => void;
   onResolve: (id: string) => void;
 }
 
 /** A row carries at most two actions: one primary (Open or Approve) plus Dismiss. */
-export function AttentionRow({ item, busy, onOpen, onApprove, onResolve }: AttentionRowProps) {
+export function AttentionRow({ item, busy, onOpen, onApprove, onAck, onResolve }: AttentionRowProps) {
   const meta = attentionKindMeta(item.kind);
   const Icon = meta.icon;
   const target = openTargetFor(item);
@@ -31,6 +33,7 @@ export function AttentionRow({ item, busy, onOpen, onApprove, onResolve }: Atten
   const isDispatcher = item.kind === 'dispatcher-proposal' && dispatcher.proposals.length > 0;
   const approved = dispatcher.approvedAt !== null || dispatcher.taskIds.length > 0;
   const project = isDispatcher ? null : projectDisplayName(item.projectPath);
+  const crew = isCrewAttentionKind(item.kind);
 
   return (
     <li
@@ -73,7 +76,7 @@ export function AttentionRow({ item, busy, onOpen, onApprove, onResolve }: Atten
         {isDispatcher && !approved && (
           <Button
             size="sm"
-            className="h-8 gap-1.5 px-3"
+            className="min-h-11 gap-1.5 px-3"
             disabled={busy}
             onClick={() => onApprove(item.id, dispatcher.proposals.length)}
             aria-label={`Approve ${dispatcher.proposals.length} dispatcher proposal${dispatcher.proposals.length === 1 ? '' : 's'}`}
@@ -81,20 +84,25 @@ export function AttentionRow({ item, busy, onOpen, onApprove, onResolve }: Atten
             Approve
           </Button>
         )}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-8 px-2.5 text-muted-foreground"
-          disabled={busy}
-          onClick={() => onResolve(item.id)}
-          aria-label={`Dismiss "${item.title}"`}
-        >
-          Dismiss
-        </Button>
+        {crew && !acked ? (
+          <Button variant="ghost" size="sm" className="min-h-11 px-3 text-muted-foreground" disabled={busy} onClick={() => onAck(item.id)} aria-label={`Mark "${item.title}" seen`}>Mark seen</Button>
+        ) : null}
+        {!crew ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="min-h-11 px-2.5 text-muted-foreground"
+            disabled={busy}
+            onClick={() => onResolve(item.id)}
+            aria-label={`Dismiss "${item.title}"`}
+          >
+            Dismiss
+          </Button>
+        ) : null}
         {target && !isDispatcher && (
           <Button
             size="sm"
-            className="h-8 gap-1.5 px-3"
+            className="min-h-11 gap-1.5 px-3"
             disabled={busy}
             onClick={() => onOpen(target)}
             aria-label={`Open "${item.title}"`}

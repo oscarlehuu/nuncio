@@ -7,10 +7,32 @@ import {
   workingIndicatorLabel,
   type TaskDigest,
 } from './transcript-build-blocks';
+import { parseInteractiveToolInput } from './interactive-tool-input';
 
 function ev(seq: number, type: string, payload: Record<string, unknown>): SessionEvent {
   return { seq, type, payload, createdAt: seq };
 }
+
+describe('parseInteractiveToolInput', () => {
+  it('matches server fallback ids without colliding with explicit positional ids', () => {
+    const parsed = parseInteractiveToolInput({
+      questions: [
+        {
+          id: 'q2',
+          prompt: 'First',
+          options: [
+            { id: '2', label: 'Alpha' },
+            { label: 'Beta' },
+          ],
+        },
+        { prompt: 'Second', options: [{ label: 'Gamma' }] },
+      ],
+    });
+
+    expect(parsed?.questions.map((question) => question.id)).toEqual(['q2', 'q2-2']);
+    expect(parsed?.questions[0]?.options.map((option) => option.id)).toEqual(['2', '2-2']);
+  });
+});
 
 describe('derivePendingQueuedSteers', () => {
   it('lists queued steers, drops delivered ones, and empties on clear', () => {

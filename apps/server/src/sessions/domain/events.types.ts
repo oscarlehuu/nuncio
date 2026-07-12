@@ -1,7 +1,7 @@
 export const DEFAULT_PAYLOAD_MAX_BYTES = 4096;
 
 import type { WorkspaceSnapshot } from '../../orchestration/workspace-snapshot';
-import type { UserInputQuestion } from './user-input.types';
+import type { UserInputAnswer, UserInputQuestion } from './user-input.types';
 
 export type SessionEventType =
   | 'user_message'
@@ -24,6 +24,7 @@ export type SessionEventType =
   | 'verify_result'
   | 'verify_retry'
   | 'verify_needs_attention'
+  | 'steer_reserved'
   | 'steer_message'
   | 'steer_queued'
   | 'steer_queue_cleared'
@@ -41,6 +42,8 @@ export interface UserInputRequestedPayload {
 export interface UserInputResolvedPayload {
   requestId: string;
   resolvedBy: UserInputResolvedBy;
+  /** Present for live responses; historical imported events may omit answers. */
+  answers?: UserInputAnswer[];
 }
 
 export interface ToolStartPayload {

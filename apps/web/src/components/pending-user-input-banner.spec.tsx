@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { PendingUserInputBanner } from './pending-user-input-banner';
 
@@ -142,5 +142,38 @@ describe('PendingUserInputBanner', () => {
 
     await user.click(screen.getByRole('button', { name: 'Skip' }));
     expect(onRespond).toHaveBeenCalledWith('r1', { answers: [], resolvedBy: 'skip' });
+  });
+
+  it('submits Skip only once while its response is in flight', async () => {
+    const user = userEvent.setup();
+    let finish: () => void = () => undefined;
+    const onRespond = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    render(<PendingUserInputBanner pending={pending} supported onRespond={onRespond} />);
+
+    const skip = screen.getByRole('button', { name: 'Skip' });
+    await user.click(skip);
+    await user.click(skip);
+
+    expect(onRespond).toHaveBeenCalledTimes(1);
+    expect(skip).toBeDisabled();
+    await act(async () => finish());
+  });
+
+  it('serializes responses when the visible pending request changes', async () => {
+    const user = userEvent.setup();
+    let finishFirst: () => void = () => undefined;
+    const onRespond = vi.fn(() => new Promise<void>((resolve) => { finishFirst = resolve; }));
+    const { rerender } = render(
+      <PendingUserInputBanner pending={pending} supported onRespond={onRespond} />,
+    );
+    await user.click(screen.getByRole('option', { name: /Frontend/ }));
+    await user.click(screen.getByRole('button', { name: 'Submit' }));
+
+    rerender(<PendingUserInputBanner pending={twoQuestions} supported onRespond={onRespond} />);
+
+    expect(screen.getByRole('button', { name: 'Skip' })).toBeDisabled();
+    expect(screen.getByRole('option', { name: /Alpha/ })).toBeDisabled();
+    await act(async () => finishFirst());
+    expect(screen.getByRole('button', { name: 'Skip' })).toBeEnabled();
   });
 });

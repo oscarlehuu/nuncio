@@ -297,6 +297,36 @@ describe('mergeOptionsForModel', () => {
       ),
     ).toEqual({});
   });
+
+  it('resets a stale select value when the current catalog no longer supports it', () => {
+    const luna: FlatModel = {
+      ...CODEX_MODEL,
+      id: 'codex:gpt-5.6-luna',
+      name: 'GPT-5.6 Luna',
+      options: [
+        { id: 'fast', label: 'Priority', type: 'boolean', defaultValue: false },
+        {
+          id: 'reasoningEffort',
+          label: 'Reasoning',
+          type: 'select',
+          options: [
+            { id: 'low', label: 'Low' },
+            { id: 'medium', label: 'Medium', isDefault: true },
+            { id: 'max', label: 'Max' },
+          ],
+          defaultValue: 'medium',
+        },
+      ],
+    };
+
+    expect(
+      mergeOptionsForModel(luna, {
+        fast: true,
+        reasoningEffort: 'ultra',
+        removedOption: 'stale',
+      }),
+    ).toEqual({ fast: true, reasoningEffort: 'medium' });
+  });
 });
 
 describe('modelOptionsEqual', () => {

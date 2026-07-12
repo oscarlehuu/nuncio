@@ -9,6 +9,7 @@ const ASK_PARAMETERS = {
     questions: {
       type: 'array',
       description: 'One entry per question (max 4).',
+      maxItems: 4,
       items: {
         type: 'object',
         properties: {
@@ -22,6 +23,7 @@ const ASK_PARAMETERS = {
             type: 'array',
             description:
               'Choices in display order. They are shown to the user numbered 1, 2, 3, 4 by position — do not add your own numbering to labels.',
+            maxItems: 4,
             items: {
               type: 'object',
               properties: {
@@ -41,6 +43,25 @@ const ASK_PARAMETERS = {
   },
   required: ['questions'],
 };
+
+function exceedsQuestionLimits(input: unknown): boolean {
+  if (typeof input !== 'object' || input === null) return false;
+  let questions = (input as { questions?: unknown }).questions;
+  if (typeof questions === 'string') {
+    try {
+      questions = JSON.parse(questions);
+    } catch {
+      return false;
+    }
+  }
+  if (!Array.isArray(questions)) return false;
+  if (questions.length > 4) return true;
+  return questions.some((question) => {
+    if (typeof question !== 'object' || question === null) return false;
+    const options = (question as { options?: unknown }).options;
+    return Array.isArray(options) && options.length > 4;
+  });
+}
 
 function numberedEcho(input: unknown): string | undefined {
   const normalized = normalizeUserInput(ASK_USER_QUESTION_TOOL_NAME, input);
@@ -76,6 +97,18 @@ export function buildAskUserQuestionTool(defineTool?: (tool: unknown) => unknown
     ],
     parameters: ASK_PARAMETERS,
     execute: async (_toolCallId: string, params: unknown) => {
+      if (exceedsQuestionLimits(params)) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'AskUserQuestion ignored: use at most 4 questions and 4 options per question.',
+            },
+          ],
+          isError: true,
+          details: {},
+        };
+      }
       const echo = numberedEcho(params);
       if (!echo) {
         return {

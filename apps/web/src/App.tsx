@@ -31,10 +31,10 @@ import { useProviderUpdateNotifications } from './lib/use-provider-update-notifi
 import { HomeSurface } from './components/home-surface';
 import { GridView } from './components/grid-view';
 import { ChunkErrorBoundary } from './components/chunk-error-boundary';
-import type { ApprovalMode } from './components/approval-mode-picker';
 import { HandoffPicker } from './components/handoff-picker';
 import { DesktopSidebarHoverRail, DesktopSidebarPinned } from './components/desktop-sidebar-shell';
 import { SessionDetail } from './components/session-detail';
+import { CrewTaskDetail } from './components/crew/crew-task-detail';
 import { Sidebar } from './components/sidebar';
 import type { ModelProvider } from './lib/model-providers';
 import type { ModelOptionsMap } from './lib/model-options';
@@ -150,11 +150,6 @@ export default function App() {
   const archivedErrorShown = useRef(false);
   const steeringSessionIdRef = useRef<string | null>(null);
   const steeringTokenRef = useRef(0);
-  const approvalMode: ApprovalMode =
-    settings.find((setting) => setting.key === 'NUNCIO_CODEX_RUNTIME_MODE')?.value ===
-    'approval-required'
-      ? 'approval-required'
-      : 'full-access';
 
   const refresh = useCallback(async () => {
     try {
@@ -573,20 +568,6 @@ export default function App() {
     }
   }, [refreshModels]);
 
-  const handleApprovalModeChange = useCallback(async (mode: ApprovalMode) => {
-    try {
-      const updated = await updateSetting('NUNCIO_CODEX_RUNTIME_MODE', mode);
-      setSettings((prev) =>
-        prev.some((s) => s.key === updated.key)
-          ? prev.map((s) => (s.key === updated.key ? updated : s))
-          : [...prev, updated],
-      );
-      toast.success(`Saved ${updated.label}`);
-    } catch {
-      toast.error('Failed to save approval mode');
-    }
-  }, []);
-
   const handleRespondProviderRequest = useCallback(
     async (requestId: string, decision: ProviderRequestDecision) => {
       if (!activeId) return;
@@ -686,9 +667,8 @@ export default function App() {
                 providers={providers}
                 onSubmit={handleCreate}
                 onContinueOnMobile={() => openHandoff()}
-                approvalMode={approvalMode}
-                onApprovalModeChange={handleApprovalModeChange}
                 loading={creating}
+                onCrewCreated={(taskId) => navigate(`/crew/${taskId}`)}
                 composerFocusKey={composerFocusKey}
                 railOverlay={!desktopSidebar.pinned}
               />
@@ -697,14 +677,21 @@ export default function App() {
           {/* Legacy /new → the merged Home composer. */}
           <Route path="/new" element={<Navigate to="/" replace />} />
           <Route
+            path="/crew/:taskId"
+            element={
+              <CrewTaskRoute
+                onBack={() => navigate('/')}
+                onOpenSession={(sessionId) => handleSelect(sessionId)}
+              />
+            }
+          />
+          <Route
             path="/grid"
             element={
               <GridView
                 sessions={gridSessions}
                 projectFilterName={gridProjectName}
                 providers={providers}
-                approvalMode={approvalMode}
-                onApprovalModeChange={handleApprovalModeChange}
                 onRespondProviderRequest={async (id, requestId, decision) => {
                   try {
                     await respondProviderRequest(id, requestId, decision);
@@ -738,8 +725,6 @@ export default function App() {
                 archivedSessions={archivedSessions}
                 listsReady={listsReady}
                 providers={providers}
-                approvalMode={approvalMode}
-                onApprovalModeChange={handleApprovalModeChange}
                 onRespondProviderRequest={handleRespondProviderRequest}
                 onSteer={handleSteer}
                 onPause={handlePause}
@@ -752,6 +737,7 @@ export default function App() {
                 steering={steering}
                 lifecycleBusy={lifecycleBusy}
                 onSessionLoaded={(session) => {
+                  if (session.verifyOwner === 'crew') return;
                   setSessions((prev) => {
                     if (prev.some((s) => s.id === session.id)) return prev;
                     return [session, ...prev];
@@ -890,13 +876,25 @@ export default function App() {
   );
 }
 
+function CrewTaskRoute({
+  onBack,
+  onOpenSession,
+}: {
+  onBack: () => void;
+  onOpenSession: (sessionId: string) => void;
+}) {
+  const { taskId } = useParams<{ taskId: string }>();
+  const location = useLocation();
+  const runId = new URLSearchParams(location.search).get('run') || undefined;
+  if (!taskId) return <Navigate to="/" replace />;
+  return <CrewTaskDetail taskId={taskId} runId={runId} onBack={onBack} onOpenSession={onOpenSession} />;
+}
+
 interface SessionRouteProps {
   sessions: Session[];
   archivedSessions: Session[];
   listsReady: boolean;
   providers: ModelProvider[];
-  approvalMode: ApprovalMode;
-  onApprovalModeChange: (mode: ApprovalMode) => void | Promise<void>;
   onRespondProviderRequest: (
     requestId: string,
     decision: ProviderRequestDecision,
@@ -922,8 +920,6 @@ function SessionRoute({
   archivedSessions,
   listsReady,
   providers,
-  approvalMode,
-  onApprovalModeChange,
   onRespondProviderRequest,
   onSteer,
   onPause,
@@ -950,6 +946,7 @@ function SessionRoute({
     archivedSessions.find((s) => s.id === sessionId) ??
     null;
   const session = listedSession ?? fetchedSession;
+  const fetchedSessionId = fetchedSession?.id;
   const { events, refetch, loadEarlier, hasEarlier } = useSessionStream(
     session?.id ?? null,
     '',
@@ -963,7 +960,7 @@ function SessionRoute({
   }, [sessionId]);
 
   useEffect(() => {
-    if (!sessionId || listedSession || !listsReady) return;
+    if (!sessionId || listedSession || fetchedSessionId === sessionId || !listsReady) return;
 
     let cancelled = false;
     void fetchSession(sessionId)
@@ -981,7 +978,7 @@ function SessionRoute({
     return () => {
       cancelled = true;
     };
-  }, [sessionId, listedSession, listsReady, onMissingSession, onSessionLoaded]);
+  }, [sessionId, listedSession, fetchedSessionId, listsReady, onMissingSession, onSessionLoaded]);
 
   useEffect(() => {
     if (!session) return;
@@ -1000,7 +997,15 @@ function SessionRoute({
       }
       if (status && title) break;
     }
-    if (status) onSessionStatus(session.id, status, statusCreatedAt);
+    if (status) {
+      setFetchedSession((prev) => {
+        if (!prev || prev.id !== session.id) return prev;
+        const updatedAt = Math.max(prev.updatedAt, statusCreatedAt);
+        if (prev.status === status && prev.updatedAt === updatedAt) return prev;
+        return { ...prev, status, updatedAt };
+      });
+      onSessionStatus(session.id, status, statusCreatedAt);
+    }
     if (title) {
       setFetchedSession((prev) => {
         if (!prev || prev.id !== session.id) return prev;
@@ -1032,8 +1037,6 @@ function SessionRoute({
       onContinueOnMobile={() =>
         onContinueOnMobile(session.projectPath ?? session.workspace ?? undefined)
       }
-      approvalMode={approvalMode}
-      onApprovalModeChange={onApprovalModeChange}
       onRespondProviderRequest={onRespondProviderRequest}
       steering={steering}
       lifecycleBusy={lifecycleBusy}

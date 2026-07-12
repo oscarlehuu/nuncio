@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   approveDispatcherProposal,
+  ackAttentionItem,
   fetchAttention,
   resolveAttentionItem,
   type AttentionItemDto,
@@ -107,6 +108,7 @@ export function AttentionQueue({ compactEmpty = false }: AttentionQueueProps) {
               toast.success(`${count} task${count === 1 ? '' : 's'} queued`);
             })
           }
+          onAck={(id) => void act(id, ackAttentionItem)}
           onResolve={(id) => void act(id, resolveAttentionItem)}
         />
       ))}

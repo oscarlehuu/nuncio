@@ -45,7 +45,7 @@ export const PendingUserInputBanner = memo(function PendingUserInputBanner({
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [drafts, setDrafts] = useState<DraftsByRequest>({});
-  const [submitting, setSubmitting] = useState(false);
+  const [submittingRequestId, setSubmittingRequestId] = useState<string | null>(null);
 
   const current = pending.find((item) => item.requestId === activeRequestId) ?? pending[0];
   const activeId = current?.requestId;
@@ -55,7 +55,6 @@ export const PendingUserInputBanner = memo(function PendingUserInputBanner({
     if (activeRequestId !== current.requestId) {
       setActiveRequestId(current.requestId);
       setQuestionIndex(0);
-      setSubmitting(false);
     }
   }, [activeRequestId, current]);
 
@@ -67,9 +66,10 @@ export const PendingUserInputBanner = memo(function PendingUserInputBanner({
   const answeredCount = questions.filter((q) => isAnswered(draftFor(drafts, activeId, q.id))).length;
   const allAnswered = answeredCount === questions.length;
   const draft = draftFor(drafts, activeId, question.id);
+  const submitting = submittingRequestId !== null;
 
   const updateDraft = (questionId: string, update: (prev: QuestionDraft) => QuestionDraft) => {
-    if (!supported) return;
+    if (!supported || submitting) return;
     setDrafts((prev) => {
       const bucket = prev[activeId] ?? {};
       const next = update(bucket[questionId] ?? EMPTY_DRAFT);
@@ -102,8 +102,19 @@ export const PendingUserInputBanner = memo(function PendingUserInputBanner({
     if (!question.allowMultiple) advanceFrom(questionIndex);
   };
 
+  const respond = async (response: InteractionResponse) => {
+    if (!supported || !onRespond || submittingRequestId !== null) return;
+    const requestId = activeId;
+    setSubmittingRequestId(requestId);
+    try {
+      await onRespond(requestId, response);
+    } finally {
+      setSubmittingRequestId((currentId) => (currentId === requestId ? null : currentId));
+    }
+  };
+
   const submit = async () => {
-    if (!supported || !onRespond || !allAnswered || submitting) return;
+    if (!allAnswered) return;
     const answers = questions.map((q) => {
       const d = draftFor(drafts, activeId, q.id);
       const freeText = d.freeText.trim();
@@ -113,17 +124,11 @@ export const PendingUserInputBanner = memo(function PendingUserInputBanner({
         ...(freeText ? { freeText } : {}),
       };
     });
-    setSubmitting(true);
-    try {
-      await onRespond(activeId, { answers, resolvedBy: 'user' });
-    } finally {
-      setSubmitting(false);
-    }
+    await respond({ answers, resolvedBy: 'user' });
   };
 
   const skip = () => {
-    if (!supported || !onRespond || submitting) return;
-    void onRespond(activeId, { answers: [], resolvedBy: 'skip' });
+    void respond({ answers: [], resolvedBy: 'skip' });
   };
 
   return (
@@ -194,7 +199,7 @@ export const PendingUserInputBanner = memo(function PendingUserInputBanner({
                   type="button"
                   role="option"
                   aria-selected={selected}
-                  disabled={!supported}
+                  disabled={!supported || submitting}
                   onClick={() => toggleOption(option.id)}
                   className={cn(
                     'rounded-md border px-3 py-2.5 min-h-[40px] text-left transition-colors',
@@ -228,7 +233,7 @@ export const PendingUserInputBanner = memo(function PendingUserInputBanner({
             })}
             <button
               type="button"
-              disabled={!supported}
+              disabled={!supported || submitting}
               data-testid="user-input-other"
               onClick={() =>
                 updateDraft(question.id, (prev) => ({ ...prev, freeTextOpen: !prev.freeTextOpen }))
@@ -255,7 +260,7 @@ export const PendingUserInputBanner = memo(function PendingUserInputBanner({
             <Textarea
               autoFocus
               value={draft.freeText}
-              disabled={!supported}
+              disabled={!supported || submitting}
               placeholder={
                 draft.selectedOptionIds.length > 0 ? 'Note for your choice…' : 'Your answer…'
               }

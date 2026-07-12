@@ -80,6 +80,28 @@ describe('normalizeUserInput', () => {
     });
   });
 
+  it('keeps generated question and option ids unique when positions collide with explicit ids', () => {
+    const result = normalizeUserInput('AskUserQuestion', {
+      questions: [
+        {
+          id: 'q2',
+          prompt: 'First',
+          options: [
+            { id: '2', label: 'Alpha' },
+            { label: 'Beta' },
+          ],
+        },
+        {
+          prompt: 'Second',
+          options: [{ label: 'Gamma' }],
+        },
+      ],
+    });
+
+    expect(result?.questions.map((question) => question.id)).toEqual(['q2', 'q2-2']);
+    expect(result?.questions[0]?.options.map((option) => option.id)).toEqual(['2', '2-2']);
+  });
+
   it('parses askquestion lowercase SDK tool name', () => {
     const result = normalizeUserInput('askquestion', { questions: [sampleQuestion] });
     expect(result?.questions).toHaveLength(1);

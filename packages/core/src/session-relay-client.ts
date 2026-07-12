@@ -21,6 +21,8 @@ export interface SessionSubscriptionOptions {
   url: string;
   sessionId: string;
   since?: number;
+  /** Bound only the initial cursor-zero replay; reconnects continue from lastSeq. */
+  tail?: number;
   onEvent: (event: SessionEvent) => void;
   /** Injected for React Native (auth headers) and tests; defaults to the global WebSocket. */
   webSocketFactory?: WebSocketFactory;
@@ -70,12 +72,15 @@ export interface SessionSubscriptionOptions {
 export interface SessionSubscription {
   /** Reconnect/resubscribe from the last seen seq (tab became visible, app foregrounded). */
   resync(): void;
+  /** Confirm a live cursor resubscribe; false means the socket is half-open/dead. */
+  confirmResync(timeoutMs?: number): Promise<boolean>;
   /** RPC over the same socket, e.g. steer. Rejects with the server's {code, message}. */
   call(method: string, params: Record<string, unknown>): Promise<unknown>;
   close(): void;
 }
 
 const DEFAULT_RECONNECT_MS = 2000;
+const DEFAULT_RESYNC_ACK_TIMEOUT_MS = 2000;
 
 export function subscribeSessionEvents(options: SessionSubscriptionOptions): SessionSubscription {
   const reconnectMs = options.reconnectMs ?? DEFAULT_RECONNECT_MS;
@@ -99,14 +104,59 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
   let nextRpcId = 1;
   const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
 
+  const rejectPending = () => {
+    for (const rpc of pending.values()) rpc.reject(new Error('connection closed'));
+    pending.clear();
+  };
+
   const sendSubscribe = () => {
+    const tail =
+      lastSeq === 0 && Number.isFinite(options.tail) && (options.tail ?? 0) > 0
+        ? Math.floor(options.tail!)
+        : undefined;
     socket?.send(
       JSON.stringify({
         id: nextRpcId++,
         method: 'subscribe',
-        params: { sessionId: options.sessionId, since: lastSeq },
+        params: {
+          sessionId: options.sessionId,
+          since: lastSeq,
+          ...(tail !== undefined ? { tail } : {}),
+        },
       }),
     );
+  };
+
+  const confirmSubscribe = (timeoutMs: number): Promise<boolean> => {
+    if (closed || !socketOpen || !socket) return Promise.resolve(false);
+    const id = nextRpcId++;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        if (!pending.delete(id)) return;
+        resolve(false);
+      }, timeoutMs);
+      pending.set(id, {
+        resolve: () => {
+          clearTimeout(timer);
+          resolve(true);
+        },
+        reject: () => {
+          clearTimeout(timer);
+          resolve(false);
+        },
+      });
+      try {
+        socket!.send(JSON.stringify({
+          id,
+          method: 'subscribe',
+          params: { sessionId: options.sessionId, since: lastSeq },
+        }));
+      } catch {
+        clearTimeout(timer);
+        pending.delete(id);
+        resolve(false);
+      }
+    });
   };
 
   const scheduleReconnect = () => {
@@ -179,8 +229,7 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
     ws.addEventListener('close', () => {
       if (socket !== ws) return;
       socketOpen = false;
-      for (const rpc of pending.values()) rpc.reject(new Error('connection closed'));
-      pending.clear();
+      rejectPending();
       // Intentional teardowns are not drops: close() (the whole subscription is
       // being disposed) and resync()'s stale-socket swap both close deliberately,
       // so neither must fire onClose or schedule a reconnect — otherwise an owner
@@ -219,6 +268,9 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
       }
       connect();
     },
+    confirmResync(timeoutMs = DEFAULT_RESYNC_ACK_TIMEOUT_MS) {
+      return confirmSubscribe(timeoutMs);
+    },
     call(method, params) {
       return new Promise((resolve, reject) => {
         if (closed || !socketOpen || !socket) {
@@ -232,6 +284,7 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
     },
     close() {
       closed = true;
+      rejectPending();
       if (reconnectTimer !== null) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;

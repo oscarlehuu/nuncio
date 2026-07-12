@@ -2,7 +2,7 @@
 
 ## Overview
 
-Nuncio is a self-hosted web app for delegating tasks to AI agents. The backend (`apps/server`, NestJS) exposes sessions over HTTP; each session is run by an **agent provider** selected per session. The agent layer is provider-neutral: Pi, Codex, Cursor, and future agent SDKs plug in by implementing one interface.
+Nuncio is a self-hosted web app for delegating tasks to AI agents. The backend (`apps/server`, NestJS) exposes sessions over HTTP; each session is run by an **agent provider** selected per session. The agent layer is provider-neutral: Pi, Codex, Cursor, Claude, and future agent SDKs plug in by implementing one interface.
 
 ## Agent provider abstraction
 
@@ -20,6 +20,7 @@ apps/server/src/agents/
     codex-app-server.client.ts  JSON-RPC client for `codex app-server`
     codex-agent.provider.ts  Codex CLI app-server provider
     cursor-agent.provider.ts Cursor SDK local runtime provider
+    claude-agent.provider.ts Claude Agent SDK provider
     mock-agent.provider.ts   Deterministic zero-credential test provider — registered only when NUNCIO_FORCE_MOCK=1, never on a normal boot
 ```
 
@@ -32,13 +33,16 @@ flowchart LR
     Registry --> Pi["PiAgentProvider"]
     Registry --> Codex["CodexAgentProvider"]
     Registry --> Cursor["CursorAgentProvider"]
+    Registry --> Claude["ClaudeAgentProvider"]
     Registry --> Mock["MockAgentProvider"]
     Pi --> PiSDK["@earendil-works/pi-coding-agent"]
     Codex --> CodexCLI["codex app-server"]
     Cursor --> CursorSDK["@cursor/sdk"]
+    Claude --> ClaudeSDK["@anthropic-ai/claude-agent-sdk"]
     Pi -.implements.-> Iface["AgentProvider (interface)"]
     Codex -.implements.-> Iface
     Cursor -.implements.-> Iface
+    Claude -.implements.-> Iface
     Mock -.implements.-> Iface
 ```
 
@@ -52,6 +56,11 @@ interface AgentCapabilities {
   modelSwitch: 'in-session' | 'restart' | 'none';
   effortSwitch: 'in-session' | 'restart' | 'none';
   images: boolean;                             // accepts image attachments
+  steerWhileRunning: boolean;
+  runtimePolicies?: readonly {
+    filesystem: 'read-only' | 'workspace-write';
+    network: 'disabled';
+  }[];
 }
 
 interface AgentProvider {
@@ -62,6 +71,7 @@ interface AgentProvider {
   listModels(): Promise<ModelProviderDto[]>;
   run(sessionId, prompt, ctx: AgentRunContext): Promise<void>;
   steer(sessionId, message, ctx: AgentRunContext): Promise<void>;
+  quiesce(sessionId): Promise<void>;            // stop producer before authority changes
   interrupt?(sessionId): Promise<void>;        // present iff capabilities.interrupt
   setModel?(sessionId, model, options?): Promise<void>; // present iff modelSwitch==='in-session'
   dispose(sessionId): void;
@@ -70,6 +80,11 @@ interface AgentProvider {
 ```
 
 `AgentRunContext.attachments?: AgentAttachment[]` carries `{ kind: 'image', mimeType, data }` (base64) into a run/steer for providers that declare `images`.
+
+`AgentRunContext.runtimePolicy?: AgentRuntimePolicy` carries an immutable per-session
+`{ filesystem, workspaceRoot, network: 'disabled' }` boundary. Its absence preserves Solo
+behavior. Its presence must match the Session workspace and one declared provider capability on
+every run/resume; unsupported policy rejects before prompting.
 
 `BaseAgentProvider` (`agents.base-provider.ts`) implements the shared `run`/`steer` orchestration (status RUNNING → user/steer_message → `executePrompt()` → status IDLE, plus error → ERROR) via a template method. Concrete providers implement only `executePrompt()`, `isAvailable()`, `listModels()`, and (optionally) `dispose()`/`interrupt()`/`setModel()`.
 
@@ -84,20 +99,21 @@ Current tool wiring:
 | Pi | `createAgentSession({ customTools })` | `buildPiCustomTools(..., context.tools)` |
 | Cursor | SDK `local.customTools` on `Agent.create` and `agent.send` | `buildCursorCustomTools(context.tools)` |
 | Codex | app-server `dynamicTools` on new `thread/start` plus `item/tool/call` responses | `buildCodexDynamicTools` / `executeCodexRuntimeTool` |
+| Claude | in-process MCP servers passed to Agent SDK `query` | `buildClaudeMcpServers(context.tools)` |
 
 The browser tool contract is the first runtime tool family. When a tool call omits `target`, `BrowserToolService` reads `NUNCIO_BROWSER_DEFAULT_TARGET` from Settings; the shipped default is `auto`, which chooses desktop in-app browser first, then the Nuncio-owned external CDP browser. Future MCP/tool families should add one registry factory, one provider adapter mapping, and any user-facing defaults under Settings -> MCP & Tools, not provider-specific branches in `SessionsService`.
 
 ### Capabilities (invariants)
 
-`BaseAgentProvider.capabilities` defaults to **all-off**: `{ interrupt: false, modelSwitch: 'none', effortSwitch: 'none', images: false }`. Providers opt in by overriding the field.
+`BaseAgentProvider.capabilities` defaults to **all-off**: `{ interrupt: false, modelSwitch: 'none', effortSwitch: 'none', images: false, steerWhileRunning: false }`. Providers opt in by overriding the field.
 
-| Provider | interrupt | modelSwitch | effortSwitch | images | Notes |
-|----------|-----------|-------------|--------------|--------|-------|
-| Pi | true | in-session | in-session | true | `pi-agent.provider.ts` overrides all four |
-| Codex | false | none | none | false | inherits base defaults |
-| Cursor (SDK) | false | none | none | false | inherits base defaults |
-| Cursor CLI | false | none | none | false | inherits base defaults |
-| Mock | false | none | none | false | inherits base defaults |
+| Provider | interrupt | modelSwitch | effortSwitch | images | live steer | explicit Crew policies |
+|----------|-----------|-------------|--------------|--------|------------|------------------------|
+| Pi | true | in-session | in-session | true | true | read-only + workspace-write; network disabled |
+| Codex | true | none | none | false | false | read-only + workspace-write; network disabled |
+| Claude | true | in-session | in-session | true | true | read-only + workspace-write; network disabled |
+| Cursor (SDK/CLI) | false | none | none | false | false | none |
+| Mock | false | none | none | false | false | both, source-test only |
 
 - **NEVER** call `provider.interrupt()`/`setModel()` without first checking the matching capability — the methods are optional and absent on providers that don't support them. `SessionsService` guards every call (see below).
 - **NEVER** assume a capability is on by default; new providers inherit all-off until they explicitly override.
@@ -137,7 +153,9 @@ this.cachedAvailable = registry.getAvailable().length > 0;   // models with conf
 
 ## Model wiring
 
-`session.model` is stored as `provider:modelId` (e.g. `codex:gpt-5.5`, `cursor:composer-2`, `anthropic:claude-sonnet-4`). `PiAgentProvider.createPiSession` resolves Pi model ids back to a Pi `Model` via `resolveModelId` (handles both `provider/modelId` slash and `provider:modelId` colon conventions) + `registry.find(provider, id)`, then passes it to `createAgentSession({ model })`. `CodexAgentProvider` strips the `codex:` prefix before sending `turn/start` to the Codex app-server. If a provider cannot resolve the requested model, it falls back to its default. `GET /api/models` aggregates `listModels()` across all available providers.
+`session.model` is stored as `provider:modelId` (e.g. `codex:gpt-5.6-sol`, `cursor:composer-2`, `anthropic:claude-sonnet-4`). `PiAgentProvider.createPiSession` resolves Pi model ids back to a Pi `Model` via `resolveModelId` (handles both `provider/modelId` slash and `provider:modelId` colon conventions) + `registry.find(provider, id)`, then passes it to `createAgentSession({ model })`. `CodexAgentProvider` strips the `codex:` prefix before sending `turn/start` to the Codex app-server. It maps each live `model/list.supportedReasoningEfforts` entry into the shared `reasoningEffort` descriptor, so model-specific choices such as GPT-5.6 Sol/Terra `ultra` appear without provider branches in the UI; the adapter forwards the stored value through `turn/start.effort`. Unsupported saved select values are reset from the destination model's descriptor before the picker emits them. If a provider cannot resolve the requested model, it falls back to its default. `GET /api/models` aggregates `listModels()` across all available providers.
+
+Pi SDK `0.80.6` supplies model-specific `thinkingLevelMap` metadata through the same catalog path. `piThinkingDescriptors()` treats `off` through `high` as baseline levels unless explicitly mapped to `null`; advanced `xhigh` and `max` levels require explicit non-null mappings. Nuncio persists and sends Pi's `max` value unchanged. It never translates it to Codex `ultra`, whose multi-agent semantics are provider-specific.
 
 `GET /api/models` also exposes `capabilities` per provider entry: `ModelsService.list()` (`models.service.ts`) sets `capabilities: entry.capabilities ?? provider.capabilities` on every `ModelProviderDto`, so the frontend can show/hide interrupt, in-session model/effort switch, and image-upload affordances per provider.
 
@@ -157,6 +175,7 @@ this.cachedAvailable = registry.getAvailable().length > 0;   // models with conf
 - **`interrupt(sessionId)`** → `session.abort()`. If `session.isStreaming` is false, abort best-effort and return without flagging. If streaming, add the id to `interruptedSessions` *before* awaiting `abort()`; on abort failure the flag is removed and the error rethrown.
 - **Stale-flag invariant:** `executePrompt` clears `interruptedSessions.delete(sessionId)` at the **top** (before awaiting the prompt) so a leftover flag from a prior turn can never swallow a later real error. The `catch` only suppresses an error when `interruptedSessions.delete(sessionId)` returns true (i.e. an interrupt for *this* turn). NEVER move that top-of-turn clear below the `await handle.prompt(...)`.
 - **`setModel(sessionId, modelId, options?)`** → live `session.setModel(...)` then `session.setThinkingLevel(...)` (effort). No-op when the session isn't active or the model id can't be resolved.
+- **Retry settlement:** Pi can emit an error `message_end` for one attempt before an automatic retry emits a successful assistant completion. The handle remembers a terminal error, but a later non-aborted, non-error assistant `message_end` clears it; final session status therefore follows the latest settled attempt. A terminal error with no recovery still routes through the shared `ERROR` path.
 - **Images:** `context.attachments` of `kind: 'image'` are mapped to Pi `{ type: 'image', data, mimeType }` prompt content. Mapped only when present.
 
 **Product intent (do NOT change):** Pi's `setModel` persists to the global `~/.pi/agent/settings.json` (Pi is single-config).
@@ -315,7 +334,9 @@ task row with:
 
 `POST /api/tasks/multitask` is the Cursor-style fan-out entrypoint. It accepts a
 `parentSessionId` plus one or more prompts, creates provider-neutral child tasks,
-and returns those task rows. The current parent session is not counted as a task
+and returns those task rows. Both generic enqueue and multitask reject a Crew-owned
+parent Session; only the Crew runner may create correlated member work, so ordinary
+task APIs cannot inherit its retained worktree or bypass its writer lease. The current parent session is not counted as a task
 queue slot, so starting multitasking can launch child work even while the parent
 session is already `RUNNING`. Child tasks inherit provider/model/model options,
 workspace, project path, and branch from the parent session unless the request
@@ -334,6 +355,131 @@ marks a terminal child task reviewed; automatic destructive cleanup is not run
 from this state yet. Future cleanup workers should key off `role`,
 `review_state`, and `cleanup_policy` rather than inferring intent from `DONE`
 alone.
+
+## Crew workspace harness
+
+**Implementation status:** present on the Crew feature branch; pending final verification and
+merge, not yet a shipped-release claim.
+
+`apps/server/src/crew/` is an additive aggregate above ordinary Tasks and Sessions. It does not
+extend the Session FSM or the frozen Session WS relay.
+
+```text
+CrewTask (stable objective)
+  -> CrewRun (immutable execution revision + frozen profile)
+       -> append-only Crew events / projected tuple
+       -> one retained worktree / one Builder writer lease
+       -> ordinary correlated Tasks and Sessions for members
+       -> structured results + redacted artifacts
+```
+
+The workflow is fixed:
+
+```text
+PLAN -> BUILD -> VERIFY -> REVIEW -> SYNTHESIZE -> DONE
+```
+
+Solo stays the composer default. Crew profile resolution returns only `ready` or
+`needs_setup`. Pi, Codex, and Claude can be frozen independently for Foreman, Builder, and
+Reviewer; Nuncio Tester is deterministic. Foreman/Reviewer use read-only policy, Builder uses
+workspace-write, and every explicit policy disables network. A missing provider/model, unsupported
+policy, missing verify command, non-independent Reviewer, or missing verifier sandbox makes the
+profile `needs_setup`. Task creation resolves the selected branch to an exact SHA and rechecks a
+project `.nuncio/verify` against that Git tree before freezing the snapshot; the script runs via
+`sh` so its executable bit is irrelevant. Builder checkpoint commits require repository-local Git
+author identity.
+
+### State and authority
+
+`CrewRun` stores phase and operational status separately:
+
+- phases: `PLAN | BUILD | VERIFY | REVIEW | SYNTHESIZE | DONE`;
+- statuses: `QUEUED | RUNNING | BLOCKED_USER | BLOCKED_PROVIDER | PAUSED | RECOVERING | TERMINAL`;
+- outcomes: `SUCCEEDED | FAILED | CANCELLED | null`.
+
+`CrewRunsRepository.applyEvent` performs expected-revision CAS, append, and projection update
+transactionally. Idempotency keys make duplicate callbacks safe, while
+`CrewRunsRepository.replay` must reproduce the stored projection. Only Nuncio applies reducer
+events. Verify and Review are required current-head gates.
+
+`CrewRunControlService` and the runner use the same per-run serialization chain. Pause/cancel abort
+an active Verify immediately, then recheck the caller's exact revision, quiesce every member/task,
+and only afterward persist `PAUSED` or `CANCELLED`; an aborted/infrastructure Verify neither
+consumes a retry nor appears as a failed gate.
+
+Verify-fix and review-fix counters are independent, default 2, and route back to the same Builder
+Session. Reviewer is reused during feedback. With strict freshness enabled, a linked fresh final
+Reviewer is created only after a review-fix loop reaches a clean reused-reviewer result.
+
+See [CrewRun Authority Boundary and State Machine](crew-run-authority-and-state-machine.md) for the
+exact event table and guards.
+
+### Workspace, runtime policy, and verifier
+
+`CrewRunnerExecutionService` prepares one run-owned worktree through the generic Git adapter.
+Every member boundary verifies canonical path, expected branch, reachable full head, and required
+cleanliness. `CrewWriterLeaseService` admits only `builder:primary`; build finalization
+independently commits/inspects the workspace before emitting `builder_completed`.
+
+The ordinary Session row persists `AgentRuntimePolicy`. `SessionsService` revalidates it against
+provider capabilities and the exact Session workspace on every run/resume. Pi uses confined file
+tools without shell, Codex maps to app-server sandbox policy, and Claude uses allowlisted tools plus
+path authorization hooks. `runtimeToolsForPolicy` exposes only statically trusted Crew tools whose
+security metadata matches the policy.
+
+`CrewCommandRunner` refuses unsandboxed verification: Seatbelt
+`/usr/bin/sandbox-exec` on macOS, bubblewrap `/usr/bin/bwrap` on Linux. Network is disabled;
+HOME/temp are isolated; host file contents, Keychain IPC, and Apple Events are denied on macOS;
+the worktree is bound while Git metadata is protected. The combined output
+budget defaults to 16 MiB and cannot exceed 64 MiB; overflow kills the process group and fails the
+gate.
+
+### Artifacts and public reads
+
+`CrewArtifactStore` redacts full captured verify logs and workspace diffs before writing
+mode-`0600` files under the server data directory. Repository rows carry run ownership,
+SHA-256, byte count, kind, retention state, and internal metadata. Every read verifies byte count
+and hash. A truncated workspace diff fails closed before Reviewer execution.
+
+Run detail removes internal storage paths and allowlists public metadata. The progressive endpoint
+is:
+
+```text
+GET /api/crew-runs/:runId/artifacts/:artifactId?offset=<byte>&limit=<bytes>
+```
+
+It defaults to 16,384 bytes, caps at 65,536, rejects cross-run ids and invalid/continuation-byte
+offsets, and returns UTF-8 text with authoritative `nextOffset` and `eof`. Web and Expo consume
+that byte cursor; they do not derive progress from string length.
+
+`GET /api/crew-runs` is a separate bounded summary projection: latest run per task, default 20,
+maximum 100, `offset` pagination. It joins the task objective but excludes the profile snapshot,
+shared context, project/worktree paths, and artifact state. Web polls five rows; Expo requests at
+most fifty. Full state remains available only from the id-scoped detail endpoint.
+
+### Context, recovery, and successors
+
+`CrewContextService` projects bounded role envelopes and deltas from objective, decisions,
+context revision, current head, prior failure, results, and artifact references. Hidden reasoning
+and full member transcripts are not merged. `CrewRuntimeToolsService` accepts only schema-bound,
+run/member/phase-authorized structured submissions.
+
+On boot, `CrewRecoveryService` scans non-terminal runs, compares event replay with projection,
+validates the retained workspace, and idempotently finishes any interrupted Builder
+intent → checkpoint → result → lease-release chain before comparing heads. A pre-existing
+deterministic worktree must equal the frozen base SHA; only the correlated finalizer may reconcile
+its clean checkpoint descendant. An acknowledged BUILD pause sets the same explicit dirty-resume
+marker used by crash recovery before the phase is queued again. Recovery then resumes the frozen
+provider Session when possible. A non-resumable member gets a linked
+replacement with the same provider/model. Irreconcilable state becomes one `crew-blocked`
+Attention item; no unexpected Git state or provider binding is silently adopted.
+
+Terminal runs never reopen. `CrewSuccessorService` requires the prior exact clean head, creates a
+new run with `priorRunId` and a new frozen snapshot, retains bounded prior context, and starts with
+new invalid gates. Compatible Foreman/Builder Sessions may continue; prior run state never mutates.
+
+The complete baseline and deferred work are recorded in
+[Crew Workspace Harness](crew-workspace-harness.md).
 
 ## Autopilot: projects, scheduler, loops (rung 2)
 
@@ -1354,6 +1500,10 @@ So the committed prefix is NOT frozen just because more events arrive. NEVER cac
 ### Streaming smoothness + stalled-run recovery
 
 - **Client event bursts are frame-batched.** `apps/web/src/lib/use-session-stream.ts` and `apps/mobile/src/lib/use-session-transcript.ts` update `sinceRef` immediately for every pushed event, but buffer React state writes until the next animation frame. This keeps gap-free resume semantics while avoiding a render per token burst.
+- **Bootstrap and refetch never replace newer live data.** Web/mobile open the relay from `seq = 0` after a 1s REST-bootstrap timeout, merge any late REST page by `seq`, and fence async work by the active session generation. Visibility/foreground recovery reopens from the highest observed cursor; mobile retries a clean `server_shutdown` after a 1–2s jittered cooldown.
+- **Provider output is commit-before-fanout.** `BaseAgentProvider` retains coalesced delta buffers until the event-log append succeeds, retries transient append failures, then fans out the committed row. Per-session run generations reject callbacks from a disposed/replaced runtime, and lifecycle teardown flushes buffered deltas before invalidating the run.
+- **Relay liveness and memory are bounded.** Direct and hub WebSocket legs ping every 15s and terminate peers that miss the next pong. Hub pre-open and bidirectional buffers cap at 1 MB; an upstream that does not connect within 10s is terminated. Clients recover every abrupt close from the durable cursor.
+- **Verifier process trees have an owner.** Every active verifier has an `AbortController`; pause/archive/delete/shutdown abort it, send `SIGTERM` to its detached process group, then escalate to `SIGKILL` after the grace period. Normal shell completion also reaps background descendants while preserving already-written output, so a child command cannot outlive the session or daemon.
 - **Provider previews are throttled.** Providers call `BaseAgentProvider.touchPreview()` instead of writing `sessions.touchPreview()` directly. The first preview persists immediately, rapid token updates coalesce, and the final preview flushes when the run ends.
 - **Silent stalled runs become resumable.** `SessionsService` resets a per-session watchdog on every live event while status is `RUNNING`. If no event arrives for `NUNCIO_STALLED_RUN_FORCE_IDLE_MS` (default 30 minutes), it disposes the provider runtime, appends `runtime_stalled`, transitions to `IDLE`, and drains queued steers. `0` disables the watchdog. Sessions with pending input are not force-idled; their watchdog is rescheduled instead.
 

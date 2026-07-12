@@ -126,7 +126,7 @@ export function PrMergeBar({ path, number, detail, capabilities, onMerged }: PrM
       </div>
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <DialogContent>
+        <DialogContent preventOutsideDismiss>
           <DialogHeader>
             <DialogTitle>Merge pull request #{number}</DialogTitle>
             <DialogDescription>

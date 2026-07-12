@@ -41,41 +41,90 @@ export function resolveVerifyCommand(
 
 /** How long to keep draining output pipes after the shell itself has exited. */
 const OUTPUT_DRAIN_GRACE_MS = 500;
+const FORCE_KILL_GRACE_MS = 150;
+
+function killProcessTree(
+  proc: ReturnType<typeof Bun.spawn>,
+  signal: 'SIGTERM' | 'SIGKILL',
+): void {
+  try {
+    if (process.platform !== 'win32' && proc.pid > 0) {
+      // detached=true makes the verifier shell the leader of a new process
+      // group. A negative pid reaches the shell and every inherited child.
+      process.kill(-proc.pid, signal);
+      return;
+    }
+  } catch {
+    // The group may already have exited; fall back to the direct child below.
+  }
+  try {
+    proc.kill(signal);
+  } catch {
+    // Idempotent teardown: an already-exited verifier needs no further action.
+  }
+}
 
 export async function runVerifyCommand(
   command: VerifyCommand,
   cwd: string,
   timeoutMs = VERIFY_TIMEOUT_MS,
+  signal?: AbortSignal,
 ): Promise<VerifyRunResult> {
   const started = Date.now();
-  const proc = Bun.spawn(command.argv, { cwd, stdout: 'pipe', stderr: 'pipe', stdin: 'ignore' });
+  if (signal?.aborted) throw signal.reason ?? new Error('Verification aborted');
+  const proc = Bun.spawn(command.argv, {
+    cwd,
+    stdout: 'pipe',
+    stderr: 'pipe',
+    stdin: 'ignore',
+    detached: process.platform !== 'win32',
+  });
   let timedOut = false;
+  let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+  const terminate = () => {
+    killProcessTree(proc, 'SIGTERM');
+    forceKillTimer ??= setTimeout(() => killProcessTree(proc, 'SIGKILL'), FORCE_KILL_GRACE_MS);
+  };
+  const onAbort = () => terminate();
+  signal?.addEventListener('abort', onAbort, { once: true });
   const timer = setTimeout(() => {
     timedOut = true;
-    proc.kill();
+    terminate();
   }, timeoutMs);
   const stdoutText = new Response(proc.stdout).text().catch(() => '');
   const stderrText = new Response(proc.stderr).text().catch(() => '');
   try {
     const exitCode = await proc.exited;
-    // Grandchildren of the shell can inherit the pipes and keep them open past
-    // the shell's death (e.g. a killed `sh -c` whose child lives on). Buffered
-    // output is available immediately after exit, so cap the drain.
-    const drain = (text: Promise<string>) =>
-      Promise.race([
-        text,
-        new Promise<string>((resolve) => setTimeout(() => resolve(''), OUTPUT_DRAIN_GRACE_MS)),
+    const outputTexts = Promise.all([stdoutText, stderrText]);
+    let settled = await Promise.race([
+      outputTexts,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), OUTPUT_DRAIN_GRACE_MS)),
+    ]);
+    if (!settled) {
+      // A normally-exited shell can leave a background child holding stdout or
+      // stderr open. Reap the detached group, then preserve bytes the shell had
+      // already written once the inherited descriptors close.
+      killProcessTree(proc, 'SIGKILL');
+      settled = await Promise.race([
+        outputTexts,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), FORCE_KILL_GRACE_MS)),
       ]);
-    const [stdout, stderr] = await Promise.all([drain(stdoutText), drain(stderrText)]);
-    const output = `${stdout}${stderr}`;
+    }
+    const [stdout, stderr] = settled ?? ['', ''];
+    const combinedOutput = `${stdout}${stderr}`;
     return {
       ok: !timedOut && exitCode === 0,
       exitCode,
       durationMs: Date.now() - started,
-      outputTail: output.slice(-OUTPUT_TAIL_CHARS),
+      outputTail: combinedOutput.slice(-OUTPUT_TAIL_CHARS),
       timedOut,
     };
   } finally {
     clearTimeout(timer);
+    // The verifier owns the detached group. A successful shell may still have
+    // spawned a background child with redirected pipes; it must not survive.
+    killProcessTree(proc, 'SIGKILL');
+    if (forceKillTimer) clearTimeout(forceKillTimer);
+    signal?.removeEventListener('abort', onAbort);
   }
 }

@@ -20,6 +20,8 @@ import { SettingsModule } from '../../src/settings/settings.module';
 const TEST_MODEL_CANDIDATES = [
   'cliproxyapi:claude-opus-4-8',
   'cliproxy:claude-opus-4-8',
+  'cliproxyapi:claude-sonnet-4-6',
+  'cliproxy:claude-sonnet-4-6',
 ];
 const piAgentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent');
 const piSettingsPath = join(piAgentDir, 'settings.json');
@@ -116,7 +118,9 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
 
       expect(modelIds).toContain(testModel);
       const firstModel = testModel;
-      const secondModel = modelIds.find((id) => id !== testModel)!;
+      const secondModel =
+        TEST_MODEL_CANDIDATES.find((candidate) => candidate !== testModel && modelIds.includes(candidate)) ??
+        modelIds.find((id) => id !== testModel)!;
       const created = sessions.create({
         prompt: 'Reply with the single word: one',
         provider: 'pi',

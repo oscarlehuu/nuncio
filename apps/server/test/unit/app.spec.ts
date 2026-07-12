@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { AppModule } from '../../src/app.module';
 import { DatabaseService } from '../../src/db/database.service';
 import { SessionsRepository } from '../../src/sessions/persistence/sessions.repository';
+import { TasksRepository } from '../../src/tasks/tasks.repository';
 import {
   configureSimulatedCursorEnv,
   withSimulatedCursorProvider,
@@ -82,6 +83,17 @@ describe('Nuncio API', () => {
     expect(res.body.status).toBe('ok');
   });
 
+  it('GET /api/crew/presets exposes the fixed Quality workflow', async () => {
+    const res = await api(app).get('/api/crew/presets');
+    expect(res.status).toBe(200);
+    expect(res.body.presets).toEqual([
+      expect.objectContaining({
+        id: 'quality',
+        phases: ['PLAN', 'BUILD', 'VERIFY', 'REVIEW', 'SYNTHESIZE', 'DONE'],
+      }),
+    ]);
+  });
+
   it('GET /api/timeline returns the global timeline feed', async () => {
     const res = await api(app).get('/api/timeline?limit=5');
     expect(res.status).toBe(200);
@@ -105,6 +117,57 @@ describe('Nuncio API', () => {
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
     expect(res.body.length).toBeGreaterThan(0);
+  });
+
+  it('keeps Crew member sessions detail-readable but hidden and immutable publicly', async () => {
+    const repo = app.get(SessionsRepository);
+    const crew = repo.create({
+      id: 'crew-member-api-boundary',
+      prompt: 'internal Crew member',
+      provider: 'cursor',
+      verifyOwner: 'crew',
+    });
+    repo.updateStatus(crew.id, 'RUNNING');
+    repo.updateStatus(crew.id, 'IDLE');
+
+    const listed = await api(app).get('/api/sessions?includeArchived=true');
+    expect(listed.status).toBe(200);
+    expect(listed.body.map((session: { id: string }) => session.id)).not.toContain(crew.id);
+
+    const detail = await api(app).get(`/api/sessions/${crew.id}`);
+    expect(detail.status).toBe(200);
+    expect(detail.body).toMatchObject({ id: crew.id, verifyOwner: 'crew' });
+    expect((await api(app).get(`/api/sessions/${crew.id}/events`)).status).toBe(200);
+
+    const steer = await api(app)
+      .post(`/api/sessions/${crew.id}/steer`)
+      .send({ message: 'bypass Crew' });
+    expect(steer.status).toBe(400);
+    expect(steer.body.message).toContain('Crew-owned sessions are read-only');
+  });
+
+  it('hides Crew member task rows and rejects their public mutation routes', async () => {
+    const repo = app.get(TasksRepository);
+    const crew = repo.create({
+      prompt: 'internal Crew attempt',
+      executionKind: 'crew-member',
+      crewRunId: 'crew-api-run',
+      crewMemberKey: 'builder:primary',
+      sessionId: 'crew-api-session',
+      holdUntil: Date.now() + 60_000,
+      verifyOwner: 'crew',
+    });
+    const solo = repo.create({ prompt: 'visible API task', holdUntil: Date.now() + 60_000 });
+
+    const listed = await api(app).get('/api/tasks');
+    expect(listed.status).toBe(200);
+    expect(listed.body.map((task: { id: string }) => task.id)).toContain(solo.id);
+    expect(listed.body.map((task: { id: string }) => task.id)).not.toContain(crew.id);
+
+    const cancelled = await api(app).post(`/api/tasks/${crew.id}/cancel`);
+    expect(cancelled.status).toBe(400);
+    expect(cancelled.body.message).toContain('Crew-owned tasks can only be changed');
+    expect(repo.findById(crew.id)?.status).toBe('QUEUED');
   });
 
   it('GET /api/sessions tolerates sessions from an unregistered provider', async () => {

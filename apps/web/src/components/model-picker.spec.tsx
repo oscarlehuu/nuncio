@@ -65,8 +65,8 @@ const CODEX_PROVIDER: ModelProvider = {
       name: 'OpenAI',
       models: [
         {
-          id: 'codex:gpt-5.5',
-          name: 'GPT-5.5',
+          id: 'codex:gpt-5.6-sol',
+          name: 'GPT-5.6 Sol',
           options: [
             { id: 'fast', label: 'Priority', type: 'boolean', defaultValue: false },
             {
@@ -74,8 +74,12 @@ const CODEX_PROVIDER: ModelProvider = {
               label: 'Reasoning',
               type: 'select',
               options: [
+                { id: 'low', label: 'Low' },
                 { id: 'medium', label: 'Medium', isDefault: true },
-                { id: 'xhigh', label: 'Xhigh' },
+                { id: 'high', label: 'High' },
+                { id: 'xhigh', label: 'Extra High' },
+                { id: 'max', label: 'Max' },
+                { id: 'ultra', label: 'Ultra · Multi-agent' },
               ],
               defaultValue: 'medium',
             },
@@ -271,32 +275,33 @@ describe('ModelPicker', () => {
     expect(screen.getByRole('button', { name: /turn off fast mode/i })).toBeInTheDocument();
   });
 
-  it('renders Codex reasoning effort as a slider and Priority as fast', async () => {
+  it('renders GPT-5.6 Ultra as the final reasoning slider choice and Priority as fast', async () => {
     const onChange = vi.fn();
     render(
       <ModelPicker
-        value="codex:gpt-5.5"
+        value="codex:gpt-5.6-sol"
         modelOptions={{ fast: false, reasoningEffort: 'medium' }}
         onChange={onChange}
         providers={[CODEX_PROVIDER]}
       />,
     );
 
-    await userEvent.click(screen.getByRole('button', { name: /gpt 5\.5/i }));
+    await userEvent.click(screen.getByRole('button', { name: /gpt-5\.6 sol/i }));
 
     expect(screen.getByRole('slider', { name: /reasoning effort/i })).toBeInTheDocument();
-    expect(screen.queryByRole('menuitem', { name: /^xhigh$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('slider', { name: /reasoning effort/i })).toHaveAttribute('aria-valuemax', '5');
+    expect(screen.queryByRole('menuitem', { name: /^ultra/i })).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByRole('slider', { name: /reasoning effort/i }), {
-      target: { value: '1' },
+      target: { value: '5' },
     });
-    expect(onChange).toHaveBeenCalledWith('codex:gpt-5.5', 'codex', {
+    expect(onChange).toHaveBeenCalledWith('codex:gpt-5.6-sol', 'codex', {
       fast: false,
-      reasoningEffort: 'xhigh',
+      reasoningEffort: 'ultra',
     });
 
     await userEvent.click(screen.getByRole('button', { name: /turn on fast mode/i }));
-    expect(onChange).toHaveBeenLastCalledWith('codex:gpt-5.5', 'codex', {
+    expect(onChange).toHaveBeenLastCalledWith('codex:gpt-5.6-sol', 'codex', {
       fast: true,
       reasoningEffort: 'medium',
     });
@@ -558,7 +563,7 @@ describe('ModelPicker', () => {
       expect(within(row).getByTestId('model-fast-slot')).toBeInTheDocument();
     }
     // Fast-capable rows show the bolt; the rest render the equal-width spacer.
-    const gpt = screen.getByRole('menuitem', { name: /gpt 5\.5/i });
+    const gpt = screen.getByRole('menuitem', { name: /gpt-5\.6 sol/i });
     expect(within(gpt).getByTestId('model-fast-slot')).toHaveAttribute('data-fast', 'true');
     const haiku = screen.getAllByRole('menuitem', { name: /claude haiku 4\.5/i })[0];
     expect(within(haiku).getByTestId('model-fast-slot')).toHaveAttribute('data-fast', 'false');
@@ -593,12 +598,12 @@ describe('ModelPicker', () => {
     expect(screen.getByRole('menuitem', { name: /claude model 8/i })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: /claude model 5/i })).not.toBeInTheDocument();
     // Fast slots align pair rows too.
-    const gpt = screen.getByRole('menuitem', { name: /gpt 5\.5/i });
+    const gpt = screen.getByRole('menuitem', { name: /gpt-5\.6 sol/i });
     expect(within(gpt).getByTestId('model-fast-slot')).toHaveAttribute('data-fast', 'true');
     // Pair mode never shows or records recents.
     expect(screen.queryByText('Recent')).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole('menuitem', { name: /gpt 5\.5/i }));
-    expect(onPairChange).toHaveBeenCalledWith('codex', 'codex:gpt-5.5');
+    await userEvent.click(screen.getByRole('menuitem', { name: /gpt-5\.6 sol/i }));
+    expect(onPairChange).toHaveBeenCalledWith('codex', 'codex:gpt-5.6-sol');
     const stored = JSON.parse(localStorage.getItem('nuncio-model-recents') ?? '[]');
     expect(stored).toEqual([{ modelId: 'anthropic:claude-haiku-4-5', providerId: 'pi' }]);
   });
@@ -618,5 +623,54 @@ describe('ModelPicker', () => {
     expect(panel).toHaveClass('max-h-[min(420px,var(--radix-dropdown-menu-content-available-height))]', 'overflow-y-auto');
     expect(screen.getByPlaceholderText(/search models/i)).toBeInTheDocument();
     expect(screen.queryByTestId('model-picker-provider-submenu')).not.toBeInTheDocument();
+  });
+
+  it('uses the same compact trigger grammar for chat and engine-model modes', () => {
+    const { unmount } = render(
+      <ModelPicker
+        value="anthropic:claude-haiku-4-5"
+        onChange={vi.fn()}
+        providers={[PI_PROVIDER]}
+        variant="text"
+        compact
+      />,
+    );
+
+    const chatTrigger = screen.getByRole('button', { name: /claude haiku 4\.5/i });
+    expect(chatTrigger).toHaveAttribute('data-slot', 'model-picker-trigger');
+    expect(chatTrigger).toHaveAttribute('data-density', 'compact');
+    unmount();
+
+    render(
+      <ModelPicker
+        pairMode="engine+model"
+        engine="pi"
+        model="anthropic:claude-haiku-4-5"
+        onPairChange={vi.fn()}
+        providers={[PI_PROVIDER]}
+        variant="text"
+        compact
+      />,
+    );
+
+    const pairTrigger = screen.getByRole('button', { name: /engine and model: pi · claude haiku 4\.5/i });
+    expect(pairTrigger).toHaveAttribute('data-slot', 'model-picker-trigger');
+    expect(pairTrigger).toHaveAttribute('data-density', 'compact');
+  });
+
+  it('uses compact height instead of retaining the boxed default height', () => {
+    render(
+      <ModelPicker
+        value="anthropic:claude-haiku-4-5"
+        onChange={vi.fn()}
+        providers={[PI_PROVIDER]}
+        variant="boxed"
+        compact
+      />,
+    );
+
+    const trigger = screen.getByRole('button', { name: /claude haiku 4\.5/i });
+    expect(trigger).toHaveClass('h-7');
+    expect(trigger).not.toHaveClass('h-8');
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { AgentToolRegistry } from '../../../src/agents/tools/agent-tool-registry';
+import { defineCrewRuntimeTool } from '../../../src/agents/tools/agent-runtime-tools-policy';
 import { BROWSER_TOOL_DEFINITIONS } from '../../../src/browser/browser-tool-contract';
 import type { BrowserToolService } from '../../../src/browser/browser-tool.service';
 import type { BrowserToolCallInput, BrowserToolResult } from '../../../src/browser/browser.types';
@@ -30,6 +31,12 @@ describe('AgentToolRegistry', () => {
     const open = runtime.tools.find((tool) => tool.name === 'browser_open');
 
     expect(open).toBeDefined();
+    expect(open?.security).toEqual({
+      network: 'required',
+      workspaceMutation: 'none',
+      runtimePolicies: [],
+      scope: 'session',
+    });
     expect((open?.inputSchema.properties as Record<string, unknown>).sessionId).toBeUndefined();
     expect(open?.inputSchema.required).toEqual([]);
 
@@ -45,5 +52,29 @@ describe('AgentToolRegistry', () => {
       content: [{ type: 'text', text: expect.stringContaining('https://example.com') }],
       structuredContent: { target: 'in_app', url: 'https://example.com' },
     });
+  });
+
+  it('merges and unregisters session-scoped runtime tool sources without cloning trusted tools', () => {
+    const browser = { toolDefinitions: [], execute: async () => ({ type: 'state', state: {} }) } as unknown as BrowserToolService;
+    const registry = new AgentToolRegistry(browser);
+    const tool = defineCrewRuntimeTool({
+      name: 'crew_submit_plan',
+      inputSchema: {},
+      execute: async () => 'ok',
+      security: {
+        network: 'disabled',
+        workspaceMutation: 'none',
+        runtimePolicies: [{ filesystem: 'read-only', network: 'disabled' }],
+        scope: 'crew-internal',
+      },
+    });
+    const unregister = registry.registerSource({
+      forSession: (scope) => scope.sessionId === 'crew-session' ? { tools: [tool] } : undefined,
+    });
+
+    expect(registry.forSession({ sessionId: 'crew-session', projectPath: null }).tools).toContain(tool);
+    expect(registry.forSession({ sessionId: 'solo-session', projectPath: null }).tools).not.toContain(tool);
+    unregister();
+    expect(registry.forSession({ sessionId: 'crew-session', projectPath: null }).tools).not.toContain(tool);
   });
 });

@@ -47,4 +47,20 @@ describe('deriveVerifyStatus', () => {
     ]);
     expect(status?.state).toBe('running');
   });
+
+  it('a later lifecycle stop terminates an unmatched verify_start', () => {
+    expect(deriveVerifyStatus([
+      ev(1, 'status', { status: 'IDLE' }),
+      ev(2, 'verify_start', { command: 'bun test' }),
+      ev(3, 'status', { status: 'PAUSED' }),
+    ])).toBeNull();
+  });
+
+  it('a note-only status event does not terminate a running verification', () => {
+    expect(deriveVerifyStatus([
+      ev(1, 'status', { status: 'IDLE' }),
+      ev(2, 'verify_start', { command: 'bun test' }),
+      ev(3, 'status', { note: 'Auto-steer suppressed' }),
+    ])).toEqual({ state: 'running', command: 'bun test' });
+  });
 });

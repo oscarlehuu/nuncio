@@ -85,6 +85,7 @@ function wire(options: { probe: () => Promise<string | null>; candidateUrls: str
     probe: options.probe,
     onActiveUrl: () => {}, // api-client repoint is out of scope for this wiring test
     reopen: openSubscription,
+    resync: () => subscription?.confirmResync() ?? Promise.resolve(false),
     subscribeNetInfo: (cb) => {
       netInfoCb = cb;
       return () => {
@@ -120,6 +121,7 @@ function wire(options: { probe: () => Promise<string | null>; candidateUrls: str
       await Promise.resolve();
       await Promise.resolve();
     },
+    call: (method: string, params: Record<string, unknown>) => subscription!.call(method, params),
   };
 }
 
@@ -128,6 +130,46 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.useRealTimers();
+});
+
+it('foreground resync preserves an in-flight steer RPC on the healthy socket', async () => {
+  const h = wire({ probe: async () => 'http://a', candidateUrls: ['http://a'] });
+  const first = FakeSocket.instances[0];
+  first.open();
+  const steering = h.call('steer', { sessionId: 's1', message: 'keep me' });
+  const request = first.sent[first.sent.length - 1];
+  let outcome: unknown = 'pending';
+  void steering.then(
+    (value) => { outcome = value; },
+    (error) => { outcome = error; },
+  );
+
+  h.appState(true);
+  await h.tick();
+  expect(FakeSocket.instances).toHaveLength(1);
+  const subscribeRequest = first.sent[first.sent.length - 1];
+  first.push({ id: subscribeRequest!.id, result: { ok: true } });
+  first.push({ id: request!.id, result: { status: 'RUNNING' } });
+  await h.tick();
+
+  expect(outcome).toEqual({ status: 'RUNNING' });
+});
+
+it('foreground recovery reopens when a live-looking socket misses the subscribe acknowledgement', async () => {
+  vi.useFakeTimers();
+  const h = wire({ probe: async () => 'http://a', candidateUrls: ['http://a'] });
+  const first = FakeSocket.instances[0];
+  first.open();
+
+  h.appState(true);
+  await h.tick();
+  expect(FakeSocket.instances).toHaveLength(1);
+
+  await vi.advanceTimersByTimeAsync(2_000);
+  await h.tick();
+
+  expect(FakeSocket.instances.length).toBeGreaterThan(1);
+  expect(first.closed).toBe(true);
 });
 
 describe('relay + connection manager integration', () => {
@@ -177,6 +219,27 @@ describe('relay + connection manager integration', () => {
     const reopened = FakeSocket.instances[FakeSocket.instances.length - 1];
     expect(FakeSocket.instances.length).toBeGreaterThan(socketsAfterOpen);
     reopened.open();
+    expect(h.manager.getState()).toBe('connected');
+  });
+
+  it('a server_shutdown cooldown reopens the relay without AppState or NetInfo', async () => {
+    const h = wire({ probe: async () => 'http://a', candidateUrls: ['http://a'] });
+    const first = FakeSocket.instances[0];
+    first.open();
+    const socketsAfterOpen = FakeSocket.instances.length;
+
+    first.push({ notice: 'server_shutdown' });
+    first.close();
+    await h.tick();
+    expect(FakeSocket.instances.length).toBe(socketsAfterOpen);
+
+    h.fireTimers();
+    await h.tick();
+
+    const reopened = FakeSocket.instances[FakeSocket.instances.length - 1];
+    expect(FakeSocket.instances.length).toBeGreaterThan(socketsAfterOpen);
+    reopened.open();
+    expect(reopened.sent[0]).toMatchObject({ method: 'subscribe', params: { since: 0 } });
     expect(h.manager.getState()).toBe('connected');
   });
 

@@ -60,6 +60,13 @@ describe('openTargetFor', () => {
   it('pr-review with no route data → no target (button hidden)', () => {
     expect(openTargetFor(item({ kind: 'pr-review', payload: {} }))).toBeNull();
   });
+  it('crew blocker → the exact task and run projection', () => {
+    expect(openTargetFor(item({
+      kind: 'crew-blocked',
+      subjectId: 'task-9',
+      payload: { crewTaskId: 'task/9', crewRunId: 'run/4', reason: 'verify_round_cap' },
+    }))).toEqual({ to: '/crew/task%2F9?run=run%2F4' });
+  });
   it('unknown kind → session if payload carries one, else null', () => {
     expect(openTargetFor(item({ kind: 'mystery', payload: { sessionId: 's1' } }))).toEqual({ to: '/session/s1' });
     expect(openTargetFor(item({ kind: 'mystery', payload: null }))).toBeNull();

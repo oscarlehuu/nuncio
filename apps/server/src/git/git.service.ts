@@ -3,9 +3,18 @@ import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'n
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 import { SettingsService } from '../settings/settings.service';
+import {
+  readBoundedGitBlobs,
+} from './git-checkpoint-blob-validation';
+import { validateGitCheckpointRange } from './git-checkpoint-range-validation';
+import { inspectGitWorkspaceBoundary } from './git-workspace-boundary';
+import { checkpointGitWorkspace } from './git-workspace-checkpoint';
 import type {
   BranchDto,
   CommitResultDto,
+  GitBoundaryExpectation,
+  GitBoundaryInspectionDto,
+  GitCheckpointResultDto,
   GitDiffDto,
   GitFileChange,
   GitStatusDto,
@@ -27,19 +36,29 @@ function sanitizeSlug(slug: string): string {
     .replace(/^-|-$/g, '') || 'task';
 }
 
-async function git(args: string[], cwd?: string): Promise<string> {
+async function git(
+  args: string[], cwd?: string, env?: Record<string, string | undefined>,
+): Promise<string> {
   const proc = Bun.spawn(['git', ...args], {
     cwd,
+    ...(env ? { env } : {}),
     stdout: 'pipe',
     stderr: 'pipe',
   });
   const code = await proc.exited;
-  const stdout = (await new Response(proc.stdout).text()).trim();
+  const rawStdout = await new Response(proc.stdout).text();
+  // NUL-delimited path output is a binary-safe protocol. Trimming it mutates
+  // legitimate leading/trailing whitespace in filenames before secret scans.
+  const stdout = args.includes('-z') ? rawStdout : rawStdout.trim();
   const stderr = (await new Response(proc.stderr).text()).trim();
   if (code !== 0) {
     throw new Error(stderr || stdout || `git ${args.join(' ')} failed`);
   }
   return stdout;
+}
+
+async function gitWithIndex(args: string[], cwd: string, indexPath: string): Promise<string> {
+  return git(args, cwd, { ...process.env, GIT_INDEX_FILE: indexPath });
 }
 
 async function gitAllowExit(args: string[], cwd: string, allowedExitCodes: number[]): Promise<string> {
@@ -55,6 +74,16 @@ async function gitAllowExit(args: string[], cwd: string, allowedExitCodes: numbe
     throw new Error(stderr || stdout || `git ${args.join(' ')} failed`);
   }
   return stdout;
+}
+
+async function gitIsAncestor(ancestor: string, descendant: string, cwd: string): Promise<boolean> {
+  const proc = Bun.spawn(['git', '--no-replace-objects', 'merge-base', '--is-ancestor', ancestor, descendant], {
+    cwd,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const code = await proc.exited;
+  return code === 0;
 }
 
 function isGitRepo(dir: string): boolean {
@@ -243,6 +272,41 @@ export class GitService {
     }
   }
 
+  /** Read-only validation of a Crew-owned Git workspace boundary. */
+  async inspectBoundary(
+    path: string,
+    expectation: string | GitBoundaryExpectation = {},
+  ): Promise<GitBoundaryInspectionDto> {
+    const normalizedExpectation = typeof expectation === 'string' || !expectation.expectedCanonicalPath
+      ? expectation
+      : { ...expectation, expectedCanonicalPath: expandHome(expectation.expectedCanonicalPath) };
+    return inspectGitWorkspaceBoundary(expandHome(path), normalizedExpectation, {
+      git: (args, cwd) => git(args, cwd),
+      isAncestor: gitIsAncestor,
+    });
+  }
+
+  /** Validate committed Builder output from one exact durable head to current HEAD. */
+  async validateCheckpointRange(path: string, fromHead: string, toHead: string): Promise<void> {
+    return validateGitCheckpointRange(expandHome(path), fromHead, toHead, {
+      // Builder-controlled refs/replace must not rewrite the graph or blobs that
+      // the acceptance scan sees.
+      git: (args, cwd) => git(['--no-replace-objects', ...args], cwd),
+      isAncestor: gitIsAncestor,
+      readBlobs: readBoundedGitBlobs,
+    });
+  }
+
+  /** Commit only the current workspace's changes; never pushes or rewrites. */
+  async checkpoint(path: string, message: string): Promise<GitCheckpointResultDto> {
+    return checkpointGitWorkspace(expandHome(path), message, {
+      git: (args, cwd) => git(args, cwd),
+      gitWithIndex,
+      isAncestor: gitIsAncestor,
+      readBlobs: readBoundedGitBlobs,
+    });
+  }
+
   async listBranches(projectPath: string): Promise<BranchDto[]> {
     const repoRoot = await this.resolveRepoRoot(projectPath);
 
@@ -258,16 +322,46 @@ export class GitService {
       }
     }
 
-    const output = await git(['branch', '--format=%(refname:short)\t%(refname:short)'], repoRoot).catch(
-      () => git(['branch'], repoRoot),
-    );
+    const output = await git(
+      [
+        'for-each-ref',
+        '--format=%(refname)\t%(refname:short)\t%(symref)\t%(objectname)',
+        'refs/heads',
+        'refs/remotes',
+      ],
+      repoRoot,
+    ).catch(() => git(['branch', '--all', '--format=%(refname)\t%(refname:short)\t\t%(objectname)'], repoRoot));
 
-    const names = new Set<string>();
+    const refs: Array<{ fullName: string; name: string; objectName: string }> = [];
+    const localObjects = new Map<string, string>();
+    const remoteDefaults: string[] = [];
     for (const line of output.split('\n')) {
       const trimmed = line.replace(/^\*\s*/, '').trim();
       if (!trimmed) continue;
-      const name = trimmed.split('\t')[0]?.trim() ?? trimmed;
-      if (name && name !== 'HEAD') names.add(name);
+      const parts = trimmed.split('\t');
+      const fullName = parts.length >= 2 ? parts[0]?.trim() ?? '' : '';
+      const name = parts.length >= 2 ? parts[1]?.trim() ?? '' : parts[0]?.trim() ?? '';
+      const symref = parts.length >= 3 ? parts[2]?.trim() ?? '' : '';
+      const objectName = parts.length >= 4 ? parts[3]?.trim() ?? '' : '';
+      if (symref) {
+        if (fullName.startsWith('refs/remotes/') && fullName.endsWith('/HEAD')) {
+          remoteDefaults.push(symref.replace('refs/remotes/', ''));
+        }
+        continue;
+      }
+      if (!name || name === 'HEAD' || name.endsWith('/HEAD')) continue;
+      refs.push({ fullName, name, objectName });
+      if (fullName.startsWith('refs/heads/')) localObjects.set(name, objectName);
+    }
+
+    const names = new Set<string>();
+    for (const ref of refs) {
+      if (ref.fullName.startsWith('refs/remotes/')) {
+        const localName = ref.name.replace(/^[^/]+\//, '');
+        const localObject = localObjects.get(localName);
+        if (localObject && ref.objectName && localObject === ref.objectName) continue;
+      }
+      names.add(ref.name);
     }
 
     if (names.size === 0 && current) {
@@ -279,10 +373,18 @@ export class GitService {
     }
 
     let defaultBranch = current ?? 'main';
-    try {
-      const symref = await git(['symbolic-ref', 'refs/remotes/origin/HEAD'], repoRoot);
-      defaultBranch = symref.replace('refs/remotes/origin/', '');
-    } catch {
+    const remoteDefault = remoteDefaults.sort((a, b) => {
+      if (a.startsWith('origin/')) return -1;
+      if (b.startsWith('origin/')) return 1;
+      return a.localeCompare(b);
+    }).find((candidate) => {
+      const localCandidate = candidate.replace(/^[^/]+\//, '');
+      return names.has(localCandidate) || names.has(candidate);
+    });
+    if (remoteDefault) {
+      const localDefault = remoteDefault.replace(/^[^/]+\//, '');
+      defaultBranch = names.has(localDefault) ? localDefault : remoteDefault;
+    } else {
       if (names.has('main')) defaultBranch = 'main';
       else if (names.has('master')) defaultBranch = 'master';
       else if (current) defaultBranch = current;

@@ -45,7 +45,7 @@ export function NewIssueDialog({ path, open, onOpenChange, onCreated }: NewIssue
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent preventOutsideDismiss>
         <DialogHeader>
           <DialogTitle>New issue</DialogTitle>
           <DialogDescription>Created on the project's forge.</DialogDescription>

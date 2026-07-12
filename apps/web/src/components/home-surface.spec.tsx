@@ -21,6 +21,10 @@ vi.mock('sonner', () => ({
   },
 }));
 
+vi.mock('./crew/recent-crew-runs', () => ({
+  RecentCrewRuns: () => <div>Recent Crew fixture</div>,
+}));
+
 vi.mock('../lib/api', () => ({
   fetchDigest: vi.fn().mockResolvedValue(null),
   fetchAttention: vi.fn().mockResolvedValue({
@@ -43,6 +47,7 @@ describe('HomeSurface', () => {
     expect(screen.queryByText(/^fleet$/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /open .*fleet/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /new agent/i })).not.toBeInTheDocument();
+    expect(screen.getByText('Recent Crew fixture')).toBeInTheDocument();
   });
 
   it('focuses the composer when the focus key advances', async () => {

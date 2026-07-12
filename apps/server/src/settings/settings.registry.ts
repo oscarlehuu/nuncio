@@ -161,9 +161,9 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     type: 'string',
     label: 'Claude permission mode',
     description:
-      'How the `claude` provider gates tool use. acceptEdits (default) auto-approves file edits and routes Bash/web/etc. through nuncio approval cards; default asks for everything; plan is read-only planning; bypassPermissions runs every tool without asking.',
+      'How the `claude` provider gates tool use. bypassPermissions (default) runs every tool without asking in trusted workspaces; acceptEdits auto-approves file edits and asks for the rest; default asks for everything; plan is read-only planning.',
     envVar: 'NUNCIO_CLAUDE_PERMISSION_MODE',
-    default: 'acceptEdits',
+    default: 'bypassPermissions',
     options: [
       { value: 'acceptEdits', label: 'Accept edits', description: 'Auto-approve file edits; ask for the rest.' },
       { value: 'default', label: 'Ask every time', description: 'Route every privileged tool through an approval card.' },

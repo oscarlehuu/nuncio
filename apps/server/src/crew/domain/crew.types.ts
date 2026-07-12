@@ -1,0 +1,176 @@
+export const CREW_RUN_PHASES = ['PLAN', 'BUILD', 'VERIFY', 'REVIEW', 'SYNTHESIZE', 'DONE'] as const;
+export type CrewRunPhase = (typeof CREW_RUN_PHASES)[number];
+export const CREW_RUN_STATUSES = [
+  'QUEUED', 'RUNNING', 'BLOCKED_USER', 'BLOCKED_PROVIDER', 'PAUSED', 'RECOVERING', 'TERMINAL',
+] as const;
+export type CrewRunStatus = (typeof CREW_RUN_STATUSES)[number];
+export type CrewRunOutcome = 'SUCCEEDED' | 'FAILED' | 'CANCELLED' | null;
+export type CrewBlockedReason =
+  | 'material_clarification'
+  | 'verify_round_cap'
+  | 'review_round_cap'
+  | 'provider_unavailable'
+  | 'unrecoverable_failure'
+  | null;
+export type CrewProviderId = 'pi' | 'codex' | 'claude' | 'mock';
+export type CrewRuntimePolicy = 'read-only' | 'workspace-write';
+export type CrewRole = 'foreman' | 'builder' | 'reviewer';
+
+export interface CrewRoleBinding {
+  provider: CrewProviderId;
+  model: string;
+}
+export interface CrewProfilePolicy {
+  maxVerifyRetries: number;
+  maxReviewRetries: number;
+  strictFreshFinalReviewer: boolean;
+  verifyCommand: string | null;
+}
+export interface CrewProfileDefinition {
+  bindings: Record<CrewRole, CrewRoleBinding>;
+  policy: CrewProfilePolicy;
+}
+export interface CrewProfileOverride {
+  bindings?: Partial<Record<CrewRole, CrewRoleBinding>>;
+  policy?: Partial<CrewProfilePolicy>;
+}
+export interface CrewResolvedBinding extends CrewRoleBinding {
+  runtimePolicy: CrewRuntimePolicy;
+}
+export interface CrewProfileSnapshot {
+  presetId: 'quality';
+  sourceProfileId: string | null;
+  sourceProfileRevision: number | null;
+  resolvedAt: number;
+  bindings: Record<CrewRole, CrewResolvedBinding>;
+  tester: { kind: 'nuncio'; runtimePolicy: 'read-only' };
+  policy: CrewProfilePolicy;
+}
+export interface CrewProfileDto {
+  id: string;
+  name: string;
+  presetId: 'quality';
+  definition: CrewProfileDefinition;
+  revision: number;
+  createdAt: number;
+  updatedAt: number;
+}
+export interface CrewProviderCapability {
+  provider: string;
+  models: string[];
+  runtimePolicies: CrewRuntimePolicy[];
+  testOnly?: boolean;
+}
+export interface CrewProfileIssue {
+  code: 'missing_binding' | 'unsupported_provider' | 'provider_unavailable' | 'model_unavailable'
+    | 'runtime_policy_unsupported' | 'reviewer_not_independent' | 'verify_command_missing'
+    | 'verifier_sandbox_unavailable';
+  role?: CrewRole;
+  message: string;
+}
+export interface CrewProfileResolution {
+  state: 'ready' | 'needs_setup';
+  snapshot: CrewProfileSnapshot;
+  issues: CrewProfileIssue[];
+}
+
+export interface CrewRunProjection {
+  phase: CrewRunPhase;
+  status: CrewRunStatus;
+  outcome: CrewRunOutcome;
+  blockedReason: CrewBlockedReason;
+  revision: number;
+  contextRevision: number;
+  workspaceHead: string | null;
+  verifyRetriesUsed: number;
+  reviewRetriesUsed: number;
+  verifyExtraRounds: number;
+  reviewExtraRounds: number;
+}
+export interface CrewRunDto extends CrewRunProjection {
+  id: string;
+  taskId: string;
+  priorRunId: string | null;
+  profileSnapshot: CrewProfileSnapshot;
+  context: Record<string, unknown>;
+  projectPath: string;
+  baseBranch: string | null;
+  baseHead: string | null;
+  worktreePath: string | null;
+  branch: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+export interface CrewRunSummaryDto {
+  id: string;
+  taskId: string;
+  objective: string;
+  phase: CrewRunPhase;
+  status: CrewRunStatus;
+  outcome: CrewRunOutcome;
+  blockedReason: CrewBlockedReason;
+  revision: number;
+  workspaceHead: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+export interface CrewTaskDto {
+  id: string;
+  objective: string;
+  projectPath: string;
+  baseBranch: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type CrewRunEventData =
+  | { type: 'run_created' }
+  | { type: 'workspace_prepared'; workspaceHead: string }
+  | { type: 'plan_started' }
+  | { type: 'plan_accepted' }
+  | { type: 'clarification_required'; reason: string }
+  | { type: 'clarification_resolved'; basedOnContextRevision: number; message?: string }
+  | { type: 'builder_claimed' }
+  | { type: 'builder_completed'; basedOnContextRevision: number; workspaceHead: string }
+  | { type: 'verify_started'; basedOnWorkspaceHead: string }
+  | { type: 'verify_passed'; basedOnWorkspaceHead: string }
+  | { type: 'verify_failed'; basedOnWorkspaceHead: string }
+  | { type: 'reviewer_claimed'; basedOnWorkspaceHead: string }
+  | { type: 'final_review_requested'; basedOnWorkspaceHead: string }
+  | { type: 'final_reviewer_claimed'; basedOnWorkspaceHead: string }
+  | { type: 'review_passed'; basedOnWorkspaceHead: string }
+  | { type: 'changes_requested'; basedOnWorkspaceHead: string }
+  | { type: 'foreman_claimed' }
+  | { type: 'synthesis_completed'; basedOnContextRevision: number; workspaceHead: string }
+  | { type: 'pause_requested' }
+  | { type: 'resume_requested' }
+  | { type: 'provider_unavailable'; reason: string }
+  | { type: 'provider_restored' }
+  | { type: 'recovery_started'; reason: string }
+  | { type: 'recovery_succeeded' }
+  | { type: 'recovery_blocked'; reason: string }
+  | { type: 'cancel_requested' }
+  | { type: 'unrecoverable_failure'; reason: string }
+  | { type: 'extra_round_approved'; gate: 'verify' | 'review' };
+
+export interface CrewRunEventDto {
+  runId: string;
+  seq: number;
+  type: CrewRunEventData['type'];
+  payload: Record<string, unknown>;
+  idempotencyKey: string;
+  actor: string;
+  contextRevision: number;
+  workspaceHead: string | null;
+  createdAt: number;
+}
+export interface ApplyCrewEventInput {
+  expectedRevision: number;
+  idempotencyKey: string;
+  actor: string;
+  event: CrewRunEventData;
+  workspace?: {
+    worktreePath: string; branch: string; baseBranch?: string | null; baseHead?: string | null;
+  };
+  contextPatch?: Record<string, unknown>;
+}

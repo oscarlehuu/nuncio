@@ -117,11 +117,11 @@ this recipe; use `noContextFiles`/`agentsFilesOverride` if the personal file sho
   over a post-hoc `extensionsOverride` filter so denied extensions never even execute. Auth,
   models, settings, skills, and context files are untouched. Escape hatch: setting
   `PI_EXTENSION_DISCOVERY=full` restores pi default discovery. Verified: full unit suite plus a
-  real-SDK session created with exactly the 13 allowlisted extensions.
+  real-SDK session created with exactly the 12 allowlisted extensions.
 - **Step 1 — first extension: `nuncio-context`.** Inject project facts + HandoffBrief via
   `appendSystemPrompt`. First time Pi knows it lives inside Nuncio. Measure against vanilla.
-- **Step 2 — flip to `noExtensions: true` + factories** once foreman/subagent are ported from
-  `~/.pi/agent/extensions/` into the repo.
+- **Step 2 — replace allowlisted paths with in-repo factories** once foreman/subagent are ported
+  from `~/.pi/agent/extensions/` into the repo; deny-by-default remains unchanged.
 
 Extension roadmap after that, in order:
 

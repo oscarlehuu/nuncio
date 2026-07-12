@@ -25,12 +25,19 @@ vi.mock('./branch-picker', () => ({
     projectPath,
     value,
     onChange,
+    apiBase,
   }: {
     projectPath?: string;
     value?: string;
     onChange: (branch: string) => void;
+    apiBase?: string;
   }) => (
-    <button type="button" disabled={!projectPath} onClick={() => onChange('main')}>
+    <button
+      type="button"
+      disabled={!projectPath}
+      data-api-base={apiBase}
+      onClick={() => onChange('main')}
+    >
       {value ?? 'Branch'}
     </button>
   ),
@@ -258,6 +265,10 @@ describe('GridSlotComposer', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: /choose machine/i }));
     await userEvent.click(screen.getByRole('menuitem', { name: /use machine studio/i }));
+    expect(screen.getByRole('button', { name: /branch/i })).toHaveAttribute(
+      'data-api-base',
+      expect.stringContaining('/m/studio'),
+    );
     // Remote model catalog loads and resolves a default model.
     await waitFor(() =>
       expect(apiMocks.fetchModels).toHaveBeenCalledWith(expect.stringContaining('/m/studio')),

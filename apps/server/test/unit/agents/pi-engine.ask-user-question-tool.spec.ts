@@ -7,6 +7,7 @@ import {
 type AskTool = {
   name: string;
   description: string;
+  parameters: unknown;
   execute: (
     toolCallId: string,
     params: unknown,
@@ -39,5 +40,30 @@ describe('pi-engine AskUserQuestion tool', () => {
     const tool = buildAskUserQuestionTool() as AskTool;
     const result = await tool.execute('c2', { questions: [{ prompt: 'No options', options: [] }] });
     expect(result.isError).toBe(true);
+  });
+
+  it('declares and enforces the advertised four-question and four-option limits', async () => {
+    const tool = buildAskUserQuestionTool() as AskTool;
+    const parameters = tool.parameters as {
+      properties: {
+        questions: {
+          maxItems?: number;
+          items: { properties: { options: { maxItems?: number } } };
+        };
+      };
+    };
+    expect(parameters.properties.questions.maxItems).toBe(4);
+    expect(parameters.properties.questions.items.properties.options.maxItems).toBe(4);
+
+    const result = await tool.execute('call-over-limit', {
+      questions: Array.from({ length: 5 }, (_, questionIndex) => ({
+        prompt: `Question ${questionIndex + 1}`,
+        options: Array.from({ length: 5 }, (_, optionIndex) => ({
+          label: `Option ${optionIndex + 1}`,
+        })),
+      })),
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('at most 4 questions');
   });
 });

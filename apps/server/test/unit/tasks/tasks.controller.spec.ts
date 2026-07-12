@@ -165,14 +165,14 @@ describe('TasksController', () => {
     expect(startNow).toHaveBeenCalledWith('t1');
   });
 
-  it('cancel, retry, review, and delete delegate to the service', () => {
-    const cancel = jest.fn(() => ({ id: 't1', status: 'CANCELLED' }));
+  it('cancel, retry, review, and delete delegate to the service', async () => {
+    const cancel = jest.fn(async () => ({ id: 't1', status: 'CANCELLED' }));
     const retry = jest.fn(() => ({ id: 't2', status: 'QUEUED' }));
     const markReviewed = jest.fn(() => ({ id: 't1', reviewState: 'reviewed' }));
     const remove = jest.fn();
     const controller = new TasksController({ cancel, retry, markReviewed, delete: remove } as never);
 
-    expect(controller.cancel('t1')).toMatchObject({ status: 'CANCELLED' });
+    await expect(controller.cancel('t1')).resolves.toMatchObject({ status: 'CANCELLED' });
     expect(controller.retry('t1')).toMatchObject({ id: 't2' });
     expect(controller.markReviewed('t1')).toMatchObject({ reviewState: 'reviewed' });
     expect(controller.delete('t1')).toEqual({ ok: true });

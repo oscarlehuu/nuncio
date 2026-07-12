@@ -60,6 +60,8 @@ interface BaseModelPickerProps {
   disabled?: boolean;
   /** Prevent automatic fallback selection when callers need nullable/inherited model state. */
   autoPick?: boolean;
+  /** Use the shared low-profile trigger density in composer and form footers. */
+  compact?: boolean;
 }
 
 interface ChatModelPickerProps extends BaseModelPickerProps {
@@ -78,7 +80,6 @@ interface PairModelPickerProps extends BaseModelPickerProps {
   onPairChange: (engine: string | null, model: string | null) => void;
   inheritOption?: { label: string };
   providerDefaultOption?: boolean;
-  compact?: boolean;
 }
 
 type ModelPickerProps = ChatModelPickerProps | PairModelPickerProps;
@@ -506,6 +507,7 @@ export function ModelPicker(props: ModelPickerProps) {
   const [expandedProviders, setExpandedProviders] = useState<ReadonlySet<string>>(new Set());
   const [recents, setRecents] = useState<RecentModel[]>([]);
   const asText = variant === 'text';
+  const compact = props.compact ?? false;
   const lookup = modelById(catalog);
   const selectedModelId = pair ? pair.model ?? '' : chat!.value;
   const modelOptions = chat?.modelOptions;
@@ -619,11 +621,13 @@ export function ModelPicker(props: ModelPickerProps) {
           <Button
             variant="outline"
             disabled={disabled}
+            data-slot="model-picker-trigger"
+            data-density={compact ? 'compact' : 'default'}
             className={cn(
               asText
                 ? 'picker-trigger-text max-w-full'
                 : 'composer-picker-trigger h-8 gap-1.5 px-2.5 max-w-[300px]',
-              pair.compact && 'h-6',
+              compact && 'h-7',
             )}
             aria-label={`Engine and model: ${engineLabel} · ${pairModelLabel}`}
           >
@@ -639,10 +643,13 @@ export function ModelPicker(props: ModelPickerProps) {
           <Button
             variant="outline"
             disabled={disabled}
+            data-slot="model-picker-trigger"
+            data-density={compact ? 'compact' : 'default'}
             className={cn(
               asText
                 ? 'picker-trigger-text max-w-[300px]'
                 : 'composer-picker-trigger h-8 gap-1.5 px-2.5 max-w-[300px]',
+              compact && 'h-7',
             )}
             aria-label={triggerLabel}
           >

@@ -128,9 +128,35 @@ same-origin; desktop/web/mobile are all clients of the same API.
 
 **Status:** active direction (2026-07).
 **Decision:** current focus is durability + task-queue lanes and dogfooding on the existing
-engines (Pi first-class default). New engines (Claude) land only when the user schedules them —
-and when one lands, it must pass the provider conformance suite
+engines (Pi, Codex, Cursor, and Claude). A new engine lands only when the user schedules it, and it
+must pass the provider conformance suite
 ([testing-and-verification.md](testing-and-verification.md#provider-conformance-suite)) before merge.
 **Why:** each engine multiplies the test surface; the contract must be proven stable on the
 engines we have.
 **Reverse only if:** the user re-prioritizes.
+
+## ADR-012 — Crew is a fixed, evidence-gated local workflow
+
+**Status:** locked implementation baseline; implemented on the feature branch, pending final
+verification and merge.
+**Decision:** Solo remains the default. Crew uses a separate durable `CrewTask`/`CrewRun`
+aggregate above ordinary Tasks and Sessions and executes exactly
+`PLAN -> BUILD -> VERIFY -> REVIEW -> SYNTHESIZE -> DONE`. Profile resolution returns only
+`ready` or `needs_setup`; Pi, Codex, and Claude are configurable frozen role bindings, while
+Nuncio Tester is deterministic. Verify and Review are mandatory. Verify-fix and review-fix caps
+are independent and default to 2. The same Builder Session is reused for feedback; Reviewer is
+reused during the loop, and a strict fresh final Reviewer is created only after a review-fix loop.
+Every run owns one worktree and one Builder writer lease. Terminal runs are immutable; change
+requests create exact-head successors. Provider/model changes never happen silently.
+
+Crew completion is local and has only `SUCCEEDED`, `FAILED`, or `CANCELLED` terminal outcomes.
+The baseline has no outbound forge/release/deployment stage and no mechanism that relabels failed
+gate evidence. Full verify logs and workspace diffs are redacted, integrity-checked artifacts read
+through bounded UTF-8-safe byte ranges. Deterministic verification refuses unsandboxed execution:
+Seatbelt on macOS, bubblewrap on Linux.
+**Why:** a model may propose work but cannot be the scheduler, permission boundary, Git witness, or
+proof of completion. Fixed phases and deterministic evidence keep restart recovery auditable,
+provider-neutral, and safe on the user's machine.
+**Reverse only if:** the user explicitly approves a new Crew contract. General workflow graphs,
+custom roles/prompts, provider substitution policy, outbound forge/deployment actions, broader
+context reads, and automated cleanup/retention require separate decisions.
