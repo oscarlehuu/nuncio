@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { join } from 'node:path';
 import type { ModelOptionsMap } from '../../models/model-options.types';
 import type { ModelGroupDto, ModelItemDto, ModelProviderDto } from '../../models/models.types';
@@ -32,6 +32,10 @@ import {
 } from '../pi-engine/ask-user-question-tool';
 import { normalizePlanItems } from '../../sessions/domain/plan.types';
 import { buildPiRuntimePolicyOptions } from './pi-runtime-policy';
+import {
+  NUNCIO_CONTEXT_MAX_BYTES,
+  NuncioContextService,
+} from '../pi-engine/nuncio-context';
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent');
 
@@ -128,7 +132,12 @@ export class PiAgentProvider extends BaseAgentProvider {
   private piSdkPromise?: Promise<PiSdk>;
   private cachedAvailable?: boolean;
 
-  constructor(sessions: SessionsRepository, events: EventsRepository, private readonly settings: SettingsService) {
+  constructor(
+    sessions: SessionsRepository,
+    events: EventsRepository,
+    private readonly settings: SettingsService,
+    @Optional() private readonly nuncioContext?: NuncioContextService,
+  ) {
     super(sessions, events);
   }
 
@@ -393,18 +402,30 @@ export class PiAgentProvider extends BaseAgentProvider {
    * tools to a fixed cwd, which breaks worktree sessions. Allowlisted
    * extensions load through `additionalExtensionPaths`, so anything outside
    * the list never executes. `PI_EXTENSION_DISCOVERY=full` restores pi's
-   * default discovery.
+   * default discovery without disabling Nuncio's project-context injection.
    */
-  private async createEngineResources(pi: PiSdk, agentDir: string, cwd?: string) {
-    if (this.settings.resolve('PI_EXTENSION_DISCOVERY') === 'full') return undefined;
+  private async createEngineResources(pi: PiSdk, agentDir: string, sessionId: string, cwd?: string) {
     const resolvedCwd = cwd ?? process.cwd();
     const settingsManager = pi.SettingsManager.create(resolvedCwd, agentDir);
+    const session = this.sessions.findById(sessionId);
+    const projectPath = session?.projectPath ?? null;
+    const configuredBudget = Number(this.settings.resolve('NUNCIO_CONTEXT_FACTS_MAX_BYTES'));
+    const contextBudget = Number.isInteger(configuredBudget) && configuredBudget > 0
+      ? Math.min(configuredBudget, NUNCIO_CONTEXT_MAX_BYTES)
+      : NUNCIO_CONTEXT_MAX_BYTES;
+    const context = this.settings.resolve('NUNCIO_CONTEXT_FACTS_INJECT') === 'off'
+      ? ''
+      : (this.nuncioContext?.buildForProject(projectPath, contextBudget, session?.originTaskId) ?? '');
+    const fullDiscovery = this.settings.resolve('PI_EXTENSION_DISCOVERY') === 'full';
     const resourceLoader = new pi.DefaultResourceLoader({
       cwd: resolvedCwd,
       agentDir,
       settingsManager,
-      noExtensions: true,
-      additionalExtensionPaths: piEngineExtensionPaths(agentDir),
+      ...(!fullDiscovery ? {
+        noExtensions: true,
+        additionalExtensionPaths: piEngineExtensionPaths(agentDir),
+      } : {}),
+      ...(context ? { appendSystemPrompt: [context] } : {}),
     });
     await resourceLoader.reload();
     return { resourceLoader, settingsManager };
@@ -469,7 +490,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       : [...(buildPiCustomTools(context.cwd, pi, context.tools) ?? []), ...engineTools];
     const engineResources = policyOptions
       ? undefined
-      : await this.createEngineResources(pi, agentDir, context.cwd);
+      : await this.createEngineResources(pi, agentDir, sessionId, context.cwd);
     // Pi 0.80.6 treats `tools` as the allowlist for built-ins AND customTools.
     // Include the already-vetted Crew definitions or the SDK silently removes
     // submit_* from the registry despite receiving it in customTools.
