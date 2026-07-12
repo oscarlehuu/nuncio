@@ -22,6 +22,7 @@ import {
 } from './transcript-blocks/verify-rows';
 import { ProviderRequestCard } from './provider-request-card';
 import { TaskDigestCard } from './transcript-blocks/task-digest-card';
+import { EvidenceBlock } from './transcript-blocks/evidence-block';
 import {
   AssistantBubble,
   ErrorBlock,
@@ -344,7 +345,14 @@ function RenderItemView({
     case 'task_completed':
       return <TaskDigestCard digest={block.digest} onOpenSession={onOpenSession} />;
     case 'evidence':
-      return null;
+      return (
+        <EvidenceBlock
+          evidence={block.evidence}
+          sessionId={sessionId}
+          apiBase={apiBase}
+          {...(block.stale ? { stale: true } : {})}
+        />
+      );
     case 'error':
       return <ErrorRow message={block.message} />;
     default: {
