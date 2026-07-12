@@ -47,7 +47,7 @@ describe('AgentRegistry', () => {
         imports: [DatabaseModule, SessionsPersistenceModule, AgentsModule],
       })
         .overrideProvider(PiAgentProvider)
-        .useValue(stubAgentProvider('pi', 'Pi', false))
+        .useValue(stubAgentProvider('pi', 'Nuncio Engine', false))
         .overrideProvider(CursorAgentProvider)
         .useValue(stubAgentProvider('cursor', 'Cursor', false))
         .overrideProvider(CodexAgentProvider)
@@ -99,7 +99,7 @@ describe('AgentRegistry', () => {
         imports: [DatabaseModule, SessionsPersistenceModule, AgentsModule],
       })
         .overrideProvider(PiAgentProvider)
-        .useValue(stubAgentProvider('pi', 'Pi', false)),
+        .useValue(stubAgentProvider('pi', 'Nuncio Engine', false)),
     );
 
     await expect(registry.getAvailable('pi')).rejects.toThrow(BadRequestException);
@@ -130,7 +130,7 @@ describe('AgentRegistry', () => {
         .overrideProvider(CodexAgentProvider)
         .useValue(stubAgentProvider('codex', 'Codex', true))
         .overrideProvider(PiAgentProvider)
-        .useValue(stubAgentProvider('pi', 'Pi', true)),
+        .useValue(stubAgentProvider('pi', 'Nuncio Engine', true)),
     );
 
     expect(await registry.defaultId()).toBe('codex');

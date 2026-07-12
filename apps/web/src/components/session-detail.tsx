@@ -33,6 +33,7 @@ import {
   modelById,
   modelSupportsImages,
   prettyModelName,
+  providerMeta,
   type ModelProvider,
 } from '../lib/model-providers';
 import { useContextUsage } from '../lib/use-context-usage';
@@ -294,9 +295,9 @@ export function SessionDetail({
   );
   const hasPendingUserInput = pendingUserInput.length > 0;
   const interactionSupported = session.supportsInteraction ?? false;
-  const providerLabel = session.provider === 'cursor' ? 'Cursor' : session.provider === 'pi' ? 'Pi' : session.provider;
-  const steerWhileRunning = session.supportsSteerWhileRunning ?? false;
   const catalog = providers && providers.length > 0 ? providers : FALLBACK_PROVIDERS;
+  const providerLabel = providerMeta(session.provider, catalog).name;
+  const steerWhileRunning = session.supportsSteerWhileRunning ?? false;
   const canAttachImages =
     !managedByCrew &&
     modelSupportsImages(catalog, session.provider, session.model ?? undefined, session.supportsImages ?? false) &&
@@ -320,7 +321,11 @@ export function SessionDetail({
     ? prettyModelName(entry.name)
     : session.model && session.model !== 'Composer'
       ? session.model
-      : session.provider === 'cursor' ? 'Cursor' : session.provider === 'pi' ? 'Pi' : 'Default';
+      : session.provider === 'cursor'
+        ? 'Cursor'
+        : session.provider === 'pi'
+          ? providerMeta('pi', catalog).name
+          : 'Default';
   const showContinueOnMobile =
     !managedByCrew &&
     session.provider === 'cursor' &&

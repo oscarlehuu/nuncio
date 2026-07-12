@@ -24,7 +24,7 @@ vi.mock('@nuncio/core/crew-api', () => ({
 const PI_ONLY_PROVIDERS: ModelProvider[] = [
   {
     id: 'pi',
-    name: 'Pi',
+    name: 'Nuncio Engine',
     groups: [{ id: 'g', name: 'G', models: [{ id: 'anthropic:claude-haiku-4', name: 'Haiku' }] }],
   },
 ];
@@ -32,7 +32,7 @@ const PI_ONLY_PROVIDERS: ModelProvider[] = [
 const PI_MIXED_IMAGE_PROVIDERS: ModelProvider[] = [
   {
     id: 'pi',
-    name: 'Pi',
+    name: 'Nuncio Engine',
     capabilities: { images: true },
     groups: [
       {

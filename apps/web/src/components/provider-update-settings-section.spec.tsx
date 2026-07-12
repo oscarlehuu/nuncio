@@ -29,13 +29,13 @@ vi.mock('../lib/settings-api', () => ({
 
 const piBehind: ProviderUpdateStatusDto = {
   provider: 'pi',
-  name: 'Pi',
+  name: 'Nuncio Engine',
   currentVersion: '0.80.2',
   latestVersion: '0.80.3',
   status: 'behind_latest',
   canUpdate: true,
   updateCommand: 'pi update',
-  message: 'Pi has a newer CLI version available.',
+  message: 'Nuncio Engine has a newer CLI version available.',
   checkedAt: '2026-07-05T00:00:00.000Z',
   muted: false,
 };
@@ -66,14 +66,14 @@ describe('ProviderUpdateSettingsSection', () => {
     vi.mocked(updateProviderTool).mockResolvedValue({
       provider: 'pi',
       status: 'succeeded',
-      message: 'Pi updated.',
+      message: 'Nuncio Engine updated.',
       output: null,
       providerStatus: piCurrent,
     });
 
     render(<ProviderUpdateSettingsSection />);
 
-    expect(await screen.findByText('Pi CLI update available')).toBeInTheDocument();
+    expect(await screen.findByText('Nuncio Engine CLI update available')).toBeInTheDocument();
     expect(screen.getByText('0.80.2 -> 0.80.3')).toBeInTheDocument();
     expect(screen.getByText('pi update')).toBeInTheDocument();
     expect(updateProviderTool).not.toHaveBeenCalled();
@@ -82,7 +82,7 @@ describe('ProviderUpdateSettingsSection', () => {
 
     await waitFor(() => expect(updateProviderTool).toHaveBeenCalledWith('pi'));
     await waitFor(() => expect(fetchProviderUpdates).toHaveBeenCalledTimes(2));
-    expect(toast.success).toHaveBeenCalledWith('Pi updated.');
+    expect(toast.success).toHaveBeenCalledWith('Nuncio Engine updated.');
   });
 
   it('shows manual Codex update commands without a one-click Update button', async () => {
@@ -128,7 +128,7 @@ describe('ProviderUpdateSettingsSection', () => {
     vi.mocked(updateProviderTool).mockResolvedValue({
       provider: 'pi',
       status: 'failed',
-      message: 'Pi update exited with code 1.',
+      message: 'Nuncio Engine update exited with code 1.',
       output: 'permission denied',
       providerStatus: piBehind,
     });
@@ -138,7 +138,7 @@ describe('ProviderUpdateSettingsSection', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Update' }));
 
     await waitFor(() => expect(updateProviderTool).toHaveBeenCalledWith('pi'));
-    expect(toast.error).toHaveBeenCalledWith('Pi update exited with code 1.');
+    expect(toast.error).toHaveBeenCalledWith('Nuncio Engine update exited with code 1.');
     expect(toast.success).not.toHaveBeenCalled();
   });
 
@@ -161,9 +161,9 @@ describe('ProviderUpdateSettingsSection', () => {
 
     render(<ProviderUpdateSettingsSection />);
 
-    expect(await screen.findByText('Pi CLI update available')).toBeInTheDocument();
+    expect(await screen.findByText('Nuncio Engine CLI update available')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Update' })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Mute Pi update notifications' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Mute Nuncio Engine update notifications' }));
 
     await waitFor(() => expect(updateSetting).toHaveBeenCalledWith('NUNCIO_CLI_UPDATE_MUTED', 'pi'));
     await waitFor(() => expect(screen.getByText('Notifications muted')).toBeInTheDocument());

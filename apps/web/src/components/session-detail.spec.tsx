@@ -249,7 +249,7 @@ describe('SessionDetail', () => {
     const providers: ModelProvider[] = [
       {
         id: 'pi',
-        name: 'Pi',
+        name: 'Nuncio Engine',
         capabilities: { images: true },
         groups: [
           {
@@ -1367,7 +1367,7 @@ describe('SessionDetail', () => {
         [
           {
             id: 'pi',
-            name: 'Pi',
+            name: 'Nuncio Engine',
             groups: [
               {
                 id: 'g',
@@ -1408,7 +1408,7 @@ describe('SessionDetail', () => {
         [
           {
             id: 'pi',
-            name: 'Pi',
+            name: 'Nuncio Engine',
             groups: [{ id: 'g', name: 'g', models: [{ id: 'claude-fable-5', name: 'Fable 5' }] }],
           },
         ],
@@ -1434,7 +1434,7 @@ describe('SessionDetail', () => {
         [
           {
             id: 'pi',
-            name: 'Pi',
+            name: 'Nuncio Engine',
             groups: [{ id: 'g', name: 'g', models: [{ id: 'claude-fable-5', name: 'Fable 5' }] }],
           },
         ],

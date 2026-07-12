@@ -4,7 +4,7 @@ import { useMessageAttachments } from './use-message-attachments';
 import { appendImageTokens, stripImageToken } from './image-reference-token';
 
 const UNSUPPORTED_IMAGE_MESSAGE =
-  'This provider does not accept images yet. Switch to Pi or another image-capable model to paste screenshots.';
+  'This provider does not accept images yet. Switch to Nuncio Engine or another image-capable model to paste screenshots.';
 
 /**
  * Image staging for a composer, wired to its prompt text: adding an image

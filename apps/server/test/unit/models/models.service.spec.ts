@@ -32,7 +32,7 @@ describe('ModelsService', () => {
       .overrideProvider(PiAgentProvider)
       .useValue({
         id: 'pi',
-        name: 'Pi',
+        name: 'Nuncio Engine',
         isAvailable: async () => false,
         listModels: async () => [],
         dispose: () => undefined,
