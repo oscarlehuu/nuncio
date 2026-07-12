@@ -30,23 +30,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function normalizeOption(raw: unknown): UserInputOption | undefined {
+function normalizeOption(raw: unknown, index: number): UserInputOption | undefined {
   if (!isRecord(raw)) return undefined;
-  const id = typeof raw.id === 'string' ? raw.id : undefined;
   const label = typeof raw.label === 'string' ? raw.label : undefined;
-  if (!id || !label) return undefined;
+  if (!label) return undefined;
+  // Options are numbered by position everywhere (UI, formatted answers), so a
+  // missing id defaults to that visible number.
+  const id = typeof raw.id === 'string' && raw.id ? raw.id : String(index + 1);
   const description = typeof raw.description === 'string' ? raw.description : undefined;
   return description ? { id, label, description } : { id, label };
 }
 
-function normalizeQuestion(raw: unknown): UserInputQuestion | undefined {
+function normalizeQuestion(raw: unknown, index: number): UserInputQuestion | undefined {
   if (!isRecord(raw)) return undefined;
-  const id = typeof raw.id === 'string' ? raw.id : undefined;
   const prompt = typeof raw.prompt === 'string' ? raw.prompt : undefined;
-  if (!id || !prompt || !Array.isArray(raw.options)) return undefined;
+  if (!prompt || !Array.isArray(raw.options)) return undefined;
+  const id = typeof raw.id === 'string' && raw.id ? raw.id : `q${index + 1}`;
 
   const options = raw.options
-    .map(normalizeOption)
+    .map((option, optionIndex) => normalizeOption(option, optionIndex))
     .filter((option): option is UserInputOption => option !== undefined);
   if (options.length === 0) return undefined;
 

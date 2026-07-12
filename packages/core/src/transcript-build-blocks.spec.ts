@@ -196,6 +196,40 @@ describe('buildTranscriptBlocks', () => {
     });
   });
 
+  it('builds a plan block from plan_updated', () => {
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'plan_updated', {
+        items: [
+          { id: 'a', text: 'Read the code', status: 'done' },
+          { id: 'b', text: 'Write the fix', status: 'in_progress' },
+        ],
+      }),
+    ]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({
+      kind: 'plan',
+      items: [
+        { id: 'a', text: 'Read the code', status: 'done' },
+        { id: 'b', text: 'Write the fix', status: 'in_progress' },
+      ],
+    });
+  });
+
+  it('folds inline answers from user_input_resolved into the block', () => {
+    const questions = [{ id: 'q1', prompt: 'Pick', options: [{ id: 'a', label: 'A' }] }];
+    const answers = [{ questionId: 'q1', selectedOptionIds: ['a'], freeText: 'note' }];
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'user_input_requested', { requestId: 'r1', questions }),
+      ev(2, 'user_input_resolved', { requestId: 'r1', resolvedBy: 'user', answers }),
+    ]);
+    expect(blocks[0]).toMatchObject({
+      kind: 'user_input',
+      requestId: 'r1',
+      resolvedBy: 'user',
+      answers,
+    });
+  });
+
   it('builds user_input block from legacy tool_start askquestion + tool_end (not tool block)', () => {
     const questions = [{ id: 'q1', prompt: 'Pick', options: [{ id: 'a', label: 'A' }] }];
     const blocks = buildTranscriptBlocks([

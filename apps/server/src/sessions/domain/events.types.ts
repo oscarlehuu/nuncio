@@ -14,6 +14,7 @@ export type SessionEventType =
   | 'thinking_message'
   | 'user_input_requested'
   | 'user_input_resolved'
+  | 'plan_updated'
   | 'error'
   | 'status'
   | 'transcript_refreshed'

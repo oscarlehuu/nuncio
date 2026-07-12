@@ -15,6 +15,7 @@ import { ThinkingBlock } from './transcript-blocks/thinking-block';
 import { ToolGroup, type ToolGroupTool } from './transcript-blocks/tool-group';
 import { CursorContextBlock } from './transcript-blocks/cursor-context-block';
 import { UserInputBlock } from './transcript-blocks/user-input-block';
+import { PlanBlock } from './transcript-blocks/plan-block';
 import {
   VerifyNeedsAttentionRow,
   VerifyRetryRow,
@@ -293,6 +294,8 @@ function RenderItemView({
           sections={block.sections}
         />
       );
+    case 'plan':
+      return <PlanBlock items={block.items} />;
     case 'user_input':
       return (
         <UserInputBlock
@@ -301,6 +304,7 @@ function RenderItemView({
           defaultOpen={pendingRequestIds?.has(block.requestId)}
           {...(block.title ? { title: block.title } : {})}
           {...(block.resolvedBy ? { resolvedBy: block.resolvedBy } : {})}
+          {...(block.answers ? { answers: block.answers } : {})}
         />
       );
     case 'provider_request':

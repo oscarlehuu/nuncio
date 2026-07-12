@@ -2,6 +2,8 @@ export * from './api';
 export * from './attention-api';
 export * from './cursor-context';
 export * from './derive-pending-user-input';
+export * from './derive-plan';
+export * from './plan.types';
 export * from './design-tokens';
 export * from './fleet-api';
 export * from './forge-status-api';

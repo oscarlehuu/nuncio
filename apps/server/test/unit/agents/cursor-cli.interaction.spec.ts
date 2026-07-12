@@ -147,8 +147,12 @@ describe('CursorCliProvider interaction', () => {
 
     const stored = events.list(session.id);
     const resolved = stored.find((e) => e.type === 'user_input_resolved');
-    expect(resolved?.payload).toEqual({ requestId: callId, resolvedBy: 'user' });
-    expect(steeredMessage).toBe('Frontend');
+    expect(resolved?.payload).toEqual({
+      requestId: callId,
+      resolvedBy: 'user',
+      answers: [{ questionId: 'q1', selectedOptionIds: ['a'] }],
+    });
+    expect(steeredMessage).toBe('Option 1 \u2014 Frontend');
     expect(stored.some((e) => e.type === 'steer_message')).toBe(true);
   });
 

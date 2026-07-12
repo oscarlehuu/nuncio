@@ -25,6 +25,10 @@ let fakeSessionFile = '/tmp/fake-pi/session.jsonl';
 
 const makePiSdkStub = () => ({
   AuthStorage: { create: () => ({}) },
+  SettingsManager: { create: () => ({}) },
+  DefaultResourceLoader: class {
+    async reload() {}
+  },
   ModelRegistry: {
     create: () => ({
       getAvailable: () => [],

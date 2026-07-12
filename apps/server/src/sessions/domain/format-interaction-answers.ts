@@ -9,13 +9,19 @@ function formatOneAnswer(
   if (!answer) return '';
 
   const freeText = answer.freeText?.trim();
-  if (freeText) return freeText;
-
-  const labels = answer.selectedOptionIds
-    .map((id) => question.options.find((option) => option.id === id)?.label)
+  // Options are numbered by position — echo the number so the agent can map
+  // "Option 2" style replies back to its own option list.
+  const selections = answer.selectedOptionIds
+    .map((id) => {
+      const index = question.options.findIndex((option) => option.id === id);
+      if (index < 0) return undefined;
+      return `Option ${index + 1} — ${question.options[index]!.label}`;
+    })
     .filter((label): label is string => label !== undefined);
 
-  return labels.join(', ');
+  if (selections.length === 0) return freeText ?? '';
+  const joined = selections.join(', ');
+  return freeText ? `${joined} (note: ${freeText})` : joined;
 }
 
 export function formatInteractionAnswers(

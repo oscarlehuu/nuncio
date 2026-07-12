@@ -1,7 +1,8 @@
 import type { SessionEvent } from './api';
 import type { ProviderRequestDecision } from './api';
 import type { TranscriptImage } from './attachments';
-import type { UserInputQuestion, UserInputResolvedBy } from './user-input.types';
+import type { UserInputAnswer, UserInputQuestion, UserInputResolvedBy } from './user-input.types';
+import { normalizePlanItems, type PlanItem } from './plan.types';
 import { summarizeToolCall, type ToolSummary } from './tool-summary';
 import {
   isCursorContextMessage,
@@ -48,6 +49,12 @@ export type TranscriptBlock =
       title?: string;
       questions: UserInputQuestion[];
       resolvedBy?: UserInputResolvedBy;
+      answers?: UserInputAnswer[];
+    }
+  | {
+      kind: 'plan';
+      key: string;
+      items: PlanItem[];
     }
   | {
       kind: 'provider_request';
@@ -475,6 +482,16 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
     return;
   }
 
+  if (event.type === 'plan_updated') {
+    flushAssistant(state);
+    flushThinking(state);
+    const items = normalizePlanItems(payload.items);
+    if (items) {
+      state.out.push({ kind: 'plan', key: `plan-${event.seq}`, items });
+    }
+    return;
+  }
+
   if (event.type === 'user_input_requested') {
     flushAssistant(state);
     flushThinking(state);
@@ -501,13 +518,16 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
         ? (payload.resolvedBy as UserInputResolvedBy)
         : undefined;
     if (requestId && resolvedBy) {
+      const answers = Array.isArray(payload.answers)
+        ? (payload.answers as UserInputAnswer[])
+        : undefined;
       const idx = state.out.findIndex(
         (b) => b.kind === 'user_input' && b.requestId === requestId,
       );
       if (idx >= 0) {
         const block = state.out[idx];
         if (block.kind === 'user_input') {
-          state.out[idx] = { ...block, resolvedBy };
+          state.out[idx] = { ...block, resolvedBy, ...(answers ? { answers } : {}) };
         }
       }
     }

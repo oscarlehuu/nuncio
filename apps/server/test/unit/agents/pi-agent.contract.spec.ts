@@ -73,6 +73,10 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
       setThinkingLevel: () => undefined,
     },
   }),
+  SettingsManager: { create: () => ({}) },
+  DefaultResourceLoader: class {
+    async reload() {}
+  },
   getAgentDir: () => '/tmp/fake-pi-contract',
 }));
 

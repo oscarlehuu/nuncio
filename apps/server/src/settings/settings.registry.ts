@@ -93,6 +93,16 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     altEnvVar: 'PI_AGENT_DIR',
   },
   {
+    key: 'PI_EXTENSION_DISCOVERY',
+    category: 'provider',
+    providerId: 'pi',
+    type: 'string',
+    label: 'Pi extension discovery',
+    description:
+      'Nuncio sessions load only an allowlisted set of Pi extensions so CLI-oriented ones cannot alter daemon behavior. Set to "full" to restore Pi\'s default discovery (~/.pi and project .pi).',
+    envVar: 'PI_EXTENSION_DISCOVERY',
+  },
+  {
     key: 'NUNCIO_PI_BIN',
     category: 'provider',
     providerId: 'pi',

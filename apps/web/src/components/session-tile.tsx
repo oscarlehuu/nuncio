@@ -6,6 +6,7 @@ import { isComposingEvent } from '../lib/keyboard';
 import { DETAIL_EVENT_TAIL, useSessionStream } from '../lib/use-session-stream';
 import { useStickToBottom } from '../lib/use-stick-to-bottom';
 import { derivePendingUserInput } from '../lib/derive-pending-user-input';
+import { derivePlan, planProgress } from '../lib/derive-plan';
 import { deriveVerifyStatus } from '../lib/derive-verify-status';
 import { VerifyChip } from './verify-chip';
 import { projectDisplayName } from '../lib/projects';
@@ -117,6 +118,7 @@ export function SessionTile({
 }: SessionTileProps) {
   const { events, loadEarlier, hasEarlier } = useSessionStream(session.id, apiBase, DETAIL_EVENT_TAIL);
   const pending = useMemo(() => derivePendingUserInput(events).length > 0, [events]);
+  const plan = useMemo(() => derivePlan(events), [events]);
   const verifyStatus = useMemo(() => deriveVerifyStatus(events), [events]);
   const latestStatus = latestStatusEvent(events);
   const latestStatusValue = latestStatus?.status;
@@ -223,6 +225,7 @@ export function SessionTile({
                 {projectName ?? 'Chat'}
                 {modelName ? ` · ${modelName}` : ''}
                 {` · ${statusLabel(status)}`}
+                {plan ? ` · ${planProgress(plan).done}/${planProgress(plan).total} steps` : ''}
               </>
             )}
           </div>
