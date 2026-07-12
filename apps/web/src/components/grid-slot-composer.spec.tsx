@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Session } from '../lib/api';
+import { saveModelPreference } from '../lib/model-preference';
 import type { ModelProvider } from '../lib/model-providers';
 
 // The pickers fetch projects/models over the network — stub them to tiny controls
@@ -177,6 +178,34 @@ describe('GridSlotComposer', () => {
     await userEvent.click(screen.getByRole('button', { name: /start/i }));
     await waitFor(() => expect(onCreate).toHaveBeenCalled());
     expect(onCreate.mock.calls[0]?.[7]).toBeUndefined();
+  });
+
+  it('clears staged images and tokens when the catalog auto-resolves to a text-only model', async () => {
+    saveModelPreference({ modelId: 'google:gemini', providerId: 'pi' });
+    const props = {
+      sessions: [],
+      boundSessionIds: new Set<string>(),
+      onCreate: vi.fn().mockResolvedValue(fakeSession()),
+      onBind: vi.fn(),
+    };
+    const view = render(<GridSlotComposer {...props} providers={MIXED_IMAGE_PROVIDERS} />);
+
+    expect(await screen.findByRole('button', { name: /attach image/i })).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText(/new session prompt/i), 'inspect this');
+    const fileInput = view.container.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(fileInput).not.toBeNull();
+    await userEvent.upload(fileInput!, new File(['png'], 'sample.png', { type: 'image/png' }));
+    await waitFor(() => expect(screen.getByTestId('attachment-tray')).toBeInTheDocument());
+    expect(screen.getByLabelText(/new session prompt/i)).toHaveValue('inspect this [image 1]');
+
+    view.rerender(<GridSlotComposer {...props} providers={PROVIDERS} />);
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/new session prompt/i)).toHaveValue('inspect this'),
+    );
+    view.rerender(<GridSlotComposer {...props} providers={MIXED_IMAGE_PROVIDERS} />);
+    expect(await screen.findByRole('button', { name: /attach image/i })).toBeInTheDocument();
+    expect(screen.queryByTestId('attachment-tray')).toBeNull();
   });
 
   it('creates a session with the prompt + model + project, then binds the slot', async () => {

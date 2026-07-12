@@ -735,14 +735,14 @@ export class PiAgentProvider extends BaseAgentProvider {
         name: modelRegistry.getProviderDisplayName(providerId),
         sub: 'Pi ModelRegistry',
         models: groupModels.sort((left, right) =>
-          left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }) ||
-          left.id.localeCompare(right.id),
+          left.name.localeCompare(right.name, 'en', { sensitivity: 'base' }) ||
+          left.id.localeCompare(right.id, 'en'),
         ),
       });
     }
     groups.sort((left, right) =>
-      left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }) ||
-      left.id.localeCompare(right.id),
+      left.name.localeCompare(right.name, 'en', { sensitivity: 'base' }) ||
+      left.id.localeCompare(right.id, 'en'),
     );
 
     return [

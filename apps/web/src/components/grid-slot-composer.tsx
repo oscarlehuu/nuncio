@@ -169,6 +169,9 @@ export function GridSlotComposer({
     if (model && provider && lookup[model]) return;
     const resolved = resolveModelSelection(activeProviders, loadModelPreference());
     if (resolved) {
+      if (!modelSupportsImages(catalog, resolved.providerId, resolved.modelId)) {
+        imageAttachments.clearWithTokens();
+      }
       setModel(resolved.modelId);
       setProvider(resolved.providerId);
       setModelOptions(resolved.modelOptions);
@@ -176,6 +179,9 @@ export function GridSlotComposer({
     }
     const picked = pickDefaultModelSelection(activeProviders);
     if (picked) {
+      if (!modelSupportsImages(catalog, picked.providerId, picked.modelId)) {
+        imageAttachments.clearWithTokens();
+      }
       setModel(picked.modelId);
       setProvider(picked.providerId);
       setModelOptions(defaultOptionsForModel(lookup[picked.modelId]));

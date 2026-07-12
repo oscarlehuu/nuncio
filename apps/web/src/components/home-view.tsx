@@ -130,6 +130,9 @@ export function HomeView({
     if (model && provider && lookup[model]) return;
     const resolved = resolveModelSelection(providers, loadModelPreference());
     if (resolved) {
+      if (!modelSupportsImages(catalog, resolved.providerId, resolved.modelId)) {
+        imageAttachments.clearWithTokens();
+      }
       setModel(resolved.modelId);
       setProvider(resolved.providerId);
       setModelOptions(resolved.modelOptions);
@@ -137,6 +140,9 @@ export function HomeView({
     }
     const picked = pickDefaultModelSelection(providers);
     if (picked) {
+      if (!modelSupportsImages(catalog, picked.providerId, picked.modelId)) {
+        imageAttachments.clearWithTokens();
+      }
       setModel(picked.modelId);
       setProvider(picked.providerId);
       setModelOptions(defaultOptionsForModel(lookup[picked.modelId]));
