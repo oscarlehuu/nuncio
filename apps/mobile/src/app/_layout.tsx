@@ -26,6 +26,10 @@ export default function RootLayout() {
   const routed = useRef<Set<string>>(new Set());
 
   useEffect(() => {
+    // The cold-start replay is an async resolve with no unsubscribe of its own;
+    // this flag stops it navigating after the effect is torn down.
+    let cancelled = false;
+
     // Action buttons must be registered before any push is delivered.
     void registerNotificationCategories();
 
@@ -51,12 +55,16 @@ export default function RootLayout() {
     // live listener, so replay (and clear) the last response once on mount.
     Notifications.getLastNotificationResponseAsync()
       .then((response) => {
+        if (cancelled) return undefined;
         route(response);
         return response ? Notifications.clearLastNotificationResponseAsync() : undefined;
       })
       .catch(() => {});
     const sub = Notifications.addNotificationResponseReceivedListener(route);
-    return () => sub.remove();
+    return () => {
+      cancelled = true;
+      sub.remove();
+    };
   }, [router]);
 
   return (

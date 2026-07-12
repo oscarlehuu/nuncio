@@ -35,10 +35,16 @@ export default function SessionList() {
   const [pushDenied, setPushDenied] = useState(false);
 
   useEffect(() => {
+    // Guards every state/navigation that lands after an await: a revoke routes
+    // to /pairing (unmounting this screen), so a later registerForPush() or
+    // rotate resolve must not touch a dead component.
+    let cancelled = false;
     loadConnection(secureStore).then(async (loaded) => {
       if (loaded) {
         applyConnection(loaded);
-        registerForPush().then((result) => setPushDenied(result === 'permission-denied'));
+        registerForPush().then((result) => {
+          if (!cancelled) setPushDenied(result === 'permission-denied');
+        });
         const outcome = await rotateDeviceSecret({
           config: loaded,
           store: secureStore,
@@ -46,13 +52,18 @@ export default function SessionList() {
           applySecret: updateActiveSecret,
         });
         if (outcome === 'revoked') {
+          // The secret is invalid regardless of mount — clear it either way,
+          // but only navigate while still mounted.
           await clearConnection(secureStore);
-          router.replace('/pairing');
+          if (!cancelled) router.replace('/pairing');
           return;
         }
       }
-      setConnection(loaded);
+      if (!cancelled) setConnection(loaded);
     });
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
   const refresh = useCallback(async () => {
