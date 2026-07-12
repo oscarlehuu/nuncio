@@ -5,6 +5,7 @@ export * from './crew-api';
 export * from './crew-run-projection';
 export * from './derive-pending-user-input';
 export * from './derive-plan';
+export * from './evidence.types';
 export * from './plan.types';
 export * from './design-tokens';
 export * from './fleet-api';

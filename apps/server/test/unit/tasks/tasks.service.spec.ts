@@ -9,6 +9,7 @@ import { CursorLocalModule } from '../../../src/cursor-local/cursor-local.module
 import { DatabaseModule } from '../../../src/db/database.module';
 import { DatabaseService } from '../../../src/db/database.service';
 import { GitModule } from '../../../src/git/git.module';
+import { EvidenceCaptureService } from '../../../src/evidence/evidence-capture.service';
 import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
 import { SteerQueueRepository } from '../../../src/sessions/persistence/steer-queue.repository';
@@ -25,6 +26,7 @@ import {
 } from '../../helpers/simulated-cursor-app';
 
 describe('TasksService', () => {
+  const captureKnown = jest.fn(async (_session: unknown, _phase: 'before' | 'after') => null as never);
   let module: TestingModule;
   let service: TasksService;
   let sessions: SessionsService;
@@ -37,7 +39,12 @@ describe('TasksService', () => {
     return withSimulatedCursorProvider(
       Test.createTestingModule({
         imports: [DatabaseModule, SessionsPersistenceModule, AgentsModule, GitModule, CursorLocalModule, SettingsModule],
-        providers: [SessionsService, TasksRepository, TasksService],
+        providers: [
+          SessionsService,
+          TasksRepository,
+          TasksService,
+          { provide: EvidenceCaptureService, useValue: { captureKnown } },
+        ],
       }),
     ).compile();
   }
@@ -55,6 +62,8 @@ describe('TasksService', () => {
   });
 
   beforeEach(() => {
+    captureKnown.mockReset();
+    captureKnown.mockImplementation(async () => null as never);
     workspace = mkdtempSync(join(tmpdir(), 'nuncio-tasks-ws-'));
   });
 
@@ -101,6 +110,32 @@ describe('TasksService', () => {
     expect(done.sessionId).toBeTruthy();
     expect(done.outcome).toMatchObject({ sessionStatus: 'IDLE', verify: { ok: true } });
     expect(events.list(done.sessionId!).some((e) => e.type === 'user_message')).toBe(true);
+    expect(events.list(done.sessionId!).some((e) => e.type === 'evidence_captured')).toBe(false);
+  });
+
+  it('captures known preview evidence before and after a successful task', async () => {
+    writeVerifyScript('exit 0\n');
+    captureKnown.mockImplementation(async (_session, phase) => ({
+      ...(phase === 'before'
+        ? { beforeRef: { id: '0123456789abcdef0123456789abcdef', mimeType: 'image/png' } }
+        : { afterRef: { id: 'fedcba9876543210fedcba9876543210', mimeType: 'image/png' } }),
+      route: '/app', viewport: { w: 1440, h: 900 }, workspaceHead: 'abc123',
+    }) as never);
+
+    const task = service.enqueue({ prompt: 'capture evidence', provider: 'cursor', workspace });
+    const done = await waitForStatus(task.id, ['DONE', 'FAILED']);
+    expect(done.status).toBe('DONE');
+    expect(captureKnown.mock.calls.map((call) => call[1])).toEqual(['before', 'after']);
+    expect(events.list(done.sessionId!).filter((event) => event.type === 'evidence_captured'))
+      .toHaveLength(2);
+  });
+
+  it('keeps task settlement green when automatic evidence capture fails', async () => {
+    writeVerifyScript('exit 0\n');
+    captureKnown.mockImplementation(async () => { throw new Error('chrome unavailable'); });
+    const task = service.enqueue({ prompt: 'capture is optional', provider: 'cursor', workspace });
+    const done = await waitForStatus(task.id, ['DONE', 'FAILED']);
+    expect(done.status).toBe('DONE');
   });
 
   it('defers queued Crew members until the Crew execution owner marks itself ready', async () => {

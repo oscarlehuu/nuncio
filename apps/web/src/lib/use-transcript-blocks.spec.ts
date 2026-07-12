@@ -111,6 +111,19 @@ describe('useTranscriptBlocks incremental equivalence', () => {
     ]);
   });
 
+  it('matches batch parse while folding before and after evidence', () => {
+    assertIncrementalMatchesBatch([
+      ev(1, 'evidence_captured', {
+        beforeRef: { id: 'a'.repeat(32), mimeType: 'image/png' },
+        route: '/app', viewport: { w: 1440, h: 900 }, workspaceHead: 'head-a',
+      }),
+      ev(2, 'evidence_captured', {
+        afterRef: { id: 'b'.repeat(32), mimeType: 'image/png' },
+        route: '/app', viewport: { w: 1440, h: 900 }, workspaceHead: 'head-b',
+      }),
+    ]);
+  });
+
   it('matches batch parse for steer_message rendering', () => {
     assertIncrementalMatchesBatch([
       ev(1, 'user_message', { text: 'do X' }),

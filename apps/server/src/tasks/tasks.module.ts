@@ -1,6 +1,7 @@
 import { Global, Module } from '@nestjs/common';
 import { AgentsModule } from '../agents/agents.module';
 import { TASK_ENQUEUER } from '../orchestration/tools/task-enqueuer.token';
+import { EvidenceModule } from '../evidence/evidence.module';
 import { PromptsModule } from '../prompts/prompts.module';
 import { SessionsModule } from '../sessions/sessions.module';
 import { SessionsPersistenceModule } from '../sessions/sessions.persistence.module';
@@ -15,7 +16,7 @@ import { TasksService } from './tasks.service';
 // AgentsModule gives the controller AgentRegistry for engine-routing.
 @Global()
 @Module({
-  imports: [AgentsModule, PromptsModule, SessionsModule, SessionsPersistenceModule, SettingsModule],
+  imports: [AgentsModule, EvidenceModule, PromptsModule, SessionsModule, SessionsPersistenceModule, SettingsModule],
   controllers: [TasksController],
   providers: [TasksRepository, TasksService, { provide: TASK_ENQUEUER, useExisting: TasksService }],
   exports: [TasksService, TasksRepository, TASK_ENQUEUER],
