@@ -179,6 +179,111 @@ describe('SessionsService live Pi transcript watcher reconciliation', () => {
     expect(types.filter((type) => type === 'tool_end')).toHaveLength(1);
   });
 
+  it('does not append a legacy Pi prompt augmented with Nuncio runtime instructions', () => {
+    const events = module.get(EventsRepository);
+    const browserInstructions =
+      'When the user asks for browser, web, UI, site, screenshot, or visual verification work, use the Nuncio browser tools first. Omit target to use the configured default from Settings > MCP & Tools; target=auto prefers the Nuncio in-app browser, then falls back to the Nuncio-owned external CDP browser.';
+    writeFileSync(piPath, '');
+    const session = sessions.createHandoff({
+      provider: 'pi',
+      title: 'Pi',
+      workspace,
+      providerThreadId: piPath,
+      prompt: 'x',
+    });
+    events.appendBatch(session.id, [
+      { type: 'steer_message', payload: { text: 'continue' } },
+      { type: 'assistant_message', payload: { text: 'done' } },
+    ]);
+    writeFileSync(
+      piPath,
+      `${JSON.stringify(piMessage('user', [{ type: 'text', text: `continue\n\n${browserInstructions}` }]))}\n` +
+        `${JSON.stringify(piMessage('assistant', [{ type: 'text', text: 'done' }]))}\n`,
+    );
+    const future = new Date(Date.now() + 10_000);
+    utimesSync(piPath, future, future);
+
+    expect(service.refreshTranscript(session.id).added).toBe(0);
+    expect(service.refreshTranscript(session.id).added).toBe(0);
+    const transcript = service.getEvents(session.id);
+    expect(transcript.filter((event) => event.type === 'user_message' || event.type === 'steer_message')).toHaveLength(1);
+    expect(transcript.at(-1)).toMatchObject({ type: 'assistant_message', payload: { text: 'done' } });
+  });
+
+  it('hides a persisted legacy transport duplicate when its canonical prompt is outside the requested tail', () => {
+    const events = module.get(EventsRepository);
+    const browserInstructions =
+      'When the user asks for browser, web, UI, site, screenshot, or visual verification work, use the Nuncio browser tools first. Omit target to use the configured default from Settings > MCP & Tools; target=auto prefers the Nuncio in-app browser, then falls back to the Nuncio-owned external CDP browser.';
+    const session = sessions.createHandoff({
+      provider: 'pi',
+      title: 'Legacy Pi',
+      workspace,
+      providerThreadId: piPath,
+      prompt: 'x',
+    });
+    events.appendBatch(session.id, [
+      { type: 'user_message', payload: { text: 'do ABC' } },
+      { type: 'assistant_message', payload: { text: 'working' } },
+      { type: 'assistant_message', payload: { text: 'done' } },
+      { type: 'user_message', payload: { text: `do ABC\n\n${browserInstructions}` } },
+    ]);
+
+    const tail = service.getEvents(session.id, 0, { tail: 2 });
+
+    expect(tail).toEqual([
+      expect.objectContaining({ type: 'assistant_message', payload: { text: 'done' } }),
+      expect.objectContaining({
+        type: 'user_message',
+        payload: { text: 'do ABC', transportDuplicateOfSeq: 1 },
+      }),
+    ]);
+  });
+
+  it('preserves the event cursor when a requested page contains only transport duplicates', () => {
+    const events = module.get(EventsRepository);
+    const browserInstructions =
+      'When the user asks for browser, web, UI, site, screenshot, or visual verification work, use the Nuncio browser tools first. Omit target to use the configured default from Settings > MCP & Tools; target=auto prefers the Nuncio in-app browser, then falls back to the Nuncio-owned external CDP browser.';
+    const session = sessions.createHandoff({
+      provider: 'pi',
+      title: 'Legacy Pi',
+      workspace,
+      providerThreadId: piPath,
+      prompt: 'x',
+    });
+    events.appendBatch(session.id, [
+      { type: 'user_message', payload: { text: 'do ABC' } },
+      { type: 'user_message', payload: { text: `do ABC\n\n${browserInstructions}` } },
+    ]);
+
+    expect(service.getEvents(session.id, 0, { tail: 1 })).toEqual([
+      expect.objectContaining({
+        seq: 2,
+        type: 'user_message',
+        payload: { text: 'do ABC', transportDuplicateOfSeq: 1 },
+      }),
+    ]);
+  });
+
+  it('sanitizes a lone persisted transport prompt instead of hiding the user turn', () => {
+    const events = module.get(EventsRepository);
+    const browserInstructions =
+      'When the user asks for browser, web, UI, site, screenshot, or visual verification work, use the Nuncio browser tools first. Omit target to use the configured default from Settings > MCP & Tools; target=auto prefers the Nuncio in-app browser, then falls back to the Nuncio-owned external CDP browser.';
+    const session = sessions.createHandoff({
+      provider: 'pi',
+      title: 'Imported Pi',
+      workspace,
+      providerThreadId: piPath,
+      prompt: 'x',
+    });
+    events.appendBatch(session.id, [
+      { type: 'user_message', payload: { text: `do ABC\n\n${browserInstructions}` } },
+    ]);
+
+    expect(service.getEvents(session.id, 0, { tail: 1 })).toEqual([
+      expect.objectContaining({ type: 'user_message', payload: { text: 'do ABC' } }),
+    ]);
+  });
+
   it('still streams watcher-hydrated events for external Pi handoff sessions', async () => {
     const watcher = installDeterministicTranscriptWatcher(service);
     writeFileSync(piPath, `${JSON.stringify(piMessage('user', [{ type: 'text', text: 'initial request' }]))}\n`);

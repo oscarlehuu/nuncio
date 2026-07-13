@@ -1,6 +1,40 @@
 import { piEntriesToSessionEvents } from '../../../src/pi-local/pi-transcript-hydrate';
 
 describe('piEntriesToSessionEvents', () => {
+  it('decodes a legacy Nuncio runtime suffix back to the canonical user input', () => {
+    const browserInstructions =
+      'When the user asks for browser, web, UI, site, screenshot, or visual verification work, use the Nuncio browser tools first. Omit target to use the configured default from Settings > MCP & Tools; target=auto prefers the Nuncio in-app browser, then falls back to the Nuncio-owned external CDP browser.';
+
+    const events = piEntriesToSessionEvents([
+      {
+        type: 'message',
+        message: {
+          role: 'user',
+          content: [{ type: 'text', text: `Continue from phone\n\n${browserInstructions}` }],
+        },
+      },
+    ] as never);
+
+    expect(events).toEqual([
+      { type: 'user_message', payload: { text: 'Continue from phone' } },
+    ]);
+  });
+
+  it('preserves text after the legacy browser paragraph instead of truncating user content', () => {
+    const browserInstructions =
+      'When the user asks for browser, web, UI, site, screenshot, or visual verification work, use the Nuncio browser tools first. Omit target to use the configured default from Settings > MCP & Tools; target=auto prefers the Nuncio in-app browser, then falls back to the Nuncio-owned external CDP browser.';
+    const text = `Continue from phone\n\n${browserInstructions}\n\nKeep this user paragraph.`;
+
+    const events = piEntriesToSessionEvents([
+      {
+        type: 'message',
+        message: { role: 'user', content: [{ type: 'text', text }] },
+      },
+    ] as never);
+
+    expect(events).toEqual([{ type: 'user_message', payload: { text } }]);
+  });
+
   it('maps pi SDK parsed entries to Nuncio transcript events and skips thinking', () => {
     const events = piEntriesToSessionEvents([
       {

@@ -488,11 +488,13 @@ describe('CursorAgentProvider', () => {
       supportsInteraction: false,
       runtimeTools: tools,
     });
-    await provider.run(created.id, created.prompt, {
+    const context = {
       emit: () => {},
       tools,
       runtimeEnvironment,
-    });
+    };
+    await provider.run(created.id, created.prompt, context);
+    await provider.steer(created.id, 'continue exactly', context);
 
     const createArgs = createCalls[0] as {
       local: { customTools?: Record<string, { inputSchema?: unknown; execute: (args: unknown) => Promise<unknown> }> };
@@ -508,6 +510,7 @@ describe('CursorAgentProvider', () => {
     expect(sendCalls[0]!.indexOf('running inside Nuncio')).toBeLessThan(
       sendCalls[0]!.indexOf(created.prompt),
     );
+    expect(sendCalls[1]).toBe('continue exactly');
     expect((sendOptionsCalls[0] as { local?: { customTools?: Record<string, unknown> } }).local?.customTools?.nuncio_echo).toBeDefined();
 
     const result = await createArgs.local.customTools!.nuncio_echo.execute({ message: 'hello' });

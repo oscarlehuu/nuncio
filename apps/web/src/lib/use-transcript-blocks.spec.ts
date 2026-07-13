@@ -133,6 +133,16 @@ describe('useTranscriptBlocks incremental equivalence', () => {
     ]);
   });
 
+  it('matches batch parse while a steer reservation is reconciled in place', () => {
+    assertIncrementalMatchesBatch([
+      ev(1, 'user_message', { text: 'do X' }),
+      ev(2, 'assistant_delta', { delta: 'working' }),
+      ev(3, 'steer_reserved', { text: 'actually do Y' }),
+      ev(4, 'steer_message', { text: 'actually do Y' }),
+      ev(5, 'assistant_message', { text: 'Doing Y' }),
+    ]);
+  });
+
   it('matches batch parse for a full mixed session ending in a streaming tail', () => {
     const events = [
       ev(1, 'user_message', { text: 'turn 1' }),

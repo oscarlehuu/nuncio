@@ -17,9 +17,17 @@ import {
   isInteractiveToolName,
   parseInteractiveToolInput,
 } from './interactive-tool-input';
+import { decodeNuncioTransportUserText } from './transcript-user-prompt';
 
 export type TranscriptBlock =
-  | { kind: 'user'; key: string; text: string; queued?: boolean; images?: TranscriptImage[] }
+  | {
+      kind: 'user';
+      key: string;
+      text: string;
+      queued?: boolean;
+      reserved?: boolean;
+      images?: TranscriptImage[];
+    }
   | { kind: 'assistant'; key: string; text: string; streaming?: boolean }
   | {
       kind: 'tool';
@@ -383,10 +391,29 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
   const payload = event.payload ?? {};
   state.lastSeq = event.seq;
 
-  if (event.type === 'user_message' || event.type === 'steer_message') {
+  if (
+    event.type === 'user_message'
+    || event.type === 'steer_message'
+    || event.type === 'steer_reserved'
+  ) {
+    const duplicateOfSeq = payload.transportDuplicateOfSeq;
+    if (
+      typeof duplicateOfSeq === 'number'
+      && Number.isSafeInteger(duplicateOfSeq)
+      && duplicateOfSeq > 0
+      && duplicateOfSeq < event.seq
+    ) return;
+    const rawText = String(payload.text ?? '');
+    const decodedText = decodeNuncioTransportUserText(rawText);
+    if (
+      decodedText !== rawText
+      && state.out.some(
+        (block) => block.kind === 'user' && !block.queued && block.text === decodedText,
+      )
+    ) return;
+
     flushAssistant(state);
     flushThinking(state);
-    const rawText = String(payload.text ?? '');
     const images = parsePayloadImages(payload);
     if (isCursorContextMessage(rawText)) {
       const parsed = parseCursorContextMessage(rawText);
@@ -402,6 +429,13 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
       for (let i = state.out.length - 1; i >= 0; i--) {
         const block = state.out[i];
         if (block.kind === 'user' && block.queued && block.text === rawText) {
+          if (block.reserved) {
+            delete block.queued;
+            delete block.reserved;
+            state.currentTurnHasThinking = false;
+            state.assistantBufFromDelta = false;
+            return;
+          }
           state.out.splice(i, 1);
           break;
         }
@@ -410,14 +444,17 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
       // refresh re-hydrates the original prompt (image-stripped) after a run, which
       // would otherwise render as a duplicate bubble. An intentional resend of the
       // same text collapses to one — an acceptable trade for killing the duplicate.
-      const alreadyShown = state.out.some(
+      const alreadyShown = state.out.find(
         (block) => block.kind === 'user' && !block.queued && block.text === rawText,
       );
-      if (!alreadyShown) {
+      if (alreadyShown?.kind === 'user') {
+        delete alreadyShown.reserved;
+      } else {
         state.out.push({
           kind: 'user',
           key: `user-${event.seq}`,
           text: rawText,
+          ...(event.type === 'steer_reserved' ? { reserved: true } : {}),
           ...(images ? { images } : {}),
         });
       }
@@ -429,10 +466,18 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
 
   if (event.type === 'steer_queued') {
     // Arrives mid-run: do NOT flush streaming buffers — the run keeps going.
+    const text = String(payload.text ?? '');
+    for (let i = state.out.length - 1; i >= 0; i--) {
+      const block = state.out[i];
+      if (block.kind === 'user' && block.reserved && block.text === text) {
+        block.queued = true;
+        return;
+      }
+    }
     state.out.push({
       kind: 'user',
       key: `queued-${event.seq}`,
-      text: String(payload.text ?? ''),
+      text,
       queued: true,
     });
     return;

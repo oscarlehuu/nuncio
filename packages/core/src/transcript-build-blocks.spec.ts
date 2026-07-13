@@ -71,6 +71,102 @@ describe('derivePendingQueuedSteers', () => {
 });
 
 describe('buildTranscriptBlocks', () => {
+  it('shows a live steer reservation immediately and keeps its position when accepted', () => {
+    const reserved = buildTranscriptBlocks([
+      ev(1, 'user_message', { text: 'start' }),
+      ev(2, 'assistant_delta', { delta: 'working' }),
+      ev(3, 'steer_reserved', { text: 'change direction' }),
+    ]);
+
+    expect(reserved.map((block) => block.kind)).toEqual(['user', 'assistant', 'user']);
+    expect(reserved[2]).toMatchObject({
+      kind: 'user',
+      key: 'user-3',
+      text: 'change direction',
+    });
+
+    const accepted = buildTranscriptBlocks([
+      ev(1, 'user_message', { text: 'start' }),
+      ev(2, 'assistant_delta', { delta: 'working' }),
+      ev(3, 'steer_reserved', { text: 'change direction' }),
+      ev(4, 'steer_message', { text: 'change direction' }),
+    ]);
+    expect(accepted.map((block) => block.kind)).toEqual(['user', 'assistant', 'user']);
+    expect(accepted[2]).toMatchObject({
+      kind: 'user',
+      key: 'user-3',
+      text: 'change direction',
+    });
+  });
+
+  it('reconciles a rejected live reservation into one queued placeholder', () => {
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'user_message', { text: 'start' }),
+      ev(2, 'assistant_delta', { delta: 'working' }),
+      ev(3, 'steer_reserved', { text: 'later' }),
+      ev(4, 'steer_queued', { text: 'later' }),
+    ]);
+
+    const userBlocks = blocks.filter((block) => block.kind === 'user');
+    expect(userBlocks).toHaveLength(2);
+    expect(userBlocks[1]).toMatchObject({
+      key: 'user-3',
+      text: 'later',
+      queued: true,
+    });
+  });
+
+  it('hides a legacy Nuncio-augmented duplicate without hiding a genuine later turn', () => {
+    const browserInstructions =
+      'When the user asks for browser, web, UI, site, screenshot, or visual verification work, use the Nuncio browser tools first. Omit target to use the configured default from Settings > MCP & Tools; target=auto prefers the Nuncio in-app browser, then falls back to the Nuncio-owned external CDP browser.';
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'user_message', { text: 'inspect the UI' }),
+      ev(2, 'assistant_message', { text: 'done' }),
+      ev(3, 'user_message', { text: `inspect the UI\n\n${browserInstructions}` }),
+      ev(4, 'user_message', { text: 'a genuine later turn' }),
+    ]);
+
+    expect(blocks.filter((block) => block.kind === 'user')).toMatchObject([
+      { text: 'inspect the UI' },
+      { text: 'a genuine later turn' },
+    ]);
+    expect(blocks.some((block) => block.kind === 'user' && block.text.includes(browserInstructions))).toBe(false);
+  });
+
+  it('hides a server-projected transport duplicate even when its canonical row is outside the window', () => {
+    const blocks = buildTranscriptBlocks([
+      ev(439, 'user_message', { text: 'do ABC', transportDuplicateOfSeq: 2 }),
+      ev(440, 'assistant_message', { text: 'done' }),
+    ]);
+
+    expect(blocks).toEqual([
+      expect.objectContaining({ kind: 'assistant', text: 'done' }),
+    ]);
+  });
+
+  it('keeps runtime-looking text when there is no earlier canonical user message', () => {
+    const text = '## Current Nuncio runtime manifest (authoritative)\nThis is user-authored text.';
+    const blocks = buildTranscriptBlocks([ev(1, 'user_message', { text })]);
+
+    expect(blocks).toMatchObject([{ kind: 'user', text }]);
+  });
+
+  it('keeps a later user turn when the legacy browser paragraph is not the exact tail', () => {
+    const browserInstructions =
+      'When the user asks for browser, web, UI, site, screenshot, or visual verification work, use the Nuncio browser tools first. Omit target to use the configured default from Settings > MCP & Tools; target=auto prefers the Nuncio in-app browser, then falls back to the Nuncio-owned external CDP browser.';
+    const later = `inspect the UI\n\n${browserInstructions}\n\nThis final paragraph is user-authored.`;
+    const blocks = buildTranscriptBlocks([
+      ev(1, 'user_message', { text: 'inspect the UI' }),
+      ev(2, 'assistant_message', { text: 'done' }),
+      ev(3, 'user_message', { text: later }),
+    ]);
+
+    expect(blocks.filter((block) => block.kind === 'user')).toMatchObject([
+      { text: 'inspect the UI' },
+      { text: later },
+    ]);
+  });
+
   it('pairs legacy tool_start and tool_end into one done block', () => {
     const blocks = buildTranscriptBlocks([
       ev(1, 'tool_start', { tool: 'Read' }),

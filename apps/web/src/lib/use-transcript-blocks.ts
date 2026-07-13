@@ -28,6 +28,7 @@ function isSafeBoundary(state: ParserState): boolean {
   }
   for (const block of state.out) {
     if (block.kind === 'user_input' && !block.resolvedBy) return false;
+    if (block.kind === 'user' && block.reserved) return false;
   }
   return true;
 }

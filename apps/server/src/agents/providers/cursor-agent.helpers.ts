@@ -86,6 +86,7 @@ export type CursorRunInstance = {
 
 export type CursorSessionHandle = {
   agent: CursorAgentInstance;
+  runtimeBootstrapSent: boolean;
   accumulatedText: string;
   accumulatedThinking: string;
   thinkingOpen: boolean;
