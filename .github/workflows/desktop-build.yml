@@ -84,16 +84,24 @@ jobs:
           if [ "${{ inputs.channel }}" = "dev" ]; then
             # Sweep draft leftovers from cancelled dev runs — run-number tags are
             # never reused, so a cancelled build's draft would linger forever.
+            # Draft releases have no git tag, so never --cleanup-tag here: that
+            # tries to delete a nonexistent ref and fails the step (HTTP 422).
             gh release list --limit 50 --json tagName,isDraft \
               --jq '.[] | select(.isDraft and (.tagName | test("-dev\\."))) | .tagName' |
             while read -r STALE; do
-              [ "$STALE" = "$TAG" ] || gh release delete "$STALE" --yes --cleanup-tag
+              [ "$STALE" = "$TAG" ] || gh release delete "$STALE" --yes
             done
           fi
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             PRERELEASE=""
             if [ "${{ inputs.channel }}" = "dev" ]; then PRERELEASE="--prerelease"; fi
-            gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" \
+            # Create the tag ref at this commit first. A draft release created
+            # with only a raw-SHA --target makes gh read back a tag that does
+            # not exist yet and fail with HTTP 422 "Reference does not exist";
+            # an existing tag lets `gh release create --draft` attach cleanly.
+            gh api "repos/${{ github.repository }}/git/refs" \
+              -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" >/dev/null 2>&1 || true
+            gh release create "$TAG" --title "$TAG" \
               --notes "Automated ${{ inputs.channel }} build of Nuncio." --draft $PRERELEASE
           fi
 
