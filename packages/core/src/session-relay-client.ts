@@ -1,4 +1,5 @@
 import type { SessionEvent } from './api';
+import { subscribeBrowserSessionEvents } from './session-relay-pool';
 
 /**
  * Client for the session WS relay (see docs/ws-relay-contract.md). Envelope:
@@ -83,6 +84,17 @@ const DEFAULT_RECONNECT_MS = 2000;
 const DEFAULT_RESYNC_ACK_TIMEOUT_MS = 2000;
 
 export function subscribeSessionEvents(options: SessionSubscriptionOptions): SessionSubscription {
+  if (
+    options.webSocketFactory === undefined &&
+    options.reconnectMs === undefined &&
+    options.reconnectDelays === undefined &&
+    options.onNotice === undefined &&
+    options.onOpen === undefined &&
+    options.onClose === undefined &&
+    options.shouldReconnect === undefined
+  ) {
+    return subscribeBrowserSessionEvents(options);
+  }
   const reconnectMs = options.reconnectMs ?? DEFAULT_RECONNECT_MS;
   const factory: WebSocketFactory =
     options.webSocketFactory ??

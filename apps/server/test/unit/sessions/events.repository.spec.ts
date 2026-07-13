@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseModule } from '../../../src/db/database.module';
+import { DatabaseService } from '../../../src/db/database.service';
 import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
@@ -11,6 +12,7 @@ describe('EventsRepository', () => {
   let module: TestingModule;
   let sessions: SessionsRepository;
   let events: EventsRepository;
+  let database: DatabaseService;
   let dataDir: string;
 
   beforeAll(async () => {
@@ -23,6 +25,7 @@ describe('EventsRepository', () => {
 
     sessions = module.get(SessionsRepository);
     events = module.get(EventsRepository);
+    database = module.get(DatabaseService);
   });
 
   afterAll(async () => {
@@ -95,6 +98,59 @@ describe('EventsRepository', () => {
     expect(events.listBefore(s.id, 4, 2).map((e) => e.seq)).toEqual([2, 3]);
     expect(events.listBefore(s.id, 2, 5).map((e) => e.seq)).toEqual([1]);
     expect(events.listBefore(s.id, 1, 5)).toEqual([]);
+  });
+
+  it('projects lifetime status plus only windowed observability facts', () => {
+    const s = sessions.create({ prompt: 'observability window' });
+    const rows = [
+      events.append(s.id, 'status', { status: 'RUNNING' }),
+      events.append(s.id, 'assistant_delta', { delta: 'old noise' }),
+      events.append(s.id, 'user_message', { text: 'inside' }),
+      events.append(s.id, 'steer_queued', { text: 'inside' }),
+      events.append(s.id, 'verify_result', { ok: true }),
+      events.append(s.id, 'verify_needs_attention', { reason: 'inside' }),
+      events.append(s.id, 'tool_end', { output: 'inside noise' }),
+      events.append(s.id, 'status', { status: 'IDLE' }),
+      events.append(s.id, 'steer_message', { text: 'at upper bound' }),
+    ];
+    const timestamps = [10, 11, 20, 21, 22, 23, 24, 30, 40];
+    rows.forEach((row, index) => {
+      database.db.prepare('UPDATE events SET created_at = ? WHERE session_id = ? AND seq = ?')
+        .run(timestamps[index]!, s.id, row.seq);
+    });
+    for (let index = 0; index < 300; index += 1) {
+      const noise = events.append(s.id, 'assistant_delta', { delta: `noise-${index}` });
+      database.db.prepare('UPDATE events SET created_at = ? WHERE session_id = ? AND seq = ?')
+        .run(25, s.id, noise.seq);
+    }
+
+    const projected = events.listObservabilityWindow(s.id, 20, 40);
+    expect(projected.map((event) => [event.seq, event.type, event.createdAt])).toEqual([
+      [1, 'status', 10],
+      [3, 'user_message', 20],
+      [4, 'steer_queued', 21],
+      [5, 'verify_result', 22],
+      [6, 'verify_needs_attention', 23],
+      [8, 'status', 30],
+    ]);
+  });
+
+  it('projects only bounded timeline facts with inclusive-from exclusive-to boundaries', () => {
+    const s = sessions.create({ prompt: 'timeline window' });
+    const rows = [
+      events.append(s.id, 'status', { status: 'RUNNING' }),
+      events.append(s.id, 'verify_needs_attention', { reason: 'inside' }),
+      events.append(s.id, 'user_message', { text: 'not a timeline fact' }),
+      events.append(s.id, 'status', { status: 'IDLE' }),
+    ];
+    [19, 20, 21, 30].forEach((at, index) => {
+      database.db.prepare('UPDATE events SET created_at = ? WHERE session_id = ? AND seq = ?')
+        .run(at, s.id, rows[index]!.seq);
+    });
+
+    expect(events.listTimelineWindow(s.id, 20, 30).map((event) => [event.seq, event.type])).toEqual([
+      [2, 'verify_needs_attention'],
+    ]);
   });
 
   it('countRecentByTypeWithOriginTag counts tagged events since the cutoff, ignoring the flood', () => {

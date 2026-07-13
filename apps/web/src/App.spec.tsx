@@ -126,6 +126,7 @@ import { fetchSettings, updateSetting } from './lib/settings-api';
 import type { ModelProvider } from './lib/model-providers';
 import type { AttentionItemDto } from './lib/api';
 import { fetchForgePull } from './lib/forge-api';
+import { resetBrowserSessionRelayPoolForTests } from '@nuncio/core/session-relay-pool';
 
 const LIVE_CATALOG: ModelProvider[] = [
   {
@@ -212,6 +213,10 @@ function stubEventSource() {
     },
   );
 }
+
+afterEach(() => {
+  resetBrowserSessionRelayPoolForTests();
+});
 
 describe('App URL routing', () => {
   const session = fakeSession({ id: 'new1', title: 'Build the thing', status: 'IDLE' });
@@ -504,6 +509,7 @@ describe('App lifecycle', () => {
       'WebSocket',
       class {
         url: string;
+        channel = '';
         private listeners = new Map<string, Array<(event: { data?: unknown }) => void>>();
         close = vi.fn();
         constructor(url: string) {
@@ -516,12 +522,15 @@ describe('App lifecycle', () => {
           list.push(listener);
           this.listeners.set(type, list);
         }
-        send() {}
+        send(data: string) {
+          const frame = JSON.parse(data) as { method?: string; params?: { sessionId?: string } };
+          if (frame.method === 'subscribe') this.channel = frame.params?.sessionId ?? this.channel;
+        }
         fire(type: string, event: { data?: unknown }) {
           for (const listener of this.listeners.get(type) ?? []) listener(event);
         }
         emit(event: unknown) {
-          this.fire('message', { data: JSON.stringify({ channel: 's', event }) });
+          this.fire('message', { data: JSON.stringify({ channel: this.channel, event }) });
         }
       },
     );

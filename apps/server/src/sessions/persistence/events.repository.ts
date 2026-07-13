@@ -75,6 +75,55 @@ export class EventsRepository {
   }
 
   /**
+   * Low-volume facts used by metrics/digests. Status stays lifetime-scoped to
+   * preserve duration semantics; every other fact is bounded to [from, to).
+   * The fixed superset predicate intentionally mirrors the partial index.
+   */
+  listObservabilityWindow(sessionId: string, from: number, to: number): SessionEvent[] {
+    const statusRows = this.database.db
+      .prepare<EventRow, [string]>(
+        `SELECT * FROM events
+         WHERE session_id = ?
+           AND type IN ('status', 'user_message', 'steer_message', 'steer_queued',
+                        'verify_result', 'verify_needs_attention')
+           AND type = 'status'
+         ORDER BY created_at ASC, seq ASC`,
+      )
+      .all(sessionId);
+    const windowRows = this.database.db
+      .prepare<EventRow, [string, number, number]>(
+        `SELECT * FROM events
+         WHERE session_id = ?
+           AND type IN ('status', 'user_message', 'steer_message', 'steer_queued',
+                        'verify_result', 'verify_needs_attention')
+           AND type IN ('user_message', 'steer_message', 'steer_queued',
+                        'verify_result', 'verify_needs_attention')
+           AND created_at >= ? AND created_at < ?
+         ORDER BY created_at ASC, seq ASC`,
+      )
+      .all(sessionId, from, to);
+    return [...statusRows, ...windowRows]
+      .sort((a, b) => a.created_at - b.created_at || a.seq - b.seq)
+      .map(parseEvent);
+  }
+
+  /** Timeline needs only completion/attention facts inside its durable window. */
+  listTimelineWindow(sessionId: string, from: number, to: number): SessionEvent[] {
+    const rows = this.database.db
+      .prepare<EventRow, [string, number, number]>(
+        `SELECT * FROM events
+         WHERE session_id = ?
+           AND type IN ('status', 'user_message', 'steer_message', 'steer_queued',
+                        'verify_result', 'verify_needs_attention')
+           AND type IN ('status', 'verify_needs_attention')
+           AND created_at >= ? AND created_at < ?
+         ORDER BY created_at ASC, seq ASC`,
+      )
+      .all(sessionId, from, to);
+    return rows.map(parseEvent);
+  }
+
+  /**
    * Count events of a given type since `sinceMs` whose serialized payload
    * carries `"origin":"<originTag>"`. The LIKE match is exact for OUR own writes
    * (we control the serialized shape: `JSON.stringify` emits `"origin":"..."`

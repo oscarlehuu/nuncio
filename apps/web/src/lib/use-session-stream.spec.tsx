@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, waitFor, act } from '@testing-library/react';
 import { useSessionStream } from './use-session-stream';
+import { resetBrowserSessionRelayPoolForTests } from '@nuncio/core/session-relay-pool';
 
 vi.mock('./api', () => ({ fetchEvents: vi.fn() }));
 
@@ -12,6 +13,7 @@ class MockWebSocket {
   static instances: MockWebSocket[] = [];
   url: string;
   sent: Array<Record<string, unknown>> = [];
+  closed = false;
   private listeners = new Map<string, Listener[]>();
 
   constructor(url: string) {
@@ -32,6 +34,7 @@ class MockWebSocket {
   }
 
   close(): void {
+    this.closed = true;
     this.fire('close', {});
   }
 
@@ -45,6 +48,10 @@ class MockWebSocket {
 
   push(event: unknown): void {
     this.fire('message', { data: JSON.stringify({ channel: 's1', event }) });
+  }
+
+  pushTo(channel: string, event: unknown): void {
+    this.fire('message', { data: JSON.stringify({ channel, event }) });
   }
 
   get subscribes(): Array<Record<string, unknown>> {
@@ -87,16 +94,63 @@ function Harness({
   return <div data-testid="count">{stream.events.length}</div>;
 }
 
+function StreamCount({ sid, base = '', testId }: { sid: string; base?: string; testId: string }) {
+  const stream = useSessionStream(sid, base);
+  return <div data-testid={testId}>{stream.events.length}</div>;
+}
+
 describe('useSessionStream', () => {
   beforeEach(() => {
+    resetBrowserSessionRelayPoolForTests();
     vi.stubGlobal('WebSocket', MockWebSocket);
     vi.mocked(fetchEvents).mockReset();
     lastSocket = undefined;
     MockWebSocket.instances.length = 0;
   });
   afterEach(() => {
+    resetBrowserSessionRelayPoolForTests();
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  });
+
+  it('multiplexes two same-machine hooks over one relay socket', async () => {
+    vi.mocked(fetchEvents).mockImplementation((id) => Promise.resolve([ev(id === 's1' ? 1 : 10)]));
+    const view = render(
+      <>
+        <StreamCount sid="s1" testId="first-count" />
+        <StreamCount sid="s2" testId="second-count" />
+      </>,
+    );
+
+    await waitFor(() => expect(view.getByTestId('first-count').textContent).toBe('1'));
+    await waitFor(() => expect(view.getByTestId('second-count').textContent).toBe('1'));
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const socket = MockWebSocket.instances[0]!;
+    await waitFor(() => expect(socket.subscribes).toHaveLength(2));
+
+    act(() => socket.pushTo('s1', ev(2, 'assistant_delta', { delta: 'a' })));
+    await waitFor(() => expect(view.getByTestId('first-count').textContent).toBe('2'));
+    expect(view.getByTestId('second-count').textContent).toBe('1');
+
+    act(() => socket.pushTo('s2', ev(11, 'assistant_delta', { delta: 'b' })));
+    await waitFor(() => expect(view.getByTestId('second-count').textContent).toBe('2'));
+    expect(MockWebSocket.instances).toHaveLength(1);
+  });
+
+  it('keeps different hub-machine bases on separate relay sockets', async () => {
+    vi.mocked(fetchEvents).mockResolvedValue([ev(1)]);
+    render(
+      <>
+        <StreamCount sid="s1" base="/m/mac-a" testId="first-count" />
+        <StreamCount sid="s2" base="/m/mac-b" testId="second-count" />
+      </>,
+    );
+
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(2));
+    expect(MockWebSocket.instances.map((socket) => socket.url).sort()).toEqual([
+      'ws://localhost/m/mac-a/api/sessions/ws',
+      'ws://localhost/m/mac-b/api/sessions/ws',
+    ]);
   });
 
   it('seeds events from fetchEvents on mount', async () => {
@@ -328,7 +382,8 @@ describe('useSessionStream', () => {
 
     await waitFor(() => expect(getByTestId('count').textContent).toBe('2'));
     expect(fetchEvents).toHaveBeenLastCalledWith('s1', 0, '');
-    expect(MockWebSocket.instances.length).toBeGreaterThanOrEqual(2);
+    expect(MockWebSocket.instances).toHaveLength(1);
+    await waitFor(() => expect(subscribeSince(MockWebSocket.instances[0]!)).toBe(2));
   });
 
   it('does not let a stale refetch from session A overwrite session B or seed its cursor', async () => {
@@ -355,8 +410,7 @@ describe('useSessionStream', () => {
     view.rerender(<Harness sid="s2" onReady={(stream) => { api = stream; }} />);
     await waitFor(() => expect(api?.events.map((event) => event.seq)).toEqual([10]));
     const bSocket = MockWebSocket.instances[MockWebSocket.instances.length - 1]!;
-    await waitFor(() => expect(bSocket.subscribes.length).toBe(1));
-    expect(bSocket.subscribes[0].params).toMatchObject({ sessionId: 's2', since: 10 });
+    await waitFor(() => expect(bSocket.subscribes.at(-1)?.params).toMatchObject({ sessionId: 's2', since: 10 }));
 
     staleARefetch.resolve([ev(99)]);
     await act(async () => {
@@ -365,7 +419,9 @@ describe('useSessionStream', () => {
 
     expect(api!.events.map((event) => event.seq)).toEqual([10]);
     expect(MockWebSocket.instances[MockWebSocket.instances.length - 1]).toBe(bSocket);
-    expect(bSocket.subscribes).toHaveLength(1);
+    expect(bSocket.subscribes.filter((message) => (
+      message.params as { sessionId: string }
+    ).sessionId === 's2')).toHaveLength(1);
   });
 
   it('does not let an older same-session refetch overwrite a newer result', async () => {
@@ -389,7 +445,7 @@ describe('useSessionStream', () => {
     });
     expect(api!.events.map((event) => event.seq)).toEqual([1, 12]);
     const newestSocket = MockWebSocket.instances[MockWebSocket.instances.length - 1]!;
-    await waitFor(() => expect(newestSocket.subscribes.length).toBe(1));
+    await waitFor(() => expect(subscribeSince(newestSocket)).toBe(12));
     expect(subscribeSince(newestSocket)).toBe(12);
 
     older.resolve([ev(4)]);
@@ -424,7 +480,7 @@ describe('useSessionStream', () => {
 
     expect(api!.events.map((event) => event.seq)).toEqual([1, 2, 3, 4, 5, 7]);
     const newestSocket = MockWebSocket.instances[MockWebSocket.instances.length - 1]!;
-    await waitFor(() => expect(newestSocket.subscribes.length).toBe(1));
+    await waitFor(() => expect(subscribeSince(newestSocket)).toBe(7));
     expect(subscribeSince(newestSocket)).toBe(7);
   });
 

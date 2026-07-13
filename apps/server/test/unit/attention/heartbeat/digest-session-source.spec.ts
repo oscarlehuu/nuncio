@@ -47,4 +47,26 @@ describe('HeartbeatService digest session source', () => {
     expect(sessions.userFacingCalls.some((c) => c === true)).toBe(true);
     expect(sessions.calls).toEqual([]);
   });
+
+  it('loads digest observability facts through the durable window projection', () => {
+    const sessions = new SpySessions();
+    const calls: Array<[string, number, number]> = [];
+    const events = {
+      list: () => { throw new Error('legacy full-history read'); },
+      listObservabilityWindow: (id: string, from: number, to: number) => {
+        calls.push([id, from, to]);
+        return [];
+      },
+    };
+    const svc = new HeartbeatService(
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, sessions as never, events as never, undefined, undefined,
+    );
+
+    (svc as unknown as { digestInput: (from: number, to: number) => unknown }).digestInput(100, 200);
+    expect(calls).toEqual([
+      ['live', 100, 200],
+      ['archived', 100, 200],
+    ]);
+  });
 });

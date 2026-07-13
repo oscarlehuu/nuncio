@@ -36,17 +36,20 @@ export class ObservabilityService {
 
   summary(from?: string, to?: string): ObservabilityMetrics {
     const now = this.clock.now();
-    return foldObservabilitySummary(this.sources(), { window: this.window(from, to, now), now });
+    const window = this.window(from, to, now);
+    return foldObservabilitySummary(this.sources(window, 'observability'), { window, now });
   }
 
   session(id: string, from?: string, to?: string): SessionObservabilityDto {
     const now = this.clock.now();
-    return foldSessionObservability(this.sources(), id, { window: this.window(from, to, now), now });
+    const window = this.window(from, to, now);
+    return foldSessionObservability(this.sources(window, 'observability', id), id, { window, now });
   }
 
   rollups(dimension?: RollupDimension, from?: string, to?: string): ObservabilityRollupDto[] {
     const now = this.clock.now();
-    return foldObservabilityRollups(this.sources(), { window: this.window(from, to, now), now }, dimension);
+    const window = this.window(from, to, now);
+    return foldObservabilityRollups(this.sources(window, 'observability'), { window, now }, dimension);
   }
 
   timeline(input: {
@@ -58,10 +61,13 @@ export class ObservabilityService {
     provider?: string;
   } = {}): TimelineFeedDto {
     const now = this.clock.now();
-    const entries = buildGlobalTimeline(this.sources(), {
-      window: this.timelineWindow(input.from, input.to, now),
+    const window = this.timelineWindow(input.from, input.to, now);
+    const before = parseNumber(input.before);
+    const sourceWindow = { ...window, to: before === null ? window.to : Math.min(window.to, before) };
+    const entries = buildGlobalTimeline(this.sources(sourceWindow, 'timeline'), {
+      window,
       now,
-      ...(parseNumber(input.before) !== null ? { before: parseNumber(input.before)! } : {}),
+      ...(before !== null ? { before } : {}),
       ...(parseLimit(input.limit) !== null ? { limit: parseLimit(input.limit)! } : {}),
       ...(input.projectPath?.trim() ? { projectPath: input.projectPath.trim() } : {}),
       ...(input.provider?.trim() ? { provider: input.provider.trim() } : {}),
@@ -69,12 +75,23 @@ export class ObservabilityService {
     return { entries, nextBefore: entries.at(-1)?.ts ?? null };
   }
 
-  private sources(): ObservabilitySources {
-    const sessions = this.sessions.listUserFacing(true);
+  private sources(
+    window: { from: number; to: number },
+    projection: 'observability' | 'timeline',
+    onlySessionId?: string,
+  ): ObservabilitySources {
+    const sessions = this.sessions
+      .listUserFacing(true)
+      .filter((session) => onlySessionId === undefined || session.id === onlySessionId);
     return {
       sessions,
       eventsBySession: Object.fromEntries(
-        sessions.map((session) => [session.id, this.events.list(session.id)]),
+        sessions.map((session) => [
+          session.id,
+          projection === 'timeline'
+            ? this.events.listTimelineWindow(session.id, window.from, window.to)
+            : this.events.listObservabilityWindow(session.id, window.from, window.to),
+        ]),
       ),
       tasks: this.tasks.list(),
       loopRuns: this.loops.listAllRuns(),

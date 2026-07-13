@@ -16,6 +16,21 @@ describe('DatabaseService schema + migration', () => {
     delete process.env.NUNCIO_DATA_DIR;
   });
 
+  it('creates the partial observability fact index without indexing transcript noise', () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-observability-index-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
+
+    db = new DatabaseService();
+    const index = db.db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?")
+      .get('idx_events_observability_window') as { sql: string } | null;
+
+    expect(index?.sql).toContain('session_id, type, created_at, seq');
+    expect(index?.sql).toContain("'verify_needs_attention'");
+    expect(index?.sql).not.toContain('assistant_delta');
+    expect(index?.sql).not.toContain('tool_end');
+  });
+
   it('fresh schema includes a provider column on sessions', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-fresh-'));
     process.env.NUNCIO_DATA_DIR = dataDir;

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'bun:test';
 import { ObservabilityService } from '../../../src/observability/observability.service';
-import type { ObservabilitySources } from '../../../src/observability/observability.types';
 
 describe('ObservabilityService Crew session boundary', () => {
   it('uses only user-facing sessions and never loads Crew member events', () => {
@@ -16,16 +15,18 @@ describe('ObservabilityService Crew session boundary', () => {
     const loadedEventIds: string[] = [];
     const service = new ObservabilityService(
       sessions as never,
-      { list: (id: string) => { loadedEventIds.push(id); return []; } } as never,
+      {
+        list: () => { throw new Error('legacy full-history read'); },
+        listObservabilityWindow: (id: string) => { loadedEventIds.push(id); return []; },
+      } as never,
       { list: () => [] } as never,
       { listAllRuns: () => [] } as never,
       { list: () => [] } as never,
       { list: () => [] } as never,
     );
 
-    const sources = (service as unknown as { sources: () => ObservabilitySources }).sources();
-    expect(sources.sessions.map(({ id, verifyOwner }) => ({ id, verifyOwner })))
-      .toEqual([{ id: 'solo', verifyOwner: 'session' }]);
+    service.clock = { now: () => 1_000 };
+    service.summary('0', '1_000');
     expect(loadedEventIds).toEqual(['solo']);
     expect(userFacingCalls).toBe(1);
     expect(rawCalls).toBe(0);

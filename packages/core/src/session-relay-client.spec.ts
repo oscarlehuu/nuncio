@@ -47,18 +47,86 @@ function event(seq: number): SessionEvent {
   return { seq, type: 'assistant_delta', payload: {}, createdAt: seq };
 }
 
+const originalWebSocket = globalThis.WebSocket;
+
+function useGlobalSocket(): void {
+  (globalThis as unknown as { WebSocket: typeof FakeSocket }).WebSocket = FakeSocket;
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   FakeSocket.instances = [];
 });
 
 afterEach(() => {
+  if (originalWebSocket) globalThis.WebSocket = originalWebSocket;
+  else delete (globalThis as { WebSocket?: unknown }).WebSocket;
   vi.useRealTimers();
 });
 
 const factory = (url: string) => new FakeSocket(url);
 
 describe('subscribeSessionEvents', () => {
+  it('shares one browser socket across session channels on the same relay URL', () => {
+    useGlobalSocket();
+    const seenA: number[] = [];
+    const seenB: number[] = [];
+
+    const first = subscribeSessionEvents({
+      url: 'ws://x/api/sessions/ws',
+      sessionId: 's1',
+      since: 3,
+      onEvent: (e) => seenA.push(e.seq),
+    });
+    const second = subscribeSessionEvents({
+      url: 'ws://x/api/sessions/ws',
+      sessionId: 's2',
+      since: 8,
+      onEvent: (e) => seenB.push(e.seq),
+    });
+
+    expect(FakeSocket.instances).toHaveLength(1);
+    const ws = FakeSocket.instances[0]!;
+    ws.open();
+    expect(ws.sent.filter((message) => message.method === 'subscribe')).toEqual([
+      expect.objectContaining({ params: { sessionId: 's1', since: 3 } }),
+      expect.objectContaining({ params: { sessionId: 's2', since: 8 } }),
+    ]);
+
+    ws.push({ channel: 's1', event: event(4) });
+    ws.push({ channel: 's2', event: event(9) });
+    expect(seenA).toEqual([4]);
+    expect(seenB).toEqual([9]);
+
+    first.close();
+    expect(ws.closed).toBe(false);
+    expect(ws.sent.at(-1)).toMatchObject({ method: 'unsubscribe', params: { sessionId: 's1' } });
+    ws.push({ channel: 's2', event: event(10) });
+    expect(seenB).toEqual([9, 10]);
+
+    second.close();
+    vi.runOnlyPendingTimers();
+    expect(ws.closed).toBe(true);
+  });
+
+  it('keeps browser relay pools isolated by the complete machine URL', () => {
+    useGlobalSocket();
+    const first = subscribeSessionEvents({
+      url: 'ws://hub/m/mac-a/api/sessions/ws',
+      sessionId: 's1',
+      onEvent: () => {},
+    });
+    const second = subscribeSessionEvents({
+      url: 'ws://hub/m/mac-b/api/sessions/ws',
+      sessionId: 's2',
+      onEvent: () => {},
+    });
+
+    expect(FakeSocket.instances).toHaveLength(2);
+    first.close();
+    second.close();
+  });
+
   it('subscribes from the given cursor on open and forwards events', () => {
     const seen: number[] = [];
     subscribeSessionEvents({

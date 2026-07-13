@@ -113,8 +113,15 @@ recovery path, while unbounded buffering can exhaust the host.
 owns the gap-free property: it tracks the highest `seq` seen, resubscribes from
 it on reconnect (2s), on `behind`, and on `resync()` (tab visible / app
 foregrounded). `call(method, params)` issues RPCs (e.g. steer) over the same
-socket. React Native injects a `webSocketFactory` that adds the Bearer header;
-browsers rely on the cookie.
+socket. Plain browser subscriptions with the exact same complete relay URL share
+one physical socket; hub URLs containing different `/m/<machine>/` paths never
+share. Every logical consumer retains its own monotonic cursor and close state.
+Consumers of the same session share one server channel from their minimum cursor,
+filter replay against their individual cursors, and unsubscribe that channel only
+after the final consumer closes. Closing or recovering a session channel does not
+interrupt its neighbors. React Native injects a `webSocketFactory` that adds the
+Bearer header and retains a standalone connection owner; browsers rely on the
+cookie.
 
 REST is only a bootstrap optimization. Web gives an already-resolved REST page
 one microtask to seed its cursor, then opens the relay immediately from the

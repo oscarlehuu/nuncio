@@ -269,7 +269,7 @@ export class HeartbeatService implements OnModuleInit {
   private digestInput(windowFrom: number, windowTo: number): DigestInput {
     const c = this.gatherDigestCounts(windowFrom, windowTo);
     const openTopCount = this.attention?.list().counts.total ?? 0;
-    const observabilitySources = this.observabilitySources();
+    const observabilitySources = this.observabilitySources(windowFrom, windowTo);
     const observabilityQuery = { window: { from: windowFrom, to: windowTo }, now: windowTo };
     return {
       runsOk: c.runsOk,
@@ -287,12 +287,15 @@ export class HeartbeatService implements OnModuleInit {
     };
   }
 
-  private observabilitySources(): ObservabilitySources {
+  private observabilitySources(windowFrom: number, windowTo: number): ObservabilitySources {
     const sessions = this.sessions?.listUserFacing(true) ?? [];
     return {
       sessions,
       eventsBySession: Object.fromEntries(
-        sessions.map((session) => [session.id, this.events?.list(session.id) ?? []]),
+        sessions.map((session) => [
+          session.id,
+          this.events?.listObservabilityWindow(session.id, windowFrom, windowTo) ?? [],
+        ]),
       ),
       tasks: this.tasks?.list() ?? [],
       loopRuns: this.allLoopRuns(),

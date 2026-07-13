@@ -44,6 +44,12 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_session_seq ON events(session_id, seq);
+CREATE INDEX IF NOT EXISTS idx_events_observability_window
+ON events(session_id, type, created_at, seq)
+WHERE type IN (
+  'status', 'user_message', 'steer_message', 'steer_queued',
+  'verify_result', 'verify_needs_attention'
+);
 
 CREATE TABLE IF NOT EXISTS provider_requests (
   request_id TEXT PRIMARY KEY,
