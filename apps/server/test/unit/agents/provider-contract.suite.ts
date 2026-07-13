@@ -123,7 +123,7 @@ export function describeAgentProviderContract(name: string, makeHarness: MakeHar
       expect(idleAt).toBeGreaterThan(runningAt);
     });
 
-    it('streams text as shared assistant_delta events that coalesce', async () => {
+    it('streams text as an immediate durable head plus coalesced tail events', async () => {
       const h = await makeHarness();
       const created = h.createSession('stream some text');
       const emitted: CapturedEvent[] = [];
@@ -135,14 +135,13 @@ export function describeAgentProviderContract(name: string, makeHarness: MakeHar
       const persistedDeltas = h.events
         .list(created.id)
         .filter((event) => event.type === 'assistant_delta');
-      // Two deltas in one turn coalesce to a single persisted assistant_delta
-      // event via BaseAgentProvider's quiet-stream flush.
-      expect(persistedDeltas).toHaveLength(1);
-      expect((persistedDeltas[0]?.payload as { delta: string }).delta).toBe(
-        h.successDeltas.join(''),
-      );
-      // The live stream carried assistant_delta too (fan-out, not just persistence).
-      expect(emitted.some((event) => event.type === 'assistant_delta')).toBe(true);
+      const persistedText = persistedDeltas
+        .map((event) => (event.payload as { delta: string }).delta)
+        .join('');
+      expect((persistedDeltas[0]?.payload as { delta: string }).delta).toBe(h.successDeltas[0]);
+      expect(persistedText).toBe(h.successDeltas.join(''));
+      const emittedDeltas = emitted.filter((event) => event.type === 'assistant_delta');
+      expect(emittedDeltas).toEqual(persistedDeltas);
     });
 
     it('emits a terminal assistant_message matching the SDK authoritative text', async () => {

@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { UserBubble } from './transcript-bubbles';
+import { AssistantBubble, UserBubble } from './transcript-bubbles';
+
+describe('AssistantBubble', () => {
+  it('renders the complete received text immediately while streaming', () => {
+    const text = `stream-head-${'x'.repeat(240)}-stream-tail`;
+
+    render(<AssistantBubble text={text} streaming />);
+
+    expect(screen.getByText(text)).toBeInTheDocument();
+  });
+});
 
 describe('UserBubble', () => {
   it('renders short text with markdown', () => {

@@ -9,7 +9,6 @@ import {
 
 /** Initial window for the full session view; older history pages in on demand. */
 export const DETAIL_EVENT_TAIL = 1000;
-const BOOTSTRAP_RELAY_FALLBACK_MS = 1_000;
 
 type ScheduledFlush = {
   id: number;
@@ -182,7 +181,6 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
     const ensureConnected = () => {
       if (isCurrent(sessionId, generation) && !subscriptionRef.current) connect(generation);
     };
-    const fallbackTimer = window.setTimeout(ensureConnected, BOOTSTRAP_RELAY_FALLBACK_MS);
 
     void fetchInitial(sessionId)
       .then((initial) => {
@@ -196,9 +194,12 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
         // from seq 0 so durable replay can recover a transient fetch failure.
       })
       .finally(() => {
-        window.clearTimeout(fallbackTimer);
         ensureConnected();
       });
+
+    // Give an already-resolved bootstrap one microtask to seed the cursor, but
+    // never let real REST/network latency delay the live durable relay.
+    queueMicrotask(ensureConnected);
 
     const onVisibility = () => {
       if (document.visibilityState !== 'visible') return;
@@ -209,7 +210,6 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
 
     return () => {
       if (generationRef.current === generation) generationRef.current += 1;
-      window.clearTimeout(fallbackTimer);
       document.removeEventListener('visibilitychange', onVisibility);
       subscriptionRef.current?.close();
       subscriptionRef.current = null;

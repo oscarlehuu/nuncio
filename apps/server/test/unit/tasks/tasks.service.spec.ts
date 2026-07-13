@@ -1286,6 +1286,12 @@ describe('TasksService', () => {
 
     it('flushes a delta buffered during the retry await before a cancellation digest', async () => {
       const parent = await sessions.create({ prompt: 'cancel ordering parent', provider: 'cursor', workspace });
+      const settleStart = Date.now();
+      while (sessions.get(parent.id)?.status !== 'IDLE' && Date.now() - settleStart < 8000) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(sessions.get(parent.id)?.status).toBe('IDLE');
+      const baselineSeq = events.list(parent.id).at(-1)?.seq ?? 0;
       const victim = repo.create({
         prompt: 'cancel with concurrent parent output',
         provider: 'cursor',
@@ -1311,7 +1317,8 @@ describe('TasksService', () => {
         // final adjacent flush themselves.
         if (pendingDelta) sessions.flushParentBuffer(parent.id);
         const ordered = events.list(parent.id).filter(
-          (event) => event.type === 'assistant_delta' || event.type === 'task_completed',
+          (event) => event.seq > baselineSeq &&
+            (event.type === 'assistant_delta' || event.type === 'task_completed'),
         );
         expect(ordered.map((event) => event.type)).toEqual(['assistant_delta', 'task_completed']);
       } finally {

@@ -166,21 +166,18 @@ describe('BaseAgentProvider streamed-tail preservation', () => {
   });
 
   it('flushes exactly when a delta append reaches the max-chars boundary, losing no character', async () => {
-    // Boundary: DELTA_FLUSH_MAX_CHARS=2000, flush fires on `length >= max`
-    // AFTER an append (the first delta of a buffer never self-flushes, however
-    // large — the size check only runs on subsequent appends). Here delta one
-    // seeds the buffer at 1999, delta two appends to hit exactly 2000 → flush.
-    // Delta three then seeds a fresh buffer that drains at turn end. The three
-    // persisted rows must reconstruct the text with no char swallowed at the
-    // split and none duplicated.
+    // The logical segment head commits immediately. Its coalesced tail still
+    // flushes exactly at 2,000 chars, then a later tail drains at turn end.
+    const head = 'H';
     const seed = 'a'.repeat(DELTA_FLUSH_MAX_CHARS - 1); // 1999
     const trip = 'Z'; // append that reaches exactly 2000
     const after = 'TAIL';
     provider.script = [
+      { type: 'assistant_delta', payload: { delta: head } },
       { type: 'assistant_delta', payload: { delta: seed } },
       { type: 'assistant_delta', payload: { delta: trip } },
       { type: 'assistant_delta', payload: { delta: after } },
-      { type: 'assistant_message', payload: { text: seed + trip + after } },
+      { type: 'assistant_message', payload: { text: head + seed + trip + after } },
     ];
     const created = sessions.create({ prompt: 'boundary', provider: 'scripted-tail' });
 
@@ -190,24 +187,20 @@ describe('BaseAgentProvider streamed-tail preservation', () => {
       .list(created.id)
       .filter((e) => e.type === 'assistant_delta')
       .map((e) => (e.payload as { delta: string }).delta);
-    // Row one is the exactly-2000 chunk that tripped `>= max`; row two is the
-    // tail flushed at turn end. Full text is preserved across the split.
-    expect(deltas).toEqual([seed + trip, after]);
-    expect(deltas[0].length).toBe(DELTA_FLUSH_MAX_CHARS);
-    expect(deltas.join('')).toBe(seed + trip + after);
-    expect(deltas.join('').length).toBe(DELTA_FLUSH_MAX_CHARS + after.length);
+    expect(deltas).toEqual([head, seed + trip, after]);
+    expect(deltas[1].length).toBe(DELTA_FLUSH_MAX_CHARS);
+    expect(deltas.join('')).toBe(head + seed + trip + after);
+    expect(deltas.join('').length).toBe(head.length + DELTA_FLUSH_MAX_CHARS + after.length);
   });
 
   it('does not flush one character short of the max-chars boundary', async () => {
-    // The below-boundary neighbour: a buffer that only ever reaches 1999 must
-    // NOT flush early; the whole message stays a single coalesced row. Guards an
-    // off-by-one that would either fragment (harmless) or, if the comparison
-    // were inverted, drop a char.
+    const head = 'H';
     const seed = 'b'.repeat(DELTA_FLUSH_MAX_CHARS - 2); // 1998
     provider.script = [
+      { type: 'assistant_delta', payload: { delta: head } },
       { type: 'assistant_delta', payload: { delta: seed } },
       { type: 'assistant_delta', payload: { delta: 'x' } }, // buffer now 1999, no flush
-      { type: 'assistant_message', payload: { text: seed + 'x' } },
+      { type: 'assistant_message', payload: { text: head + seed + 'x' } },
     ];
     const created = sessions.create({ prompt: 'below boundary', provider: 'scripted-tail' });
 
@@ -217,10 +210,8 @@ describe('BaseAgentProvider streamed-tail preservation', () => {
       .list(created.id)
       .filter((e) => e.type === 'assistant_delta')
       .map((e) => (e.payload as { delta: string }).delta);
-    // Buffer stops at 1999 (< 2000), so nothing flushes early: one row at turn end.
-    expect(deltas.length).toBe(1);
-    expect(deltas[0]).toBe(seed + 'x');
-    expect(deltas[0].length).toBe(DELTA_FLUSH_MAX_CHARS - 1);
+    expect(deltas).toEqual([head, seed + 'x']);
+    expect(deltas[1].length).toBe(DELTA_FLUSH_MAX_CHARS - 1);
   });
 
   it('drops callbacks from an older run generation after a replacement run starts', async () => {
@@ -259,6 +250,7 @@ describe('BaseAgentProvider streamed-tail preservation', () => {
       emit: (event) => emitted.push(event),
     });
     while (overlapping.contexts.length < 1) await Promise.resolve();
+    overlapping.emitFrom(0, 'durable head: ');
     overlapping.emitFrom(0, 'accepted before dispose');
 
     const originalAppend = events.append.bind(events);
@@ -281,9 +273,9 @@ describe('BaseAgentProvider streamed-tail preservation', () => {
     overlapping.release(0);
     await running;
     const deltas = events.list(created.id).filter((event) => event.type === 'assistant_delta');
-    expect(deltas.map((event) => (event.payload as { delta: string }).delta)).toEqual([
-      'accepted before dispose',
-    ]);
+    expect(
+      deltas.map((event) => (event.payload as { delta: string }).delta).join(''),
+    ).toBe('durable head: accepted before dispose');
     expect(emitted).toContainEqual(
       expect.objectContaining({
         type: 'assistant_delta',
@@ -292,11 +284,44 @@ describe('BaseAgentProvider streamed-tail preservation', () => {
     );
   });
 
+  it('does not recreate segment metadata when a disposed retained tail recovers', async () => {
+    const overlapping = new OverlappingRunProvider(sessions, events);
+    const created = sessions.create({ prompt: 'dispose metadata recovery', provider: 'overlapping' });
+    const running = overlapping.run(created.id, created.prompt, { emit: () => {} });
+    while (overlapping.contexts.length < 1) await Promise.resolve();
+    overlapping.emitFrom(0, 'durable head');
+
+    const originalAppend = events.append.bind(events);
+    events.append = ((sessionId: string, type: string, payload: unknown) => {
+      if (type === 'assistant_delta') throw new Error('sqlite unavailable during dispose');
+      return originalAppend(sessionId, type, payload);
+    }) as EventsRepository['append'];
+
+    try {
+      overlapping.emitFrom(0, 'a'.repeat(DELTA_FLUSH_MAX_CHARS));
+      overlapping.emitFrom(0, 'retained behind full tail');
+      expect(() => overlapping.dispose(created.id)).toThrow('sqlite unavailable during dispose');
+    } finally {
+      events.append = originalAppend as EventsRepository['append'];
+    }
+
+    overlapping.flushPendingEvents(created.id);
+    const segmentState = (
+      overlapping as unknown as { deltaSegments: Map<string, unknown> }
+    ).deltaSegments;
+    expect(overlapping.pendingEventSessionIds()).not.toContain(created.id);
+    expect(segmentState.has(created.id)).toBe(false);
+
+    overlapping.release(0);
+    await running;
+  });
+
   it('can cancel a retained delta retry when shutdown makes persistence unavailable', async () => {
     const overlapping = new OverlappingRunProvider(sessions, events);
     const created = sessions.create({ prompt: 'shutdown retry', provider: 'overlapping' });
     const running = overlapping.run(created.id, created.prompt, { emit: () => {} });
     while (overlapping.contexts.length < 1) await Promise.resolve();
+    overlapping.emitFrom(0, 'durable head: ');
     overlapping.emitFrom(0, 'accepted before shutdown');
 
     const originalAppend = events.append.bind(events);
@@ -330,7 +355,9 @@ describe('BaseAgentProvider streamed-tail preservation', () => {
       emit: (event) => emitted.push(event),
     });
     while (overlapping.contexts.length < 1) await Promise.resolve();
+    overlapping.emitFrom(0, 'durable head: ');
     overlapping.emitFrom(0, 'must remain retained');
+    const emittedBeforeFailure = emitted.filter((event) => event.type === 'assistant_delta').length;
 
     const originalAppend = events.append.bind(events);
     events.append = ((sessionId: string, type: string, payload: unknown) => {
@@ -343,14 +370,22 @@ describe('BaseAgentProvider streamed-tail preservation', () => {
     try {
       expect(() => overlapping.flushPendingEvents(created.id)).toThrow(RetainedEventFlushError);
       expect(overlapping.pendingEventSessionIds()).toContain(created.id);
-      expect(emitted.filter((event) => event.type === 'assistant_delta')).toHaveLength(0);
+      expect(emitted.filter((event) => event.type === 'assistant_delta')).toHaveLength(
+        emittedBeforeFailure,
+      );
     } finally {
       events.append = originalAppend as EventsRepository['append'];
     }
 
     overlapping.flushPendingEvents(created.id);
     expect(overlapping.pendingEventSessionIds()).not.toContain(created.id);
-    expect(events.list(created.id).filter((event) => event.type === 'assistant_delta')).toHaveLength(1);
+    expect(
+      events
+        .list(created.id)
+        .filter((event) => event.type === 'assistant_delta')
+        .map((event) => (event.payload as { delta: string }).delta)
+        .join(''),
+    ).toBe('durable head: must remain retained');
     overlapping.release(0);
     await running;
   });
@@ -514,7 +549,7 @@ describe('BaseAgentProvider streamed-tail preservation', () => {
     const created = sessions.create({ prompt: 'bounded retry chunks', provider: 'overlapping' });
     const running = overlapping.run(created.id, created.prompt, { emit: () => {} });
     while (overlapping.contexts.length < 1) await Promise.resolve();
-    overlapping.emitFrom(0, 'a'.repeat(DELTA_FLUSH_MAX_CHARS - 1));
+    overlapping.emitFrom(0, 'H');
 
     const originalAppend = events.append.bind(events);
     let failures = 1;
@@ -522,6 +557,7 @@ describe('BaseAgentProvider streamed-tail preservation', () => {
       if (type === 'assistant_delta' && failures-- > 0) throw new Error('sqlite temporarily busy');
       return originalAppend(sessionId, type, payload);
     }) as EventsRepository['append'];
+    overlapping.emitFrom(0, 'a'.repeat(DELTA_FLUSH_MAX_CHARS - 1));
     overlapping.emitFrom(0, 'Z');
     events.append = originalAppend as EventsRepository['append'];
 
@@ -531,8 +567,8 @@ describe('BaseAgentProvider streamed-tail preservation', () => {
       .list(created.id)
       .filter((event) => event.type === 'assistant_delta')
       .map((event) => (event.payload as { delta: string }).delta);
-    expect(chunks.map((chunk) => chunk.length)).toEqual([DELTA_FLUSH_MAX_CHARS, 4]);
-    expect(chunks.join('')).toBe(`${'a'.repeat(DELTA_FLUSH_MAX_CHARS - 1)}ZTAIL`);
+    expect(chunks.map((chunk) => chunk.length)).toEqual([1, DELTA_FLUSH_MAX_CHARS, 4]);
+    expect(chunks.join('')).toBe(`H${'a'.repeat(DELTA_FLUSH_MAX_CHARS - 1)}ZTAIL`);
 
     overlapping.release(0);
     await running;

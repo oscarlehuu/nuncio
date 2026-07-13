@@ -1591,7 +1591,7 @@ describe('SessionDetail', () => {
   });
 });
 
-describe('SessionDetail throttled streaming', () => {
+describe('SessionDetail live streaming', () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
   });
@@ -1600,28 +1600,17 @@ describe('SessionDetail throttled streaming', () => {
     vi.useRealTimers();
   });
 
-  it('reveals assistant deltas gradually while RUNNING', async () => {
+  it('renders the complete received assistant delta immediately while RUNNING', async () => {
     const longDelta = 'x'.repeat(120);
     const events: SessionEvent[] = [
       { seq: 1, type: 'assistant_delta', payload: { delta: longDelta }, createdAt: Date.now() },
     ];
     await renderDetail({ status: 'RUNNING' }, events);
 
-    act(() => {
-      vi.advanceTimersByTime(100);
-    });
-
-    const assistantBubble = screen.getByText(/^x{1,119}$/);
-    expect(assistantBubble.textContent?.length).toBeLessThan(longDelta.length);
-
-    act(() => {
-      vi.advanceTimersByTime(2000);
-    });
-    // Adaptive catch-up fully drains the backlog well within 2s.
-    expect(assistantBubble.textContent?.length).toBe(longDelta.length);
+    expect(screen.getByText(longDelta)).toBeInTheDocument();
   });
 
-  it('flushes throttled text when assistant_message arrives', async () => {
+  it('keeps the exact text when the terminal assistant_message arrives', async () => {
     const full = 'Complete response text here';
     const events: SessionEvent[] = [
       { seq: 1, type: 'assistant_delta', payload: { delta: full }, createdAt: Date.now() },

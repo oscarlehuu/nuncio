@@ -442,14 +442,12 @@ describe('useSessionStream', () => {
     });
   });
 
-  it('opens the relay from seq 0 when the REST bootstrap stays pending', async () => {
-    vi.useFakeTimers();
+  it('opens the relay from seq 0 in a microtask when the REST bootstrap stays pending', async () => {
     vi.mocked(fetchEvents).mockReturnValueOnce(new Promise(() => {}));
     render(<Harness sid="s1" tail={50} />);
     expect(lastSocket).toBeUndefined();
 
     await act(async () => {
-      vi.advanceTimersByTime(1_000);
       await Promise.resolve();
     });
 
@@ -460,6 +458,55 @@ describe('useSessionStream', () => {
       since: 0,
       tail: 50,
     });
+  });
+
+  it('merges a late REST bootstrap with RAF-pending live events without duplicates or cursor regression', async () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal(
+      'requestAnimationFrame',
+      vi.fn((callback: FrameRequestCallback) => {
+        frames.push(callback);
+        return frames.length;
+      }),
+    );
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    const bootstrap = deferred<ReturnType<typeof ev>[]>();
+    vi.mocked(fetchEvents).mockReturnValueOnce(bootstrap.promise);
+    let api: ReturnType<typeof useSessionStream> | undefined;
+
+    render(<Harness sid="s1" tail={50} onReady={(stream) => { api = stream; }} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(lastSocket).toBeDefined();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(lastSocket!.subscribes).toHaveLength(1);
+    expect(subscribeSince(lastSocket!)).toBe(0);
+
+    act(() => {
+      lastSocket!.push(ev(3, 'assistant_delta', { delta: 'live-3' }));
+      lastSocket!.push(ev(4, 'assistant_delta', { delta: 'live-4' }));
+    });
+    expect(frames).toHaveLength(1);
+
+    bootstrap.resolve([ev(1), ev(2), ev(3, 'assistant_delta', { delta: 'live-3' })]);
+    await act(async () => {
+      await bootstrap.promise;
+      await Promise.resolve();
+    });
+    expect(api!.events.map((event) => event.seq)).toEqual([1, 2, 3]);
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(lastSocket!.subscribes).toHaveLength(1);
+
+    act(() => frames.shift()?.(16));
+    expect(api!.events.map((event) => event.seq)).toEqual([1, 2, 3, 4]);
+
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    expect(lastSocket!.subscribes).toHaveLength(2);
+    expect(subscribeSince(lastSocket!)).toBe(4);
   });
 
   it('visibility recovery resubscribes from the highest live seq', async () => {

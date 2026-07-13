@@ -14,6 +14,16 @@ describe('ThinkingBlock (Cursor-style compact row)', () => {
     expect(screen.getByTestId('thinking-row')).toHaveTextContent(/thinking/i);
   });
 
+  it('reveals the complete received thinking text immediately when expanded', async () => {
+    const user = userEvent.setup();
+    const text = `thought-head-${'x'.repeat(240)}-thought-tail`;
+    render(<ThinkingBlock text={text} streaming />);
+
+    await user.click(screen.getByRole('button'));
+
+    expect(screen.getByText(text)).toBeInTheDocument();
+  });
+
   it('starts collapsed and expands on click to reveal text', async () => {
     const user = userEvent.setup();
     render(<ThinkingBlock text="pondering steps" />);

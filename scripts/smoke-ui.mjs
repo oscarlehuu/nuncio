@@ -114,24 +114,7 @@ async function main() {
   };
 
   try {
-    // 1) Create the session on the Mock provider via the API (see header note).
-    const createStep = record('create mock session (POST /api/sessions provider=mock)');
-    const createRes = await fetch(`${baseUrl}/api/sessions`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt: 'Smoke: run the mock flow', provider: 'mock' }),
-    });
-    if (!createRes.ok) {
-      throw new Error(`create failed: ${createRes.status} ${await createRes.text()}`);
-    }
-    const session = await createRes.json();
-    if (session.provider !== 'mock' || !session.id) {
-      throw new Error(`unexpected create response: ${JSON.stringify(session)}`);
-    }
-    createStep.ok = true;
-    createStep.detail = `id=${session.id}`;
-
-    // 2) Launch system Chrome headless against the same-origin UI.
+    // 1) Launch system Chrome headless against the same-origin UI.
     const chromeTarget = CHROME_EXECUTABLE
       ? `executable=${CHROME_EXECUTABLE}`
       : `channel=${CHROME_CHANNEL}`;
@@ -203,7 +186,25 @@ async function main() {
     composerStep.ok = true;
     composerStep.detail = `current=${currentBranch}, remote=${remoteBranch}`;
 
-    // 3) Open the session in the UI and assert the streamed assistant text.
+    // 2) Create immediately before navigation so Chrome observes a live run,
+    // rather than hydrating a response that completed during setup.
+    const createStep = record('create live mock session (POST /api/sessions provider=mock)');
+    const createRes = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ prompt: 'Smoke: run the mock flow', provider: 'mock' }),
+    });
+    if (!createRes.ok) {
+      throw new Error(`create failed: ${createRes.status} ${await createRes.text()}`);
+    }
+    const session = await createRes.json();
+    if (session.provider !== 'mock' || !session.id) {
+      throw new Error(`unexpected create response: ${JSON.stringify(session)}`);
+    }
+    createStep.ok = true;
+    createStep.detail = `id=${session.id}`;
+
+    // 3) Open the live session and assert the initial reply completes exactly.
     const streamStep = record('stream: assistant reply appears in the transcript');
     await page.goto(`${baseUrl}/session/${session.id}`, { waitUntil: 'domcontentloaded' });
     // Wait for the UI to hydrate to the detail view (the steer composer is present).
@@ -214,11 +215,18 @@ async function main() {
       async () => (await page.getByText(replyMark, { exact: false }).count()) > 0,
       { label: 'streamed assistant reply' },
     );
+    const fullReply = 'I received your task. In mock mode (agent auth not configured), I simulate agent output. ' +
+      'Configure a real provider to use an agent SDK harness.';
+    await waitFor(
+      async () => (await page.getByText(fullReply, { exact: true }).count()) > 0,
+      { label: 'exact completed assistant reply' },
+    );
     streamStep.ok = true;
-    streamStep.detail = `matched "${replyMark}…"`;
+    streamStep.detail = `matched "${replyMark}…" and exact final text`;
 
-    // 4) Send a steer through the UI composer and assert the second turn.
-    const steerStep = record('steer: send via UI, assert the reply turn appears');
+    // 4) With the detail view already live, send a steer and prove a partial
+    // reply renders before the exact terminal text.
+    const steerStep = record('steer: partial reply renders before exact completion');
     const steerText = `steer-${Date.now()}`;
     await composer.click();
     await composer.fill(steerText);
@@ -227,14 +235,21 @@ async function main() {
     await waitFor(async () => (await page.getByText(steerText, { exact: false }).count()) > 0, {
       label: 'steer echoed into transcript',
     });
-    // …and the mock's steer-specific reply streams back.
-    const steerReplyMark = 'Steer received';
+    // …and the mock's first committed chunk becomes visible before completion.
+    const steerReply = `Steer received: "${steerText}". Continuing in mock mode.`;
+    const steerReplyHead = steerReply.slice(0, 8);
     await waitFor(
-      async () => (await page.getByText(steerReplyMark, { exact: false }).count()) > 0,
-      { label: 'mock steer reply' },
+      async () =>
+        (await page.getByText(steerReplyHead, { exact: false }).count()) > 0 &&
+        (await page.getByText(steerReply, { exact: true }).count()) === 0,
+      { interval: 10, label: 'partial mock steer reply before completion' },
+    );
+    await waitFor(
+      async () => (await page.getByText(steerReply, { exact: true }).count()) > 0,
+      { label: 'exact completed mock steer reply' },
     );
     steerStep.ok = true;
-    steerStep.detail = `sent "${steerText}", saw "${steerReplyMark}…"`;
+    steerStep.detail = `saw "${steerReplyHead}…" before exact final text`;
 
     // 5) Archive via the UI and assert it leaves the active list.
     const archiveStep = record('archive: via UI, assert it leaves the active list');

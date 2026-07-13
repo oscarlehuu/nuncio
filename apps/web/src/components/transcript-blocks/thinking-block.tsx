@@ -1,6 +1,5 @@
 import { ChevronDown, Sparkles } from 'lucide-react';
 import { useState } from 'react';
-import { useThrottledStreamText } from '@/lib/use-throttled-stream-text';
 import { cn } from '@/lib/utils';
 
 export interface ThinkingBlockProps {
@@ -10,7 +9,6 @@ export interface ThinkingBlockProps {
 
 export function ThinkingBlock({ text, streaming }: ThinkingBlockProps) {
   const [open, setOpen] = useState(false);
-  const displayed = useThrottledStreamText(text, streaming ?? false);
   const durationS = Math.max(1, Math.round(text.length / 500));
 
   return (
@@ -44,7 +42,7 @@ export function ThinkingBlock({ text, streaming }: ThinkingBlockProps) {
       {open && (
         <div className="px-2 pb-2 pt-0.5">
           <pre className="rounded-md bg-muted/30 border border-border/40 px-3 py-2 text-ui whitespace-pre-wrap break-all text-muted-foreground font-mono max-h-[40vh] overflow-y-auto">
-            {displayed}
+            {text}
           </pre>
         </div>
       )}

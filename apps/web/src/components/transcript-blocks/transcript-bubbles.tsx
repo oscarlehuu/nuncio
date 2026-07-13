@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { ChevronDown } from 'lucide-react';
-import { useThrottledStreamText } from '@/lib/use-throttled-stream-text';
 import { MarkdownView, type MarkdownLinkClickHandler } from '../markdown-view';
 import { cn } from '@/lib/utils';
 
@@ -13,10 +12,9 @@ export function AssistantBubble({
   streaming?: boolean;
   onLinkClick?: MarkdownLinkClickHandler;
 }) {
-  const displayed = useThrottledStreamText(text, streaming ?? false);
   return (
     <>
-      <MarkdownView text={displayed} streaming={streaming} onLinkClick={onLinkClick} />
+      <MarkdownView text={text} streaming={streaming} onLinkClick={onLinkClick} />
       {streaming && (
         <span className="inline-block w-2 h-4 ml-0.5 bg-primary animate-pulse align-middle" />
       )}

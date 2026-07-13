@@ -143,10 +143,12 @@ describe('MockAgentProvider unicode stream', () => {
 
     await provider.run(created.id, created.prompt, { emit });
 
-    const delta = events
+    const streamed = events
       .list(created.id)
-      .find((event) => event.type === 'assistant_delta');
-    expect((delta?.payload as { delta: string }).delta).toBe('café naïve 🧪');
+      .filter((event) => event.type === 'assistant_delta')
+      .map((event) => (event.payload as { delta: string }).delta)
+      .join('');
+    expect(streamed).toBe('café naïve 🧪');
     const message = events
       .list(created.id)
       .findLast((event) => event.type === 'assistant_message');

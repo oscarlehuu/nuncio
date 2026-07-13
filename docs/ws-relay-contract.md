@@ -116,8 +116,10 @@ foregrounded). `call(method, params)` issues RPCs (e.g. steer) over the same
 socket. React Native injects a `webSocketFactory` that adds the Bearer header;
 browsers rely on the cookie.
 
-Web and mobile normally bootstrap the transcript over REST before subscribing.
-REST is only an optimization: if it fails or stays pending for 1s, the client
-opens the relay from `seq = 0`; a late REST result is merged by `seq` and may
-never replace newer live events or move the cursor backwards. Switching sessions
-invalidates every older bootstrap/refetch callback before it can mutate state.
+REST is only a bootstrap optimization. Web gives an already-resolved REST page
+one microtask to seed its cursor, then opens the relay immediately from the
+highest cursor available (normally `0` while network I/O is pending). Mobile
+keeps a 1s fallback before opening from `0`. In both clients a late REST result
+is merged by `seq`; it may never replace newer live events or move the cursor
+backwards. Switching sessions invalidates every older bootstrap/refetch callback
+before it can connect or mutate state.

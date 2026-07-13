@@ -1195,13 +1195,20 @@ describe('CodexAgentProvider', () => {
     });
 
     await waitUntil(() => sessions.findById(created.id)?.preview === 'Hello');
-    expect(events.list(created.id).some((event) => event.type === 'assistant_delta')).toBe(false);
+    fakeClient.emitNotification({
+      method: 'item/agentMessage/delta',
+      params: { threadId: 'codex-thread-1', turnId: 'turn-1', delta: ' tail' },
+    });
+    expect(events.list(created.id).filter((event) => event.type === 'assistant_delta')).toEqual([
+      expect.objectContaining({ payload: { delta: 'Hello' } }),
+    ]);
 
     destroyProvider(provider);
 
     expect(fakeClient.closed).toBe(true);
     expect(events.list(created.id).filter((event) => event.type === 'assistant_delta')).toEqual([
       expect.objectContaining({ payload: { delta: 'Hello' } }),
+      expect.objectContaining({ payload: { delta: ' tail' } }),
     ]);
     await expect(settledWithin(run)).resolves.toBe('settled');
   });

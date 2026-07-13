@@ -45,6 +45,11 @@ interface DeltaBuffer {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
+interface DeltaSegment {
+  type: string;
+  base: Record<string, unknown>;
+}
+
 interface RetainedEvent {
   type: string;
   payload: unknown;
@@ -130,6 +135,12 @@ export abstract class BaseAgentProvider implements AgentProvider {
     } catch (error) {
       teardownError ??= error;
     }
+    if (this.pendingEventSessionIds().includes(sessionId)) {
+      this.disposedSegmentRecoveries.add(sessionId);
+    } else {
+      this.disposedSegmentRecoveries.delete(sessionId);
+    }
+    this.deltaSegments.delete(sessionId);
     this.invalidateRun(sessionId);
     try {
       this.disposeRuntime(sessionId);
@@ -180,6 +191,8 @@ export abstract class BaseAgentProvider implements AgentProvider {
   ): Promise<void>;
 
   private readonly deltaBuffers = new Map<string, DeltaBuffer>();
+  private readonly deltaSegments = new Map<string, DeltaSegment>();
+  private readonly disposedSegmentRecoveries = new Set<string>();
   private readonly retainedEvents = new Map<string, RetainedEvent[]>();
   private readonly retainedEventTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly previewBuffers = new Map<string, PreviewBuffer>();
@@ -232,11 +245,14 @@ export abstract class BaseAgentProvider implements AgentProvider {
         this.retainEvent(sessionId, type, payload, acceptedEmit);
         return;
       }
+      this.deltaSegments.delete(sessionId);
       emit?.(event);
       return;
     }
 
     const base = payloadBase(payload);
+    const segment = this.deltaSegments.get(sessionId);
+    const startsSegment = !segment || segment.type !== type || !sameBase(segment.base, base);
     const buffered = this.deltaBuffers.get(sessionId);
     if (buffered && (buffered.type !== type || !sameBase(buffered.base, base))) {
       try {
@@ -260,6 +276,15 @@ export abstract class BaseAgentProvider implements AgentProvider {
         timer: null,
       };
       this.deltaBuffers.set(sessionId, next);
+      if (startsSegment) {
+        this.deltaSegments.set(sessionId, { type, base });
+        try {
+          this.flushDeltas(sessionId);
+        } catch {
+          // The durable head stays buffered and retries before any fan-out.
+        }
+        return;
+      }
       this.scheduleDeltaFlush(sessionId, next);
       if (next.delta.length >= DELTA_FLUSH_MAX_CHARS) {
         try {
@@ -297,6 +322,13 @@ export abstract class BaseAgentProvider implements AgentProvider {
   flushPendingEvents(sessionId: string): void {
     this.flushDeltas(sessionId);
     this.flushRetainedEvents(sessionId);
+    if (
+      !this.deltaBuffers.has(sessionId) &&
+      !this.retainedEvents.has(sessionId) &&
+      this.disposedSegmentRecoveries.delete(sessionId)
+    ) {
+      this.deltaSegments.delete(sessionId);
+    }
   }
 
   pendingEventSessionIds(): string[] {
@@ -313,6 +345,8 @@ export abstract class BaseAgentProvider implements AgentProvider {
       if (retainedTimer) clearTimeout(retainedTimer);
       this.retainedEventTimers.delete(sessionId);
       this.retainedEvents.delete(sessionId);
+      this.deltaSegments.delete(sessionId);
+      this.disposedSegmentRecoveries.delete(sessionId);
       return;
     }
     for (const buffered of this.deltaBuffers.values()) {
@@ -322,6 +356,8 @@ export abstract class BaseAgentProvider implements AgentProvider {
     for (const timer of this.retainedEventTimers.values()) clearTimeout(timer);
     this.retainedEventTimers.clear();
     this.retainedEvents.clear();
+    this.deltaSegments.clear();
+    this.disposedSegmentRecoveries.clear();
   }
 
   /** Persist + emit any buffered delta for the session as a single merged event. */
@@ -428,6 +464,7 @@ export abstract class BaseAgentProvider implements AgentProvider {
     const retainedTimer = this.retainedEventTimers.get(sessionId);
     if (retainedTimer) clearTimeout(retainedTimer);
     this.retainedEventTimers.delete(sessionId);
+    this.deltaSegments.delete(sessionId);
     const pending: RetainedEvent[] = [];
     if (buffered) {
       pending.push({
@@ -482,6 +519,15 @@ export abstract class BaseAgentProvider implements AgentProvider {
         throw new RetainedEventFlushError(error);
       }
       queue.shift();
+      const delta = coalescableDelta(retained.type, retained.payload);
+      if (delta === null || this.disposedSegmentRecoveries.has(sessionId)) {
+        this.deltaSegments.delete(sessionId);
+      } else {
+        this.deltaSegments.set(sessionId, {
+          type: retained.type,
+          base: payloadBase(retained.payload),
+        });
+      }
       try {
         retained.emit?.(event);
       } catch {

@@ -181,7 +181,7 @@ const MarkdownSegment = memo(function MarkdownSegment({
  * - Fenced ```lang code blocks → CodeBlock with language header + copy button.
  * - Tables, lists, headers, blockquotes via remark-gfm.
  * - Streaming-safe: the text is split into fence-aware segments; completed
- *   segments are memoized and only the tail re-parses per reveal tick.
+ *   segments are memoized and only the tail re-parses per received batch.
  */
 export function MarkdownView({ text, className, streaming, onLinkClick }: MarkdownViewProps) {
   const segments = useMemo(() => splitMarkdownSegments(text), [text]);

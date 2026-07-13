@@ -35,6 +35,11 @@ class ScriptedProvider extends BaseAgentProvider {
     this.pushEvent(sessionId, 'assistant_delta', { delta }, emit);
   }
 
+  /** Test hook: emit any provider-neutral event without running a prompt. */
+  bufferEvent(sessionId: string, type: string, payload: unknown, emit?: EventEmitter): void {
+    this.pushEvent(sessionId, type, payload, emit);
+  }
+
   protected async executePrompt(
     sessionId: string,
     _text: string,
@@ -82,7 +87,7 @@ describe('BaseAgentProvider delta coalescing', () => {
     delete process.env.NUNCIO_DATA_DIR;
   });
 
-  it('merges a rapid burst of assistant deltas into one persisted row', async () => {
+  it('persists a rapid burst as an immediate head plus one coalesced tail', async () => {
     provider.script = [
       { type: 'assistant_delta', payload: { delta: 'hel' } },
       { type: 'assistant_delta', payload: { delta: 'lo ' } },
@@ -95,12 +100,38 @@ describe('BaseAgentProvider delta coalescing', () => {
     await provider.run(created.id, created.prompt, { emit: (event) => emitted.push(event) });
 
     const persistedDeltas = events.list(created.id).filter((e) => e.type === 'assistant_delta');
-    expect(persistedDeltas.length).toBe(1);
-    expect((persistedDeltas[0].payload as { delta: string }).delta).toBe('hello world');
+    expect(persistedDeltas.map((event) => (event.payload as { delta: string }).delta)).toEqual([
+      'hel',
+      'lo world',
+    ]);
 
     const emittedDeltas = emitted.filter((e) => e.type === 'assistant_delta');
-    expect(emittedDeltas.length).toBe(1);
-    expect(emittedDeltas[0]).toEqual(persistedDeltas[0]);
+    expect(emittedDeltas).toEqual(persistedDeltas);
+  });
+
+  it('persists and emits the first delta immediately while coalescing the matching tail', () => {
+    const created = sessions.create({ prompt: 'fast durable head', provider: 'scripted' });
+    const emitted: Parameters<NonNullable<EventEmitter>>[0][] = [];
+    const emit: EventEmitter = (event) => emitted.push(event);
+
+    provider.bufferDelta(created.id, 'head', emit);
+
+    let persisted = events.list(created.id).filter((event) => event.type === 'assistant_delta');
+    expect(persisted.map((event) => (event.payload as { delta: string }).delta)).toEqual(['head']);
+    expect(emitted).toEqual(persisted);
+
+    provider.bufferDelta(created.id, 'tail-a', emit);
+    provider.bufferDelta(created.id, 'tail-b', emit);
+    persisted = events.list(created.id).filter((event) => event.type === 'assistant_delta');
+    expect(persisted.map((event) => (event.payload as { delta: string }).delta)).toEqual(['head']);
+
+    provider.flushPendingEvents(created.id);
+    persisted = events.list(created.id).filter((event) => event.type === 'assistant_delta');
+    expect(persisted.map((event) => (event.payload as { delta: string }).delta)).toEqual([
+      'head',
+      'tail-atail-b',
+    ]);
+    expect(emitted).toEqual(persisted);
   });
 
   it('flushes buffered deltas before any non-delta event to preserve order', async () => {
@@ -123,13 +154,18 @@ describe('BaseAgentProvider delta coalescing', () => {
 
   it('flushPendingEvents persists a buffered delta immediately, before a later append', () => {
     const created = sessions.create({ prompt: 'flush', provider: 'scripted' });
+    provider.bufferDelta(created.id, 'head');
     provider.bufferDelta(created.id, 'buffered');
-    // The delta sits in the coalescing buffer — not yet persisted.
-    expect(events.list(created.id).some((e) => e.type === 'assistant_delta')).toBe(false);
+    // The segment head is durable; only the matching tail remains buffered.
+    expect(events.list(created.id).filter((e) => e.type === 'assistant_delta')).toHaveLength(1);
 
     provider.flushPendingEvents(created.id);
     const deltas = events.list(created.id).filter((e) => e.type === 'assistant_delta');
-    expect(deltas).toHaveLength(1);
+    expect(deltas).toHaveLength(2);
+    expect(deltas.map((event) => (event.payload as { delta: string }).delta)).toEqual([
+      'head',
+      'buffered',
+    ]);
 
     // An out-of-band append now lands strictly after the flushed delta.
     const digest = events.append(created.id, 'task_completed', { taskId: 't', status: 'DONE' });
@@ -157,7 +193,8 @@ describe('BaseAgentProvider delta coalescing', () => {
 
     try {
       provider.bufferDelta(created.id, 'retry me', (event) => emitted.push(event));
-      expect(() => provider.flushPendingEvents(created.id)).toThrow('temporary sqlite failure');
+      expect(events.list(created.id).filter((event) => event.type === 'assistant_delta')).toHaveLength(0);
+      expect(emitted).toHaveLength(0);
       provider.flushPendingEvents(created.id);
     } finally {
       events.append = originalAppend as EventsRepository['append'];
@@ -171,6 +208,7 @@ describe('BaseAgentProvider delta coalescing', () => {
 
   it('retries a quiet-timer append failure without losing or duplicating the tail', async () => {
     const created = sessions.create({ prompt: 'timer retry', provider: 'scripted' });
+    provider.bufferDelta(created.id, 'head');
     const originalAppend = events.append.bind(events);
     let failures = 1;
     events.append = ((sessionId: string, type: string, payload: unknown) => {
@@ -184,7 +222,7 @@ describe('BaseAgentProvider delta coalescing', () => {
       provider.bufferDelta(created.id, 'timer tail');
       const started = Date.now();
       while (
-        events.list(created.id).filter((event) => event.type === 'assistant_delta').length === 0 &&
+        events.list(created.id).filter((event) => event.type === 'assistant_delta').length < 2 &&
         Date.now() - started < 1000
       ) {
         await new Promise((resolve) => setTimeout(resolve, 20));
@@ -194,8 +232,10 @@ describe('BaseAgentProvider delta coalescing', () => {
     }
 
     const deltas = events.list(created.id).filter((event) => event.type === 'assistant_delta');
-    expect(deltas).toHaveLength(1);
-    expect((deltas[0]!.payload as { delta: string }).delta).toBe('timer tail');
+    expect(deltas.map((event) => (event.payload as { delta: string }).delta)).toEqual([
+      'head',
+      'timer tail',
+    ]);
   });
 
   it('does not merge thinking deltas into assistant deltas', async () => {
@@ -212,12 +252,78 @@ describe('BaseAgentProvider delta coalescing', () => {
     const rows = events
       .list(created.id)
       .filter((e) => e.type === 'thinking_delta' || e.type === 'assistant_delta');
-    expect(rows.length).toBe(2);
+    expect(rows.length).toBe(3);
     expect(rows[0].type).toBe('thinking_delta');
-    expect((rows[0].payload as { delta: string; thinkingId: string }).delta).toBe('plan more');
+    expect((rows[0].payload as { delta: string; thinkingId: string }).delta).toBe('plan ');
     expect((rows[0].payload as { thinkingId: string }).thinkingId).toBe('t1');
-    expect(rows[1].type).toBe('assistant_delta');
-    expect((rows[1].payload as { delta: string }).delta).toBe('answer');
+    expect(rows[1].type).toBe('thinking_delta');
+    expect((rows[1].payload as { delta: string; thinkingId: string }).delta).toBe('more');
+    expect((rows[1].payload as { thinkingId: string }).thinkingId).toBe('t1');
+    expect(rows[2].type).toBe('assistant_delta');
+    expect((rows[2].payload as { delta: string }).delta).toBe('answer');
+  });
+
+  it('starts a new immediate head after a non-delta boundary', () => {
+    const created = sessions.create({ prompt: 'tool boundary', provider: 'scripted' });
+    const emitted: Parameters<NonNullable<EventEmitter>>[0][] = [];
+    const emit: EventEmitter = (event) => emitted.push(event);
+
+    provider.bufferDelta(created.id, 'before-', emit);
+    provider.bufferDelta(created.id, 'tool', emit);
+    provider.bufferEvent(created.id, 'tool_start', { callId: 'c1', tool: 'bash' }, emit);
+    provider.bufferDelta(created.id, 'after', emit);
+
+    const relevant = events.list(created.id).filter((event) =>
+      event.type === 'assistant_delta' || event.type === 'tool_start'
+    );
+    expect(relevant.map((event) => event.type)).toEqual([
+      'assistant_delta',
+      'assistant_delta',
+      'tool_start',
+      'assistant_delta',
+    ]);
+    expect(
+      relevant
+        .filter((event) => event.type === 'assistant_delta')
+        .map((event) => (event.payload as { delta: string }).delta),
+    ).toEqual(['before-', 'tool', 'after']);
+    expect(emitted).toEqual(relevant);
+  });
+
+  it('starts a new immediate thinking head when its non-delta base changes', () => {
+    const created = sessions.create({ prompt: 'thinking boundary', provider: 'scripted' });
+
+    provider.bufferEvent(created.id, 'thinking_delta', { thinkingId: 't1', delta: 'head-1' });
+    provider.bufferEvent(created.id, 'thinking_delta', { thinkingId: 't1', delta: 'tail-1' });
+    provider.bufferEvent(created.id, 'thinking_delta', { thinkingId: 't2', delta: 'head-2' });
+
+    const thinking = events.list(created.id).filter((event) => event.type === 'thinking_delta');
+    expect(
+      thinking.map((event) => ({
+        thinkingId: (event.payload as { thinkingId: string }).thinkingId,
+        delta: (event.payload as { delta: string }).delta,
+      })),
+    ).toEqual([
+      { thinkingId: 't1', delta: 'head-1' },
+      { thinkingId: 't1', delta: 'tail-1' },
+      { thinkingId: 't2', delta: 'head-2' },
+    ]);
+  });
+
+  it('resets segment state on dispose so a reused session gets a new immediate head', () => {
+    const created = sessions.create({ prompt: 'dispose boundary', provider: 'scripted' });
+
+    provider.bufferDelta(created.id, 'first');
+    provider.bufferDelta(created.id, '-tail');
+    provider.dispose(created.id);
+    provider.bufferDelta(created.id, 'second');
+
+    const deltas = events
+      .list(created.id)
+      .filter((event) => event.type === 'assistant_delta')
+      .map((event) => (event.payload as { delta: string }).delta);
+    expect(deltas).toEqual(['first', '-tail', 'second']);
+    expect(provider.pendingEventSessionIds()).not.toContain(created.id);
   });
 
   it('flushes a quiet buffer on the timer so slow streams still reach subscribers', async () => {
