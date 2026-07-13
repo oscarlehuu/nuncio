@@ -410,7 +410,7 @@ apps/
   web/      Vite + React + Tailwind v4 + shadcn/ui (installable PWA)
 mockup.html UI blueprint (reference)
 data/       SQLite (gitignored)
-docs/       system-architecture.md
+docs/       product-vision, architecture-decisions, product-surfaces, system-architecture, …
 assets/     Screenshots for the README (un-ignored only here — see .gitignore)
 ```
 
@@ -442,7 +442,7 @@ Contributions are welcome! Before opening a PR:
 
 - Read [CONTRIBUTING.md](CONTRIBUTING.md) — it covers the TDD-first workflow, the Changeset-based release process, branch/worktree naming, and the PR checklist.
 - For context on architecture and conventions, see [AGENTS.md](AGENTS.md) and [docs/system-architecture.md](docs/system-architecture.md).
-- For the product north star (your-machine-as-cloud, pillars, non-goals), locked decisions, and the testing/self-verification playbook, see [docs/product-vision.md](docs/product-vision.md), [docs/architecture-decisions.md](docs/architecture-decisions.md), and [docs/testing-and-verification.md](docs/testing-and-verification.md).
+- For the product north star (your-machine-as-cloud, pillars, non-goals), locked decisions, **where each capability appears across clients**, and the testing/self-verification playbook, see [docs/product-vision.md](docs/product-vision.md), [docs/architecture-decisions.md](docs/architecture-decisions.md), [docs/product-surfaces.md](docs/product-surfaces.md), and [docs/testing-and-verification.md](docs/testing-and-verification.md).
 - Found a security issue? See [SECURITY.md](SECURITY.md) — **do not** open a public issue for vulnerabilities.
 - Everyone is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 

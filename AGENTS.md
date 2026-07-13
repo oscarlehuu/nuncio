@@ -4,7 +4,7 @@ Context file for AI coding agents working on Nuncio. Read this before touching t
 
 > **Work TDD-first.** Always start from a failing test. Implement only what makes it pass. A change is not done while the suite is red. See [Working practice: TDD-first](#working-practice-tdd-first).
 > **Need a decision from the user? Answer TL;DR.** One-line recommendation first, then the trade-off in a sentence (what you gain vs. lose), then the options. No long preamble — the user decides fast.
-> **North-star docs — read in this order before your first change:** [`docs/product-vision.md`](docs/product-vision.md) (why Nuncio exists: your-machine-as-cloud, pillars, direction tests) → [`docs/architecture-decisions.md`](docs/architecture-decisions.md) (locked decisions — never reverse one without the user) → [`docs/testing-and-verification.md`](docs/testing-and-verification.md) (self-verify playbook + edge-case heuristics).
+> **North-star docs — read in this order before your first change:** [`docs/product-vision.md`](docs/product-vision.md) (why Nuncio exists: your-machine-as-cloud, pillars, direction tests) → [`docs/architecture-decisions.md`](docs/architecture-decisions.md) (locked decisions — never reverse one without the user) → [`docs/product-surfaces.md`](docs/product-surfaces.md) (capability → every web/mobile/settings/server surface — use this before UI or cross-cutting changes) → [`docs/system-architecture.md`](docs/system-architecture.md) (internals) → [`docs/testing-and-verification.md`](docs/testing-and-verification.md) (self-verify playbook + edge-case heuristics).
 
 ## What is Nuncio
 
@@ -25,7 +25,7 @@ Nuncio is a **self-hosted, Devin-style web app for delegating tasks to AI agents
 2. **Green — implement the minimum** to make the test pass. No more, no less.
 3. **Refactor** under the safety of the passing test.
 4. **Gate:** the change is not done until the suite is green. Run **`bun run gate`** (build + lint + all unit layers, including web + `test:scripts`) as the minimum bar before you commit, and **`bun run gate:full`** (adds server e2e and the real-browser smoke) before a promotion PR (dev→main). Don't move on, don't commit, don't open a PR on a red suite. **Never silence, skip, or weaken a failing test just to pass the build.**
-5. **Docs sync:** update `README.md` to match the shipped code — commands, API, architecture, status. If architecture or conventions shifted, update `AGENTS.md` too. A merged change with stale docs isn't done.
+5. **Docs sync:** update `README.md` to match the shipped code — commands, API, architecture, status. If architecture or conventions shifted, update `AGENTS.md` too. If you add/remove/rename a route, Settings section, or a second shell for an existing capability, update [`docs/product-surfaces.md`](docs/product-surfaces.md) in the same PR. A merged change with stale docs isn't done.
 6. **Changeset (release note) — mandatory for user-facing changes.** If the PR changes anything a user would notice (new feature, behavior shift, bug fix, UI change), add a changeset fragment before opening the PR:
    ```bash
    bun run add-changeset patch "Fixed steer composer clearing your draft on reconnect."

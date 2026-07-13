@@ -1,8 +1,9 @@
 # Product Vision (PRD)
 
 North-star document for Nuncio. Every agent working on this codebase reads this **before**
-`docs/system-architecture.md`. When a change conflicts with this document, stop and ask the user —
-do not silently reinterpret the direction.
+`docs/product-surfaces.md` (where capabilities live across clients) and
+`docs/system-architecture.md` (internals). When a change conflicts with this document, stop and ask
+the user — do not silently reinterpret the direction.
 
 ## One-line thesis
 

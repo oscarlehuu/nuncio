@@ -4,6 +4,8 @@
 
 Nuncio is a self-hosted web app for delegating tasks to AI agents. The backend (`apps/server`, NestJS) exposes sessions over HTTP; each session is run by an **agent provider** selected per session. The agent layer is provider-neutral: Pi, Codex, Cursor, Claude, and future agent SDKs plug in by implementing one interface.
 
+**UI / product surface map:** before changing web, mobile, Settings, or a cross-cutting capability, read [`product-surfaces.md`](product-surfaces.md) (capability → every sibling shell). This document covers internals; that one covers where the product appears.
+
 ## Agent provider abstraction
 
 ```
