@@ -599,6 +599,50 @@ describe('App lifecycle', () => {
     resolveArchived([fakeSession({ status: 'ARCHIVED' })]);
   });
 
+  it('leaves the session route before archiveSession resolves so a mid-flight poll cannot blank the pane', async () => {
+    await openSession();
+
+    let resolveArchive!: (session: Session) => void;
+    vi.mocked(toast.error).mockClear();
+    vi.mocked(archiveSession).mockImplementation(
+      () =>
+        new Promise<Session>((resolve) => {
+          resolveArchive = resolve;
+        }),
+    );
+    vi.mocked(fetchSessions).mockResolvedValue([]);
+    vi.mocked(fetchArchivedSessions).mockResolvedValue([]);
+    vi.mocked(fetchSession).mockImplementation(() => new Promise(() => {}));
+
+    await userEvent.click(screen.getByRole('button', { name: /session actions/i }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /archive session/i }));
+
+    await waitFor(() => expect(archiveSession).toHaveBeenCalledWith('new1'));
+    // Poll/list refresh can empty `sessions` while the archive HTTP call is still open.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.getByRole('heading', { name: /^home$/i })).toBeInTheDocument());
+    expect(screen.queryByText(/loading session/i)).not.toBeInTheDocument();
+
+    resolveArchive(fakeSession({ status: 'ARCHIVED' }));
+    await waitFor(() => expect(fetchSessions).toHaveBeenCalled());
+  });
+
+  it('returns Home after archiving the last remaining session from the sidebar', async () => {
+    await openSession();
+    vi.mocked(toast.error).mockClear();
+    vi.mocked(archiveSession).mockResolvedValue(fakeSession({ status: 'ARCHIVED' }));
+    vi.mocked(fetchSessions).mockResolvedValue([]);
+    vi.mocked(fetchArchivedSessions).mockResolvedValue([fakeSession({ status: 'ARCHIVED' })]);
+
+    await userEvent.click(screen.getByRole('button', { name: /archive build the thing/i }));
+
+    await waitFor(() => expect(archiveSession).toHaveBeenCalledWith('new1'));
+    await waitFor(() => expect(screen.getByRole('heading', { name: /^home$/i })).toBeInTheDocument());
+    expect(screen.getByText(/no sessions yet/i)).toBeInTheDocument();
+  });
+
   it('sidebar hover-archive calls archiveSession with the row id (not the active id)', async () => {
     const other = fakeSession({ id: 'other1', title: 'Other task', status: 'IDLE' });
     vi.mocked(fetchSessions).mockResolvedValue([session, other]);

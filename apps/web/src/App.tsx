@@ -446,16 +446,23 @@ export default function App() {
 
   const handleArchiveById = async (id: string) => {
     setLifecycleBusy(true);
+    // Leave /session/:id immediately — before the archive HTTP round-trip — so a
+    // concurrent list poll cannot blank SessionRoute while the row is gone from
+    // `sessions` but not yet archived (or while fetchSession is still in flight).
+    const viewingArchivedSession = sessionIdFromPath(location.pathname) === id;
+    if (viewingArchivedSession) {
+      navigate('/', { replace: true });
+      dismissTransientSidebar();
+    }
     try {
       await archiveSession(id);
-      // Leave /session/:id before list refresh — otherwise SessionRoute can render
-      // null (blank main) while the row is gone from `sessions` but not yet in
-      // `archivedSessions` (or while fetchSession is still in flight).
-      if (activeId === id) {
+      const [list] = await Promise.all([refresh(), refreshArchived()]);
+      // Workbench (/grid) maximize has no /session/:id URL — still send the user
+      // Home when the last active session disappears.
+      if (list && list.length === 0 && location.pathname !== '/') {
         navigate('/', { replace: true });
         dismissTransientSidebar();
       }
-      await Promise.all([refresh(), refreshArchived()]);
     } catch {
       toast.error('Failed to archive session');
     } finally {
