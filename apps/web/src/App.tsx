@@ -448,11 +448,14 @@ export default function App() {
     setLifecycleBusy(true);
     try {
       await archiveSession(id);
-      await Promise.all([refresh(), refreshArchived()]);
+      // Leave /session/:id before list refresh — otherwise SessionRoute can render
+      // null (blank main) while the row is gone from `sessions` but not yet in
+      // `archivedSessions` (or while fetchSession is still in flight).
       if (activeId === id) {
-        navigate('/');
+        navigate('/', { replace: true });
         dismissTransientSidebar();
       }
+      await Promise.all([refresh(), refreshArchived()]);
     } catch {
       toast.error('Failed to archive session');
     } finally {
@@ -1017,7 +1020,14 @@ function SessionRoute({
     }
   }, [events, onSessionStatus, onSessionTitle, session]);
 
-  if (!session) return null;
+  // Avoid a blank main pane while lists catch up or fetchSession is in flight.
+  if (!session) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-ui-sm text-muted-foreground">
+        Loading session…
+      </div>
+    );
+  }
 
   return (
     <SessionDetail
