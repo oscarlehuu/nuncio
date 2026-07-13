@@ -11,6 +11,7 @@ import {
   type BrowserCaptureEvidenceDto,
   type EvidenceBrowser,
   type EvidenceBrowserServer,
+  type EvidenceCaptureOutcome,
   type EvidenceCaptureResult,
   type EvidenceChromium,
   type EvidenceGitHeadReader,
@@ -40,14 +41,14 @@ export class EvidenceCaptureService implements OnModuleDestroy {
     @Optional() private readonly simulator?: SimulatorEvidenceCaptureService,
   ) {}
 
-  capture(session: SessionDto, input: CaptureEvidenceDto): Promise<EvidenceCaptureResult> {
+  capture(session: SessionDto, input: CaptureEvidenceDto): Promise<EvidenceCaptureOutcome> {
     const targetRevision = this.targetRevisions.get(session.id) ?? 0;
     const result = this.captureTail.then(() => this.captureOnce(session, input, targetRevision));
     this.captureTail = result.then(() => undefined, () => undefined);
     return result;
   }
 
-  captureKnown(session: SessionDto, phase: EvidencePhase): Promise<EvidenceCaptureResult | null> {
+  captureKnown(session: SessionDto, phase: EvidencePhase): Promise<EvidenceCaptureOutcome | null> {
     const target = this.knownTargets.get(session.id);
     return target ? this.capture(session, { ...target, phase }) : Promise.resolve(null);
   }
@@ -66,7 +67,7 @@ export class EvidenceCaptureService implements OnModuleDestroy {
     session: SessionDto,
     input: CaptureEvidenceDto,
     targetRevision: number,
-  ): Promise<EvidenceCaptureResult> {
+  ): Promise<EvidenceCaptureOutcome> {
     this.assertCaptureCurrent(session.id, targetRevision);
     if (input.phase !== 'before' && input.phase !== 'after') {
       throw new BadRequestException('phase must be before or after');
@@ -83,7 +84,7 @@ export class EvidenceCaptureService implements OnModuleDestroy {
     const captured = input.target === 'simulator'
       ? await this.captureSimulator()
       : await this.captureBrowser(session.id, input, targetRevision);
-    if ('unavailable' in captured) return captured;
+    if ('unavailable' in captured && captured.unavailable === true) return captured;
     const workspaceHead = await this.readHead(cwd);
     if (!workspaceHead || workspaceHead !== headBefore) {
       throw new BadRequestException('Workspace HEAD changed during evidence capture');
@@ -114,7 +115,7 @@ export class EvidenceCaptureService implements OnModuleDestroy {
     sessionId: string,
     input: BrowserCaptureEvidenceDto,
     targetRevision: number,
-  ) {
+  ): Promise<EvidenceCaptureResult> {
     if (!this.chromium) {
       return { unavailable: true as const, reason: 'Browser capture unavailable' };
     }

@@ -200,6 +200,7 @@ describe('EvidenceCaptureService', () => {
     const result = await h.service.capture(session(), {
       url: 'http://localhost:5173/app', phase: 'before',
     });
+    if ('unavailable' in result) throw new Error('expected a successful capture');
     expect(result.route).toBe('/ready?mode=1#done');
   });
 
@@ -277,6 +278,7 @@ describe('EvidenceCaptureService', () => {
     const result = await h.service.capture(session(), {
       url: 'http://localhost:5173', route: '/#/settings', phase: 'before',
     });
+    if ('unavailable' in result) throw new Error('expected a successful capture');
     expect(result.route).toBe('/#/settings');
   });
 
