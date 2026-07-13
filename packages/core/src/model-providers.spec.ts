@@ -5,6 +5,7 @@ import {
   FALLBACK_PROVIDERS,
   flattenProviders,
   modelById,
+  modelSupportsImages,
   normalizeModelCatalog,
   pickDefaultModelSelection,
   prettyModelName,
@@ -18,7 +19,7 @@ describe('flattenProviders', () => {
     const providers: ModelProvider[] = [
       {
         id: 'pi',
-        name: 'Pi',
+        name: 'Nuncio Engine',
         groups: [
           { id: 'g1', name: 'G1', models: [{ id: 'm1', name: 'M1' }, { id: 'm2', name: 'M2' }] },
         ],
@@ -30,7 +31,7 @@ describe('flattenProviders', () => {
     expect(flat[0]).toMatchObject({
       id: 'm1',
       providerId: 'pi',
-      providerName: 'Pi',
+      providerName: 'Nuncio Engine',
       groupId: 'g1',
       groupName: 'G1',
     });
@@ -45,7 +46,7 @@ describe('flattenProviders', () => {
 describe('modelById', () => {
   it('maps model id → flat model', () => {
     const lookup = modelById([
-      { id: 'pi', name: 'Pi', groups: [{ id: 'g', name: 'G', models: [{ id: 'm1', name: 'M1' }] }] },
+      { id: 'pi', name: 'Nuncio Engine', groups: [{ id: 'g', name: 'G', models: [{ id: 'm1', name: 'M1' }] }] },
     ]);
     expect(lookup['m1'].name).toBe('M1');
     expect(lookup['m1'].providerId).toBe('pi');
@@ -57,6 +58,34 @@ describe('modelById', () => {
     expect(lookup[DEFAULT_MODEL_ID]).toBeDefined();
     expect(DEFAULT_MODEL_ID).toBe('claude-fable-5');
     expect(DEFAULT_PROVIDER_ID).toBe('pi');
+  });
+});
+
+describe('modelSupportsImages', () => {
+  const providers: ModelProvider[] = [
+    {
+      id: 'pi',
+      name: 'Nuncio Engine',
+      capabilities: { images: true },
+      groups: [
+        {
+          id: 'mixed',
+          name: 'Mixed',
+          models: [
+            { id: 'xai:grok', name: 'Grok', capabilities: { images: false } },
+            { id: 'google:gemini', name: 'Gemini', capabilities: { images: true } },
+            { id: 'custom:unknown', name: 'Unknown' },
+          ],
+        },
+      ],
+    },
+  ];
+
+  it('prefers selected-model image metadata and falls back to provider capability', () => {
+    expect(modelSupportsImages(providers, 'pi', 'xai:grok')).toBe(false);
+    expect(modelSupportsImages(providers, 'pi', 'google:gemini')).toBe(true);
+    expect(modelSupportsImages(providers, 'pi', 'custom:unknown')).toBe(true);
+    expect(modelSupportsImages(providers, 'missing', 'missing:model')).toBe(false);
   });
 });
 
@@ -109,7 +138,7 @@ describe('sanitizeCursorModels', () => {
 describe('sortModelProviders', () => {
   it('orders pi before cursor regardless of input order', () => {
     const providers: ModelProvider[] = [
-      { id: 'pi', name: 'Pi', groups: [{ id: 'g', name: 'G', models: [{ id: 'm1', name: 'M1' }] }] },
+      { id: 'pi', name: 'Nuncio Engine', groups: [{ id: 'g', name: 'G', models: [{ id: 'm1', name: 'M1' }] }] },
       { id: 'cursor', name: 'Cursor', groups: [{ id: 'g', name: 'G', models: [{ id: 'm2', name: 'M2' }] }] },
     ];
     expect(sortModelProviders(providers).map((p) => p.id)).toEqual(['pi', 'cursor']);
@@ -118,7 +147,7 @@ describe('sortModelProviders', () => {
   it('sorts unknown providers after known ones alphabetically', () => {
     const providers: ModelProvider[] = [
       { id: 'zulu', name: 'Zulu', groups: [{ id: 'g', name: 'G', models: [{ id: 'm0', name: 'M0' }] }] },
-      { id: 'pi', name: 'Pi', groups: [{ id: 'g', name: 'G', models: [{ id: 'm1', name: 'M1' }] }] },
+      { id: 'pi', name: 'Nuncio Engine', groups: [{ id: 'g', name: 'G', models: [{ id: 'm1', name: 'M1' }] }] },
       { id: 'cursor', name: 'Cursor', groups: [{ id: 'g', name: 'G', models: [{ id: 'm2', name: 'M2' }] }] },
     ];
     expect(sortModelProviders(providers).map((p) => p.id)).toEqual(['pi', 'cursor', 'zulu']);
@@ -160,7 +189,7 @@ describe('sortModelProviders', () => {
     const providers: ModelProvider[] = [
       {
         id: 'pi',
-        name: 'Pi',
+        name: 'Nuncio Engine',
         groups: [
           { id: 'z', name: 'Zulu', models: [{ id: 'm-z', name: 'Z Model' }] },
           { id: 'a', name: 'Alpha', models: [{ id: 'm-a', name: 'A Model' }] },
@@ -177,7 +206,7 @@ describe('normalizeModelCatalog', () => {
     const providers: ModelProvider[] = [
       {
         id: 'pi',
-        name: 'Pi',
+        name: 'Nuncio Engine',
         groups: [{ id: 'g', name: 'G', models: [{ id: 'pi:m', name: 'pi-model' }] }],
       },
       {
@@ -208,7 +237,7 @@ describe('pickDefaultModelSelection', () => {
   const piOnly: ModelProvider[] = [
     {
       id: 'pi',
-      name: 'Pi',
+      name: 'Nuncio Engine',
       groups: [{ id: 'g', name: 'G', models: [{ id: 'anthropic:claude-haiku-4', name: 'Haiku' }] }],
     },
   ];

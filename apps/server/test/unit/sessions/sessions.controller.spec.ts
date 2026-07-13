@@ -1,4 +1,4 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { SessionsController } from '../../../src/sessions/api/sessions.controller';
 import type { SessionDto, SessionEvent } from '../../../src/sessions/domain/sessions.types';
 
@@ -218,6 +218,122 @@ describe('SessionsController', () => {
     expect(() => controller.get('nope')).toThrow(NotFoundException);
   });
 
+  it('captures evidence for an existing session and returns media refs', async () => {
+    const result = {
+      beforeRef: { id: '0123456789abcdef0123456789abcdef', mimeType: 'image/png' as const },
+      route: '/app', viewport: { w: 1440, h: 900 }, workspaceHead: 'abc123',
+    };
+    const capture = jest.fn(async () => result);
+    const appendOrchestrationEvent = jest.fn();
+    const current = makeSession({ worktreePath: '/repo' });
+    const requirePublicMutableSession = jest.fn(() => current);
+    const controller = new SessionsController(
+      { requirePublicMutableSession, appendOrchestrationEvent } as never,
+      { capture } as never,
+    );
+
+    await expect(controller.captureEvidence('s1', {
+      url: 'http://localhost:5173', route: '/app', phase: 'before',
+    })).resolves.toEqual(result);
+    expect(capture).toHaveBeenCalledWith(current, {
+      url: 'http://localhost:5173', route: '/app', phase: 'before',
+    });
+    expect(appendOrchestrationEvent).toHaveBeenCalledWith('s1', 'evidence_captured', result);
+    expect(requirePublicMutableSession).toHaveBeenCalledWith('s1');
+  });
+
+  it('captures simulator evidence without a URL and appends the shared event', async () => {
+    const result = {
+      afterRef: { id: '0123456789abcdef0123456789abcdef', mimeType: 'image/png' as const },
+      route: 'simulator://booted', viewport: { w: 1179, h: 2556 }, workspaceHead: 'abc123',
+    };
+    const capture = jest.fn(async () => result);
+    const appendOrchestrationEvent = jest.fn();
+    const current = makeSession({ worktreePath: '/repo' });
+    const controller = new SessionsController(
+      { requirePublicMutableSession: () => current, appendOrchestrationEvent } as never,
+      { capture } as never,
+    );
+
+    await expect(controller.captureEvidence('s1', {
+      target: 'simulator', phase: 'after',
+    })).resolves.toEqual(result);
+    expect(capture).toHaveBeenCalledWith(current, { target: 'simulator', phase: 'after' });
+    expect(appendOrchestrationEvent).toHaveBeenCalledWith('s1', 'evidence_captured', result);
+  });
+
+  it('appends no event when simulator capability is unavailable', async () => {
+    const appendOrchestrationEvent = jest.fn();
+    const controller = new SessionsController(
+      { requirePublicMutableSession: () => makeSession(), appendOrchestrationEvent } as never,
+      { capture: async () => { throw new ServiceUnavailableException('xcrun unavailable'); } } as never,
+    );
+    await expect(controller.captureEvidence('s1', { target: 'simulator', phase: 'before' }))
+      .rejects.toThrow('xcrun unavailable');
+    expect(appendOrchestrationEvent).not.toHaveBeenCalled();
+  });
+
+  it('rejects evidence capture for a missing session', async () => {
+    const controller = new SessionsController(
+      { requirePublicMutableSession: () => { throw new NotFoundException('Session not found'); } } as never,
+      { capture: jest.fn() } as never,
+    );
+    await expect(controller.captureEvidence('missing', {
+      url: 'http://localhost:5173', phase: 'after',
+    })).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('rejects Crew-owned evidence mutation before capture or append', async () => {
+    const capture = jest.fn();
+    const appendOrchestrationEvent = jest.fn();
+    const controller = new SessionsController({
+      requirePublicMutableSession: () => {
+        throw new BadRequestException('Crew-owned sessions are read-only outside Crew controls');
+      },
+      appendOrchestrationEvent,
+    } as never, { capture } as never);
+    await expect(controller.captureEvidence('crew-member', {
+      url: 'http://localhost:5173', phase: 'before',
+    })).rejects.toBeInstanceOf(BadRequestException);
+    expect(capture).not.toHaveBeenCalled();
+    expect(appendOrchestrationEvent).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing evidence body with BadRequestException', async () => {
+    const controller = new SessionsController({
+      requirePublicMutableSession: () => makeSession(),
+    } as never, { capture: jest.fn() } as never);
+    await expect(controller.captureEvidence('s1', null as never))
+      .rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects an invalid simulator evidence phase before capture', async () => {
+    const capture = jest.fn();
+    const controller = new SessionsController({
+      requirePublicMutableSession: () => makeSession(),
+    } as never, { capture } as never);
+    await expect(controller.captureEvidence('s1', {
+      target: 'simulator', phase: 'during' as never,
+    })).rejects.toBeInstanceOf(BadRequestException);
+    expect(capture).not.toHaveBeenCalled();
+  });
+
+  it('forgets known evidence targets after archive succeeds', () => {
+    const archive = jest.fn(() => makeSession({ status: 'ARCHIVED' }));
+    const forget = jest.fn();
+    const controller = new SessionsController({ archive } as never, { forget } as never);
+    expect(controller.archive('s1')).toMatchObject({ status: 'ARCHIVED' });
+    expect(forget).toHaveBeenCalledWith('s1');
+  });
+
+  it('keeps known evidence targets when archive fails', () => {
+    const archive = jest.fn(() => { throw new BadRequestException('cannot archive'); });
+    const forget = jest.fn();
+    const controller = new SessionsController({ archive } as never, { forget } as never);
+    expect(() => controller.archive('s1')).toThrow(BadRequestException);
+    expect(forget).not.toHaveBeenCalled();
+  });
+
   it('events throws NotFoundException when the session is missing', () => {
     const service = { get: () => null } as never;
     const controller = new SessionsController(service);
@@ -274,6 +390,16 @@ describe('SessionsController', () => {
     await deleting;
     expect(result).toEqual({ ok: true });
     expect(del).toHaveBeenCalledWith('s1');
+  });
+
+  it('forgets a captured preview target after session deletion', async () => {
+    const forget = jest.fn();
+    const controller = new SessionsController(
+      { delete: jest.fn(async () => undefined) } as never,
+      { forget } as never,
+    );
+    await controller.delete('s1');
+    expect(forget).toHaveBeenCalledWith('s1');
   });
 
   it('respondProviderRequest delegates to sessions.respondProviderRequest', () => {

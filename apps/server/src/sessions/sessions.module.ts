@@ -12,9 +12,9 @@ import { SessionDiffController } from './diff/session-diff.controller';
 import { SessionDiffService } from './diff/session-diff.service';
 import { SessionsPersistenceModule } from './sessions.persistence.module';
 import { SessionsService } from './sessions.service';
-import { MediaStore } from './media.store';
 import { SettingsModule } from '../settings/settings.module';
 import { ProjectsModule } from '../projects/projects.module';
+import { EvidenceModule } from '../evidence/evidence.module';
 
 @Module({
   imports: [
@@ -28,9 +28,10 @@ import { ProjectsModule } from '../projects/projects.module';
     SessionsPersistenceModule,
     SettingsModule,
     ProjectsModule,
+    EvidenceModule,
   ],
   controllers: [SessionsController, GitSessionController, SessionDiffController],
-  providers: [SessionsService, SessionDiffService, MediaStore],
+  providers: [SessionsService, SessionDiffService],
   exports: [SessionsService],
 })
 export class SessionsModule {}

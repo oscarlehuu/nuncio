@@ -1,4 +1,6 @@
 import {
+  BadRequestException,
+  Body,
   Controller,
   Delete,
   Get,
@@ -10,11 +12,20 @@ import {
 import type { AuthRequestLike } from '../auth/auth-request';
 import { parseDeviceBearer } from '../auth/device-token';
 import { Public } from '../auth/public.decorator';
+import { PushService } from '../push/push.service';
 import { DevicesService, type DeviceSummary } from './devices.service';
+
+interface PushTokenBody {
+  token?: unknown;
+  platform?: unknown;
+}
 
 @Controller('devices')
 export class DevicesController {
-  constructor(private readonly devices: DevicesService) {}
+  constructor(
+    private readonly devices: DevicesService,
+    private readonly push: PushService,
+  ) {}
 
   @Get()
   list(): DeviceSummary[] {
@@ -45,5 +56,29 @@ export class DevicesController {
       throw new UnauthorizedException('Device bearer token required');
     }
     return { deviceId: rotated.id, deviceSecret: rotated.secret };
+  }
+
+  @Public()
+  @Post(':deviceId/push-token')
+  async registerPushToken(
+    @Param('deviceId') deviceId: string,
+    @Body() body: PushTokenBody,
+    @Req() req: AuthRequestLike,
+  ): Promise<{ ok: true }> {
+    const bearer = parseDeviceBearer(req.headers?.authorization);
+    if (
+      !bearer ||
+      bearer.deviceId !== deviceId ||
+      !this.devices.verifyDevice(bearer.deviceId, bearer.secret)
+    ) {
+      throw new UnauthorizedException('Matching device bearer token required');
+    }
+    const token = typeof body.token === 'string' ? body.token.trim() : '';
+    if (!token) throw new BadRequestException('token is required');
+    if (body.platform !== 'ios' && body.platform !== 'android') {
+      throw new BadRequestException('platform must be ios or android');
+    }
+    await this.push.registerForDevice(deviceId, token, body.platform);
+    return { ok: true };
   }
 }

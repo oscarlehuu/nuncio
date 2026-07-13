@@ -13,6 +13,7 @@ export interface ModelInfo {
   badge?: string;
   cost?: string;
   contextWindow?: number;
+  capabilities?: ModelProviderCapabilities;
   options?: ModelOptionDescriptor[];
   variants?: ModelVariant[];
 }
@@ -41,11 +42,14 @@ export interface ModelProvider {
   capabilities?: ModelProviderCapabilities;
 }
 
+/** User-facing label for the `pi` provider slot (internal id stays `pi`). */
+export const NUNCIO_ENGINE_DISPLAY_NAME = 'Nuncio Engine';
+
 /** Static fallback — mirrors mockup.html PROVIDERS */
 export const FALLBACK_PROVIDERS: ModelProvider[] = [
   {
     id: 'pi',
-    name: 'Pi',
+    name: NUNCIO_ENGINE_DISPLAY_NAME,
     sub: 'Local harness · ~/.pi/agent',
     icon: 'π',
     groups: [
@@ -137,6 +141,19 @@ export function modelById(providers: ModelProvider[]): Record<string, FlatModel>
   return Object.fromEntries(flattenProviders(providers).map((m) => [m.id, m]));
 }
 
+export function modelSupportsImages(
+  providers: ModelProvider[],
+  providerId: string | undefined,
+  modelId: string | undefined,
+  fallback = false,
+): boolean {
+  if (!providerId) return fallback;
+  const provider = providers.find((entry) => entry.id === providerId);
+  if (!provider) return fallback;
+  const modelCapability = modelId ? modelById([provider])[modelId]?.capabilities?.images : undefined;
+  return modelCapability ?? provider.capabilities?.images ?? fallback;
+}
+
 export function providerMeta(
   providerId: string,
   providers: ModelProvider[] = FALLBACK_PROVIDERS,
@@ -196,7 +213,7 @@ function isCursorDefaultModelId(id: string): boolean {
 export const DEFAULT_PROVIDER_ID = 'pi';
 export const DEFAULT_MODEL_ID = 'claude-fable-5';
 
-/** Provider menu order — pi first (Pi is the first-class engine). */
+/** Provider menu order — pi first (Nuncio Engine is the first-class engine). */
 export const DEFAULT_PROVIDER_ORDER = ['pi', 'cursor'] as const;
 
 export function compareProvidersByOrder(

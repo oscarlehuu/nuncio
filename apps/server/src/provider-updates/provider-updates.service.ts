@@ -35,7 +35,7 @@ const UPDATE_TIMEOUT_MS = 5 * 60_000;
 const PROVIDER_TOOLS: ProviderToolDefinition[] = [
   {
     provider: 'pi',
-    name: 'Pi',
+    name: 'Nuncio Engine',
     packageName: '@earendil-works/pi-coding-agent',
     binarySetting: 'NUNCIO_PI_BIN',
     defaultBinary: 'pi',

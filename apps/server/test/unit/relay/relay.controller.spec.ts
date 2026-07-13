@@ -6,6 +6,7 @@ import { RelayController } from '../../../src/relay/relay.controller';
 import { CandidateUrlsService } from '../../../src/pairing/candidate-urls.service';
 import { DevicesService } from '../../../src/devices/devices.service';
 import { ConnectionTicketService } from '../../../src/relay/connection-ticket.service';
+import { RelayHealthService } from '../../../src/relay/relay-health.service';
 
 const ladder = {
   urls: ['http://192.168.1.8:3000', 'https://mac.tailnet.ts.net'],
@@ -17,7 +18,15 @@ const ladder = {
   },
 };
 
-function makeController() {
+const healthResult = {
+  lan: { status: 'up', latencyMs: 2, probedAt: 100 },
+  tailnet: { status: 'up', latencyMs: 12, probedAt: 101 },
+  funnel: { status: 'down', latencyMs: 48, probedAt: 102, reason: 'not configured' },
+} as const;
+
+function makeController(
+  health: Partial<RelayHealthService> = { probeAll: async () => healthResult as never },
+) {
   const candidates = { discover: async () => ladder.endpoints } as unknown as CandidateUrlsService;
   const devices = {
     verifyDevice: (id: string, secret: string) => id === 'device-1' && secret === 'good',
@@ -29,7 +38,12 @@ function makeController() {
         ? { deviceId: 'device-1' }
         : null,
   } as unknown as ConnectionTicketService;
-  const controller = new RelayController(candidates, devices, tickets);
+  const controller = new RelayController(
+    candidates,
+    devices,
+    tickets,
+    health as unknown as RelayHealthService,
+  );
   controller.setClock(() => 1_700_000_000_000);
   return controller;
 }
@@ -69,6 +83,12 @@ describe('RelayController', () => {
       );
     }
   });
+
+  it('returns the exact per-path status and last-probe latency shape', async () => {
+    const controller = makeController();
+    await expect(controller.getHealth()).resolves.toEqual(healthResult);
+    expect(Object.keys(await controller.getHealth())).toEqual(['lan', 'tailnet', 'funnel']);
+  });
 });
 
 describe('relay HTTP contract', () => {
@@ -86,12 +106,14 @@ describe('relay HTTP contract', () => {
           ? { deviceId: 'device-1' }
           : null,
     };
+    const health = { probeAll: async () => healthResult };
     const moduleRef = await Test.createTestingModule({
       controllers: [RelayController],
       providers: [
         { provide: CandidateUrlsService, useValue: candidates },
         { provide: DevicesService, useValue: devices },
         { provide: ConnectionTicketService, useValue: tickets },
+        { provide: RelayHealthService, useValue: health },
       ],
     }).compile();
     moduleRef.get(RelayController).setClock(() => 1_700_000_000_000);

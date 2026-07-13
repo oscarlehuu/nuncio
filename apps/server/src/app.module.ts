@@ -12,6 +12,7 @@ import { DevicesModule } from './devices/devices.module';
 import { DispatcherModule } from './dispatcher/dispatcher.module';
 import { ForgesModule } from './forges/forges.module';
 import { FsModule } from './fs/fs.module';
+import { EvidenceModule } from './evidence/evidence.module';
 import { GitModule } from './git/git.module';
 import { HealthModule } from './health/health.module';
 import { HubModule } from './hub/hub.module';
@@ -53,6 +54,7 @@ import { UsageModule } from './usage/usage.module';
     CrewModule,
     CursorLocalModule,
     ForgesModule,
+    EvidenceModule,
     FsModule,
     GitModule,
     HealthModule,

@@ -147,6 +147,8 @@ this.cachedAvailable = registry.getAvailable().length > 0;   // models with conf
 ```
 
 - `getAvailable()` returns models that have auth configured — the accurate "Pi can actually run a model" gate.
+- Empty registries and registry failures produce an empty model list; the server never invents
+  unauthenticated Pi models or triggers an auth prompt.
 - Env override is `PI_CODING_AGENT_DIR` (the SDK's own variable, not a nuncio-invented one).
 - The SDK is lazy-loaded (cached promise) so startup stays light. Availability is cached for the process lifetime.
 - `createAgentSession` is passed `agentDir`, `authStorage`, `modelRegistry`, and the resolved `model` (see below). Availability is cached for the process lifetime.
@@ -157,7 +159,13 @@ this.cachedAvailable = registry.getAvailable().length > 0;   // models with conf
 
 Pi SDK `0.80.6` supplies model-specific `thinkingLevelMap` metadata through the same catalog path. `piThinkingDescriptors()` treats `off` through `high` as baseline levels unless explicitly mapped to `null`; advanced `xhigh` and `max` levels require explicit non-null mappings. Nuncio persists and sends Pi's `max` value unchanged. It never translates it to Codex `ultra`, whose multi-agent semantics are provider-specific.
 
-`GET /api/models` also exposes `capabilities` per provider entry: `ModelsService.list()` (`models.service.ts`) sets `capabilities: entry.capabilities ?? provider.capabilities` on every `ModelProviderDto`, so the frontend can show/hide interrupt, in-session model/effort switch, and image-upload affordances per provider.
+Pi groups are generated for every provider returned by `ModelRegistry.getAvailable()`, named with
+`getProviderDisplayName()`, and sorted with their models before entering the API response. Each
+model's `input` metadata becomes `model.capabilities.images`; shared composers prefer that value
+over the provider-wide fallback so text-only Grok or custom models do not expose image upload while
+image-capable Gemini/Claude models do.
+
+`GET /api/models` also exposes `capabilities` per provider entry: `ModelsService.list()` (`models.service.ts`) sets `capabilities: entry.capabilities ?? provider.capabilities` on every `ModelProviderDto`, while models may narrow capabilities such as image input. The frontend uses the model value first and the provider value only as a compatibility fallback.
 
 ### Model context window (real vs. fallback)
 
@@ -695,6 +703,19 @@ apps/server/src/tailscale/
   tailscale.module.ts      imports SettingsModule, exported to AuthModule + main.ts (terminal WS)
 ```
 
+### Relay health and Funnel watchdog (`apps/server/src/relay/`)
+
+`GET /api/relay/health` probes a LAN-interface health URL, the MagicDNS health URL, and read-only
+Funnel configuration. Each path reports `up`, `down`, or conservative `unknown` plus
+the last probe latency and timestamp. A local request to the MagicDNS hostname cannot prove that
+the public Funnel route works, so command errors and unrecognized CLI output remain `unknown`.
+
+The daemon watchdog is deliberately one-way: only a typed, explicit Funnel `down` result can
+reach `enableFunnel(port)`. `up` and `unknown` return before mutation, and the watchdog has no
+disable, reset, or teardown dependency. Failed recovery is retried on the watchdog cadence;
+persistent failure raises one deduplicated `relay-down` Attention condition, cleared after a
+later healthy probe.
+
 - **Toggle:** setting `NUNCIO_TAILSCALE_AUTO_TRUST` (registry, boolean, default `'1'`). Resolved
   per request via `SettingsService.resolve` — flipping it in Settings applies immediately, no
   restart. `'0'` disables all tailscale trust.
@@ -834,6 +855,19 @@ not present a streamed remote-browser viewport there.
 **Invariant:** never use the user's daily Chrome profile and never launch a
 normal external Chrome window for the dock. The browser dock is available only
 through the desktop bridge.
+
+## Evidence capture targets
+
+`EvidenceCaptureService` serializes captures and binds every successful PNG to the workspace's
+unchanged Git HEAD. Browser capture remains the default and preserves its registered-origin and
+redirect checks. The `simulator` target gates on macOS plus `xcrun --find simctl`, then runs
+`xcrun simctl io booted screenshot <temporary-png>`. The command boundary is injected, temporary
+files are always removed, and PNG dimensions become the shared evidence viewport.
+
+Both targets write bytes through `MediaStore` and emit the same ref-only `evidence_captured`
+payload. An unavailable capability is a no-op with a clear reason and no event. The simulator
+driver is the future seam for `recordVideo`; Maestro installation and verify-command wiring are
+owned by orchestration and intentionally remain outside this capture service.
 
 ## Desktop server profiles (connect the shell to a remote nuncio)
 

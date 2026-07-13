@@ -72,7 +72,7 @@ describe('Sidebar', () => {
     // Line one: the title. Line two: the provider indicator + status/preview meta.
     const row = screen.getByRole('button', { name: /open fix auth/i });
     expect(row).toHaveTextContent('Fix auth');
-    expect(row).toContainElement(screen.getByLabelText(/pi provider/i));
+    expect(row).toContainElement(screen.getByLabelText(/nuncio engine provider/i));
     expect(row).toHaveTextContent(/reading middleware/i);
   });
 
@@ -112,7 +112,7 @@ describe('Sidebar', () => {
     renderWithTheme(
       <Sidebar sessions={sessions} activeId={null} onSelect={() => {}} onNew={() => {}} />,
     );
-    expect(screen.getByLabelText(/pi provider/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/nuncio engine provider/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/cursor provider/i)).toBeInTheDocument();
   });
 

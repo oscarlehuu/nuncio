@@ -1,6 +1,11 @@
 import { Module, type Provider } from '@nestjs/common';
 import { SessionsPersistenceModule } from '../sessions/sessions.persistence.module';
 import { SettingsModule } from '../settings/settings.module';
+import { ContextModule } from '../context/context.module';
+import {
+  NuncioContextRepository,
+  NuncioContextService,
+} from './pi-engine/nuncio-context';
 import { AgentRegistry } from './agents.registry';
 import { CursorAgentProvider } from './providers/cursor-agent.provider';
 import { CursorCliProvider } from './providers/cursor-cli.provider';
@@ -43,7 +48,7 @@ const mockProviderBinding: Provider = {
 };
 
 @Module({
-  imports: [SessionsPersistenceModule, SettingsModule],
+  imports: [SessionsPersistenceModule, SettingsModule, ContextModule],
   providers: [
     PiAgentProvider,
     CursorAgentProvider,
@@ -51,6 +56,8 @@ const mockProviderBinding: Provider = {
     ClaudeAgentProvider,
     CursorCliProvider,
     MockAgentProvider,
+    NuncioContextRepository,
+    NuncioContextService,
     mockProviderBinding,
     AgentRegistry,
   ],

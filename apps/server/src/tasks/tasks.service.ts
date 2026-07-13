@@ -7,6 +7,8 @@ import {
 } from '@nestjs/common';
 import { RetainedEventFlushError } from '../agents/agents.base-provider';
 import { DatabaseService } from '../db/database.service';
+import { EvidenceCaptureService } from '../evidence/evidence-capture.service';
+import type { EvidencePhase } from '../evidence/evidence.types';
 import type { ModelOptionsMap } from '../models/model-options.types';
 import { assembleSubagentBrief } from '../orchestration/handoff-brief.assembler';
 import { buildOutcomeDigest } from '../orchestration/outcome-digest.builder';
@@ -96,6 +98,7 @@ export class TasksService implements OnModuleDestroy {
     private readonly database: DatabaseService,
     @Optional() private readonly settings?: SettingsService,
     @Optional() private readonly profiles?: PromptProfileService,
+    @Optional() private readonly evidence?: EvidenceCaptureService,
   ) {
     // A RUNNING row at boot means the runner died mid-task; its session was
     // already reconciled by the sessions sweep. Generic queued work resumes;
@@ -596,6 +599,8 @@ export class TasksService implements OnModuleDestroy {
       let session: SessionDto;
       if (task.executionKind === 'crew-member' && task.sessionId) {
         childSessionId = task.sessionId;
+        const existing = this.sessions.get(task.sessionId);
+        if (existing) await this.captureTaskEvidence(existing, 'before');
         session = await this.sessions.continueExistingSession(task.sessionId, {
           prompt: task.prompt,
           ...(task.contextBrief ? { contextBrief: task.contextBrief } : {}),
@@ -622,6 +627,7 @@ export class TasksService implements OnModuleDestroy {
         });
         childSessionId = session.id;
         this.tasks.attachSession(task.id, session.id);
+        await this.captureTaskEvidence(session, 'before');
         await this.sessions.awaitRun(session.id);
       }
       // Wait for the verify-feedback loop (if any) to settle — a task's outcome
@@ -633,6 +639,7 @@ export class TasksService implements OnModuleDestroy {
       const verify = this.lastVerifyResult(session.id);
       const needsAttention = this.needsAttention(session.id);
       status = final?.status === 'IDLE' ? 'DONE' : 'FAILED';
+      if (status === 'DONE' && final) await this.captureTaskEvidence(final, 'after');
       outcome = {
         sessionStatus: final?.status ?? 'UNKNOWN',
         ...(verify ? { verify } : {}),
@@ -655,6 +662,18 @@ export class TasksService implements OnModuleDestroy {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[tasks] finish+digest transaction failed for ${task.id}; left for boot recovery: ${message}`);
+    }
+  }
+
+  /** Evidence is annotate-don't-block: capture failure never changes task outcome. */
+  private async captureTaskEvidence(session: SessionDto, phase: EvidencePhase): Promise<void> {
+    if (!this.evidence) return;
+    try {
+      const captured = await this.evidence.captureKnown(session, phase);
+      if (captured) this.sessions.appendOrchestrationEvent(session.id, 'evidence_captured', captured);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.warn(`[tasks] ${phase} evidence capture failed for ${session.id}: ${reason}`);
     }
   }
 

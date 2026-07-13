@@ -15,6 +15,7 @@ export type SessionEventType =
   | 'user_input_requested'
   | 'user_input_resolved'
   | 'plan_updated'
+  | 'evidence_captured'
   | 'error'
   | 'status'
   | 'transcript_refreshed'
@@ -85,6 +86,19 @@ export interface TaskCompletedPayload {
   workspace: WorkspaceSnapshot | null;
   /** Branch the work lives on. */
   childBranch: string | null;
+}
+
+export interface EvidenceMediaRef {
+  id: string;
+  mimeType: 'image/png';
+}
+
+export interface EvidenceCapturedPayload {
+  beforeRef?: EvidenceMediaRef;
+  afterRef?: EvidenceMediaRef;
+  route: string;
+  viewport: { w: number; h: number };
+  workspaceHead: string;
 }
 
 export interface TruncatedPayload {
@@ -180,4 +194,38 @@ export function isTaskCompletedEvent(event: {
     typeof (event.payload as TaskCompletedPayload).taskId === 'string' &&
     typeof (event.payload as TaskCompletedPayload).status === 'string'
   );
+}
+
+function isEvidenceRef(value: unknown): value is EvidenceMediaRef {
+  if (typeof value !== 'object' || value === null) return false;
+  const ref = value as Record<string, unknown>;
+  return Object.keys(ref).length === 2
+    && typeof ref.id === 'string'
+    && /^[a-f0-9]{32}$/.test(ref.id)
+    && ref.mimeType === 'image/png';
+}
+
+export function isEvidenceCapturedEvent(event: {
+  type: string;
+  payload: unknown;
+}): event is { type: 'evidence_captured'; payload: EvidenceCapturedPayload } {
+  if (event.type !== 'evidence_captured' || typeof event.payload !== 'object' || event.payload === null) {
+    return false;
+  }
+  const payload = event.payload as Record<string, unknown>;
+  const viewport = payload.viewport as Record<string, unknown> | undefined;
+  const before = payload.beforeRef;
+  const after = payload.afterRef;
+  return (before === undefined || isEvidenceRef(before))
+    && (after === undefined || isEvidenceRef(after))
+    && (isEvidenceRef(before) !== isEvidenceRef(after))
+    && typeof payload.route === 'string'
+    && typeof payload.workspaceHead === 'string'
+    && Boolean(payload.workspaceHead)
+    && typeof viewport?.w === 'number'
+    && Number.isInteger(viewport.w)
+    && viewport.w > 0
+    && typeof viewport?.h === 'number'
+    && Number.isInteger(viewport.h)
+    && viewport.h > 0;
 }

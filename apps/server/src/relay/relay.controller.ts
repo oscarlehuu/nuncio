@@ -6,12 +6,13 @@ import { Public } from '../auth/public.decorator';
 import { DevicesService } from '../devices/devices.service';
 import { CandidateUrlsService, type RelayEndpoints } from '../pairing/candidate-urls.service';
 import { ConnectionTicketService } from './connection-ticket.service';
+import { RelayHealthService } from './relay-health.service';
+import type { RelayHealthDto } from './relay.types';
 
 export interface LiveRelayEndpoints extends RelayEndpoints {
   updatedAt: number;
 }
 
-@Public()
 @Controller('relay')
 export class RelayController {
   private now: () => number = () => Date.now();
@@ -20,12 +21,14 @@ export class RelayController {
     private readonly candidates: CandidateUrlsService,
     private readonly devices: DevicesService,
     private readonly tickets: ConnectionTicketService,
+    private readonly health: RelayHealthService,
   ) {}
 
   setClock(now: () => number): void {
     this.now = now;
   }
 
+  @Public()
   @Post('ticket')
   ticket(@Req() req: AuthRequestLike): { ticket: string; expiresAt: number } {
     const bearer = parseDeviceBearer(req.headers?.authorization);
@@ -35,6 +38,7 @@ export class RelayController {
     return this.tickets.mint(bearer.deviceId);
   }
 
+  @Public()
   @Get('endpoints')
   async endpoints(@Req() req: AuthRequestLike): Promise<LiveRelayEndpoints> {
     if (!this.authorize(req)) {
@@ -42,6 +46,11 @@ export class RelayController {
     }
     const endpoints = await this.candidates.discover();
     return { ...endpoints, updatedAt: this.now() };
+  }
+
+  @Get('health')
+  getHealth(): Promise<RelayHealthDto> {
+    return this.health.probeAll();
   }
 
   private authorize(req: AuthRequestLike): boolean {
