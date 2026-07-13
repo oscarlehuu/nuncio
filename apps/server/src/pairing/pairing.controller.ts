@@ -12,6 +12,7 @@ import type { AuthRequestLike } from '../auth/auth-request';
 import { Public } from '../auth/public.decorator';
 import { DevicesService } from '../devices/devices.service';
 import { CandidateUrlsService } from './candidate-urls.service';
+import type { RelayEndpoints } from './candidate-urls.service';
 import { PairingService } from './pairing.service';
 import { FixedWindowRateLimiter } from './rate-limit';
 
@@ -35,14 +36,20 @@ export class PairingController {
   ) {}
 
   @Post('start')
-  async start(): Promise<{ code: string; expiresAt: number; urls: string[]; hints: string[] }> {
+  async start(): Promise<{
+    code: string;
+    expiresAt: number;
+    urls: string[];
+    hints: string[];
+    endpoints: RelayEndpoints;
+  }> {
     // Build the URLs BEFORE minting the code: minting invalidates any prior code,
     // so a slow/failed build must not leave a fresh code stranded on an error
     // response. build() is designed never to throw, but ordering keeps the
     // invariant even if that ever changes.
-    const { urls, hints } = await this.candidateUrls.build();
+    const { urls, hints, endpoints } = await this.candidateUrls.build();
     const { code, expiresAt } = this.pairing.start();
-    return { code, expiresAt, urls, hints };
+    return { code, expiresAt, urls, hints, endpoints };
   }
 
   @Public()

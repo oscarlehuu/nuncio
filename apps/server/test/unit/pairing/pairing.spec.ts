@@ -87,10 +87,23 @@ async function startCode(): Promise<string> {
   expect(typeof res.body.code).toBe('string');
   expect(Array.isArray(res.body.urls)).toBe(true);
   expect(Array.isArray(res.body.hints)).toBe(true);
+  expect(res.body.endpoints).toEqual(expect.objectContaining({ lan: expect.any(Array) }));
   return res.body.code;
 }
 
 describe('pairing HTTP lifecycle', () => {
+  it('keeps the legacy start fields in their original order and adds only endpoints', async () => {
+    const res = await request(app.getHttpServer()).post('/api/pairing/start');
+    expect(res.status).toBe(201);
+    expect(Object.keys(res.body)).toEqual(['code', 'expiresAt', 'urls', 'hints', 'endpoints']);
+    expect(JSON.stringify({
+      code: res.body.code,
+      expiresAt: res.body.expiresAt,
+      urls: res.body.urls,
+      hints: res.body.hints,
+    })).toBe(JSON.stringify(Object.fromEntries(Object.entries(res.body).slice(0, 4))));
+  });
+
   it('start never runs tailscale serve/funnel against the host in a unit test', async () => {
     await startCode();
     // The inert fake reports tailscale offline, so the builder must short-circuit
@@ -109,10 +122,34 @@ describe('pairing HTTP lifecycle', () => {
     expect(typeof res.body.deviceId).toBe('string');
     expect(typeof res.body.deviceSecret).toBe('string');
     expect(typeof res.body.serverName).toBe('string');
+    expect(Object.keys(res.body)).toEqual(['deviceId', 'deviceSecret', 'serverName']);
 
     // The minted credential must verify against the device store.
     const devices = app.get(DevicesService);
     expect(devices.verifyDevice(res.body.deviceId, res.body.deviceSecret)).toBe(true);
+  });
+
+  it('an old-format QR fixture with no endpoints field still pairs unchanged', async () => {
+    const started = await request(app.getHttpServer()).post('/api/pairing/start');
+    const oldQrFixture = JSON.parse(JSON.stringify({
+      v: 1,
+      code: started.body.code,
+      urls: started.body.urls,
+    })) as { v: number; code: string; urls: string[]; endpoints?: unknown };
+
+    expect(oldQrFixture).toEqual({ v: 1, code: started.body.code, urls: started.body.urls });
+    expect(oldQrFixture.endpoints).toBeUndefined();
+
+    const claim = await request(app.getHttpServer())
+      .post('/api/pairing/claim')
+      .send({ code: oldQrFixture.code, platform: 'ios' });
+    expect(claim.status).toBe(201);
+    expect(Object.keys(claim.body)).toEqual(['deviceId', 'deviceSecret', 'serverName']);
+    expect(JSON.stringify(claim.body)).toBe(JSON.stringify({
+      deviceId: claim.body.deviceId,
+      deviceSecret: claim.body.deviceSecret,
+      serverName: claim.body.serverName,
+    }));
   });
 
   it('a claimed code cannot be claimed again', async () => {

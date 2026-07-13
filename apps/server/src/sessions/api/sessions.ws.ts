@@ -4,6 +4,7 @@ import type { TokenValidator } from '../../auth/auth-request';
 import type { RevocableDeviceValidator } from '../../auth/device-token';
 import { DeviceSocketRegistry } from '../../auth/device-socket-registry';
 import { authorizeUpgrade, type RemoteTrust } from '../../auth/upgrade-auth';
+import type { ConnectionTicketVerifier } from '../../relay/connection-ticket.service';
 import type { SessionEvent } from '../domain/sessions.types';
 
 export const SESSIONS_WS_PATH = '/api/sessions/ws';
@@ -97,6 +98,7 @@ export function attachSessionsWebSocketServer(
   trust?: RemoteTrust,
   devices?: RevocableDeviceValidator,
   options?: SessionsWsOptions,
+  tickets?: ConnectionTicketVerifier,
 ): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
   const maxBuffered = options?.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES;
@@ -121,7 +123,14 @@ export function attachSessionsWebSocketServer(
     }
 
     const remoteAddress = (socket as unknown as { remoteAddress?: string }).remoteAddress;
-    void authorizeUpgrade({ headers: req.headers, socket: { remoteAddress } }, authTokens, trust, devices)
+    void authorizeUpgrade(
+      { headers: req.headers, socket: { remoteAddress } },
+      authTokens,
+      trust,
+      devices,
+      tickets,
+      'sessions:ws',
+    )
       .then((authz) => {
         if (!authz.authorized) {
           socket.destroy();

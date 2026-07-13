@@ -11,6 +11,7 @@ import {
 } from '../../../src/sessions/api/sessions.ws';
 import { attachTerminalWebSocketServer } from '../../../src/terminal/terminal.ws';
 import type { TerminalService } from '../../../src/terminal/terminal.service';
+import type { ConnectionTicketVerifier } from '../../../src/relay/connection-ticket.service';
 
 /**
  * A device validator that verifies one known credential and lets the test fire a
@@ -121,6 +122,33 @@ afterEach(() => {
 });
 
 describe('WS device revocation', () => {
+  it('tags + revokes a sessions WS authorized by an rt1 connection ticket', async () => {
+    const devices = makeDevices();
+    const tickets: ConnectionTicketVerifier = {
+      verify: (ticket, scope) =>
+        ticket === 'rt1.valid.signed' && scope === 'sessions:ws' ? { deviceId: 'dev1' } : null,
+    };
+    server = createServer();
+    forceRemoteAddress(server, '192.168.1.50');
+    attachSessionsWebSocketServer(
+      server,
+      fakeSessions(),
+      undefined,
+      undefined,
+      devices,
+      undefined,
+      tickets,
+    );
+    const port = await listen(server);
+
+    const ws = await connect(port, SESSIONS_WS_PATH, {
+      authorization: 'Bearer rt1.valid.signed',
+    });
+    const closed = waitForClose(ws);
+    devices.revoke('dev1');
+    expect(await closed).toBe(DEVICE_REVOKED_CLOSE_CODE);
+  });
+
   it('closes a live sessions WS when its device is revoked', async () => {
     const devices = makeDevices();
     server = createServer();

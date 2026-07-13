@@ -14,6 +14,7 @@ import { HubService } from './hub/hub.service';
 import { HubRegistryService } from './hub/hub-registry.service';
 import { configureHubProxy } from './hub/hub.proxy';
 import { attachHubWebSocketProxy } from './hub/hub.ws-proxy';
+import { ConnectionTicketService } from './relay/connection-ticket.service';
 
 // The Cursor SDK under Bun emits stray NGHTTP2_FRAME_SIZE_ERROR / ERR_HTTP2_STREAM_ERROR
 // events from its HTTP/2 streams (model discovery, Agent.create validation) that escape the
@@ -139,6 +140,8 @@ async function bootstrap() {
     authTokens,
     app.get(TailscaleService),
     devices,
+    undefined,
+    app.get(ConnectionTicketService),
   );
   console.log(
     `[auth] loopback clients need no token; remote clients authenticate with: ${authTokens.token} (source: ${authTokens.source})`,
