@@ -139,6 +139,7 @@ export class SessionsController {
     const session = this.sessions.requirePublicMutableSession(id);
     if (!this.evidence) throw new BadRequestException('Evidence capture is unavailable');
     const captured = await this.evidence.capture(session, body);
+    if ('unavailable' in captured) return captured;
     this.sessions.appendOrchestrationEvent(id, 'evidence_captured', captured);
     return captured;
   }

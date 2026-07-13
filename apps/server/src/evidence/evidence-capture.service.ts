@@ -11,6 +11,7 @@ import {
   type BrowserCaptureEvidenceDto,
   type EvidenceBrowser,
   type EvidenceBrowserServer,
+  type EvidenceCaptureOutcome,
   type EvidenceCaptureResult,
   type EvidenceChromium,
   type EvidenceGitHeadReader,
@@ -33,21 +34,21 @@ export class EvidenceCaptureService implements OnModuleDestroy {
   private destroying = false;
 
   constructor(
-    @Inject(EVIDENCE_CHROMIUM) private readonly chromium: EvidenceChromium,
+    @Inject(EVIDENCE_CHROMIUM) private readonly chromium: EvidenceChromium | null,
     private readonly media: MediaStore,
     @Inject(EVIDENCE_GIT_HEAD) private readonly readHead: EvidenceGitHeadReader,
     private readonly browserTools: BrowserToolService,
     @Optional() private readonly simulator?: SimulatorEvidenceCaptureService,
   ) {}
 
-  capture(session: SessionDto, input: CaptureEvidenceDto): Promise<EvidenceCaptureResult> {
+  capture(session: SessionDto, input: CaptureEvidenceDto): Promise<EvidenceCaptureOutcome> {
     const targetRevision = this.targetRevisions.get(session.id) ?? 0;
     const result = this.captureTail.then(() => this.captureOnce(session, input, targetRevision));
     this.captureTail = result.then(() => undefined, () => undefined);
     return result;
   }
 
-  captureKnown(session: SessionDto, phase: EvidencePhase): Promise<EvidenceCaptureResult | null> {
+  captureKnown(session: SessionDto, phase: EvidencePhase): Promise<EvidenceCaptureOutcome | null> {
     const target = this.knownTargets.get(session.id);
     return target ? this.capture(session, { ...target, phase }) : Promise.resolve(null);
   }
@@ -66,10 +67,13 @@ export class EvidenceCaptureService implements OnModuleDestroy {
     session: SessionDto,
     input: CaptureEvidenceDto,
     targetRevision: number,
-  ): Promise<EvidenceCaptureResult> {
+  ): Promise<EvidenceCaptureOutcome> {
     this.assertCaptureCurrent(session.id, targetRevision);
     if (input.phase !== 'before' && input.phase !== 'after') {
       throw new BadRequestException('phase must be before or after');
+    }
+    if (input.target !== 'simulator' && !this.chromium) {
+      return { unavailable: true, reason: 'Browser capture unavailable' };
     }
     const cwd = session.worktreePath ?? session.workspace ?? session.projectPath;
     if (!cwd) throw new BadRequestException('Session has no workspace to witness');
@@ -80,6 +84,7 @@ export class EvidenceCaptureService implements OnModuleDestroy {
     const captured = input.target === 'simulator'
       ? await this.captureSimulator()
       : await this.captureBrowser(session.id, input, targetRevision);
+    if ('unavailable' in captured && captured.unavailable === true) return captured;
     const workspaceHead = await this.readHead(cwd);
     if (!workspaceHead || workspaceHead !== headBefore) {
       throw new BadRequestException('Workspace HEAD changed during evidence capture');
@@ -110,7 +115,10 @@ export class EvidenceCaptureService implements OnModuleDestroy {
     sessionId: string,
     input: BrowserCaptureEvidenceDto,
     targetRevision: number,
-  ) {
+  ): Promise<EvidenceCaptureResult> {
+    if (!this.chromium) {
+      return { unavailable: true as const, reason: 'Browser capture unavailable' };
+    }
     const allowedOrigin = await this.resolveAllowedOrigin(sessionId);
     const target = this.resolveTarget(input, allowedOrigin);
     const server = await this.chromium.launchServer({ channel: 'chrome', headless: true });

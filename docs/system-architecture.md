@@ -869,6 +869,12 @@ payload. An unavailable capability is a no-op with a clear reason and no event. 
 driver is the future seam for `recordVideo`; Maestro installation and verify-command wiring are
 owned by orchestration and intentionally remain outside this capture service.
 
+`playwright-core` is an optional desktop runtime dependency: the server resolves it through an
+async Nest provider and injects `null` when it is not staged. Browser capture then returns an
+explicit unavailable result without launching Chrome or writing media; Simulator capture remains
+independent. Desktop server bundling keeps `playwright-core` external so Bun does not follow its
+runtime-only Chromium/BiDi modules into the packaged daemon bundle.
+
 ## Desktop server profiles (connect the shell to a remote nuncio)
 
 The Electron shell can load either its own local daemon or a saved remote nuncio server

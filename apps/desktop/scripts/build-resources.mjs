@@ -44,6 +44,8 @@ const EXTERNALS = [
   '@nestjs/websockets/socket-module',
   'class-validator',
   'class-transformer',
+  // Optional browser runtime; packaged desktops boot without staging it.
+  'playwright-core',
   // Loads platform binaries + numbered chunks at runtime; must resolve from a
   // real on-disk node_modules staged next to the bundle.
   '@cursor/sdk',
