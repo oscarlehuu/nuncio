@@ -93,6 +93,16 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     altEnvVar: 'PI_AGENT_DIR',
   },
   {
+    key: 'NUNCIO_PI_MODELS_PATH',
+    category: 'provider',
+    providerId: 'pi',
+    type: 'path',
+    label: 'Nuncio Engine models file',
+    description:
+      'Optional Pi-format custom model file used only by Nuncio Engine. Defaults to nuncio-models.json inside the active Pi agent directory; the Pi CLI models.json is never loaded.',
+    envVar: 'NUNCIO_PI_MODELS_PATH',
+  },
+  {
     key: 'PI_EXTENSION_DISCOVERY',
     category: 'provider',
     providerId: 'pi',

@@ -26,12 +26,20 @@ let isStreaming = false;
 let subscribedHandler: ((event: { type: string; [key: string]: unknown }) => void) | null = null;
 let sessionOpenError: Error | null = null;
 let createSessionCalls = 0;
+let customRegistryModels = new Map<string, ReturnType<typeof registryModel>>();
+let lastModelsPath: string | undefined;
 const abortMock = mock(async () => undefined);
 const steerMock = mock(async (_text: string, _images?: unknown) => undefined);
 const setModelMock = mock(async (_model: unknown) => undefined);
 const setThinkingLevelMock = mock((_level: unknown) => undefined);
 
-function registryModel(provider = 'anthropic', id = 'model-1') {
+function registryModel(provider = 'anthropic', id = 'model-1'): {
+  provider: string;
+  id: string;
+  name: string;
+  reasoning: boolean;
+  thinkingLevelMap: Record<string, string | null>;
+} {
   return {
     provider,
     id,
@@ -65,15 +73,21 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
   createFindTool: () => ({ name: 'find' }),
   createLsTool: () => ({ name: 'ls' }),
   ModelRegistry: {
-    create: () => ({
+    create: (_authStorage: unknown, modelsPath?: string) => {
+      lastModelsPath = modelsPath;
+      return {
+      getError: () => undefined,
       getAvailable: () => Array.from({ length: availableModelCount }, (_, i) => ({
         provider: 'anthropic',
         id: `model-${i}`,
         name: `Model ${i}`,
       })),
       getProviderDisplayName: (provider: string) => provider,
-      find: (provider: string, id: string) => (provider === 'anthropic' ? registryModel(provider, id) : undefined),
-    }),
+      find: (provider: string, id: string) => provider === 'anthropic'
+        ? registryModel(provider, id)
+        : customRegistryModels.get(`${provider}:${id}`),
+      };
+    },
   },
   SessionManager: {
     open: (path: string, sessionDir: undefined, cwd?: string) => {
@@ -166,6 +180,8 @@ describe('PiAgentProvider', () => {
     loaderReloadCalls = 0;
     sessionOpenError = null;
     createSessionCalls = 0;
+    customRegistryModels = new Map();
+    lastModelsPath = undefined;
     abortMock.mockClear();
     steerMock.mockClear();
     setModelMock.mockClear();
@@ -208,6 +224,46 @@ describe('PiAgentProvider', () => {
     const paths = lastLoaderOptions?.additionalExtensionPaths as string[];
     expect(paths).toContain('/tmp/fake-pi/extensions/foreman');
     expect(paths.some((p) => p.includes('claude-studio'))).toBe(false);
+  });
+
+  it('creates optional custom-provider Opus sessions with xhigh and max effort', async () => {
+    const originalResolve = settings.resolve.bind(settings);
+    settings.resolve = ((key: string) => key === 'NUNCIO_PI_MODELS_PATH'
+      ? '/tmp/user-config/models.json'
+      : originalResolve(key)) as SettingsService['resolve'];
+    customRegistryModels.set(
+      'custom-proxy:claude-opus-4-8',
+      {
+        ...registryModel('custom-proxy', 'claude-opus-4-8'),
+        thinkingLevelMap: { xhigh: 'xhigh', max: 'max' },
+      },
+    );
+
+    try {
+      for (const thinkingLevel of ['xhigh', 'max'] as const) {
+        const created = sessions.create({
+          prompt: `opus ${thinkingLevel}`,
+          provider: 'pi',
+          model: 'custom-proxy:claude-opus-4-8',
+          modelOptions: { thinkingLevel },
+        });
+
+        await provider.run(created.id, created.prompt, {
+          emit: () => {},
+          model: created.model ?? undefined,
+          modelOptions: created.modelOptions ?? undefined,
+        });
+
+        expect(lastCreateSessionOptions?.model).toMatchObject({
+          provider: 'custom-proxy',
+          id: 'claude-opus-4-8',
+        });
+        expect(lastCreateSessionOptions?.thinkingLevel).toBe(thinkingLevel);
+        expect(lastModelsPath).toBe('/tmp/user-config/models.json');
+      }
+    } finally {
+      settings.resolve = originalResolve as SettingsService['resolve'];
+    }
   });
 
   it('appends project facts and prefers the current Solo session brief', async () => {

@@ -72,6 +72,10 @@ describe('SettingsService', () => {
       expect(service.resolve('NUNCIO_CLAUDE_PERMISSION_MODE')).toBe('bypassPermissions');
     });
 
+    it('exposes an optional per-user Nuncio Engine models path', () => {
+      expect(service.resolve('NUNCIO_PI_MODELS_PATH')).toBeUndefined();
+    });
+
     it('honours altEnvVar when envVar is absent (PI_AGENT_DIR / PI_CODING_AGENT_DIR)', () => {
       delete process.env.PI_CODING_AGENT_DIR;
       process.env.PI_AGENT_DIR = '/custom/pi';

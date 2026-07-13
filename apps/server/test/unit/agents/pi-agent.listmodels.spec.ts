@@ -15,8 +15,12 @@ type FakeModel = {
 let availableModels: FakeModel[] = [];
 let throwOnCreate = false;
 let providerDisplayNames: Record<string, string> = {};
+let registryFactory: 'file' | 'memory' | null = null;
+let registryModelsPath: string | undefined;
+let registryLoadError: string | undefined;
 
 const fakeRegistry = {
+  getError: () => registryLoadError,
   getAvailable: () => availableModels,
   getProviderDisplayName: (provider: string) => providerDisplayNames[provider] ?? provider,
   find: (provider: string, id: string) =>
@@ -28,7 +32,14 @@ const fakeRegistry = {
 mock.module('@earendil-works/pi-coding-agent', () => ({
   AuthStorage: { create: () => ({}) },
   ModelRegistry: {
-    create: () => {
+    create: (_authStorage: unknown, modelsPath?: string) => {
+      registryFactory = 'file';
+      registryModelsPath = modelsPath;
+      if (throwOnCreate) throw new Error('sdk broken');
+      return fakeRegistry;
+    },
+    inMemory: () => {
+      registryFactory = 'memory';
       if (throwOnCreate) throw new Error('sdk broken');
       return fakeRegistry;
     },
@@ -40,15 +51,98 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
   getAgentDir: () => '/tmp/fake-pi',
 }));
 
-function makeProvider(): PiAgentProvider {
+function makeProvider(resolve: (key: string) => string | undefined = () => undefined): PiAgentProvider {
   // Minimal SettingsService stub: resolve() returns undefined for every key,
   // so the provider falls back to the mocked SDK's getAgentDir() ('/tmp/fake-pi')
   // and is never short-circuited by NUNCIO_FORCE_MOCK.
-  const settingsStub = { resolve: () => undefined } as never;
+  const settingsStub = { resolve } as never;
   return new PiAgentProvider({} as never, {} as never, settingsStub);
 }
 
 describe('PiAgentProvider.listModels', () => {
+  it('loads an optional Nuncio-only models file without reading the Pi CLI models.json', async () => {
+    availableModels = [{
+      provider: 'custom-proxy',
+      id: 'claude-opus-4-8',
+      name: 'Claude Opus 4.8',
+      reasoning: true,
+      thinkingLevelMap: { xhigh: 'xhigh', max: 'max' },
+    }];
+    registryFactory = null;
+    registryModelsPath = undefined;
+    throwOnCreate = false;
+
+    const providers = await makeProvider().listModels();
+
+    expect(registryFactory as 'file' | 'memory' | null).toBe('file');
+    expect(registryModelsPath as string | undefined).toBe('/tmp/fake-pi/nuncio-models.json');
+    expect(providers[0]?.sub).toBe('Optional models file · shared Pi auth');
+    expect(providers[0]?.groups?.[0]?.name).toBe('custom-proxy');
+  });
+
+  it('allows a user-specific Nuncio models path override', async () => {
+    availableModels = [];
+    registryModelsPath = undefined;
+
+    await makeProvider((key) => key === 'NUNCIO_PI_MODELS_PATH'
+      ? '/tmp/user-config/models.json'
+      : undefined).listModels();
+
+    expect(registryModelsPath as string | undefined).toBe('/tmp/user-config/models.json');
+  });
+
+  it('resolves a relative models path inside the active Pi agent directory', async () => {
+    registryModelsPath = undefined;
+
+    await makeProvider((key) => key === 'NUNCIO_PI_MODELS_PATH'
+      ? 'private/models.json'
+      : undefined).listModels();
+
+    expect(registryModelsPath as string | undefined).toBe('/tmp/fake-pi/private/models.json');
+  });
+
+  it('leaves a home-relative models path for the Pi SDK to expand', async () => {
+    registryModelsPath = undefined;
+
+    await makeProvider((key) => key === 'NUNCIO_PI_MODELS_PATH'
+      ? '~/.config/nuncio/models.json'
+      : undefined).listModels();
+
+    expect(registryModelsPath as string | undefined).toBe('~/.config/nuncio/models.json');
+  });
+
+  it('keeps built-in models available when the optional custom file is missing', async () => {
+    registryLoadError = undefined;
+    availableModels = [{ provider: 'anthropic', id: 'claude-built-in', name: 'Claude built-in' }];
+
+    const providers = await makeProvider().listModels();
+
+    expect(providers[0]?.groups?.[0]?.models?.[0]?.id).toBe('anthropic:claude-built-in');
+  });
+
+  it('warns once per invalid models path without exposing config contents', async () => {
+    availableModels = [];
+    registryLoadError = 'Invalid apiKey: sk-private-value';
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(' '));
+
+    try {
+      const provider = makeProvider((key) => key === 'NUNCIO_PI_MODELS_PATH'
+        ? '/tmp/invalid-private-models.json'
+        : undefined);
+      await provider.listModels();
+      await provider.listModels();
+    } finally {
+      console.warn = originalWarn;
+      registryLoadError = undefined;
+    }
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('/tmp/invalid-private-models.json');
+    expect(warnings[0]).not.toContain('sk-private-value');
+  });
+
   it('groups registry models by provider with provider:modelId ids, cost formatting, and context windows', async () => {
     availableModels = [
       {

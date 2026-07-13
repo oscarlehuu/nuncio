@@ -36,6 +36,7 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
   AuthStorage: { create: () => ({}) },
   ModelRegistry: {
     create: () => ({
+      getError: () => undefined,
       getAvailable: () => [{ provider: 'anthropic', id: 'model-0', name: 'Model 0' }],
       getProviderDisplayName: (provider: string) => provider,
       find: (provider: string, id: string) =>

@@ -35,6 +35,7 @@ import {
   NUNCIO_CONTEXT_MAX_BYTES,
   NuncioContextService,
 } from '../pi-engine/nuncio-context';
+import { createPiEngineModelRegistry } from '../pi-engine/model-registry';
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent');
 
@@ -147,8 +148,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     try {
       const pi = await this.loadSdk();
       const agentDir = this.resolveAgentDir(pi);
-      const authStorage = pi.AuthStorage.create(join(agentDir, 'auth.json'));
-      const registry = pi.ModelRegistry.create(authStorage, join(agentDir, 'models.json'));
+      const { modelRegistry: registry } = createPiEngineModelRegistry(pi, agentDir, this.settings);
       this.cachedAvailable = registry.getAvailable().length > 0;
     } catch {
       this.cachedAvailable = false;
@@ -170,8 +170,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     try {
       const pi = await this.loadSdk();
       const agentDir = this.resolveAgentDir(pi);
-      const authStorage = pi.AuthStorage.create(join(agentDir, 'auth.json'));
-      const modelRegistry = pi.ModelRegistry.create(authStorage, join(agentDir, 'models.json'));
+      const { modelRegistry } = createPiEngineModelRegistry(pi, agentDir, this.settings);
       return this.fromRegistry(modelRegistry);
     } catch {
       return [];
@@ -439,8 +438,7 @@ export class PiAgentProvider extends BaseAgentProvider {
   ): Promise<PiSessionHandle> {
     const pi = await this.loadSdk();
     const agentDir = this.resolveAgentDir(pi);
-    const authStorage = pi.AuthStorage.create(join(agentDir, 'auth.json'));
-    const modelRegistry = pi.ModelRegistry.create(authStorage, join(agentDir, 'models.json'));
+    const { authStorage, modelRegistry } = createPiEngineModelRegistry(pi, agentDir, this.settings);
     const model = resolveModelId(context.model, (provider, id) => modelRegistry.find(provider, id));
     if (context.runtimePolicy && context.model?.trim() && !model) {
       throw new Error(
@@ -749,7 +747,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       {
         id: this.id,
         name: this.name,
-        sub: 'Local harness · ~/.pi/agent',
+        sub: 'Optional models file · shared Pi auth',
         icon: 'π',
         groups,
       },

@@ -32,6 +32,7 @@ const makePiSdkStub = () => ({
   SettingsManager: { create: () => ({}) },
   ModelRegistry: {
     create: () => ({
+      getError: () => undefined,
       getAvailable: () => [],
       getProviderDisplayName: (provider: string) => provider,
       find: () => undefined,

@@ -144,11 +144,14 @@ Pi credentials live in `~/.pi/agent/auth.json` and are read by the Pi SDK's `Aut
 const pi = await loadSdk();                       // cached dynamic import
 const agentDir = pi.getAgentDir();                // PI_CODING_AGENT_DIR or ~/.pi/agent
 const authStorage = pi.AuthStorage.create(join(agentDir, 'auth.json'));
-const registry = pi.ModelRegistry.create(authStorage, join(agentDir, 'models.json'));
+const modelsPath = resolveNuncioModelsPath(agentDir, settings);
+const registry = pi.ModelRegistry.create(authStorage, modelsPath); // never personal models.json
 this.cachedAvailable = registry.getAvailable().length > 0;   // models with configured auth
 ```
 
 - `getAvailable()` returns models that have auth configured — the accurate "Pi can actually run a model" gate.
+- Built-in providers reuse Pi-managed `auth.json`; optional providers come only from the dedicated,
+  user-owned `nuncio-models.json`, so Pi CLI model aliases cannot leak into Nuncio Engine.
 - Empty registries and registry failures produce an empty model list; the server never invents
   unauthenticated Pi models or triggers an auth prompt.
 - Env override is `PI_CODING_AGENT_DIR` (the SDK's own variable, not a nuncio-invented one).
@@ -1686,7 +1689,7 @@ core; the hook only wires the `prevMap` ref + bridge call.
 | E2E | `bun run --filter @nuncio/server test:e2e` (`test/e2e/`) | HTTP lifecycle via supertest with simulated providers |
 | Integration | `bun run --filter @nuncio/server test:integration` (`test/integration/`) | Real provider auth checks and prompts; gated so CI stays safe |
 
-The Pi integration suite (`test/integration/pi-agent.integration.spec.ts`) exercises the real capabilities: in-session model switch, interrupt-and-resume, cwd tool-use pinned to `cliproxyapi:claude-opus-4-8`, and persist/resume. **Invariant:** it snapshots `~/.pi/agent/settings.json` in `beforeAll` and restores it in `afterAll`, so a run leaves that file byte-identical even though Pi's `setModel` intentionally writes to it.
+The Pi integration suite (`test/integration/pi-agent.integration.spec.ts`) exercises the real capabilities: in-session model switch, interrupt-and-resume, cwd tool-use with an available tool-capable model, and persist/resume. **Invariant:** it snapshots `~/.pi/agent/settings.json` in `beforeAll` and restores it in `afterAll`, so a run leaves that file byte-identical even though Pi's `setModel` intentionally writes to it.
 
 Server tests run on `bun test`. Unit tests use fakes for provider subprocess/SDK boundaries, so they do not require Codex, Cursor, or Pi credentials. Pi handoff is covered by `test/unit/pi-local/` (`pi-local-sessions.service.spec.ts`, `pi-transcript-hydrate.spec.ts`) plus `sessions.handoff.spec.ts` and `sessions.repository.spec.ts` (`findByProviderThreadId`, discriminated `createHandoff`); the `PiLocalSessionsService` SDK boundary is faked via its `loadSdk`/`openSession` overrides.
 
