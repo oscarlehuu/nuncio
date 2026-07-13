@@ -13,8 +13,8 @@ import { SessionsRepository } from '../../sessions/persistence/sessions.reposito
 import { SettingsService } from '../../settings/settings.service';
 import type { AgentRunContext } from '../agents.types';
 import { BaseAgentProvider } from '../agents.base-provider';
-import { appendRuntimeToolInstructions } from '../tools/agent-runtime-tools.types';
 import { renderRuntimeInstructions } from '../runtime-environment';
+import { encodeCursorRuntimeBootstrap } from '../runtime-user-prompt';
 import { buildCursorCustomTools } from '../tools/cursor-runtime-tools.adapter';
 import {
   CURSOR_PREFERRED_MODEL,
@@ -160,7 +160,13 @@ export class CursorAgentProvider extends BaseAgentProvider {
           ...(customTools ? { customTools } : {}),
         },
       });
-      handle = { agent, accumulatedText: '', accumulatedThinking: '', thinkingOpen: false };
+      handle = {
+        agent,
+        runtimeBootstrapSent: false,
+        accumulatedText: '',
+        accumulatedThinking: '',
+        thinkingOpen: false,
+      };
       this.activeSessions.set(sessionId, handle);
     }
 
@@ -176,13 +182,16 @@ export class CursorAgentProvider extends BaseAgentProvider {
     const runtimeInstructions = context.runtimeEnvironment
       ? renderRuntimeInstructions(context.runtimeEnvironment, context.tools)
       : undefined;
-    const prompt = runtimeInstructions
-      ? `${runtimeInstructions}\n\n## User request\n${text}`
-      : appendRuntimeToolInstructions(text, context.tools);
+    const legacyInstructions = context.tools?.systemPromptAppend?.trim();
+    const bootstrapInstructions = runtimeInstructions || legacyInstructions;
+    const prompt = !active.runtimeBootstrapSent && bootstrapInstructions
+      ? encodeCursorRuntimeBootstrap(text, bootstrapInstructions)
+      : text;
     const run = await active.agent.send(prompt, {
       onDelta: ({ update }) => this.handleDelta(sessionId, active, update, context),
       ...(customTools ? { local: { customTools } } : {}),
     });
+    active.runtimeBootstrapSent = true;
     const result = await run.wait();
     switch (result.status) {
       case 'finished':

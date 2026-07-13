@@ -99,13 +99,23 @@ state, approvals, verification, browser state, delegation, and project context. 
 in code rather than prompt-profile data: profiles may tune artifact wrappers, but can never
 remove the host identity or capability boundary.
 
-The adapters use the strongest channel their SDK exposes: Pi system append; Claude static system
-identity plus a per-turn manifest; Codex `developerInstructions` on both `thread/start` and
-`thread/resume`; Cursor per-turn preamble fallback. `nuncio_runtime_info` returns the same bounded
-host/session/tool/constraint snapshot as a read-only tool and is trusted through explicit Crew
-policies. Codex deliberately omits only this convenience tool from `dynamicTools`, because its
-app-server fixes that surface at `thread/start`; the equivalent developer instructions preserve
-old thread continuity without silently resetting a conversation.
+The adapters use the strongest channel their SDK exposes while keeping canonical user turns
+exact:
+
+- Pi installs the full runtime instructions through native `appendSystemPrompt`.
+- Codex supplies them as `developerInstructions` on both `thread/start` and `thread/resume`.
+- Claude installs the full instructions through native `appendSystemPrompt`. If their signature
+  changes between completed turns, Nuncio retires the completed query and resumes its persisted
+  thread with the refreshed system append before sending the exact next user turn.
+- Cursor SDK 1.0.22 exposes no native system/developer-instruction channel. Nuncio therefore wraps
+  only the first provider message in a deterministic
+  `<nuncio-runtime-bootstrap version="1">` envelope; later messages on that provider handle are
+  exact user text. The versioned envelope is losslessly decodable at transcript boundaries.
+
+`nuncio_runtime_info` returns the same bounded host/session/tool/constraint snapshot as a read-only
+tool and is trusted through explicit Crew policies. Codex deliberately omits only this convenience
+tool from `dynamicTools`, because its app-server fixes that surface at `thread/start`; equivalent
+developer instructions preserve old thread continuity without silently resetting a conversation.
 
 ### Runtime tools
 
@@ -1281,10 +1291,10 @@ to the very file the live SDK is actively writing. Two producers then feed the s
 (a) the **live** path emits one `assistant_message` per turn with `handle.getAssistantText()` —
 the UNTRIMMED concatenation of all text deltas; (b) the **watcher→hydrate** path
 (`pi-transcript-hydrate.ts`, `piEntriesToSessionEvents`) emits one `assistant_message` PER text
-block, each `blockText.trim()`ed. `missingTranscriptEvents` dedups by the EXACT key
-`` `${type}:${JSON.stringify(payload)}` ``, so the untrimmed concatenation and the N trimmed
-per-block messages never match → the watcher re-appends assistant text the live stream already
-delivered → the user sees DUPLICATED / fragmented assistant messages. The `locallyProducing`
+block, each `blockText.trim()`ed. `missingTranscriptEvents` dedupes messages by normalized event
+family plus exact text and occurrence count, so the untrimmed concatenation and the N trimmed
+per-block messages still do not match → the watcher would re-append assistant text the live stream
+already delivered → the user sees DUPLICATED / fragmented assistant messages. The `locallyProducing`
 guard fixes this by making the watcher refresh a no-op while nuncio is the in-process live
 producer; the non-live handoff/external-CLI path is behavior-preserving (the guard is never set
 for sessions nuncio does not run in-process).
@@ -1304,8 +1314,8 @@ for sessions nuncio does not run in-process).
   to the file STILL streams new events (the guard must not over-suppress). **This spec fails
   WITHOUT the guard and passes WITH it.**
 
-The seam coverage for the same streaming pipeline continues on the web side:
-`apps/web/src/lib/transcript-build-blocks.spec.ts` (delta→message→hydrate reconciliation — an
+The seam coverage for the same streaming pipeline continues in shared core and the web:
+`packages/core/src/transcript-build-blocks.spec.ts` (delta→message→hydrate reconciliation — an
 identical replayed `assistant_message`, incl. trailing-whitespace variant, must not create a
 second bubble), `apps/web/src/lib/use-session-stream.spec.tsx` (SSE resume: mid-stream drop +
 `since`-cursor reconnect yields a gap-free, duplicate-free, monotonic-seq event array), and
@@ -1513,28 +1523,55 @@ Web helpers `openPullRequest(id)`/`fetchPullRequest(id)` (`apps/web/src/lib/api.
 
 **NEVER** verify a webhook against a re-serialized JSON body — always the raw bytes; GitHub uses HMAC-SHA256 over `x-hub-signature-256`, GitLab compares the shared `x-gitlab-token` (handled inside each provider so the `ForgeProvider` interface stays uniform).
 
-## Web transcript parsing (incremental)
+## Shared transcript parsing (incremental)
 
-The web transcript is rendered from the session event log by a **resumable parser** so token streaming cost per event depends on the size of the *current* turn, not total session history. `apps/web/src/lib/transcript-build-blocks.ts` is the single source of truth for per-event transcript logic; `apps/web/src/lib/use-transcript-blocks.ts` wraps it in an incremental builder + React hook.
+Web and mobile transcripts are rendered from the session event log by a shared **resumable parser**
+so token streaming cost per event depends on the size of the *current* turn, not total session
+history. `packages/core/src/transcript-build-blocks.ts` is the single source of truth for per-event
+projection logic; the web re-export plus `apps/web/src/lib/use-transcript-blocks.ts` wrap it in an
+incremental builder and React hook.
 
 ### Resumable parser core (`transcript-build-blocks.ts`)
 
 The parser is split into a state object + three entry points so both the batch and incremental callers share **one** copy of the branch logic (no duplication):
 
-- `interface ParserState` (`transcript-build-blocks.ts:164`) holds everything the per-event loop mutates: `out` (the committed `TranscriptBlock[]`), the streaming buffers `assistantBuf`/`thinkingBuf`/`thinkingOpen`/`thinkingId`, the split-scoping guards `currentTurnHasThinking`/`assistantBufFromDelta` (see below), and the reach-back maps/stacks `openTools`, `pendingInteractive`, `providerRequests`, `legacyStack`, `legacySeq`. `cloneParserState` (`use-transcript-blocks.ts:34`) MUST copy all of these — including the two guards — or the incremental path diverges from `buildTranscriptBlocks`.
+- `interface ParserState` in shared core holds everything the per-event loop mutates: `out` (the committed `TranscriptBlock[]`), the streaming buffers `assistantBuf`/`thinkingBuf`/`thinkingOpen`/`thinkingId`, the split-scoping guards `currentTurnHasThinking`/`assistantBufFromDelta` (see below), and the reach-back maps/stacks `openTools`, `pendingInteractive`, `providerRequests`, `legacyStack`, `legacySeq`. The web `cloneParserState` MUST copy all of these or the incremental path diverges from `buildTranscriptBlocks`.
 - `createParserState()` (`transcript-build-blocks.ts:177`) → a fresh empty state.
 - `stepEvent(state, event)` (`transcript-build-blocks.ts:256`) applies one event's effect in place. This is the body of the old `for` loop (all `if (event.type === …)` branches).
 - `finalizeBlocks(state)` (`transcript-build-blocks.ts:492`) returns committed blocks **plus** any trailing streaming-tail block for an unterminated assistant/thinking buffer, WITHOUT mutating `state`. It clones `state.out` into a `scratch` before the streaming flush, so it is idempotent and safe to call between `stepEvent`s.
 
 **Imported-thinking split scoping (`splitThinking`) — Cursor-only, never live Pi.** `splitThinking(text)` (`transcript-build-blocks.ts:115`) is an **import-only Cursor-JSONL heuristic**: Cursor's imported transcripts append the model's reasoning to the end of the assistant text, so `flushAssistant` splits a trailing thinking tail into its own `thinking` block. This heuristic MUST NOT reclassify a live Pi (or any live-streamed) assistant answer as trailing thinking — that produced symptom 3 (thinking shown as a bottom `Thought for Ns` block). Two `ParserState` guards scope it (`transcript-build-blocks.ts:167`, cloned in `use-transcript-blocks.ts:46`): `currentTurnHasThinking` (set by any real `thinking_start`/`thinking_delta`/`thinking_message`; reset on each `user_message` turn boundary) and `assistantBufFromDelta` (set by `assistant_delta` live streaming; reset on `user_message` and after every `flushAssistant`). The gate (`flushAssistant`, `transcript-build-blocks.ts:199`) is `shouldSplitImportedThinking = !streaming && !currentTurnHasThinking && !assistantBufFromDelta`; only then does `splitThinking` run, otherwise `{ response, thinking: null }`. A purely imported Cursor message (no `thinking_*`, no `assistant_delta`) still splits — the `splits appended thinking into a separate thinking block` and `splits thinking starting with Let me think patterns` specs stay green. **NEVER** run `splitThinking` on live/streamed content or on a turn with real thinking blocks — it would move inline reasoning to a trailing block and can duplicate answer text.
 
-- `buildTranscriptBlocks(events)` (`transcript-build-blocks.ts:512`) is now just: `createParserState()` → `stepEvent` each event → `finalizeBlocks`. **Its public signature and byte-for-byte output are unchanged**; all `transcript-build-blocks.spec.ts` cases pass untouched.
+- `buildTranscriptBlocks(events)` remains: `createParserState()` → `stepEvent` each event →
+  `finalizeBlocks`. Its public signature stays stable; web and mobile inherit the same projection.
+
+**Transport compatibility and live-steer projection.** Canonical append-only events are never
+rewritten. Pi transcript hydration decodes the exact legacy Nuncio browser-instruction suffix
+before event-log dedupe, so the old provider-expanded form matches the already persisted clean
+user/steer text. Shared core also recognizes the versioned Cursor bootstrap. For an already
+persisted legacy augmented row, it suppresses the row only when decoding changes the text and an
+earlier non-queued canonical user block matches exactly; ordinary runtime-looking user text and
+genuine later turns remain visible. The server applies the same compatibility projection before
+returning event windows: if the matching canonical user input exists earlier in the durable log,
+the polluted legacy row is decoded and tagged with `transportDuplicateOfSeq` even when that
+canonical row falls outside the client's bounded tail. Shared core does not render tagged rows, but
+their `seq` remains in the event array so an all-duplicate page still preserves its history cursor.
+If no canonical row exists (for example, a lone imported legacy transcript), the server keeps and
+renders the turn with only its decoded user text. The append-only SQLite rows remain untouched.
+
+`steer_reserved` is durable input intent and projects a user block immediately after the current
+partial assistant output. A matching `steer_message` accepts that same block in place; a matching
+`steer_queued` marks it queued in place, preserving its key and chronology. Queued blocks remain
+hidden from the inline web transcript and continue to feed `derivePendingQueuedSteers`, so the
+existing queued-steers panel behavior is unchanged.
 
 **Reach-back mutation invariant (why a naive prefix-cache is WRONG).** Several events mutate an *earlier* block already in `state.out`:
 
 - `tool_end` → `state.out.findIndex(b => b.kind==='tool' && b.callId===entry.callId)` and replaces that earlier tool block (`transcript-build-blocks.ts:409`).
 - interactive `tool_end` and `user_input_resolved` → `state.out.findIndex` for the matching `user_input` block, set `resolvedBy` (`transcript-build-blocks.ts:323` for `user_input_resolved`, `:386` for interactive `tool_end`).
 - `provider_request_resolved` → mutates the matching `provider_request` block via the `providerRequests` map (`transcript-build-blocks.ts:459`, `existing.status = 'resolved'` at `:464`).
+- `steer_message` / `steer_queued` → reconcile a matching earlier `steer_reserved` user block in
+  place, retaining its original key and position.
 
 So the committed prefix is NOT frozen just because more events arrive. NEVER cache `out` at an arbitrary index and append.
 
@@ -1542,7 +1579,11 @@ So the committed prefix is NOT frozen just because more events arrive. NEVER cac
 
 `IncrementalTranscriptBuilder` (`use-transcript-blocks.ts:49`) keeps a persistent `checkpointState` (a `ParserState` folded up to `checkpointIndex`) and `checkpointSeq` (the `seq` of `events[checkpointIndex-1]`).
 
-- **Safe-boundary invariant.** `isSafeBoundary(state)` (`use-transcript-blocks.ts:18`) is true only when NO future event can reach back into `state.out`: `assistantBuf===''` AND `thinkingBuf===''` AND `!thinkingOpen` AND `openTools.size===0` AND `pendingInteractive.size===0` AND `legacyStack.length===0` AND no unresolved `provider_request` AND no unresolved `user_input` block. At a safe boundary every block in `out` is immutable for all future events, so the prefix can be treated as frozen. The checkpoint is advanced/snapshotted **only** at safe boundaries.
+- **Safe-boundary invariant.** `isSafeBoundary(state)` is true only when NO future event can reach
+  back into `state.out`: streaming buffers are empty, no thinking/tool/interactive/evidence work is
+  open, no provider request or user-input block is unresolved, and no user block is still
+  `reserved`. At a safe boundary every block in `out` is immutable for future events, so the prefix
+  can be frozen. The checkpoint advances **only** at safe boundaries.
 - **Hot streaming path.** During a turn the buffers are non-empty ⇒ not a safe boundary ⇒ no snapshot. `update(events)` clones `checkpointState` (`cloneParserState`, `use-transcript-blocks.ts:34`) and replays only `events[checkpointIndex .. end]` — i.e. just the current unfinished turn — then returns `finalizeBlocks(working)`. Cost per streamed token is O(current turn), not O(total history).
 - **Cache-extension validation / RESET.** `extendsPriorPrefix` (`use-transcript-blocks.ts:78`) requires `events.length >= checkpointIndex` and `events[checkpointIndex-1].seq === checkpointSeq`. On session switch, refetch that replaces content, shrink, or seq mismatch it fails and `update` RESETs (`reset`, rebuild from scratch). Correctness first — a failed validation always falls back to a fresh parse equal to `buildTranscriptBlocks(events)`.
 - **Frozen-prefix sharing.** The frozen prefix is not deep-cloned per token; `finalizeBlocks` produces a fresh array (shallow) for React while the safe-boundary invariant guarantees the prefix is never mutated past the checkpoint.
@@ -1554,12 +1595,17 @@ So the committed prefix is NOT frozen just because more events arrive. NEVER cac
 
 **NEVER**
 
-- NEVER snapshot the checkpoint when `isSafeBoundary` is false — an in-flight tool/interactive/provider request or a non-empty streaming buffer means a later event still mutates `out`.
+- NEVER snapshot the checkpoint when `isSafeBoundary` is false — an in-flight
+  tool/interactive/provider/evidence request, reserved steer, or non-empty streaming buffer means a
+  later event still mutates `out`.
 - NEVER duplicate the per-event branch logic into the incremental builder; both paths must call `stepEvent`/`finalizeBlocks`.
 - NEVER let `finalizeBlocks` permanently mutate `state` — it must remain idempotent so stepping more events afterward stays correct.
 - NEVER change `buildTranscriptBlocks`' signature or output; the incremental path must, at every prefix length `k`, deep-equal `buildTranscriptBlocks(events.slice(0, k))`.
 
-**Tests.** `apps/web/src/lib/use-transcript-blocks.spec.ts` proves equivalence: for a battery of sequences (delta streaming, interleaved thinking, concurrent tool reach-back, user_input request/resolve, interactive tool, provider_request with and without a prior request, steer_message, a mixed multi-turn session ending in a streaming tail, and a session-switch RESET) it appends events one at a time and asserts each prefix equals `buildTranscriptBlocks(events.slice(0, k))`. Existing `transcript-build-blocks.spec.ts` cases remain green.
+**Tests.** `apps/web/src/lib/use-transcript-blocks.spec.ts` proves incremental/batch equivalence by
+appending events one at a time and comparing every prefix with
+`buildTranscriptBlocks(events.slice(0, k))`. Shared core specs additionally pin exact legacy
+duplicate suppression and the `steer_reserved` → accepted/queued in-place reconciliation.
 
 ### Streaming smoothness + stalled-run recovery
 

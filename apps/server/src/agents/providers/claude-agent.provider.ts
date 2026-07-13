@@ -11,8 +11,7 @@ import {
   runtimePolicyKey,
   runtimeToolsForPolicy,
 } from '../agent-runtime-policy';
-import { appendRuntimeToolInstructions } from '../tools/agent-runtime-tools.types';
-import { renderRuntimeTurnContext } from '../runtime-environment';
+import { renderRuntimeInstructions } from '../runtime-environment';
 import {
   buildClaudeMcpServers,
   CLAUDE_RUNTIME_MCP_SERVER,
@@ -123,6 +122,7 @@ interface ActiveClaudeSession {
    */
   mcpToolSignature: string;
   runtimePolicyKey: string;
+  runtimeInstructionsKey: string;
   /** Persisted thread being resumed until its first successful terminal result. */
   resumedThreadId?: string;
 }
@@ -287,6 +287,14 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
       existing.delta = createDeltaMappingState();
       existing.requestProviderApproval = safeContext.requestProviderApproval;
       this.interruptedSessions.delete(sessionId);
+      const runtimeInstructionsKey = this.runtimeSystemInstructions(safeContext) ?? '';
+      if (existing.runtimeInstructionsKey !== runtimeInstructionsKey) {
+        this.dropHandle(sessionId, existing);
+        const refreshed = await this.startSession(sessionId, text, safeContext);
+        this.activeSessions.set(sessionId, refreshed);
+        await this.consume(sessionId, refreshed, safeContext);
+        return;
+      }
       await this.maybeRebuildMcpServers(existing, safeContext);
       existing.input.push(this.buildUserMessage(text, safeContext, false));
       await this.consume(sessionId, existing, safeContext);
@@ -467,9 +475,7 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     const model = this.stripPrefix(context.model);
     const apiKey = this.resolveApiKey();
     const effort = this.resolveEffort(context.modelOptions);
-    const appendSystemPrompt = context.runtimeEnvironment?.coreInstructions.trim()
-      || context.tools?.systemPromptAppend?.trim()
-      || undefined;
+    const appendSystemPrompt = this.runtimeSystemInstructions(context);
     const trustedMcpToolNames = (context.tools?.tools ?? []).map(
       (tool) => `mcp__${CLAUDE_RUNTIME_MCP_SERVER}__${tool.name}`,
     );
@@ -490,6 +496,7 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
       requestProviderApproval: context.requestProviderApproval,
       mcpToolSignature: this.mcpToolSignature(context),
       runtimePolicyKey: runtimePolicyKey(context.runtimePolicy),
+      runtimeInstructionsKey: appendSystemPrompt ?? '',
       ...(resume ? { resumedThreadId: resume } : {}),
     };
 
@@ -811,20 +818,19 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     context: AgentRunContext,
     isSteer: boolean,
   ): ClaudeUserMessage {
-    // Static Nuncio identity stays in the system prompt. Capabilities remain
-    // per-turn because MCP tools and policy-scoped authority can change.
-    const runtimeContext = context.runtimeEnvironment
-      ? renderRuntimeTurnContext(context.runtimeEnvironment, context.tools)
-      : undefined;
-    const prompt = runtimeContext
-      ? `${text}\n\n${runtimeContext}`
-      : appendRuntimeToolInstructions(text, context.tools);
     return {
       type: 'user',
       parent_tool_use_id: null,
-      message: { role: 'user', content: this.buildContent(prompt, context.attachments) },
+      message: { role: 'user', content: this.buildContent(text, context.attachments) },
       ...(isSteer ? { priority: 'now' as const } : {}),
     };
+  }
+
+  private runtimeSystemInstructions(context: AgentRunContext): string | undefined {
+    if (context.runtimeEnvironment) {
+      return renderRuntimeInstructions(context.runtimeEnvironment, context.tools).trim() || undefined;
+    }
+    return context.tools?.systemPromptAppend?.trim() || undefined;
   }
 
   /**

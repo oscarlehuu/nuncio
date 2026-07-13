@@ -6,6 +6,10 @@ import {
   renderRuntimeInstructions,
 } from '../../../src/agents/runtime-environment';
 import { runtimeToolsForPolicy } from '../../../src/agents/agent-runtime-policy';
+import {
+  decodeNuncioTransportUserText,
+  encodeCursorRuntimeBootstrap,
+} from '../../../src/agents/runtime-user-prompt';
 
 const readOnly = {
   filesystem: 'read-only' as const,
@@ -14,6 +18,16 @@ const readOnly = {
 };
 
 describe('Nuncio runtime environment', () => {
+  it('round-trips the versioned Cursor bootstrap without changing ordinary user text', () => {
+    const encoded = encodeCursorRuntimeBootstrap('ship it', 'Nuncio runtime instructions');
+
+    expect(encoded).toContain('<nuncio-runtime-bootstrap version="1">');
+    expect(decodeNuncioTransportUserText(encoded)).toBe('ship it');
+    expect(decodeNuncioTransportUserText('notes about a runtime manifest')).toBe(
+      'notes about a runtime manifest',
+    );
+  });
+
   it('renders a non-overridable host identity and a truthful capability manifest', () => {
     const environment = buildAgentRuntimeEnvironment({
       sessionId: 'session-1',

@@ -1,5 +1,6 @@
 import type { SessionEntry } from '@earendil-works/pi-coding-agent';
 import { truncatePayload } from '../sessions/domain/events.types';
+import { decodeNuncioTransportUserText } from '../agents/runtime-user-prompt';
 
 type SessionEventInput = { type: string; payload: unknown };
 
@@ -27,7 +28,12 @@ export function piEntriesToSessionEvents(entries: SessionEntry[]): SessionEventI
 
     if (role === 'user') {
       const text = textFromContent(content);
-      if (text) events.push({ type: 'user_message', payload: { text } });
+      if (text) {
+        events.push({
+          type: 'user_message',
+          payload: { text: decodeNuncioTransportUserText(text) },
+        });
+      }
       continue;
     }
 

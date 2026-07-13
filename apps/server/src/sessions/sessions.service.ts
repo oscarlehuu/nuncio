@@ -29,6 +29,7 @@ import {
   buildAgentRuntimeEnvironment,
   createNuncioRuntimeInfoTool,
 } from '../agents/runtime-environment';
+import { decodeNuncioTransportUserText } from '../agents/runtime-user-prompt';
 import { MediaStore } from './media.store';
 import { CursorLocalSessionsService } from '../cursor-local/cursor-local-sessions.service';
 import { turnsToSessionEvents } from '../cursor-local/cursor-transcript-hydrate';
@@ -232,13 +233,45 @@ export class SessionsService implements OnModuleDestroy {
     const session = this.requireSession(id);
     this.hydrateIfNeeded(session);
     this.safeRefreshTranscript(id, session);
+    let events: SessionEvent[];
     if (opts?.tail !== undefined) {
-      return this.events.listTail(id, opts.tail);
+      events = this.events.listTail(id, opts.tail);
+    } else if (opts?.before !== undefined) {
+      events = this.events.listBefore(id, opts.before, opts.limit ?? DEFAULT_BACKFILL_LIMIT);
+    } else {
+      events = this.events.list(id, since, opts?.limit);
     }
-    if (opts?.before !== undefined) {
-      return this.events.listBefore(id, opts.before, opts.limit ?? DEFAULT_BACKFILL_LIMIT);
+    return this.projectPersistedTransportUserEvents(id, events);
+  }
+
+  private projectPersistedTransportUserEvents(id: string, events: SessionEvent[]): SessionEvent[] {
+    const projected: SessionEvent[] = [];
+    for (const event of events) {
+      if (event.type !== 'user_message' && event.type !== 'steer_message') {
+        projected.push(event);
+        continue;
+      }
+      const payload = event.payload as Record<string, unknown>;
+      if (typeof payload.text !== 'string') {
+        projected.push(event);
+        continue;
+      }
+      const decodedText = decodeNuncioTransportUserText(payload.text);
+      if (decodedText === payload.text) {
+        projected.push(event);
+        continue;
+      }
+      const canonicalSeq = this.events.findUserInputSeqBefore(id, event.seq, decodedText);
+      projected.push({
+        ...event,
+        payload: {
+          ...payload,
+          text: decodedText,
+          ...(canonicalSeq !== null ? { transportDuplicateOfSeq: canonicalSeq } : {}),
+        },
+      });
     }
-    return this.events.list(id, since, opts?.limit);
+    return projected;
   }
 
   /** Catch-up refresh guarded against local live runs and transient fs errors. */

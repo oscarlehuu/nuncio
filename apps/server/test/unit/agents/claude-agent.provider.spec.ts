@@ -14,6 +14,7 @@ import type {
   ClaudeQuery,
   ClaudeQueryOptions,
   ClaudeSdkMessage,
+  ClaudeUserMessage,
 } from '../../../src/agents/providers/claude-agent.sdk';
 // ClaudeQuery is used to type the image-capture fake query below.
 import { DatabaseModule } from '../../../src/db/database.module';
@@ -505,21 +506,22 @@ describe('ClaudeAgentProvider', () => {
   });
 
   describe('runtime tools → in-process MCP server', () => {
-    it('keeps static Nuncio identity in the system prompt and dynamic capabilities in the user turn', async () => {
+    it('keeps all Nuncio runtime instructions in the system prompt and user turns exact', async () => {
       const create = (opts: { name: string }) => ({ type: 'sdk' as const, name: opts.name, instance: {} });
       provider.createSdkMcpServer = create as never;
-      let receivedUserText = '';
+      const receivedUserTexts: string[] = [];
       provider.queryFactory = ({ prompt, options }) => {
         capturedOptions = options;
         return {
           async interrupt() {},
           async setModel() {},
           async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
-            const first = await prompt[Symbol.asyncIterator]().next();
-            const content = first.value?.message?.content;
-            receivedUserText = typeof content === 'string' ? content : '';
             yield { type: 'system', subtype: 'init', session_id: 'thread-runtime' };
-            yield { type: 'result', subtype: 'success', result: 'ok' };
+            for await (const message of prompt) {
+              const content = message.message.content;
+              receivedUserTexts.push(typeof content === 'string' ? content : '');
+              yield { type: 'result', subtype: 'success', result: 'ok' };
+            }
           },
         };
       };
@@ -537,18 +539,19 @@ describe('ClaudeAgentProvider', () => {
         supportsInteraction: true,
         runtimeTools: tools,
       });
-      await provider.run(created.id, 'call the tool', {
+      const context = {
         cwd: '/tmp/ws',
         model: 'claude:haiku',
         tools,
         runtimeEnvironment,
-      });
+      };
+      await provider.run(created.id, 'call the tool', context);
+      await provider.steer(created.id, 'continue exactly', context);
       expect(capturedOptions?.mcpServers?.['nuncio-runtime']).toBeDefined();
       expect(capturedOptions?.appendSystemPrompt).toContain('running inside Nuncio');
-      expect(capturedOptions?.appendSystemPrompt).not.toContain('You have a verify tool.');
-      expect(receivedUserText).toContain('You have a verify tool.');
-      expect(receivedUserText).toContain('available tools: verify');
-      expect(receivedUserText).not.toContain('running inside Nuncio');
+      expect(capturedOptions?.appendSystemPrompt).toContain('You have a verify tool.');
+      expect(capturedOptions?.appendSystemPrompt).toContain('available tools: verify');
+      expect(receivedUserTexts).toEqual(['call the tool', 'continue exactly']);
     });
 
     it('omits mcpServers when the session has no runtime tools', async () => {
@@ -711,6 +714,74 @@ describe('ClaudeAgentProvider', () => {
 
     const toolset = (name: string) => ({
       tools: [{ name, inputSchema: {}, execute: () => 'ok' }],
+    });
+
+    it('resumes with refreshed native system instructions when runtime context changes', async () => {
+      const optionRecords: ClaudeQueryOptions[] = [];
+      const receivedUserTexts: string[] = [];
+      provider.createSdkMcpServer = ((opts: { name: string }) => ({
+        type: 'sdk' as const,
+        name: opts.name,
+        instance: {},
+      })) as never;
+      provider.queryFactory = (({ prompt, options }: {
+        prompt: AsyncIterable<ClaudeUserMessage>;
+        options: ClaudeQueryOptions;
+      }) => {
+        optionRecords.push(options);
+        return {
+          async interrupt() {},
+          async setModel() {},
+          async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+            const message = await prompt[Symbol.asyncIterator]().next();
+            const content = message.value?.message.content;
+            receivedUserTexts.push(typeof content === 'string' ? content : '');
+            yield { type: 'system', subtype: 'init', session_id: 'thread-refresh' };
+            yield { type: 'result', subtype: 'success', result: 'ok' };
+          },
+        };
+      }) as never;
+
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      const firstTools = toolset('verify');
+      const secondTools = toolset('deploy');
+      const firstEnvironment = buildAgentRuntimeEnvironment({
+        sessionId: created.id,
+        provider: 'claude',
+        model: 'claude:haiku',
+        projectPath: null,
+        cwd: '/tmp/ws',
+        supportsInteraction: true,
+        runtimeTools: firstTools,
+      });
+      const secondEnvironment = buildAgentRuntimeEnvironment({
+        sessionId: created.id,
+        provider: 'claude',
+        model: 'claude:haiku',
+        projectPath: null,
+        cwd: '/tmp/ws',
+        supportsInteraction: true,
+        runtimeTools: secondTools,
+      });
+
+      await provider.run(created.id, 'first exact', {
+        cwd: '/tmp/ws',
+        model: 'claude:haiku',
+        tools: firstTools,
+        runtimeEnvironment: firstEnvironment,
+      });
+      await provider.steer(created.id, 'second exact', {
+        cwd: '/tmp/ws',
+        model: 'claude:haiku',
+        tools: secondTools,
+        runtimeEnvironment: secondEnvironment,
+      });
+
+      expect(optionRecords).toHaveLength(2);
+      expect(optionRecords[0]?.appendSystemPrompt).toContain('available tools: verify');
+      expect(optionRecords[1]?.appendSystemPrompt).toContain('available tools: deploy');
+      expect(optionRecords[1]?.resume).toBe('thread-refresh');
+      expect(receivedUserTexts).toEqual(['first exact', 'second exact']);
     });
 
     it('does not call setMcpServers when the follow-up toolset is unchanged', async () => {

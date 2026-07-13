@@ -9,9 +9,7 @@ import type {
   AgentRuntimeToolSource,
   AgentRuntimeTools,
 } from './agent-runtime-tools.types';
-
-const BROWSER_PROMPT_APPEND =
-  'When the user asks for browser, web, UI, site, screenshot, or visual verification work, use the Nuncio browser tools first. Omit target to use the configured default from Settings > MCP & Tools; target=auto prefers the Nuncio in-app browser, then falls back to the Nuncio-owned external CDP browser.';
+import { NUNCIO_BROWSER_RUNTIME_INSTRUCTIONS } from '../runtime-user-prompt';
 
 export type ToolScope = AgentRuntimeToolScope;
 
@@ -69,7 +67,7 @@ export class AgentToolRegistry {
       .map((source) => source.forSession(scope))
       .filter((tools): tools is AgentRuntimeTools => tools !== undefined);
     const appends = [
-      BROWSER_PROMPT_APPEND,
+      NUNCIO_BROWSER_RUNTIME_INSTRUCTIONS,
       orchestration.systemPromptAppend,
       ...sourced.map((tools) => tools.systemPromptAppend),
     ].filter(Boolean);

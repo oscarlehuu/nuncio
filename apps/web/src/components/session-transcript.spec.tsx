@@ -49,3 +49,21 @@ describe('Transcript evidence dispatch', () => {
     expect(screen.queryByTestId('evidence-stale')).not.toBeInTheDocument();
   });
 });
+
+describe('Transcript live steer projection', () => {
+  it('renders a reserved steer immediately and does not duplicate it when accepted', () => {
+    const events = [
+      ev(1, 'user_message', { text: 'start' }),
+      ev(2, 'assistant_delta', { delta: 'working' }),
+      ev(3, 'steer_reserved', { text: 'change direction' }),
+      ev(4, 'steer_message', { text: 'change direction' }),
+    ];
+
+    const { container } = render(<Transcript events={events} sessionId="s1" streaming />);
+
+    expect(screen.getAllByText('change direction')).toHaveLength(1);
+    expect(container.textContent?.indexOf('working')).toBeLessThan(
+      container.textContent?.indexOf('change direction') ?? -1,
+    );
+  });
+});

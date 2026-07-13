@@ -74,6 +74,21 @@ export class EventsRepository {
     return rows.map(parseEvent).reverse();
   }
 
+  findUserInputSeqBefore(sessionId: string, before: number, text: string): number | null {
+    const row = this.database.db
+      .prepare<{ seq: number }, [string, number, string]>(
+        `SELECT seq FROM events
+         WHERE session_id = ?
+           AND seq < ?
+           AND type IN ('user_message', 'steer_message')
+           AND json_extract(payload, '$.text') = ?
+         ORDER BY seq ASC
+         LIMIT 1`,
+      )
+      .get(sessionId, before, text);
+    return row?.seq ?? null;
+  }
+
   /**
    * Low-volume facts used by metrics/digests. Status stays lifetime-scoped to
    * preserve duration semantics; every other fact is bounded to [from, to).
