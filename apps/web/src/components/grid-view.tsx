@@ -237,40 +237,47 @@ export function GridView(props: GridViewProps) {
 
   // Maximize: mount ONLY the full SessionDetail; every tile unmounts (founder-locked).
   // The transition wrapper grows it from — and shrinks it back to — the origin slot.
-  if (maximizedSlot !== null) {
-    const bound = slots[maximizedSlot]?.sessionId;
-    const session = bound ? sessionsById.get(bound) : undefined;
-    if (session) {
-      return (
-        <section className="relative flex flex-1 flex-col min-h-0 min-w-0">
-          <MaximizeTransition originRect={originRect} closing={closing} onExited={handleMaximizeExited}>
-            <MaximizedSession
-              session={session}
-              providers={providers}
-              onRespondProviderRequest={(requestId, decision) =>
-                props.onRespondProviderRequest(session.id, requestId, decision)
-              }
-              onSteer={(message, attachments) =>
-                props.onSteerSession(session.id, message, attachments)
-              }
-              onPause={() => props.onPauseSession(session.id)}
-              onArchive={() => props.onArchiveSession(session.id)}
-              onRestore={props.onRestore}
-              onDelete={props.onDelete}
-              onRename={props.onRename}
-              onSessionStatus={props.onSessionStatus}
-              onSessionTitle={props.onSessionTitle}
-              onOpenSession={openSession}
-              steering={props.steering}
-              lifecycleBusy={props.lifecycleBusy}
-              onRestoreGrid={requestRestore}
-            />
-          </MaximizeTransition>
-        </section>
-      );
-    }
-    // Bound session vanished while maximized — fall back to the grid.
+  const maximizedBoundId =
+    maximizedSlot !== null ? slots[maximizedSlot]?.sessionId ?? null : null;
+  const maximizedSession = maximizedBoundId ? sessionsById.get(maximizedBoundId) : undefined;
+
+  useEffect(() => {
+    // Bound session vanished while maximized (e.g. archived) — fall back to the grid.
+    if (maximizedSlot === null || !maximizedBoundId || maximizedSession) return;
     setMaximizedSlot(null);
+    setClosing(false);
+    setOriginRect(null);
+  }, [maximizedSlot, maximizedBoundId, maximizedSession]);
+
+  if (maximizedSlot !== null && maximizedSession) {
+    const session = maximizedSession;
+    return (
+      <section className="relative flex flex-1 flex-col min-h-0 min-w-0">
+        <MaximizeTransition originRect={originRect} closing={closing} onExited={handleMaximizeExited}>
+          <MaximizedSession
+            session={session}
+            providers={providers}
+            onRespondProviderRequest={(requestId, decision) =>
+              props.onRespondProviderRequest(session.id, requestId, decision)
+            }
+            onSteer={(message, attachments) =>
+              props.onSteerSession(session.id, message, attachments)
+            }
+            onPause={() => props.onPauseSession(session.id)}
+            onArchive={() => props.onArchiveSession(session.id)}
+            onRestore={props.onRestore}
+            onDelete={props.onDelete}
+            onRename={props.onRename}
+            onSessionStatus={props.onSessionStatus}
+            onSessionTitle={props.onSessionTitle}
+            onOpenSession={openSession}
+            steering={props.steering}
+            lifecycleBusy={props.lifecycleBusy}
+            onRestoreGrid={requestRestore}
+          />
+        </MaximizeTransition>
+      </section>
+    );
   }
 
   return (
