@@ -573,6 +573,32 @@ describe('App lifecycle', () => {
     await waitFor(() => expect(archiveSession).toHaveBeenCalledWith('new1'));
   });
 
+  it('navigates Home after archive even when the archived list refreshes after the active list', async () => {
+    await openSession();
+
+    let resolveArchived!: (sessions: Session[]) => void;
+    const archivedLater = new Promise<Session[]>((resolve) => {
+      resolveArchived = resolve;
+    });
+    vi.mocked(toast.error).mockClear();
+    vi.mocked(archiveSession).mockResolvedValue(fakeSession({ status: 'ARCHIVED' }));
+    vi.mocked(fetchSessions).mockResolvedValue([]);
+    // Hang both recovery paths so only an immediate post-archive navigate can leave the blank SessionRoute.
+    vi.mocked(fetchArchivedSessions).mockImplementation(() => archivedLater);
+    vi.mocked(fetchSession).mockImplementation(() => new Promise(() => {}));
+
+    await userEvent.click(screen.getByRole('button', { name: /session actions/i }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /archive session/i }));
+
+    await waitFor(() => expect(archiveSession).toHaveBeenCalledWith('new1'));
+    // Active list already empty; archived + fetchSession still pending — must not leave a blank SessionRoute.
+    await waitFor(() => expect(screen.getByRole('heading', { name: /^home$/i })).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: /session actions/i })).not.toBeInTheDocument();
+    expect(toast.error).not.toHaveBeenCalledWith('Session not found');
+
+    resolveArchived([fakeSession({ status: 'ARCHIVED' })]);
+  });
+
   it('sidebar hover-archive calls archiveSession with the row id (not the active id)', async () => {
     const other = fakeSession({ id: 'other1', title: 'Other task', status: 'IDLE' });
     vi.mocked(fetchSessions).mockResolvedValue([session, other]);
