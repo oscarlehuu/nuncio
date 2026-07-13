@@ -71,7 +71,12 @@ export function ScmPanel({ session, workingDir, segment, onSegmentChange }: ScmP
           <>
             <div className="border-b border-border/60 bg-card/40">
               <Suspense fallback={<div className="px-3 py-3 text-sm text-muted-foreground">Loading changes…</div>}>
-                <SessionChangesPanel sessionId={session.id} sessionStatus={session.status} />
+                <SessionChangesPanel
+                  sessionId={session.id}
+                  sessionStatus={session.status}
+                  repoPath={repoPath}
+                  branch={session.branch}
+                />
               </Suspense>
             </div>
             <PrPanel session={session} repoPath={repoPath} />

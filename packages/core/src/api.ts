@@ -34,6 +34,66 @@ export interface GitStatusDto {
   files: GitFileChange[];
 }
 
+export interface GitCommitDto {
+  sha: string;
+  shortSha: string;
+  subject: string;
+  authorName: string;
+  authoredAt: string;
+}
+
+export interface GitUnpushedCommitsDto {
+  branch: string;
+  base: string | null;
+  commits: GitCommitDto[];
+}
+
+export interface GitBranchSyncDto {
+  branch: string;
+  base: string | null;
+  ahead: number;
+  behind: number;
+  outgoing: GitCommitDto[];
+  incoming: GitCommitDto[];
+  conflicts: string[];
+  clean: boolean;
+}
+
+export interface GitStashEntryDto {
+  index: number;
+  message: string;
+  sha: string;
+}
+
+export interface GitBlameLineDto {
+  line: number;
+  sha: string;
+  shortSha: string;
+  authorName: string;
+  authoredAt: string;
+  content: string;
+}
+
+export interface GitBlameDto {
+  path: string;
+  lines: GitBlameLineDto[];
+  truncated: boolean;
+}
+
+export interface GitHistoryCommitDto extends GitCommitDto {
+  parents: string[];
+}
+
+export interface GitHistoryDto {
+  branch: string;
+  commits: GitHistoryCommitDto[];
+}
+
+export interface PullResultDto {
+  pulled: boolean;
+  fastForward: boolean;
+}
+
 export interface GitDiffDto {
   diff: string;
   truncated: boolean;
@@ -496,6 +556,52 @@ export function relativeTime(ts: number): string {
 export async function fetchGitStatus(id: string): Promise<GitStatusDto> {
   const res = await apiFetch(`/api/sessions/${id}/git/status`);
   if (!res.ok) throw new Error('Failed to fetch Git status');
+  return res.json();
+}
+
+export async function fetchUnpushedCommits(id: string): Promise<GitUnpushedCommitsDto> {
+  const res = await apiFetch(`/api/sessions/${id}/git/unpushed`);
+  if (!res.ok) throw new Error('Failed to fetch unpushed commits');
+  return res.json();
+}
+
+export async function fetchGitBranchSync(id: string): Promise<GitBranchSyncDto> {
+  const res = await apiFetch(`/api/sessions/${id}/git/sync`);
+  if (!res.ok) throw new Error('Failed to fetch branch sync');
+  return res.json();
+}
+
+export async function fetchCommitDiff(id: string, sha: string): Promise<GitDiffDto> {
+  const res = await apiFetch(`/api/sessions/${id}/git/commits/${encodeURIComponent(sha)}/diff`);
+  if (!res.ok) throw new Error('Failed to fetch commit diff');
+  return res.json();
+}
+
+export async function fetchGitStash(id: string): Promise<GitStashEntryDto[]> {
+  const res = await apiFetch(`/api/sessions/${id}/git/stash`);
+  if (!res.ok) throw new Error('Failed to fetch stash');
+  return res.json();
+}
+
+export async function fetchGitBlame(id: string, path: string): Promise<GitBlameDto> {
+  const params = new URLSearchParams({ path });
+  const res = await apiFetch(`/api/sessions/${id}/git/blame?${params}`);
+  if (!res.ok) throw new Error('Failed to fetch blame');
+  return res.json();
+}
+
+export async function fetchGitHistory(id: string, limit?: number): Promise<GitHistoryDto> {
+  const params = new URLSearchParams();
+  if (limit != null) params.set('limit', String(limit));
+  const query = params.toString() ? `?${params}` : '';
+  const res = await apiFetch(`/api/sessions/${id}/git/history${query}`);
+  if (!res.ok) throw new Error('Failed to fetch history');
+  return res.json();
+}
+
+export async function pullSession(id: string): Promise<PullResultDto> {
+  const res = await apiFetch(`/api/sessions/${id}/git/pull`, { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to pull');
   return res.json();
 }
 

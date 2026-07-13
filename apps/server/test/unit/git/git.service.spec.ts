@@ -441,6 +441,174 @@ describe('GitService', () => {
       expect(status.files).toEqual([]);
     });
 
+    it('unpushedCommits lists commits ahead of the configured upstream', async () => {
+      const bare = mkdtempSync(join(tmpdir(), 'nuncio-bare-unpushed-'));
+      try {
+        await runGitAsync(bare, ['init', '--bare']);
+        await runGitAsync(repo, ['remote', 'add', 'origin', bare]);
+        await service.push(repo, 'main');
+        await runGitAsync(repo, ['branch', '--set-upstream-to=origin/main', 'main']);
+
+        writeFileSync(join(repo, 'ahead.txt'), 'local only\n');
+        await runGitAsync(repo, ['add', 'ahead.txt']);
+        await runGitAsync(repo, ['commit', '-m', 'local commit one']);
+        writeFileSync(join(repo, 'ahead2.txt'), 'local two\n');
+        await runGitAsync(repo, ['add', 'ahead2.txt']);
+        await runGitAsync(repo, ['commit', '-m', 'local commit two']);
+
+        const result = await service.unpushedCommits(repo);
+        expect(result.branch).toBe('main');
+        expect(result.base).toBe('origin/main');
+        expect(result.commits.map((c) => c.subject)).toEqual([
+          'local commit two',
+          'local commit one',
+        ]);
+        expect(result.commits[0]?.sha).toMatch(/^[0-9a-f]{40}$/);
+        expect(result.commits[0]?.shortSha).toMatch(/^[0-9a-f]{7,}$/);
+        expect(result.commits[0]?.authorName).toBe('Nuncio Test');
+        expect(result.commits[0]?.authoredAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      } finally {
+        rmSync(bare, { recursive: true, force: true });
+      }
+    });
+
+    it('unpushedCommits falls back to origin/<branch> when upstream is unset', async () => {
+      const bare = mkdtempSync(join(tmpdir(), 'nuncio-bare-origin-fallback-'));
+      try {
+        await runGitAsync(bare, ['init', '--bare']);
+        await runGitAsync(repo, ['remote', 'add', 'origin', bare]);
+        await service.push(repo, 'main');
+        // No upstream configured — still compare against origin/main.
+
+        writeFileSync(join(repo, 'solo.txt'), 'solo\n');
+        await runGitAsync(repo, ['add', 'solo.txt']);
+        await runGitAsync(repo, ['commit', '-m', 'solo ahead']);
+
+        const result = await service.unpushedCommits(repo);
+        expect(result.base).toBe('origin/main');
+        expect(result.commits.map((c) => c.subject)).toEqual(['solo ahead']);
+      } finally {
+        rmSync(bare, { recursive: true, force: true });
+      }
+    });
+
+    it('unpushedCommits uses fallbackBase when the branch has never been pushed', async () => {
+      await runGitAsync(repo, ['checkout', '-b', 'feature/never-pushed']);
+      writeFileSync(join(repo, 'feat.txt'), 'feature\n');
+      await runGitAsync(repo, ['add', 'feat.txt']);
+      await runGitAsync(repo, ['commit', '-m', 'feature work']);
+
+      const result = await service.unpushedCommits(repo, { fallbackBase: 'main' });
+      expect(result.branch).toBe('feature/never-pushed');
+      expect(result.base).toBe('main');
+      expect(result.commits.map((c) => c.subject)).toEqual(['feature work']);
+    });
+
+    it('unpushedCommits returns an empty list when fully synced with upstream', async () => {
+      const bare = mkdtempSync(join(tmpdir(), 'nuncio-bare-synced-'));
+      try {
+        await runGitAsync(bare, ['init', '--bare']);
+        await runGitAsync(repo, ['remote', 'add', 'origin', bare]);
+        await service.push(repo, 'main');
+        await runGitAsync(repo, ['branch', '--set-upstream-to=origin/main', 'main']);
+
+        const result = await service.unpushedCommits(repo);
+        expect(result.commits).toEqual([]);
+        expect(result.base).toBe('origin/main');
+      } finally {
+        rmSync(bare, { recursive: true, force: true });
+      }
+    });
+
+    it('branchSync reports outgoing and incoming commits', async () => {
+      const bare = mkdtempSync(join(tmpdir(), 'nuncio-scm-bare-'));
+      try {
+        await runGitAsync(bare, ['init', '--bare']);
+        await runGitAsync(repo, ['remote', 'add', 'origin', bare]);
+        await service.push(repo, 'main');
+        await runGitAsync(bare, ['symbolic-ref', 'HEAD', 'refs/heads/main']);
+        await runGitAsync(repo, ['branch', '--set-upstream-to=origin/main', 'main']);
+
+        writeFileSync(join(repo, 'local.txt'), 'local\n');
+        await runGitAsync(repo, ['add', 'local.txt']);
+        await runGitAsync(repo, ['commit', '-m', 'local outgoing']);
+
+        const remoteClone = mkdtempSync(join(tmpdir(), 'nuncio-scm-remote-clone-'));
+        try {
+          await runGitAsync(remoteClone, ['clone', '-b', 'main', bare, '.']);
+          await runGitAsync(remoteClone, ['config', 'user.email', 'remote@nuncio.local']);
+          await runGitAsync(remoteClone, ['config', 'user.name', 'Remote']);
+          writeFileSync(join(remoteClone, 'remote.txt'), 'remote\n');
+          await runGitAsync(remoteClone, ['add', 'remote.txt']);
+          await runGitAsync(remoteClone, ['commit', '-m', 'remote incoming']);
+          await runGitAsync(remoteClone, ['push', 'origin', 'main']);
+        } finally {
+          rmSync(remoteClone, { recursive: true, force: true });
+        }
+
+        await runGitAsync(repo, ['fetch', 'origin']);
+
+        const sync = await service.branchSync(repo);
+        expect(sync.branch).toBe('main');
+        expect(sync.base).toBe('origin/main');
+        expect(sync.ahead).toBe(1);
+        expect(sync.behind).toBe(1);
+        expect(sync.outgoing.map((c) => c.subject)).toEqual(['local outgoing']);
+        expect(sync.incoming.map((c) => c.subject)).toEqual(['remote incoming']);
+        expect(sync.clean).toBe(true);
+        expect(sync.conflicts).toEqual([]);
+      } finally {
+        rmSync(bare, { recursive: true, force: true });
+      }
+    });
+
+    it('commitDiff returns the commit patch', async () => {
+      writeFileSync(join(repo, 'diff.txt'), 'patch me\n');
+      await runGitAsync(repo, ['add', 'diff.txt']);
+      await runGitAsync(repo, ['commit', '-m', 'add diff file']);
+      const sha = await readGitAsync(repo, ['rev-parse', 'HEAD']);
+
+      const result = await service.commitDiff(repo, sha);
+      expect(result.diff).toContain('diff.txt');
+      expect(result.diff).toContain('patch me');
+      expect(result.truncated).toBe(false);
+    });
+
+    it('stashList returns entries after stashing', async () => {
+      writeFileSync(join(repo, 'README.md'), '# test\nstashed\n');
+      await runGitAsync(repo, ['stash', 'push', '-m', 'wip changes']);
+
+      const entries = await service.stashList(repo);
+      expect(entries.length).toBe(1);
+      expect(entries[0]?.index).toBe(0);
+      expect(entries[0]?.message).toContain('wip changes');
+      expect(entries[0]?.sha).toMatch(/^[0-9a-f]{40}$/);
+    });
+
+    it('blame returns per-line attribution', async () => {
+      const result = await service.blame(repo, 'README.md');
+      expect(result.path).toBe('README.md');
+      expect(result.lines.length).toBeGreaterThan(0);
+      expect(result.lines[0]?.content).toBeTruthy();
+      expect(result.lines[0]?.sha).toMatch(/^[0-9a-f]{40}$/);
+      expect(result.lines[0]?.shortSha).toMatch(/^[0-9a-f]{7}$/);
+      expect(result.truncated).toBe(false);
+    });
+
+    it('history includes parent short shas', async () => {
+      writeFileSync(join(repo, 'second.txt'), 'two\n');
+      await runGitAsync(repo, ['add', 'second.txt']);
+      await runGitAsync(repo, ['commit', '-m', 'second commit']);
+
+      const result = await service.history(repo, { limit: 5 });
+      expect(result.branch).toBe('main');
+      expect(result.commits.length).toBe(2);
+      expect(result.commits[0]?.subject).toBe('second commit');
+      expect(result.commits[0]?.parents.length).toBe(1);
+      expect(result.commits[0]?.parents[0]).toMatch(/^[0-9a-f]{7}$/);
+      expect(result.commits[1]?.parents).toEqual([]);
+    });
+
     it('push to a bare local remote reports pushed + remoteBranch and lands the branch', async () => {
       const bare = mkdtempSync(join(tmpdir(), 'nuncio-bare-'));
       try {

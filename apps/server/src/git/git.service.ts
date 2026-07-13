@@ -9,16 +9,30 @@ import {
 import { validateGitCheckpointRange } from './git-checkpoint-range-validation';
 import { inspectGitWorkspaceBoundary } from './git-workspace-boundary';
 import { checkpointGitWorkspace } from './git-workspace-checkpoint';
+import {
+  blame as blameFile,
+  branchSync as computeBranchSync,
+  commitDiff as showCommitDiff,
+  history as loadHistory,
+  pull as pullRemote,
+  stashList as listStashes,
+} from './git-scm-panel-ops';
 import type {
   BranchDto,
   CommitResultDto,
   GitBoundaryExpectation,
   GitBoundaryInspectionDto,
   GitCheckpointResultDto,
+  GitBlameDto,
+  GitBranchSyncDto,
   GitDiffDto,
   GitFileChange,
+  GitHistoryDto,
   GitStatusDto,
+  GitStashEntryDto,
+  GitUnpushedCommitsDto,
   ProjectDto,
+  PullResultDto,
   PushResultDto,
   RemoteInfoDto,
   WorktreeResult,
@@ -475,6 +489,115 @@ export class GitService {
       clean: files.length === 0,
       files,
     };
+  }
+
+  /**
+   * Commits on HEAD that are not yet on the push target: configured upstream,
+   * else `origin/<branch>`, else optional `fallbackBase` (session baseBranch).
+   */
+  async unpushedCommits(
+    path: string,
+    options: { fallbackBase?: string | null } = {},
+  ): Promise<GitUnpushedCommitsDto> {
+    const sync = await this.branchSync(path, options);
+    return {
+      branch: sync.branch,
+      base: sync.base,
+      commits: sync.outgoing,
+    };
+  }
+
+  async branchSync(
+    path: string,
+    options: { fallbackBase?: string | null } = {},
+  ): Promise<GitBranchSyncDto> {
+    const repoRoot = await this.resolveRepoRoot(path);
+    const branch = await this.currentBranchName(repoRoot);
+    const base = await this.resolveUnpushedBase(repoRoot, branch, options.fallbackBase);
+    return computeBranchSync((args, cwd) => git(args, cwd), repoRoot, branch, base);
+  }
+
+  async commitDiff(path: string, sha: string): Promise<GitDiffDto> {
+    const repoRoot = await this.resolveRepoRoot(path);
+    const revision = validateGitRevision(sha);
+    return showCommitDiff((args, cwd) => git(args, cwd), repoRoot, revision);
+  }
+
+  async stashList(path: string): Promise<GitStashEntryDto[]> {
+    const repoRoot = await this.resolveRepoRoot(path);
+    return listStashes((args, cwd) => git(args, cwd), repoRoot);
+  }
+
+  async blame(path: string, filePath: string): Promise<GitBlameDto> {
+    const repoRoot = await this.resolveRepoRoot(path);
+    return blameFile(
+      (args, cwd) => git(args, cwd),
+      repoRoot,
+      filePath,
+      validateGitPath,
+    );
+  }
+
+  async history(
+    path: string,
+    options: { limit?: number } = {},
+  ): Promise<GitHistoryDto> {
+    const repoRoot = await this.resolveRepoRoot(path);
+    const branch = await this.currentBranchName(repoRoot);
+    return loadHistory(
+      (args, cwd) => git(args, cwd),
+      repoRoot,
+      branch,
+      options.limit,
+    );
+  }
+
+  async pull(path: string): Promise<PullResultDto> {
+    const repoRoot = await this.resolveRepoRoot(path);
+    return pullRemote((args, cwd) => git(args, cwd), repoRoot);
+  }
+
+  private async currentBranchName(repoRoot: string): Promise<string> {
+    try {
+      const name = await git(['rev-parse', '--abbrev-ref', 'HEAD'], repoRoot);
+      return name || 'HEAD';
+    } catch {
+      return 'HEAD';
+    }
+  }
+
+  private async resolveUnpushedBase(
+    repoRoot: string,
+    branch: string,
+    fallbackBase?: string | null,
+  ): Promise<string | null> {
+    try {
+      const upstream = await git(['rev-parse', '--abbrev-ref', '@{upstream}'], repoRoot);
+      if (upstream) return upstream;
+    } catch {
+      // No upstream configured.
+    }
+
+    if (branch && branch !== 'HEAD') {
+      const remoteRef = `origin/${branch}`;
+      try {
+        await git(['rev-parse', '--verify', remoteRef], repoRoot);
+        return remoteRef;
+      } catch {
+        // Remote branch does not exist yet (never pushed).
+      }
+    }
+
+    const fallback = fallbackBase?.trim();
+    if (fallback) {
+      try {
+        return validateGitRevision(fallback);
+      } catch {
+        return null;
+      }
+    }
+
+    return null;
   }
 
   private async populateFileStats(repoRoot: string, files: GitFileChange[]): Promise<void> {

@@ -32,6 +32,28 @@ export class GitSessionController {
     return this.git.status(this.requireSessionGitDir(id));
   }
 
+  @Get('sync')
+  sync(@Param('id') id: string) {
+    const session = this.sessions.get(id);
+    if (!session) throw new NotFoundException('Session not found');
+    const path = session.worktreePath ?? session.workspace ?? session.projectPath;
+    if (!path) {
+      throw new BadRequestException('Session has no git working directory');
+    }
+    return this.git.branchSync(path, { fallbackBase: session.baseBranch });
+  }
+
+  @Get('unpushed')
+  unpushed(@Param('id') id: string) {
+    const session = this.sessions.get(id);
+    if (!session) throw new NotFoundException('Session not found');
+    const path = session.worktreePath ?? session.workspace ?? session.projectPath;
+    if (!path) {
+      throw new BadRequestException('Session has no git working directory');
+    }
+    return this.git.unpushedCommits(path, { fallbackBase: session.baseBranch });
+  }
+
   @Get('diff')
   diff(
     @Param('id') id: string,
@@ -44,6 +66,37 @@ export class GitSessionController {
       base: base?.trim() || undefined,
       path,
     });
+  }
+
+  @Get('commits/:sha/diff')
+  commitDiff(@Param('id') id: string, @Param('sha') sha: string) {
+    return this.git.commitDiff(this.requireSessionGitDir(id), sha);
+  }
+
+  @Get('stash')
+  stash(@Param('id') id: string) {
+    return this.git.stashList(this.requireSessionGitDir(id));
+  }
+
+  @Get('blame')
+  blame(@Param('id') id: string, @Query('path') path?: string) {
+    if (!path?.trim()) {
+      throw new BadRequestException('path is required');
+    }
+    return this.git.blame(this.requireSessionGitDir(id), path);
+  }
+
+  @Get('history')
+  history(@Param('id') id: string, @Query('limit') limit?: string) {
+    const parsed = limit ? Number(limit) : undefined;
+    return this.git.history(this.requireSessionGitDir(id), {
+      limit: Number.isFinite(parsed) ? parsed : undefined,
+    });
+  }
+
+  @Post('pull')
+  pull(@Param('id') id: string) {
+    return this.git.pull(this.requireSessionGitDir(id));
   }
 
   @Post('commit')

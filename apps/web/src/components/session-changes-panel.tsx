@@ -1,26 +1,56 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import {
+  fetchGitBranchSync,
+  fetchGitHistory,
+  fetchGitStash,
   fetchSessionDiff,
   postDiffComment,
   type DiffFile,
   type DiffHunk,
+  type GitBranchSyncDto,
+  type GitHistoryDto,
+  type GitStashEntryDto,
   type SessionDiff,
   type SessionStatus,
 } from '../lib/api';
-import { cn } from '@/lib/utils';
-import { Button } from './ui/button';
 import { SessionChangeFileRow } from './session-change-file-row';
+import { SessionScmBranchStrip } from './session-scm-branch-strip';
+import { SessionScmCommitList } from './session-scm-commit-list';
+import { SessionScmConflicts } from './session-scm-conflicts';
+import { SessionScmHistory } from './session-scm-history';
+import { SessionScmIssues } from './session-scm-issues';
+import { SessionScmStash } from './session-scm-stash';
 import { hunkRange, hunkText, type ComposerKey } from './session-changes-panel-format';
 
 interface SessionChangesPanelProps {
   sessionId: string;
   sessionStatus: SessionStatus;
+  repoPath?: string;
+  branch?: string | null;
 }
 
-export function SessionChangesPanel({ sessionId, sessionStatus }: SessionChangesPanelProps) {
+const CLEAN_SYNC: GitBranchSyncDto = {
+  branch: 'main',
+  base: null,
+  ahead: 0,
+  behind: 0,
+  outgoing: [],
+  incoming: [],
+  conflicts: [],
+  clean: true,
+};
+
+export function SessionChangesPanel({
+  sessionId,
+  sessionStatus,
+  repoPath,
+  branch,
+}: SessionChangesPanelProps) {
   const [diff, setDiff] = useState<SessionDiff | null>(null);
+  const [sync, setSync] = useState<GitBranchSyncDto | null>(null);
+  const [stash, setStash] = useState<GitStashEntryDto[]>([]);
+  const [history, setHistory] = useState<GitHistoryDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [composerKey, setComposerKey] = useState<ComposerKey | null>(null);
@@ -31,7 +61,16 @@ export function SessionChangesPanel({ sessionId, sessionStatus }: SessionChanges
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      setDiff(await fetchSessionDiff(sessionId));
+      const [nextDiff, nextSync, nextStash, nextHistory] = await Promise.all([
+        fetchSessionDiff(sessionId),
+        fetchGitBranchSync(sessionId).catch(() => null),
+        fetchGitStash(sessionId).catch(() => [] as GitStashEntryDto[]),
+        fetchGitHistory(sessionId, 15).catch(() => null),
+      ]);
+      setDiff(nextDiff);
+      setSync(nextSync);
+      setStash(nextStash);
+      setHistory(nextHistory);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to load changes');
     } finally {
@@ -92,61 +131,115 @@ export function SessionChangesPanel({ sessionId, sessionStatus }: SessionChanges
     }
   };
 
-  if (loading && !diff) {
+  if (loading && !diff && !sync) {
     return <div className="px-3 py-3 text-sm text-muted-foreground">Loading changes…</div>;
   }
 
   const files = diff?.files ?? [];
-  if (files.length === 0) {
-    return (
-      <div className="flex flex-col gap-3 px-3 py-3 text-sm text-muted-foreground">
-        <div className="flex items-center justify-between gap-2">
-          <span>No changes yet.</span>
-          <Button size="icon" variant="ghost" aria-label="Refresh changes" onClick={() => void load()}>
-            <RefreshCw className="size-3.5" />
-          </Button>
-        </div>
-      </div>
-    );
-  }
+  const branchSync = sync ?? {
+    ...CLEAN_SYNC,
+    branch: branch?.trim() || 'HEAD',
+  };
+  const hasOutgoing = branchSync.outgoing.length > 0;
+  const hasIncoming = branchSync.incoming.length > 0;
+  const hasStash = stash.length > 0;
+  const hasHistory = (history?.commits.length ?? 0) > 0;
+  const hasFiles = files.length > 0;
+  const fullyEmpty =
+    branchSync.clean &&
+    !hasFiles &&
+    !hasOutgoing &&
+    !hasIncoming &&
+    !hasStash &&
+    !hasHistory &&
+    branchSync.conflicts.length === 0;
 
   return (
     <div className="flex h-full flex-col text-card-foreground">
-      <div className="flex min-h-11 items-center gap-2 border-b border-border/50 px-3 py-2">
-        <span className="min-w-0 flex-1 text-sm font-medium">{files.length} changed file{files.length === 1 ? '' : 's'}</span>
-        <span className="shrink-0 font-mono text-xs">
-          {totals.additions > 0 && <span className="text-success">+{totals.additions}</span>}{' '}
-          {totals.deletions > 0 && <span className="text-destructive">-{totals.deletions}</span>}
-        </span>
-        <Button size="icon" variant="ghost" aria-label="Refresh changes" onClick={() => void load()} disabled={loading}>
-          <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
-        </Button>
+      <SessionScmBranchStrip
+        sessionId={sessionId}
+        sync={branchSync}
+        repoPath={repoPath}
+        branch={branch ?? branchSync.branch}
+        onChanged={() => void load()}
+        refreshing={loading}
+      />
+
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <SessionScmConflicts conflicts={branchSync.conflicts} />
+
+        <SessionScmCommitList
+          title={`${branchSync.outgoing.length} outgoing commit${branchSync.outgoing.length === 1 ? '' : 's'}`}
+          direction="up"
+          commits={branchSync.outgoing}
+          base={branchSync.base}
+          sessionId={sessionId}
+        />
+
+        <SessionScmCommitList
+          title={`${branchSync.incoming.length} incoming commit${branchSync.incoming.length === 1 ? '' : 's'}`}
+          direction="down"
+          commits={branchSync.incoming}
+          base={branchSync.base}
+          sessionId={sessionId}
+        />
+
+        <SessionScmStash entries={stash} />
+
+        {hasFiles && (
+          <div className="border-b border-border/50">
+            <div className="flex min-h-10 items-center gap-2 px-3 py-2">
+              <span className="min-w-0 flex-1 text-sm font-medium">
+                {files.length} changed file{files.length === 1 ? '' : 's'}
+              </span>
+              <span className="shrink-0 font-mono text-xs">
+                {totals.additions > 0 && <span className="text-success">+{totals.additions}</span>}{' '}
+                {totals.deletions > 0 && <span className="text-destructive">-{totals.deletions}</span>}
+              </span>
+            </div>
+            {diff?.truncated && (
+              <div className="border-t border-border/50 bg-amber-500/10 px-3 py-2 text-xs text-muted-foreground">
+                Diff truncated. {diff.omittedFiles} file{diff.omittedFiles === 1 ? '' : 's'} omitted.
+              </div>
+            )}
+            <ul>
+              {files.map((file) => (
+                <SessionChangeFileRow
+                  key={file.path}
+                  file={file}
+                  isOpen={expanded.has(file.path)}
+                  composerKey={composerKey}
+                  comment={comment}
+                  sending={sending}
+                  sentKey={sentKey}
+                  sessionId={sessionId}
+                  showBlame
+                  onToggle={toggle}
+                  onOpenComposer={(key) => {
+                    setComposerKey(key);
+                    setComment('');
+                  }}
+                  onCommentChange={setComment}
+                  onSubmitComment={(nextFile, hunk, key) => void submitComment(nextFile, hunk, key)}
+                />
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {!hasFiles && !fullyEmpty && (
+          <div className="border-b border-border/50 px-3 py-2 text-xs text-muted-foreground">
+            Working tree clean.
+          </div>
+        )}
+
+        {fullyEmpty && (
+          <div className="px-3 py-2 text-xs text-muted-foreground">No local changes.</div>
+        )}
+
+        <SessionScmHistory history={history} />
+        <SessionScmIssues repoPath={repoPath} />
       </div>
-      {diff?.truncated && (
-        <div className="border-b border-border/50 bg-amber-500/10 px-3 py-2 text-xs text-muted-foreground">
-          Diff truncated. {diff.omittedFiles} file{diff.omittedFiles === 1 ? '' : 's'} omitted.
-        </div>
-      )}
-      <ul className="min-h-0 flex-1 overflow-y-auto">
-        {files.map((file) => (
-          <SessionChangeFileRow
-            key={file.path}
-            file={file}
-            isOpen={expanded.has(file.path)}
-            composerKey={composerKey}
-            comment={comment}
-            sending={sending}
-            sentKey={sentKey}
-            onToggle={toggle}
-            onOpenComposer={(key) => {
-              setComposerKey(key);
-              setComment('');
-            }}
-            onCommentChange={setComment}
-            onSubmitComment={(nextFile, hunk, key) => void submitComment(nextFile, hunk, key)}
-          />
-        ))}
-      </ul>
     </div>
   );
 }

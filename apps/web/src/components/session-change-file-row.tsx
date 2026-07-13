@@ -1,8 +1,10 @@
 import { ChevronDown, ChevronRight, Lock, MessageSquare } from 'lucide-react';
+import { useState } from 'react';
 import type { DiffFile, DiffHunk } from '../lib/api';
 import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
 import { DiffView } from './diff-view';
+import { SessionScmFileBlame } from './session-scm-file-blame';
 import { collapsedLabel, type ComposerKey } from './session-changes-panel-format';
 import { FileSummary } from './session-changes-panel-utils';
 
@@ -13,6 +15,8 @@ interface SessionChangeFileRowProps {
   comment: string;
   sending: boolean;
   sentKey: ComposerKey | null;
+  sessionId?: string;
+  showBlame?: boolean;
   onToggle: (file: DiffFile) => void;
   onOpenComposer: (key: ComposerKey) => void;
   onCommentChange: (comment: string) => void;
@@ -26,11 +30,14 @@ export function SessionChangeFileRow({
   comment,
   sending,
   sentKey,
+  sessionId,
+  showBlame = false,
   onToggle,
   onOpenComposer,
   onCommentChange,
   onSubmitComment,
 }: SessionChangeFileRowProps) {
+  const [blameOpen, setBlameOpen] = useState(false);
   const expandable = !file.collapsed && file.hunks.length > 0;
   return (
     <li className="border-b border-border/40">
@@ -100,6 +107,14 @@ export function SessionChangeFileRow({
               );
             }}
           />
+          {showBlame && sessionId && (
+            <SessionScmFileBlame
+              sessionId={sessionId}
+              path={file.path}
+              open={blameOpen}
+              onToggle={() => setBlameOpen((current) => !current)}
+            />
+          )}
         </div>
       )}
     </li>

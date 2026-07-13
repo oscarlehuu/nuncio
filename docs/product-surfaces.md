@@ -155,7 +155,7 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 | **Web** | Session inspector: `forge/scm-panel.tsx` (live path — Changes / PR / issues). Standalone: `/forge/pr` → `standalone-pr-route.tsx` + `pr-detail.tsx`. Project picker may browse/clone. Attention can deep-link PR review |
 | **Mobile** | None |
 | **Settings** | Source control (GitHub / GitLab) |
-| **Server** | `forges/`, `git/`, webhooks, session git/PR routes |
+| **Server** | `forges/`, `git/` (`sync`, `unpushed`, `commits/:sha/diff`, `stash`, `blame`, `history`, `pull`, status/diff/push), webhooks, session git/PR routes |
 | **Also check** | Settings credentials + live `scm-panel` + standalone PR + attention PR items |
 | **Legacy** | `review-changes.tsx` is unwired orphan; prefer `scm-panel` / `session-changes-panel`. Do not “fix PR UI” only in orphans |
 
@@ -182,7 +182,7 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 
 | Tool | Web component | Notes |
 |---|---|---|
-| SCM / Changes / PR | `forge/scm-panel.tsx`, `session-changes-panel.tsx` | See Forge row |
+| SCM / Changes / PR | `forge/scm-panel.tsx`, `session-changes-panel.tsx` (+ branch sync, outgoing/incoming, stash, blame, history, issues via `GET/POST /sessions/:id/git/*`) | See Forge row |
 | Files | `file-explorer-panel.tsx` | Server `fs/` |
 | Terminal | `terminal-dock.tsx` / `terminal-panel.tsx` | Server `terminal/`; desktop IPC or WS |
 | Browser | `browser-panel.tsx` | Desktop-only; server `browser/` |

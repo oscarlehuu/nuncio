@@ -4,8 +4,13 @@ import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { SessionChangesPanel } from './session-changes-panel';
 import {
+  fetchCommitDiff,
+  fetchGitBranchSync,
+  fetchGitHistory,
+  fetchGitStash,
   fetchSessionDiff,
   postDiffComment,
+  type GitBranchSyncDto,
   type SessionDiff,
 } from '../lib/api';
 
@@ -21,9 +26,24 @@ vi.mock('../lib/api', async () => {
   return {
     ...actual,
     fetchSessionDiff: vi.fn(),
+    fetchGitBranchSync: vi.fn(),
+    fetchGitStash: vi.fn(),
+    fetchGitHistory: vi.fn(),
+    fetchCommitDiff: vi.fn(),
     postDiffComment: vi.fn(),
   };
 });
+
+const SYNC_CLEAN: GitBranchSyncDto = {
+  branch: 'main',
+  base: 'origin/main',
+  ahead: 0,
+  behind: 0,
+  outgoing: [],
+  incoming: [],
+  conflicts: [],
+  clean: true,
+};
 
 const DIFF: SessionDiff = {
   files: [
@@ -74,6 +94,10 @@ const DIFF: SessionDiff = {
 describe('SessionChangesPanel', () => {
   beforeEach(() => {
     vi.mocked(fetchSessionDiff).mockReset().mockResolvedValue(DIFF);
+    vi.mocked(fetchGitBranchSync).mockReset().mockResolvedValue(SYNC_CLEAN);
+    vi.mocked(fetchGitStash).mockReset().mockResolvedValue([]);
+    vi.mocked(fetchGitHistory).mockReset().mockResolvedValue({ branch: 'main', commits: [] });
+    vi.mocked(fetchCommitDiff).mockReset().mockResolvedValue({ diff: '@@ -1 +1 @@\n-old\n+new', truncated: false });
     vi.mocked(postDiffComment).mockReset().mockResolvedValue({ ok: true });
     vi.mocked(toast.success).mockReset();
     vi.mocked(toast.error).mockReset();
@@ -89,12 +113,102 @@ describe('SessionChangesPanel', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /refresh changes/i }));
     await waitFor(() => expect(fetchSessionDiff).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(fetchGitBranchSync).toHaveBeenCalledTimes(2));
   });
 
-  it('shows a calm empty state for clean or non-git sessions', async () => {
+  it('shows branch strip with push disabled when ahead is 0', async () => {
+    render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+    expect(await screen.findByText('main')).toBeInTheDocument();
+    const push = screen.getByRole('button', { name: /^push$/i });
+    expect(push).toBeDisabled();
+  });
+
+  it('shows a calm empty state for clean sessions with branch strip', async () => {
     vi.mocked(fetchSessionDiff).mockResolvedValueOnce({ files: [], truncated: false, omittedFiles: 0 });
     render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
-    expect(await screen.findByText(/no changes yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no local changes/i)).toBeInTheDocument();
+    expect(screen.getByText('main')).toBeInTheDocument();
+  });
+
+  it('lists outgoing commits even when the working tree is clean', async () => {
+    vi.mocked(fetchSessionDiff).mockResolvedValueOnce({ files: [], truncated: false, omittedFiles: 0 });
+    vi.mocked(fetchGitBranchSync).mockResolvedValueOnce({
+      branch: 'feat/demo',
+      base: 'origin/feat/demo',
+      ahead: 2,
+      behind: 0,
+      outgoing: [
+        {
+          sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          shortSha: 'aaaaaaa',
+          subject: 'feat: add demo panel',
+          authorName: 'Oscar',
+          authoredAt: '2026-07-13T01:00:00+00:00',
+        },
+        {
+          sha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+          shortSha: 'bbbbbbb',
+          subject: 'chore: wire tests',
+          authorName: 'Oscar',
+          authoredAt: '2026-07-13T00:00:00+00:00',
+        },
+      ],
+      incoming: [],
+      conflicts: [],
+      clean: false,
+    });
+
+    render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+    expect(await screen.findByText(/2 outgoing commits/i)).toBeInTheDocument();
+    expect(screen.getByText('feat: add demo panel')).toBeInTheDocument();
+    expect(screen.getByText('chore: wire tests')).toBeInTheDocument();
+    expect(screen.getByText(/working tree clean/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no local changes/i)).toBeNull();
+    expect(screen.getByRole('button', { name: /^push$/i })).toBeEnabled();
+  });
+
+  it('expands outgoing commit diff on click', async () => {
+    vi.mocked(fetchSessionDiff).mockResolvedValueOnce({ files: [], truncated: false, omittedFiles: 0 });
+    vi.mocked(fetchGitBranchSync).mockResolvedValueOnce({
+      ...SYNC_CLEAN,
+      branch: 'feat/demo',
+      ahead: 1,
+      clean: false,
+      outgoing: [
+        {
+          sha: 'cccccccccccccccccccccccccccccccccccccccc',
+          shortSha: 'ccccccc',
+          subject: 'fix: panel layout',
+          authorName: 'Oscar',
+          authoredAt: '2026-07-13T02:00:00+00:00',
+        },
+      ],
+    });
+
+    render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+    await userEvent.click(await screen.findByRole('button', { name: /fix: panel layout/i }));
+    await waitFor(() =>
+      expect(fetchCommitDiff).toHaveBeenCalledWith('s1', 'cccccccccccccccccccccccccccccccccccccccc'),
+    );
+    expect(await screen.findByText('+new')).toBeInTheDocument();
+  });
+
+  it('shows conflicts banner when sync reports conflicted paths', async () => {
+    vi.mocked(fetchSessionDiff).mockResolvedValueOnce({ files: [], truncated: false, omittedFiles: 0 });
+    vi.mocked(fetchGitBranchSync).mockResolvedValueOnce({
+      ...SYNC_CLEAN,
+      clean: false,
+      conflicts: ['src/conflicted.ts', 'README.md'],
+    });
+
+    render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+    expect(await screen.findByText(/2 merge conflicts/i)).toBeInTheDocument();
+    expect(screen.getByText('src/conflicted.ts')).toBeInTheDocument();
+    expect(screen.getByText('README.md')).toBeInTheDocument();
   });
 
   it('expands textual hunks but keeps collapsed and binary rows locked', async () => {
