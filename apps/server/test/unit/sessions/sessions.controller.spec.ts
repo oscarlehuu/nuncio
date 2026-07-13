@@ -273,6 +273,20 @@ describe('SessionsController', () => {
     expect(appendOrchestrationEvent).not.toHaveBeenCalled();
   });
 
+  it('returns unavailable browser capture without appending an evidence event', async () => {
+    const unavailable = { unavailable: true as const, reason: 'Browser capture unavailable' };
+    const appendOrchestrationEvent = jest.fn();
+    const controller = new SessionsController(
+      { requirePublicMutableSession: () => makeSession(), appendOrchestrationEvent } as never,
+      { capture: async () => unavailable } as never,
+    );
+
+    await expect(controller.captureEvidence('s1', {
+      url: 'http://localhost:5173', phase: 'before',
+    })).resolves.toEqual(unavailable);
+    expect(appendOrchestrationEvent).not.toHaveBeenCalled();
+  });
+
   it('rejects evidence capture for a missing session', async () => {
     const controller = new SessionsController(
       { requirePublicMutableSession: () => { throw new NotFoundException('Session not found'); } } as never,

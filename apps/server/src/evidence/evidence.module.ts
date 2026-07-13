@@ -1,5 +1,4 @@
 import { Module } from '@nestjs/common';
-import { chromium } from 'playwright-core';
 import { BrowserModule } from '../browser/browser.module';
 import { SessionsPersistenceModule } from '../sessions/sessions.persistence.module';
 import { EvidenceCaptureService } from './evidence-capture.service';
@@ -12,7 +11,16 @@ import { SimulatorEvidenceCaptureService } from './simulator-evidence-capture.se
   providers: [
     EvidenceCaptureService,
     SimulatorEvidenceCaptureService,
-    { provide: EVIDENCE_CHROMIUM, useValue: chromium },
+    {
+      provide: EVIDENCE_CHROMIUM,
+      useFactory: async () => {
+        try {
+          return (await import('playwright-core')).chromium;
+        } catch {
+          return null;
+        }
+      },
+    },
     { provide: EVIDENCE_GIT_HEAD, useValue: readEvidenceGitHead },
   ],
   exports: [EvidenceCaptureService],

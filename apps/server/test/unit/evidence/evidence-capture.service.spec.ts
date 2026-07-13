@@ -10,7 +10,7 @@ function session(over: Partial<SessionDto> = {}): SessionDto {
   } as SessionDto;
 }
 
-function harness() {
+function harness(chromium: unknown = undefined) {
   const screenshot = jest.fn(async () => Buffer.from('png bytes'));
   let currentUrl = 'about:blank';
   const goto = jest.fn(async (url: string) => { currentUrl = url; });
@@ -33,7 +33,7 @@ function harness() {
     route: 'simulator://booted',
   }));
   const service = new EvidenceCaptureService(
-    { launchServer, connect } as never,
+    (chromium === undefined ? { launchServer, connect } : chromium) as never,
     { write } as never,
     readHead,
     { state: browserState } as never,
@@ -46,6 +46,21 @@ function harness() {
 }
 
 describe('EvidenceCaptureService', () => {
+  it('skips browser capture when Chromium is unavailable', async () => {
+    const h = harness(null);
+
+    await expect(h.service.capture(session(), {
+      url: 'http://localhost:5173/app', phase: 'before',
+    })).resolves.toEqual({
+      unavailable: true,
+      reason: 'Browser capture unavailable',
+    });
+    expect(h.readHead).not.toHaveBeenCalled();
+    expect(h.browserState).not.toHaveBeenCalled();
+    expect(h.launchServer).not.toHaveBeenCalled();
+    expect(h.write).not.toHaveBeenCalled();
+  });
+
   it('captures a before screenshot headlessly and stores only a PNG media ref', async () => {
     const h = harness();
     const result = await h.service.capture(session(), {
@@ -73,7 +88,7 @@ describe('EvidenceCaptureService', () => {
   });
 
   it('captures Simulator bytes through the same media and evidence payload path', async () => {
-    const h = harness();
+    const h = harness(null);
     const result = await h.service.capture(session(), { target: 'simulator', phase: 'after' });
 
     expect(h.simulatorCapture).toHaveBeenCalledTimes(1);

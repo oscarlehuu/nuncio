@@ -670,7 +670,9 @@ export class TasksService implements OnModuleDestroy {
     if (!this.evidence) return;
     try {
       const captured = await this.evidence.captureKnown(session, phase);
-      if (captured) this.sessions.appendOrchestrationEvent(session.id, 'evidence_captured', captured);
+      if (captured && !('unavailable' in captured)) {
+        this.sessions.appendOrchestrationEvent(session.id, 'evidence_captured', captured);
+      }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       console.warn(`[tasks] ${phase} evidence capture failed for ${session.id}: ${reason}`);

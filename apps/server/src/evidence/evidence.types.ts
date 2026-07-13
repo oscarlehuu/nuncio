@@ -16,7 +16,12 @@ export interface SimulatorCaptureEvidenceDto {
 
 export type CaptureEvidenceDto = BrowserCaptureEvidenceDto | SimulatorCaptureEvidenceDto;
 
-export type EvidenceCaptureResult = EvidenceCapturedPayload;
+export interface EvidenceCaptureUnavailable {
+  unavailable: true;
+  reason: string;
+}
+
+export type EvidenceCaptureResult = EvidenceCapturedPayload | EvidenceCaptureUnavailable;
 
 export interface EvidencePage {
   goto(url: string, options: { waitUntil: 'load'; timeout: number }): Promise<unknown>;

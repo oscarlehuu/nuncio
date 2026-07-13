@@ -138,6 +138,20 @@ describe('TasksService', () => {
     expect(done.status).toBe('DONE');
   });
 
+  it('keeps task settlement green when browser evidence is unavailable', async () => {
+    writeVerifyScript('exit 0\n');
+    captureKnown.mockResolvedValue({
+      unavailable: true, reason: 'Browser capture unavailable',
+    } as never);
+    const task = service.enqueue({
+      prompt: 'capture engine is optional', provider: 'cursor', workspace,
+    });
+    const done = await waitForStatus(task.id, ['DONE', 'FAILED']);
+    expect(done.status).toBe('DONE');
+    expect(events.list(done.sessionId!).some((event) => event.type === 'evidence_captured'))
+      .toBe(false);
+  });
+
   it('defers queued Crew members until the Crew execution owner marks itself ready', async () => {
     const task = service.enqueue({
       prompt: 'resume only after Crew bootstrap',
