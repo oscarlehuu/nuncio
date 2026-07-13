@@ -25,6 +25,10 @@ import type {
   AgentRuntimePolicy,
 } from '../agents/agents.types';
 import { AgentToolRegistry } from '../agents/tools/agent-tool-registry';
+import {
+  buildAgentRuntimeEnvironment,
+  createNuncioRuntimeInfoTool,
+} from '../agents/runtime-environment';
 import { MediaStore } from './media.store';
 import { CursorLocalSessionsService } from '../cursor-local/cursor-local-sessions.service';
 import { turnsToSessionEvents } from '../cursor-local/cursor-transcript-hydrate';
@@ -2017,6 +2021,36 @@ export class SessionsService implements OnModuleDestroy {
         ? this.cursorLocal.isTranscriptTurnEnded(session.cursorChatId, workspace)
         : false;
 
+    const registeredTools = this.agentTools?.forSession({
+      sessionId: session.id,
+      projectPath: session.projectPath,
+      provider: session.provider,
+      model: session.model,
+    });
+    let runtimeEnvironment!: ReturnType<typeof buildAgentRuntimeEnvironment>;
+    const runtimeInfoTool = createNuncioRuntimeInfoTool(() => runtimeEnvironment, runtimePolicy);
+    const toolsWithRuntimeInfo = {
+      ...(registeredTools?.systemPromptAppend
+        ? { systemPromptAppend: registeredTools.systemPromptAppend }
+        : {}),
+      tools: [
+        ...(registeredTools?.tools.filter((tool) => tool.name !== runtimeInfoTool.name) ?? []),
+        runtimeInfoTool,
+      ],
+    };
+    const tools = runtimeToolsForPolicy(runtimePolicy, toolsWithRuntimeInfo) ?? { tools: [] };
+    const effectiveCwd = session.worktreePath ?? workspace ?? null;
+    runtimeEnvironment = buildAgentRuntimeEnvironment({
+      sessionId: session.id,
+      provider: session.provider,
+      model: session.model,
+      projectPath: session.projectPath,
+      cwd: effectiveCwd,
+      supportsInteraction: provider.supportsInteraction?.() ?? false,
+      runtimePolicy,
+      runtimeTools: tools,
+    });
+
     return {
       emit: (event) => this.onAgentEvent(session.id, event),
       requestProviderApproval: (request) => this.requestProviderApproval(session.id, request),
@@ -2028,15 +2062,8 @@ export class SessionsService implements OnModuleDestroy {
       transcriptMtimeMs,
       chatStoreMtimeMs,
       transcriptTurnEnded,
-      tools: runtimeToolsForPolicy(
-        runtimePolicy,
-        this.agentTools?.forSession({
-          sessionId: session.id,
-          projectPath: session.projectPath,
-          provider: session.provider,
-          model: session.model,
-        }),
-      ),
+      tools,
+      runtimeEnvironment,
       runtimePolicy,
     };
   }

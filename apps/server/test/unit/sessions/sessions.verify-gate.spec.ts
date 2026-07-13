@@ -128,7 +128,7 @@ describe('SessionsService verifier gate', () => {
     ).rejects.toThrow('does not support runtime policy');
   });
 
-  it('passes the persisted policy through first run and follow-up steer while dropping runtime tools', async () => {
+  it('passes the persisted policy and a truthful Nuncio envelope while dropping unsafe tools', async () => {
     const cursor = module.get(CursorAgentProvider);
     const originalCapabilities = cursor.capabilities;
     const originalRun = cursor.run.bind(cursor);
@@ -174,7 +174,18 @@ describe('SessionsService verifier gate', () => {
         expectedPolicy,
         expectedPolicy,
       ]);
-      expect(contexts.every((context) => context.tools === undefined)).toBe(true);
+      expect(
+        contexts.map((context) => context.tools?.tools.map((tool) => tool.name)),
+      ).toEqual([['nuncio_runtime_info'], ['nuncio_runtime_info']]);
+      expect(contexts.every((context) => context.runtimeEnvironment?.info.host === 'nuncio')).toBe(true);
+      expect(
+        contexts.every(
+          (context) =>
+            context.runtimeEnvironment?.info.capabilities.browser === false &&
+            context.runtimeEnvironment.info.constraints.network === 'disabled' &&
+            context.runtimeEnvironment.coreInstructions.includes('running inside Nuncio'),
+        ),
+      ).toBe(true);
     } finally {
       cursor.run = originalRun;
       cursor.steer = originalSteer;

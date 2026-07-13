@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { EventEmitter } from '../../../src/agents/agents.types';
 import { parseCursorModel } from '../../../src/agents/providers/cursor-agent.helpers';
 import { CursorAgentProvider } from '../../../src/agents/providers/cursor-agent.provider';
+import { buildAgentRuntimeEnvironment } from '../../../src/agents/runtime-environment';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
@@ -464,23 +465,33 @@ describe('CursorAgentProvider', () => {
     process.env.CURSOR_API_KEY = 'cursor_test_key';
 
     const created = sessions.create({ prompt: 'open the browser', provider: 'cursor' });
+    const tools = {
+      systemPromptAppend: 'Use Nuncio browser tools when browser work is requested.',
+      tools: [
+        {
+          name: 'nuncio_echo',
+          description: 'Echo a message through Nuncio runtime tools.',
+          inputSchema: {
+            type: 'object',
+            properties: { message: { type: 'string' } },
+            required: ['message'],
+          },
+          execute: async (input: Record<string, unknown>) => `echo ${String(input.message)}`,
+        },
+      ],
+    };
+    const runtimeEnvironment = buildAgentRuntimeEnvironment({
+      sessionId: created.id,
+      provider: 'cursor',
+      model: null,
+      projectPath: null,
+      supportsInteraction: false,
+      runtimeTools: tools,
+    });
     await provider.run(created.id, created.prompt, {
       emit: () => {},
-      tools: {
-        systemPromptAppend: 'Use Nuncio browser tools when browser work is requested.',
-        tools: [
-          {
-            name: 'nuncio_echo',
-            description: 'Echo a message through Nuncio runtime tools.',
-            inputSchema: {
-              type: 'object',
-              properties: { message: { type: 'string' } },
-              required: ['message'],
-            },
-            execute: async (input) => `echo ${String(input.message)}`,
-          },
-        ],
-      },
+      tools,
+      runtimeEnvironment,
     });
 
     const createArgs = createCalls[0] as {
@@ -491,7 +502,12 @@ describe('CursorAgentProvider', () => {
       properties: { message: { type: 'string' } },
       required: ['message'],
     });
+    expect(sendCalls[0]).toContain('running inside Nuncio');
     expect(sendCalls[0]).toContain('Use Nuncio browser tools');
+    expect(sendCalls[0]).toContain('nuncio_echo');
+    expect(sendCalls[0]!.indexOf('running inside Nuncio')).toBeLessThan(
+      sendCalls[0]!.indexOf(created.prompt),
+    );
     expect((sendOptionsCalls[0] as { local?: { customTools?: Record<string, unknown> } }).local?.customTools?.nuncio_echo).toBeDefined();
 
     const result = await createArgs.local.customTools!.nuncio_echo.execute({ message: 'hello' });

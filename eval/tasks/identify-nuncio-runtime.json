@@ -1,0 +1,11 @@
+{
+  "id": "identify-nuncio-runtime",
+  "title": "Identify the Nuncio host and current runtime capabilities",
+  "fixture": "echo-readme",
+  "prompt": "Without editing files, identify the host runtime you are operating inside. Briefly report the runtime contract version, whether browser and orchestration are available, and name the authoritative introspection tool if it is available.",
+  "setup": {},
+  "verifyCommand": "test -z \"$(git status --porcelain)\"",
+  "timeoutMs": 300000,
+  "tags": ["runtime"],
+  "expect": { "verifyPassed": true }
+}

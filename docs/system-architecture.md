@@ -90,6 +90,23 @@ every run/resume; unsupported policy rejects before prompting.
 
 `BaseAgentProvider` (`agents.base-provider.ts`) implements the shared `run`/`steer` orchestration (status RUNNING → user/steer_message → `executePrompt()` → status IDLE, plus error → ERROR) via a template method. Concrete providers implement only `executePrompt()`, `isAvailable()`, `listModels()`, and (optionally) `dispose()`/`interrupt()`/`setModel()`.
 
+### Runtime awareness contract
+
+`AgentRunContext.runtimeEnvironment` is the provider-neutral host-awareness lane. It is built
+from the Session plus the **post-policy** toolset, so it states only capabilities the current
+turn can actually use. Its static core identifies Nuncio as the outer authority for session
+state, approvals, verification, browser state, delegation, and project context. That core lives
+in code rather than prompt-profile data: profiles may tune artifact wrappers, but can never
+remove the host identity or capability boundary.
+
+The adapters use the strongest channel their SDK exposes: Pi system append; Claude static system
+identity plus a per-turn manifest; Codex `developerInstructions` on both `thread/start` and
+`thread/resume`; Cursor per-turn preamble fallback. `nuncio_runtime_info` returns the same bounded
+host/session/tool/constraint snapshot as a read-only tool and is trusted through explicit Crew
+policies. Codex deliberately omits only this convenience tool from `dynamicTools`, because its
+app-server fixes that surface at `thread/start`; the equivalent developer instructions preserve
+old thread continuity without silently resetting a conversation.
+
 ### Runtime tools
 
 `AgentRunContext.tools?: AgentRuntimeTools` is the provider-neutral tool lane. `SessionsService` asks `AgentToolRegistry.forSession(session.id)` for a session-bound toolset before every run/steer. The registry binds private session state (for example the browser `sessionId`) before tools reach the model, so provider adapters expose only safe input schemas.

@@ -5,6 +5,7 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CodexAgentProvider } from '../../../src/agents/providers/codex-agent.provider';
+import { buildAgentRuntimeEnvironment } from '../../../src/agents/runtime-environment';
 import { defineCrewRuntimeTool } from '../../../src/agents/tools/agent-runtime-tools-policy';
 import type {
   CodexAppServerClientLike,
@@ -778,7 +779,7 @@ describe('CodexAgentProvider', () => {
     });
   });
 
-  it('resumes a persisted Codex thread before sending a follow-up turn', async () => {
+  it('resumes a persisted Codex thread with Nuncio developer instructions and a clean user turn', async () => {
     const created = sessions.create({
       id: 'session-2',
       prompt: 'Initial prompt',
@@ -788,10 +789,20 @@ describe('CodexAgentProvider', () => {
     sessions.updateProviderRuntimeState(created.id, {
       providerThreadId: 'codex-existing-thread',
     });
+    const runtimeEnvironment = buildAgentRuntimeEnvironment({
+      sessionId: created.id,
+      provider: 'codex',
+      model: created.model,
+      projectPath: '/tmp/project',
+      cwd: '/tmp/project',
+      supportsInteraction: false,
+      runtimeTools: { tools: [] },
+    });
 
     await provider.steer(created.id, 'Continue', {
       model: created.model,
       cwd: '/tmp/project',
+      runtimeEnvironment,
     });
 
     expect(fakeClient.requests).toContainEqual({
@@ -802,6 +813,7 @@ describe('CodexAgentProvider', () => {
         cwd: '/tmp/project',
         approvalPolicy: 'never',
         sandbox: 'danger-full-access',
+        developerInstructions: expect.stringContaining('running inside Nuncio'),
       },
     });
     expect(fakeClient.requests).toContainEqual({
@@ -947,7 +959,7 @@ describe('CodexAgentProvider', () => {
     await run;
   });
 
-  it('registers runtime tools as Codex dynamic tools and responds to tool calls', async () => {
+  it('registers compatible Codex tools, sends Nuncio developer instructions, and keeps user text clean', async () => {
     fakeClient.autoCompleteTurn = false;
     fakeClient.emitApprovalRequests = false;
     fakeClient.suppressAutoDelta = true;
@@ -957,28 +969,52 @@ describe('CodexAgentProvider', () => {
       provider: 'codex',
       model: 'codex:gpt-5.5',
     });
+    const tools = {
+      systemPromptAppend: 'Use Nuncio tools deliberately.',
+      tools: [
+        {
+          name: 'nuncio_runtime_info',
+          description: 'Read Nuncio runtime information.',
+          inputSchema: { type: 'object', properties: {} },
+          execute: async () => 'runtime',
+        },
+        {
+          name: 'nuncio_echo',
+          description: 'Echo a message through Nuncio runtime tools.',
+          inputSchema: {
+            type: 'object',
+            properties: { message: { type: 'string' } },
+            required: ['message'],
+          },
+          execute: async (input: Record<string, unknown>) => `echo ${String(input.message)}`,
+        },
+      ],
+    };
+    const runtimeEnvironment = buildAgentRuntimeEnvironment({
+      sessionId: created.id,
+      provider: 'codex',
+      model: created.model,
+      projectPath: '/tmp/project',
+      cwd: '/tmp/project',
+      supportsInteraction: false,
+      runtimeTools: tools,
+    });
 
     const run = provider.run(created.id, created.prompt, {
       model: created.model,
       cwd: '/tmp/project',
-      tools: {
-        tools: [
-          {
-            name: 'nuncio_echo',
-            description: 'Echo a message through Nuncio runtime tools.',
-            inputSchema: {
-              type: 'object',
-              properties: { message: { type: 'string' } },
-              required: ['message'],
-            },
-            execute: async (input) => `echo ${String(input.message)}`,
-          },
-        ],
-      },
+      tools,
+      runtimeEnvironment,
     });
 
     await waitUntil(() => sessions.findById(created.id)?.providerActiveTurnId === 'turn-1');
     const threadStart = fakeClient.requests.find((request) => request.method === 'thread/start');
+    const instructions = String(
+      (threadStart?.params as Record<string, unknown>).developerInstructions ?? '',
+    );
+    expect(instructions).toContain('running inside Nuncio');
+    expect(instructions).toContain('available tools: nuncio_echo');
+    expect(instructions).toContain('When available, call nuncio_runtime_info');
     expect(threadStart?.params).toMatchObject({
       dynamicTools: [
         {
@@ -993,6 +1029,10 @@ describe('CodexAgentProvider', () => {
         },
       ],
     });
+    const turnStart = fakeClient.requests.find((request) => request.method === 'turn/start');
+    expect((turnStart?.params as { input: unknown }).input).toEqual([
+      { type: 'text', text: 'use browser', text_elements: [] },
+    ]);
 
     fakeClient.emitServerRequest({
       id: 'tool-call-1',

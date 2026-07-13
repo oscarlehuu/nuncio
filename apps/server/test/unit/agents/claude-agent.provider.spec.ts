@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ClaudeAgentProvider } from '../../../src/agents/providers/claude-agent.provider';
+import { buildAgentRuntimeEnvironment } from '../../../src/agents/runtime-environment';
 import { defineCrewRuntimeTool } from '../../../src/agents/tools/agent-runtime-tools-policy';
 import {
   CLAUDE_RUNTIME_MCP_SERVER,
@@ -504,20 +505,50 @@ describe('ClaudeAgentProvider', () => {
   });
 
   describe('runtime tools → in-process MCP server', () => {
-    it('registers an mcpServers entry and appendSystemPrompt from context.tools', async () => {
+    it('keeps static Nuncio identity in the system prompt and dynamic capabilities in the user turn', async () => {
       const create = (opts: { name: string }) => ({ type: 'sdk' as const, name: opts.name, instance: {} });
       provider.createSdkMcpServer = create as never;
+      let receivedUserText = '';
+      provider.queryFactory = ({ prompt, options }) => {
+        capturedOptions = options;
+        return {
+          async interrupt() {},
+          async setModel() {},
+          async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+            const first = await prompt[Symbol.asyncIterator]().next();
+            const content = first.value?.message?.content;
+            receivedUserText = typeof content === 'string' ? content : '';
+            yield { type: 'system', subtype: 'init', session_id: 'thread-runtime' };
+            yield { type: 'result', subtype: 'success', result: 'ok' };
+          },
+        };
+      };
       const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
+      const tools = {
+        systemPromptAppend: 'You have a verify tool.',
+        tools: [{ name: 'verify', inputSchema: {}, execute: () => 'ok' }],
+      };
+      const runtimeEnvironment = buildAgentRuntimeEnvironment({
+        sessionId: created.id,
+        provider: 'claude',
+        model: 'claude:haiku',
+        projectPath: null,
+        cwd: '/tmp/ws',
+        supportsInteraction: true,
+        runtimeTools: tools,
+      });
       await provider.run(created.id, 'call the tool', {
         cwd: '/tmp/ws',
         model: 'claude:haiku',
-        tools: {
-          systemPromptAppend: 'You have a verify tool.',
-          tools: [{ name: 'verify', inputSchema: {}, execute: () => 'ok' }],
-        },
+        tools,
+        runtimeEnvironment,
       });
       expect(capturedOptions?.mcpServers?.['nuncio-runtime']).toBeDefined();
-      expect(capturedOptions?.appendSystemPrompt).toBe('You have a verify tool.');
+      expect(capturedOptions?.appendSystemPrompt).toContain('running inside Nuncio');
+      expect(capturedOptions?.appendSystemPrompt).not.toContain('You have a verify tool.');
+      expect(receivedUserText).toContain('You have a verify tool.');
+      expect(receivedUserText).toContain('available tools: verify');
+      expect(receivedUserText).not.toContain('running inside Nuncio');
     });
 
     it('omits mcpServers when the session has no runtime tools', async () => {

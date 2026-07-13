@@ -18,6 +18,10 @@ import {
 } from '../agent-runtime-policy';
 import { appendRuntimeToolInstructions, type AgentRuntimeTools } from '../tools/agent-runtime-tools.types';
 import {
+  renderRuntimeInstructions,
+  withoutRuntimeInfoTool,
+} from '../runtime-environment';
+import {
   buildCodexDynamicTools,
   executeCodexRuntimeTool,
 } from '../tools/codex-runtime-tools.adapter';
@@ -306,7 +310,9 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
     context: AgentRunContext,
   ): Promise<void> {
     const active = await this.ensureSession(sessionId, context);
-    const runtimeTools = runtimeToolsForPolicy(context.runtimePolicy, context.tools);
+    const runtimeTools = withoutRuntimeInfoTool(
+      runtimeToolsForPolicy(context.runtimePolicy, context.tools),
+    );
     active.currentEmit = context.emit;
     active.requestProviderApproval = context.requestProviderApproval;
     active.runtimeTools = runtimeTools;
@@ -319,7 +325,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
     const turnInput = [
       {
         type: 'text' as const,
-        text: appendRuntimeToolInstructions(text, runtimeTools),
+        text: context.runtimeEnvironment ? text : appendRuntimeToolInstructions(text, runtimeTools),
         text_elements: [] as [],
       },
     ];
@@ -356,9 +362,9 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
       if (existing.runtimePolicyKey !== runtimePolicyKey(context.runtimePolicy)) {
         throw new Error('Runtime policy cannot change on an active Codex session.');
       }
-      const nextSurface = codexDynamicToolSurface(
+      const nextSurface = codexDynamicToolSurface(withoutRuntimeInfoTool(
         runtimeToolsForPolicy(context.runtimePolicy, context.tools),
-      );
+      ));
       if (existing.dynamicToolSurface !== nextSurface) {
         throw new Error('Runtime tool definitions cannot change on an active Codex thread.');
       }
@@ -366,7 +372,9 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
     }
 
     const cwd = this.resolveCwd(context);
-    const runtimeTools = runtimeToolsForPolicy(context.runtimePolicy, context.tools);
+    const runtimeTools = withoutRuntimeInfoTool(
+      runtimeToolsForPolicy(context.runtimePolicy, context.tools),
+    );
     const client = this.createClient(cwd, await this.resolveBinaryPathForRun());
     const active: ActiveCodexSession = {
       client,
@@ -403,6 +411,9 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
       const model = this.resolveModel(context.model);
       const runtime = this.threadRuntimeOverrides(context.runtimePolicy);
       const dynamicTools = buildCodexDynamicTools(runtimeTools);
+      const developerInstructions = context.runtimeEnvironment
+        ? renderRuntimeInstructions(context.runtimeEnvironment, runtimeTools)
+        : undefined;
       const persistedThreadId = session?.providerThreadId;
       resumeCandidate = Boolean(persistedThreadId);
       const persistedToolSurface = asString(session?.providerState?.codexDynamicToolSurface);
@@ -419,6 +430,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
             ...(model ? { model } : {}),
             cwd,
             ...runtime,
+            ...(developerInstructions ? { developerInstructions } : {}),
           })
         : await client.request<CodexThreadOpenResponse>('thread/start', {
             ...(model ? { model } : {}),
@@ -426,6 +438,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
             ...runtime,
             ...(context.runtimePolicy ? { allowProviderModelFallback: false } : {}),
             experimentalRawEvents: false,
+            ...(developerInstructions ? { developerInstructions } : {}),
             ...(dynamicTools ? { dynamicTools } : {}),
           });
 

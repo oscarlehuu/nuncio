@@ -12,6 +12,7 @@ import {
   runtimeToolsForPolicy,
 } from '../agent-runtime-policy';
 import { appendRuntimeToolInstructions } from '../tools/agent-runtime-tools.types';
+import { renderRuntimeTurnContext } from '../runtime-environment';
 import {
   buildClaudeMcpServers,
   CLAUDE_RUNTIME_MCP_SERVER,
@@ -466,7 +467,9 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     const model = this.stripPrefix(context.model);
     const apiKey = this.resolveApiKey();
     const effort = this.resolveEffort(context.modelOptions);
-    const appendSystemPrompt = context.tools?.systemPromptAppend?.trim() || undefined;
+    const appendSystemPrompt = context.runtimeEnvironment?.coreInstructions.trim()
+      || context.tools?.systemPromptAppend?.trim()
+      || undefined;
     const trustedMcpToolNames = (context.tools?.tools ?? []).map(
       (tool) => `mcp__${CLAUDE_RUNTIME_MCP_SERVER}__${tool.name}`,
     );
@@ -808,8 +811,14 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     context: AgentRunContext,
     isSteer: boolean,
   ): ClaudeUserMessage {
-    // Steers into a live turn redirect immediately; a plain prompt runs normally.
-    const prompt = appendRuntimeToolInstructions(text, context.tools);
+    // Static Nuncio identity stays in the system prompt. Capabilities remain
+    // per-turn because MCP tools and policy-scoped authority can change.
+    const runtimeContext = context.runtimeEnvironment
+      ? renderRuntimeTurnContext(context.runtimeEnvironment, context.tools)
+      : undefined;
+    const prompt = runtimeContext
+      ? `${text}\n\n${runtimeContext}`
+      : appendRuntimeToolInstructions(text, context.tools);
     return {
       type: 'user',
       parent_tool_use_id: null,

@@ -57,6 +57,33 @@ export interface InteractionResponse {
   resolvedBy: 'user' | 'skip';
 }
 
+export type NuncioOrchestrationCapability = 'off' | 'read' | 'read-write';
+
+export interface AgentRuntimeInfo {
+  host: 'nuncio';
+  contractVersion: number;
+  session: { id: string; provider: string; model: string | null };
+  workspace: { projectPath: string | null; cwd: string | null };
+  capabilities: {
+    tools: string[];
+    browser: boolean;
+    orchestration: NuncioOrchestrationCapability;
+    interaction: boolean;
+  };
+  constraints: {
+    filesystem: AgentRuntimeFilesystemPolicy | 'provider-default';
+    network: 'disabled' | 'provider-default';
+  };
+}
+
+export interface AgentRuntimeEnvironment {
+  coreInstructions: string;
+  capabilityManifest: string;
+  info: AgentRuntimeInfo;
+  /** Exact post-policy toolset used to render the manifest. */
+  runtimeTools?: AgentRuntimeTools;
+}
+
 export interface AgentRunContext {
   emit?: EventEmitter;
   model?: string | null;
@@ -87,6 +114,8 @@ export interface AgentRunContext {
   requestProviderApproval?: (request: ProviderRequestInput) => Promise<ProviderRequestResult>;
   /** Session-bound runtime tools that providers adapt into SDK-native tool contracts. */
   tools?: AgentRuntimeTools;
+  /** Host identity and truthful post-policy capabilities, independent of prompt profiles. */
+  runtimeEnvironment?: AgentRuntimeEnvironment;
   /** Explicit policy; absence deliberately preserves the provider's current Solo defaults. */
   runtimePolicy?: AgentRuntimePolicy | null;
 }

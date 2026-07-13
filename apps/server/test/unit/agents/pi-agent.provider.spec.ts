@@ -4,6 +4,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PiAgentProvider } from '../../../src/agents/providers/pi-agent.provider';
+import {
+  buildAgentRuntimeEnvironment,
+  createNuncioRuntimeInfoTool,
+} from '../../../src/agents/runtime-environment';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
 import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
@@ -525,10 +529,134 @@ describe('PiAgentProvider', () => {
     expect(setThinkingLevelMock).toHaveBeenCalledWith('max');
   });
 
+  it('rejects a model switch while the active Pi turn is streaming', async () => {
+    const created = sessions.create({ prompt: 'stream before switching', provider: 'pi' });
+    await provider.run(created.id, created.prompt, { emit: () => {} });
+    isStreaming = true;
+
+    await expect(provider.setModel(created.id, 'anthropic:model-1')).rejects.toThrow(
+      'Cannot switch the Pi model while a turn is running.',
+    );
+    expect(setModelMock).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the authoritative runtime manifest after an in-session model switch', async () => {
+    const created = sessions.create({
+      prompt: 'switch the manifested model',
+      provider: 'pi',
+      model: 'anthropic:model-0',
+    });
+    let runtimeEnvironment = buildAgentRuntimeEnvironment({
+      sessionId: created.id,
+      provider: 'pi',
+      model: 'anthropic:model-0',
+      projectPath: null,
+      cwd: '/tmp/project',
+      supportsInteraction: true,
+      runtimeTools: { tools: [] },
+    });
+    let runtimeTools = {
+      tools: [createNuncioRuntimeInfoTool(() => runtimeEnvironment)],
+    };
+    runtimeEnvironment = buildAgentRuntimeEnvironment({
+      sessionId: created.id,
+      provider: 'pi',
+      model: 'anthropic:model-0',
+      projectPath: null,
+      cwd: '/tmp/project',
+      supportsInteraction: true,
+      runtimeTools,
+    });
+
+    await provider.run(created.id, created.prompt, {
+      emit: () => {},
+      cwd: '/tmp/project',
+      model: 'anthropic:model-0',
+      tools: runtimeTools,
+      runtimeEnvironment,
+    });
+    await provider.setModel(created.id, 'anthropic:model-1');
+
+    let switchedEnvironment = buildAgentRuntimeEnvironment({
+      sessionId: created.id,
+      provider: 'pi',
+      model: 'anthropic:model-1',
+      projectPath: null,
+      cwd: '/tmp/project',
+      supportsInteraction: true,
+      runtimeTools: { tools: [] },
+    });
+    runtimeTools = {
+      tools: [createNuncioRuntimeInfoTool(() => switchedEnvironment)],
+    };
+    switchedEnvironment = buildAgentRuntimeEnvironment({
+      sessionId: created.id,
+      provider: 'pi',
+      model: 'anthropic:model-1',
+      projectPath: null,
+      cwd: '/tmp/project',
+      supportsInteraction: true,
+      runtimeTools,
+    });
+
+    await provider.steer(created.id, 'continue with the switched model', {
+      emit: () => {},
+      cwd: '/tmp/project',
+      model: 'anthropic:model-1',
+      tools: runtimeTools,
+      runtimeEnvironment: switchedEnvironment,
+    });
+
+    expect(createSessionCalls).toBe(2);
+    expect((lastLoaderOptions?.appendSystemPrompt as string[])[0]).toContain(
+      'provider/model: pi / anthropic:model-1',
+    );
+    const customTools = lastCreateSessionOptions?.customTools as Array<{
+      name?: string;
+      execute?: (callId: string, input: unknown) => Promise<{ details?: unknown }>;
+    }>;
+    const infoTool = customTools.find((tool) => tool.name === 'nuncio_runtime_info');
+    expect((await infoTool?.execute?.('runtime-info', {}))?.details).toMatchObject({
+      session: { model: 'anthropic:model-1' },
+    });
+  });
+
   it('setModel no-ops without an active session', async () => {
     await provider.setModel('no-such-session', 'anthropic:model-1', { thinkingLevel: 'high' });
     expect(setModelMock).not.toHaveBeenCalled();
     expect(setThinkingLevelMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps the Pi user prompt exact while placing the Nuncio envelope in the system prompt', async () => {
+    const created = sessions.create({ prompt: 'inspect the page', provider: 'pi' });
+    const tools = {
+      systemPromptAppend: 'Use browser_open for browser work.',
+      tools: [{ name: 'browser_open', inputSchema: {}, execute: async () => 'opened' }],
+    };
+    const runtimeEnvironment = buildAgentRuntimeEnvironment({
+      sessionId: created.id,
+      provider: 'pi',
+      model: null,
+      projectPath: null,
+      cwd: '/tmp/project',
+      supportsInteraction: true,
+      runtimeTools: tools,
+    });
+
+    await provider.run(created.id, created.prompt, {
+      emit: () => {},
+      cwd: '/tmp/project',
+      tools,
+      runtimeEnvironment,
+    });
+
+    expect(promptCalls[0]?.text).toBe('inspect the page');
+    expect(lastLoaderOptions?.appendSystemPrompt).toEqual([
+      expect.stringContaining('running inside Nuncio'),
+    ]);
+    expect((lastLoaderOptions?.appendSystemPrompt as string[])[0]).toContain(
+      'Use browser_open for browser work.',
+    );
   });
 
   it('passes image attachments to Pi prompt options', async () => {

@@ -14,6 +14,7 @@ import { SettingsService } from '../../settings/settings.service';
 import type { AgentRunContext } from '../agents.types';
 import { BaseAgentProvider } from '../agents.base-provider';
 import { appendRuntimeToolInstructions } from '../tools/agent-runtime-tools.types';
+import { renderRuntimeInstructions } from '../runtime-environment';
 import { buildCursorCustomTools } from '../tools/cursor-runtime-tools.adapter';
 import {
   CURSOR_PREFERRED_MODEL,
@@ -172,7 +173,13 @@ export class CursorAgentProvider extends BaseAgentProvider {
     // onDelta gives token-by-token text + tool-call state (finer-grained than
     // run.stream()'s block-level `assistant` events). run.wait() drains the run
     // and returns the terminal result.
-    const run = await active.agent.send(appendRuntimeToolInstructions(text, context.tools), {
+    const runtimeInstructions = context.runtimeEnvironment
+      ? renderRuntimeInstructions(context.runtimeEnvironment, context.tools)
+      : undefined;
+    const prompt = runtimeInstructions
+      ? `${runtimeInstructions}\n\n## User request\n${text}`
+      : appendRuntimeToolInstructions(text, context.tools);
+    const run = await active.agent.send(prompt, {
       onDelta: ({ update }) => this.handleDelta(sessionId, active, update, context),
       ...(customTools ? { local: { customTools } } : {}),
     });

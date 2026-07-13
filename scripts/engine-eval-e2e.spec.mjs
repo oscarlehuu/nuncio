@@ -34,7 +34,7 @@ describe('engine-eval harness (mock end-to-end)', () => {
       expect(fresh.length).toBeGreaterThan(0);
 
       const report = JSON.parse(readFileSync(join(reportsDir, fresh[0]), 'utf8'));
-      expect(report.suiteVersion).toBe(1);
+      expect(report.suiteVersion).toBe(2);
       expect(report.engine).toBe('mock');
       expect(report.results).toHaveLength(1);
       const [row] = report.results;

@@ -16,7 +16,7 @@ export const checksDir = join(evalRoot, 'checks');
 export const reportsDir = join(evalRoot, 'reports');
 export const baselinesDir = join(evalRoot, 'baselines');
 
-export const SUITE_VERSION = 1;
+export const SUITE_VERSION = 2;
 
 // Note substrings that mark an INFRA failure — the run couldn't measure the task
 // (engine not installed, task never terminated, or a harness error), as opposed

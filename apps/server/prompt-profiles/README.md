@@ -2,7 +2,9 @@
 
 Engine-specific prompting decisions live here as **data**, never in adapter code (ADR-004). A
 profile shapes only what nuncio *appends/wraps* — it never modifies the engine's own
-vendor-owned system prompt.
+vendor-owned system prompt. The core Nuncio runtime identity and post-policy capability
+manifest are also outside profile control: a profile can tune orchestration phrasing, but cannot
+remove or contradict the host-awareness contract.
 
 ## Files
 

@@ -15,6 +15,7 @@ import type { AgentRunContext, InteractionResponse } from '../agents.types';
 import { runtimePolicyKey, runtimeToolsForPolicy } from '../agent-runtime-policy';
 import { AgentRunCancelledError, BaseAgentProvider } from '../agents.base-provider';
 import { eventImagesFromAttachments } from '../agents.attachments';
+import { renderRuntimeInstructions } from '../runtime-environment';
 import {
   appendRuntimeToolInstructions,
   asToolInput,
@@ -81,6 +82,7 @@ type PiSessionHandle = {
   getTurnError: () => string | null;
   sealOpenTools: (emit?: AgentRunContext['emit']) => void;
   runtimePolicyKey: string;
+  runtimeInstructionsKey: string;
   runtimeToolSnapshot: PiRuntimeToolSnapshot;
 };
 
@@ -310,6 +312,9 @@ export class PiAgentProvider extends BaseAgentProvider {
   ): Promise<void> {
     const handle = this.activeSessions.get(sessionId);
     if (!handle) return;
+    if (handle.session.isStreaming) {
+      throw new Error('Cannot switch the Pi model while a turn is running.');
+    }
     const model = resolveModelId(modelId, (provider, id) => handle.modelRegistry.find(provider, id));
     if (!model) return;
     await handle.session.setModel(model);
@@ -324,13 +329,17 @@ export class PiAgentProvider extends BaseAgentProvider {
     context: AgentRunContext,
   ): Promise<void> {
     const runtimeTools = runtimeToolsForPolicy(context.runtimePolicy, context.tools);
+    const runtimeInstructionsKey = piRuntimeInstructionsKey(context, runtimeTools);
     let handle = this.activeSessions.get(sessionId);
     if (!handle) {
       handle = await this.createPiSession(sessionId, context, runtimeTools);
       this.activeSessions.set(sessionId, handle);
     } else {
       this.assertRuntimePolicyUnchanged(handle, context);
-      if (!samePiRuntimeTools(handle.runtimeToolSnapshot, runtimeTools, context.runtimePolicy != null)) {
+      if (
+        handle.runtimeInstructionsKey !== runtimeInstructionsKey
+        || !samePiRuntimeTools(handle.runtimeToolSnapshot, runtimeTools, context.runtimePolicy != null)
+      ) {
         if (handle.session.isStreaming) {
           throw new Error('Runtime tools cannot change during an active Pi turn.');
         }
@@ -353,7 +362,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     let interrupted = false;
     try {
       await handle.prompt(
-        appendRuntimeToolInstructions(text, runtimeTools),
+        context.runtimeEnvironment ? text : appendRuntimeToolInstructions(text, runtimeTools),
         Object.keys(promptOptions).length ? promptOptions : undefined,
       );
     } catch (error) {
@@ -404,7 +413,13 @@ export class PiAgentProvider extends BaseAgentProvider {
    * the list never executes. `PI_EXTENSION_DISCOVERY=full` restores pi's
    * default discovery without disabling Nuncio's project-context injection.
    */
-  private async createEngineResources(pi: PiSdk, agentDir: string, sessionId: string, cwd?: string) {
+  private async createEngineResources(
+    pi: PiSdk,
+    agentDir: string,
+    sessionId: string,
+    cwd: string | undefined,
+    runtimeInstructions: string,
+  ) {
     const resolvedCwd = cwd ?? process.cwd();
     const settingsManager = pi.SettingsManager.create(resolvedCwd, agentDir);
     const session = this.sessions.findById(sessionId);
@@ -417,6 +432,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       ? ''
       : (this.nuncioContext?.buildForProject(projectPath, contextBudget, session?.originTaskId) ?? '');
     const fullDiscovery = this.settings.resolve('PI_EXTENSION_DISCOVERY') === 'full';
+    const systemAppend = [context, runtimeInstructions].filter(Boolean).join('\n\n');
     const resourceLoader = new pi.DefaultResourceLoader({
       cwd: resolvedCwd,
       agentDir,
@@ -425,7 +441,7 @@ export class PiAgentProvider extends BaseAgentProvider {
         noExtensions: true,
         additionalExtensionPaths: piEngineExtensionPaths(agentDir),
       } : {}),
-      ...(context ? { appendSystemPrompt: [context] } : {}),
+      ...(systemAppend ? { appendSystemPrompt: [systemAppend] } : {}),
     });
     await resourceLoader.reload();
     return { resourceLoader, settingsManager };
@@ -450,6 +466,9 @@ export class PiAgentProvider extends BaseAgentProvider {
       ? buildPiRuntimePolicyOptions(context.runtimePolicy, pi)
       : undefined;
     const cwd = policyOptions?.workspaceRoot ?? context.cwd;
+    const runtimeInstructions = context.runtimeEnvironment
+      ? renderRuntimeInstructions(context.runtimeEnvironment, runtimeTools)
+      : runtimeTools?.systemPromptAppend?.trim() ?? '';
     const policyResourceLoader = policyOptions
       ? new pi.DefaultResourceLoader({
           cwd: policyOptions.workspaceRoot,
@@ -459,6 +478,7 @@ export class PiAgentProvider extends BaseAgentProvider {
           noPromptTemplates: true,
           noThemes: true,
           noContextFiles: true,
+          ...(runtimeInstructions ? { appendSystemPrompt: [runtimeInstructions] } : {}),
         })
       : undefined;
     await policyResourceLoader?.reload();
@@ -489,7 +509,13 @@ export class PiAgentProvider extends BaseAgentProvider {
       : [...(buildPiCustomTools(context.cwd, pi, context.tools) ?? []), ...engineTools];
     const engineResources = policyOptions
       ? undefined
-      : await this.createEngineResources(pi, agentDir, sessionId, context.cwd);
+      : await this.createEngineResources(
+          pi,
+          agentDir,
+          sessionId,
+          context.cwd,
+          runtimeInstructions,
+        );
     // Pi 0.80.6 treats `tools` as the allowlist for built-ins AND customTools.
     // Include the already-vetted Crew definitions or the SDK silently removes
     // submit_* from the registry despite receiving it in customTools.
@@ -687,6 +713,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       getTurnError: () => lastTurnError,
       sealOpenTools,
       runtimePolicyKey: runtimePolicyKey(context.runtimePolicy),
+      runtimeInstructionsKey: piRuntimeInstructionsKey(context, runtimeTools),
       runtimeToolSnapshot: snapshotPiRuntimeTools(runtimeTools),
     };
   }
@@ -845,6 +872,15 @@ function snapshotPiRuntimeTools(runtimeTools: AgentRuntimeTools | undefined): Pi
     definition: JSON.stringify([tool.name, tool.description ?? null, tool.inputSchema]),
     execute: tool.execute,
   }));
+}
+
+function piRuntimeInstructionsKey(
+  context: AgentRunContext,
+  runtimeTools: AgentRuntimeTools | undefined,
+): string {
+  return context.runtimeEnvironment
+    ? renderRuntimeInstructions(context.runtimeEnvironment, runtimeTools)
+    : runtimeTools?.systemPromptAppend?.trim() ?? '';
 }
 
 function samePiRuntimeTools(
