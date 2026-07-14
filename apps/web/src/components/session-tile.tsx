@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { Maximize2, Send, X } from 'lucide-react';
 import type { Session, SessionStatus } from '../lib/api';
 import { statusLabel } from '../lib/api';
+import { hasSelectionInside } from '../lib/auto-copy-selection';
 import { isComposingEvent } from '../lib/keyboard';
 import { DETAIL_EVENT_TAIL, useSessionStream } from '../lib/use-session-stream';
 import { useStickToBottom } from '../lib/use-stick-to-bottom';
@@ -174,8 +175,10 @@ export function SessionTile({
       tabIndex={0}
       onClick={() => {
         // Selecting a tile in the workbench lands the caret in its composer so
-        // the user can type straight away.
+        // the user can type straight away — unless this click just finished a
+        // text selection (focusing the input would clear the highlight).
         onFocus();
+        if (hasSelectionInside(rootRef.current)) return;
         steerRef.current?.focus({ preventScroll: true });
       }}
       onKeyDown={(e) => {

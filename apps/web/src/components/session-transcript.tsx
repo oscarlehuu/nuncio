@@ -3,6 +3,7 @@ import { Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { TranscriptImage, ProviderRequestDecision, SessionEvent } from '../lib/api';
 import { transcriptImageSrc } from '../lib/api';
+import { useAutoCopySelection } from '../lib/use-auto-copy-selection';
 import { ChatImage } from './chat-image';
 import { ProviderIcon } from './provider-icon';
 import {
@@ -403,6 +404,8 @@ export const Transcript = memo(function Transcript({
   showAvatar = false,
 }: TranscriptProps) {
   const blocks = useTranscriptBlocks(events);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useAutoCopySelection(rootRef);
   const itemCacheRef = useRef(new Map<string, RenderItem>());
   const items = useMemo(() => {
     // Queued steers live in the composer's queue panel, not inline — drop them here.
@@ -427,7 +430,11 @@ export const Transcript = memo(function Transcript({
     item.type === 'block' && item.block.kind === 'user';
 
   return (
-    <div className={cn('flex flex-col py-2', !showAvatar && 'gap-[var(--chat-gap)]')}>
+    <div
+      ref={rootRef}
+      data-chat-transcript=""
+      className={cn('flex flex-col py-2', !showAvatar && 'gap-[var(--chat-gap)]')}
+    >
       {items.map((item, i) => {
         const view = (
           <MemoRenderItemView

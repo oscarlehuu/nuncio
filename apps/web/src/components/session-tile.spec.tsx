@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Session, SessionEvent } from '../lib/api';
 
@@ -216,6 +216,32 @@ describe('SessionTile', () => {
     // Click the tile surface (its title), not the input itself.
     await userEvent.click(screen.getByText('Refactor the parser'));
     expect(input).toHaveFocus();
+  });
+
+  it('does not steal composer focus when the click ends a transcript text selection', () => {
+    streamState.events = [assistantEvent(1, 'copy this phrase from the tile')];
+    render(
+      <SessionTile
+        session={fakeSession()}
+        focused={false}
+        onFocus={noop}
+        onMaximize={noop}
+        onSteer={vi.fn()}
+      />,
+    );
+    const input = screen.getByLabelText(/steer refactor the parser/i);
+    const phrase = screen.getByText(/copy this phrase from the tile/i);
+    const range = document.createRange();
+    range.selectNodeContents(phrase);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    // fireEvent.click alone (no mousedown) mirrors mouseup→click after a drag
+    // select, where the highlight is still alive.
+    fireEvent.click(phrase);
+    expect(input).not.toHaveFocus();
+    expect(window.getSelection()?.toString()).toContain('copy this phrase');
   });
 
   it('maximize hands up the tile rect so the full view can grow from this slot', async () => {
