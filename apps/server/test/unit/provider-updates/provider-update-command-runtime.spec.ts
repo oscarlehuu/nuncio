@@ -17,20 +17,20 @@ afterEach(() => {
 describe('provider update command runtime', () => {
   it('fetchNpmLatestVersion returns the latest version from npm metadata', async () => {
     globalThis.fetch = (async () =>
-      Response.json({ version: '1.2.3' })) as typeof fetch;
+      Response.json({ version: '1.2.3' })) as unknown as typeof fetch;
 
     await expect(fetchNpmLatestVersion('@openai/codex')).resolves.toBe('1.2.3');
   });
 
   it('fetchNpmLatestVersion returns null on non-ok responses', async () => {
-    globalThis.fetch = (async () => new Response(null, { status: 404 })) as typeof fetch;
+    globalThis.fetch = (async () => new Response(null, { status: 404 })) as unknown as typeof fetch;
     await expect(fetchNpmLatestVersion('@openai/codex')).resolves.toBeNull();
   });
 
   it('fetchNpmLatestVersion returns null when fetch throws', async () => {
     globalThis.fetch = (async () => {
       throw new Error('network down');
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
     await expect(fetchNpmLatestVersion('@openai/codex')).resolves.toBeNull();
   });
 

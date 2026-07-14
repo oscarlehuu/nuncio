@@ -52,7 +52,7 @@ describe('usage credentials helpers', () => {
         access_token: 'new-access',
         refresh_token: 'new-refresh',
         expires_in: 3600,
-      })) as typeof fetch;
+      })) as unknown as typeof fetch;
 
     const result = await refreshOAuthAccessToken({
       refreshUrl: 'https://example.test/token',
@@ -69,7 +69,7 @@ describe('usage credentials helpers', () => {
   });
 
   it('refreshOAuthAccessToken returns null on failed refresh', async () => {
-    globalThis.fetch = (async () => new Response(null, { status: 401 })) as typeof fetch;
+    globalThis.fetch = (async () => new Response(null, { status: 401 })) as unknown as typeof fetch;
     await expect(
       refreshOAuthAccessToken({
         refreshUrl: 'https://example.test/token',

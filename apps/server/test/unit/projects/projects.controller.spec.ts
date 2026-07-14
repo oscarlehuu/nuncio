@@ -36,7 +36,7 @@ describe('ProjectsController', () => {
   it('lists all project configs when path is omitted', () => {
     repo.upsert({ path: projectPath, name: 'demo' });
     const result = controller.get();
-    expect(result.items.some((item) => item.path === projectPath)).toBe(true);
+    expect('items' in result && result.items.some((item) => item.path === projectPath)).toBe(true);
   });
 
   it('returns a single project when path is provided', () => {

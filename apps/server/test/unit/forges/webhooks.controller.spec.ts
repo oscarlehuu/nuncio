@@ -1,4 +1,6 @@
 import { UnauthorizedException } from '@nestjs/common';
+import type { RawBodyRequest } from '@nestjs/common';
+import type { Request } from 'express';
 import { describe, expect, it } from 'bun:test';
 import { WebhooksController } from '../../../src/forges/webhooks/webhooks.controller';
 import type { ForgeWebhookEvent } from '../../../src/forges/forges.types';
@@ -19,6 +21,10 @@ describe('WebhooksController', () => {
     labels: [],
   };
 
+  function rawReq(rawBody?: Buffer): RawBodyRequest<Request> {
+    return { rawBody } as unknown as RawBodyRequest<Request>;
+  }
+
   function controllerFor(opts: {
     verify?: boolean;
     parse?: ForgeWebhookEvent | null;
@@ -33,7 +39,7 @@ describe('WebhooksController', () => {
     const webhooks = {
       handleEvent: async (providerId: string, parsed: ForgeWebhookEvent) => {
         handleCalls.push([providerId, parsed]);
-        return opts.handle ?? { created: 1 };
+        return opts.handle ?? { created: true };
       },
     };
     const controller = new WebhooksController(registry as never, webhooks as never);
@@ -43,24 +49,24 @@ describe('WebhooksController', () => {
   it('rejects requests with an invalid signature', async () => {
     const { controller } = controllerFor({ verify: false });
     await expect(
-      controller.receive('github', {}, {}, { rawBody: Buffer.from('{}') }),
+      controller.receive('github', {}, {}, rawReq(Buffer.from('{}'))),
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
   it('ignores events the provider cannot parse', async () => {
     const { controller, handleCalls } = controllerFor({ parse: null });
     await expect(
-      controller.receive('github', { 'x-github-event': 'ping' }, {}, { rawBody: Buffer.from('{}') }),
+      controller.receive('github', { 'x-github-event': 'ping' }, {}, rawReq(Buffer.from('{}'))),
     ).resolves.toEqual({ ok: true, ignored: true });
     expect(handleCalls).toHaveLength(0);
   });
 
   it('forwards verified events to WebhooksService and returns 202 payload', async () => {
-    const { controller, handleCalls } = controllerFor({ handle: { sessionId: 's-1' } });
+    const { controller, handleCalls } = controllerFor({ handle: { created: false, sessionId: 's-1' } });
     const raw = Buffer.from('{"action":"opened"}');
     await expect(
-      controller.receive('github', { 'x-github-event': 'issues' }, { action: 'opened' }, { rawBody: raw }),
-    ).resolves.toEqual({ ok: true, sessionId: 's-1' });
+      controller.receive('github', { 'x-github-event': 'issues' }, { action: 'opened' }, rawReq(raw)),
+    ).resolves.toEqual({ ok: true, created: false, sessionId: 's-1' });
     expect(handleCalls).toEqual([['github', event]]);
   });
 
@@ -75,9 +81,9 @@ describe('WebhooksController', () => {
     };
     const controller = new WebhooksController(
       { get: () => provider } as never,
-      { handleEvent: async () => ({}) } as never,
+      { handleEvent: async () => ({ created: false }) } as never,
     );
-    await controller.receive('github', {}, {}, {});
+    await controller.receive('github', {}, {}, rawReq());
     expect(verifiedRaw).toBe('');
   });
 });

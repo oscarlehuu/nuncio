@@ -1,13 +1,15 @@
 import { BadRequestException } from '@nestjs/common';
 import { describe, expect, it } from 'bun:test';
 import { CursorLocalController } from '../../../src/cursor-local/cursor-local.controller';
+import type { LocalCursorSessionDto } from '../../../src/cursor-local/cursor-local-sessions.types';
 
 describe('CursorLocalController', () => {
   const workspace = '/tmp/demo-repo';
-  const items = [
+  const items: LocalCursorSessionDto[] = [
     {
       chatId: 'chat-1',
       workspace,
+      projectSlug: 'tmp-demo-repo',
       title: 'Demo',
       preview: 'hello',
       updatedAt: 1,

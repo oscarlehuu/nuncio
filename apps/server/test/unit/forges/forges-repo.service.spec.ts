@@ -2,7 +2,16 @@ import { BadRequestException } from '@nestjs/common';
 import { ForgeRepoService } from '../../../src/forges/forges-repo.service';
 import type { ForgeRegistry } from '../../../src/forges/forges.registry';
 import type { GitService } from '../../../src/git/git.service';
-import type { ForgeProvider } from '../../../src/forges/forges.types';
+import type {
+  ForgeIssueDetail,
+  ForgeIssueSummary,
+  ForgeJobLog,
+  ForgeProvider,
+  ForgePullRequestDetail,
+  ForgePullRequestSummary,
+  ForgeReviewThread,
+  MergeResult,
+} from '../../../src/forges/forges.types';
 
 function makeProvider(overrides: Partial<ForgeProvider> = {}): ForgeProvider {
   return {
@@ -107,43 +116,107 @@ describe('ForgeRepoService', () => {
 
   it('delegates pull, issue, and workflow operations to the resolved provider', async () => {
     const calls: string[] = [];
+    const pullSummary: ForgePullRequestSummary = {
+      number: 2,
+      title: 'PR',
+      state: 'open',
+      draft: false,
+      author: 'octo',
+      sourceBranch: 'feature',
+      targetBranch: 'main',
+      url: 'https://example/pr/2',
+      updatedAt: '2024-01-01T00:00:00Z',
+      commentCount: null,
+    };
+    const issueSummary: ForgeIssueSummary = {
+      number: 3,
+      title: 'Issue',
+      state: 'open',
+      author: 'octo',
+      labels: [],
+      assignees: [],
+      commentCount: 0,
+      updatedAt: '2024-01-01T00:00:00Z',
+      url: 'https://example/issues/3',
+    };
+    const issueDetail: ForgeIssueDetail = { ...issueSummary, body: '', comments: [] };
+    const pullDetail: ForgePullRequestDetail = {
+      number: 1,
+      url: 'u',
+      state: 'open',
+      title: 't',
+      body: '',
+      author: 'a',
+      draft: false,
+      sourceBranch: 'feature',
+      targetBranch: 'main',
+      mergeable: 'mergeable',
+      reviewDecision: null,
+      additions: 0,
+      deletions: 0,
+      changedFiles: 0,
+    };
+    const mergeResult: MergeResult = { merged: true, sha: 'abc', message: 'merged' };
+    const jobLog: ForgeJobLog = { log: 'log output', truncated: false };
+    const reviewThread: ForgeReviewThread = {
+      id: 't1',
+      replyTargetId: 'rt1',
+      resolved: false,
+      resolvable: true,
+      path: null,
+      line: null,
+      outdated: false,
+      comments: [],
+    };
     const provider = makeProvider({
-      listPullRequests: async () => [{ number: 2, title: 'PR', state: 'open' }],
-      listPullRequestFiles: async () => [{ path: 'a.ts', status: 'modified' }],
-      listReviewThreads: async () => [{ id: 't1', resolved: false }],
+      listPullRequests: async () => [pullSummary],
+      listPullRequestFiles: async () => [
+        { path: 'a.ts', oldPath: null, status: 'modified', additions: 1, deletions: 0, patch: null },
+      ],
+      listReviewThreads: async () => [reviewThread],
       replyToThread: async () => { calls.push('reply'); },
       resolveThread: async () => { calls.push('resolve'); },
       submitReview: async () => { calls.push('review'); },
       addComment: async () => { calls.push('pr-comment'); },
-      mergePullRequest: async () => ({ merged: true, sha: 'abc' }),
+      mergePullRequest: async () => mergeResult,
       updatePullRequestState: async () => { calls.push('pr-state'); },
       updateBranch: async () => { calls.push('update-branch'); },
-      listIssues: async () => [{ number: 3, title: 'Issue', state: 'open' }],
-      getIssue: async () => ({ number: 3, title: 'Issue', state: 'open', body: '' }),
+      listIssues: async () => [issueSummary],
+      getIssue: async () => issueDetail,
       addIssueComment: async () => { calls.push('issue-comment'); },
       updateIssueState: async () => { calls.push('issue-state'); },
-      createIssue: async () => ({ number: 4, title: 'New', state: 'open' }),
-      listWorkflowRuns: async () => [{ id: 9, status: 'completed' }],
-      getWorkflowRunJobs: async () => [{ id: 10, name: 'build', status: 'completed' }],
+      createIssue: async () => ({ ...issueSummary, number: 4, title: 'New' }),
+      listWorkflowRuns: async () => [
+        {
+          id: 9,
+          name: 'CI',
+          runNumber: 1,
+          status: 'completed',
+          conclusion: 'success',
+          branch: 'main',
+          sha: 'abc',
+          event: 'push',
+          actor: 'octo',
+          url: 'https://example/runs/9',
+          createdAt: '2024-01-01T00:00:00Z',
+          durationSeconds: 60,
+        },
+      ],
+      getWorkflowRunJobs: async () => [
+        {
+          id: 10,
+          name: 'build',
+          status: 'completed',
+          conclusion: 'success',
+          startedAt: null,
+          completedAt: null,
+          steps: [],
+        },
+      ],
       rerunWorkflowRun: async () => { calls.push('rerun'); },
       cancelWorkflowRun: async () => { calls.push('cancel'); },
-      getJobLog: async () => ({ text: 'log output' }),
-      getPullRequestDetail: async () => ({
-        number: 1,
-        url: 'u',
-        state: 'open',
-        title: 't',
-        body: '',
-        author: 'a',
-        draft: false,
-        sourceBranch: null,
-        targetBranch: 'main',
-        mergeable: 'mergeable' as const,
-        reviewDecision: null,
-        additions: 0,
-        deletions: 0,
-        changedFiles: 0,
-      }),
+      getJobLog: async () => jobLog,
+      getPullRequestDetail: async () => pullDetail,
     });
     const service = makeService(provider);
 
@@ -154,10 +227,9 @@ describe('ForgeRepoService', () => {
     await service.resolveThread('/some/repo', 1, 'thread', true);
     await service.submitReview('/some/repo', 1, { event: 'comment', body: 'note' });
     await service.addPullRequestComment('/some/repo', 1, 'comment');
-    await expect(service.mergePullRequest('/some/repo', 1, { method: 'merge' })).resolves.toEqual({
-      merged: true,
-      sha: 'abc',
-    });
+    await expect(service.mergePullRequest('/some/repo', 1, { method: 'merge' })).resolves.toEqual(
+      mergeResult,
+    );
     await service.updatePullRequestState('/some/repo', 1, 'closed');
     await service.updateBranch('/some/repo', 1);
     await expect(service.listIssues('/some/repo', 'open')).resolves.toHaveLength(1);
@@ -171,7 +243,7 @@ describe('ForgeRepoService', () => {
     await expect(service.getWorkflowRunJobs('/some/repo', 9)).resolves.toHaveLength(1);
     await service.rerunWorkflowRun('/some/repo', 9, true);
     await service.cancelWorkflowRun('/some/repo', 9);
-    await expect(service.getJobLog('/some/repo', 10)).resolves.toEqual({ text: 'log output' });
+    await expect(service.getJobLog('/some/repo', 10)).resolves.toEqual(jobLog);
     expect(calls).toEqual([
       'reply',
       'resolve',
@@ -203,14 +275,14 @@ describe('ForgeRepoService', () => {
         body: '',
         author: 'a',
         draft: false,
-        sourceBranch: null,
+        sourceBranch: '',
         targetBranch: 'main',
-        mergeable: 'mergeable' as const,
+        mergeable: 'mergeable',
         reviewDecision: null,
         additions: 0,
         deletions: 0,
         changedFiles: 0,
-      }),
+      } satisfies ForgePullRequestDetail),
       listChecks: async () => [{ name: 'ci', status: 'completed', conclusion: 'success' }],
     });
     const serviceNoBranch = makeService(noBranch);

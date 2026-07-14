@@ -2,6 +2,12 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { describe, expect, it } from 'bun:test';
 import { GitSessionController } from '../../../src/sessions/api/git-session.controller';
 import type { SessionDto } from '../../../src/sessions/domain/sessions.types';
+import type {
+  CommitResultDto,
+  GitBranchSyncDto,
+  GitStatusDto,
+  GitUnpushedCommitsDto,
+} from '../../../src/git/git.types';
 
 function makeSession(over: Partial<SessionDto> = {}): SessionDto {
   return {
@@ -63,6 +69,29 @@ function createSpy<T>(impl: (...args: unknown[]) => T) {
 
 describe('GitSessionController', () => {
   const gitDir = '/wt/s1';
+  const gitStatus: GitStatusDto = {
+    branch: 'nuncio/s1-slug',
+    ahead: 0,
+    behind: 0,
+    clean: true,
+    files: [],
+  };
+  const branchSync: GitBranchSyncDto = {
+    branch: 'nuncio/s1-slug',
+    base: 'main',
+    ahead: 0,
+    behind: 0,
+    outgoing: [],
+    incoming: [],
+    conflicts: [],
+    clean: true,
+  };
+  const unpushed: GitUnpushedCommitsDto = {
+    branch: 'nuncio/s1-slug',
+    base: 'main',
+    commits: [],
+  };
+  const commitResult: CommitResultDto = { sha: 'abc123', committed: true };
 
   function controllerFor(session: SessionDto | null) {
     const sessions = {
@@ -72,9 +101,9 @@ describe('GitSessionController', () => {
       },
     };
     const git: GitSpy = {
-      status: createSpy(() => ({ branch: 'nuncio/s1-slug', clean: true })),
-      branchSync: createSpy(() => ({ ahead: 0, behind: 0 })),
-      unpushedCommits: createSpy(() => []),
+      status: createSpy(() => Promise.resolve(gitStatus)),
+      branchSync: createSpy(() => Promise.resolve(branchSync)),
+      unpushedCommits: createSpy(() => Promise.resolve(unpushed)),
       diff: createSpy(() => ({ diff: '', truncated: false })),
       commitDiff: createSpy(() => ({ diff: '', truncated: false })),
       stashList: createSpy(() => []),
@@ -82,7 +111,7 @@ describe('GitSessionController', () => {
       history: createSpy(() => []),
       pull: createSpy(() => ({ ok: true })),
       stageAll: createSpy(async () => undefined),
-      commit: createSpy(() => ({ sha: 'abc123' })),
+      commit: createSpy(() => commitResult),
       push: createSpy(() => ({ ok: true })),
     };
     return {
@@ -91,21 +120,21 @@ describe('GitSessionController', () => {
     };
   }
 
-  it('status resolves the session git dir and delegates to GitService', () => {
+  it('status resolves the session git dir and delegates to GitService', async () => {
     const { controller, git } = controllerFor(makeSession());
-    expect(controller.status('s1')).toEqual({ branch: 'nuncio/s1-slug', clean: true });
+    await expect(controller.status('s1')).resolves.toEqual(gitStatus);
     expect(git.status.calls).toEqual([[gitDir]]);
   });
 
-  it('sync returns branch sync metadata for the session cwd', () => {
+  it('sync returns branch sync metadata for the session cwd', async () => {
     const { controller, git } = controllerFor(makeSession());
-    expect(controller.sync('s1')).toEqual({ ahead: 0, behind: 0 });
+    await expect(controller.sync('s1')).resolves.toEqual(branchSync);
     expect(git.branchSync.calls).toEqual([[gitDir, { fallbackBase: 'main' }]]);
   });
 
-  it('unpushed lists unpushed commits for the session cwd', () => {
+  it('unpushed lists unpushed commits for the session cwd', async () => {
     const { controller, git } = controllerFor(makeSession());
-    expect(controller.unpushed('s1')).toEqual([]);
+    await expect(controller.unpushed('s1')).resolves.toEqual(unpushed);
     expect(git.unpushedCommits.calls).toEqual([[gitDir, { fallbackBase: 'main' }]]);
   });
 
@@ -139,7 +168,7 @@ describe('GitSessionController', () => {
     await expect(controller.commit('s1', { message: '  ' })).rejects.toBeInstanceOf(
       BadRequestException,
     );
-    await expect(controller.commit('s1', { message: 'fix bug' })).resolves.toEqual({ sha: 'abc123' });
+    await expect(controller.commit('s1', { message: 'fix bug' })).resolves.toEqual(commitResult);
     expect(git.stageAll.calls).toEqual([[gitDir]]);
     expect(git.commit.calls).toEqual([[gitDir, 'fix bug']]);
   });
@@ -160,7 +189,7 @@ describe('GitSessionController', () => {
 
   it('push rejects sessions without a pushable branch', async () => {
     const { controller, git } = controllerFor(makeSession({ branch: null }));
-    git.status.mockReturnValue({ branch: 'HEAD', clean: true });
+    git.status.mockReturnValue(Promise.resolve({ ...gitStatus, branch: 'HEAD' }));
     await expect(controller.push('s1', {})).rejects.toBeInstanceOf(BadRequestException);
   });
 
