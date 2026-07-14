@@ -361,6 +361,7 @@ export function GridView(props: GridViewProps) {
                 <SlotComposerCell
                   key={index}
                   {...props}
+                  preferenceScope={`workbench-slot:${index}`}
                   boundSessionIds={boundSessionIds}
                   onBind={(id, machineId) => bindSlot(index, id, machineId)}
                 />
@@ -388,6 +389,7 @@ export function GridView(props: GridViewProps) {
               <SlotComposerCell
                 key={index}
                 {...props}
+                preferenceScope={`workbench-slot:${index}`}
                 boundSessionIds={boundSessionIds}
                 onBind={(id, machineId) => bindSlot(index, id, machineId)}
               />
@@ -400,17 +402,20 @@ export function GridView(props: GridViewProps) {
 }
 
 function SlotComposerCell({
+  preferenceScope,
   providers,
   sessions,
   boundSessionIds,
   onCreate,
   onBind,
 }: GridViewProps & {
+  preferenceScope: string;
   boundSessionIds: Set<string>;
   onBind: (id: string, machineId?: string) => void;
 }) {
   return (
     <GridSlotComposer
+      preferenceScope={preferenceScope}
       providers={providers}
       sessions={sessions}
       boundSessionIds={boundSessionIds}

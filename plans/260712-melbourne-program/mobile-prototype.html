@@ -1,0 +1,644 @@
+<title>Nuncio Mobile — P0 prototype</title>
+<style>
+  :root{
+    --bg:#0B0B0C; --stage:#070708; --panel:#131316; --card:#17171A; --card2:#1D1D21;
+    --line:#26262A; --line2:#333339;
+    --text:#F4F4F2; --mut:#98989F; --dim:#5F5F66;
+    --amber:#E9A13B; --amber-soft:rgba(233,161,59,.13); --amber-line:rgba(233,161,59,.45);
+    --r:14px; --r-lg:20px;
+    --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",sans-serif;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--stage)}
+  body{font-family:var(--sans);color:var(--text);-webkit-font-smoothing:antialiased}
+  button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;text-align:left}
+  button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--amber);outline-offset:2px;border-radius:6px}
+
+  .stage{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:28px 12px}
+  .stage-cap{font:500 11px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+  .phone{position:relative;width:390px;height:844px;background:var(--bg);border-radius:54px;
+    box-shadow:0 0 0 1px #1c1c20,0 0 0 12px #0e0e10,0 0 0 13px #232327,0 40px 90px rgba(0,0,0,.65);overflow:hidden;display:flex;flex-direction:column}
+  .island{position:absolute;top:12px;left:50%;transform:translateX(-50%);width:118px;height:34px;background:#000;border-radius:20px;z-index:60}
+  @media(max-width:520px){
+    .stage{padding:0;gap:0}.stage-cap{display:none}
+    .phone{width:100vw;height:100vh;height:100dvh;border-radius:0;box-shadow:none}
+    .island{display:none}
+  }
+
+  /* ---------- screens ---------- */
+  .screens{flex:1;position:relative;overflow:hidden}
+  .screen{position:absolute;inset:0;display:none;flex-direction:column;overflow-y:auto;padding:60px 16px 30px;scrollbar-width:none}
+  .screen::-webkit-scrollbar{display:none}
+  .screen.active{display:flex}
+  .screen.push{animation:pushin .28s cubic-bezier(.3,.9,.3,1)}
+  @keyframes pushin{from{transform:translateX(40px);opacity:.4}to{transform:none;opacity:1}}
+  @media(prefers-reduced-motion:reduce){.screen.push{animation:none}}
+
+  .eyebrow{font:600 11px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin-bottom:6px}
+  h1.large{font-size:30px;font-weight:700;letter-spacing:-.02em;margin-bottom:18px}
+  .sect{font:600 11px/1 var(--mono);letter-spacing:.13em;text-transform:uppercase;color:var(--mut);margin:22px 2px 10px}
+  .sect:first-of-type{margin-top:2px}
+
+  /* topbar for pushed screens */
+  .topbar{position:sticky;top:-64px;margin:-64px -16px 10px;padding:58px 12px 10px;display:flex;align-items:center;gap:8px;
+    background:linear-gradient(to bottom,var(--bg) 78%,transparent);z-index:20}
+  .backbtn{display:flex;align-items:center;color:var(--mut);padding:8px 12px 8px 4px;flex-shrink:0}
+  .topmeta{min-width:0;flex:1}
+  .topmeta .t{font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .topmeta .s{font:400 11.5px/1.5 var(--mono);color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ctxring{flex-shrink:0;width:34px;height:34px;display:flex;align-items:center;justify-content:center}
+
+  /* ---------- rows & cards ---------- */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:14px}
+  .rowlist{display:flex;flex-direction:column;gap:8px}
+  .srow{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:13px 14px;width:100%}
+  .srow:active{background:var(--card2)}
+  .srow .body{flex:1;min-width:0}
+  .srow .t{font-size:14.5px;font-weight:600;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .srow .m{font:400 11.5px/1.6 var(--mono);color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chev{color:var(--dim);flex-shrink:0}
+
+  .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:var(--dim)}
+  .dot.run{background:var(--text);animation:breathe 2.6s ease-in-out infinite}
+  .dot.wait{background:var(--amber);animation:breathe 1.6s ease-in-out infinite}
+  .dot.done{background:var(--dim)}
+  @keyframes breathe{0%,100%{opacity:1}50%{opacity:.35}}
+  @media(prefers-reduced-motion:reduce){.dot.run,.dot.wait{animation:none}}
+
+  .needs .srow{border-color:var(--amber-line);background:linear-gradient(var(--amber-soft),transparent 70%),var(--card)}
+  .needs .t::after{content:"";display:none}
+  .steps{font-family:var(--mono);color:var(--mut)}
+
+  /* ---------- transcript ---------- */
+  .tx{display:flex;flex-direction:column;gap:12px;padding-bottom:8px}
+  .bub-user{align-self:flex-end;max-width:82%;background:var(--card2);border:1px solid var(--line2);border-radius:18px 18px 4px 18px;padding:10px 14px;font-size:14.5px}
+  .bub-ai{align-self:stretch;font-size:14.5px;line-height:1.55;color:var(--text);padding:2px 2px}
+  .toolline{display:flex;align-items:center;gap:8px;font:400 12px/1.4 var(--mono);color:var(--dim);padding:0 2px}
+  .toolline .tick{color:var(--mut)}
+
+  /* plan block */
+  .plan{border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+  .plan-head{display:flex;align-items:center;gap:8px;width:100%;padding:11px 13px;font:500 12.5px/1 var(--mono);color:var(--mut)}
+  .plan-head .prog{color:var(--text);font-weight:600}
+  .plan-head .active-step{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;text-align:left}
+  .plan-head .caret{transition:transform .2s;color:var(--dim)}
+  .plan.open .caret{transform:rotate(180deg)}
+  .plan-items{display:none;flex-direction:column;padding:2px 13px 12px;gap:9px}
+  .plan.open .plan-items{display:flex}
+  .pi{display:flex;gap:10px;align-items:flex-start;font-size:13.5px}
+  .pi .ic{width:16px;height:16px;flex-shrink:0;margin-top:1px}
+  .pi.done{color:var(--dim);text-decoration:line-through;text-decoration-color:var(--line2)}
+  .pi.now{font-weight:600}
+  .pi.todo{color:var(--mut)}
+
+  /* evidence */
+  .evi{border:1px solid var(--line);border-radius:var(--r);padding:12px}
+  .evi-cap{display:flex;justify-content:space-between;align-items:center;font:500 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:10px}
+  .evi-cap .sha{letter-spacing:0;text-transform:none}
+  .evi-pair{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .shot{position:relative;aspect-ratio:9/16;border-radius:10px;border:1px solid var(--line2);overflow:hidden;background:#0e0e11;padding:0}
+  .shot .tag{position:absolute;left:6px;top:6px;font:600 9px/1 var(--mono);letter-spacing:.12em;color:var(--mut);background:rgba(0,0,0,.55);padding:3px 6px;border-radius:5px;text-transform:uppercase}
+  .mock{position:absolute;inset:0;padding:16px 10px;display:flex;flex-direction:column;gap:6px}
+  .mk{background:#232328;border-radius:4px}
+  .mock .bar{height:8px;width:55%}
+  .mock .blk{height:26px}
+  .mock .half{height:26px;width:70%}
+  .mock.after .mk{background:#2E2E35}
+  .mock.after .fill{background:#3A3A42}
+
+  /* question card */
+  .q{border:1px solid var(--amber-line);border-radius:var(--r-lg);background:linear-gradient(var(--amber-soft),transparent 60%),var(--card);padding:15px 14px}
+  .q-head{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+  .q-head .qi{color:var(--amber);flex-shrink:0}
+  .q-head .t{font-size:14.5px;font-weight:650;flex:1}
+  .q-prompt{font-size:14.5px;margin-bottom:11px}
+  .opts{display:flex;flex-direction:column;gap:8px}
+  .opt{display:flex;gap:11px;align-items:flex-start;border:1px solid var(--line2);border-radius:12px;padding:11px 12px;background:rgba(255,255,255,.02);width:100%}
+  .opt .num{width:22px;height:22px;flex-shrink:0;border:1px solid var(--line2);border-radius:7px;display:flex;align-items:center;justify-content:center;font:600 11px/1 var(--mono);color:var(--mut)}
+  .opt .ob{min-width:0}
+  .opt .ol{font-size:14px;font-weight:600}
+  .opt .od{font-size:12.5px;color:var(--mut);margin-top:2px;line-height:1.4}
+  .opt[aria-pressed="true"]{border-color:var(--text)}
+  .opt[aria-pressed="true"] .num{border-color:var(--text);color:var(--text)}
+  .notebtn{border-style:dashed;color:var(--mut)}
+  .notefield{display:none;margin-top:9px}
+  .notefield.show{display:block}
+  .notefield textarea{width:100%;min-height:58px;background:var(--panel);border:1px solid var(--line2);border-radius:10px;color:var(--text);font:400 13.5px/1.5 var(--sans);padding:9px 11px;resize:none}
+  .q-actions{display:flex;gap:10px;align-items:center;margin-top:13px}
+  .btn-pri{background:var(--text);color:#0B0B0C;font-weight:650;font-size:14px;border-radius:11px;padding:10px 20px;text-align:center}
+  .btn-pri:disabled{opacity:.35}
+  .btn-ghost{color:var(--mut);font-size:14px;padding:10px 8px}
+  /* answered state */
+  .q.answered{border-color:var(--line);background:var(--card);padding:12px 14px}
+  .q.answered .q-body{display:none}
+  .q-done{display:none;align-items:flex-start;gap:9px;font-size:13.5px;color:var(--mut)}
+  .q.answered .q-done{display:flex}
+  .q-done b{color:var(--text);font-weight:600}
+
+  .typing{display:none;gap:5px;padding:4px 2px}
+  .typing.show{display:flex}
+  .typing i{width:6px;height:6px;border-radius:50%;background:var(--dim);animation:breathe 1.2s ease-in-out infinite}
+  .typing i:nth-child(2){animation-delay:.2s}.typing i:nth-child(3){animation-delay:.4s}
+
+  /* composer */
+  .composer{position:absolute;left:0;right:0;bottom:0;padding:10px 14px 26px;z-index:30;display:none;
+    background:linear-gradient(to top,var(--bg) 62%,transparent)}
+  #scr-session.active ~ .composer{display:block}
+  .comp-in{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--line2);border-radius:22px;padding:6px 6px 6px 16px}
+  .comp-in input{flex:1;background:none;border:0;color:var(--text);font-size:14.5px}
+  .comp-in input::placeholder{color:var(--dim)}
+  .send{width:32px;height:32px;border-radius:50%;background:var(--text);color:#0B0B0C;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+
+  /* ---------- inbox ---------- */
+  .att{border:1px solid var(--amber-line);border-radius:var(--r);background:linear-gradient(var(--amber-soft),transparent 65%),var(--card);padding:13px 14px;margin-bottom:8px}
+  .att.quiet{border-color:var(--line);background:var(--card)}
+  .att .k{font:600 10px/1 var(--mono);letter-spacing:.13em;text-transform:uppercase;color:var(--amber);margin-bottom:6px}
+  .att.quiet .k{color:var(--dim)}
+  .att .t{font-size:14px;font-weight:600;margin-bottom:3px}
+  .att .m{font-size:12.5px;color:var(--mut);line-height:1.45}
+  .att .acts{display:flex;gap:8px;margin-top:11px}
+  .btn-sm{border:1px solid var(--line2);border-radius:9px;padding:7px 14px;font-size:13px;font-weight:600}
+  .btn-sm.pri{background:var(--text);color:#0B0B0C;border-color:var(--text)}
+
+  /* ---------- new task ---------- */
+  .field{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:13px 14px;width:100%;margin-bottom:8px}
+  .field .l{font-size:14px;color:var(--mut)}
+  .field .v{font-size:14px;font-weight:600;display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:13px}
+  .engines{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}
+  .eng{border:1px solid var(--line);border-radius:var(--r);padding:12px;background:var(--card)}
+  .eng .n{font-size:13.5px;font-weight:650;display:flex;gap:7px;align-items:center}
+  .eng .d{font:400 11px/1.5 var(--mono);color:var(--dim);margin-top:3px}
+  .eng[aria-pressed="true"]{border-color:var(--text)}
+  .seg{display:flex;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:3px;margin-bottom:8px}
+  .seg button{flex:1;text-align:center;font-size:13.5px;font-weight:600;color:var(--mut);border-radius:9px;padding:8px}
+  .seg button[aria-pressed="true"]{background:var(--card2);color:var(--text);border:1px solid var(--line2)}
+  .prompt{width:100%;min-height:110px;background:var(--card);border:1px solid var(--line);border-radius:var(--r);color:var(--text);font:400 15px/1.55 var(--sans);padding:13px 14px;resize:none;margin-bottom:12px}
+  .prompt::placeholder{color:var(--dim)}
+  .pillrow{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px}
+  .pill{border:1px solid var(--line);border-radius:999px;padding:7px 13px;font:500 12.5px/1 var(--mono);color:var(--mut);background:var(--card)}
+  .pill.on{border-color:var(--line2);color:var(--text)}
+  .start{width:100%;text-align:center;font-size:15px}
+
+  /* ---------- settings ---------- */
+  .quota{display:flex;flex-direction:column;gap:10px}
+  .qrow .qt{display:flex;justify-content:space-between;font-size:13.5px;margin-bottom:6px}
+  .qrow .qt b{font-weight:600}
+  .qrow .qt span{font-family:var(--mono);font-size:12px;color:var(--mut)}
+  .meter{height:5px;border-radius:3px;background:var(--line);overflow:hidden}
+  .meter i{display:block;height:100%;background:var(--mut);border-radius:3px}
+  .meter i.hot{background:var(--amber)}
+  .kv{display:flex;justify-content:space-between;align-items:center;padding:13px 2px;border-bottom:1px solid var(--line);font-size:14.5px}
+  .kv:last-child{border-bottom:0}
+  .kv .r{color:var(--mut);font-size:13.5px;display:flex;gap:8px;align-items:center;font-family:var(--mono)}
+
+  /* ---------- root header + drawer ---------- */
+  .rootbar{display:flex;align-items:center;justify-content:space-between;margin:-6px -2px 14px}
+  .iconbtn{width:38px;height:38px;border-radius:12px;border:1px solid var(--line);background:var(--card);display:flex;align-items:center;justify-content:center;color:var(--mut);position:relative;flex-shrink:0}
+  .iconbtn.pri{background:var(--text);color:#0B0B0C;border-color:var(--text)}
+  .iconbtn .alert{position:absolute;top:-3px;right:-3px;min-width:15px;height:15px;border-radius:8px;background:var(--amber);color:#0B0B0C;font:700 9.5px/15px var(--mono);text-align:center;padding:0 4px}
+  .drawer{position:absolute;top:0;bottom:0;left:0;width:280px;background:var(--panel);border-right:1px solid var(--line2);z-index:85;
+    transform:translateX(-102%);transition:transform .26s cubic-bezier(.3,.9,.3,1);display:flex;flex-direction:column;padding:64px 14px 26px}
+  .drawer.show{transform:none}
+  .d-title{font-size:19px;font-weight:700;letter-spacing:-.02em;padding:0 10px 16px}
+  .d-item{display:flex;align-items:center;gap:12px;border-radius:12px;padding:12px;font-size:15px;font-weight:600;color:var(--mut);width:100%;position:relative}
+  .d-item.on{background:var(--card2);color:var(--text)}
+  .d-item .badge{margin-left:auto;min-width:18px;height:18px;border-radius:9px;background:var(--amber);color:#0B0B0C;font:700 11px/18px var(--mono);text-align:center;padding:0 5px}
+  .d-sep{height:1px;background:var(--line);margin:10px 12px}
+  .d-foot{margin-top:auto;padding:0 12px;color:var(--dim);font:400 11px/1.8 var(--mono)}
+
+  /* sheet + lightbox + toast */
+  .scrim{position:absolute;inset:0;background:rgba(0,0,0,.6);opacity:0;pointer-events:none;transition:opacity .2s;z-index:70}
+  .scrim.show{opacity:1;pointer-events:auto}
+  .sheet{position:absolute;left:0;right:0;bottom:0;background:var(--panel);border-radius:22px 22px 0 0;border-top:1px solid var(--line2);padding:14px 18px 30px;z-index:80;transform:translateY(105%);transition:transform .26s cubic-bezier(.3,.9,.3,1)}
+  .sheet.show{transform:none}
+  .grab{width:38px;height:4px;border-radius:2px;background:var(--line2);margin:0 auto 14px}
+  .lightbox{position:absolute;inset:0;background:rgba(5,5,6,.96);z-index:90;display:none;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:30px}
+  .lightbox.show{display:flex}
+  .lightbox .shot{width:64%;max-height:60%}
+  .lb-seg{display:flex;background:var(--card);border:1px solid var(--line2);border-radius:11px;padding:3px}
+  .lb-seg button{font:600 12px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mut);padding:8px 18px;border-radius:8px}
+  .lb-seg button[aria-pressed="true"]{background:var(--card2);color:var(--text)}
+  .toast{position:absolute;left:50%;bottom:96px;transform:translate(-50%,14px);background:var(--card2);border:1px solid var(--line2);color:var(--text);font-size:13px;font-weight:600;border-radius:12px;padding:10px 16px;opacity:0;transition:.25s;z-index:100;pointer-events:none;white-space:nowrap}
+  .toast.show{opacity:1;transform:translate(-50%,0)}
+</style>
+
+<div class="stage">
+  <div class="stage-cap">Nuncio Mobile · P0 interactive prototype · dark / mono / amber-as-attention</div>
+  <div class="phone">
+    <div class="island"></div>
+
+    <div class="screens">
+      <!-- ============ HOME ============ -->
+      <section class="screen active" id="scr-home">
+        <div class="rootbar">
+          <button class="iconbtn" onclick="menu(true)" aria-label="Menu">
+            <svg width="17" height="13" viewBox="0 0 17 13" fill="none"><path d="M1 1.5h15M1 6.5h15M1 11.5h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+            <span class="alert" id="menu-alert">2</span>
+          </button>
+          <button class="iconbtn pri" onclick="go('new')" aria-label="New task">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <div class="eyebrow">Sat · Jul 12 · MacBook connected</div>
+        <h1 class="large">Sessions</h1>
+
+        <div class="sect">Needs you</div>
+        <div class="rowlist needs">
+          <button class="srow" onclick="openSession()">
+            <span class="dot wait"></span>
+            <span class="body">
+              <span class="t">Design decision — 1 question</span>
+              <span class="m">Build the settings page · asked 2m ago</span>
+            </span>
+            <svg class="chev" width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M1 1l6 6-6 6" stroke="currentColor" stroke-width="1.6"/></svg>
+          </button>
+          <button class="srow" onclick="go('inbox')">
+            <span class="dot wait"></span>
+            <span class="body">
+              <span class="t">Approve push — feat/usage-analytics</span>
+              <span class="m">nuncio · waiting 11m</span>
+            </span>
+            <svg class="chev" width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M1 1l6 6-6 6" stroke="currentColor" stroke-width="1.6"/></svg>
+          </button>
+        </div>
+
+        <div class="sect">Running</div>
+        <div class="rowlist">
+          <button class="srow" onclick="openSession()">
+            <span class="dot run"></span>
+            <span class="body">
+              <span class="t">Build the settings page</span>
+              <span class="m">nuncio · Nuncio Engine · <span class="steps" id="home-steps">1/4 steps</span></span>
+            </span>
+            <svg class="chev" width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M1 1l6 6-6 6" stroke="currentColor" stroke-width="1.6"/></svg>
+          </button>
+          <button class="srow" onclick="toast('Prototype: one live session wired')">
+            <span class="dot run"></span>
+            <span class="body">
+              <span class="t">Harden updater 404 mapping</span>
+              <span class="m">nuncio · Codex · 3/5 steps</span>
+            </span>
+            <svg class="chev" width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M1 1l6 6-6 6" stroke="currentColor" stroke-width="1.6"/></svg>
+          </button>
+        </div>
+
+        <div class="sect">Earlier today</div>
+        <div class="rowlist">
+          <button class="srow" onclick="toast('Prototype: one live session wired')">
+            <span class="dot done"></span>
+            <span class="body">
+              <span class="t">Numbered AskUserQuestion + notes</span>
+              <span class="m">merged · PR #73</span>
+            </span>
+          </button>
+          <button class="srow" onclick="toast('Prototype: one live session wired')">
+            <span class="dot done"></span>
+            <span class="body">
+              <span class="t">Usage analytics + quota chips</span>
+              <span class="m">merged · PR #72</span>
+            </span>
+          </button>
+        </div>
+      </section>
+
+      <!-- ============ SESSION DETAIL ============ -->
+      <section class="screen" id="scr-session">
+        <div class="topbar">
+          <button class="backbtn" onclick="go('home')" aria-label="Back">
+            <svg width="10" height="17" viewBox="0 0 9 16" fill="none"><path d="M8 1L2 8l6 7" stroke="currentColor" stroke-width="1.8"/></svg>
+          </button>
+          <div class="topmeta">
+            <div class="t">Build the settings page</div>
+            <div class="s">nuncio · Nuncio Engine · fable-5</div>
+          </div>
+          <button class="ctxring" onclick="sheet(true)" aria-label="Context 24% — open usage">
+            <svg width="30" height="30" viewBox="0 0 30 30">
+              <circle cx="15" cy="15" r="11.5" fill="none" stroke="var(--line2)" stroke-width="2.5"/>
+              <circle cx="15" cy="15" r="11.5" fill="none" stroke="var(--mut)" stroke-width="2.5"
+                stroke-dasharray="17.3 55" stroke-linecap="round" transform="rotate(-90 15 15)"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="tx">
+          <div class="bub-user">Build the settings page</div>
+
+          <div class="plan" id="plan">
+            <button class="plan-head" onclick="this.parentElement.classList.toggle('open')" aria-label="Toggle plan">
+              <span class="prog" id="plan-prog">Plan · 1/4</span>
+              <span class="active-step" id="plan-active">· Wire preferences API</span>
+              <svg class="caret" width="10" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5"/></svg>
+            </button>
+            <div class="plan-items">
+              <div class="pi done" data-step><svg class="ic" viewBox="0 0 16 16" fill="none"><path d="M3 8.5L6.5 12 13 4.5" stroke="currentColor" stroke-width="1.8"/></svg><span>Scaffold the settings route</span></div>
+              <div class="pi now" data-step><svg class="ic" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="8" r="2.4" fill="currentColor"/></svg><span>Wire preferences API</span></div>
+              <div class="pi todo" data-step><svg class="ic" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.3"/></svg><span>Add appearance section</span></div>
+              <div class="pi todo" data-step><svg class="ic" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.3"/></svg><span>Run vitest + typecheck</span></div>
+            </div>
+          </div>
+
+          <div class="toolline"><span class="tick">✓</span> read settings-view.tsx · edit routes.tsx · bash bun test</div>
+
+          <div class="bub-ai">Scaffolded the route. Now wiring the preferences API — one question about scope before I continue.</div>
+
+          <div class="evi">
+            <div class="evi-cap"><span>Evidence · before / after</span><span class="sha">a38bef7</span></div>
+            <div class="evi-pair">
+              <button class="shot" onclick="lightbox('before')" aria-label="Open before screenshot">
+                <span class="mock"><i class="mk bar"></i><i class="mk blk"></i><i class="mk half"></i></span>
+                <span class="tag">Before</span>
+              </button>
+              <button class="shot" onclick="lightbox('after')" aria-label="Open after screenshot">
+                <span class="mock after"><i class="mk bar"></i><i class="mk blk fill"></i><i class="mk blk"></i><i class="mk half fill"></i><i class="mk blk"></i></span>
+                <span class="tag">After</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="q" id="qcard">
+            <div class="q-done">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style="flex-shrink:0;margin-top:2px"><path d="M3 8.5L6.5 12 13 4.5" stroke="currentColor" stroke-width="1.8"/></svg>
+              <span>Answered · <b>Option 1 — Server KV store</b> <span id="q-note-echo"></span></span>
+            </div>
+            <div class="q-body">
+              <div class="q-head">
+                <svg class="qi" width="17" height="17" viewBox="0 0 17 17" fill="none"><circle cx="8.5" cy="8.5" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M6.6 6.4a2 2 0 113.4 1.4c-.7.6-1.2 1-1.2 1.9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8.6" cy="12.1" r=".9" fill="currentColor"/></svg>
+                <span class="t">Design decision</span>
+                <span style="font:500 11px/1 var(--mono);color:var(--dim)">1 of 1</span>
+              </div>
+              <div class="q-prompt">Where should the settings persist?</div>
+              <div class="opts" id="opts">
+                <button class="opt" aria-pressed="false" onclick="pick(this)">
+                  <span class="num">1</span>
+                  <span class="ob"><span class="ol">Server KV store</span><span class="od" style="display:block">Follows the workbench layout pattern</span></span>
+                </button>
+                <button class="opt" aria-pressed="false" onclick="pick(this)">
+                  <span class="num">2</span>
+                  <span class="ob"><span class="ol">localStorage only</span><span class="od" style="display:block">No server round-trip, device-local</span></span>
+                </button>
+                <button class="opt" aria-pressed="false" onclick="pick(this)">
+                  <span class="num">3</span>
+                  <span class="ob"><span class="ol">Both with sync</span><span class="od" style="display:block">Server wins on conflict</span></span>
+                </button>
+                <button class="opt notebtn" onclick="noteToggle()">
+                  <span class="num">✎</span>
+                  <span class="ob"><span class="ol" id="notelabel">Add a note…</span><span class="od" style="display:block">Extra detail sent with your choice</span></span>
+                </button>
+              </div>
+              <div class="notefield" id="notefield"><textarea id="noteta" placeholder="Note for your choice…"></textarea></div>
+              <div class="q-actions">
+                <button class="btn-pri" id="qsubmit" disabled onclick="answer()">Submit</button>
+                <button class="btn-ghost" onclick="skip()">Skip</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="typing" id="typing"><i></i><i></i><i></i></div>
+          <div class="bub-ai" id="followup" style="display:none">Server KV store it is — reusing the workbench preferences store, no new table. Wiring <span style="font-family:var(--mono);font-size:13px">GET/PUT /api/preferences</span> now, then the appearance section.</div>
+        </div>
+      </section>
+
+      <!-- ============ INBOX ============ -->
+      <section class="screen" id="scr-inbox">
+        <div class="rootbar">
+          <button class="iconbtn" onclick="menu(true)" aria-label="Menu">
+            <svg width="17" height="13" viewBox="0 0 17 13" fill="none"><path d="M1 1.5h15M1 6.5h15M1 11.5h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <div class="eyebrow">2 open · quiet since 14:02</div>
+        <h1 class="large">Inbox</h1>
+        <button class="att" style="width:100%" onclick="openSession()">
+          <div class="k">Question · Nuncio Engine</div>
+          <div class="t">Where should the settings persist?</div>
+          <div class="m">Build the settings page · 3 numbered options · answer to unblock</div>
+        </button>
+        <div class="att" id="approve-card">
+          <div class="k">Approval · git push</div>
+          <div class="t">Push feat/usage-analytics to origin?</div>
+          <div class="m">4 commits · +1,982 −262 · no force</div>
+          <div class="acts">
+            <button class="btn-sm pri" onclick="approve(this)">Approve</button>
+            <button class="btn-sm" onclick="toast('Denied — agent notified')">Deny</button>
+          </div>
+        </div>
+        <div class="att quiet">
+          <div class="k">Verify · resolved 41m ago</div>
+          <div class="t">web vitest — 921 passed</div>
+          <div class="m">auto-retried once after a flaky socket test</div>
+        </div>
+      </section>
+
+      <!-- ============ NEW TASK ============ -->
+      <section class="screen" id="scr-new">
+        <div class="topbar">
+          <button class="backbtn" onclick="go('home')" aria-label="Back">
+            <svg width="10" height="17" viewBox="0 0 9 16" fill="none"><path d="M8 1L2 8l6 7" stroke="currentColor" stroke-width="1.8"/></svg>
+          </button>
+        </div>
+        <div class="eyebrow">New session</div>
+        <h1 class="large">What should Nuncio do?</h1>
+        <textarea class="prompt" id="newprompt" style="min-height:150px" autofocus
+          placeholder="Build features, fix bugs, explain the codebase…"
+          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();startSession()}"></textarea>
+        <div class="pillrow">
+          <button class="pill">nuncio</button>
+          <button class="pill">dev</button>
+          <button class="pill on">◆ Nuncio Engine</button>
+          <button class="pill">Solo</button>
+        </div>
+        <button class="btn-pri start" onclick="startSession()">Start session</button>
+      </section>
+
+      <!-- ============ SETTINGS ============ -->
+      <section class="screen" id="scr-settings">
+        <div class="rootbar">
+          <button class="iconbtn" onclick="menu(true)" aria-label="Menu">
+            <svg width="17" height="13" viewBox="0 0 17 13" fill="none"><path d="M1 1.5h15M1 6.5h15M1 11.5h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <div class="eyebrow">MacBook Pro · paired</div>
+        <h1 class="large">Settings</h1>
+
+        <div class="sect">Subscriptions</div>
+        <div class="card quota">
+          <div class="qrow"><div class="qt"><b>Claude Max ×20</b><span>62% used · resets 3h</span></div><div class="meter"><i style="width:62%"></i></div></div>
+          <div class="qrow"><div class="qt"><b>Codex ×20</b><span>41% used · resets 5h</span></div><div class="meter"><i style="width:41%"></i></div></div>
+          <div class="qrow"><div class="qt"><b>Cursor Ultra</b><span>78% used · resets 2d</span></div><div class="meter"><i class="hot" style="width:78%"></i></div></div>
+        </div>
+
+        <div class="sect">Engines</div>
+        <div class="card" style="padding:2px 14px">
+          <div class="kv"><span>Nuncio Engine</span><span class="r"><span class="dot run" style="width:7px;height:7px"></span> ready</span></div>
+          <div class="kv"><span>Claude</span><span class="r"><span class="dot run" style="width:7px;height:7px"></span> ready</span></div>
+          <div class="kv"><span>Codex</span><span class="r"><span class="dot run" style="width:7px;height:7px"></span> ready</span></div>
+          <div class="kv"><span>Cursor</span><span class="r"><span class="dot done" style="width:7px;height:7px"></span> auth needed</span></div>
+        </div>
+
+        <div class="sect">Device</div>
+        <div class="card" style="padding:2px 14px">
+          <div class="kv"><span>Connection</span><span class="r">Tailscale · 12ms</span></div>
+          <div class="kv"><span>Pair another device</span><span class="r">QR ›</span></div>
+          <div class="kv"><span>Push notifications</span><span class="r">questions + approvals</span></div>
+        </div>
+        <div style="text-align:center;color:var(--dim);font:400 11px/1 var(--mono);margin-top:22px">nuncio mobile 0.1 · prototype P0</div>
+      </section>
+    </div>
+
+    <!-- composer (session only) -->
+    <div class="composer" id="composer">
+      <div class="comp-in">
+        <input id="steer" placeholder="Reply or steer…" onkeydown="if(event.key==='Enter')steerSend()">
+        <button class="send" onclick="steerSend()" aria-label="Send"><svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M6.5 11V2M2.5 6L6.5 2l4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
+      </div>
+    </div>
+
+    <!-- drawer -->
+    <div class="drawer" id="drawer">
+      <div class="d-title">Nuncio</div>
+      <button class="d-item on" data-nav="home" onclick="nav('home')">
+        <svg width="19" height="19" viewBox="0 0 21 21" fill="none"><path d="M3 9.5L10.5 3 18 9.5V18h-5v-5h-5v5H3V9.5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>Sessions
+      </button>
+      <button class="d-item" data-nav="inbox" onclick="nav('inbox')">
+        <svg width="19" height="19" viewBox="0 0 21 21" fill="none"><path d="M10.5 3a5 5 0 015 5c0 4 1.5 5.5 1.5 5.5H4S5.5 12 5.5 8a5 5 0 015-5zM9 17a1.8 1.8 0 003 0" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Inbox
+        <span class="badge" id="inbox-badge">2</span>
+      </button>
+      <button class="d-item" data-nav="new" onclick="nav('new')">
+        <svg width="19" height="19" viewBox="0 0 16 16" fill="none"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>New session
+      </button>
+      <div class="d-sep"></div>
+      <button class="d-item" data-nav="settings" onclick="nav('settings')">
+        <svg width="19" height="19" viewBox="0 0 21 21" fill="none"><circle cx="10.5" cy="10.5" r="2.6" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 2.5v2.4m0 11.2v2.4m8-8h-2.4M4.9 10.5H2.5m13.7-5.7l-1.7 1.7M6.5 14.5l-1.7 1.7m11.4 0l-1.7-1.7M6.5 6.5L4.8 4.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>Settings
+      </button>
+      <div class="d-foot">MacBook Pro · Tailscale 12ms<br>nuncio mobile 0.1 · P0</div>
+    </div>
+
+    <!-- quota sheet -->
+    <div class="scrim" id="scrim" onclick="scrimTap()"></div>
+    <div class="sheet" id="qsheet">
+      <div class="grab"></div>
+      <div class="sect" style="margin-top:0">Session usage</div>
+      <div class="card quota" style="border:0;background:none;padding:4px 0">
+        <div class="qrow"><div class="qt"><b>Context</b><span>24% of 200k</span></div><div class="meter"><i style="width:24%"></i></div></div>
+        <div class="qrow"><div class="qt"><b>Claude Max ×20</b><span>62% used · resets 3h</span></div><div class="meter"><i style="width:62%"></i></div></div>
+        <div class="qrow"><div class="qt"><b>Today on this repo</b><span>1.9M tokens · 41 turns</span></div><div class="meter"><i style="width:33%"></i></div></div>
+      </div>
+    </div>
+
+    <!-- evidence lightbox -->
+    <div class="lightbox" id="lb" onclick="if(event.target===this)lb(false)">
+      <div class="shot" style="cursor:default">
+        <span class="mock" id="lb-before"><i class="mk bar"></i><i class="mk blk"></i><i class="mk half"></i></span>
+        <span class="mock after" id="lb-after" style="display:none"><i class="mk bar"></i><i class="mk blk fill"></i><i class="mk blk"></i><i class="mk half fill"></i><i class="mk blk"></i></span>
+      </div>
+      <div class="lb-seg">
+        <button id="lb-b" aria-pressed="true" onclick="lbside('before')">Before</button>
+        <button id="lb-a" aria-pressed="false" onclick="lbside('after')">After</button>
+      </div>
+      <div style="font:400 11px/1 var(--mono);color:var(--dim)">settings route · a38bef7 · 390×844</div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+  </div>
+</div>
+
+<script>
+  const $=s=>document.querySelector(s);
+  let stack='home';
+  function go(name){
+    document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active','push'));
+    const scr=$('#scr-'+name);scr.classList.add('active');
+    if(name==='new')scr.classList.add('push');
+    document.querySelectorAll('.d-item[data-nav]').forEach(t=>t.classList.toggle('on',t.dataset.nav===name));
+    $('#composer').style.display='none';
+    stack=name;
+  }
+  function nav(name){menu(false);setTimeout(()=>go(name),120);}
+  function menu(open){
+    $('#drawer').classList.toggle('show',open);
+    $('#scrim').classList.toggle('show',open);
+    scrimMode=open?'menu':null;
+  }
+  function openSession(){
+    document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active','push'));
+    const s=$('#scr-session');s.classList.add('active','push');
+    $('#composer').style.display='block';
+  }
+  function toast(msg){
+    const t=$('#toast');t.textContent=msg;t.classList.add('show');
+    clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),2200);
+  }
+  /* question card */
+  let chosen=null;
+  function pick(btn){
+    document.querySelectorAll('#opts .opt:not(.notebtn)').forEach(o=>o.setAttribute('aria-pressed','false'));
+    btn.setAttribute('aria-pressed','true');chosen=btn;
+    $('#qsubmit').disabled=false;
+  }
+  function noteToggle(){
+    $('#notefield').classList.toggle('show');
+    if($('#notefield').classList.contains('show'))$('#noteta').focus();
+  }
+  function answer(){
+    if(!chosen)return;
+    const note=$('#noteta').value.trim();
+    if(note)$('#q-note-echo').textContent='· note: “'+note+'”';
+    $('#qcard').classList.add('answered');
+    toast('Answer sent to the agent');
+    setTimeout(()=>{$('#typing').classList.add('show');},450);
+    setTimeout(()=>{
+      $('#typing').classList.remove('show');
+      $('#followup').style.display='block';
+      /* plan progresses */
+      const steps=document.querySelectorAll('[data-step]');
+      steps[1].className='pi done';steps[1].querySelector('.ic').outerHTML='<svg class="ic" viewBox="0 0 16 16" fill="none"><path d="M3 8.5L6.5 12 13 4.5" stroke="currentColor" stroke-width="1.8"/></svg>';
+      steps[2].className='pi now';
+      $('#plan-prog').textContent='Plan · 2/4';
+      $('#plan-active').textContent='· Add appearance section';
+      $('#home-steps').textContent='2/4 steps';
+      /* inbox count drops */
+      $('#inbox-badge').textContent='1';$('#menu-alert').textContent='1';
+      $('#followup').scrollIntoView({behavior:'smooth',block:'end'});
+    },1700);
+  }
+  function skip(){
+    $('#qcard').classList.add('answered');
+    $('#qcard').querySelector('.q-done span').innerHTML='Skipped — the agent will decide';
+    $('#inbox-badge').textContent='1';$('#menu-alert').textContent='1';
+    toast('Skipped');
+  }
+  function steerSend(){
+    const i=$('#steer');if(!i.value.trim())return;
+    const b=document.createElement('div');b.className='bub-user';b.textContent=i.value.trim();
+    document.querySelector('.tx').appendChild(b);i.value='';
+    b.scrollIntoView({behavior:'smooth',block:'end'});
+    toast('Steer queued');
+  }
+  /* sheets & lightbox */
+  let scrimMode=null;
+  function sheet(open){$('#scrim').classList.toggle('show',open);$('#qsheet').classList.toggle('show',open);scrimMode=open?'sheet':null;}
+  function scrimTap(){if(scrimMode==='menu')menu(false);else sheet(false);}
+  function lightbox(side){$('#lb').classList.add('show');lbside(side);}
+  function lb(open){$('#lb').classList.toggle('show',open);}
+  function lbside(side){
+    $('#lb-before').style.display=side==='before'?'flex':'none';
+    $('#lb-after').style.display=side==='after'?'flex':'none';
+    $('#lb-b').setAttribute('aria-pressed',side==='before');
+    $('#lb-a').setAttribute('aria-pressed',side==='after');
+  }
+  /* inbox + new task */
+  function approve(btn){
+    const card=$('#approve-card');card.classList.add('quiet');
+    card.querySelector('.k').textContent='Approval · resolved';
+    card.querySelector('.acts').remove();toast('Approved — pushing');
+    $('#inbox-badge').textContent='1';$('#menu-alert').textContent='1';
+  }
+  function startSession(){
+    const p=document.querySelector('#newprompt');
+    if(!p.value.trim()){toast('Type what Nuncio should do first');p.focus();return}
+    toast('Session started on MacBook');p.value='';
+    openSession();
+  }
+  function engpick(btn){document.querySelectorAll('#engines .eng').forEach(e=>e.setAttribute('aria-pressed','false'));btn.setAttribute('aria-pressed','true');}
+  function segpick(btn){btn.parentElement.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed','false'));btn.setAttribute('aria-pressed','true');}
+</script>

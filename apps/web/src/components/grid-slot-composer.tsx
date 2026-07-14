@@ -15,7 +15,11 @@ import {
   type ModelProvider,
 } from '../lib/model-providers';
 import { defaultOptionsForModel } from '../lib/model-picker-catalog';
-import { loadModelPreference, resolveModelSelection } from '../lib/model-preference';
+import {
+  loadScopedModelPreference,
+  resolveModelSelection,
+  saveScopedModelPreference,
+} from '../lib/model-preference';
 import {
   isNuncioSessionBranch,
   loadProjectPreference,
@@ -44,6 +48,8 @@ import { cn } from '@/lib/utils';
 type Mode = 'new' | 'attach';
 
 interface GridSlotComposerProps {
+  /** Stable owner for this slot's draft model selection. */
+  preferenceScope?: string;
   providers: ModelProvider[];
   /** Non-archived sessions available to attach. */
   sessions: Session[];
@@ -64,6 +70,7 @@ interface GridSlotComposerProps {
 }
 
 export function GridSlotComposer({
+  preferenceScope = 'workbench:new-agent',
   providers,
   sessions,
   boundSessionIds,
@@ -167,7 +174,10 @@ export function GridSlotComposer({
     if (!catalogLoaded) return;
     const lookup = modelById(catalog);
     if (model && provider && lookup[model]) return;
-    const resolved = resolveModelSelection(activeProviders, loadModelPreference());
+    const resolved = resolveModelSelection(
+      activeProviders,
+      loadScopedModelPreference(preferenceScope),
+    );
     if (resolved) {
       if (!modelSupportsImages(catalog, resolved.providerId, resolved.modelId)) {
         imageAttachments.clearWithTokens();
@@ -186,7 +196,7 @@ export function GridSlotComposer({
       setProvider(picked.providerId);
       setModelOptions(defaultOptionsForModel(lookup[picked.modelId]));
     }
-  }, [catalogLoaded, activeProviders, catalog, model, provider]);
+  }, [catalogLoaded, activeProviders, catalog, model, provider, preferenceScope]);
 
   const attachable = useMemo(() => {
     const source = machine ? (remoteSessions ?? []) : sessions;
@@ -375,10 +385,18 @@ export function GridSlotComposer({
               value={model}
               modelOptions={modelOptions}
               onChange={(modelId, providerId, options) => {
-                if (!modelSupportsImages(catalog, providerId, modelId)) imageAttachments.clearWithTokens();
+                if (!modelSupportsImages(catalog, providerId, modelId)) {
+                  imageAttachments.clearWithTokens();
+                }
+                const nextOptions = options ?? {};
                 setModel(modelId);
                 setProvider(providerId);
-                setModelOptions(options ?? {});
+                setModelOptions(nextOptions);
+                saveScopedModelPreference(preferenceScope, {
+                  modelId,
+                  providerId,
+                  modelOptions: Object.keys(nextOptions).length > 0 ? nextOptions : undefined,
+                });
               }}
               providers={activeProviders}
               compact

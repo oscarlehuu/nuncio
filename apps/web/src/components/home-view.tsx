@@ -16,9 +16,9 @@ import { cn } from '@/lib/utils';
 import { defaultOptionsForModel } from '../lib/model-picker-catalog';
 import type { ModelOptionsMap } from '../lib/model-options';
 import {
-  loadModelPreference,
+  loadScopedModelPreference,
   resolveModelSelection,
-  saveModelPreference,
+  saveScopedModelPreference,
 } from '../lib/model-preference';
 import { projectDisplayName } from '../lib/projects';
 import { type MessageAttachment } from '../lib/api';
@@ -46,6 +46,8 @@ import { CrewProfilePicker } from './crew/crew-profile-picker';
 import { ExecutionModePicker } from './crew/execution-mode-picker';
 import { ResolvedCrewPreview } from './crew/resolved-crew-preview';
 import { useCrewComposer } from './crew/use-crew-composer';
+
+const HOME_MODEL_PREFERENCE_SCOPE = 'home:new-agent';
 
 /** Quiet starter prompts for the empty landing — click prefills the composer. */
 const STARTERS = [
@@ -128,7 +130,10 @@ export function HomeView({
     if (!catalogLoaded || !providers) return;
     const lookup = modelById(catalog);
     if (model && provider && lookup[model]) return;
-    const resolved = resolveModelSelection(providers, loadModelPreference());
+    const resolved = resolveModelSelection(
+      providers,
+      loadScopedModelPreference(HOME_MODEL_PREFERENCE_SCOPE),
+    );
     if (resolved) {
       if (!modelSupportsImages(catalog, resolved.providerId, resolved.modelId)) {
         imageAttachments.clearWithTokens();
@@ -196,7 +201,7 @@ export function HomeView({
     setProvider(providerId);
     const nextOptions = options ?? {};
     setModelOptions(nextOptions);
-    saveModelPreference({
+    saveScopedModelPreference(HOME_MODEL_PREFERENCE_SCOPE, {
       modelId,
       providerId,
       modelOptions: Object.keys(nextOptions).length > 0 ? nextOptions : undefined,

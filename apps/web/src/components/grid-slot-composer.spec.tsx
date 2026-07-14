@@ -1,8 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Session } from '../lib/api';
-import { saveModelPreference } from '../lib/model-preference';
+import {
+  loadModelPreference,
+  loadScopedModelPreference,
+  saveModelPreference,
+} from '../lib/model-preference';
 import type { ModelProvider } from '../lib/model-providers';
 
 // The pickers fetch projects/models over the network — stub them to tiny controls
@@ -17,11 +21,14 @@ vi.mock('./project-picker', () => ({
 
 vi.mock('./model-picker', () => ({
   ModelPicker: ({
+    value,
     onChange,
   }: {
+    value: string;
     onChange: (modelId: string, providerId: string) => void;
   }) => (
     <div>
+      <span>selected:{value}</span>
       <button type="button" onClick={() => onChange('google:gemini', 'pi')}>pick-gemini</button>
       <button type="button" onClick={() => onChange('xai:grok', 'pi')}>pick-grok</button>
     </div>
@@ -147,6 +154,49 @@ describe('GridSlotComposer', () => {
     localStorage.clear();
     vi.clearAllMocks();
     hubMocks.fetchHubMachines.mockResolvedValue({ hubMode: false, machines: [] });
+  });
+
+  it('keeps model drafts isolated per Workbench slot across remounts', async () => {
+    saveModelPreference({ modelId: 'google:gemini', providerId: 'pi' });
+    const props = {
+      providers: MIXED_IMAGE_PROVIDERS,
+      sessions: [],
+      boundSessionIds: new Set<string>(),
+      onCreate: vi.fn().mockResolvedValue(fakeSession()),
+      onBind: vi.fn(),
+    };
+    const slots = (
+      <>
+        <div data-testid="slot-a">
+          <GridSlotComposer {...props} preferenceScope="workbench-slot:0" />
+        </div>
+        <div data-testid="slot-b">
+          <GridSlotComposer {...props} preferenceScope="workbench-slot:1" />
+        </div>
+      </>
+    );
+    const view = render(slots);
+    const slotA = within(screen.getByTestId('slot-a'));
+    const slotB = within(screen.getByTestId('slot-b'));
+
+    expect(await slotA.findByText('selected:google:gemini')).toBeInTheDocument();
+    expect(slotB.getByText('selected:google:gemini')).toBeInTheDocument();
+    await userEvent.click(slotA.getByRole('button', { name: /pick-grok/i }));
+
+    expect(slotA.getByText('selected:xai:grok')).toBeInTheDocument();
+    expect(slotB.getByText('selected:google:gemini')).toBeInTheDocument();
+    expect(loadScopedModelPreference('workbench-slot:0')?.modelId).toBe('xai:grok');
+    expect(loadScopedModelPreference('workbench-slot:1')?.modelId).toBe('google:gemini');
+    expect(loadModelPreference()?.modelId).toBe('google:gemini');
+
+    view.unmount();
+    render(slots);
+    expect(
+      await within(screen.getByTestId('slot-a')).findByText('selected:xai:grok'),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId('slot-b')).getByText('selected:google:gemini'),
+    ).toBeInTheDocument();
   });
 
   it('updates image attachment gating when the selected Pi model changes', async () => {

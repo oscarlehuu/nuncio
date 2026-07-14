@@ -2,11 +2,14 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   loadModelPreference,
   loadRecentModels,
+  loadScopedModelPreference,
   MODEL_PREFERENCE_STORAGE_KEY,
   MODEL_RECENTS_STORAGE_KEY,
   recordRecentModel,
   resolveModelSelection,
   saveModelPreference,
+  saveScopedModelPreference,
+  scopedModelPreferenceStorageKey,
 } from './model-preference';
 import type { ModelProvider } from './model-providers';
 
@@ -64,6 +67,43 @@ describe('model-preference', () => {
       providerId: 'cursor',
       modelOptions: { fast: true, reasoning: 'high' },
     });
+  });
+
+  it('isolates scoped selections while preserving the legacy global default', () => {
+    saveModelPreference({ modelId: 'anthropic:claude-haiku-4', providerId: 'pi' });
+
+    expect(loadScopedModelPreference('home:new-agent')).toEqual({
+      modelId: 'anthropic:claude-haiku-4',
+      providerId: 'pi',
+    });
+
+    saveScopedModelPreference('home:new-agent', {
+      modelId: 'cursor:composer-2.5',
+      providerId: 'cursor',
+    });
+    saveScopedModelPreference('workbench-slot:0', {
+      modelId: 'cursor:codex-5.1-max',
+      providerId: 'cursor',
+    });
+
+    expect(loadScopedModelPreference('home:new-agent')?.modelId).toBe('cursor:composer-2.5');
+    expect(loadScopedModelPreference('workbench-slot:0')?.modelId).toBe('cursor:codex-5.1-max');
+    expect(loadScopedModelPreference('workbench-slot:1')?.modelId).toBe(
+      'anthropic:claude-haiku-4',
+    );
+    expect(loadModelPreference()?.modelId).toBe('anthropic:claude-haiku-4');
+    expect(
+      localStorage.getItem(scopedModelPreferenceStorageKey('workbench-slot:0')),
+    ).not.toBeNull();
+  });
+
+  it('falls back to the legacy global value when scoped JSON is corrupt', () => {
+    saveModelPreference({ modelId: 'anthropic:claude-haiku-4', providerId: 'pi' });
+    localStorage.setItem(scopedModelPreferenceStorageKey('home:new-agent'), '{not-json');
+
+    expect(loadScopedModelPreference('home:new-agent')?.modelId).toBe(
+      'anthropic:claude-haiku-4',
+    );
   });
 
   it('restores a stored selection when the model is still in the catalog', () => {
