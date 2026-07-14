@@ -118,4 +118,58 @@ describe('PiLocalSessionsService', () => {
 
     expect(service.readModelMeta(piPath)).toEqual({ model: null, thinkingLevel: null });
   });
+
+  it('returns an empty list for blank workspaces and when Pi list fails', async () => {
+    expect(await service.listForWorkspace('   ')).toEqual([]);
+    const previousLoadSdk = service.loadSdk;
+    service.loadSdk = async () => ({
+      SessionManager: {
+        list: async () => {
+          throw new Error('pi unavailable');
+        },
+      },
+    } as never);
+    expect(await service.listForWorkspace(workspace)).toEqual([]);
+    service.loadSdk = previousLoadSdk;
+  });
+
+  it('caps listForWorkspace to the configured max limit', async () => {
+    const previousLoadSdk = service.loadSdk;
+    service.loadSdk = async () => ({
+      SessionManager: {
+        list: async () =>
+          Array.from({ length: 60 }, (_, index) => ({
+            id: `pi-${index}`,
+            path: `${piPath}-${index}`,
+            cwd: workspace,
+            name: `Session ${index}`,
+            firstMessage: `message ${index}`,
+            messageCount: 1,
+            modified: new Date(1_700_000_000_000 + index),
+            created: new Date(1_700_000_000_000),
+            allMessagesText: `message ${index}`,
+          })),
+      },
+    } as never);
+
+    const items = await service.listForWorkspace(workspace, 100);
+    expect(items).toHaveLength(50);
+    service.loadSdk = previousLoadSdk;
+  });
+
+  it('find returns a listed session when the path matches', async () => {
+    const found = await service.find(piPath, workspace);
+    expect(found).toMatchObject({
+      path: piPath,
+      workspace,
+      title: 'Named pi task',
+    });
+  });
+
+  it('readTranscriptEvents returns an empty array when openSession fails', () => {
+    service.openSession = () => {
+      throw new Error('missing file');
+    };
+    expect(service.readTranscriptEvents(piPath)).toEqual([]);
+  });
 });

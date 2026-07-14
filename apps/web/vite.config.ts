@@ -57,6 +57,18 @@ export default defineConfig({
     },
     setupFiles: ['./src/test/setup.ts'],
     globals: true,
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'text-summary'],
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: [
+        'src/**/*.spec.{ts,tsx}',
+        'src/test/**',
+        'src/components/ui/**',
+        'src/vite-env.d.ts',
+        'src/qrcode-react.d.ts',
+      ],
+    },
   },
   server: {
     port: webPort,

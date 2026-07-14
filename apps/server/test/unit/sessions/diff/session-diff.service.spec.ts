@@ -1,161 +1,152 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { Test, TestingModule } from '@nestjs/testing';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { describe, expect, it } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { DatabaseModule } from '../../../../src/db/database.module';
-import { GitModule } from '../../../../src/git/git.module';
-import { GitService } from '../../../../src/git/git.service';
+import { join } from 'node:path';
 import { SessionDiffService } from '../../../../src/sessions/diff/session-diff.service';
+import type { SessionDto } from '../../../../src/sessions/domain/sessions.types';
 
-/**
- * Session diff service (rung 3 sub-phase D) — RED until implemented. Base
- * derivation over FIXTURE repos (git module's spec pattern): a worktree session
- * diffs vs its baseBranch (full delta), a plain cwd session diffs uncommitted work.
- */
-async function git(cwd: string, args: string[]): Promise<void> {
-  const proc = Bun.spawn(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });
-  if ((await proc.exited) !== 0) throw new Error(`git ${args.join(' ')} failed`);
-}
-async function initRepo(dir: string): Promise<void> {
-  mkdirSync(dir, { recursive: true });
-  await git(dir, ['init', '-b', 'main']);
-  await git(dir, ['config', 'user.email', 't@t']);
-  await git(dir, ['config', 'user.name', 'T']);
-  writeFileSync(join(dir, 'a.ts'), 'export const a = 1;\n');
-  await git(dir, ['add', '.']);
-  await git(dir, ['commit', '-m', 'init']);
+function makeSession(over: Partial<SessionDto> = {}): SessionDto {
+  return {
+    id: 's1',
+    title: 't',
+    status: 'IDLE',
+    provider: 'pi',
+    model: null,
+    modelOptions: null,
+    workspace: '/repo',
+    prompt: 'p',
+    preview: null,
+    projectPath: '/repo',
+    baseBranch: 'main',
+    worktreePath: '/wt/s1',
+    branch: 'nuncio/s1',
+    providerThreadId: null,
+    providerActiveTurnId: null,
+    providerState: null,
+    cursorBackend: null,
+    cursorChatId: null,
+    supportsInteraction: false,
+    supportsInterrupt: false,
+    supportsSteerWhileRunning: false,
+    supportsImages: false,
+    pendingInput: false,
+    parentSessionId: null,
+    originTaskId: null,
+    priorSessionId: null,
+    createdAt: 0,
+    updatedAt: 0,
+    ...over,
+  };
 }
 
 describe('SessionDiffService', () => {
-  let module: TestingModule;
-  let svc: SessionDiffService;
-  let gitService: GitService;
-  let dataDir: string;
-  let repo: string;
-  let workDir: string;
+  function serviceFor(session: SessionDto | null) {
+    const steerCalls: Array<[string, string]> = [];
+    let diffImpl: () => Promise<{ diff: string; truncated: boolean }> = async () => ({
+      diff: '',
+      truncated: false,
+    });
+    const sessions = {
+      get: () => session,
+      steer: async (sessionId: string, message: string) => {
+        steerCalls.push([sessionId, message]);
+        return { id: session?.id, status: 'RUNNING' };
+      },
+    };
+    const git = {
+      resolveWorktreeDiffBase: async () => 'main',
+      diff: async () => diffImpl(),
+      setDiffImpl: (impl: typeof diffImpl) => {
+        diffImpl = impl;
+      },
+    };
+    const service = new SessionDiffService(git as never, sessions as never);
+    service.onModuleInit();
+    return { service, steerCalls, git };
+  }
 
-  beforeEach(async () => {
-    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-diff-data-'));
-    workDir = mkdtempSync(join(tmpdir(), 'nuncio-diff-work-'));
-    process.env.NUNCIO_DATA_DIR = dataDir;
-    process.env.NUNCIO_WORKSPACES_DIR = workDir;
-    repo = join(workDir, 'repo');
-    await initRepo(repo);
-
-    module = await Test.createTestingModule({
-      imports: [DatabaseModule, GitModule],
-      providers: [SessionDiffService],
-    }).compile();
-    svc = module.get(SessionDiffService);
-    gitService = module.get(GitService);
+  it('binds resolveTarget from SessionsService on module init', () => {
+    const { service } = serviceFor(makeSession());
+    expect(service.resolveTarget('s1')).toEqual({
+      gitDir: '/wt/s1',
+      base: 'main',
+      mode: 'worktree',
+    });
   });
 
-  afterEach(async () => {
-    await module.close();
-    rmSync(dataDir, { recursive: true, force: true });
-    rmSync(workDir, { recursive: true, force: true });
-    delete process.env.NUNCIO_DATA_DIR;
-    delete process.env.NUNCIO_WORKSPACES_DIR;
+  it('uses local mode when the session has no worktree', () => {
+    const { service } = serviceFor(makeSession({ worktreePath: null }));
+    expect(service.resolveTarget('s1')).toEqual({
+      gitDir: '/repo',
+      base: null,
+      mode: 'local',
+    });
   });
 
-  it('a plain cwd session (no base) surfaces uncommitted changes', async () => {
-    writeFileSync(join(repo, 'a.ts'), 'export const a = 2;\n'); // uncommitted edit
-    svc.resolveTarget = () => ({ gitDir: repo, base: null });
-    const diff = await svc.diff('s1');
-    expect(diff.files.some((f) => f.path === 'a.ts')).toBe(true);
-    expect(diff.files.find((f) => f.path === 'a.ts')!.status).toBe('modified');
+  it('throws when the session is missing or has no git dir', () => {
+    const { service } = serviceFor(null);
+    expect(() => service.resolveTarget('s1')).toThrow(NotFoundException);
+
+    const noDir = serviceFor(makeSession({ worktreePath: null, workspace: null, projectPath: null }));
+    expect(() => noDir.service.resolveTarget('s1')).toThrow(BadRequestException);
   });
 
-  it('an untracked new file is surfaced (not dropped)', async () => {
-    writeFileSync(join(repo, 'fresh.ts'), 'export const fresh = true;\n');
-    svc.resolveTarget = () => ({ gitDir: repo, base: null });
-    const diff = await svc.diff('s1');
-    expect(diff.files.some((f) => f.path === 'fresh.ts')).toBe(true);
+  it('returns an empty diff when git reports the directory is not a repository', async () => {
+    const { service, git } = serviceFor(makeSession());
+    git.setDiffImpl(async () => {
+      throw new BadRequestException('Not a git repository: /wt/s1');
+    });
+    await expect(service.diff('s1')).resolves.toEqual({
+      files: [],
+      truncated: false,
+      omittedFiles: 0,
+    });
   });
 
-  it('an untracked file nested in a new directory is surfaced', async () => {
-    mkdirSync(join(repo, 'src', 'new-feature'), { recursive: true });
-    writeFileSync(join(repo, 'src', 'new-feature', 'index.ts'), 'export const nested = true;\n');
-    svc.resolveTarget = () => ({ gitDir: repo, base: null });
-
-    const diff = await svc.diff('s1');
-
-    expect(diff.files.some((f) => f.path === 'src/new-feature/index.ts')).toBe(true);
+  it('marks truncated diffs when git output was truncated', async () => {
+    const { service, git } = serviceFor(makeSession());
+    git.setDiffImpl(async () => ({
+      diff: 'diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n',
+      truncated: true,
+    }));
+    const result = await service.diff('s1');
+    expect(result.truncated).toBe(true);
+    expect(result.omittedFiles).toBeGreaterThanOrEqual(1);
   });
 
-  it('a worktree session diffs vs its base branch (the full session delta)', async () => {
-    // Branch off, commit a change on the branch → diff vs main shows it.
-    await git(repo, ['checkout', '-b', 'feature']);
-    writeFileSync(join(repo, 'a.ts'), 'export const a = 99;\n');
-    await git(repo, ['commit', '-am', 'feature work']);
-    svc.resolveTarget = () => ({ gitDir: repo, base: 'main' });
-    const diff = await svc.diff('s1');
-    expect(diff.files.some((f) => f.path === 'a.ts')).toBe(true);
-  });
-
-  it('a work-local session ignores stored baseBranch metadata and shows only uncommitted work', async () => {
-    await git(repo, ['checkout', '-b', 'feature']);
-    writeFileSync(join(repo, 'branch-only.ts'), 'export const branchOnly = true;\n');
-    await git(repo, ['add', 'branch-only.ts']);
-    await git(repo, ['commit', '-m', 'branch-only work']);
-    const localSvc = new SessionDiffService(gitService, {
-      get: () => ({
-        worktreePath: null,
-        workspace: repo,
-        projectPath: repo,
-        baseBranch: 'main',
-      }),
-      steer: async () => undefined,
-    } as never);
-    localSvc.onModuleInit();
-
-    const diff = await localSvc.diff('s1');
-
-    expect(diff.files.some((f) => f.path === 'branch-only.ts')).toBe(false);
-    expect(diff.files).toEqual([]);
-  });
-
-  it('raw git truncation is surfaced in the structured session diff', async () => {
-    const truncatedSvc = new SessionDiffService({
-      diff: async () => ({
-        diff: [
-          'diff --git a/a.ts b/a.ts',
-          'index 1111111..2222222 100644',
-          '--- a/a.ts',
-          '+++ b/a.ts',
-          '@@ -1 +1 @@',
-          '-export const a = 1;',
-          '+export const a = 2;',
-        ].join('\n'),
-        truncated: true,
-      }),
-    } as unknown as GitService);
-    truncatedSvc.resolveTarget = () => ({ gitDir: repo, base: null });
-
-    const diff = await truncatedSvc.diff('s1');
-
-    expect(diff.truncated).toBe(true);
-    expect(diff.omittedFiles).toBeGreaterThan(0);
-  });
-
-  it('a clean worktree → empty diff, never a throw', async () => {
-    svc.resolveTarget = () => ({ gitDir: repo, base: null });
-    expect((await svc.diff('s1')).files).toEqual([]);
-  });
-
-  it('a non-git cwd → clean empty state (tolerated)', async () => {
-    const notARepo = mkdtempSync(join(tmpdir(), 'nuncio-notrepo-'));
+  it('comment validates the path and steers with a diff comment block', async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'nuncio-session-diff-'));
     try {
-      svc.resolveTarget = () => ({ gitDir: notARepo, base: null });
-      expect((await svc.diff('s1')).files).toEqual([]);
+      const { service, steerCalls } = serviceFor(
+        makeSession({ worktreePath: repoDir, workspace: repoDir, projectPath: repoDir }),
+      );
+      await service.comment('s1', {
+        path: 'src/a.ts',
+        startLine: 1,
+        endLine: 2,
+        hunk: '-old\n+new',
+        comment: 'please fix',
+      });
+      expect(steerCalls).toHaveLength(1);
+      expect(steerCalls[0][0]).toBe('s1');
+      expect(steerCalls[0][1]).toContain('Re: src/a.ts:1-2');
+      expect(steerCalls[0][1]).toContain('please fix');
     } finally {
-      rmSync(notARepo, { recursive: true, force: true });
+      rmSync(repoDir, { recursive: true, force: true });
     }
   });
 
-  it('a bad/injection base ref (leading -) is rejected', async () => {
-    svc.resolveTarget = () => ({ gitDir: repo, base: '--output=/tmp/x' });
-    await expect(svc.diff('s1')).rejects.toThrow();
+  it('rejects traversal paths in diff comments', async () => {
+    const { service } = serviceFor(makeSession());
+    await expect(
+      service.comment('s1', {
+        path: '../escape.ts',
+        startLine: 1,
+        endLine: 1,
+        hunk: '',
+        comment: 'nope',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 });

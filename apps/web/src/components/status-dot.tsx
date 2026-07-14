@@ -1,16 +1,17 @@
 import type { SessionStatus } from '../lib/api';
 import { statusLabel } from '../lib/api';
+import { deriveStatusDotTone } from '../lib/derive-status-dot-tone';
 import { cn } from '@/lib/utils';
 
-/* Color is a summons: amber = waiting on you, red = broken. A healthy running
- * agent is a calm gray pulse, and an idle agent shows nothing at all. */
-const STATUS_CLASS: Record<SessionStatus, string | null> = {
-  CREATED: 'bg-muted-foreground',
-  RUNNING: 'bg-muted-foreground animate-pulse',
-  IDLE: null,
-  PAUSED: 'bg-muted-foreground',
-  ARCHIVED: 'bg-muted-foreground opacity-40',
-  ERROR: 'bg-destructive',
+const TONE_CLASS: Record<
+  Exclude<ReturnType<typeof deriveStatusDotTone>, 'hidden'>,
+  string
+> = {
+  neutral: 'bg-muted-foreground',
+  running: 'bg-muted-foreground animate-pulse',
+  warning: 'bg-warning animate-pulse shadow-[0_0_6px_var(--color-warning)]',
+  error: 'bg-destructive',
+  archived: 'bg-muted-foreground opacity-40',
 };
 
 export function ConnectionDot({ className }: { className?: string }) {
@@ -32,10 +33,10 @@ export function StatusDot({
   pending?: boolean;
   className?: string;
 }) {
-  const dotClass = pending
-    ? 'bg-warning animate-pulse shadow-[0_0_6px_var(--color-warning)]'
-    : STATUS_CLASS[status];
-  if (!dotClass) return null;
+  const tone = deriveStatusDotTone(status, pending);
+  if (tone === 'hidden') return null;
+
+  const dotClass = TONE_CLASS[tone];
   return (
     <span
       className={cn('inline-block size-[7px] rounded-full shrink-0', dotClass, className)}

@@ -104,4 +104,117 @@ describe('ForgeRepoService', () => {
       'title is required',
     );
   });
+
+  it('delegates pull, issue, and workflow operations to the resolved provider', async () => {
+    const calls: string[] = [];
+    const provider = makeProvider({
+      listPullRequests: async () => [{ number: 2, title: 'PR', state: 'open' }],
+      listPullRequestFiles: async () => [{ path: 'a.ts', status: 'modified' }],
+      listReviewThreads: async () => [{ id: 't1', resolved: false }],
+      replyToThread: async () => { calls.push('reply'); },
+      resolveThread: async () => { calls.push('resolve'); },
+      submitReview: async () => { calls.push('review'); },
+      addComment: async () => { calls.push('pr-comment'); },
+      mergePullRequest: async () => ({ merged: true, sha: 'abc' }),
+      updatePullRequestState: async () => { calls.push('pr-state'); },
+      updateBranch: async () => { calls.push('update-branch'); },
+      listIssues: async () => [{ number: 3, title: 'Issue', state: 'open' }],
+      getIssue: async () => ({ number: 3, title: 'Issue', state: 'open', body: '' }),
+      addIssueComment: async () => { calls.push('issue-comment'); },
+      updateIssueState: async () => { calls.push('issue-state'); },
+      createIssue: async () => ({ number: 4, title: 'New', state: 'open' }),
+      listWorkflowRuns: async () => [{ id: 9, status: 'completed' }],
+      getWorkflowRunJobs: async () => [{ id: 10, name: 'build', status: 'completed' }],
+      rerunWorkflowRun: async () => { calls.push('rerun'); },
+      cancelWorkflowRun: async () => { calls.push('cancel'); },
+      getJobLog: async () => ({ text: 'log output' }),
+      getPullRequestDetail: async () => ({
+        number: 1,
+        url: 'u',
+        state: 'open',
+        title: 't',
+        body: '',
+        author: 'a',
+        draft: false,
+        sourceBranch: null,
+        targetBranch: 'main',
+        mergeable: 'mergeable' as const,
+        reviewDecision: null,
+        additions: 0,
+        deletions: 0,
+        changedFiles: 0,
+      }),
+    });
+    const service = makeService(provider);
+
+    await expect(service.listPullRequests('/some/repo', 'all')).resolves.toHaveLength(1);
+    await expect(service.listPullRequestFiles('/some/repo', 1)).resolves.toHaveLength(1);
+    await expect(service.listReviewThreads('/some/repo', 1)).resolves.toHaveLength(1);
+    await service.replyToThread('/some/repo', 1, 'thread', 'hello');
+    await service.resolveThread('/some/repo', 1, 'thread', true);
+    await service.submitReview('/some/repo', 1, { event: 'comment', body: 'note' });
+    await service.addPullRequestComment('/some/repo', 1, 'comment');
+    await expect(service.mergePullRequest('/some/repo', 1, { method: 'merge' })).resolves.toEqual({
+      merged: true,
+      sha: 'abc',
+    });
+    await service.updatePullRequestState('/some/repo', 1, 'closed');
+    await service.updateBranch('/some/repo', 1);
+    await expect(service.listIssues('/some/repo', 'open')).resolves.toHaveLength(1);
+    await expect(service.getIssue('/some/repo', 3)).resolves.toMatchObject({ number: 3 });
+    await service.addIssueComment('/some/repo', 3, 'fix');
+    await service.updateIssueState('/some/repo', 3, 'closed');
+    await expect(service.createIssue('/some/repo', { title: 'Bug', body: 'x' })).resolves.toMatchObject({
+      number: 4,
+    });
+    await expect(service.listWorkflowRuns('/some/repo', 'main')).resolves.toHaveLength(1);
+    await expect(service.getWorkflowRunJobs('/some/repo', 9)).resolves.toHaveLength(1);
+    await service.rerunWorkflowRun('/some/repo', 9, true);
+    await service.cancelWorkflowRun('/some/repo', 9);
+    await expect(service.getJobLog('/some/repo', 10)).resolves.toEqual({ text: 'log output' });
+    expect(calls).toEqual([
+      'reply',
+      'resolve',
+      'review',
+      'pr-comment',
+      'pr-state',
+      'update-branch',
+      'issue-comment',
+      'issue-state',
+      'rerun',
+      'cancel',
+    ]);
+  });
+
+  it('returns an empty checks array when listChecks fails or source branch is missing', async () => {
+    const withBranch = makeProvider({
+      listChecks: async () => { throw new Error('rate limited'); },
+    });
+    const serviceWithBranch = makeService(withBranch);
+    const detail = await serviceWithBranch.getPullRequestDetail('/some/repo', 1);
+    expect(detail.checks).toEqual([]);
+
+    const noBranch = makeProvider({
+      getPullRequestDetail: async () => ({
+        number: 1,
+        url: 'u',
+        state: 'open',
+        title: 't',
+        body: '',
+        author: 'a',
+        draft: false,
+        sourceBranch: null,
+        targetBranch: 'main',
+        mergeable: 'mergeable' as const,
+        reviewDecision: null,
+        additions: 0,
+        deletions: 0,
+        changedFiles: 0,
+      }),
+      listChecks: async () => [{ name: 'ci', status: 'completed', conclusion: 'success' }],
+    });
+    const serviceNoBranch = makeService(noBranch);
+    const noChecks = await serviceNoBranch.getPullRequestDetail('/some/repo', 1);
+    expect(noChecks.checks).toEqual([]);
+  });
 });

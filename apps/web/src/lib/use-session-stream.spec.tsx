@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, waitFor, act } from '@testing-library/react';
-import { useSessionStream } from './use-session-stream';
+import { sessionRelayUrl, useSessionStream } from './use-session-stream';
 import { resetBrowserSessionRelayPoolForTests } from '@nuncio/core/session-relay-pool';
 
 vi.mock('./api', () => ({ fetchEvents: vi.fn() }));
@@ -98,6 +98,28 @@ function StreamCount({ sid, base = '', testId }: { sid: string; base?: string; t
   const stream = useSessionStream(sid, base);
   return <div data-testid={testId}>{stream.events.length}</div>;
 }
+
+describe('sessionRelayUrl', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('maps http origins to ws', () => {
+    vi.stubGlobal('window', {
+      location: { origin: 'http://localhost:5173' },
+    });
+    expect(sessionRelayUrl()).toBe('ws://localhost:5173/api/sessions/ws');
+  });
+
+  it('maps https origins to wss and prefixes hub bases', () => {
+    vi.stubGlobal('window', {
+      location: { origin: 'https://hub.ts.net' },
+    });
+    expect(sessionRelayUrl('/m/oscar-workstation')).toBe(
+      'wss://hub.ts.net/m/oscar-workstation/api/sessions/ws',
+    );
+  });
+});
 
 describe('useSessionStream', () => {
   beforeEach(() => {
@@ -642,5 +664,23 @@ describe('useSessionStream', () => {
     );
     await waitFor(() => expect(lastSocket!.subscribes.length).toBe(2));
     expect(subscribeSince(lastSocket!)).toBe(6);
+  });
+
+  it('resubscribes from last seen seq on server_shutdown without wiping events', async () => {
+    vi.mocked(fetchEvents).mockResolvedValue([ev(1)]);
+    let latest: ReturnType<typeof useSessionStream> | undefined;
+    render(<Harness sid="s1" onReady={(stream) => { latest = stream; }} />);
+    await waitFor(() => expect(lastSocket).toBeDefined());
+    await waitFor(() => expect(lastSocket!.subscribes.length).toBe(1));
+
+    act(() => lastSocket!.push(ev(2, 'assistant_delta', { delta: 'hi' })));
+    await waitFor(() => expect(latest?.events.map((event) => event.seq)).toEqual([1, 2]));
+
+    act(() =>
+      lastSocket!.fire('message', { data: JSON.stringify({ notice: 'server_shutdown' }) }),
+    );
+    await waitFor(() => expect(lastSocket!.subscribes.length).toBe(2));
+    expect(subscribeSince(lastSocket!)).toBe(2);
+    expect(latest?.events.map((event) => event.seq)).toEqual([1, 2]);
   });
 });

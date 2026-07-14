@@ -68,6 +68,44 @@ describe('derivePendingQueuedSteers', () => {
     expect(blocks.some((b) => b.kind === 'user' && b.queued)).toBe(false);
     expect(blocks.filter((b) => b.kind === 'user')).toHaveLength(1);
   });
+
+  it('keeps steer_queued pending while the session is RUNNING', () => {
+    const pending = derivePendingQueuedSteers([
+      ev(1, 'user_message', { text: 'go' }),
+      ev(2, 'status', { status: 'RUNNING' }),
+      ev(3, 'assistant_delta', { delta: 'working…' }),
+      ev(4, 'steer_queued', { text: 'follow up' }),
+    ]);
+    expect(pending.map((s) => s.text)).toEqual(['follow up']);
+  });
+
+  it('preserves FIFO order for multiple queued steers', () => {
+    const pending = derivePendingQueuedSteers([
+      ev(1, 'steer_queued', { text: 'first' }),
+      ev(2, 'steer_queued', { text: 'second' }),
+      ev(3, 'steer_queued', { text: 'third' }),
+    ]);
+    expect(pending.map((s) => s.text)).toEqual(['first', 'second', 'third']);
+  });
+
+  it('removes delivered steers in FIFO order as steer_message events land', () => {
+    expect(
+      derivePendingQueuedSteers([
+        ev(1, 'steer_queued', { text: 'first' }),
+        ev(2, 'steer_queued', { text: 'second' }),
+        ev(3, 'steer_message', { text: 'first' }),
+      ]).map((s) => s.text),
+    ).toEqual(['second']);
+
+    expect(
+      derivePendingQueuedSteers([
+        ev(1, 'steer_queued', { text: 'first' }),
+        ev(2, 'steer_queued', { text: 'second' }),
+        ev(3, 'steer_message', { text: 'first' }),
+        ev(4, 'steer_message', { text: 'second' }),
+      ]),
+    ).toHaveLength(0);
+  });
 });
 
 describe('buildTranscriptBlocks', () => {

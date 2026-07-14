@@ -223,9 +223,9 @@ export function subscribeSessionEvents(options: SessionSubscriptionOptions): Ses
         }
         return;
       }
-      // Additive top-level notice frame (e.g. server_shutdown). Unknown to web
-      // callers, which pass no onNotice and so ignore it — that is what keeps
-      // their behavior identical.
+      // Additive top-level notice frame (e.g. server_shutdown). Dedicated
+      // sockets (mobile / custom options) forward via onNotice; the browser
+      // shared pool resubscribes from lastSeq on `server_shutdown` itself.
       if (typeof parsed.notice === 'string') {
         options.onNotice?.(parsed.notice);
         return;
