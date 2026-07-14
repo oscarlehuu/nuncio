@@ -11,6 +11,7 @@ import { SessionsRepository } from '../../../src/sessions/persistence/sessions.r
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
 import { SettingsModule } from '../../../src/settings/settings.module';
 import { describeAgentProviderContract } from './provider-contract.suite';
+import { configurePiSdkMock } from './pi-sdk.mock';
 
 type PiEvent = { type: string; [key: string]: unknown };
 
@@ -34,7 +35,7 @@ function registryModel(provider = 'anthropic', id = 'model-1') {
 }
 
 // Stub the Pi SDK at the adapter boundary — no real ~/.pi read/write, no network.
-mock.module('@earendil-works/pi-coding-agent', () => ({
+configurePiSdkMock({
   AuthStorage: { create: () => ({}) },
   ModelRegistry: {
     create: () => ({
@@ -81,7 +82,7 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
     async reload() {}
   },
   getAgentDir: () => '/tmp/fake-pi-contract',
-}));
+});
 
 describe('PiAgentProvider contract', () => {
   let module: TestingModule;

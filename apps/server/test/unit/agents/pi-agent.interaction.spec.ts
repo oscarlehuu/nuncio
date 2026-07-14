@@ -9,6 +9,7 @@ import { EventsRepository } from '../../../src/sessions/persistence/events.repos
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
 import { SettingsModule } from '../../../src/settings/settings.module';
+import { configurePiSdkMock } from './pi-sdk.mock';
 
 let promptCalls: Array<{ text: string; options: unknown }> = [];
 let promptBehavior: ((text: string, options?: unknown) => Promise<void>) | null = null;
@@ -22,7 +23,7 @@ const sampleQuestion = {
   options: [{ id: 'a', label: 'Frontend', description: 'UI work' }],
 };
 
-mock.module('@earendil-works/pi-coding-agent', () => ({
+configurePiSdkMock({
   AuthStorage: { create: () => ({}) },
   ModelRegistry: {
     create: () => ({
@@ -62,7 +63,7 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
     async reload() {}
   },
   getAgentDir: () => '/tmp/fake-pi',
-}));
+});
 
 describe('PiAgentProvider interaction', () => {
   let module: TestingModule;

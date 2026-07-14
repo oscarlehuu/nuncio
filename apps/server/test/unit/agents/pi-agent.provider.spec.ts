@@ -1,5 +1,6 @@
 import { beforeAll, afterAll, beforeEach, describe, it, expect, mock } from 'bun:test';
 import { Test, TestingModule } from '@nestjs/testing';
+import { configurePiSdkMock } from './pi-sdk.mock';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -57,7 +58,7 @@ let lastCreateSessionOptions: Record<string, unknown> | null = null;
 let lastLoaderOptions: Record<string, unknown> | null = null;
 let loaderReloadCalls = 0;
 
-mock.module('@earendil-works/pi-coding-agent', () => ({
+configurePiSdkMock({
   AuthStorage: { create: () => ({}) },
   SettingsManager: { create: () => ({ kind: 'settings-manager' }) },
   DefaultResourceLoader: class {
@@ -132,7 +133,7 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
     };
   },
   getAgentDir: () => '/tmp/fake-pi',
-}));
+});
 
 describe('PiAgentProvider', () => {
   let module: TestingModule;
