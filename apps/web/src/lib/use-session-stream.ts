@@ -26,6 +26,18 @@ export function sessionRelayUrl(base = ''): string {
 
 function mergeEvents(prev: SessionEvent[], incoming: SessionEvent[]): SessionEvent[] {
   if (incoming.length === 0) return prev;
+  // Live relay events arrive in strictly ascending seq order past the loaded
+  // tail; appending directly keeps per-frame cost independent of session length.
+  let ascending = true;
+  let lastSeq = prev.length > 0 ? prev[prev.length - 1].seq : Number.NEGATIVE_INFINITY;
+  for (const event of incoming) {
+    if (event.seq <= lastSeq) {
+      ascending = false;
+      break;
+    }
+    lastSeq = event.seq;
+  }
+  if (ascending) return [...prev, ...incoming];
   const seen = new Set(prev.map((e) => e.seq));
   const fresh: SessionEvent[] = [];
   for (const event of incoming) {
