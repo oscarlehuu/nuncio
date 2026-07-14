@@ -1,5 +1,6 @@
-import { describe, it, expect, mock } from 'bun:test';
+import { describe, it, expect } from 'bun:test';
 import { PiAgentProvider } from '../../../src/agents/providers/pi-agent.provider';
+import { configurePiSdkMock } from './pi-sdk.mock';
 
 type FakeModel = {
   provider: string;
@@ -29,7 +30,7 @@ const fakeRegistry = {
 
 // Intercept the lazily-imported Pi SDK so listModels() runs against a
 // controllable registry without touching real auth or the network.
-mock.module('@earendil-works/pi-coding-agent', () => ({
+configurePiSdkMock({
   AuthStorage: { create: () => ({}) },
   ModelRegistry: {
     create: (_authStorage: unknown, modelsPath?: string) => {
@@ -49,7 +50,7 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
     async reload() {}
   },
   getAgentDir: () => '/tmp/fake-pi',
-}));
+});
 
 function makeProvider(resolve: (key: string) => string | undefined = () => undefined): PiAgentProvider {
   // Minimal SettingsService stub: resolve() returns undefined for every key,
