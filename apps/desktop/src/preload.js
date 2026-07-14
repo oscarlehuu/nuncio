@@ -13,6 +13,23 @@ contextBridge.exposeInMainWorld('nuncioDesktop', {
     reload: (id) => ipcRenderer.invoke('browser:reload', id),
     resize: (id, bounds) => ipcRenderer.invoke('browser:resize', id, bounds),
     hide: (id) => ipcRenderer.invoke('browser:hide', id),
+    designModeEnter: (id) => ipcRenderer.invoke('browser:design-mode-enter', id),
+    designModeLeave: (id) => ipcRenderer.invoke('browser:design-mode-leave', id),
+    onDesignModePick: (cb) => {
+      const listener = (_event, payload) => cb(payload);
+      ipcRenderer.on('browser:design-mode-pick', listener);
+      return () => ipcRenderer.removeListener('browser:design-mode-pick', listener);
+    },
+    onDesignModeSteer: (cb) => {
+      const listener = (_event, payload) => cb(payload);
+      ipcRenderer.on('browser:design-mode-steer', listener);
+      return () => ipcRenderer.removeListener('browser:design-mode-steer', listener);
+    },
+    onDesignModeExit: (cb) => {
+      const listener = (_event, payload) => cb(payload);
+      ipcRenderer.on('browser:design-mode-exit', listener);
+      return () => ipcRenderer.removeListener('browser:design-mode-exit', listener);
+    },
   },
   servers: {
     list: () => ipcRenderer.invoke('servers:list'),

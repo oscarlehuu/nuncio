@@ -20,6 +20,47 @@ class MockResizeObserver {
   unobserve() {}
 }
 
+function installBrowserBridge() {
+  const show = vi.fn().mockResolvedValue({ url: 'https://example.com/', title: 'Example', loading: false });
+  const navigate = vi.fn().mockResolvedValue({ url: 'https://example.com/', title: 'Example', loading: false });
+  const reload = vi.fn().mockResolvedValue({ url: 'https://example.com/', title: 'Example', loading: false });
+  const resize = vi.fn().mockResolvedValue({ url: 'https://example.com/', title: 'Example', loading: false });
+  const hide = vi.fn().mockResolvedValue(undefined);
+  const designModeEnter = vi.fn().mockResolvedValue({ ok: true, id: 's1' });
+  const designModeLeave = vi.fn().mockResolvedValue({ ok: true, id: 's1' });
+  let pickHandler: ((payload: {
+    id: string;
+    pick: Record<string, unknown>;
+  }) => void) | null = null;
+
+  const onDesignModePick = vi.fn((cb: (payload: { id: string; pick: Record<string, unknown> }) => void) => {
+    pickHandler = cb;
+    return () => {
+      pickHandler = null;
+    };
+  });
+
+  window.nuncioDesktop = {
+    browser: {
+      show,
+      navigate,
+      reload,
+      resize,
+      hide,
+      designModeEnter,
+      designModeLeave,
+      onDesignModePick,
+    },
+  };
+
+  return {
+    show,
+    navigate,
+    designModeEnter,
+    emitPick: (payload: { id: string; pick: Record<string, unknown> }) => pickHandler?.(payload),
+  };
+}
+
 describe('BrowserPanel', () => {
   beforeEach(() => {
     Object.defineProperty(globalThis, 'ResizeObserver', {
@@ -27,11 +68,11 @@ describe('BrowserPanel', () => {
       writable: true,
       value: MockResizeObserver,
     });
-    delete (window as Window & { nuncioDesktop?: unknown }).nuncioDesktop;
+    delete window.nuncioDesktop;
   });
 
   afterEach(() => {
-    delete (window as Window & { nuncioDesktop?: unknown }).nuncioDesktop;
+    delete window.nuncioDesktop;
     Object.defineProperty(globalThis, 'ResizeObserver', {
       configurable: true,
       writable: true,
@@ -41,32 +82,44 @@ describe('BrowserPanel', () => {
 
   it('renders nothing when the desktop browser bridge is unavailable', () => {
     const { container } = render(<BrowserPanel sessionId="s1" />);
-
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('uses the desktop embedded browser bridge when available', async () => {
-    const show = vi.fn().mockResolvedValue({ url: 'https://example.com/', title: 'Example', loading: false });
-    const navigate = vi.fn().mockResolvedValue({ url: 'https://example.com/', title: 'Example', loading: false });
-    const reload = vi.fn().mockResolvedValue({ url: 'https://example.com/', title: 'Example', loading: false });
-    const resize = vi.fn().mockResolvedValue({ url: 'https://example.com/', title: 'Example', loading: false });
-    const hide = vi.fn().mockResolvedValue(undefined);
-    (window as Window & { nuncioDesktop?: unknown }).nuncioDesktop = {
-      browser: { show, navigate, reload, resize, hide },
-    };
+  it('shows the Design Mode pill immediately and inserts chips from page picks', async () => {
+    const bridge = installBrowserBridge();
+    const onSteer = vi.fn().mockResolvedValue(undefined);
+    render(<BrowserPanel sessionId="s1" onSteer={onSteer} />);
 
-    render(<BrowserPanel sessionId="s1" />);
+    await waitFor(() => expect(bridge.show).toHaveBeenCalled());
+    await userEvent.click(screen.getByRole('button', { name: 'Enter Design Mode' }));
+    await waitFor(() => expect(bridge.designModeEnter).toHaveBeenCalledWith('s1'));
 
-    await waitFor(() => expect(show).toHaveBeenCalled());
-    expect(screen.queryByLabelText('Type into page')).toBeNull();
+    expect(screen.getByTestId('design-mode-overlay')).toBeInTheDocument();
+    expect(screen.getByLabelText('Design Mode prompt')).toBeInTheDocument();
 
-    await userEvent.clear(screen.getByLabelText('Address'));
-    await userEvent.type(screen.getByLabelText('Address'), 'example.com');
-    await userEvent.click(screen.getByRole('button', { name: 'Navigate' }));
+    bridge.emitPick({
+      id: 's1',
+      pick: {
+        tag: 'input',
+        placeholder: 'Search',
+        className: 'RNNXgb',
+        label: 'Search',
+        xpath: '/html/body/input',
+        cssPath: 'input',
+        outerHTML: '<input placeholder="Search" />',
+        styles: {},
+        bbox: { x: 1, y: 2, width: 3, height: 4 },
+        cropPngBase64: 'crop-a',
+      },
+    });
 
-    await waitFor(() => expect(navigate).toHaveBeenCalledWith('s1', 'example.com'));
-    expect(reload).not.toHaveBeenCalled();
-    expect(resize).toHaveBeenCalled();
-    expect(screen.getByRole('group', { name: 'Embedded browser viewport' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText('Design Mode prompt')).toHaveValue('[Search] '));
+    expect(screen.getByText('Search')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Send Design Mode steer' }));
+    await waitFor(() => expect(onSteer).toHaveBeenCalledTimes(1));
+    const [message, attachments] = onSteer.mock.calls[0]!;
+    expect(message).toContain('[Search]');
+    expect(attachments).toEqual([{ kind: 'image', mimeType: 'image/png', data: 'crop-a' }]);
   });
 });

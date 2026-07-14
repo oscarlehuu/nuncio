@@ -838,7 +838,7 @@ export function SessionDetail({
           </div>
         </div>
       ) : (
-        <div className="shrink-0 px-4 md:px-5 pt-2.5 pb-3 md:pb-4">
+        <div className="shrink-0 max-h-[42vh] overflow-y-auto px-4 md:px-5 pt-2.5 pb-3 md:pb-4">
         <SubagentsPanel
           tasks={childTasks}
           providers={providers}
@@ -1130,7 +1130,21 @@ export function SessionDetail({
 
           {panelOpen && activeTool === 'browser' && (
             <div className="flex-1 min-h-0">
-              <BrowserPanel sessionId={session.id} />
+              <BrowserPanel
+                sessionId={session.id}
+                onSteer={onSteer}
+                steerDisabled={steerDisabled}
+                steerDisabledReason={
+                  managedByCrew
+                    ? 'Crew-owned sessions cannot be steered here'
+                    : isArchived
+                      ? 'Session archived — steering disabled'
+                      : hasPendingUserInput
+                        ? 'Respond to the pending question first'
+                        : undefined
+                }
+                steering={steering}
+              />
             </div>
           )}
 

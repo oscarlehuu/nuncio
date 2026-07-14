@@ -185,7 +185,7 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 | SCM / Changes / PR | `forge/scm-panel.tsx`, `session-changes-panel.tsx` (+ branch sync, outgoing/incoming, stash, blame, history, issues via `GET/POST /sessions/:id/git/*`) | See Forge row |
 | Files | `file-explorer-panel.tsx` | Server `fs/` |
 | Terminal | `terminal-dock.tsx` / `terminal-panel.tsx` | Server `terminal/`; desktop IPC or WS |
-| Browser | `browser-panel.tsx` | Desktop-only; server `browser/` |
+| Browser | `browser-panel.tsx` + `design-mode-overlay.tsx` | Desktop-only. **Design Mode**: page highlight/click inject + Cursor-style **pill composer** in React under the BrowserView (cannot paint over native view / CSP sites). Steers open session only. Restart Desktop after code pulls. |
 | Subagents | `subagents-panel.tsx` | See Tasks row |
 | Queued steers | `queued-steers-panel.tsx` | Session detail |
 
