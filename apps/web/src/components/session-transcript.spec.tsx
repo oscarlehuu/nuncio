@@ -1,7 +1,13 @@
-import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { SessionEvent } from '../lib/api';
 import { Transcript } from './session-transcript';
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), info: vi.fn(), error: vi.fn() },
+}));
+
+import { toast } from 'sonner';
 
 function ev(seq: number, type: string, payload: Record<string, unknown>): SessionEvent {
   return { seq, type, payload, createdAt: seq };
@@ -65,5 +71,47 @@ describe('Transcript live steer projection', () => {
     expect(container.textContent?.indexOf('working')).toBeLessThan(
       container.textContent?.indexOf('change direction') ?? -1,
     );
+  });
+});
+
+describe('Transcript auto-copy selection', () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+
+  beforeEach(() => {
+    writeText.mockClear();
+    vi.mocked(toast.success).mockClear();
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+  });
+
+  afterEach(() => {
+    window.getSelection()?.removeAllRanges();
+  });
+
+  it('copies the highlighted transcript text on mouseup', async () => {
+    render(
+      <Transcript
+        events={[ev(1, 'assistant_message', { text: 'auto copy this chat line' })]}
+        sessionId="s1"
+      />,
+    );
+    const phrase = screen.getByText(/auto copy this chat line/i);
+    const root = phrase.closest('[data-chat-transcript]');
+    expect(root).toBeTruthy();
+
+    const range = document.createRange();
+    range.selectNodeContents(phrase);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    fireEvent.mouseUp(root!);
+
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('auto copy this chat line')),
+    );
+    expect(toast.success).toHaveBeenCalledWith('Copied', { duration: 1000 });
   });
 });

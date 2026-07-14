@@ -2,7 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HomeView } from './home-view';
-import { saveModelPreference } from '../lib/model-preference';
+import {
+  loadModelPreference,
+  loadScopedModelPreference,
+  saveModelPreference,
+} from '../lib/model-preference';
 import {
   recordBranchSelection,
   recordProjectSelection,
@@ -297,6 +301,25 @@ describe('HomeView', () => {
     });
     render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
     expect(await screen.findByRole('button', { name: /haiku/i })).toBeInTheDocument();
+  });
+
+  it('persists Home selection in its own scope without changing the global default', async () => {
+    saveModelPreference({
+      modelId: 'anthropic:claude-haiku-4',
+      providerId: 'pi',
+    });
+    const view = render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
+
+    await userEvent.click(await screen.findByRole('button', { name: /haiku/i }));
+    await userEvent.click(await screen.findByText('Composer 2.5'));
+
+    expect(await screen.findByRole('button', { name: /composer 2.5/i })).toBeInTheDocument();
+    expect(loadScopedModelPreference('home:new-agent')?.modelId).toBe('cursor:composer-2.5');
+    expect(loadModelPreference()?.modelId).toBe('anthropic:claude-haiku-4');
+
+    view.unmount();
+    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
+    expect(await screen.findByRole('button', { name: /composer 2.5/i })).toBeInTheDocument();
   });
 
   it('defaults to pi when cursor is not in the live catalog', async () => {

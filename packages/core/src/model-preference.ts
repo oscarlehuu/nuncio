@@ -8,6 +8,7 @@ import {
 } from './model-providers';
 
 export const MODEL_PREFERENCE_STORAGE_KEY = 'nuncio-model-preference';
+const MODEL_PREFERENCE_SCOPE_SEPARATOR = ':';
 
 export type ModelPreference = {
   modelId: string;
@@ -15,9 +16,9 @@ export type ModelPreference = {
   modelOptions?: ModelOptionsMap;
 };
 
-export function loadModelPreference(storage: Storage = localStorage): ModelPreference | null {
+function readModelPreference(key: string, storage: Storage): ModelPreference | null {
   try {
-    const raw = storage.getItem(MODEL_PREFERENCE_STORAGE_KEY);
+    const raw = storage.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as ModelPreference;
     if (!parsed?.modelId || !parsed?.providerId) return null;
@@ -27,11 +28,50 @@ export function loadModelPreference(storage: Storage = localStorage): ModelPrefe
   }
 }
 
+export function loadModelPreference(storage: Storage = localStorage): ModelPreference | null {
+  return readModelPreference(MODEL_PREFERENCE_STORAGE_KEY, storage);
+}
+
 export function saveModelPreference(
   pref: ModelPreference,
   storage: Storage = localStorage,
 ): void {
   storage.setItem(MODEL_PREFERENCE_STORAGE_KEY, JSON.stringify(pref));
+}
+
+/** Stable storage key for one model-selection owner (for example Home or a Workbench slot). */
+export function scopedModelPreferenceStorageKey(scope: string): string {
+  return `${MODEL_PREFERENCE_STORAGE_KEY}${MODEL_PREFERENCE_SCOPE_SEPARATOR}${encodeURIComponent(scope)}`;
+}
+
+/**
+ * Load a selection owned by one composer. A legacy global preference is only a
+ * compatibility/default seed; once this scope is saved, other scopes cannot
+ * overwrite it.
+ */
+export function loadScopedModelPreference(
+  scope: string,
+  storage: Storage = localStorage,
+): ModelPreference | null {
+  const scoped = readModelPreference(scopedModelPreferenceStorageKey(scope), storage);
+  if (scoped) return scoped;
+
+  const legacy = loadModelPreference(storage);
+  if (!legacy) return null;
+  try {
+    saveScopedModelPreference(scope, legacy, storage);
+  } catch {
+    // Storage can be unavailable; the legacy value is still a valid in-memory seed.
+  }
+  return legacy;
+}
+
+export function saveScopedModelPreference(
+  scope: string,
+  pref: ModelPreference,
+  storage: Storage = localStorage,
+): void {
+  storage.setItem(scopedModelPreferenceStorageKey(scope), JSON.stringify(pref));
 }
 
 /** Restore last picker choice, or fall back to catalog default. */
