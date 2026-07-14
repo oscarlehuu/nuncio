@@ -63,6 +63,22 @@ export interface NuncioDesktopBrowserApi {
   reload: (id: string) => Promise<NuncioDesktopBrowserState>;
   resize: (id: string, bounds: NuncioDesktopBrowserBounds) => Promise<NuncioDesktopBrowserState | null>;
   hide: (id: string) => Promise<unknown> | void;
+  designModeEnter?: (id: string) => Promise<{ ok: boolean; id: string }>;
+  designModeLeave?: (id: string) => Promise<{ ok: boolean; id: string }>;
+  onDesignModePick?: (
+    cb: (payload: {
+      id: string;
+      pick: Record<string, unknown>;
+    }) => void,
+  ) => () => void;
+  onDesignModeSteer?: (
+    cb: (payload: {
+      id: string;
+      text: string;
+      components: Record<string, unknown>[];
+    }) => void,
+  ) => () => void;
+  onDesignModeExit?: (cb: (payload: { id: string }) => void) => () => void;
 }
 
 export interface NuncioDesktopShellSettings {

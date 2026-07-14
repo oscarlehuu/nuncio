@@ -14,6 +14,12 @@ const {
 const { DaemonSupervisor } = require('./daemon');
 const serverProfiles = require('./server-profiles');
 const shellSettings = require('./shell-settings');
+const { normalizeBrowserUrl } = require('./browser-url');
+const {
+  buildPickerInstallScript,
+  buildPickerUninstallScript,
+  normalizeGuestPick,
+} = require('./design-mode');
 
 // A single instance owns the daemon and its stable port. A second launch must
 // not spawn a second daemon on another port (paired phones would race between
@@ -598,13 +604,6 @@ function registerExternalHandlers() {
   });
 }
 
-function normalizeBrowserUrl(url) {
-  const value = typeof url === 'string' ? url.trim() : '';
-  if (!value) return '';
-  if (/^[a-zA-Z][a-zA-Z\d+.-]*:/.test(value)) return value;
-  return `https://${value}`;
-}
-
 function coerceBrowserCoordinate(value) {
   const numeric = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(numeric)) return 0;
@@ -647,13 +646,127 @@ function getEmbeddedBrowser(id) {
       nodeIntegration: false,
       partition: EMBEDDED_BROWSER_PARTITION,
       sandbox: true,
+      preload: path.join(__dirname, 'browser-view-preload.js'),
     },
   });
   view.setAutoResize?.({ width: true, height: true });
 
-  const entry = { id, view };
+  const entry = { id, view, designMode: false, designModeNavHooked: false };
+  wireDesignModeNavigation(entry);
   embeddedBrowserViews.set(id, entry);
   return entry;
+}
+
+function wireDesignModeNavigation(entry) {
+  if (entry.designModeNavHooked) return;
+  const webContents = entry.view.webContents;
+  if (!webContents?.on) return;
+  entry.designModeNavHooked = true;
+  const reinject = () => {
+    if (!entry.designMode) return;
+    void injectDesignModePicker(entry).catch(() => undefined);
+  };
+  webContents.on('did-finish-load', reinject);
+  webContents.on('did-navigate-in-page', reinject);
+}
+
+async function injectDesignModePicker(entry) {
+  const webContents = entry.view.webContents;
+  if (!webContents?.executeJavaScript) return;
+  // Always reinstall so SPA navigations / stale flags cannot leave us without handlers.
+  try {
+    await webContents.executeJavaScript(buildPickerUninstallScript(), true);
+  } catch {
+    // First install — uninstall may no-op.
+  }
+  await webContents.executeJavaScript(buildPickerInstallScript(), true);
+}
+
+async function removeDesignModePicker(entry) {
+  const webContents = entry.view.webContents;
+  if (!webContents?.executeJavaScript) return;
+  await webContents.executeJavaScript(buildPickerUninstallScript(), true);
+}
+
+function findEmbeddedBrowserByWebContents(webContents) {
+  for (const entry of embeddedBrowserViews.values()) {
+    if (entry.view.webContents === webContents) return entry;
+  }
+  return null;
+}
+
+function focusDesignModeOverlayHost() {
+  if (!mainWindow) return;
+  try {
+    if (mainWindow.isMinimized?.()) mainWindow.restore?.();
+    mainWindow.show?.();
+    mainWindow.focus?.();
+    mainWindow.webContents?.focus?.();
+  } catch {
+    // Focus is best-effort; the renderer still receives the pick event.
+  }
+}
+
+async function captureDesignModeCrop(entry, bbox) {
+  const webContents = entry.view.webContents;
+  if (!webContents?.capturePage || !bbox) return undefined;
+  try {
+    const image = await webContents.capturePage({
+      x: Math.max(0, bbox.x),
+      y: Math.max(0, bbox.y),
+      width: Math.max(1, bbox.width),
+      height: Math.max(1, bbox.height),
+    });
+    if (!image || typeof image.toPNG !== 'function') return undefined;
+    const png = image.toPNG();
+    if (!png || !png.length) return undefined;
+    return Buffer.from(png).toString('base64');
+  } catch {
+    return undefined;
+  }
+}
+
+async function forwardDesignModePick(entry, rawPayload) {
+  const pick = normalizeGuestPick(rawPayload);
+  if (!pick.cropPngBase64) {
+    const crop = await captureDesignModeCrop(entry, pick.bbox);
+    if (crop) pick.cropPngBase64 = crop;
+  }
+  // Return keyboard focus to the app so the React Design Mode pill can receive typing.
+  focusDesignModeOverlayHost();
+  mainWindow?.webContents?.send?.('browser:design-mode-pick', {
+    id: entry.id,
+    pick,
+  });
+}
+
+async function forwardDesignModeSteer(entry, rawPayload) {
+  const text = typeof rawPayload?.text === 'string' ? rawPayload.text : '';
+  const rawComponents = Array.isArray(rawPayload?.components) ? rawPayload.components : [];
+  const components = [];
+  for (const raw of rawComponents.slice(0, 8)) {
+    try {
+      const pick = normalizeGuestPick(raw);
+      if (!pick.cropPngBase64) {
+        const crop = await captureDesignModeCrop(entry, pick.bbox);
+        if (crop) pick.cropPngBase64 = crop;
+      }
+      components.push(pick);
+    } catch {
+      // Skip malformed picks.
+    }
+  }
+  mainWindow?.webContents?.send?.('browser:design-mode-steer', {
+    id: entry.id,
+    text,
+    components,
+  });
+}
+
+function forwardDesignModeExit(entry) {
+  entry.designMode = false;
+  void removeDesignModePicker(entry).catch(() => undefined);
+  mainWindow?.webContents?.send?.('browser:design-mode-exit', { id: entry.id });
 }
 
 function embeddedBrowserState(entry) {
@@ -756,6 +869,50 @@ function registerBrowserHandlers() {
   ipcMain.handle('browser:hide', (_event, id) => {
     if (typeof id !== 'string') return;
     detachEmbeddedBrowser(id);
+  });
+
+  ipcMain.handle('browser:design-mode-enter', async (_event, id) => {
+    const entry = getEmbeddedBrowser(id);
+    entry.designMode = true;
+    attachEmbeddedBrowser(entry);
+    await injectDesignModePicker(entry);
+    return { ok: true, id: entry.id };
+  });
+
+  ipcMain.handle('browser:design-mode-leave', async (_event, id) => {
+    const entry = embeddedBrowserViews.get(id);
+    if (!entry) return { ok: true, id };
+    entry.designMode = false;
+    await removeDesignModePicker(entry);
+    return { ok: true, id: entry.id };
+  });
+
+  ipcMain.on('browser:design-mode-guest-pick', (event, payload) => {
+    const entry = findEmbeddedBrowserByWebContents(event.sender);
+    if (!entry || !entry.designMode) return;
+    void forwardDesignModePick(entry, payload).catch((error) => {
+      console.error(
+        '[nuncio-desktop] design mode pick failed:',
+        error instanceof Error ? error.message : error,
+      );
+    });
+  });
+
+  ipcMain.on('browser:design-mode-guest-steer', (event, payload) => {
+    const entry = findEmbeddedBrowserByWebContents(event.sender);
+    if (!entry || !entry.designMode) return;
+    void forwardDesignModeSteer(entry, payload).catch((error) => {
+      console.error(
+        '[nuncio-desktop] design mode steer failed:',
+        error instanceof Error ? error.message : error,
+      );
+    });
+  });
+
+  ipcMain.on('browser:design-mode-guest-exit', (event) => {
+    const entry = findEmbeddedBrowserByWebContents(event.sender);
+    if (!entry) return;
+    forwardDesignModeExit(entry);
   });
 }
 

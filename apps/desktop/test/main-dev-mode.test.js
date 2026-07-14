@@ -29,7 +29,12 @@ async function runMain({
     browserPartitions: [],
     browserReloads: 0,
     browserViews: [],
+    browserExecuteScripts: [],
+    browserSentEvents: [],
+    windowSentEvents: [],
     ipcHandlers: {},
+    ipcListeners: {},
+    focusCalls: 0,
     loadedUrls: [],
     removedBrowserViews: [],
     setBrowserViews: [],
@@ -111,6 +116,12 @@ async function runMain({
           webContentsHandlers[eventName] = handler;
         },
         getURL: () => this.currentUrl,
+        send(channel, payload) {
+          state.windowSentEvents.push({ channel, payload });
+        },
+        focus() {
+          state.focusCalls += 1;
+        },
       };
       state.windows.push(this);
     }
@@ -137,9 +148,10 @@ async function runMain({
       this.shown = false;
     }
 
-    focus() {
-      this.focused = true;
-    }
+            focus() {
+              this.focused = true;
+              state.focusCalls += 1;
+            }
 
     isMinimized() {
       return this.minimized;
@@ -167,7 +179,9 @@ async function runMain({
       this.options = options;
       this.url = '';
       this.title = '';
+      const webContentsHandlers = {};
       this.webContents = {
+        handlers: webContentsHandlers,
         loadURL: (url) => {
           this.url = url;
           state.browserLoads.push(url);
@@ -179,6 +193,22 @@ async function runMain({
         getURL: () => this.url,
         getTitle: () => this.title,
         isLoading: () => false,
+        executeJavaScript: async (script) => {
+          state.browserExecuteScripts.push(script);
+          return true;
+        },
+        on(eventName, handler) {
+          webContentsHandlers[eventName] = handler;
+        },
+        send(channel, payload) {
+          state.browserSentEvents.push({ channel, payload });
+        },
+        focus() {
+          state.focusCalls += 1;
+        },
+        capturePage: async () => ({
+          toPNG: () => Buffer.from('fake-png'),
+        }),
       };
       state.browserPartitions.push(options?.webPreferences?.partition);
       state.browserViews.push(this);
@@ -290,6 +320,9 @@ async function runMain({
             handle(channel, handler) {
               state.ipcHandlers[channel] = handler;
             },
+            on(channel, handler) {
+              state.ipcListeners[channel] = handler;
+            },
           },
           Notification: class {
             static isSupported() {
@@ -305,6 +338,12 @@ async function runMain({
             },
           },
         };
+      }
+      if (specifier === './browser-url') {
+        return require(path.resolve(__dirname, '../src/browser-url.js'));
+      }
+      if (specifier === './design-mode') {
+        return require(path.resolve(__dirname, '../src/design-mode.js'));
       }
       if (specifier === './daemon') {
         return { DaemonSupervisor: FakeDaemonSupervisor };
@@ -444,6 +483,20 @@ describe('desktop main dev-mode loading', () => {
     });
   });
 
+  test('desktop browser navigates localhost:port over http (not as a fake scheme)', async () => {
+    const state = await runMain({
+      fetchImpl: async (url) => ({ ok: url === 'http://localhost:5173' }),
+    });
+
+    await state.ipcHandlers['browser:show']({}, {
+      id: 's1',
+      bounds: { x: 0, y: 0, width: 400, height: 300 },
+    });
+    await state.ipcHandlers['browser:navigate']({}, 's1', 'localhost:5173');
+
+    expect(state.browserLoads).toEqual(['http://localhost:5173']);
+  });
+
   test('desktop browser hide detaches the native view without destroying the profile', async () => {
     const state = await runMain({
       fetchImpl: async (url) => ({ ok: url === 'http://localhost:5173' }),
@@ -463,6 +516,52 @@ describe('desktop main dev-mode loading', () => {
     expect(state.browserViews).toHaveLength(1);
     expect(state.removedBrowserViews).toEqual([state.browserViews[0]]);
     expect(state.setBrowserViews).toEqual([state.browserViews[0], state.browserViews[0]]);
+  });
+
+  test('design mode enter injects the picker and guest picks forward to the renderer', async () => {
+    const state = await runMain({
+      fetchImpl: async (url) => ({ ok: url === 'http://localhost:5173' }),
+    });
+
+    await state.ipcHandlers['browser:show']({}, {
+      id: 's1',
+      url: 'https://example.com',
+      bounds: { x: 0, y: 0, width: 400, height: 300 },
+    });
+
+    await state.ipcHandlers['browser:design-mode-enter']({}, 's1');
+    expect(
+      state.browserExecuteScripts.some((script) => script.includes('__nuncio-design-mode-highlight')),
+    ).toBe(true);
+    expect(state.browserViews[0].options.webPreferences.preload).toContain('browser-view-preload.js');
+
+    const guestPick = state.ipcListeners['browser:design-mode-guest-pick'];
+    expect(typeof guestPick).toBe('function');
+
+    await guestPick(
+      { sender: state.browserViews[0].webContents },
+      {
+        tag: 'INPUT',
+        placeholder: 'Search',
+        className: 'RNNXgb',
+        xpath: '/html/body/input[1]',
+        cssPath: 'input',
+        outerHTML: '<input placeholder="Search" />',
+        styles: { fontSize: '14px' },
+        bbox: { x: 8, y: 12, width: 64, height: 28 },
+      },
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(state.focusCalls).toBeGreaterThan(0);
+    expect(state.windowSentEvents.some((e) => e.channel === 'browser:design-mode-pick')).toBe(true);
+    const pickEvent = state.windowSentEvents.find((e) => e.channel === 'browser:design-mode-pick');
+    expect(pickEvent.payload.id).toBe('s1');
+    expect(pickEvent.payload.pick.label).toBe('Search');
+    expect(pickEvent.payload.pick.cropPngBase64).toBe(Buffer.from('fake-png').toString('base64'));
+
+    await state.ipcHandlers['browser:design-mode-leave']({}, 's1');
   });
 
   test('external:open delegates http links to the system browser only', async () => {
