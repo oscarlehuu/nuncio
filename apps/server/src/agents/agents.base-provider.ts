@@ -27,8 +27,12 @@ export class RetainedEventFlushError extends Error {
 
 /** Streamed token events that are safe to merge by concatenating `delta`. */
 const COALESCED_EVENT_TYPES = new Set(['assistant_delta', 'thinking_delta']);
-/** Quiet-stream flush: buffered deltas reach persistence/subscribers within this window. */
-const DELTA_FLUSH_MS = 100;
+/**
+ * Quiet-stream flush: buffered deltas reach persistence/subscribers within this
+ * window. 25ms (~40 flushes/sec) keeps streaming visually smooth while still
+ * bounding SQLite appends well below per-token writes.
+ */
+const DELTA_FLUSH_MS = 25;
 /** Flush before a merged payload can approach the 4KB event truncation limit. */
 const DELTA_FLUSH_MAX_CHARS = 2000;
 /** Hard aggregate bound while durable storage is unavailable. */
