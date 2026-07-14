@@ -1,4 +1,4 @@
-import { beforeAll, afterAll, beforeEach, describe, mock } from 'bun:test';
+import { beforeAll, afterAll, beforeEach, describe, expect, mock } from 'bun:test';
 import { Test, TestingModule } from '@nestjs/testing';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -20,6 +20,8 @@ let promptBehavior: (() => Promise<void>) | null = null;
 const abortMock = mock(async () => {
   isStreaming = false;
 });
+const steerMock = mock(async () => undefined);
+let releasePrompt: (() => void) | null = null;
 
 function registryModel(provider = 'anthropic', id = 'model-1') {
   return {
@@ -69,7 +71,7 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
         await promptBehavior?.();
       },
       abort: abortMock,
-      steer: async () => undefined,
+      steer: steerMock,
       setModel: async () => undefined,
       setThinkingLevel: () => undefined,
     },
@@ -113,6 +115,8 @@ describe('PiAgentProvider contract', () => {
     isStreaming = false;
     promptBehavior = null;
     abortMock.mockClear();
+    steerMock.mockClear();
+    releasePrompt = null;
     provider.bustCache();
   });
 
@@ -173,6 +177,36 @@ describe('PiAgentProvider contract', () => {
       await promptStarted;
       await provider.interrupt(sessionId);
       rejectPrompt(new Error('aborted by user'));
+      await run;
+    },
+    exercisesSteerMidRun: true,
+    arrangeMidRunSteer: async (sessionId, emit: EventEmitter) => {
+      const promptStarted = new Promise<void>((resolve) => {
+        promptBehavior = async () =>
+          new Promise<void>((resolvePrompt) => {
+            releasePrompt = () => {
+              subscribedHandler?.({
+                type: 'message_end',
+                message: {
+                  role: 'assistant',
+                  stopReason: 'stop',
+                  content: [{ type: 'text', text: 'after mid-run steer' }],
+                },
+              });
+              resolvePrompt();
+            };
+            resolve();
+          });
+      });
+      isStreaming = true;
+      const created = sessions.findById(sessionId)!;
+      const run = provider.run(sessionId, created.prompt, { emit });
+      await promptStarted;
+      const delivered = await provider.steerMidRun!(sessionId, 'steer while streaming', { emit });
+      expect(delivered).toBe(true);
+      expect(steerMock).toHaveBeenCalled();
+      isStreaming = false;
+      releasePrompt?.();
       await run;
     },
   }));

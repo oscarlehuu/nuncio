@@ -94,6 +94,7 @@ export class SharedSessionRelayConnection {
       channel?: string;
       event?: SessionEvent;
       behind?: boolean;
+      notice?: string;
     };
     try {
       frame = JSON.parse(String(data));
@@ -112,6 +113,16 @@ export class SharedSessionRelayConnection {
         if (frame.event.seq <= consumer.lastSeq) continue;
         consumer.lastSeq = Math.max(consumer.lastSeq, frame.event.seq);
         consumer.onEvent(frame.event);
+      }
+      return;
+    }
+    // Top-level notice (e.g. graceful `server_shutdown`). While the socket is
+    // still up, resubscribe from each channel's lastSeq so clients catch up
+    // before the connection drops. If the socket is already down, the next
+    // open path re-subscribes all channels as usual.
+    if (typeof frame.notice === 'string') {
+      if (frame.notice === 'server_shutdown' && this.socketOpen) {
+        for (const sessionId of this.channels.keys()) this.sendSubscribe(sessionId);
       }
       return;
     }

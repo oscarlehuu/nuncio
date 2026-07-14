@@ -23,6 +23,7 @@ import { derivePendingQueuedSteers } from '../lib/transcript-build-blocks';
 import { useComposerAttachments } from '../lib/use-composer-attachments';
 import { AttachButton, AttachmentTray } from './attachment-tray';
 import { derivePendingUserInput } from '../lib/derive-pending-user-input';
+import { deriveComposerEnabled } from '../lib/derive-composer-enabled';
 import { isComposingEvent } from '../lib/keyboard';
 import { useStickToBottom } from '../lib/use-stick-to-bottom';
 import { deriveVerifyStatus } from '../lib/derive-verify-status';
@@ -302,12 +303,13 @@ export function SessionDetail({
     !managedByCrew &&
     modelSupportsImages(catalog, session.provider, session.model ?? undefined, session.supportsImages ?? false) &&
     !isArchived;
-  const steerDisabled =
-    managedByCrew ||
-    session.status === 'ARCHIVED' ||
-    steering ||
-    lifecycleBusy ||
-    hasPendingUserInput;
+  const steerDisabled = !deriveComposerEnabled({
+    status: session.status,
+    managedByCrew,
+    steering: steering ?? false,
+    lifecycleBusy: lifecycleBusy ?? false,
+    hasPendingUserInput,
+  }).enabled;
   const showHeaderPause = !managedByCrew && session.status !== 'PAUSED' && !isArchived;
   const canArchive = !managedByCrew && !isArchived;
   const canRestore = !managedByCrew && isArchived && !!onRestore;

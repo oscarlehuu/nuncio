@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it } from 'bun:test';
 import {
   cliAuthPath,
   githubCliToken,
@@ -93,6 +93,44 @@ describe('forge CLI auth helpers', () => {
     it('returns null on command failure or missing binary', async () => {
       await expect(gitlabCliToken(runner({ exitCode: 1, stdout: '', stderr: 'no auth' }))).resolves.toBeNull();
       await expect(gitlabCliToken(throwingRunner())).resolves.toBeNull();
+    });
+  });
+
+  describe('runCli integration via default runner', () => {
+    const originalSpawn = Bun.spawn;
+
+    afterEach(() => {
+      Bun.spawn = originalSpawn;
+    });
+
+    it('githubCliToken reads a token from a mocked gh spawn', async () => {
+      Bun.spawn = ((_cmd: string[], _opts?: object) => ({
+        stdout: new Response('ghp_spawned_token\n').body,
+        stderr: new Response('').body,
+        exited: Promise.resolve(0),
+        kill() {},
+      })) as typeof Bun.spawn;
+      await expect(githubCliToken()).resolves.toBe('ghp_spawned_token');
+    });
+
+    it('githubCliToken returns null when the mocked spawn times out', async () => {
+      Bun.spawn = ((_cmd: string[], _opts?: object) => ({
+        stdout: new Response('').body,
+        stderr: new Response('').body,
+        exited: new Promise(() => {}),
+        kill() {},
+      })) as typeof Bun.spawn;
+      await expect(githubCliToken()).resolves.toBeNull();
+    }, 10_000);
+
+    it('gitlabCliToken reads stderr from a mocked glab spawn', async () => {
+      Bun.spawn = ((_cmd: string[], _opts?: object) => ({
+        stdout: new Response('').body,
+        stderr: new Response('✓ Token found: glpat_spawned\n').body,
+        exited: Promise.resolve(0),
+        kill() {},
+      })) as typeof Bun.spawn;
+      await expect(gitlabCliToken()).resolves.toBe('glpat_spawned');
     });
   });
 });

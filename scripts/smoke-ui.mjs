@@ -224,6 +224,47 @@ async function main() {
     streamStep.ok = true;
     streamStep.detail = `matched "${replyMark}…" and exact final text`;
 
+    // 3b) Composer must be enabled once the mock run is IDLE (B1 projection regression).
+    const composerEnabledStep = record('composer: enabled after IDLE (deriveComposerEnabled)');
+    await waitFor(
+      async () => {
+        const res = await fetch(`${baseUrl}/api/sessions/${session.id}`);
+        if (!res.ok) return false;
+        const body = await res.json();
+        return body.status === 'IDLE';
+      },
+      { label: 'mock session to settle IDLE' },
+    );
+    if (await composer.isDisabled()) {
+      throw new Error('steer composer stayed disabled after IDLE');
+    }
+    composerEnabledStep.ok = true;
+
+    // 3c) Light theme screenshot (visual gate for both themes).
+    // ModeToggle sits under the desktop sidebar rail hit-target in this layout,
+    // so set the theme the same way ThemeProvider persists it and prove paint.
+    const lightThemeStep = record('theme: apply Light and capture session screenshot');
+    await page.evaluate(() => {
+      localStorage.setItem('nuncio-theme', 'light');
+      document.documentElement.classList.remove('dark');
+    });
+    await waitFor(
+      async () => !(await page.locator('html').evaluate((el) => el.classList.contains('dark'))),
+      { label: 'html to leave .dark after Light theme' },
+    );
+    await page.screenshot({
+      path: join(ARTIFACTS_DIR, 'session-detail-light.png'),
+      fullPage: true,
+    });
+    lightThemeStep.ok = true;
+
+    // 3d) Stop/Interrupt while RUNNING — Mock has interrupt:false and settles
+    // instantly, so the control is not exercisable mid-run here. Covered by
+    // provider-contract interrupt honesty + unit projections instead.
+    const interruptSkipStep = record('interrupt: skipped on mock (interrupt:false, settles instantly)');
+    interruptSkipStep.ok = true;
+    interruptSkipStep.detail = 'no mid-run Stop surface for Mock; contract suite covers capable providers';
+
     // 4) With the detail view already live, send a steer and prove a partial
     // reply renders before the exact terminal text.
     const steerStep = record('steer: partial reply renders before exact completion');

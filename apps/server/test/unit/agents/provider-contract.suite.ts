@@ -65,6 +65,19 @@ export interface ProviderContractHarness {
    * session settled (IDLE, not stuck RUNNING). Required iff `exercisesInterrupt`.
    */
   arrangeAndInterrupt?(sessionId: string, emit: EventEmitter): Promise<void>;
+  /**
+   * Capability honesty: whether this provider declares `steerWhileRunning: true`
+   * and must prove mid-run steering actually works. When false, the contract
+   * asserts the declared-off capability rejects cleanly instead.
+   */
+  exercisesSteerMidRun?: boolean;
+  /**
+   * For steer-while-running-capable providers: arrange a live streaming run,
+   * call `steerMidRun` with a message, and resolve once steer is delivered
+   * (must emit `steer_message` or leave equivalent evidence). Must leave the
+   * session settled (not stuck RUNNING). Required iff `exercisesSteerMidRun`.
+   */
+  arrangeMidRunSteer?(sessionId: string, emit: EventEmitter): Promise<void>;
 }
 
 export type MakeHarness = () => Promise<ProviderContractHarness> | ProviderContractHarness;
@@ -249,6 +262,37 @@ export function describeAgentProviderContract(name: string, makeHarness: MakeHar
       const maybeInterrupt = h.provider.interrupt?.bind(h.provider);
       if (maybeInterrupt) {
         await expect(maybeInterrupt('no-such-session')).resolves.toBeUndefined();
+      }
+    });
+
+    it('capability honesty: steerWhileRunning matches its declared capability', async () => {
+      const h = await makeHarness();
+      const emitted: CapturedEvent[] = [];
+      const emit: EventEmitter = (e) => emitted.push(e);
+
+      if (h.exercisesSteerMidRun) {
+        expect(h.provider.capabilities.steerWhileRunning).toBe(true);
+        expect(typeof h.provider.steerMidRun).toBe('function');
+        expect(h.arrangeMidRunSteer).toBeDefined();
+
+        const created = h.createSession('mid-run steerable run');
+        await h.arrangeMidRunSteer!(created.id, emit);
+
+        await waitUntil(
+          () => h.sessions.findById(created.id)?.status !== 'RUNNING',
+          'session settles after mid-run steer',
+        );
+        expect(h.sessions.findById(created.id)?.status).not.toBe('RUNNING');
+
+        const all = [...emitted, ...(h.events.list(created.id) as CapturedEvent[])];
+        expect(all.some((event) => event.type === 'steer_message')).toBe(true);
+        return;
+      }
+
+      expect(h.provider.capabilities.steerWhileRunning).toBe(false);
+      const maybeSteerMidRun = h.provider.steerMidRun?.bind(h.provider);
+      if (maybeSteerMidRun) {
+        await expect(maybeSteerMidRun('no-such-session', 'orphan steer', {})).resolves.toBeFalsy();
       }
     });
   });

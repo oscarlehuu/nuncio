@@ -101,6 +101,29 @@ describe('browser session relay pool', () => {
     second.close();
   });
 
+  it('resubscribes from lastSeq on server_shutdown without wiping delivery', () => {
+    const seen: number[] = [];
+    const sub = subscribeSessionEvents({
+      url: 'ws://x',
+      sessionId: 's1',
+      since: 1,
+      onEvent: (e) => seen.push(e.seq),
+    });
+    const socket = FakeSocket.instances[0]!;
+    socket.open();
+    socket.push({ channel: 's1', event: event(3) });
+    const before = messages(socket, 'subscribe').length;
+
+    socket.push({ notice: 'server_shutdown' });
+    expect(messages(socket, 'subscribe')).toHaveLength(before + 1);
+    expect(messages(socket, 'subscribe').at(-1)?.params).toEqual({ sessionId: 's1', since: 3 });
+    expect(seen).toEqual([3]);
+
+    socket.push({ channel: 's1', event: event(4) });
+    expect(seen).toEqual([3, 4]);
+    sub.close();
+  });
+
   it('recovers a behind channel without disturbing its neighbor', () => {
     const first = subscribeSessionEvents({ url: 'ws://x', sessionId: 's1', since: 1, onEvent: () => {} });
     const second = subscribeSessionEvents({ url: 'ws://x', sessionId: 's2', since: 7, onEvent: () => {} });

@@ -1,4 +1,4 @@
-import { beforeEach, afterEach, describe } from 'bun:test';
+import { beforeEach, afterEach, describe, expect } from 'bun:test';
 import { Test, TestingModule } from '@nestjs/testing';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -19,7 +19,8 @@ import { describeAgentProviderContract } from './provider-contract.suite';
 type Script =
   | { kind: 'success'; deltas: string[]; finalText: string }
   | { kind: 'error' }
-  | { kind: 'interrupt' };
+  | { kind: 'interrupt' }
+  | { kind: 'midRunSteer' };
 
 /**
  * A scriptable stand-in for the SDK `query()` handle. It mirrors the real
@@ -29,6 +30,8 @@ type Script =
  */
 class FakeClaudeQuery implements ClaudeQuery {
   private interruptRequested = false;
+  /** When set by the harness, unblocks a midRunSteer stall after steerMidRun lands. */
+  releaseMidRunSteer: (() => void) | null = null;
 
   constructor(
     private readonly getScript: () => Script,
@@ -65,6 +68,15 @@ class FakeClaudeQuery implements ClaudeQuery {
       return;
     }
 
+    if (script.kind === 'midRunSteer') {
+      // Stall until the harness calls steerMidRun and releases the turn.
+      await new Promise<void>((resolve) => {
+        this.releaseMidRunSteer = resolve;
+      });
+      yield { type: 'result', subtype: 'success', result: 'after mid-run steer' };
+      return;
+    }
+
     // interrupt: stall until interrupt() lands, then emit the aborted terminal
     // the SDK sends for query.interrupt() — an error subtype that must map to a
     // clean stop, not ERROR.
@@ -87,6 +99,7 @@ describe('ClaudeAgentProvider contract', () => {
   let events: EventsRepository;
   let dataDir: string;
   let script: Script;
+  let fakeQuery: FakeClaudeQuery;
 
   beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-claude-contract-'));
@@ -102,7 +115,8 @@ describe('ClaudeAgentProvider contract', () => {
     provider = module.get(ClaudeAgentProvider);
 
     script = { kind: 'success', deltas: [], finalText: '' };
-    provider.queryFactory = () => new FakeClaudeQuery(() => script);
+    fakeQuery = new FakeClaudeQuery(() => script);
+    provider.queryFactory = () => fakeQuery;
     // Availability without spawning a real CLI: pretend a logged-in bundled binary.
     provider.bundledBinaryPath = '/fake/claude';
     provider.commandRunner = async () => ({
@@ -144,6 +158,24 @@ describe('ClaudeAgentProvider contract', () => {
       // Let the run reach the stalled delta loop, then interrupt.
       await new Promise((resolve) => setTimeout(resolve, 20));
       await provider.interrupt(sessionId);
+      await run;
+    },
+    exercisesSteerMidRun: true,
+    arrangeMidRunSteer: async (sessionId, emit) => {
+      script = { kind: 'midRunSteer' };
+      const run = provider.run(sessionId, 'steer while streaming', {
+        cwd: '/tmp/project',
+        model: 'claude:haiku',
+        emit,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const delivered = await provider.steerMidRun!(sessionId, 'steer while streaming', {
+        cwd: '/tmp/project',
+        model: 'claude:haiku',
+        emit,
+      });
+      expect(delivered).toBe(true);
+      fakeQuery.releaseMidRunSteer?.();
       await run;
     },
   }));
