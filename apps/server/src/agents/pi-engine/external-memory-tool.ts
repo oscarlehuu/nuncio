@@ -70,9 +70,12 @@ export function buildExternalMemoryTool(
       if (typeof id !== 'string' || !validId(id)) {
         return error('Rejected invalid memory id. Use an id from the injected index.');
       }
+      // The Claude index shows filename links like (style.md) while ids are
+      // the stems, so accept the displayed form the agent is likely to copy.
+      const lookupId = source === 'claude-code' ? id.replace(/\.md$/i, '') : id;
       const availableIds = deps.availableIds(source);
-      if (!availableIds.includes(id)) return error(unknownIdText(source, id, availableIds));
-      const content = await deps.read(source, id);
+      if (!availableIds.includes(lookupId)) return error(unknownIdText(source, id, availableIds));
+      const content = await deps.read(source, lookupId);
       if (content === null) return error(unknownIdText(source, id, availableIds));
       return {
         content: [{

@@ -30,6 +30,16 @@ describe('read_external_memory', () => {
     }
   });
 
+  it('accepts the displayed filename form for Claude ids but not for Codex', async () => {
+    const tool = buildExternalMemoryTool(deps as never) as ExternalMemoryTool;
+    const claude = await tool.execute('call', { source: 'claude-code', id: 'safe-one.md' });
+    expect(claude.isError).toBeUndefined();
+    expect(claude.content[0]?.text).toBe('memory body');
+
+    const codex = await tool.execute('call', { source: 'codex', id: 'safe-one.md' });
+    expect(codex.isError).toBe(true);
+  });
+
   it('returns the complete session-bound id list for an unknown id', async () => {
     const ids = Array.from({ length: 400 }, (_, index) => `memory-${index}`);
     const tool = buildExternalMemoryTool({
