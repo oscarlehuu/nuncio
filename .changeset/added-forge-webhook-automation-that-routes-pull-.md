@@ -2,4 +2,4 @@
 "nuncio": minor
 ---
 
-Added forge webhook automation that routes trusted collaborator feedback and failing CI to owning sessions, safely closes clean merged sessions, and creates source-tracking sessions from existing pull requests.
+Added forge webhook automation that durably routes trusted collaborator feedback and failing CI to one owning session, safely closes clean merged sessions, and creates source-tracking pull-request sessions that support plain pushes.

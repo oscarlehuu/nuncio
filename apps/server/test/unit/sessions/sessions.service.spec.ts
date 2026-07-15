@@ -1,6 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AgentsModule } from '../../../src/agents/agents.module';
@@ -518,6 +518,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
 
     it('repairs stale worktree metadata before restoring an archived session', () => {
       const missingWorktree = join(workspacesDir, 'removed-worktree');
+      mkdirSync(missingWorktree, { recursive: true });
       const created = sessions.create({
         prompt: 'Restore after merge cleanup',
         provider: 'cursor',
@@ -544,6 +545,41 @@ describe('SessionsService lifecycle (phase 3)', () => {
         branch: null,
       });
       expect(restored.runtimePolicy?.workspaceRoot).toBe(repoPath);
+    });
+
+    it('detaches stale PR ownership when restoring an archived former owner', () => {
+      const former = sessions.create({
+        prompt: 'former PR owner',
+        provider: 'cursor',
+        projectPath: repoPath,
+        pullRequestNumber: 92,
+        forgeProvider: 'github',
+        pullRequestUrl: 'https://github.com/octo/nuncio/pull/92',
+        pullRequestState: 'merged',
+        forgeStatus: 'merged',
+      });
+      sessions.updateStatus(former.id, 'RUNNING');
+      sessions.updateStatus(former.id, 'IDLE');
+      sessions.updateStatus(former.id, 'ARCHIVED');
+      const replacement = sessions.create({
+        prompt: 'replacement PR owner',
+        provider: 'cursor',
+        projectPath: repoPath,
+        pullRequestNumber: 92,
+        forgeProvider: 'github',
+      });
+
+      const restored = service.restore(former.id);
+
+      expect(restored).toMatchObject({
+        status: 'IDLE',
+        forgeProvider: null,
+        pullRequestUrl: null,
+        pullRequestNumber: null,
+        pullRequestState: null,
+        forgeStatus: 'none',
+      });
+      expect(sessions.findById(replacement.id)?.pullRequestNumber).toBe(92);
     });
 
     it('rejects restore on a non-archived session', () => {
@@ -1253,6 +1289,27 @@ describe('SessionsService lifecycle (phase 3)', () => {
         }),
       ).rejects.toThrow(BadRequestException);
       expect(service.list(true).length).toBe(before);
+    });
+
+    it('removes a newly created worktree when active PR ownership rejects the insert', async () => {
+      sessions.create({
+        prompt: 'existing PR owner',
+        provider: 'cursor',
+        projectPath: repoPath,
+        pullRequestNumber: 91,
+      });
+      const before = readdirSync(workspacesDir).sort();
+
+      await expect(service.create({
+        prompt: 'stale adoption request',
+        provider: 'cursor',
+        projectPath: repoPath,
+        baseBranch: 'main',
+        useWorktree: true,
+        pullRequestNumber: 91,
+      })).rejects.toThrow('UNIQUE constraint failed');
+
+      expect(readdirSync(workspacesDir).sort()).toEqual(before);
     });
   });
 });

@@ -13,6 +13,8 @@ import {
 import { assertTransition } from '../domain/sessions.fsm';
 import type { CreateSessionDto, SessionDto, SessionRow, SessionStatus } from '../domain/sessions.types';
 
+export const PULL_REQUEST_ADOPTION_LEASE_MS = 30_000;
+
 function parseProviderStateJson(raw: string | null | undefined): Record<string, unknown> | null {
   if (!raw?.trim()) return null;
   try {
@@ -154,6 +156,162 @@ export class SessionsRepository {
     return row ? toDto(row) : null;
   }
 
+  claimPullRequestAdoption(
+    projectPath: string,
+    pullRequestNumber: number,
+    claimToken: string,
+  ):
+    | { status: 'claimed' }
+    | { status: 'existing'; sessionId: string }
+    | { status: 'pending' } {
+    return this.database.immediateTransaction(() => {
+      const active = this.database.db
+        .prepare<{ id: string }, [string, number]>(
+          `SELECT id FROM sessions
+           WHERE project_path = ? AND pull_request_number = ?
+             AND status != 'ARCHIVED' AND verify_owner = 'session'
+           ORDER BY updated_at DESC, rowid DESC LIMIT 1`,
+        )
+        .get(projectPath, pullRequestNumber);
+      if (active) return { status: 'existing' as const, sessionId: active.id };
+
+      const now = Date.now();
+      const leaseExpiresAt = now + PULL_REQUEST_ADOPTION_LEASE_MS;
+      const inserted = this.database.db
+        .prepare(
+          `INSERT OR IGNORE INTO forge_pr_session_claims
+           (project_path, pull_request_number, claim_token, session_id, created_at, lease_expires_at)
+           VALUES (?, ?, ?, NULL, ?, ?)`,
+        )
+        .run(projectPath, pullRequestNumber, claimToken, now, leaseExpiresAt);
+      if (inserted.changes > 0) return { status: 'claimed' as const };
+
+      const claim = this.database.db
+        .prepare<
+          { claim_token: string; session_id: string | null; lease_expires_at: number | null },
+          [string, number]
+        >(
+          `SELECT claim_token, session_id, lease_expires_at FROM forge_pr_session_claims
+           WHERE project_path = ? AND pull_request_number = ?`,
+        )
+        .get(projectPath, pullRequestNumber)!;
+      if (claim.session_id) {
+        const owner = this.database.db
+          .prepare<{ status: SessionStatus }, [string, string, number]>(
+            `SELECT status FROM sessions
+             WHERE id = ? AND project_path = ? AND pull_request_number = ?
+               AND verify_owner = 'session'`,
+          )
+          .get(claim.session_id, projectPath, pullRequestNumber);
+        if (owner && owner.status !== 'ARCHIVED') {
+          return { status: 'existing' as const, sessionId: claim.session_id };
+        }
+      }
+      if (claim.session_id) {
+        this.database.db
+          .prepare(
+            `UPDATE forge_pr_session_claims
+             SET claim_token = ?, session_id = NULL, created_at = ?, lease_expires_at = ?
+             WHERE project_path = ? AND pull_request_number = ?`,
+          )
+          .run(claimToken, now, leaseExpiresAt, projectPath, pullRequestNumber);
+        return { status: 'claimed' as const };
+      }
+      if ((claim.lease_expires_at ?? 0) <= now) {
+        this.database.db
+          .prepare(
+            `UPDATE forge_pr_session_claims
+             SET claim_token = ?, created_at = ?, lease_expires_at = ?
+             WHERE project_path = ? AND pull_request_number = ? AND session_id IS NULL`,
+          )
+          .run(claimToken, now, leaseExpiresAt, projectPath, pullRequestNumber);
+        return { status: 'claimed' as const };
+      }
+      return { status: 'pending' as const };
+    });
+  }
+
+  renewPullRequestAdoption(
+    projectPath: string,
+    pullRequestNumber: number,
+    claimToken: string,
+  ): boolean {
+    const renewed = this.database.db
+      .prepare(
+        `UPDATE forge_pr_session_claims SET lease_expires_at = ?
+         WHERE project_path = ? AND pull_request_number = ?
+           AND claim_token = ? AND session_id IS NULL`,
+      )
+      .run(
+        Date.now() + PULL_REQUEST_ADOPTION_LEASE_MS,
+        projectPath,
+        pullRequestNumber,
+        claimToken,
+      );
+    return renewed.changes === 1;
+  }
+
+  completePullRequestAdoption(
+    projectPath: string,
+    pullRequestNumber: number,
+    claimToken: string,
+    sessionId: string,
+    state: {
+      forgeProvider: string;
+      pullRequestUrl: string;
+      pullRequestState: string;
+      forgeStatus: string;
+    },
+  ): void {
+    this.database.transaction(() => {
+      const claim = this.database.db
+        .prepare<{ claim_token: string; session_id: string | null }, [string, number]>(
+          `SELECT claim_token, session_id FROM forge_pr_session_claims
+           WHERE project_path = ? AND pull_request_number = ?`,
+        )
+        .get(projectPath, pullRequestNumber);
+      if (!claim || claim.claim_token !== claimToken || claim.session_id !== null) {
+        throw new Error('Pull request adoption claim is no longer owned by this request');
+      }
+      const updated = this.database.db
+        .prepare(
+          `UPDATE sessions SET forge_provider = ?, pull_request_url = ?,
+           pull_request_number = ?, pull_request_state = ?, forge_status = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(
+          state.forgeProvider,
+          state.pullRequestUrl,
+          pullRequestNumber,
+          state.pullRequestState,
+          state.forgeStatus,
+          Date.now(),
+          sessionId,
+        );
+      if (updated.changes !== 1) throw new Error(`Session ${sessionId} not found`);
+      this.database.db
+        .prepare(
+          `UPDATE forge_pr_session_claims SET session_id = ?
+           WHERE project_path = ? AND pull_request_number = ? AND claim_token = ?`,
+        )
+        .run(sessionId, projectPath, pullRequestNumber, claimToken);
+    });
+  }
+
+  releasePullRequestAdoption(
+    projectPath: string,
+    pullRequestNumber: number,
+    claimToken: string,
+  ): void {
+    this.database.db
+      .prepare(
+        `DELETE FROM forge_pr_session_claims
+         WHERE project_path = ? AND pull_request_number = ?
+           AND claim_token = ? AND session_id IS NULL`,
+      )
+      .run(projectPath, pullRequestNumber, claimToken);
+  }
+
   /** Direct tree children of a session, oldest first (insertion order on a created_at tie). */
   childrenOf(parentSessionId: string): SessionDto[] {
     const rows = this.database.db
@@ -188,11 +346,11 @@ export class SessionsRepository {
       verify_owner: input.verifyOwner ?? 'session',
       cursor_backend: input.cursorBackend ?? null,
       cursor_chat_id: input.cursorChatId ?? null,
-      forge_provider: null,
-      pull_request_url: null,
-      pull_request_number: null,
-      pull_request_state: null,
-      forge_status: 'none',
+      forge_provider: input.forgeProvider ?? null,
+      pull_request_url: input.pullRequestUrl ?? null,
+      pull_request_number: input.pullRequestNumber ?? null,
+      pull_request_state: input.pullRequestState ?? null,
+      forge_status: input.forgeStatus ?? 'none',
       parent_session_id: input.parentSessionId ?? null,
       origin_task_id: input.originTaskId ?? null,
       prior_session_id: null,
@@ -382,6 +540,41 @@ export class SessionsRepository {
         id,
       );
     return this.findById(id)!;
+  }
+
+  /** Detach an archived PR mapping only when another live session owns it. */
+  detachForgeOwnershipIfReplaced(id: string): boolean {
+    const current = this.database.db
+      .prepare<
+        { status: SessionStatus; project_path: string | null; pull_request_number: number | null },
+        [string]
+      >(
+        `SELECT status, project_path, pull_request_number FROM sessions WHERE id = ?`,
+      )
+      .get(id);
+    if (
+      !current || current.status !== 'ARCHIVED' ||
+      !current.project_path || current.pull_request_number === null
+    ) return false;
+    const replacement = this.database.db
+      .prepare<{ id: string }, [string, number, string]>(
+        `SELECT id FROM sessions
+         WHERE project_path = ? AND pull_request_number = ?
+           AND id != ? AND status != 'ARCHIVED' AND verify_owner = 'session'
+         LIMIT 1`,
+      )
+      .get(current.project_path, current.pull_request_number, id);
+    if (!replacement) return false;
+    this.database.db
+      .prepare(
+        `UPDATE sessions
+         SET forge_provider = NULL, pull_request_url = NULL,
+             pull_request_number = NULL, pull_request_state = NULL,
+             forge_status = 'none', updated_at = ?
+         WHERE id = ? AND status = 'ARCHIVED'`,
+      )
+      .run(Date.now(), id);
+    return true;
   }
 
   clearWorktreeMetadata(id: string): SessionDto {

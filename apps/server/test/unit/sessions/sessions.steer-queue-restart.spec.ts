@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AgentsModule } from '../../../src/agents/agents.module';
+import { AgentRegistry } from '../../../src/agents/agents.registry';
+import type { AgentProvider } from '../../../src/agents/agents.types';
 import { CursorLocalModule } from '../../../src/cursor-local/cursor-local.module';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { GitModule } from '../../../src/git/git.module';
@@ -82,6 +84,58 @@ describe('Steer queue survives server restart', () => {
     );
     await waitFor(() => restartedSessions.findById(id)?.status === 'IDLE');
 
+    await restarted.close();
+  });
+
+  it('reports a post-restart background delivery failure from durable context', async () => {
+    const first = await buildModule();
+    const firstService = first.get(SessionsService);
+    const sessions = first.get(SessionsRepository);
+    const id = sessions.create({ prompt: 'restart failure seed', provider: 'cursor' }).id;
+    sessions.updateStatus(id, 'RUNNING');
+    firstService.steerInBackground(
+      id,
+      'durable forge feedback',
+      undefined,
+      undefined,
+      'forge:github:pr-feedback',
+      { kind: 'pr-feedback', subjectId: 'octo/nuncio#7' },
+    );
+    await first.close();
+
+    const restarted = await buildModule();
+    const restartedService = restarted.get(SessionsService);
+    const registry = restarted.get(AgentRegistry);
+    const failingProvider: AgentProvider = {
+      id: 'failing',
+      name: 'Failing',
+      capabilities: {
+        interrupt: false,
+        modelSwitch: 'none',
+        effortSwitch: 'none',
+        images: false,
+        steerWhileRunning: false,
+      },
+      isAvailable: async () => true,
+      listModels: async () => [],
+      run: async () => undefined,
+      steer: async () => { throw new Error('provider unavailable after restart'); },
+      quiesce: async () => undefined,
+      dispose: () => undefined,
+      bustCache: () => undefined,
+    };
+    registry.resolveForSession = (() => failingProvider) as AgentRegistry['resolveForSession'];
+    registry.resolveAvailableForSession = (async () =>
+      failingProvider) as AgentRegistry['resolveAvailableForSession'];
+    const failures: Array<{ context: Record<string, unknown>; error: unknown }> = [];
+    restartedService.onBackgroundSteerFailure((failure) => failures.push(failure));
+
+    await waitFor(() => failures.length > 0);
+    expect(failures[0]?.context).toEqual({
+      kind: 'pr-feedback',
+      subjectId: 'octo/nuncio#7',
+    });
+    expect(failures[0]?.error).toBeInstanceOf(Error);
     await restarted.close();
   });
 

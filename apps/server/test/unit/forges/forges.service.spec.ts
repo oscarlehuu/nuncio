@@ -92,7 +92,7 @@ describe('ForgesService', () => {
   it('derives the title from the session title and the body from the prompt', async () => {
     const s = sessions.create({
       prompt: 'Implement the rate limiter so requests are throttled',
-      projectPath: '/repo',
+      projectPath: '/repo/derived-title',
       branch: 'nuncio/abc-rate-limit',
       baseBranch: 'main',
     });
@@ -137,7 +137,7 @@ describe('ForgesService', () => {
   it('honours explicit title/body/base overrides', async () => {
     const s = sessions.create({
       prompt: 'do the thing',
-      projectPath: '/repo',
+      projectPath: '/repo/explicit-overrides',
       branch: 'nuncio/x',
       baseBranch: 'main',
     });
@@ -159,7 +159,7 @@ describe('ForgesService', () => {
   it('persists PR metadata onto the session via updateForgeState', async () => {
     const s = sessions.create({
       prompt: 'persist me',
-      projectPath: '/repo',
+      projectPath: '/repo/persist-metadata',
       branch: 'nuncio/persist',
       baseBranch: 'main',
     });

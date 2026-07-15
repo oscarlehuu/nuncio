@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseModule } from '../../../src/db/database.module';
+import { DatabaseService } from '../../../src/db/database.service';
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
 import { SteerQueueRepository } from '../../../src/sessions/persistence/steer-queue.repository';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
@@ -11,6 +12,7 @@ describe('SteerQueueRepository', () => {
   let module: TestingModule;
   let sessions: SessionsRepository;
   let queue: SteerQueueRepository;
+  let database: DatabaseService;
   let dataDir: string;
 
   beforeAll(async () => {
@@ -23,6 +25,7 @@ describe('SteerQueueRepository', () => {
 
     sessions = module.get(SessionsRepository);
     queue = module.get(SteerQueueRepository);
+    database = module.get(DatabaseService);
   });
 
   afterAll(async () => {
@@ -52,6 +55,54 @@ describe('SteerQueueRepository', () => {
     expect(queue.dequeue(s.id)).toEqual({ message: 'with image', attachments });
     // An empty attachments array is stored and returned as "no attachments".
     expect(queue.dequeue(s.id)).toEqual({ message: 'plain' });
+  });
+
+  it('round-trips durable background failure context', () => {
+    const s = sessions.create({ prompt: 'failure context' });
+    const failureContext = {
+      kind: 'pr-feedback',
+      subjectId: 'octo/nuncio#7',
+      projectPath: '/projects/nuncio',
+    };
+    queue.enqueue(
+      s.id,
+      'webhook feedback',
+      undefined,
+      'forge:github:pr-feedback',
+      failureContext,
+    );
+
+    expect(queue.peekNext(s.id)).toMatchObject({
+      message: 'webhook feedback',
+      origin: 'forge:github:pr-feedback',
+      failureContext,
+    });
+    queue.deleteForSession(s.id);
+  });
+
+  it('marks failure reporting only when the report transaction commits', () => {
+    const s = sessions.create({ prompt: 'failure reporting transaction' });
+    const rowId = queue.enqueue(s.id, 'webhook feedback');
+
+    expect(() => queue.reportFailureOnce(rowId, () => {
+      database.db
+        .prepare('INSERT INTO preferences (key, value, updated_at) VALUES (?, ?, ?)')
+        .run('failure-report-test', 'rolled-back', Date.now());
+      throw new Error('attention write failed');
+    })).toThrow('attention write failed');
+    expect(database.db.prepare('SELECT value FROM preferences WHERE key = ?')
+      .get('failure-report-test')).toBeNull();
+
+    expect(queue.reportFailureOnce(rowId, () => {
+      database.db
+        .prepare('INSERT INTO preferences (key, value, updated_at) VALUES (?, ?, ?)')
+        .run('failure-report-test', 'committed', Date.now());
+    })).toBe(true);
+    expect(queue.reportFailureOnce(rowId, () => {
+      throw new Error('must not run twice');
+    })).toBe(false);
+    queue.deleteForSession(s.id);
+    database.db.prepare('DELETE FROM preferences WHERE key = ?').run('failure-report-test');
   });
 
   it('claimAll hides rows from dequeue until released or deleted', () => {
@@ -87,6 +138,24 @@ describe('SteerQueueRepository', () => {
     // The wake is still drainable normally.
     queue.deleteByIds(claimed.map((c) => c.id));
     expect(queue.dequeue(s.id)?.message).toBe('wake me');
+    queue.deleteForSession(s.id);
+  });
+
+  it('claimAll leaves forge background work for the session drain', () => {
+    const s = sessions.create({ prompt: 'forge-fanout-skip' });
+    queue.enqueue(s.id, 'user work');
+    queue.enqueue(s.id, 'CI feedback', undefined, 'forge:github:ci-failure', {
+      kind: 'pr-feedback',
+    });
+
+    const claimed = queue.claimAll(s.id);
+    expect(claimed.map((entry) => entry.message)).toEqual(['user work']);
+    queue.deleteByIds(claimed.map((entry) => entry.id));
+    expect(queue.peekNext(s.id)).toMatchObject({
+      message: 'CI feedback',
+      origin: 'forge:github:ci-failure',
+      failureContext: { kind: 'pr-feedback' },
+    });
     queue.deleteForSession(s.id);
   });
 

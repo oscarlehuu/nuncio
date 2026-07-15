@@ -3,6 +3,10 @@ import type { SessionsRepository } from '../../sessions/persistence/sessions.rep
 import type { SessionsService } from '../../sessions/sessions.service';
 import type { ForgesService } from '../forges.service';
 import type { ForgePullRequestFeedbackWebhookEvent } from '../forges.types';
+import {
+  raiseWebhookSteerFailure,
+  webhookSteerFailureContext,
+} from './webhook-steer-failure';
 
 interface FeedbackDependencies {
   sessions: SessionsService;
@@ -62,13 +66,27 @@ export async function routeWebhookFeedback(
     return { created: false, reason: 'untrusted-feedback-author' } as const;
   }
 
-  await deps.sessions.steer(
-    session.id,
-    buildFeedbackPrompt(event),
-    undefined,
-    undefined,
-    `forge:${provider}:pr-feedback`,
-  );
+  const failureContext = webhookSteerFailureContext({
+    provider,
+    repo: event.repoFullName,
+    number: event.number,
+    url: event.url,
+    projectPath,
+    title: `PR #${event.number} feedback could not be delivered to its session`,
+  });
+  try {
+    deps.sessions.steerInBackground(
+      session.id,
+      buildFeedbackPrompt(event),
+      undefined,
+      undefined,
+      `forge:${provider}:pr-feedback`,
+      failureContext,
+    );
+  } catch (error) {
+    raiseWebhookSteerFailure(deps.attention, failureContext, error);
+    return { created: false, reason: 'background-steer-failed', sessionId: session.id } as const;
+  }
   return { created: false, steered: true, sessionId: session.id } as const;
 }
 

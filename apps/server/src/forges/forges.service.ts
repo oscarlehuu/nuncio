@@ -1,6 +1,16 @@
-import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { GitService } from '../git/git.service';
-import { SessionsRepository } from '../sessions/persistence/sessions.repository';
+import {
+  PULL_REQUEST_ADOPTION_LEASE_MS,
+  SessionsRepository,
+} from '../sessions/persistence/sessions.repository';
 import { SessionsService } from '../sessions/sessions.service';
 import { ForgeRegistry, providerIdForHost } from './forges.registry';
 import type {
@@ -20,6 +30,7 @@ export interface OpenPullRequestOptions {
 }
 
 const AUTHOR_PERMISSION_TTL_MS = 60_000;
+const PULL_REQUEST_ADOPTION_HEARTBEAT_MS = Math.floor(PULL_REQUEST_ADOPTION_LEASE_MS / 3);
 
 /**
  * Session-facing facade for the forge layer: maps a session's branch + origin
@@ -56,46 +67,88 @@ export class ForgesService {
     }
     if (!this.sessionService) throw new BadRequestException('Session creation is unavailable');
 
-    const remote = await this.git.remoteInfo(path);
-    const provider = await this.registry.getAvailable(this.providerIdForHost(remote.host));
-    const pullRequest = await provider.getPullRequestDetail(this.repoRef(remote), number);
-    if (!pullRequest.sourceBranch?.trim()) {
-      throw new BadRequestException(`Pull request #${number} has no source branch`);
+    const claimToken = randomUUID();
+    const claim = this.sessions.claimPullRequestAdoption(path, number, claimToken);
+    if (claim.status === 'existing') return { sessionId: claim.sessionId };
+    if (claim.status === 'pending') {
+      throw new ConflictException(`Pull request #${number} is already being adopted`);
     }
-    if (pullRequest.sourceRepositoryMatchesTarget !== true) {
-      throw new BadRequestException('Pull requests from fork repositories cannot be adopted safely');
+
+    let claimLost = false;
+    const renewClaim = (): void => {
+      if (claimLost || !this.sessions.renewPullRequestAdoption(path, number, claimToken)) {
+        claimLost = true;
+        throw new ConflictException(`Pull request #${number} adoption claim was lost`);
+      }
+    };
+    const heartbeat = setInterval(() => {
+      try {
+        renewClaim();
+      } catch {
+        claimLost = true;
+      }
+    }, PULL_REQUEST_ADOPTION_HEARTBEAT_MS);
+    heartbeat.unref?.();
+
+    try {
+      const remote = await this.git.remoteInfo(path);
+      renewClaim();
+      const provider = await this.registry.getAvailable(this.providerIdForHost(remote.host));
+      renewClaim();
+      const pullRequest = await provider.getPullRequestDetail(this.repoRef(remote), number);
+      renewClaim();
+      if (!pullRequest.sourceBranch?.trim()) {
+        throw new BadRequestException(`Pull request #${number} has no source branch`);
+      }
+      if (pullRequest.sourceRepositoryMatchesTarget !== true) {
+        throw new BadRequestException('Pull requests from fork repositories cannot be adopted safely');
+      }
+      if (provider.id !== 'github' && provider.id !== 'gitlab') {
+        throw new BadRequestException(`Pull request worktrees are unsupported for ${provider.id}`);
+      }
+      const pullRequestHead = await this.git.fetchPullRequestHead(path, provider.id, number);
+      renewClaim();
+      const upstreamBranch = await this.git.fetchRemoteBranch(path, pullRequest.sourceBranch);
+      renewClaim();
+      const prompt = [
+        `Continue pull request #${number}: ${pullRequest.title}`,
+        '',
+        pullRequest.body?.trim(),
+        '',
+        `Pull request: ${pullRequest.url}`,
+      ]
+        .filter((line) => line !== undefined)
+        .join('\n')
+        .trim();
+      const session = await this.sessionService.create({
+        prompt,
+        projectPath: path,
+        baseBranch: pullRequestHead,
+        useWorktree: true,
+        pushBranch: pullRequest.sourceBranch,
+        upstreamBranch,
+        forgeProvider: provider.id,
+        pullRequestUrl: pullRequest.url,
+        pullRequestNumber: pullRequest.number,
+        pullRequestState: pullRequest.state,
+        forgeStatus: pullRequest.state,
+      });
+      renewClaim();
+      this.sessions.completePullRequestAdoption(path, number, claimToken, session.id, {
+        forgeProvider: provider.id,
+        pullRequestUrl: pullRequest.url,
+        pullRequestState: pullRequest.state,
+        forgeStatus: pullRequest.state,
+      });
+      return { sessionId: session.id };
+    } catch (error) {
+      this.sessions.releasePullRequestAdoption(path, number, claimToken);
+      const owner = this.sessions.findByProjectPullRequest(path, number);
+      if (owner) return { sessionId: owner.id };
+      throw error;
+    } finally {
+      clearInterval(heartbeat);
     }
-    if (provider.id !== 'github' && provider.id !== 'gitlab') {
-      throw new BadRequestException(`Pull request worktrees are unsupported for ${provider.id}`);
-    }
-    const pullRequestHead = await this.git.fetchPullRequestHead(path, provider.id, number);
-    const upstreamBranch = await this.git.fetchRemoteBranch(path, pullRequest.sourceBranch);
-    const prompt = [
-      `Continue pull request #${number}: ${pullRequest.title}`,
-      '',
-      pullRequest.body?.trim(),
-      '',
-      `Pull request: ${pullRequest.url}`,
-    ]
-      .filter((line) => line !== undefined)
-      .join('\n')
-      .trim();
-    const session = await this.sessionService.create({
-      prompt,
-      projectPath: path,
-      baseBranch: pullRequestHead,
-      useWorktree: true,
-      pushBranch: pullRequest.sourceBranch,
-      upstreamBranch,
-    });
-    this.sessions.updateForgeState(session.id, {
-      forgeProvider: provider.id,
-      pullRequestUrl: pullRequest.url,
-      pullRequestNumber: pullRequest.number,
-      pullRequestState: pullRequest.state,
-      forgeStatus: pullRequest.state,
-    });
-    return { sessionId: session.id };
   }
 
   async openPullRequestForSession(

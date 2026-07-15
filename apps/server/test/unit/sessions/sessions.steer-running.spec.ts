@@ -135,6 +135,124 @@ describe('SessionsService steer while RUNNING', () => {
     expect((queued[0].payload as { text: string }).text).toBe('wait your turn');
   });
 
+  it('persists a background steer before returning and reports its first delivery failure', async () => {
+    const created = sessions.create({ prompt: 'webhook owner', provider: 'cursor' });
+    sessions.updateStatus(created.id, 'RUNNING');
+    sessions.updateStatus(created.id, 'IDLE');
+    let deliveryAvailable = false;
+    const failures: unknown[] = [];
+    const steer = jest.fn(async () => {
+      if (!deliveryAvailable) throw new Error('provider unavailable');
+    });
+    installProvider(stubProvider({ steer }));
+    const stopFailureReporting = service.onBackgroundSteerFailure(({ error }) => {
+      failures.push(error);
+    });
+
+    try {
+      service.steerInBackground(
+        created.id,
+        'durable webhook feedback',
+        undefined,
+        undefined,
+        'forge:github:pr-feedback',
+        { kind: 'pr-feedback', subjectId: 'octo/nuncio#7' },
+      );
+
+      expect(service.steerQueueRepository.peekNext(created.id)).toMatchObject({
+        message: 'durable webhook feedback',
+        origin: 'forge:github:pr-feedback',
+        failureContext: { kind: 'pr-feedback', subjectId: 'octo/nuncio#7' },
+      });
+      const failedAt = Date.now();
+      while (failures.length === 0 && Date.now() - failedAt < 1_000) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(failures[0]).toBeInstanceOf(Error);
+      expect(service.steerQueueRepository.peekNext(created.id)?.message)
+        .toBe('durable webhook feedback');
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      expect(failures).toHaveLength(1);
+      expect(events.list(created.id).filter((event) =>
+        event.type === 'error' &&
+        String((event.payload as { message?: string }).message).includes('Queued message failed'),
+      )).toHaveLength(1);
+
+      deliveryAvailable = true;
+      service.scheduleSteerDrain(created.id);
+      const recoveredAt = Date.now();
+      while (service.steerQueueRepository.peekNext(created.id) && Date.now() - recoveredAt < 1_000) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(service.steerQueueRepository.peekNext(created.id)).toBeNull();
+      expect(failures).toHaveLength(1);
+    } finally {
+      stopFailureReporting();
+    }
+  });
+
+  it('retries failure reporting when the first handler attempt cannot persist attention', async () => {
+    const created = sessions.create({ prompt: 'webhook owner', provider: 'cursor' });
+    sessions.updateStatus(created.id, 'RUNNING');
+    sessions.updateStatus(created.id, 'IDLE');
+    let deliveryAvailable = false;
+    installProvider(stubProvider({
+      steer: jest.fn(async () => {
+        if (!deliveryAvailable) throw new Error('provider unavailable');
+      }),
+    }));
+    let attempts = 0;
+    const reported: unknown[] = [];
+    const stopFailureReporting = service.onBackgroundSteerFailure(({ error }) => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('attention database unavailable');
+      reported.push(error);
+    });
+
+    try {
+      service.steerInBackground(
+        created.id,
+        'durable webhook feedback',
+        undefined,
+        undefined,
+        'forge:github:pr-feedback',
+        { kind: 'pr-feedback', subjectId: 'octo/nuncio#8' },
+      );
+
+      const startedAt = Date.now();
+      while (reported.length === 0 && Date.now() - startedAt < 1_000) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(attempts).toBeGreaterThanOrEqual(2);
+      expect(reported).toHaveLength(1);
+      deliveryAvailable = true;
+      service.scheduleSteerDrain(created.id);
+      const recoveredAt = Date.now();
+      while (service.steerQueueRepository.peekNext(created.id) && Date.now() - recoveredAt < 1_000) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(service.steerQueueRepository.peekNext(created.id)).toBeNull();
+    } finally {
+      stopFailureReporting();
+    }
+  });
+
+  it('keeps one background row queued while a non-live-steer provider is running', async () => {
+    const id = seedRunning();
+    const steer = jest.fn(async () => undefined);
+    installProvider(stubProvider({ steer }));
+
+    service.steerInBackground(id, 'wait for settle', undefined, undefined, 'forge:github:ci-failure');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(steer).not.toHaveBeenCalled();
+    expect(service.steerQueueRepository.peekNext(id)).toMatchObject({
+      message: 'wait for settle',
+      origin: 'forge:github:ci-failure',
+    });
+    expect(events.list(id).filter((event) => event.type === 'steer_queued')).toHaveLength(1);
+  });
+
   it('falls back to the queue when steerMidRun reports no live run', async () => {
     const id = seedRunning();
     const steerMidRun = jest.fn(async () => false);

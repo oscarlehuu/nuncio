@@ -3,6 +3,10 @@ import type { SessionsRepository } from '../../sessions/persistence/sessions.rep
 import type { SessionsService } from '../../sessions/sessions.service';
 import type { ForgeRepoService } from '../forges-repo.service';
 import type { ForgeCiFailureWebhookEvent } from '../forges.types';
+import {
+  raiseWebhookSteerFailure,
+  webhookSteerFailureContext,
+} from './webhook-steer-failure';
 
 interface CiDependencies {
   sessions: SessionsService;
@@ -50,13 +54,27 @@ export async function routeWebhookCiFailure(
     '',
     'Diagnose the failure, implement the fix, run the relevant checks, and update the pull request.',
   ].join('\n');
-  await deps.sessions.steer(
-    session.id,
-    prompt,
-    undefined,
-    undefined,
-    `forge:${provider}:ci-failure`,
-  );
+  const failureContext = webhookSteerFailureContext({
+    provider,
+    repo: event.repoFullName,
+    number: event.number,
+    url: event.url,
+    projectPath,
+    title: `PR #${event.number} CI failure could not be delivered to its session`,
+  });
+  try {
+    deps.sessions.steerInBackground(
+      session.id,
+      prompt,
+      undefined,
+      undefined,
+      `forge:${provider}:ci-failure`,
+      failureContext,
+    );
+  } catch (error) {
+    raiseWebhookSteerFailure(deps.attention, failureContext, error);
+    return { created: false, reason: 'background-steer-failed', sessionId: session.id } as const;
+  }
   return { created: false, steered: true, sessionId: session.id } as const;
 }
 

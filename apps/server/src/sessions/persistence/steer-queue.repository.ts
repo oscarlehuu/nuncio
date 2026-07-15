@@ -10,6 +10,7 @@ interface SteerQueueRow {
   created_at: number;
   claimed_at: number | null;
   origin: string | null;
+  failure_context_json: string | null;
 }
 
 export interface QueuedSteer {
@@ -17,6 +18,8 @@ export interface QueuedSteer {
   attachments?: AgentAttachment[];
   /** Provenance (e.g. 'task-digest') stamped onto the delivered steer_message. */
   origin?: string;
+  /** Durable routing data used to report a failed background delivery after restart. */
+  failureContext?: Record<string, unknown>;
 }
 
 function parseAttachments(raw: string | null): AgentAttachment[] | undefined {
@@ -29,16 +32,35 @@ function parseAttachments(raw: string | null): AgentAttachment[] | undefined {
   }
 }
 
+function parseFailureContext(raw: string | null): Record<string, unknown> | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Durable FIFO of steers accepted while a session was RUNNING (survives restarts). */
 @Injectable()
 export class SteerQueueRepository {
   constructor(private readonly database: DatabaseService) {}
 
-  enqueue(sessionId: string, message: string, attachments?: AgentAttachment[], origin?: string): void {
-    this.database.db
+  enqueue(
+    sessionId: string,
+    message: string,
+    attachments?: AgentAttachment[],
+    origin?: string,
+    failureContext?: Record<string, unknown>,
+  ): number {
+    const result = this.database.db
       .prepare(
-        `INSERT INTO steer_queue (session_id, message, attachments_json, created_at, origin)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO steer_queue
+         (session_id, message, attachments_json, created_at, origin, failure_context_json)
+         VALUES (?, ?, ?, ?, ?, ?)`,
       )
       .run(
         sessionId,
@@ -46,7 +68,9 @@ export class SteerQueueRepository {
         attachments && attachments.length > 0 ? JSON.stringify(attachments) : null,
         Date.now(),
         origin ?? null,
+        failureContext ? JSON.stringify(failureContext) : null,
       );
+    return Number(result.lastInsertRowid);
   }
 
   /**
@@ -63,17 +87,40 @@ export class SteerQueueRepository {
       .get(sessionId);
     if (!row) return null;
     const attachments = parseAttachments(row.attachments_json);
+    const failureContext = parseFailureContext(row.failure_context_json);
     return {
       id: row.id,
       message: row.message,
       ...(attachments ? { attachments } : {}),
       ...(row.origin ? { origin: row.origin } : {}),
+      ...(failureContext ? { failureContext } : {}),
     };
   }
 
   /** Delete a single row by id (no-op if already gone). */
   deleteById(id: number): void {
     this.database.db.prepare('DELETE FROM steer_queue WHERE id = ?').run(id);
+  }
+
+  /** Persist a failure report and its once-only marker in one SQLite transaction. */
+  reportFailureOnce(id: number, report: () => void): boolean {
+    return this.database.transaction(() => {
+      const row = this.database.db
+        .prepare<{ failure_reported_at: number | null }, [number]>(
+          'SELECT failure_reported_at FROM steer_queue WHERE id = ?',
+        )
+        .get(id);
+      if (!row || row.failure_reported_at !== null) return false;
+      report();
+      const marked = this.database.db
+        .prepare(
+          `UPDATE steer_queue SET failure_reported_at = ?
+           WHERE id = ? AND failure_reported_at IS NULL`,
+        )
+        .run(Date.now(), id);
+      if (marked.changes !== 1) throw new Error(`Steer queue row ${id} changed during reporting`);
+      return true;
+    });
   }
 
   /**
@@ -99,10 +146,12 @@ export class SteerQueueRepository {
     if (!row) return null;
     this.database.db.prepare('DELETE FROM steer_queue WHERE id = ?').run(row.id);
     const attachments = parseAttachments(row.attachments_json);
+    const failureContext = parseFailureContext(row.failure_context_json);
     return {
       message: row.message,
       ...(attachments ? { attachments } : {}),
       ...(row.origin ? { origin: row.origin } : {}),
+      ...(failureContext ? { failureContext } : {}),
     };
   }
 
@@ -121,7 +170,8 @@ export class SteerQueueRepository {
     const rows = this.database.db
       .prepare<SteerQueueRow, [number, string]>(
         `UPDATE steer_queue SET claimed_at = ?
-         WHERE session_id = ? AND claimed_at IS NULL AND (origin IS NULL OR origin != 'task-digest')
+         WHERE session_id = ? AND claimed_at IS NULL
+           AND (origin IS NULL OR (origin != 'task-digest' AND origin NOT LIKE 'forge:%'))
          RETURNING *`,
       )
       .all(now, sessionId)

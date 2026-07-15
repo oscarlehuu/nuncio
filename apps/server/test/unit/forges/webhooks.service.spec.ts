@@ -41,6 +41,11 @@ describe('WebhooksService (Phase 4)', () => {
   let autoCloseOnMerge: string;
   let forgeLogin: string | null;
   let steerError: Error | null;
+  let backgroundHandoffError: Error | null;
+  let backgroundFailureHandler: ((failure: {
+    context: Record<string, unknown>;
+    error: unknown;
+  }) => void) | null;
   let jobLogCalls: number[];
   let forgeStateUpdates: Array<{ id: string; state: Record<string, unknown> }>;
   let archiveCalls: string[];
@@ -61,6 +66,17 @@ describe('WebhooksService (Phase 4)', () => {
   let sessionsStub: {
     create: (dto: CreateSessionDto) => Promise<{ id: string }>;
     steer: (id: string, message: string, force?: boolean, attachments?: unknown, origin?: string) => Promise<{ id: string }>;
+    steerInBackground: (
+      id: string,
+      message: string,
+      force?: boolean,
+      attachments?: unknown,
+      origin?: string,
+      failureContext?: Record<string, unknown>,
+    ) => void;
+    onBackgroundSteerFailure: (
+      handler: (failure: { context: Record<string, unknown>; error: unknown }) => void,
+    ) => () => void;
     archive: (id: string) => unknown;
   };
   let gitStub: {
@@ -101,6 +117,8 @@ describe('WebhooksService (Phase 4)', () => {
     autoCloseOnMerge = '1';
     forgeLogin = 'nuncio-bot';
     steerError = null;
+    backgroundHandoffError = null;
+    backgroundFailureHandler = null;
     jobLogCalls = [];
     forgeStateUpdates = [];
     archiveCalls = [];
@@ -127,6 +145,17 @@ describe('WebhooksService (Phase 4)', () => {
         if (steerError) throw steerError;
         steerCalls.push({ id, message, origin });
         return { id };
+      },
+      steerInBackground: (id, message, _force, _attachments, origin, failureContext) => {
+        if (backgroundHandoffError) throw backgroundHandoffError;
+        steerCalls.push({ id, message, origin });
+        if (steerError && failureContext) {
+          queueMicrotask(() => backgroundFailureHandler?.({ context: failureContext, error: steerError }));
+        }
+      },
+      onBackgroundSteerFailure: (handler) => {
+        backgroundFailureHandler = handler;
+        return () => { backgroundFailureHandler = null; };
       },
       archive: (id: string) => {
         if (archiveError) throw archiveError;
@@ -292,6 +321,47 @@ describe('WebhooksService (Phase 4)', () => {
     expect(steerCalls[0].message).toContain('https://github.com/octo/nuncio/pull/7');
   });
 
+  it('acknowledges feedback without waiting for a provider turn to finish', async () => {
+    sessionsStub.steer = () => new Promise(() => undefined);
+    const handled = service.handleEvent('github', {
+      provider: 'github', deliveryId: 'feedback-background', kind: 'pull_request_feedback',
+      action: 'created', owner: 'octo', repo: 'nuncio', repoFullName: 'octo/nuncio',
+      defaultBranch: 'main', number: 7, author: 'reviewer',
+      comments: [{ body: 'Please fix this.' }], url: 'https://github.com/octo/nuncio/pull/7',
+    } as never);
+
+    expect(await Promise.race([
+      handled,
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 25)),
+    ])).toMatchObject({ steered: true, sessionId: 'sess-pr' });
+  });
+
+  it('raises attention and accepts feedback when durable handoff fails synchronously', async () => {
+    backgroundHandoffError = new Error('queue unavailable');
+    const event = {
+      provider: 'github', deliveryId: 'feedback-handoff-failed', kind: 'pull_request_feedback',
+      action: 'created', owner: 'octo', repo: 'nuncio', repoFullName: 'octo/nuncio',
+      defaultBranch: 'main', number: 7, author: 'reviewer',
+      comments: [{ body: 'Please fix this.' }], url: 'https://github.com/octo/nuncio/pull/7',
+    } as never;
+
+    await expect(service.handleEvent('github', event)).resolves.toMatchObject({
+      reason: 'background-steer-failed',
+      sessionId: 'sess-pr',
+    });
+    expect(attentionSignals).toContainEqual(expect.objectContaining({
+      subjectId: 'octo/nuncio#7',
+      payload: expect.objectContaining({
+        reason: 'background-steer-failed',
+        error: 'queue unavailable',
+      }),
+    }));
+    await expect(service.handleEvent('github', event)).resolves.toEqual({
+      created: false,
+      reason: 'duplicate',
+    });
+  });
+
   it('routes feedback from an author without repository write access to attention', async () => {
     authorCanWrite = false;
     const result = await service.handleEvent('github', {
@@ -378,17 +448,21 @@ describe('WebhooksService (Phase 4)', () => {
     }));
   });
 
-  it('retains a failed delivery claim so a retry cannot duplicate a possibly-persisted steer', async () => {
+  it('raises attention when background feedback delivery fails without reopening the delivery', async () => {
     const event = {
       provider: 'github', deliveryId: 'feedback-retry', kind: 'pull_request_feedback', action: 'created',
       owner: 'octo', repo: 'nuncio', repoFullName: 'octo/nuncio', defaultBranch: 'main', number: 7,
       author: 'reviewer', comments: [{ body: 'Retry me.' }], url: 'https://github.com/octo/nuncio/pull/7',
     } as never;
     steerError = new Error('temporary provider failure');
-    await expect(service.handleEvent('github', event)).rejects.toThrow('temporary provider failure');
-    steerError = null;
+    await expect(service.handleEvent('github', event)).resolves.toMatchObject({ steered: true });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(attentionSignals).toContainEqual(expect.objectContaining({
+      kind: 'pr-feedback',
+      subjectId: 'octo/nuncio#7',
+      payload: expect.objectContaining({ reason: 'background-steer-failed' }),
+    }));
     await expect(service.handleEvent('github', event)).resolves.toEqual({ created: false, reason: 'duplicate' });
-    expect(steerCalls).toHaveLength(0);
   });
 
   it('refuses to steer an owning session when feedback has no author', async () => {
@@ -452,6 +526,52 @@ describe('WebhooksService (Phase 4)', () => {
     expect(jobLogCalls).toEqual([901]);
     expect(steerCalls[0].message).toContain('unit-tests');
     expect(steerCalls[0].message).toContain('AssertionError: expected 2 to be 3');
+  });
+
+  it('acknowledges a CI failure without waiting for the provider turn', async () => {
+    sessionsStub.steer = () => new Promise(() => undefined);
+    const handled = service.handleEvent('github', {
+      provider: 'github', deliveryId: 'ci-background', kind: 'ci_failure', action: 'failed',
+      owner: 'octo', repo: 'nuncio', repoFullName: 'octo/nuncio', defaultBranch: 'main',
+      number: 7, runId: 90, jobName: 'CI', url: 'https://github.com/octo/nuncio/actions/runs/90',
+      labels: [],
+    });
+
+    expect(await Promise.race([
+      handled,
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 25)),
+    ])).toMatchObject({ steered: true, sessionId: 'sess-pr' });
+  });
+
+  it('raises attention and accepts CI when durable handoff fails synchronously', async () => {
+    backgroundHandoffError = new Error('queue unavailable');
+    await expect(service.handleEvent('github', {
+      provider: 'github', deliveryId: 'ci-handoff-failed', kind: 'ci_failure', action: 'failed',
+      owner: 'octo', repo: 'nuncio', repoFullName: 'octo/nuncio', defaultBranch: 'main',
+      number: 7, runId: 90, jobName: 'CI', url: 'https://github.com/octo/nuncio/actions/runs/90',
+      labels: [],
+    })).resolves.toMatchObject({ reason: 'background-steer-failed', sessionId: 'sess-pr' });
+    expect(attentionSignals).toContainEqual(expect.objectContaining({
+      subjectId: 'octo/nuncio#7',
+      payload: expect.objectContaining({ error: 'queue unavailable' }),
+    }));
+  });
+
+  it('raises attention when background CI delivery fails', async () => {
+    steerError = new Error('provider unavailable');
+    await expect(service.handleEvent('github', {
+      provider: 'github', deliveryId: 'ci-background-failed', kind: 'ci_failure', action: 'failed',
+      owner: 'octo', repo: 'nuncio', repoFullName: 'octo/nuncio', defaultBranch: 'main',
+      number: 7, runId: 90, jobName: 'CI', url: 'https://github.com/octo/nuncio/actions/runs/90',
+      labels: [],
+    })).resolves.toMatchObject({ steered: true, sessionId: 'sess-pr' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(attentionSignals).toContainEqual(expect.objectContaining({
+      kind: 'pr-feedback',
+      subjectId: 'octo/nuncio#7',
+      payload: expect.objectContaining({ reason: 'background-steer-failed' }),
+    }));
   });
 
   it('still steers CI failure context when workflow job lookup is unavailable', async () => {
@@ -661,6 +781,27 @@ describe('WebhooksService (Phase 4)', () => {
     expect(attentionSignals).toContainEqual(expect.objectContaining({
       subjectId: 'octo/nuncio#7:cleanup',
       payload: expect.objectContaining({ reason: 'worktree-removal-failed' }),
+    }));
+  });
+
+  it('repairs metadata and raises cleanup attention when the worktree vanished', async () => {
+    ownerSession = {
+      id: 'sess-pr', status: 'IDLE', projectPath: KNOWN_PATH, pullRequestNumber: 7,
+      worktreePath: '/worktrees/sess-pr', baseBranch: 'main',
+    } as never;
+    gitStub.removeWorktreeIfSafe = async () => ({ removed: false, reason: 'worktree-missing' });
+
+    const result = await service.handleEvent('github', {
+      ...makeEvent({ deliveryId: 'merged-worktree-missing' }), kind: 'pull_request',
+      action: 'closed', merged: true,
+      url: 'https://github.com/octo/nuncio/pull/7', labels: [],
+    } as never);
+
+    expect(result).toMatchObject({ reason: 'worktree-missing' });
+    expect(clearedWorktreeMetadata).toEqual(['sess-pr']);
+    expect(attentionSignals).toContainEqual(expect.objectContaining({
+      subjectId: 'octo/nuncio#7:cleanup',
+      payload: expect.objectContaining({ reason: 'worktree-missing' }),
     }));
   });
 

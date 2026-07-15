@@ -344,8 +344,21 @@ describe('GitService', () => {
         expect(await readGitAsync(worktree.worktreePath, [
           'rev-parse', '--abbrev-ref', '@{upstream}',
         ])).toBe('origin/feat/pr-head');
+        expect(await readGitAsync(worktree.worktreePath, [
+          'config', '--worktree', '--get', 'push.default',
+        ])).toBe('upstream');
+
+        await runGitAsync(worktree.worktreePath, ['commit', '--allow-empty', '-m', 'adopted update']);
+        const adoptedHead = await readGitAsync(worktree.worktreePath, ['rev-parse', 'HEAD']);
+        await runGitAsync(worktree.worktreePath, ['push']);
+        expect(await readGitAsync(origin, ['rev-parse', 'refs/heads/feat/pr-head'])).toBe(adoptedHead);
+        await expect(readGitAsync(origin, [
+          'rev-parse', `refs/heads/${worktree.branch}`,
+        ])).rejects.toThrow();
 
         await runGitAsync(source, ['checkout', 'feat/pr-head']);
+        await runGitAsync(source, ['fetch', 'origin', 'feat/pr-head']);
+        await runGitAsync(source, ['reset', '--hard', 'origin/feat/pr-head']);
         await runGitAsync(source, ['commit', '--allow-empty', '-m', 'remote update']);
         const remoteHead = await readGitAsync(source, ['rev-parse', 'HEAD']);
         await runGitAsync(source, ['push', 'origin', 'feat/pr-head']);
@@ -395,6 +408,19 @@ describe('GitService', () => {
       fallbackBase: 'main',
     })).toEqual({ removed: true });
     expect(existsSync(result.worktreePath)).toBe(false);
+  });
+
+  it('reports a vanished worktree as a non-removal result', async () => {
+    const result = await service.createWorktree(repoA, 'main', 'vanished1', 'vanished');
+    rmSync(result.worktreePath, { recursive: true, force: true });
+    mkdirSync(result.worktreePath, { recursive: true });
+
+    await expect(service.removeWorktreeIfSafe(repoA, result.worktreePath, {
+      fallbackBase: 'main',
+    })).resolves.toEqual({ removed: false, reason: 'worktree-missing' });
+    expect(existsSync(result.worktreePath)).toBe(true);
+    rmSync(result.worktreePath, { recursive: true, force: true });
+    await runGitAsync(repoA, ['worktree', 'prune']);
   });
 
   describe('Phase 1 — status / diff / stage / commit / push', () => {

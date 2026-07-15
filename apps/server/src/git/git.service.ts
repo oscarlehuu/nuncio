@@ -513,6 +513,8 @@ export class GitService {
       await git(['check-ref-format', '--branch', remoteBranch], repoRoot);
       await git(['rev-parse', '--verify', `refs/remotes/${upstreamBranch}^{commit}`], repoRoot);
       await git(['branch', '--set-upstream-to', upstreamBranch, localBranch], repoRoot);
+      await git(['config', 'extensions.worktreeConfig', 'true'], repoRoot);
+      await git(['config', '--worktree', 'push.default', 'upstream'], repoRoot);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new BadRequestException(`Failed to configure source branch upstream: ${message}`);
@@ -903,10 +905,15 @@ export class GitService {
     worktreePath: string,
     options: { fallbackBase?: string | null } = {},
   ): Promise<{ removed: boolean; reason?: string }> {
-    const resolvedWorktree = await this.resolveRepoRoot(worktreePath);
-    const gitDirValue = await git(['rev-parse', '--git-dir'], resolvedWorktree);
-    const gitDir = resolve(resolvedWorktree, gitDirValue);
-    const headLock = join(gitDir, 'HEAD.lock');
+    let resolvedWorktree: string;
+    let headLock: string;
+    try {
+      resolvedWorktree = await this.resolveRepoRoot(worktreePath);
+      const gitDirValue = await git(['rev-parse', '--git-dir'], resolvedWorktree);
+      headLock = join(resolve(resolvedWorktree, gitDirValue), 'HEAD.lock');
+    } catch {
+      return { removed: false, reason: 'worktree-missing' };
+    }
     let lockFd: number;
     try {
       lockFd = openSync(headLock, 'wx');

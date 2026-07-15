@@ -84,6 +84,9 @@ export async function routePullRequestLifecycle(
     fallbackBase: session.baseBranch,
   });
   if (!removal.removed) {
+    if (removal.reason === 'worktree-missing') {
+      deps.sessionRecords.clearWorktreeMetadata(session.id);
+    }
     return skipCleanup(
       deps.attention,
       projectPath,

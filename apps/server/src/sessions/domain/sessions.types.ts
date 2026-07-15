@@ -188,6 +188,11 @@ export interface CreateSessionDto {
   upstreamBranch?: string;
   worktreePath?: string;
   branch?: string;
+  forgeProvider?: string | null;
+  pullRequestUrl?: string | null;
+  pullRequestNumber?: number | null;
+  pullRequestState?: string | null;
+  forgeStatus?: string;
   providerThreadId?: string | null;
   providerActiveTurnId?: string | null;
   providerState?: Record<string, unknown> | null;

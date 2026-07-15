@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { AttentionService } from '../../attention/attention.service';
 import { DatabaseService } from '../../db/database.service';
 import { GitService } from '../../git/git.service';
@@ -12,6 +12,7 @@ import { routeWebhookCiFailure } from './webhook-ci-failure-router';
 import { routeWebhookFeedback } from './webhook-feedback-router';
 import { findWebhookProject } from './webhook-project-resolver';
 import { routePullRequestLifecycle } from './webhook-pr-lifecycle-router';
+import { raiseWebhookSteerFailure } from './webhook-steer-failure';
 
 const AUTO_CREATE_LABEL = 'nuncio';
 const AUTO_STEER_SETTING = 'forges.autoSteer';
@@ -27,7 +28,9 @@ export interface WebhookHandleResult {
 }
 
 @Injectable()
-export class WebhooksService {
+export class WebhooksService implements OnModuleDestroy {
+  private readonly stopFailureReporting: () => void;
+
   constructor(
     private readonly sessions: SessionsService,
     private readonly git: GitService,
@@ -37,7 +40,15 @@ export class WebhooksService {
     private readonly forges: ForgesService,
     private readonly forgeRepos: ForgeRepoService,
     private readonly attention: AttentionService,
-  ) {}
+  ) {
+    this.stopFailureReporting = this.sessions.onBackgroundSteerFailure(
+      ({ context, error }) => raiseWebhookSteerFailure(this.attention, context, error),
+    );
+  }
+
+  onModuleDestroy(): void {
+    this.stopFailureReporting();
+  }
 
   async handleEvent(provider: string, event: ForgeWebhookEvent): Promise<WebhookHandleResult> {
     if (event.kind === 'issue') return this.handleIssue(provider, event);
