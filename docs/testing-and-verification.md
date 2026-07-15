@@ -30,6 +30,21 @@ is the pre-promotion (dev→main) bar: everything in `gate` plus levels 2 (web u
 and 5 (real-browser smoke via `test:smoke-ui`). CI keeps these as separate steps for readable failure
 output — the gates are for local runs, not a CI replacement.
 
+**Ratchet gates (CI).** Two baseline-diff gates run on every PR; both fail only on *new* debt:
+
+- **Dead code** — `bun run check-dead-code` runs knip over the monorepo and compares against
+  `scripts/dead-code-baseline.json`. New unused files/exports/deps fail CI; existing findings are
+  accepted debt to burn down. After deleting dead code (or intentionally accepting a finding), run
+  `bun run check-dead-code:update`.
+- **Coverage** — `bun run check-coverage-ratchet` reads the server lcov + web json-summary reports
+  (produced by each package's `test:coverage`) and fails any target whose line coverage dropped
+  below `scripts/coverage-baseline.json` minus the tolerance. When coverage improves, ratchet the
+  floor up with `bun run check-coverage-ratchet:update`.
+
+**Failure evidence (CI).** The real-browser smoke records a Playwright trace for the whole run and
+saves it (plus failure screenshots) to `smoke-artifacts/` only when a step fails; CI uploads that
+directory as the `smoke-artifacts` artifact. Open traces with `bunx playwright show-trace <zip>`.
+
 ## Self-verify playbook (no user in the loop)
 
 Pick by change type. The **Mock provider** needs zero credentials — it is registered only when

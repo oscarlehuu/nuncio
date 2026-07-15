@@ -26,8 +26,8 @@ import { runCrewSmoke } from './lib/crew-smoke-flow.mjs';
 const FORCE_BUILD = process.argv.includes('--build');
 const CHROME_EXECUTABLE = process.env.NUNCIO_SMOKE_CHROME_EXECUTABLE?.trim();
 const CHROME_CHANNEL = process.env.NUNCIO_SMOKE_CHROME_CHANNEL?.trim() || 'chrome';
-// Artifacts are screenshots only (*.png), which the repo .gitignore already
-// ignores globally — so this dir never shows up in git status.
+// Artifacts are screenshots (*.png) plus, on failure, a Playwright trace
+// (trace-*.zip). The whole dir is gitignored and uploaded by CI on failure.
 const ARTIFACTS_DIR = join(repoRoot, 'smoke-artifacts');
 const STEP_TIMEOUT_MS = 20000;
 
@@ -91,6 +91,7 @@ async function main() {
   );
 
   let browser;
+  let context;
   let cleaned = false;
   const cleanup = async () => {
     if (cleaned) return;
@@ -123,11 +124,14 @@ async function main() {
       ...(CHROME_EXECUTABLE ? { executablePath: CHROME_EXECUTABLE } : { channel: CHROME_CHANNEL }),
       headless: true,
     });
-    const context = await browser.newContext({
+    context = await browser.newContext({
       baseURL: baseUrl,
       colorScheme: 'dark',
       reducedMotion: 'reduce',
     });
+    // Retain-on-failure trace: recorded for the whole run, saved (as a
+    // trace-viewer .zip) only in the catch block below; discarded on success.
+    await context.tracing.start({ screenshots: true, snapshots: true });
     page = await context.newPage();
     browserStep.ok = true;
 
@@ -400,12 +404,20 @@ async function main() {
     for (const s of steps) {
       console.log(`  ✓ ${s.name}${s.detail ? ` — ${s.detail}` : ''}`);
     }
+    await context.tracing.stop().catch(() => {});
     await cleanup();
     process.exit(0);
   } catch (err) {
     const failing = steps.find((s) => !s.ok);
     const tag = (failing?.name ?? 'unknown').replace(/[^a-z0-9]+/gi, '-').slice(0, 40);
     const screenshot = await shot(tag);
+    let trace = null;
+    if (context) {
+      trace = join(ARTIFACTS_DIR, `trace-${tag}-${Date.now()}.zip`);
+      await context.tracing.stop({ path: trace }).catch(() => {
+        trace = null;
+      });
+    }
     console.error('\n[smoke] FAIL');
     for (const s of steps) {
       console.error(`  ${s.ok ? '✓' : '✗'} ${s.name}${s.detail ? ` — ${s.detail}` : ''}`);
@@ -413,6 +425,7 @@ async function main() {
     console.error(`  failing step: ${failing?.name ?? '(setup)'}`);
     console.error(`  error: ${err.message}`);
     if (screenshot) console.error(`  screenshot: ${screenshot}`);
+    if (trace) console.error(`  trace: ${trace}  (open with: bunx playwright show-trace ${basename(trace)})`);
     console.error(`  stack: ${err.stack ?? err.message}`);
     await cleanup();
     process.exit(1);

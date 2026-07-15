@@ -1,0 +1,7 @@
+{
+  "tolerancePct": 0.25,
+  "targets": {
+    "server": 93.83,
+    "web": 84.22
+  }
+}

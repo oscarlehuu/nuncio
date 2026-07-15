@@ -176,6 +176,8 @@ bun run gate:full    # pre-promotion gate (dev→main): gate + server e2e + real
 bun run setup-hooks  # install versioned git hooks for protected-branch pre-push gates
 bun run add-changeset patch "…"   # create a changeset fragment (preferred for agents)
 bun run check-changeset           # verify PR will pass CI changeset gate
+bun run check-dead-code           # knip vs scripts/dead-code-baseline.json — CI fails on NEW dead code (`:update` rewrites baseline)
+bun run check-coverage-ratchet    # line coverage vs scripts/coverage-baseline.json floor — needs each package's test:coverage reports first (`:update` ratchets up)
 bun run changeset                 # interactive alternative for humans
 bun run version      # consume pending changesets → bump root version + update CHANGELOG.md + sync server/web (opens via CI)
 bun run release      # create v<version> tag + draft GitHub Release; desktop CI publishes after assets upload
