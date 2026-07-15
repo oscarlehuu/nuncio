@@ -185,6 +185,23 @@ this.cachedAvailable = registry.getAvailable().length > 0;   // models with conf
 - The SDK is lazy-loaded (cached promise) so startup stays light. Availability is cached for the process lifetime.
 - `createAgentSession` is passed `agentDir`, `authStorage`, `modelRegistry`, and the resolved `model` (see below). Availability is cached for the process lifetime.
 
+### Nuncio Engine external memories
+
+Pi sessions may receive read-only context from Claude Code and Codex CLI's own memory stores.
+`ExternalMemoriesService` builds a compact project-scoped index for `appendSystemPrompt`; it never
+injects Codex's global `MEMORY.md` wholesale. `read_external_memory` is bound to the Session's
+stored `projectPath` and the ids captured from that session's injected index, so later store edits
+cannot silently widen the tool surface. Claude ids are
+resolved inside the matching project memory directory with canonical-path containment checks.
+Codex task groups match only their `applies_to` paths; `memory_summary.md` is exposed as `summary`.
+Missing, unreadable, or malformed stores degrade to no context rather than failing a session.
+
+Settings under the `pi` provider control the feature: `PI_EXTERNAL_MEMORIES`
+(`off|claude|codex|all`, default `all`) and `PI_EXTERNAL_MEMORIES_MAX_BYTES` (default 12288, hard
+cap 16384). `NUNCIO_CLAUDE_CONFIG_DIR` / `CLAUDE_CONFIG_DIR` selects Claude's config root;
+`NUNCIO_CODEX_HOME` selects Codex's home. A project under `/.claude/worktrees/` also tries the
+owning repository root for both source matchers.
+
 ## Model wiring
 
 `session.model` is stored as `provider:modelId` (e.g. `codex:gpt-5.6-sol`, `cursor:composer-2`, `anthropic:claude-sonnet-4`). `PiAgentProvider.createPiSession` resolves Pi model ids back to a Pi `Model` via `resolveModelId` (handles both `provider/modelId` slash and `provider:modelId` colon conventions) + `registry.find(provider, id)`, then passes it to `createAgentSession({ model })`. `CodexAgentProvider` strips the `codex:` prefix before sending `turn/start` to the Codex app-server. It maps each live `model/list.supportedReasoningEfforts` entry into the shared `reasoningEffort` descriptor, so model-specific choices such as GPT-5.6 Sol/Terra `ultra` appear without provider branches in the UI; the adapter forwards the stored value through `turn/start.effort`. Unsupported saved select values are reset from the destination model's descriptor before the picker emits them. If a provider cannot resolve the requested model, it falls back to its default. `GET /api/models` aggregates `listModels()` across all available providers.

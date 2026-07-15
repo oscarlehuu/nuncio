@@ -125,6 +125,12 @@ this recipe; use `noContextFiles`/`agentsFilesOverride` if the personal file sho
   (`apps/server/src/agents/pi-engine/nuncio-context.ts`) injects bounded project facts +
   HandoffBrief via `appendSystemPrompt` on every Nuncio Engine session. Toggle via
   `NUNCIO_CONTEXT_INJECTION`; facts come from the shared context-facts store.
+- **External agent memories. DONE.** Nuncio Engine reads project-scoped memory indexes from
+  Claude Code and Codex CLI's existing stores without writing or copying them. The bounded
+  informational index is appended after `nuncio-context`; `read_external_memory` opens an
+  indexed item with a separate result cap. `PI_EXTERNAL_MEMORIES` gates each source and
+  `PI_EXTERNAL_MEMORIES_MAX_BYTES` controls the index budget. Worktrees also match their owning
+  repository path, and every filesystem read fails soft.
 - **Step 2 — replace allowlisted paths with in-repo factories** once foreman/subagent are ported
   from `~/.pi/agent/extensions/` into the repo; deny-by-default remains unchanged.
 

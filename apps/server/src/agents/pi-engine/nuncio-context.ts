@@ -31,7 +31,7 @@ function orderedFacts(facts: ContextFactDto[]): ContextFactDto[] {
   });
 }
 
-function singleLineFactText(text: string): string {
+export function singleLineFactText(text: string): string {
   return text.replace(/\s*[\r\n\u2028\u2029]+\s*/g, ' ').trim();
 }
 
