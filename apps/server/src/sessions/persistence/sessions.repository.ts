@@ -149,7 +149,7 @@ export class SessionsRepository {
         `SELECT * FROM sessions
          WHERE project_path = ? AND pull_request_number = ?
            ${archivedFilter} AND verify_owner = 'session'
-         ORDER BY updated_at DESC, rowid DESC
+         ORDER BY (status = 'ARCHIVED') ASC, updated_at DESC, rowid DESC
          LIMIT 1`,
       )
       .get(projectPath, pullRequestNumber);

@@ -105,6 +105,24 @@ describe('SessionsRepository — forge state', () => {
     ).toBe(owner.id);
   });
 
+  it('prefers a live owner over a more recently updated archived owner', () => {
+    const archived = repo.create({ prompt: 'archived owner', projectPath: '/projects/ranked' });
+    repo.updateForgeState(archived.id, { pullRequestNumber: 19, forgeProvider: 'github' });
+    repo.updateStatus(archived.id, 'RUNNING');
+    repo.updateStatus(archived.id, 'IDLE');
+    repo.updateStatus(archived.id, 'ARCHIVED');
+    const live = repo.create({ prompt: 'live owner', projectPath: '/projects/ranked' });
+    repo.updateForgeState(live.id, { pullRequestNumber: 19, forgeProvider: 'github' });
+    database.db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?')
+      .run(Date.now() + 10_000, archived.id);
+
+    expect(repo.findByProjectPullRequest(
+      '/projects/ranked',
+      19,
+      { includeArchived: true },
+    )?.id).toBe(live.id);
+  });
+
   it('atomically reserves one active session owner per project pull request', () => {
     const competingDatabase = new DatabaseService();
     const competingRepo = new SessionsRepository(competingDatabase);

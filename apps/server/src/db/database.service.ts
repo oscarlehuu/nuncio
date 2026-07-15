@@ -277,9 +277,29 @@ export class DatabaseService implements OnModuleDestroy {
         provider TEXT NOT NULL,
         delivery_id TEXT NOT NULL,
         created_at INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'completed',
+        claim_token TEXT,
+        lease_expires_at INTEGER,
+        updated_at INTEGER,
+        checkpoint TEXT,
         PRIMARY KEY (provider, delivery_id)
       )
     `);
+    const forgeDeliveryColumns = this.db
+      .prepare('PRAGMA table_info(forge_webhook_deliveries)')
+      .all() as Array<{ name: string }>;
+    const deliveryColumns = [
+      ['status', "TEXT NOT NULL DEFAULT 'completed'"],
+      ['claim_token', 'TEXT'],
+      ['lease_expires_at', 'INTEGER'],
+      ['updated_at', 'INTEGER'],
+      ['checkpoint', 'TEXT'],
+    ] as const;
+    for (const [column, type] of deliveryColumns) {
+      if (!forgeDeliveryColumns.some((entry) => entry.name === column)) {
+        this.db.exec(`ALTER TABLE forge_webhook_deliveries ADD COLUMN ${column} ${type}`);
+      }
+    }
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS forge_pr_session_claims (

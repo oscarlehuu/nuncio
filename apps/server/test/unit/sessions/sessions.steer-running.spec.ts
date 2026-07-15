@@ -141,12 +141,16 @@ describe('SessionsService steer while RUNNING', () => {
     sessions.updateStatus(created.id, 'IDLE');
     let deliveryAvailable = false;
     const failures: unknown[] = [];
+    const recoveries: Array<Record<string, unknown>> = [];
     const steer = jest.fn(async () => {
       if (!deliveryAvailable) throw new Error('provider unavailable');
     });
     installProvider(stubProvider({ steer }));
     const stopFailureReporting = service.onBackgroundSteerFailure(({ error }) => {
       failures.push(error);
+    });
+    const stopRecoveryReporting = service.onBackgroundSteerDelivered(({ context }) => {
+      recoveries.push(context);
     });
 
     try {
@@ -186,8 +190,10 @@ describe('SessionsService steer while RUNNING', () => {
       }
       expect(service.steerQueueRepository.peekNext(created.id)).toBeNull();
       expect(failures).toHaveLength(1);
+      expect(recoveries).toEqual([{ kind: 'pr-feedback', subjectId: 'octo/nuncio#7' }]);
     } finally {
       stopFailureReporting();
+      stopRecoveryReporting();
     }
   });
 
@@ -208,6 +214,7 @@ describe('SessionsService steer while RUNNING', () => {
       if (attempts === 1) throw new Error('attention database unavailable');
       reported.push(error);
     });
+    const stopRecoveryReporting = service.onBackgroundSteerDelivered(() => undefined);
 
     try {
       service.steerInBackground(
@@ -234,6 +241,7 @@ describe('SessionsService steer while RUNNING', () => {
       expect(service.steerQueueRepository.peekNext(created.id)).toBeNull();
     } finally {
       stopFailureReporting();
+      stopRecoveryReporting();
     }
   });
 
@@ -506,16 +514,16 @@ describe('SessionsService steer while RUNNING', () => {
     service.steerQueueRepository.enqueue(created.id, 'deliver once');
     const steer = jest.fn(async () => undefined);
     installProvider(stubProvider({ steer }));
-    const originalDelete = service.steerQueueRepository.deleteById.bind(
+    const originalAcknowledge = service.steerQueueRepository.acknowledgeDelivered.bind(
       service.steerQueueRepository,
     );
     let deleteCalls = 0;
     const deleteSpy = jest
-      .spyOn(service.steerQueueRepository, 'deleteById')
-      .mockImplementation((rowId) => {
+      .spyOn(service.steerQueueRepository, 'acknowledgeDelivered')
+      .mockImplementation((rowId, onRecovered) => {
         deleteCalls += 1;
         if (deleteCalls === 1) throw new Error('sqlite temporarily unavailable');
-        originalDelete(rowId);
+        return originalAcknowledge(rowId, onRecovered);
       });
 
     try {

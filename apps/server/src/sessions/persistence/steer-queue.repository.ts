@@ -11,6 +11,7 @@ interface SteerQueueRow {
   claimed_at: number | null;
   origin: string | null;
   failure_context_json: string | null;
+  failure_reported_at: number | null;
 }
 
 export interface QueuedSteer {
@@ -119,6 +120,25 @@ export class SteerQueueRepository {
         )
         .run(Date.now(), id);
       if (marked.changes !== 1) throw new Error(`Steer queue row ${id} changed during reporting`);
+      return true;
+    });
+  }
+
+  /** Delete a delivered row and resolve its prior failure signal atomically. */
+  acknowledgeDelivered(
+    id: number,
+    onRecovered: (context: Record<string, unknown>) => void,
+  ): boolean {
+    return this.database.transaction(() => {
+      const row = this.database.db
+        .prepare<SteerQueueRow, [number]>('SELECT * FROM steer_queue WHERE id = ?')
+        .get(id);
+      if (!row) return false;
+      if (row.failure_reported_at !== null) {
+        const context = parseFailureContext(row.failure_context_json);
+        if (context) onRecovered(context);
+      }
+      this.database.db.prepare('DELETE FROM steer_queue WHERE id = ?').run(id);
       return true;
     });
   }

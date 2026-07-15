@@ -5,7 +5,7 @@ import type { ForgeWebhookEvent } from '../forges.types';
 export async function findWebhookProject(
   git: GitService,
   event: ForgeWebhookEvent,
-  ownsPullRequest?: (projectPath: string) => boolean,
+  ownsPullRequest?: (projectPath: string) => boolean | 'live' | 'archived',
 ): Promise<string | null> {
   const projects = await git.listProjects();
   const matches: string[] = [];
@@ -23,5 +23,11 @@ export async function findWebhookProject(
       // Repositories without a supported origin cannot own a forge delivery.
     }
   }
-  return matches.find((path) => ownsPullRequest?.(path)) ?? matches[0] ?? null;
+  let archivedOwner: string | null = null;
+  for (const path of matches) {
+    const ownership = ownsPullRequest?.(path);
+    if (ownership === true || ownership === 'live') return path;
+    if (ownership === 'archived' && archivedOwner === null) archivedOwner = path;
+  }
+  return archivedOwner ?? matches[0] ?? null;
 }

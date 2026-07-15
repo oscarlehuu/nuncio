@@ -46,6 +46,9 @@ describe('WebhooksService (Phase 4)', () => {
     context: Record<string, unknown>;
     error: unknown;
   }) => void) | null;
+  let backgroundDeliveredHandler: ((delivery: {
+    context: Record<string, unknown>;
+  }) => void) | null;
   let jobLogCalls: number[];
   let forgeStateUpdates: Array<{ id: string; state: Record<string, unknown> }>;
   let archiveCalls: string[];
@@ -63,6 +66,10 @@ describe('WebhooksService (Phase 4)', () => {
   let authorCanWrite: boolean;
   let clearedWorktreeMetadata: string[];
   let ownerSession: { id: string; status: string; projectPath: string; pullRequestNumber: number } | null;
+  let additionalOwnerSessions: Map<string, { id: string; status: string; projectPath: string; pullRequestNumber: number }>;
+  let projectListFailures: number;
+  let forgeStateUpdateFailures: number;
+  let clearWorktreeMetadataFailures: number;
   let sessionsStub: {
     create: (dto: CreateSessionDto) => Promise<{ id: string }>;
     steer: (id: string, message: string, force?: boolean, attachments?: unknown, origin?: string) => Promise<{ id: string }>;
@@ -76,6 +83,9 @@ describe('WebhooksService (Phase 4)', () => {
     ) => void;
     onBackgroundSteerFailure: (
       handler: (failure: { context: Record<string, unknown>; error: unknown }) => void,
+    ) => () => void;
+    onBackgroundSteerDelivered: (
+      handler: (delivery: { context: Record<string, unknown> }) => void,
     ) => () => void;
     archive: (id: string) => unknown;
   };
@@ -119,6 +129,7 @@ describe('WebhooksService (Phase 4)', () => {
     steerError = null;
     backgroundHandoffError = null;
     backgroundFailureHandler = null;
+    backgroundDeliveredHandler = null;
     jobLogCalls = [];
     forgeStateUpdates = [];
     archiveCalls = [];
@@ -136,6 +147,10 @@ describe('WebhooksService (Phase 4)', () => {
     authorCanWrite = true;
     clearedWorktreeMetadata = [];
     ownerSession = { id: 'sess-pr', status: 'IDLE', projectPath: KNOWN_PATH, pullRequestNumber: 7 };
+    additionalOwnerSessions = new Map();
+    projectListFailures = 0;
+    forgeStateUpdateFailures = 0;
+    clearWorktreeMetadataFailures = 0;
     sessionsStub = {
       create: async (dto) => {
         createCalls.push(dto);
@@ -157,6 +172,10 @@ describe('WebhooksService (Phase 4)', () => {
         backgroundFailureHandler = handler;
         return () => { backgroundFailureHandler = null; };
       },
+      onBackgroundSteerDelivered: (handler) => {
+        backgroundDeliveredHandler = handler;
+        return () => { backgroundDeliveredHandler = null; };
+      },
       archive: (id: string) => {
         if (archiveError) throw archiveError;
         archiveCalls.push(id);
@@ -165,7 +184,10 @@ describe('WebhooksService (Phase 4)', () => {
       },
     };
     gitStub = {
-      listProjects: async () => projectPaths.map((path) => ({ path })),
+      listProjects: async () => {
+        if (projectListFailures-- > 0) throw new Error('project discovery unavailable');
+        return projectPaths.map((path) => ({ path }));
+      },
       remoteInfo: async (path) =>
         matchingProjectPaths.has(path)
           ? { host: 'github.com', owner: 'octo', repo: 'nuncio' }
@@ -201,13 +223,25 @@ describe('WebhooksService (Phase 4)', () => {
       gitStub as never,
       db as never,
       {
-        findByProjectPullRequest: (path: string) =>
-          ownerSession?.projectPath === path ? ownerSession : null,
+        findByProjectPullRequest: (
+          path: string,
+          _number: number,
+          options?: { includeArchived?: boolean },
+        ) => {
+          const candidate = additionalOwnerSessions.get(path) ??
+            (ownerSession?.projectPath === path ? ownerSession : null);
+          if (candidate?.status === 'ARCHIVED' && !options?.includeArchived) return null;
+          return candidate;
+        },
         updateForgeState: (id: string, state: Record<string, unknown>) => {
+          if (forgeStateUpdateFailures-- > 0) throw new Error('forge state unavailable');
           forgeStateUpdates.push({ id, state });
           return ownerSession;
         },
         clearWorktreeMetadata: (id: string) => {
+          if (clearWorktreeMetadataFailures-- > 0) {
+            throw new Error('workspace metadata unavailable');
+          }
           clearedWorktreeMetadata.push(id);
           return ownerSession;
         },
@@ -350,7 +384,7 @@ describe('WebhooksService (Phase 4)', () => {
       sessionId: 'sess-pr',
     });
     expect(attentionSignals).toContainEqual(expect.objectContaining({
-      subjectId: 'octo/nuncio#7',
+      subjectId: 'octo/nuncio#7:delivery',
       payload: expect.objectContaining({
         reason: 'background-steer-failed',
         error: 'queue unavailable',
@@ -429,6 +463,43 @@ describe('WebhooksService (Phase 4)', () => {
     expect(steerCalls).toHaveLength(1);
   });
 
+  it('retries the same delivery after transient project discovery failure', async () => {
+    projectListFailures = 1;
+    const event = {
+      provider: 'github', deliveryId: 'feedback-project-retry', kind: 'pull_request_feedback', action: 'created',
+      owner: 'octo', repo: 'nuncio', repoFullName: 'octo/nuncio', defaultBranch: 'main', number: 7,
+      author: 'reviewer', comments: [{ body: 'Do not lose this.' }], url: 'https://github.com/octo/nuncio/pull/7',
+    } as never;
+
+    await expect(service.handleEvent('github', event)).rejects.toThrow('project discovery unavailable');
+    await expect(service.handleEvent('github', event)).resolves.toMatchObject({
+      steered: true,
+      sessionId: 'sess-pr',
+    });
+    expect(steerCalls).toHaveLength(1);
+  });
+
+  it('returns a retryable error while the same delivery is still in progress', async () => {
+    let releaseProjects!: () => void;
+    gitStub.listProjects = () => new Promise((resolve) => {
+      releaseProjects = () => resolve(projectPaths.map((path) => ({ path })));
+    });
+    const event = {
+      provider: 'github', deliveryId: 'feedback-concurrent', kind: 'pull_request_feedback', action: 'created',
+      owner: 'octo', repo: 'nuncio', repoFullName: 'octo/nuncio', defaultBranch: 'main', number: 7,
+      author: 'reviewer', comments: [{ body: 'Only once.' }], url: 'https://github.com/octo/nuncio/pull/7',
+    } as never;
+
+    const first = service.handleEvent('github', event);
+    await Promise.resolve();
+    await expect(service.handleEvent('github', event)).rejects.toThrow(
+      'Webhook delivery is already being processed',
+    );
+    releaseProjects();
+    await expect(first).resolves.toMatchObject({ steered: true });
+    expect(steerCalls).toHaveLength(1);
+  });
+
   it('fails closed when the authenticated forge login cannot be established', async () => {
     forgeLogin = null;
     const result = await service.handleEvent(
@@ -459,10 +530,44 @@ describe('WebhooksService (Phase 4)', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(attentionSignals).toContainEqual(expect.objectContaining({
       kind: 'pr-feedback',
-      subjectId: 'octo/nuncio#7',
+      subjectId: 'octo/nuncio#7:delivery',
       payload: expect.objectContaining({ reason: 'background-steer-failed' }),
     }));
     await expect(service.handleEvent('github', event)).resolves.toEqual({ created: false, reason: 'duplicate' });
+  });
+
+  it('resolves delivery-failure attention after the queued feedback later succeeds', async () => {
+    const event = {
+      provider: 'github', deliveryId: 'feedback-recovers', kind: 'pull_request_feedback', action: 'created',
+      owner: 'octo', repo: 'nuncio', repoFullName: 'octo/nuncio', defaultBranch: 'main', number: 7,
+      author: 'reviewer', comments: [{ body: 'Retry me.' }], url: 'https://github.com/octo/nuncio/pull/7',
+    } as never;
+    steerError = new Error('temporary provider failure');
+    await service.handleEvent('github', event);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(attentionSignals).toContainEqual(expect.objectContaining({
+      kind: 'pr-feedback',
+      subjectId: 'octo/nuncio#7:delivery',
+    }));
+
+    backgroundDeliveredHandler?.({
+      context: {
+        kind: 'pr-feedback',
+        subjectId: 'octo/nuncio#7',
+        payload: { reason: 'background-steer-failed' },
+      },
+    });
+
+    expect(resolvedAttention).toContainEqual(['pr-feedback', 'octo/nuncio#7:delivery']);
+    expect(resolvedAttention).not.toContainEqual(['pr-feedback', 'octo/nuncio#7']);
+    backgroundDeliveredHandler?.({
+      context: {
+        kind: 'pr-feedback',
+        subjectId: 'octo/nuncio#7',
+        payload: { reason: 'untrusted-author' },
+      },
+    });
+    expect(resolvedAttention).toEqual([['pr-feedback', 'octo/nuncio#7:delivery']]);
   });
 
   it('refuses to steer an owning session when feedback has no author', async () => {
@@ -552,7 +657,7 @@ describe('WebhooksService (Phase 4)', () => {
       labels: [],
     })).resolves.toMatchObject({ reason: 'background-steer-failed', sessionId: 'sess-pr' });
     expect(attentionSignals).toContainEqual(expect.objectContaining({
-      subjectId: 'octo/nuncio#7',
+      subjectId: 'octo/nuncio#7:delivery',
       payload: expect.objectContaining({ error: 'queue unavailable' }),
     }));
   });
@@ -569,7 +674,7 @@ describe('WebhooksService (Phase 4)', () => {
 
     expect(attentionSignals).toContainEqual(expect.objectContaining({
       kind: 'pr-feedback',
-      subjectId: 'octo/nuncio#7',
+      subjectId: 'octo/nuncio#7:delivery',
       payload: expect.objectContaining({ reason: 'background-steer-failed' }),
     }));
   });
@@ -601,6 +706,32 @@ describe('WebhooksService (Phase 4)', () => {
 
     expect(result).toMatchObject({ steered: true, sessionId: 'sess-pr' });
     expect(attentionSignals).toHaveLength(0);
+  });
+
+  it('routes merge lifecycle to a live owner before archived owners in other clones', async () => {
+    projectPaths = ['/projects/archived-clone', KNOWN_PATH];
+    matchingProjectPaths.add('/projects/archived-clone');
+    additionalOwnerSessions.set('/projects/archived-clone', {
+      id: 'sess-archived',
+      status: 'ARCHIVED',
+      projectPath: '/projects/archived-clone',
+      pullRequestNumber: 7,
+    });
+    ownerSession = {
+      id: 'sess-live',
+      status: 'RUNNING',
+      projectPath: KNOWN_PATH,
+      pullRequestNumber: 7,
+    };
+
+    const result = await service.handleEvent('github', {
+      ...makeEvent({ deliveryId: 'merged-live-clone' }),
+      kind: 'pull_request', action: 'closed', merged: true,
+      url: 'https://github.com/octo/nuncio/pull/7', labels: [],
+    } as never);
+
+    expect(result).toMatchObject({ reason: 'session-running' });
+    expect(forgeStateUpdates[0]?.id).toBe('sess-live');
   });
 
   it('raises attention for a CI failure without an owning session', async () => {
@@ -659,6 +790,7 @@ describe('WebhooksService (Phase 4)', () => {
     expect(clearedWorktreeMetadata).toEqual(['sess-pr']);
     expect(resolvedAttention).toContainEqual(['pr-review', `${KNOWN_PATH}#7`]);
     expect(resolvedAttention).toContainEqual(['pr-feedback', 'octo/nuncio#7']);
+    expect(resolvedAttention).toContainEqual(['pr-feedback', 'octo/nuncio#7:delivery']);
   });
 
   it('skips destructive merge cleanup and raises attention for a dirty worktree', async () => {
@@ -731,6 +863,20 @@ describe('WebhooksService (Phase 4)', () => {
     expect(replay).toEqual({ created: false, reason: 'duplicate' });
   });
 
+  it('retries a lifecycle delivery after forge-state persistence fails', async () => {
+    forgeStateUpdateFailures = 1;
+    const event = {
+      ...makeEvent({ deliveryId: 'closed-state-retry' }), kind: 'pull_request', action: 'closed',
+      merged: false, url: 'https://github.com/octo/nuncio/pull/7', labels: [],
+    } as never;
+
+    await expect(service.handleEvent('github', event)).rejects.toThrow('forge state unavailable');
+    await expect(service.handleEvent('github', event)).resolves.toMatchObject({
+      closed: true,
+      sessionId: 'sess-pr',
+    });
+  });
+
   it('updates merged state and resolves PR attention when auto-close is disabled', async () => {
     ownerSession = {
       id: 'sess-pr', status: 'IDLE', projectPath: KNOWN_PATH, pullRequestNumber: 7,
@@ -762,6 +908,66 @@ describe('WebhooksService (Phase 4)', () => {
     expect(forgeStateUpdates[0].state).toMatchObject({ pullRequestState: 'merged' });
     expect(archiveCalls).toHaveLength(0);
     expect(removeWorktreeCalls).toHaveLength(0);
+  });
+
+  it('does not clean a manually archived worktree after an unrelated delivery retry', async () => {
+    ownerSession = {
+      id: 'sess-pr', status: 'ARCHIVED', projectPath: KNOWN_PATH, pullRequestNumber: 7,
+      worktreePath: '/worktrees/manual-archive', baseBranch: 'main',
+    } as never;
+    projectListFailures = 1;
+    const event = {
+      ...makeEvent({ deliveryId: 'merged-manual-archive-retry' }),
+      kind: 'pull_request', action: 'closed', merged: true,
+      url: 'https://github.com/octo/nuncio/pull/7', labels: [],
+    } as never;
+
+    await expect(service.handleEvent('github', event)).rejects.toThrow(
+      'project discovery unavailable',
+    );
+    await expect(service.handleEvent('github', event)).resolves.toMatchObject({
+      reason: 'cleanup-authorization-missing',
+    });
+    expect(removeWorktreeCalls).toHaveLength(0);
+    expect(clearedWorktreeMetadata).toHaveLength(0);
+    expect(attentionSignals).toContainEqual(expect.objectContaining({
+      subjectId: 'octo/nuncio#7:cleanup',
+      payload: expect.objectContaining({ reason: 'cleanup-authorization-missing' }),
+    }));
+  });
+
+  it('raises cleanup attention when checkpoint persistence fails after archive', async () => {
+    ownerSession = {
+      id: 'sess-pr', status: 'IDLE', projectPath: KNOWN_PATH, pullRequestNumber: 7,
+      worktreePath: '/worktrees/checkpoint-failed', baseBranch: 'main',
+    } as never;
+    const tracker = (service as unknown as {
+      deliveries: { markCheckpoint: (...args: unknown[]) => void };
+    }).deliveries;
+    const originalMarkCheckpoint = tracker.markCheckpoint.bind(tracker);
+    let failures = 1;
+    tracker.markCheckpoint = (...args: unknown[]) => {
+      if (failures-- > 0) throw new Error('checkpoint unavailable');
+      originalMarkCheckpoint(...args);
+    };
+    const event = {
+      ...makeEvent({ deliveryId: 'merged-checkpoint-retry' }),
+      kind: 'pull_request', action: 'closed', merged: true,
+      url: 'https://github.com/octo/nuncio/pull/7', labels: [],
+    } as never;
+
+    try {
+      await expect(service.handleEvent('github', event)).rejects.toThrow('checkpoint unavailable');
+      await expect(service.handleEvent('github', event)).resolves.toMatchObject({
+        reason: 'cleanup-authorization-missing',
+      });
+      expect(removeWorktreeCalls).toHaveLength(0);
+      expect(attentionSignals).toContainEqual(expect.objectContaining({
+        payload: expect.objectContaining({ reason: 'cleanup-authorization-missing' }),
+      }));
+    } finally {
+      tracker.markCheckpoint = originalMarkCheckpoint;
+    }
   });
 
   it('raises cleanup attention when non-forced worktree removal fails', async () => {
@@ -803,6 +1009,28 @@ describe('WebhooksService (Phase 4)', () => {
       subjectId: 'octo/nuncio#7:cleanup',
       payload: expect.objectContaining({ reason: 'worktree-missing' }),
     }));
+  });
+
+  it('repairs stale metadata when a merge cleanup retry finds the session archived', async () => {
+    ownerSession = {
+      id: 'sess-pr', status: 'IDLE', projectPath: KNOWN_PATH, pullRequestNumber: 7,
+      worktreePath: '/worktrees/sess-pr', baseBranch: 'main',
+    } as never;
+    clearWorktreeMetadataFailures = 1;
+    const event = {
+      ...makeEvent({ deliveryId: 'merged-metadata-retry' }), kind: 'pull_request', action: 'closed',
+      merged: true, url: 'https://github.com/octo/nuncio/pull/7', labels: [],
+    } as never;
+
+    await expect(service.handleEvent('github', event)).rejects.toThrow(
+      'workspace metadata unavailable',
+    );
+    expect((ownerSession as { status: string } | null)?.status).toBe('ARCHIVED');
+    await expect(service.handleEvent('github', event)).resolves.toMatchObject({
+      reason: 'already-archived',
+      sessionId: 'sess-pr',
+    });
+    expect(clearedWorktreeMetadata).toEqual(['sess-pr']);
   });
 
   it('rechecks the worktree after archive and preserves it if a final write appears', async () => {

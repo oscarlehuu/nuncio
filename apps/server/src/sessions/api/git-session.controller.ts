@@ -125,9 +125,14 @@ export class GitSessionController {
     if (!localBranch || localBranch === 'HEAD') {
       throw new BadRequestException('Session has no pushable branch');
     }
+    const adoptedPullRequest =
+      session.forgeProvider !== null &&
+      session.pullRequestNumber !== null &&
+      session.baseBranch ===
+        `refs/nuncio/pull-requests/${session.forgeProvider}/${session.pullRequestNumber}`;
     return this.git.push(path, localBranch, {
       force: body?.force === true,
-      remoteBranch: session.branch ?? localBranch,
+      ...(adoptedPullRequest && session.branch ? { remoteBranch: session.branch } : {}),
     });
   }
 

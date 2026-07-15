@@ -3,6 +3,7 @@ import type { SessionsRepository } from '../../sessions/persistence/sessions.rep
 import type { SessionsService } from '../../sessions/sessions.service';
 import type { ForgeRepoService } from '../forges-repo.service';
 import type { ForgeCiFailureWebhookEvent } from '../forges.types';
+import type { WebhookDeliveryAcceptance } from './webhook-delivery-tracker';
 import {
   raiseWebhookSteerFailure,
   webhookSteerFailureContext,
@@ -13,6 +14,7 @@ interface CiDependencies {
   sessionRecords: SessionsRepository;
   forgeRepos: ForgeRepoService;
   attention: AttentionService;
+  accept: WebhookDeliveryAcceptance;
 }
 
 export async function routeWebhookCiFailure(
@@ -23,14 +25,16 @@ export async function routeWebhookCiFailure(
 ) {
   const session = deps.sessionRecords.findByProjectPullRequest(projectPath, event.number);
   if (!session) {
-    deps.attention.raise({
-      kind: 'pr-feedback',
-      subjectId: `${event.repoFullName}#${event.number}`,
-      projectPath,
-      title: `PR #${event.number} CI failed without an owning session`,
-      payload: { provider, repo: event.repoFullName, number: event.number, url: event.url },
+    return deps.accept(() => {
+      deps.attention.raise({
+        kind: 'pr-feedback',
+        subjectId: `${event.repoFullName}#${event.number}`,
+        projectPath,
+        title: `PR #${event.number} CI failed without an owning session`,
+        payload: { provider, repo: event.repoFullName, number: event.number, url: event.url },
+      });
+      return { created: false, reason: 'no-owning-session' } as const;
     });
-    return { created: false, reason: 'no-owning-session' } as const;
   }
 
   const job = await resolveFailingJob(deps.forgeRepos, projectPath, event);
@@ -63,19 +67,27 @@ export async function routeWebhookCiFailure(
     title: `PR #${event.number} CI failure could not be delivered to its session`,
   });
   try {
-    deps.sessions.steerInBackground(
-      session.id,
-      prompt,
-      undefined,
-      undefined,
-      `forge:${provider}:ci-failure`,
-      failureContext,
-    );
+    return deps.accept(() => {
+      deps.sessions.steerInBackground(
+        session.id,
+        prompt,
+        undefined,
+        undefined,
+        `forge:${provider}:ci-failure`,
+        failureContext,
+      );
+      return { created: false, steered: true, sessionId: session.id } as const;
+    });
   } catch (error) {
-    raiseWebhookSteerFailure(deps.attention, failureContext, error);
-    return { created: false, reason: 'background-steer-failed', sessionId: session.id } as const;
+    return deps.accept(() => {
+      raiseWebhookSteerFailure(deps.attention, failureContext, error);
+      return {
+        created: false,
+        reason: 'background-steer-failed',
+        sessionId: session.id,
+      } as const;
+    });
   }
-  return { created: false, steered: true, sessionId: session.id } as const;
 }
 
 async function resolveFailingJob(

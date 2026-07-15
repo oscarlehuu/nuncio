@@ -819,6 +819,13 @@ export class SessionsService implements OnModuleDestroy {
       error: unknown;
     },
   ) => void>();
+  private readonly backgroundSteerDeliveredHandlers = new Set<(
+    delivery: {
+      sessionId: string;
+      origin?: string;
+      context: Record<string, unknown>;
+    },
+  ) => void>();
 
   onBackgroundSteerFailure(
     handler: (
@@ -832,6 +839,19 @@ export class SessionsService implements OnModuleDestroy {
   ): () => void {
     this.backgroundSteerFailureHandlers.add(handler);
     return () => this.backgroundSteerFailureHandlers.delete(handler);
+  }
+
+  onBackgroundSteerDelivered(
+    handler: (
+      delivery: {
+        sessionId: string;
+        origin?: string;
+        context: Record<string, unknown>;
+      },
+    ) => void,
+  ): () => void {
+    this.backgroundSteerDeliveredHandlers.add(handler);
+    return () => this.backgroundSteerDeliveredHandlers.delete(handler);
   }
 
   private enqueueSteer(
@@ -1151,7 +1171,11 @@ export class SessionsService implements OnModuleDestroy {
 
       // Provider delivery already completed. A transient acknowledgement write
       // must retry only the delete; redelivering could repeat external effects.
-      await this.acknowledgeDeliveredSteer(delivered.id);
+      await this.acknowledgeDeliveredSteer(
+        delivered.id,
+        id,
+        delivered.origin,
+      );
     })();
     // Track so shutdown awaits it — a fire-and-forget drained steer must not write
     // to a closed DB handle after the module is destroyed.
@@ -1178,10 +1202,32 @@ export class SessionsService implements OnModuleDestroy {
   }
 
   /** Retry only the durable queue acknowledgement after provider delivery. */
-  private async acknowledgeDeliveredSteer(rowId: number): Promise<void> {
+  private async acknowledgeDeliveredSteer(
+    rowId: number,
+    sessionId: string,
+    origin?: string,
+  ): Promise<void> {
     while (!this.destroyed) {
       try {
-        this.steerQueue.deleteById(rowId);
+        this.steerQueue.acknowledgeDelivered(rowId, (context) => {
+          let handled = false;
+          let handlerError: unknown;
+          for (const handler of this.backgroundSteerDeliveredHandlers) {
+            try {
+              handler({
+                sessionId,
+                ...(origin ? { origin } : {}),
+                context,
+              });
+              handled = true;
+            } catch (error) {
+              handlerError = error;
+            }
+          }
+          if (!handled) {
+            throw handlerError ?? new Error('No background steer recovery handler is registered');
+          }
+        });
         return;
       } catch {
         await new Promise((resolve) => setTimeout(resolve, 250));
@@ -1713,6 +1759,7 @@ export class SessionsService implements OnModuleDestroy {
     this.transcriptWatchers.clear();
     await this.drainInFlightForShutdown();
     this.backgroundSteerFailureHandlers.clear();
+    this.backgroundSteerDeliveredHandlers.clear();
     this.pendingOrchestrationEvents.clear();
     this.cancelAllLifecycleRetries();
     this.cancelAllProviderEventRetries();

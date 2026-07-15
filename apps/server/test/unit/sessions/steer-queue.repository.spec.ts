@@ -105,6 +105,25 @@ describe('SteerQueueRepository', () => {
     database.db.prepare('DELETE FROM preferences WHERE key = ?').run('failure-report-test');
   });
 
+  it('keeps a delivered row until its failure recovery transaction commits', () => {
+    const s = sessions.create({ prompt: 'delivery recovery transaction' });
+    const context = { kind: 'pr-feedback', subjectId: 'octo/nuncio#9' };
+    const rowId = queue.enqueue(s.id, 'webhook feedback', undefined, 'forge:github', context);
+    queue.reportFailureOnce(rowId, () => undefined);
+
+    expect(() => queue.acknowledgeDelivered(rowId, () => {
+      throw new Error('attention resolution unavailable');
+    })).toThrow('attention resolution unavailable');
+    expect(queue.peekNext(s.id)?.id).toBe(rowId);
+
+    const recovered: Array<Record<string, unknown>> = [];
+    expect(queue.acknowledgeDelivered(rowId, (failureContext) => {
+      recovered.push(failureContext);
+    })).toBe(true);
+    expect(recovered).toEqual([context]);
+    expect(queue.peekNext(s.id)).toBeNull();
+  });
+
   it('claimAll hides rows from dequeue until released or deleted', () => {
     const s = sessions.create({ prompt: 'claim' });
     queue.enqueue(s.id, 'one');

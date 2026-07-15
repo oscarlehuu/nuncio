@@ -10,7 +10,7 @@ export function webhookSteerFailureContext(input: {
 }): Record<string, unknown> {
   return {
     kind: 'pr-feedback',
-    subjectId: `${input.repo}#${input.number}`,
+    subjectId: `${input.repo}#${input.number}:delivery`,
     projectPath: input.projectPath,
     title: input.title,
     payload: {
@@ -30,15 +30,16 @@ export function raiseWebhookSteerFailure(
 ): void {
   if (
     context.kind !== 'pr-feedback' ||
-    typeof context.subjectId !== 'string' ||
     typeof context.title !== 'string'
   ) return;
+  const subjectId = deliveryFailureSubject(context);
+  if (!subjectId) return;
   const payload = context.payload && typeof context.payload === 'object'
     ? context.payload as Record<string, unknown>
     : {};
   attention.raise({
     kind: context.kind,
-    subjectId: context.subjectId,
+    subjectId,
     projectPath: typeof context.projectPath === 'string' ? context.projectPath : null,
     title: context.title,
     payload: {
@@ -46,4 +47,24 @@ export function raiseWebhookSteerFailure(
       error: error instanceof Error ? error.message : String(error),
     },
   });
+}
+
+export function resolveWebhookSteerFailure(
+  attention: AttentionService,
+  context: Record<string, unknown>,
+): void {
+  if (context.kind !== 'pr-feedback') return;
+  const subjectId = deliveryFailureSubject(context);
+  if (!subjectId) return;
+  attention.onConditionCleared(context.kind, subjectId);
+}
+
+function deliveryFailureSubject(context: Record<string, unknown>): string | null {
+  if (typeof context.subjectId !== 'string' || !context.subjectId.trim()) return null;
+  const subjectId = context.subjectId.trim();
+  if (subjectId.endsWith(':delivery')) return subjectId;
+  const payload = context.payload && typeof context.payload === 'object'
+    ? context.payload as Record<string, unknown>
+    : null;
+  return payload?.reason === 'background-steer-failed' ? `${subjectId}:delivery` : null;
 }
