@@ -6,7 +6,7 @@
  * they must be read before the DB / encryption key is available.
  */
 
-export type SettingType = 'secret' | 'string' | 'path' | 'boolean';
+export type SettingType = 'secret' | 'string' | 'path' | 'boolean' | 'number';
 
 export type SettingCategory =
   | 'provider'

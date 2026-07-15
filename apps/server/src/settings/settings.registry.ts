@@ -113,6 +113,46 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     envVar: 'PI_EXTENSION_DISCOVERY',
   },
   {
+    key: 'PI_EXTERNAL_MEMORIES',
+    category: 'provider',
+    providerId: 'pi',
+    type: 'string',
+    label: 'Nuncio Engine external memories',
+    description:
+      'Choose which read-only Claude Code and Codex CLI memory stores Nuncio Engine may index for the selected project. Nuncio never writes to these stores.',
+    envVar: 'PI_EXTERNAL_MEMORIES',
+    default: 'all',
+    options: [
+      { value: 'off', label: 'Off', description: 'Do not read or expose external agent memories.' },
+      { value: 'claude', label: 'Claude Code', description: 'Use matching Claude Code project memories only.' },
+      { value: 'codex', label: 'Codex CLI', description: 'Use matching Codex CLI memories only.' },
+      { value: 'all', label: 'All', description: 'Use matching memories from both external stores.' },
+    ],
+  },
+  {
+    key: 'PI_EXTERNAL_MEMORIES_MAX_BYTES',
+    category: 'provider',
+    providerId: 'pi',
+    type: 'number',
+    label: 'External memory index budget (bytes)',
+    description:
+      'Maximum UTF-8 bytes Nuncio Engine injects for the compact external-memory index. Full memories remain available through the read tool. Hard-capped at 16384 bytes.',
+    envVar: 'PI_EXTERNAL_MEMORIES_MAX_BYTES',
+    default: '12288',
+  },
+  {
+    key: 'NUNCIO_CLAUDE_CONFIG_DIR',
+    category: 'provider',
+    providerId: 'pi',
+    type: 'path',
+    label: 'Claude Code config directory for memories',
+    description:
+      'Claude Code config root Nuncio Engine reads project memories from. Stored memories stay read-only and in Claude Code\'s own store.',
+    envVar: 'NUNCIO_CLAUDE_CONFIG_DIR',
+    altEnvVar: 'CLAUDE_CONFIG_DIR',
+    default: '~/.claude',
+  },
+  {
     key: 'NUNCIO_PI_BIN',
     category: 'provider',
     providerId: 'pi',

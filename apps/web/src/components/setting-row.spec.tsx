@@ -60,6 +60,18 @@ describe('SettingRow', () => {
     expect(onUpdate).toHaveBeenCalledWith('TEST_KEY', 'hello');
   });
 
+  it('renders number settings with numeric input semantics', () => {
+    render(
+      <SettingRow
+        setting={makeSetting({ type: 'number' })}
+        onUpdate={vi.fn()}
+        onClear={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('spinbutton')).toBeInTheDocument();
+  });
+
   it('selects an option from the option group', async () => {
     const onUpdate = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();

@@ -234,7 +234,9 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
         filesystem: 'read-only',
         network: 'disabled',
       });
-      expect(options.tools).toEqual(['read', 'grep', 'ls', 'todo_write', 'AskUserQuestion']);
+      expect(options.tools).toEqual([
+        'read', 'grep', 'ls', 'todo_write', 'AskUserQuestion', 'read_external_memory',
+      ]);
       expect((options.resourceLoader as { options?: Record<string, unknown> }).options).toMatchObject({
         cwd: realpathSync(workspaceRoot),
         noExtensions: true,
@@ -251,6 +253,7 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
         'ls',
         'todo_write',
         'AskUserQuestion',
+        'read_external_memory',
       ]);
     } finally {
       rmSync(workspaceRoot, { recursive: true, force: true });
@@ -284,6 +287,7 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
         'ls',
         'todo_write',
         'AskUserQuestion',
+        'read_external_memory',
       ]);
       const writeTool = (options.customTools as Array<{
         name: string;
@@ -381,12 +385,14 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
           testCase.toolName,
           'todo_write',
           'AskUserQuestion',
+          'read_external_memory',
         ]);
         expect(customTools.map((tool) => tool.name)).toEqual([
           ...testCase.builtins,
           testCase.toolName,
           'todo_write',
           'AskUserQuestion',
+          'read_external_memory',
         ]);
         expect(customTools.map((tool) => tool.name)).not.toContain('bash');
         expect(customTools.map((tool) => tool.name)).not.toContain('forged_submit');
@@ -444,6 +450,7 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
           'submit_synthesis',
           'todo_write',
           'AskUserQuestion',
+          'read_external_memory',
         ]);
 
       await provider.steer(created.id, 'synthesize now', {
@@ -470,6 +477,7 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
           'submit_synthesis',
           'todo_write',
           'AskUserQuestion',
+          'read_external_memory',
         ]);
       const refreshedSynthesis = (createAgentSessionOptions[1]!.customTools as Array<{
         name: string;

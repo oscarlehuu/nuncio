@@ -37,6 +37,16 @@ import {
   NuncioContextService,
 } from '../pi-engine/nuncio-context';
 import { createPiEngineModelRegistry } from '../pi-engine/model-registry';
+import {
+  EXTERNAL_MEMORIES_DEFAULT_BYTES,
+  EXTERNAL_MEMORIES_MAX_BYTES,
+  ExternalMemoriesService,
+  normalizeExternalMemoriesMode,
+  type ExternalMemoriesMode,
+} from '../pi-engine/external-memories';
+import { buildExternalMemoryTool, EXTERNAL_MEMORY_TOOL_NAME } from '../pi-engine/external-memory-tool';
+import type { ExternalMemoryRoots } from '../pi-engine/external-memory-sources';
+import { expandHome } from './cli-path.helpers';
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent');
 
@@ -141,6 +151,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     events: EventsRepository,
     private readonly settings: SettingsService,
     @Optional() private readonly nuncioContext?: NuncioContextService,
+    @Optional() private readonly externalMemories?: ExternalMemoriesService,
   ) {
     super(sessions, events);
   }
@@ -405,6 +416,25 @@ export class PiAgentProvider extends BaseAgentProvider {
     return this.settings.resolve('PI_AGENT_DIR') ?? pi.getAgentDir();
   }
 
+  private resolveExternalMemoriesConfig(): {
+    mode: ExternalMemoriesMode;
+    maxBytes: number;
+    roots: ExternalMemoryRoots;
+  } {
+    const configuredBudget = Number(this.settings.resolve('PI_EXTERNAL_MEMORIES_MAX_BYTES'));
+    const maxBytes = Number.isInteger(configuredBudget) && configuredBudget > 0
+      ? Math.min(configuredBudget, EXTERNAL_MEMORIES_MAX_BYTES)
+      : EXTERNAL_MEMORIES_DEFAULT_BYTES;
+    return {
+      mode: normalizeExternalMemoriesMode(this.settings.resolve('PI_EXTERNAL_MEMORIES')),
+      maxBytes,
+      roots: {
+        claudeDir: expandHome(this.settings.resolve('NUNCIO_CLAUDE_CONFIG_DIR') ?? '~/.claude'),
+        codexHome: expandHome(this.settings.resolve('NUNCIO_CODEX_HOME') ?? '~/.codex'),
+      },
+    };
+  }
+
   /**
    * Pi extension discovery is deny-by-default in nuncio sessions: global
    * `~/.pi` extensions are written for the interactive CLI or rebind core
@@ -431,8 +461,16 @@ export class PiAgentProvider extends BaseAgentProvider {
     const context = this.settings.resolve('NUNCIO_CONTEXT_FACTS_INJECT') === 'off'
       ? ''
       : (this.nuncioContext?.buildForProject(projectPath, contextBudget, session?.originTaskId) ?? '');
+    const externalConfig = this.resolveExternalMemoriesConfig();
+    const externalMemoryBlock = this.externalMemories?.buildForProject(
+      projectPath,
+      externalConfig.mode,
+      externalConfig.maxBytes,
+      externalConfig.roots,
+    ) ?? '';
     const fullDiscovery = this.settings.resolve('PI_EXTENSION_DISCOVERY') === 'full';
-    const systemAppend = [context, runtimeInstructions].filter(Boolean).join('\n\n');
+    const systemAppend = [context, externalMemoryBlock, runtimeInstructions]
+      .filter(Boolean).join('\n\n');
     const resourceLoader = new pi.DefaultResourceLoader({
       cwd: resolvedCwd,
       agentDir,
@@ -444,7 +482,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       ...(systemAppend ? { appendSystemPrompt: [systemAppend] } : {}),
     });
     await resourceLoader.reload();
-    return { resourceLoader, settingsManager };
+    return { resourceLoader, settingsManager, externalMemoryBlock, externalConfig };
   }
 
   private async createPiSession(
@@ -496,17 +534,7 @@ export class PiAgentProvider extends BaseAgentProvider {
         throw new Error(`Cannot resume Pi session: ${reason}`);
       }
     }
-    const runtimeCustomTools = buildPiRuntimeTools(
-      runtimeTools,
-      pi.defineTool,
-    );
-    const engineTools = [
-      buildTodoTool(pi.defineTool as (tool: unknown) => unknown),
-      buildAskUserQuestionTool(pi.defineTool as (tool: unknown) => unknown),
-    ];
-    const customTools = policyOptions
-      ? [...policyOptions.customTools, ...runtimeCustomTools, ...engineTools]
-      : [...(buildPiCustomTools(context.cwd, pi, context.tools) ?? []), ...engineTools];
+    const projectPath = this.sessions.findById(sessionId)?.projectPath ?? null;
     const engineResources = policyOptions
       ? undefined
       : await this.createEngineResources(
@@ -516,6 +544,48 @@ export class PiAgentProvider extends BaseAgentProvider {
           context.cwd,
           runtimeInstructions,
         );
+    const externalConfig = engineResources?.externalConfig
+      ?? this.resolveExternalMemoriesConfig();
+    const externalMemoryBlock = engineResources?.externalMemoryBlock ?? '';
+    const exposedExternalIds = {
+      'claude-code': projectPath && this.externalMemories
+        ? this.externalMemories.availableIdsFromBlock(
+            projectPath,
+            'claude-code',
+            externalConfig.roots,
+            externalMemoryBlock,
+          )
+        : [],
+      codex: projectPath && this.externalMemories
+        ? this.externalMemories.availableIdsFromBlock(
+            projectPath,
+            'codex',
+            externalConfig.roots,
+            externalMemoryBlock,
+          )
+        : [],
+    };
+    const runtimeCustomTools = buildPiRuntimeTools(
+      runtimeTools,
+      pi.defineTool,
+    );
+    const engineTools = [
+      buildTodoTool(pi.defineTool as (tool: unknown) => unknown),
+      buildAskUserQuestionTool(pi.defineTool as (tool: unknown) => unknown),
+      buildExternalMemoryTool({
+        availableIds: (source) => exposedExternalIds[source],
+        read: (source, id) => this.externalMemories?.read(
+          projectPath,
+          externalConfig.mode,
+          source,
+          id,
+          externalConfig.roots,
+        ) ?? Promise.resolve(null),
+      }, pi.defineTool as (tool: unknown) => unknown),
+    ];
+    const customTools = policyOptions
+      ? [...policyOptions.customTools, ...runtimeCustomTools, ...engineTools]
+      : [...(buildPiCustomTools(context.cwd, pi, context.tools) ?? []), ...engineTools];
     // Pi 0.80.6 treats `tools` as the allowlist for built-ins AND customTools.
     // Include the already-vetted Crew definitions or the SDK silently removes
     // submit_* from the registry despite receiving it in customTools.
@@ -525,13 +595,17 @@ export class PiAgentProvider extends BaseAgentProvider {
           ...(runtimeTools?.tools.map((tool) => tool.name) ?? []),
           TODO_TOOL_NAME,
           ASK_USER_QUESTION_TOOL_NAME,
+          EXTERNAL_MEMORY_TOOL_NAME,
         ])]
       : undefined;
     const { session } = await pi.createAgentSession({
       agentDir,
       ...(cwd ? { cwd } : {}),
       ...(resumeManager ? { sessionManager: resumeManager } : {}),
-      ...(engineResources ?? {}),
+      ...(engineResources ? {
+        resourceLoader: engineResources.resourceLoader,
+        settingsManager: engineResources.settingsManager,
+      } : {}),
       authStorage,
       modelRegistry,
       ...(policyResourceLoader ? { resourceLoader: policyResourceLoader } : {}),

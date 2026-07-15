@@ -1,6 +1,6 @@
 /** API client for the settings store (DB-backed env config). Mirrors the backend SettingDto. */
 
-export type SettingType = 'secret' | 'string' | 'path' | 'boolean';
+export type SettingType = 'secret' | 'string' | 'path' | 'boolean' | 'number';
 export type SettingCategory =
   | 'provider'
   | 'general'

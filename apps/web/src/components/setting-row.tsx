@@ -126,6 +126,7 @@ export function SettingRow({ setting, onUpdate, onClear }: SettingRowProps) {
       {!setting.readOnly && setting.type !== 'boolean' && !hasOptions && (
         <div className="flex items-center gap-2 mt-1.5">
           <Input
+            type={setting.type === 'number' ? 'number' : 'text'}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder="Enter new value"

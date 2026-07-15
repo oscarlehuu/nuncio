@@ -1,7 +1,7 @@
 import { beforeAll, afterAll, beforeEach, describe, it, expect, mock } from 'bun:test';
 import { Test, TestingModule } from '@nestjs/testing';
 import { configurePiSdkMock } from './pi-sdk.mock';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PiAgentProvider } from '../../../src/agents/providers/pi-agent.provider';
@@ -22,6 +22,11 @@ import {
   NuncioContextService,
 } from '../../../src/agents/pi-engine/nuncio-context';
 import { TasksRepository } from '../../../src/tasks/tasks.repository';
+import {
+  ExternalMemorySources,
+  parseCodexMemoryIndex,
+} from '../../../src/agents/pi-engine/external-memory-sources';
+import { ExternalMemoriesService } from '../../../src/agents/pi-engine/external-memories';
 
 let availableModelCount = 0;
 let fakeSessionFile = '/tmp/fake-pi/session.jsonl';
@@ -155,6 +160,8 @@ describe('PiAgentProvider', () => {
         PiAgentProvider,
         NuncioContextRepository,
         NuncioContextService,
+        ExternalMemorySources,
+        ExternalMemoriesService,
         TasksRepository,
       ],
     }).compile();
@@ -174,6 +181,8 @@ describe('PiAgentProvider', () => {
   });
 
   beforeEach(() => {
+    // Keep provider tests hermetic; dedicated cases opt into fixture-backed stores.
+    settings.set('PI_EXTERNAL_MEMORIES', 'off');
     availableModelCount = 0;
     fakeSessionFile = '/tmp/fake-pi/session.jsonl';
     promptCalls = [];
@@ -342,6 +351,126 @@ describe('PiAgentProvider', () => {
     await provider.run(created.id, created.prompt, { emit: () => {} });
 
     expect(lastLoaderOptions?.appendSystemPrompt).toBeUndefined();
+  });
+
+  it('composes project context, external memories, then runtime instructions', async () => {
+    const projectPath = `/tmp/nuncio-external-${Date.now()}`;
+    const codexHome = mkdtempSync(join(tmpdir(), 'nuncio-codex-memory-'));
+    mkdirSync(join(codexHome, 'memories'));
+    writeFileSync(join(codexHome, 'memories', 'MEMORY.md'), [
+      '# Task Group: Engine memory work',
+      'scope: external memory implementation',
+      `applies_to: cwd=${projectPath}; reuse_rule=safe`,
+      '',
+      '## Reusable knowledge',
+      'Keep source stores read-only.',
+    ].join('\n'));
+    contextFacts.upsert({
+      projectPath,
+      key: 'runtime',
+      value: 'Use Bun.',
+      provenance: 'founder',
+    });
+    const created = sessions.create({ prompt: 'memory probe', provider: 'pi', projectPath });
+    const runtimeEnvironment = buildAgentRuntimeEnvironment({
+      sessionId: created.id,
+      provider: 'pi',
+      model: null,
+      projectPath,
+      cwd: projectPath,
+      supportsInteraction: true,
+      runtimeTools: { tools: [] },
+    });
+    const originalResolve = settings.resolve.bind(settings);
+    settings.resolve = ((key: string) => {
+      if (key === 'PI_EXTERNAL_MEMORIES') return 'codex';
+      if (key === 'NUNCIO_CODEX_HOME') return codexHome;
+      return originalResolve(key);
+    }) as SettingsService['resolve'];
+
+    try {
+      await provider.run(created.id, created.prompt, { emit: () => {}, runtimeEnvironment });
+      const appended = (lastLoaderOptions?.appendSystemPrompt as string[])[0]!;
+      expect(appended).toContain('## External agent memories');
+      expect(appended.indexOf('## Nuncio project context')).toBeLessThan(
+        appended.indexOf('## External agent memories'),
+      );
+      expect(appended.indexOf('## External agent memories')).toBeLessThan(
+        appended.indexOf('running inside Nuncio'),
+      );
+    } finally {
+      settings.resolve = originalResolve as SettingsService['resolve'];
+      rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
+
+  it('omits external memories when the Nuncio Engine setting is off', async () => {
+    const originalResolve = settings.resolve.bind(settings);
+    settings.resolve = ((key: string) => key === 'PI_EXTERNAL_MEMORIES'
+      ? 'off'
+      : originalResolve(key)) as SettingsService['resolve'];
+    const created = sessions.create({
+      prompt: 'disabled external memories',
+      provider: 'pi',
+      projectPath: '/tmp/disabled-external-memory',
+    });
+
+    try {
+      await provider.run(created.id, created.prompt, { emit: () => {} });
+      expect(lastLoaderOptions?.appendSystemPrompt).toBeUndefined();
+    } finally {
+      settings.resolve = originalResolve as SettingsService['resolve'];
+    }
+  });
+
+  it('binds read_external_memory authorization to the index injected for the session', async () => {
+    const projectPath = `/tmp/nuncio-external-snapshot-${Date.now()}`;
+    const codexHome = mkdtempSync(join(tmpdir(), 'nuncio-codex-snapshot-'));
+    const memoryDir = join(codexHome, 'memories');
+    mkdirSync(memoryDir);
+    const oldSection = [
+      '# Task Group: Existing memory',
+      'scope: original group',
+      `applies_to: cwd=${projectPath}; reuse_rule=safe`,
+      '',
+      '## Reusable knowledge',
+      'Original content.',
+    ].join('\n');
+    writeFileSync(join(memoryDir, 'MEMORY.md'), oldSection);
+    const oldId = parseCodexMemoryIndex(oldSection)[0]!.id;
+    const originalResolve = settings.resolve.bind(settings);
+    settings.resolve = ((key: string) => {
+      if (key === 'PI_EXTERNAL_MEMORIES') return 'codex';
+      if (key === 'NUNCIO_CODEX_HOME') return codexHome;
+      return originalResolve(key);
+    }) as SettingsService['resolve'];
+    const created = sessions.create({ prompt: 'snapshot memories', provider: 'pi', projectPath });
+
+    try {
+      await provider.run(created.id, created.prompt, { emit: () => {} });
+      const tool = ((lastCreateSessionOptions?.customTools ?? []) as Array<{
+        name?: string;
+        execute?: (callId: string, params: unknown) => Promise<{
+          content: Array<{ text: string }>;
+          isError?: boolean;
+        }>;
+      }>).find((candidate) => candidate.name === 'read_external_memory')!;
+      const newSection = [
+        '# Task Group: Newly added memory',
+        'scope: added after session creation',
+        `applies_to: cwd=${projectPath}; reuse_rule=safe`,
+      ].join('\n');
+      writeFileSync(join(memoryDir, 'MEMORY.md'), `${newSection}\n\n${oldSection}`);
+      const newId = parseCodexMemoryIndex(newSection)[0]!.id;
+
+      expect((await tool.execute?.('new', { source: 'codex', id: newId }))?.isError).toBe(true);
+      const existing = await tool.execute?.('old', { source: 'codex', id: oldId });
+      expect(existing?.isError).toBeUndefined();
+      expect(existing?.content[0]?.text).toContain('Original content.');
+    } finally {
+      settings.resolve = originalResolve as SettingsService['resolve'];
+      rmSync(codexHome, { recursive: true, force: true });
+    }
   });
 
   it('honors the project-facts injection kill-switch', async () => {
@@ -1090,6 +1219,7 @@ describe('PiAgentProvider', () => {
     const tools = (lastCreateSessionOptions?.customTools ?? []) as Array<{ name?: string }>;
     expect(tools.some((tool) => tool.name === 'todo_write')).toBe(true);
     expect(tools.some((tool) => tool.name === 'AskUserQuestion')).toBe(true);
+    expect(tools.some((tool) => tool.name === 'read_external_memory')).toBe(true);
   });
 
   it('emits Pi thinking events from message_update reasoning without adding it to assistant text', async () => {

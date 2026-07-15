@@ -6,6 +6,8 @@ import {
   NuncioContextRepository,
   NuncioContextService,
 } from './pi-engine/nuncio-context';
+import { ExternalMemorySources } from './pi-engine/external-memory-sources';
+import { ExternalMemoriesService } from './pi-engine/external-memories';
 import { AgentRegistry } from './agents.registry';
 import { CursorAgentProvider } from './providers/cursor-agent.provider';
 import { CursorCliProvider } from './providers/cursor-cli.provider';
@@ -58,6 +60,8 @@ const mockProviderBinding: Provider = {
     MockAgentProvider,
     NuncioContextRepository,
     NuncioContextService,
+    ExternalMemorySources,
+    ExternalMemoriesService,
     mockProviderBinding,
     AgentRegistry,
   ],
