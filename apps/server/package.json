@@ -9,7 +9,7 @@
     "start": "bun ../../scripts/run-server.mjs",
     "start:prod": "bun run dist/main.js",
     "test": "bun test test/unit/",
-    "test:coverage": "bun test test/unit/ --coverage --coverage-reporter=text",
+    "test:coverage": "bun test test/unit/ --coverage --coverage-reporter=text --coverage-reporter=lcov",
     "test:e2e": "bun test ./test/e2e/app.e2e-spec.ts ./test/e2e/crew.e2e-spec.ts",
     "test:integration": "bun test test/integration/",
     "test:integration:codex": "NUNCIO_CODEX_INTEGRATION=1 bun test test/integration/codex-agent.integration.spec.ts",

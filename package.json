@@ -26,6 +26,10 @@
     "setup-hooks": "bun run scripts/setup-hooks.mjs",
     "check-changeset": "bun run scripts/check-changeset.mjs",
     "check-branch-flow": "bun run scripts/check-branch-flow.mjs",
+    "check-dead-code": "bun run scripts/check-dead-code.mjs",
+    "check-dead-code:update": "bun run scripts/check-dead-code.mjs --update",
+    "check-coverage-ratchet": "bun run scripts/check-coverage-ratchet.mjs",
+    "check-coverage-ratchet:update": "bun run scripts/check-coverage-ratchet.mjs --update",
     "version": "changeset version",
     "sync-versions": "bun run scripts/sync-versions.mjs",
     "release": "bun run scripts/release.mjs",
@@ -41,6 +45,7 @@
     "@changesets/changelog-github": "^0.7.0",
     "@changesets/cli": "^2.31.0",
     "concurrently": "^9.2.1",
+    "knip": "^6.26.0",
     "playwright-core": "^1.61.1"
   }
 }

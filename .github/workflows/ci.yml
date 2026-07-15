@@ -47,14 +47,23 @@ jobs:
       - name: Lint + typecheck (server, web, core, mobile)
         run: bun run lint
 
-      - name: Unit tests (server, core, mobile)
-        run: bun run test
+      - name: Unit tests + coverage (server)
+        run: bun run --filter @nuncio/server test:coverage
 
-      - name: Web unit tests
-        run: bun run --filter @nuncio/web test
+      - name: Unit tests (core, mobile)
+        run: bun run --filter @nuncio/core test && bun run --filter @nuncio/mobile test
+
+      - name: Web unit tests + coverage
+        run: bun run --filter @nuncio/web test:coverage
 
       - name: Script unit tests
         run: bun run test:scripts
+
+      - name: Dead-code gate (knip vs committed baseline)
+        run: bun run check-dead-code
+
+      - name: Coverage ratchet (line coverage may only go up)
+        run: bun run check-coverage-ratchet
 
       - name: Require changeset for user-facing PR changes
         if: >-
@@ -105,3 +114,12 @@ jobs:
         env:
           NUNCIO_SMOKE_CHROME_EXECUTABLE: ${{ steps.setup-chrome.outputs.chrome-path }}
         run: bun run test:smoke-ui --build
+
+      - name: Upload smoke artifacts (screenshots + trace)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-artifacts
+          path: smoke-artifacts/
+          if-no-files-found: ignore
+          retention-days: 14

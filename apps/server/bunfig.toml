@@ -1,0 +1,4 @@
+[test]
+# Coverage measures product code only — spec files execute fully by definition
+# and would inflate the ratchet baseline.
+coverageSkipTestFiles = true
