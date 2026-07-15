@@ -432,7 +432,11 @@ export class PiAgentProvider extends BaseAgentProvider {
       maxBytes,
       roots: {
         claudeDir: expandHome(this.settings.resolve('NUNCIO_CLAUDE_CONFIG_DIR') ?? '~/.claude'),
-        codexHome: expandHome(this.settings.resolve('NUNCIO_CODEX_HOME') ?? '~/.codex'),
+        // Match buildCodexEnv in the Codex provider: an inherited CODEX_HOME
+        // env points the app-server at a custom store, so read the same one.
+        codexHome: expandHome(
+          this.settings.resolve('NUNCIO_CODEX_HOME') ?? process.env.CODEX_HOME ?? '~/.codex',
+        ),
       },
     };
   }

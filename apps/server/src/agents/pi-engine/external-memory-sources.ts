@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { expandHome } from '../providers/cli-path.helpers';
 
 interface ClaudeMemoryFile {
   directory: string;
@@ -43,6 +44,35 @@ export function projectPathCandidates(projectPath: string): string[] {
   const markerIndex = normalized.indexOf(marker);
   if (markerIndex < 0) return [normalized];
   return [normalized, normalized.slice(0, markerIndex)];
+}
+
+/**
+ * Claude Code's documented `autoMemoryDirectory` setting relocates the auto
+ * memory store: the configured directory then holds MEMORY.md and topic files
+ * directly. Mirror the settings precedence (project local > project > user)
+ * and require an absolute or ~-prefixed value, like Claude Code does.
+ */
+function claudeAutoMemoryDirectory(candidates: string[], claudeDir: string): string | null {
+  const settingsFiles = [
+    ...candidates.flatMap((candidate) => [
+      join(candidate, '.claude', 'settings.local.json'),
+      join(candidate, '.claude', 'settings.json'),
+    ]),
+    join(claudeDir, 'settings.json'),
+  ];
+  for (const file of settingsFiles) {
+    const raw = safeRead(file);
+    if (raw === null) continue;
+    try {
+      const value = (JSON.parse(raw) as { autoMemoryDirectory?: unknown }).autoMemoryDirectory;
+      if (typeof value !== 'string' || !value.trim()) continue;
+      const expanded = expandHome(value.trim());
+      if (isAbsolute(expanded)) return expanded;
+    } catch {
+      // Malformed settings file: skip it and keep walking the precedence chain.
+    }
+  }
+  return null;
 }
 
 function normalizedAppliesTo(value: string): string {
@@ -132,8 +162,11 @@ function safeContainedRead(directory: string, filename: string): string | null {
 export class ExternalMemorySources {
   loadClaude(projectPath: string, claudeDir: string): ClaudeMemorySource {
     try {
-      const locations = projectPathCandidates(projectPath)
-        .map((candidate) => join(claudeDir, 'projects', claudeProjectSlug(candidate), 'memory'));
+      const candidates = projectPathCandidates(projectPath);
+      const override = claudeAutoMemoryDirectory(candidates, claudeDir);
+      const locations = override
+        ? [override]
+        : candidates.map((candidate) => join(claudeDir, 'projects', claudeProjectSlug(candidate), 'memory'));
       const loaded = locations.flatMap((location) => {
         const index = safeRead(join(location, 'MEMORY.md'));
         return index === null ? [] : [{ location, index, files: indexedClaudeFiles(index, location) }];

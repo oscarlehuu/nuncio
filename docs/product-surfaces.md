@@ -211,6 +211,16 @@ changing a **tool** means the panel + its server module.
 | **Server** | `cursor-local/`, `pi-local/`, `POST /api/sessions/handoff` |
 | **Also check** | Both entry points + import APIs |
 
+### External agent memories (Nuncio Engine)
+
+Read-only Claude Code / Codex CLI memories indexed into Pi sessions; stores stay in place.
+
+| | |
+|---|---|
+| **Settings** | Providers → Nuncio Engine: `PI_EXTERNAL_MEMORIES` (off/claude/codex/all), `PI_EXTERNAL_MEMORIES_MAX_BYTES`, `NUNCIO_CLAUDE_CONFIG_DIR` (+ shared `NUNCIO_CODEX_HOME`) |
+| **Server** | `agents/pi-engine/external-memor*` (sources, budgeted index, `read_external_memory` tool), wired in `pi-agent.provider.ts` |
+| **Also check** | Honors Claude `autoMemoryDirectory` and inherited `CODEX_HOME`; no web/mobile shell — the surface is the injected system-prompt block + tool |
+
 ### Settings taxonomy
 
 `/settings?section=<id>` — `settings-view.tsx`:

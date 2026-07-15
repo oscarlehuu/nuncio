@@ -52,6 +52,53 @@ describe('external memory source paths', () => {
     }
   });
 
+  it('honors Claude autoMemoryDirectory from user settings over the slug layout', () => {
+    const root = mkdtempSync(join(tmpdir(), 'nuncio-claude-auto-'));
+    const projectPath = join(root, 'repo');
+    const customDir = join(root, 'custom-memory');
+    mkdirSync(customDir, { recursive: true });
+    mkdirSync(projectPath, { recursive: true });
+    writeFileSync(join(root, 'settings.json'), JSON.stringify({ autoMemoryDirectory: customDir }));
+    writeFileSync(join(customDir, 'MEMORY.md'), '- [Custom note](custom-note.md) — relocated store');
+    writeFileSync(join(customDir, 'custom-note.md'), 'relocated body');
+    const slugDir = join(root, 'projects', claudeProjectSlug(projectPath), 'memory');
+    mkdirSync(slugDir, { recursive: true });
+    writeFileSync(join(slugDir, 'MEMORY.md'), '- [Slug note](slug-note.md) — default store');
+    writeFileSync(join(slugDir, 'slug-note.md'), 'slug body');
+
+    try {
+      const sources = new ExternalMemorySources();
+      const loaded = sources.loadClaude(projectPath, root);
+      expect(loaded.ids).toEqual(['custom-note']);
+      expect(sources.readClaude(loaded, 'custom-note')).toBe('relocated body');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('prefers project-local autoMemoryDirectory and ignores non-absolute values', () => {
+    const root = mkdtempSync(join(tmpdir(), 'nuncio-claude-auto-scope-'));
+    const projectPath = join(root, 'repo');
+    const projectDir = join(root, 'project-memory');
+    mkdirSync(join(projectPath, '.claude'), { recursive: true });
+    mkdirSync(projectDir, { recursive: true });
+    // User scope sets a relative (invalid) value; project scope wins with a valid one.
+    writeFileSync(join(root, 'settings.json'), JSON.stringify({ autoMemoryDirectory: 'relative/dir' }));
+    writeFileSync(
+      join(projectPath, '.claude', 'settings.json'),
+      JSON.stringify({ autoMemoryDirectory: projectDir }),
+    );
+    writeFileSync(join(projectDir, 'MEMORY.md'), '- [Project note](project-note.md) — project scope');
+    writeFileSync(join(projectDir, 'project-note.md'), 'project body');
+
+    try {
+      const loaded = new ExternalMemorySources().loadClaude(projectPath, root);
+      expect(loaded.ids).toEqual(['project-note']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('fails soft when external stores do not exist', () => {
     const sources = new ExternalMemorySources();
     expect(sources.loadClaude('/repo', '/missing/claude')).toEqual({

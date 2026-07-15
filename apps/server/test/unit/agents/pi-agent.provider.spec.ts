@@ -432,6 +432,35 @@ describe('PiAgentProvider', () => {
     }
   });
 
+  it('falls back to the inherited CODEX_HOME env for the Codex memory store', async () => {
+    const projectPath = `/tmp/nuncio-external-env-${Date.now()}`;
+    const codexHome = mkdtempSync(join(tmpdir(), 'nuncio-codex-env-'));
+    mkdirSync(join(codexHome, 'memories'));
+    writeFileSync(join(codexHome, 'memories', 'MEMORY.md'), [
+      '# Task Group: Env store work',
+      'scope: env-resolved store',
+      `applies_to: cwd=${projectPath}; reuse_rule=safe`,
+    ].join('\n'));
+    const created = sessions.create({ prompt: 'env home probe', provider: 'pi', projectPath });
+    const originalResolve = settings.resolve.bind(settings);
+    settings.resolve = ((key: string) => key === 'PI_EXTERNAL_MEMORIES'
+      ? 'codex'
+      : originalResolve(key)) as SettingsService['resolve'];
+    const originalEnvHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+
+    try {
+      await provider.run(created.id, created.prompt, { emit: () => {} });
+      const appended = (lastLoaderOptions?.appendSystemPrompt as string[])[0]!;
+      expect(appended).toContain('Env store work');
+    } finally {
+      settings.resolve = originalResolve as SettingsService['resolve'];
+      if (originalEnvHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalEnvHome;
+      rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
+
   it('omits external memories when the Nuncio Engine setting is off', async () => {
     const originalResolve = settings.resolve.bind(settings);
     settings.resolve = ((key: string) => key === 'PI_EXTERNAL_MEMORIES'
