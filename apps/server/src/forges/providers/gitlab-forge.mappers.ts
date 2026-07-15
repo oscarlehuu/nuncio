@@ -32,6 +32,8 @@ export interface GitlabMrDetailResponse extends GitlabMrSummaryResponse {
   changes_count?: string | null;
   merge_commit_sha?: string | null;
   sha?: string | null;
+  source_project_id?: number;
+  target_project_id?: number;
 }
 
 export interface GitlabDiffResponse {
@@ -131,6 +133,11 @@ export function mapGitlabPullDetail(
     author: data.author?.username ?? '',
     draft: data.draft ?? false,
     sourceBranch: data.source_branch ?? '',
+    sourceRepositoryMatchesTarget: Boolean(
+      Number.isInteger(data.source_project_id) &&
+      Number.isInteger(data.target_project_id) &&
+      data.source_project_id === data.target_project_id,
+    ),
     targetBranch: data.target_branch ?? '',
     mergeable: mapGitlabMergeable(data),
     reviewDecision,

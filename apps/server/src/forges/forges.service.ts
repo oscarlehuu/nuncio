@@ -1,6 +1,17 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { GitService } from '../git/git.service';
-import { SessionsRepository } from '../sessions/persistence/sessions.repository';
+import {
+  PULL_REQUEST_ADOPTION_LEASE_MS,
+  SessionsRepository,
+} from '../sessions/persistence/sessions.repository';
+import { SessionsService } from '../sessions/sessions.service';
 import { ForgeRegistry, providerIdForHost } from './forges.registry';
 import type {
   ForgeCheck,
@@ -18,6 +29,9 @@ export interface OpenPullRequestOptions {
   base?: string;
 }
 
+const AUTHOR_PERMISSION_TTL_MS = 60_000;
+const PULL_REQUEST_ADOPTION_HEARTBEAT_MS = Math.floor(PULL_REQUEST_ADOPTION_LEASE_MS / 3);
+
 /**
  * Session-facing facade for the forge layer: maps a session's branch + origin
  * remote onto a forge provider and opens / refreshes a pull request. Provider
@@ -26,11 +40,116 @@ export interface OpenPullRequestOptions {
  */
 @Injectable()
 export class ForgesService {
+  private readonly authorPermissionCache = new Map<
+    string,
+    { allowed: boolean; expiresAt: number }
+  >();
+
   constructor(
     private readonly registry: ForgeRegistry,
     private readonly git: GitService,
     private readonly sessions: SessionsRepository,
+    @Optional() private readonly sessionService?: SessionsService,
   ) {}
+
+  async createSessionFromPullRequest(
+    rawPath: string,
+    number: number,
+  ): Promise<{ sessionId: string }> {
+    const path = rawPath?.trim();
+    if (!path) throw new BadRequestException('path is required');
+    if (!Number.isInteger(number) || number <= 0) {
+      throw new BadRequestException('number must be a positive integer');
+    }
+    const projects = await this.git.listProjects();
+    if (!projects.some((project) => project.path === path)) {
+      throw new NotFoundException(`Project ${path} not found`);
+    }
+    if (!this.sessionService) throw new BadRequestException('Session creation is unavailable');
+
+    const claimToken = randomUUID();
+    const claim = this.sessions.claimPullRequestAdoption(path, number, claimToken);
+    if (claim.status === 'existing') return { sessionId: claim.sessionId };
+    if (claim.status === 'pending') {
+      throw new ConflictException(`Pull request #${number} is already being adopted`);
+    }
+
+    let claimLost = false;
+    const renewClaim = (): void => {
+      if (claimLost || !this.sessions.renewPullRequestAdoption(path, number, claimToken)) {
+        claimLost = true;
+        throw new ConflictException(`Pull request #${number} adoption claim was lost`);
+      }
+    };
+    const heartbeat = setInterval(() => {
+      try {
+        renewClaim();
+      } catch {
+        claimLost = true;
+      }
+    }, PULL_REQUEST_ADOPTION_HEARTBEAT_MS);
+    heartbeat.unref?.();
+
+    try {
+      const remote = await this.git.remoteInfo(path);
+      renewClaim();
+      const provider = await this.registry.getAvailable(this.providerIdForHost(remote.host));
+      renewClaim();
+      const pullRequest = await provider.getPullRequestDetail(this.repoRef(remote), number);
+      renewClaim();
+      if (!pullRequest.sourceBranch?.trim()) {
+        throw new BadRequestException(`Pull request #${number} has no source branch`);
+      }
+      if (pullRequest.sourceRepositoryMatchesTarget !== true) {
+        throw new BadRequestException('Pull requests from fork repositories cannot be adopted safely');
+      }
+      if (provider.id !== 'github' && provider.id !== 'gitlab') {
+        throw new BadRequestException(`Pull request worktrees are unsupported for ${provider.id}`);
+      }
+      const pullRequestHead = await this.git.fetchPullRequestHead(path, provider.id, number);
+      renewClaim();
+      const upstreamBranch = await this.git.fetchRemoteBranch(path, pullRequest.sourceBranch);
+      renewClaim();
+      const prompt = [
+        `Continue pull request #${number}: ${pullRequest.title}`,
+        '',
+        pullRequest.body?.trim(),
+        '',
+        `Pull request: ${pullRequest.url}`,
+      ]
+        .filter((line) => line !== undefined)
+        .join('\n')
+        .trim();
+      const session = await this.sessionService.create({
+        prompt,
+        projectPath: path,
+        baseBranch: pullRequestHead,
+        useWorktree: true,
+        pushBranch: pullRequest.sourceBranch,
+        upstreamBranch,
+        forgeProvider: provider.id,
+        pullRequestUrl: pullRequest.url,
+        pullRequestNumber: pullRequest.number,
+        pullRequestState: pullRequest.state,
+        forgeStatus: pullRequest.state,
+      });
+      renewClaim();
+      this.sessions.completePullRequestAdoption(path, number, claimToken, session.id, {
+        forgeProvider: provider.id,
+        pullRequestUrl: pullRequest.url,
+        pullRequestState: pullRequest.state,
+        forgeStatus: pullRequest.state,
+      });
+      return { sessionId: session.id };
+    } catch (error) {
+      this.sessions.releasePullRequestAdoption(path, number, claimToken);
+      const owner = this.sessions.findByProjectPullRequest(path, number);
+      if (owner) return { sessionId: owner.id };
+      throw error;
+    } finally {
+      clearInterval(heartbeat);
+    }
+  }
 
   async openPullRequestForSession(
     id: string,
@@ -155,6 +274,29 @@ export class ForgesService {
         };
       }),
     );
+  }
+
+  async canAuthorWriteRepository(
+    providerId: string,
+    repo: ForgeRepoRef,
+    author: string,
+  ): Promise<boolean> {
+    const key = `${providerId}:${repo.owner.toLowerCase()}/${repo.repo.toLowerCase()}:${author.toLowerCase()}`;
+    const cached = this.authorPermissionCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) return cached.allowed;
+
+    let allowed = false;
+    try {
+      const provider = await this.registry.getAvailable(providerId);
+      allowed = await provider.canWriteRepository(repo, author);
+    } catch {
+      // A missing or failed authorization proof must never reach the steer sink.
+    }
+    this.authorPermissionCache.set(key, {
+      allowed,
+      expiresAt: Date.now() + AUTHOR_PERMISSION_TTL_MS,
+    });
+    return allowed;
   }
 
   private withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {

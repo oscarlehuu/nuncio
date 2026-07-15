@@ -180,11 +180,48 @@ describe('GitSessionController', () => {
     expect(git.commit.calls).toEqual([[gitDir, 'wip']]);
   });
 
-  it('push resolves branch from session or git status and honors force', async () => {
+  it('uses plain push semantics for an ordinary session even when its stored branch differs', async () => {
     const { controller, git } = controllerFor(makeSession({ branch: null }));
     await controller.push('s1', { force: true });
     expect(git.status.calls).toEqual([[gitDir]]);
-    expect(git.push.calls).toEqual([[gitDir, 'nuncio/s1-slug', { force: true }]]);
+    expect(git.push.calls).toEqual([[
+      gitDir,
+      'nuncio/s1-slug',
+      { force: true },
+    ]]);
+  });
+
+  it('pushes an adopted PR worktree branch back to the PR source branch', async () => {
+    const { controller, git } = controllerFor(makeSession({
+      branch: 'feat/pr-head',
+      forgeProvider: 'github',
+      pullRequestNumber: 7,
+      baseBranch: 'refs/nuncio/pull-requests/github/7',
+    }));
+    await controller.push('s1', {});
+    expect(git.push.calls).toEqual([[
+      gitDir,
+      'nuncio/s1-slug',
+      { force: false, remoteBranch: 'feat/pr-head' },
+    ]]);
+  });
+
+  it('does not use PR metadata alone as a remote push target', async () => {
+    const { controller, git } = controllerFor(makeSession({
+      branch: 'main',
+      forgeProvider: 'github',
+      pullRequestNumber: 7,
+      baseBranch: 'main',
+    }));
+    git.status.mockReturnValue(Promise.resolve({ ...gitStatus, branch: 'feature/current' }));
+
+    await controller.push('s1', {});
+
+    expect(git.push.calls).toEqual([[
+      gitDir,
+      'feature/current',
+      { force: false },
+    ]]);
   });
 
   it('push rejects sessions without a pushable branch', async () => {

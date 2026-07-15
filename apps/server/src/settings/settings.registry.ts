@@ -82,6 +82,26 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     envVar: 'GITLAB_WEBHOOK_SECRET',
   },
   {
+    key: 'forges.autoSteer',
+    category: 'advanced',
+    type: 'boolean',
+    label: 'Auto-steer from forge feedback',
+    description:
+      'Route pull-request reviews, comments, and failing CI logs to the session that owns the pull request.',
+    envVar: 'NUNCIO_FORGES_AUTO_STEER',
+    default: '1',
+  },
+  {
+    key: 'forges.autoCloseOnMerge',
+    category: 'advanced',
+    type: 'boolean',
+    label: 'Auto-close merged sessions',
+    description:
+      'Archive an idle pull-request session and remove its worktree after merge when no local or unpushed work remains.',
+    envVar: 'NUNCIO_FORGES_AUTO_CLOSE_ON_MERGE',
+    default: '1',
+  },
+  {
     key: 'PI_AGENT_DIR',
     category: 'provider',
     providerId: 'pi',

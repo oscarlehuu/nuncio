@@ -109,6 +109,7 @@ export class DatabaseService implements OnModuleDestroy {
     this.dataDir = dataDir;
     this.db = new Database(join(dataDir, 'nuncio.db'));
     this.db.exec('PRAGMA journal_mode = WAL');
+    this.db.exec('PRAGMA busy_timeout = 5000');
     this.db.exec(SCHEMA);
     this.migrate();
     ensureCrewSchema(this);
@@ -126,6 +127,10 @@ export class DatabaseService implements OnModuleDestroy {
    */
   transaction<T>(fn: () => T): T {
     return this.db.transaction(fn)();
+  }
+
+  immediateTransaction<T>(fn: () => T): T {
+    return this.db.transaction(fn).immediate();
   }
 
   private migrate(): void {
@@ -210,6 +215,37 @@ export class DatabaseService implements OnModuleDestroy {
       }
     }
 
+    // Webhook routing historically selected the newest owner, so preserve that
+    // winner while detaching older duplicates before enforcing the invariant.
+    this.db.exec(`
+      UPDATE sessions AS older
+      SET forge_provider = NULL, pull_request_url = NULL,
+          pull_request_number = NULL, pull_request_state = NULL,
+          forge_status = 'none'
+      WHERE older.project_path IS NOT NULL
+        AND older.pull_request_number IS NOT NULL
+        AND older.status != 'ARCHIVED'
+        AND older.verify_owner = 'session'
+        AND EXISTS (
+          SELECT 1 FROM sessions AS newer
+          WHERE newer.project_path = older.project_path
+            AND newer.pull_request_number = older.pull_request_number
+            AND newer.status != 'ARCHIVED'
+            AND newer.verify_owner = 'session'
+            AND (
+              newer.updated_at > older.updated_at
+              OR (newer.updated_at = older.updated_at AND newer.rowid > older.rowid)
+            )
+        )
+    `);
+
+    this.db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS sessions_active_project_pr_unique
+      ON sessions(project_path, pull_request_number)
+      WHERE project_path IS NOT NULL AND pull_request_number IS NOT NULL
+        AND status != 'ARCHIVED' AND verify_owner = 'session'
+    `);
+
     this.db.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS sessions_cli_chat_unique
       ON sessions(cursor_chat_id) WHERE cursor_backend = 'cli'
@@ -241,9 +277,49 @@ export class DatabaseService implements OnModuleDestroy {
         provider TEXT NOT NULL,
         delivery_id TEXT NOT NULL,
         created_at INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'completed',
+        claim_token TEXT,
+        lease_expires_at INTEGER,
+        updated_at INTEGER,
+        checkpoint TEXT,
+        accepted_session_id TEXT,
         PRIMARY KEY (provider, delivery_id)
       )
     `);
+    const forgeDeliveryColumns = this.db
+      .prepare('PRAGMA table_info(forge_webhook_deliveries)')
+      .all() as Array<{ name: string }>;
+    const deliveryColumns = [
+      ['status', "TEXT NOT NULL DEFAULT 'completed'"],
+      ['claim_token', 'TEXT'],
+      ['lease_expires_at', 'INTEGER'],
+      ['updated_at', 'INTEGER'],
+      ['checkpoint', 'TEXT'],
+      ['accepted_session_id', 'TEXT'],
+    ] as const;
+    for (const [column, type] of deliveryColumns) {
+      if (!forgeDeliveryColumns.some((entry) => entry.name === column)) {
+        this.db.exec(`ALTER TABLE forge_webhook_deliveries ADD COLUMN ${column} ${type}`);
+      }
+    }
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS forge_pr_session_claims (
+        project_path TEXT NOT NULL,
+        pull_request_number INTEGER NOT NULL,
+        claim_token TEXT NOT NULL,
+        session_id TEXT,
+        created_at INTEGER NOT NULL,
+        lease_expires_at INTEGER,
+        PRIMARY KEY (project_path, pull_request_number)
+      )
+    `);
+    const forgeClaimColumns = this.db
+      .prepare('PRAGMA table_info(forge_pr_session_claims)')
+      .all() as Array<{ name: string }>;
+    if (!forgeClaimColumns.some((column) => column.name === 'lease_expires_at')) {
+      this.db.exec('ALTER TABLE forge_pr_session_claims ADD COLUMN lease_expires_at INTEGER');
+    }
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS recent_projects (
@@ -497,6 +573,8 @@ export class DatabaseService implements OnModuleDestroy {
         session_id TEXT NOT NULL,
         message TEXT NOT NULL,
         attachments_json TEXT,
+        failure_context_json TEXT,
+        failure_reported_at INTEGER,
         created_at INTEGER NOT NULL,
         FOREIGN KEY(session_id) REFERENCES sessions(id)
       )
@@ -519,6 +597,12 @@ export class DatabaseService implements OnModuleDestroy {
       // Provenance carried to the delivered steer_message (e.g. 'task-digest')
       // so the auto-steer rate cap can count queued-then-drained wakes.
       this.db.exec('ALTER TABLE steer_queue ADD COLUMN origin TEXT');
+    }
+    if (!steerQueueColumns.some((column) => column.name === 'failure_context_json')) {
+      this.db.exec('ALTER TABLE steer_queue ADD COLUMN failure_context_json TEXT');
+    }
+    if (!steerQueueColumns.some((column) => column.name === 'failure_reported_at')) {
+      this.db.exec('ALTER TABLE steer_queue ADD COLUMN failure_reported_at INTEGER');
     }
 
     this.db.exec(`

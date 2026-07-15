@@ -1,6 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AgentsModule } from '../../../src/agents/agents.module';
@@ -11,6 +11,7 @@ import { CursorLocalModule } from '../../../src/cursor-local/cursor-local.module
 import { DatabaseModule } from '../../../src/db/database.module';
 import { DatabaseService } from '../../../src/db/database.service';
 import { GitModule } from '../../../src/git/git.module';
+import { GitService } from '../../../src/git/git.service';
 import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
@@ -46,6 +47,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
   let events: EventsRepository;
   let registry: AgentRegistry;
   let database: DatabaseService;
+  let git: GitService;
   let dataDir: string;
   let repoPath: string;
   let workspacesDir: string;
@@ -71,6 +73,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
     events = module.get(EventsRepository);
     registry = module.get(AgentRegistry);
     database = module.get(DatabaseService);
+    git = module.get(GitService);
   });
 
   afterAll(async () => {
@@ -511,6 +514,72 @@ describe('SessionsService lifecycle (phase 3)', () => {
       const last = after[after.length - 1];
       expect(last.type).toBe('status');
       expect(last.payload).toEqual({ status: 'IDLE' });
+    });
+
+    it('repairs stale worktree metadata before restoring an archived session', () => {
+      const missingWorktree = join(workspacesDir, 'removed-worktree');
+      mkdirSync(missingWorktree, { recursive: true });
+      const created = sessions.create({
+        prompt: 'Restore after merge cleanup',
+        provider: 'cursor',
+        projectPath: repoPath,
+        workspace: missingWorktree,
+        worktreePath: missingWorktree,
+        branch: 'feat/pr-head',
+        runtimePolicy: {
+          filesystem: 'workspace-write',
+          network: 'disabled',
+          workspaceRoot: missingWorktree,
+        },
+      });
+      sessions.updateStatus(created.id, 'RUNNING');
+      sessions.updateStatus(created.id, 'IDLE');
+      sessions.updateStatus(created.id, 'ARCHIVED');
+
+      const restored = service.restore(created.id);
+
+      expect(restored).toMatchObject({
+        status: 'IDLE',
+        workspace: repoPath,
+        worktreePath: null,
+        branch: null,
+      });
+      expect(restored.runtimePolicy?.workspaceRoot).toBe(repoPath);
+    });
+
+    it('detaches stale PR ownership when restoring an archived former owner', () => {
+      const former = sessions.create({
+        prompt: 'former PR owner',
+        provider: 'cursor',
+        projectPath: repoPath,
+        pullRequestNumber: 92,
+        forgeProvider: 'github',
+        pullRequestUrl: 'https://github.com/octo/nuncio/pull/92',
+        pullRequestState: 'merged',
+        forgeStatus: 'merged',
+      });
+      sessions.updateStatus(former.id, 'RUNNING');
+      sessions.updateStatus(former.id, 'IDLE');
+      sessions.updateStatus(former.id, 'ARCHIVED');
+      const replacement = sessions.create({
+        prompt: 'replacement PR owner',
+        provider: 'cursor',
+        projectPath: repoPath,
+        pullRequestNumber: 92,
+        forgeProvider: 'github',
+      });
+
+      const restored = service.restore(former.id);
+
+      expect(restored).toMatchObject({
+        status: 'IDLE',
+        forgeProvider: null,
+        pullRequestUrl: null,
+        pullRequestNumber: null,
+        pullRequestState: null,
+        forgeStatus: 'none',
+      });
+      expect(sessions.findById(replacement.id)?.pullRequestNumber).toBe(92);
     });
 
     it('rejects restore on a non-archived session', () => {
@@ -1162,6 +1231,22 @@ describe('SessionsService lifecycle (phase 3)', () => {
       await waitForIdle(service, session.id);
     });
 
+    it('uses an internally reserved id for the session and its worktree', async () => {
+      const session = await service.create({
+        id: 'reserved',
+        prompt: 'Recover issue delivery',
+        provider: 'cursor',
+        projectPath: repoPath,
+        baseBranch: 'main',
+        useWorktree: true,
+      });
+
+      expect(session.id).toBe('reserved');
+      expect(session.worktreePath).toBe(join(workspacesDir, 'reserved'));
+      expect(session.branch).toBe('nuncio/reserved-recover-issue-delivery');
+      await waitForIdle(service, session.id);
+    });
+
     it('persists the resolved default base branch for worktree sessions when omitted', async () => {
       const session = await service.create({
         prompt: 'Fix diff review',
@@ -1177,6 +1262,37 @@ describe('SessionsService lifecycle (phase 3)', () => {
       await waitForIdle(service, session.id);
     });
 
+    it('configures an adopted source branch upstream before starting the session', async () => {
+      const original = git.setWorktreeUpstream.bind(git);
+      const calls: Array<[string, string, string]> = [];
+      git.setWorktreeUpstream = async (...args) => {
+        calls.push(args);
+      };
+      let worktreePath: string | null = null;
+      try {
+        const session = await service.create({
+          prompt: 'Continue pull request',
+          provider: 'cursor',
+          projectPath: repoPath,
+          baseBranch: 'main',
+          useWorktree: true,
+          pushBranch: 'feat/pr-head',
+          upstreamBranch: 'origin/feat/pr-head',
+        });
+        worktreePath = session.worktreePath;
+        expect(calls).toEqual([[
+          session.worktreePath!,
+          `nuncio/${session.id}-continue-pull-request`,
+          'origin/feat/pr-head',
+        ]]);
+        expect(session.branch).toBe('feat/pr-head');
+        await waitForIdle(service, session.id);
+      } finally {
+        git.setWorktreeUpstream = original;
+        if (worktreePath) await git.removeWorktree(repoPath, worktreePath);
+      }
+    });
+
     it('does not persist a session when worktree creation fails', async () => {
       const before = service.list(true).length;
       await expect(
@@ -1189,6 +1305,27 @@ describe('SessionsService lifecycle (phase 3)', () => {
         }),
       ).rejects.toThrow(BadRequestException);
       expect(service.list(true).length).toBe(before);
+    });
+
+    it('removes a newly created worktree when active PR ownership rejects the insert', async () => {
+      sessions.create({
+        prompt: 'existing PR owner',
+        provider: 'cursor',
+        projectPath: repoPath,
+        pullRequestNumber: 91,
+      });
+      const before = readdirSync(workspacesDir).sort();
+
+      await expect(service.create({
+        prompt: 'stale adoption request',
+        provider: 'cursor',
+        projectPath: repoPath,
+        baseBranch: 'main',
+        useWorktree: true,
+        pullRequestNumber: 91,
+      })).rejects.toThrow('UNIQUE constraint failed');
+
+      expect(readdirSync(workspacesDir).sort()).toEqual(before);
     });
   });
 });

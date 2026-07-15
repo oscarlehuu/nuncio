@@ -10,6 +10,7 @@ import {
 import { EventEmitter } from 'events';
 import { existsSync, watch, type FSWatcher } from 'node:fs';
 import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
 import { AgentRegistry } from '../agents/agents.registry';
 import { RetainedEventFlushError } from '../agents/agents.base-provider';
@@ -316,7 +317,7 @@ export class SessionsService implements OnModuleDestroy {
       throw new BadRequestException(error instanceof Error ? error.message : String(error));
     }
 
-    const id = uuidv4().slice(0, 8);
+    const id = input.id?.trim() || uuidv4().slice(0, 8);
     let workspace = input.workspace?.trim() || undefined;
     let projectPath: string | undefined;
     let baseBranch: string | undefined;
@@ -336,8 +337,20 @@ export class SessionsService implements OnModuleDestroy {
         const slug = input.prompt.trim().split('\n')[0] ?? 'task';
         const worktree = await this.git.createWorktree(projectPath, baseBranch, id, slug);
         worktreePath = worktree.worktreePath;
-        branch = worktree.branch;
+        branch = input.pushBranch?.trim() || worktree.branch;
         baseBranch = worktree.baseBranch;
+        if (input.upstreamBranch?.trim()) {
+          try {
+            await this.git.setWorktreeUpstream(
+              worktreePath,
+              worktree.branch,
+              input.upstreamBranch.trim(),
+            );
+          } catch (error) {
+            await this.git.removeWorktree(projectPath, worktreePath);
+            throw error;
+          }
+        }
       } else {
         workspace = workspace ?? projectPath;
       }
@@ -359,19 +372,31 @@ export class SessionsService implements OnModuleDestroy {
       ...(profile ? { profile } : {}),
     });
 
-    const session = this.sessions.create({
-      ...input,
-      id,
-      prompt,
-      provider: providerId,
-      workspace,
-      projectPath,
-      baseBranch,
-      worktreePath,
-      branch,
-      runtimePolicy,
-      cursorBackend: 'sdk',
-    });
+    let session: SessionDto;
+    try {
+      session = this.sessions.create({
+        ...input,
+        id,
+        prompt,
+        provider: providerId,
+        workspace,
+        projectPath,
+        baseBranch,
+        worktreePath,
+        branch,
+        runtimePolicy,
+        cursorBackend: 'sdk',
+      });
+    } catch (error) {
+      if (worktreePath && projectPath) {
+        try {
+          await this.git.removeWorktree(projectPath, worktreePath);
+        } catch {
+          // Preserve the insert failure; worktree pruning can reconcile the orphan later.
+        }
+      }
+      throw error;
+    }
     // B4: materialize the engine's native context file into the worktree now
     // that the session row exists (so a skip note can be recorded). Opt-in per
     // project; the preamble injection above is the guarantee, this reinforces it.
@@ -619,6 +644,36 @@ export class SessionsService implements OnModuleDestroy {
     return this.steerInternal(id, message, forceResume, attachments, origin);
   }
 
+  steerInBackground(
+    id: string,
+    message: string,
+    forceResume?: boolean,
+    attachments?: AgentAttachment[],
+    origin?: string,
+    failureContext?: Record<string, unknown>,
+  ): void {
+    const session = this.requirePublicMutableSession(id);
+    const trimmed = message?.trim() ?? '';
+    if (!trimmed && !(attachments && attachments.length > 0)) {
+      throw new BadRequestException('message is required');
+    }
+    if (session.status !== 'RUNNING' && !canTransition(session.status, 'RUNNING')) {
+      throw new BadRequestException(`Cannot steer session in status ${session.status}`);
+    }
+    this.enqueueSteer(
+      id,
+      trimmed,
+      this.persistImageAttachments(id, attachments),
+      origin,
+      failureContext,
+    );
+    // A running/starting turn owns its normal settle drain. Starting another
+    // pass now would make a non-live steer re-enqueue itself indefinitely.
+    if (session.status !== 'RUNNING' && !this.startingSteers.has(id)) {
+      setTimeout(() => this.drainSteerQueue(id), 0);
+    }
+  }
+
   private async steerInternal(
     id: string,
     message: string,
@@ -756,14 +811,59 @@ export class SessionsService implements OnModuleDestroy {
     return work;
   }
 
+  private readonly backgroundSteerFailureHandlers = new Set<(
+    failure: {
+      sessionId: string;
+      origin?: string;
+      context: Record<string, unknown>;
+      error: unknown;
+    },
+  ) => void>();
+  private readonly backgroundSteerDeliveredHandlers = new Set<(
+    delivery: {
+      sessionId: string;
+      origin?: string;
+      context: Record<string, unknown>;
+    },
+  ) => void>();
+
+  onBackgroundSteerFailure(
+    handler: (
+      failure: {
+        sessionId: string;
+        origin?: string;
+        context: Record<string, unknown>;
+        error: unknown;
+      },
+    ) => void,
+  ): () => void {
+    this.backgroundSteerFailureHandlers.add(handler);
+    return () => this.backgroundSteerFailureHandlers.delete(handler);
+  }
+
+  onBackgroundSteerDelivered(
+    handler: (
+      delivery: {
+        sessionId: string;
+        origin?: string;
+        context: Record<string, unknown>;
+      },
+    ) => void,
+  ): () => void {
+    this.backgroundSteerDeliveredHandlers.add(handler);
+    return () => this.backgroundSteerDeliveredHandlers.delete(handler);
+  }
+
   private enqueueSteer(
     id: string,
     message: string,
     attachments?: AgentAttachment[],
     origin?: string,
-  ): void {
-    this.steerQueue.enqueue(id, message, attachments, origin);
+    failureContext?: Record<string, unknown>,
+  ): number {
+    const rowId = this.steerQueue.enqueue(id, message, attachments, origin, failureContext);
     this.appendAndEmit(id, 'steer_queued', { text: message });
+    return rowId;
   }
 
 
@@ -1036,18 +1136,46 @@ export class SessionsService implements OnModuleDestroy {
         );
       } catch (error) {
         deliveryFailed = true;
-        const reason = error instanceof Error ? error.message : String(error);
         try {
-          this.appendAndEmit(id, 'error', { message: `Queued message failed to send: ${reason}` });
+          this.steerQueue.reportFailureOnce(delivered.id, () => {
+            if (delivered.failureContext) {
+              let handled = false;
+              let handlerError: unknown;
+              for (const handler of this.backgroundSteerFailureHandlers) {
+                try {
+                  handler({
+                    sessionId: id,
+                    ...(delivered.origin ? { origin: delivered.origin } : {}),
+                    context: delivered.failureContext!,
+                    error,
+                  });
+                  handled = true;
+                } catch (failure) {
+                  handlerError = failure;
+                }
+              }
+              if (!handled) {
+                throw handlerError ?? new Error('No background steer failure handler is registered');
+              }
+            }
+            const reason = error instanceof Error ? error.message : String(error);
+            this.appendAndEmit(id, 'error', {
+              message: `Queued message failed to send: ${reason}`,
+            });
+          });
         } catch {
-          // Session gone (deleted/archived mid-drain) — nothing left to notify.
+          // Rollback keeps the failure report eligible for a later delivery retry.
         }
         return;
       }
 
       // Provider delivery already completed. A transient acknowledgement write
       // must retry only the delete; redelivering could repeat external effects.
-      await this.acknowledgeDeliveredSteer(delivered.id);
+      await this.acknowledgeDeliveredSteer(
+        delivered.id,
+        id,
+        delivered.origin,
+      );
     })();
     // Track so shutdown awaits it — a fire-and-forget drained steer must not write
     // to a closed DB handle after the module is destroyed.
@@ -1074,10 +1202,32 @@ export class SessionsService implements OnModuleDestroy {
   }
 
   /** Retry only the durable queue acknowledgement after provider delivery. */
-  private async acknowledgeDeliveredSteer(rowId: number): Promise<void> {
+  private async acknowledgeDeliveredSteer(
+    rowId: number,
+    sessionId: string,
+    origin?: string,
+  ): Promise<void> {
     while (!this.destroyed) {
       try {
-        this.steerQueue.deleteById(rowId);
+        this.steerQueue.acknowledgeDelivered(rowId, (context) => {
+          let handled = false;
+          let handlerError: unknown;
+          for (const handler of this.backgroundSteerDeliveredHandlers) {
+            try {
+              handler({
+                sessionId,
+                ...(origin ? { origin } : {}),
+                context,
+              });
+              handled = true;
+            } catch (error) {
+              handlerError = error;
+            }
+          }
+          if (!handled) {
+            throw handlerError ?? new Error('No background steer recovery handler is registered');
+          }
+        });
         return;
       } catch {
         await new Promise((resolve) => setTimeout(resolve, 250));
@@ -1322,7 +1472,19 @@ export class SessionsService implements OnModuleDestroy {
     if (session.status !== 'ARCHIVED') {
       throw new BadRequestException(`Cannot restore session in status ${session.status}`);
     }
-    this.transition(id, 'IDLE');
+    // Filesystem removal and SQLite cannot share a transaction. Repairing a
+    // missing worktree here closes the crash window between those two writes.
+    if (
+      session.worktreePath &&
+      session.projectPath &&
+      (!existsSync(session.worktreePath) || !existsSync(join(session.worktreePath, '.git')))
+    ) {
+      this.sessions.clearWorktreeMetadata(id);
+    }
+    this.transition(id, 'IDLE', {
+      immediate: true,
+      beforeUpdate: () => this.sessions.detachForgeOwnershipIfReplaced(id),
+    });
     return this.requireSession(id);
   }
 
@@ -1596,6 +1758,8 @@ export class SessionsService implements OnModuleDestroy {
     }
     this.transcriptWatchers.clear();
     await this.drainInFlightForShutdown();
+    this.backgroundSteerFailureHandlers.clear();
+    this.backgroundSteerDeliveredHandlers.clear();
     this.pendingOrchestrationEvents.clear();
     this.cancelAllLifecycleRetries();
     this.cancelAllProviderEventRetries();
@@ -2113,18 +2277,27 @@ export class SessionsService implements OnModuleDestroy {
     }
   }
 
-  private transition(id: string, status: SessionStatus): void {
+  private transition(
+    id: string,
+    status: SessionStatus,
+    options: { immediate?: boolean; beforeUpdate?: () => void } = {},
+  ): void {
     let event: SessionEvent;
     let notifyAfterCommit = false;
     if (this.database) {
-      event = this.database.transaction(() => {
+      const persist = () => {
+        options.beforeUpdate?.();
         this.sessions.updateStatus(id, status);
         const persisted = this.events.append(id, 'status', { status }, false);
         if (persisted.seq <= 0) throw new Error('Status event append did not commit');
         return persisted;
-      });
+      };
+      event = options.immediate
+        ? this.database.immediateTransaction(persist)
+        : this.database.transaction(persist);
       notifyAfterCommit = true;
     } else {
+      options.beforeUpdate?.();
       this.sessions.updateStatus(id, status);
       event = this.events.append(id, 'status', { status });
     }

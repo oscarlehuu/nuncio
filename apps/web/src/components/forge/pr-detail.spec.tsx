@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
+import type { ComponentProps } from 'react';
 
 vi.mock('../../lib/forge-api', () => ({
   fetchForgeCapabilities: vi.fn(),
@@ -73,6 +75,14 @@ const THREAD: ForgeReviewThread = {
   comments: [{ id: '99', author: 'reviewer', body: 'simplify this', createdAt: '2026-07-01T00:00:00Z' }],
 };
 
+function renderPr(props: ComponentProps<typeof PrDetail>) {
+  return render(
+    <MemoryRouter>
+      <PrDetail {...props} />
+    </MemoryRouter>,
+  );
+}
+
 describe('PrDetail', () => {
   beforeEach(() => {
     clearForgeCache();
@@ -84,7 +94,7 @@ describe('PrDetail', () => {
   });
 
   it('renders header, body, review decision, and the open thread', async () => {
-    render(<PrDetail path="/repo" number={7} />);
+    renderPr({ path: "/repo", number: 7 });
 
     expect(await screen.findByText('Improve parsing')).toBeInTheDocument();
     expect(screen.getByText(/changes requested/i)).toBeInTheDocument();
@@ -94,7 +104,7 @@ describe('PrDetail', () => {
   });
 
   it('replies to a review thread', async () => {
-    render(<PrDetail path="/repo" number={7} />);
+    renderPr({ path: "/repo", number: 7 });
     await screen.findByText('simplify this');
 
     await userEvent.type(screen.getByPlaceholderText('Reply…'), 'done in latest commit');
@@ -111,7 +121,7 @@ describe('PrDetail', () => {
       provider: 'gitlab',
       requestChanges: false,
     });
-    render(<PrDetail path="/repo" number={7} />);
+    renderPr({ path: "/repo", number: 7 });
     await screen.findByText('Improve parsing');
 
     await waitFor(() =>
@@ -124,7 +134,7 @@ describe('PrDetail', () => {
     vi.mocked(fetchForgePullFiles).mockResolvedValue([
       { path: 'src/parse.ts', oldPath: null, status: 'modified', additions: 5, deletions: 1, patch: '@@ -1 +1 @@' },
     ]);
-    render(<PrDetail path="/repo" number={7} />);
+    renderPr({ path: "/repo", number: 7 });
     await screen.findByText('Improve parsing');
 
     await userEvent.click(screen.getByRole('button', { name: /files \(2\)/i }));

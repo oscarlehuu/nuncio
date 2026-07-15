@@ -43,7 +43,7 @@ export class WebhooksController {
     }
 
     const event = provider.parseWebhookEvent(headers, payload);
-    if (!event) return { ok: true, ignored: true };
+    if (!event) return { ok: true, ignored: true, reason: 'unsupported-event' };
 
     const result = await this.webhooks.handleEvent(providerId, event);
     return { ok: true, ...result };

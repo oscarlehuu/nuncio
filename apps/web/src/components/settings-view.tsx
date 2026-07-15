@@ -123,6 +123,10 @@ const PROVIDER_METAS: Record<string, ProviderMetaInfo> = {
   },
 };
 
+// Forge automation flags live in the 'advanced' registry category but read most
+// naturally beside the GitHub/GitLab connections, so they are surfaced there.
+const FORGE_AUTOMATION_KEYS = new Set(['forges.autoSteer', 'forges.autoCloseOnMerge']);
+
 function sourceControlAuthMethodSuffix(providerId: string, method: ForgeStatusDto['method']): string {
   if (method === 'token') return ' · via token';
   if (method === 'cli') return ` · via ${providerId === 'gitlab' ? 'glab' : 'gh'} CLI`;
@@ -158,7 +162,10 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
   const tools = settings.filter((s) => s.category === 'tools');
   const workspaces = settings.filter((s) => s.category === 'workspaces');
   const network = settings.filter((s) => s.category === 'network' && s.key !== 'NUNCIO_TAILSCALE_AUTO_TRUST');
-  const advanced = settings.filter((s) => s.category === 'advanced');
+  const advanced = settings.filter(
+    (s) => s.category === 'advanced' && !FORGE_AUTOMATION_KEYS.has(s.key),
+  );
+  const forgeAutomation = settings.filter((s) => FORGE_AUTOMATION_KEYS.has(s.key));
   const providerSettings = settings.filter((s) => s.category === 'provider');
 
   // Group by providerId
@@ -348,8 +355,16 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
     if (['cursor', 'pi', 'codex'].some((id) => renderProviderRow(id, query))) {
       resultSections.push(<div key="providers">{providerResult}</div>);
     }
-    if (['github', 'gitlab'].some((id) => renderProviderRow(id, query))) {
-      resultSections.push(<div key="source-control">{sourceResult}</div>);
+    const matchingForgeAutomation = filterSettings(forgeAutomation, query);
+    const hasSourceProviderMatch = ['github', 'gitlab'].some((id) => renderProviderRow(id, query));
+    if (hasSourceProviderMatch || matchingForgeAutomation.length > 0) {
+      resultSections.push(
+        <div key="source-control" className="space-y-6">
+          {hasSourceProviderMatch && sourceResult}
+          {matchingForgeAutomation.length > 0 &&
+            renderSettingGroup('Automation', matchingForgeAutomation, '')}
+        </div>,
+      );
     }
     // The per-provider default-model picker replaces the raw NUNCIO_SUBAGENT_MODELS
     // row, so search must match it on the section's title and key synonyms —
@@ -417,7 +432,13 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
       case 'usage':
         return <UsageSettingsSection />;
       case 'source-control':
-        return renderProviderGroup('Source control', ['github', 'gitlab']);
+        return (
+          <div className="space-y-6">
+            {renderProviderGroup('Source control', ['github', 'gitlab'])}
+            {forgeAutomation.length > 0 &&
+              renderSettingGroup('Automation', forgeAutomation, 'No automation settings are available.')}
+          </div>
+        );
       case 'mcp-tools':
         return renderSettingGroup('MCP & Tools', tools, 'No MCP or tool settings are available.');
       case 'agents':

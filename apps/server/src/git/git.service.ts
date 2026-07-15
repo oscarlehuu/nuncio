@@ -1,5 +1,14 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+  unlinkSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 import { SettingsService } from '../settings/settings.service';
@@ -194,18 +203,24 @@ function truncateDiff(diff: string): GitDiffDto {
   return { diff: diff.slice(0, maxDiffChars), truncated: true };
 }
 
+function parseRemotePath(host: string, rawPath: string): RemoteInfoDto | null {
+  const parts = rawPath.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean);
+  if (parts.length < 2) return null;
+  const repo = parts.pop()!.replace(/\.git$/, '');
+  if (!repo) return null;
+  return { host, owner: parts.join('/'), repo };
+}
+
 function parseRemoteUrl(url: string): RemoteInfoDto | null {
-  const sshMatch = url.match(/^git@([^:]+):([^/]+)\/(.+?)(?:\.git)?$/);
+  const sshMatch = url.match(/^git@([^:]+):(.+)$/);
   if (sshMatch) {
-    return { host: sshMatch[1], owner: sshMatch[2], repo: sshMatch[3] };
+    return parseRemotePath(sshMatch[1], sshMatch[2]);
   }
 
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== 'https:') return null;
-    const [owner, repoWithSuffix] = parsed.pathname.replace(/^\/+/, '').split('/');
-    if (!owner || !repoWithSuffix) return null;
-    return { host: parsed.host, owner, repo: repoWithSuffix.replace(/\.git$/, '') };
+    return parseRemotePath(parsed.host, parsed.pathname);
   } catch {
     return null;
   }
@@ -428,10 +443,11 @@ export class GitService {
     // Resolve the repo's actual default branch when the caller omits baseBranch,
     // instead of assuming "main" — repos may use develop/master/etc.
     const resolvedBase = baseBranch?.trim() || (await this.resolveDefaultBranch(repoRoot));
+    const worktreeBase = await this.resolveWorktreeBase(repoRoot, resolvedBase);
 
     try {
       await git(
-        ['worktree', 'add', '-b', branch, worktreePath, resolvedBase],
+        ['worktree', 'add', '-b', branch, worktreePath, worktreeBase],
         repoRoot,
       );
     } catch (error) {
@@ -440,6 +456,84 @@ export class GitService {
     }
 
     return { worktreePath, branch, baseBranch: resolvedBase };
+  }
+
+  async fetchPullRequestHead(
+    projectPath: string,
+    provider: 'github' | 'gitlab',
+    number: number,
+  ): Promise<string> {
+    if (!Number.isInteger(number) || number <= 0) {
+      throw new BadRequestException('Pull request number must be a positive integer');
+    }
+    const repoRoot = await this.resolveRepoRoot(projectPath);
+    const remoteRef = provider === 'github'
+      ? `refs/pull/${number}/head`
+      : `refs/merge-requests/${number}/head`;
+    const localRef = `refs/nuncio/pull-requests/${provider}/${number}`;
+    try {
+      await git(['fetch', '--force', 'origin', `${remoteRef}:${localRef}`], repoRoot);
+      return localRef;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new BadRequestException(`Failed to fetch pull request head: ${message}`);
+    }
+  }
+
+  async fetchRemoteBranch(projectPath: string, branch: string): Promise<string> {
+    const repoRoot = await this.resolveRepoRoot(projectPath);
+    const remoteBranch = branch.trim();
+    try {
+      await git(['check-ref-format', '--branch', remoteBranch], repoRoot);
+      await git([
+        'fetch',
+        '--force',
+        'origin',
+        `refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}`,
+      ], repoRoot);
+      return `origin/${remoteBranch}`;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new BadRequestException(`Failed to fetch source branch: ${message}`);
+    }
+  }
+
+  async setWorktreeUpstream(
+    worktreePath: string,
+    localBranch: string,
+    upstreamBranch: string,
+  ): Promise<void> {
+    const repoRoot = await this.resolveRepoRoot(worktreePath);
+    const remotePrefix = 'origin/';
+    const remoteBranch = upstreamBranch.startsWith(remotePrefix)
+      ? upstreamBranch.slice(remotePrefix.length)
+      : '';
+    try {
+      await git(['check-ref-format', '--branch', localBranch], repoRoot);
+      await git(['check-ref-format', '--branch', remoteBranch], repoRoot);
+      await git(['rev-parse', '--verify', `refs/remotes/${upstreamBranch}^{commit}`], repoRoot);
+      await git(['branch', '--set-upstream-to', upstreamBranch, localBranch], repoRoot);
+      await git(['config', 'extensions.worktreeConfig', 'true'], repoRoot);
+      await git(['config', '--worktree', 'push.default', 'upstream'], repoRoot);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new BadRequestException(`Failed to configure source branch upstream: ${message}`);
+    }
+  }
+
+  private async resolveWorktreeBase(repoRoot: string, base: string): Promise<string> {
+    const candidates = base.startsWith('refs/')
+      ? [base]
+      : [`refs/heads/${base}`, `refs/remotes/origin/${base}`, base];
+    for (const candidate of candidates) {
+      try {
+        await git(['rev-parse', '--verify', `${candidate}^{commit}`], repoRoot);
+        return candidate;
+      } catch {
+        // Try the next exact namespace before letting worktree add report failure.
+      }
+    }
+    return base;
   }
 
   private async resolveDefaultBranch(repoRoot: string): Promise<string> {
@@ -774,21 +868,31 @@ export class GitService {
   async push(
     path: string,
     branch: string,
-    options: { force?: boolean } = {},
+    options: { force?: boolean; remoteBranch?: string } = {},
   ): Promise<PushResultDto> {
     const repoRoot = await this.resolveRepoRoot(path);
-    const remoteBranch = branch.trim();
-    if (!remoteBranch) {
+    const localBranch = branch.trim();
+    const remoteBranch = options.remoteBranch?.trim() || localBranch;
+    if (!localBranch || !remoteBranch || remoteBranch.startsWith('-')) {
       throw new BadRequestException('Branch is required');
     }
 
-    const args = ['push', 'origin', remoteBranch];
+    const refspec = localBranch === remoteBranch
+      ? localBranch
+      : `${localBranch}:refs/heads/${remoteBranch.replace(/^refs\/heads\//, '')}`;
+    const args = ['push', 'origin', refspec];
     if (options.force === true) {
       args.push('--force-with-lease');
     }
 
     try {
       await git(args, repoRoot);
+      if (localBranch !== remoteBranch) {
+        await git(
+          ['branch', '--set-upstream-to', `origin/${remoteBranch}`, localBranch],
+          repoRoot,
+        ).catch(() => '');
+      }
       return { pushed: true, remoteBranch };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -796,11 +900,62 @@ export class GitService {
     }
   }
 
-  async removeWorktree(repoRoot: string, worktreePath: string): Promise<void> {
+  async removeWorktreeIfSafe(
+    repoRoot: string,
+    worktreePath: string,
+    options: { fallbackBase?: string | null } = {},
+  ): Promise<{ removed: boolean; reason?: string }> {
+    let resolvedWorktree: string;
+    let headLock: string;
     try {
-      await git(['worktree', 'remove', '--force', worktreePath], repoRoot);
+      resolvedWorktree = await this.resolveRepoRoot(worktreePath);
+      const gitDirValue = await git(['rev-parse', '--git-dir'], resolvedWorktree);
+      headLock = join(resolve(resolvedWorktree, gitDirValue), 'HEAD.lock');
     } catch {
-      // best-effort cleanup for tests
+      return { removed: false, reason: 'worktree-missing' };
+    }
+    let lockFd: number;
+    try {
+      lockFd = openSync(headLock, 'wx');
+    } catch {
+      return { removed: false, reason: 'worktree-busy' };
+    }
+
+    try {
+      const status = await this.status(resolvedWorktree);
+      if (!status.clean) return { removed: false, reason: 'dirty-after-archive' };
+      const unpushed = await this.unpushedCommits(resolvedWorktree, options);
+      if (unpushed.commits.length > 0) {
+        return { removed: false, reason: 'unpushed-after-archive' };
+      }
+      await git(['worktree', 'remove', worktreePath], await this.resolveRepoRoot(repoRoot));
+      return { removed: true };
+    } catch {
+      return { removed: false, reason: 'worktree-removal-failed' };
+    } finally {
+      closeSync(lockFd);
+      try {
+        unlinkSync(headLock);
+      } catch {
+        // Successful removal deletes the linked-worktree metadata and its lock.
+      }
+    }
+  }
+
+  async removeWorktree(
+    repoRoot: string,
+    worktreePath: string,
+    options: { force?: boolean; bestEffort?: boolean } = { force: true, bestEffort: true },
+  ): Promise<void> {
+    try {
+      await git(
+        ['worktree', 'remove', ...(options.force === false ? [] : ['--force']), worktreePath],
+        repoRoot,
+      );
+    } catch (error) {
+      if (options.bestEffort !== false) return;
+      const message = error instanceof Error ? error.message : String(error);
+      throw new BadRequestException(`Failed to remove worktree: ${message}`);
     }
   }
 }

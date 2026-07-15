@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { SettingsService } from '../../settings/settings.service';
 import { githubCliToken } from '../cli-auth';
 import { BaseForgeProvider } from '../forges.base-provider';
+import { parseGithubWebhookEvent } from './github-webhook-parser';
 import type {
   CreatePullRequestOptions,
   ForgeAuth,
@@ -13,32 +14,14 @@ import type {
   ForgeWebhookEvent,
 } from '../forges.types';
 
-interface GithubWebhookActor {
-  login?: string;
-}
-
-interface GithubWebhookIssue {
-  number: number;
-  title?: string;
-  body?: string | null;
-  labels?: Array<{ name: string }>;
-}
-
-interface GithubWebhookPayload {
-  action?: string;
-  issue?: GithubWebhookIssue;
-  pull_request?: GithubWebhookIssue;
-  repository?: {
-    name?: string;
-    full_name?: string;
-    default_branch?: string;
-    owner?: GithubWebhookActor;
-  };
-}
-
 interface GithubUserResponse {
   login: string;
   name?: string | null;
+}
+
+interface GithubCollaboratorPermissionResponse {
+  permission?: string;
+  role_name?: string;
 }
 
 interface GithubPullRequestResponse {
@@ -99,6 +82,15 @@ export abstract class GithubForgeCore extends BaseForgeProvider {
       headers: await this.authHeaders(),
     });
     return { login: data.login, name: data.name ?? null };
+  }
+
+  async canWriteRepository(repo: ForgeRepoRef, username: string): Promise<boolean> {
+    const data = await this.request<GithubCollaboratorPermissionResponse>(
+      `${this.repoUrl(repo)}/collaborators/${encodeURIComponent(username)}/permission`,
+      { headers: await this.authHeaders() },
+    );
+    const permission = (data.permission ?? data.role_name ?? '').toLowerCase();
+    return ['write', 'push', 'maintain', 'admin'].includes(permission);
   }
 
   async createPullRequest(
@@ -162,37 +154,7 @@ export abstract class GithubForgeCore extends BaseForgeProvider {
     headers: Record<string, string | undefined>,
     payload: unknown,
   ): ForgeWebhookEvent | null {
-    const eventType = headers['x-github-event'];
-    const data = (payload ?? {}) as GithubWebhookPayload;
-    const repository = data.repository;
-    if (!repository) return null;
-
-    const base = {
-      provider: this.id,
-      deliveryId: headers['x-github-delivery'] ?? '',
-      action: data.action ?? '',
-      owner: repository.owner?.login ?? '',
-      repo: repository.name ?? '',
-      repoFullName: repository.full_name ?? '',
-      defaultBranch: repository.default_branch ?? '',
-    };
-
-    if (eventType === 'issues' && data.issue) {
-      return { ...base, kind: 'issue', ...this.mapIssueFields(data.issue) };
-    }
-    if (eventType === 'pull_request' && data.pull_request) {
-      return { ...base, kind: 'pull_request', ...this.mapIssueFields(data.pull_request) };
-    }
-    return null;
-  }
-
-  private mapIssueFields(issue: GithubWebhookIssue) {
-    return {
-      number: issue.number,
-      title: issue.title ?? '',
-      body: issue.body ?? '',
-      labels: (issue.labels ?? []).map((label) => label.name),
-    };
+    return parseGithubWebhookEvent(headers, payload, this.id);
   }
 
   bustCache(): void {

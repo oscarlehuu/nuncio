@@ -3,6 +3,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { SettingsService } from '../../settings/settings.service';
 import { gitlabCliToken } from '../cli-auth';
 import { BaseForgeProvider } from '../forges.base-provider';
+import { parseGitlabWebhookEvent } from './gitlab-webhook-parser';
 import type {
   CreatePullRequestOptions,
   ForgeAuth,
@@ -14,8 +15,13 @@ import type {
 } from '../forges.types';
 
 interface GitlabUserResponse {
+  id?: number;
   username: string;
   name?: string | null;
+}
+
+interface GitlabMemberResponse {
+  access_level?: number;
 }
 
 interface GitlabMergeRequestResponse {
@@ -28,20 +34,6 @@ interface GitlabMergeRequestResponse {
 interface GitlabPipelineResponse {
   id: number;
   status: string;
-}
-
-interface GitlabWebhookAttributes {
-  iid: number;
-  title?: string;
-  description?: string | null;
-  action?: string;
-  target_branch?: string;
-}
-
-interface GitlabWebhookPayload {
-  object_attributes?: GitlabWebhookAttributes;
-  project?: { path_with_namespace?: string; default_branch?: string };
-  labels?: Array<{ title: string }>;
 }
 
 /**
@@ -79,6 +71,22 @@ export abstract class GitlabForgeCore extends BaseForgeProvider {
       headers: await this.authHeaders(),
     });
     return { login: data.username, name: data.name ?? null };
+  }
+
+  async canWriteRepository(repo: ForgeRepoRef, username: string): Promise<boolean> {
+    const users = await this.request<GitlabUserResponse[]>(
+      `${this.resolveApiBase()}/users?username=${encodeURIComponent(username)}`,
+      { headers: await this.authHeaders() },
+    );
+    const user = (users ?? []).find(
+      (candidate) => candidate.username.toLowerCase() === username.toLowerCase(),
+    );
+    if (!user || !Number.isInteger(user.id)) return false;
+    const member = await this.request<GitlabMemberResponse>(
+      `${this.projectUrl(repo)}/members/all/${user.id}`,
+      { headers: await this.authHeaders() },
+    );
+    return (member.access_level ?? 0) >= 30;
   }
 
   async createPullRequest(
@@ -144,59 +152,7 @@ export abstract class GitlabForgeCore extends BaseForgeProvider {
     headers: Record<string, string | undefined>,
     payload: unknown,
   ): ForgeWebhookEvent | null {
-    const eventType = headers['x-gitlab-event'];
-    const kind =
-      eventType === 'Issue Hook'
-        ? ('issue' as const)
-        : eventType === 'Merge Request Hook'
-          ? ('pull_request' as const)
-          : null;
-    if (!kind) return null;
-
-    const data = (payload ?? {}) as GitlabWebhookPayload;
-    const attrs = data.object_attributes;
-    const project = data.project;
-    if (!attrs || !project?.path_with_namespace) return null;
-
-    const fullName = project.path_with_namespace;
-    const lastSlash = fullName.lastIndexOf('/');
-    const owner = lastSlash >= 0 ? fullName.slice(0, lastSlash) : '';
-    const repo = lastSlash >= 0 ? fullName.slice(lastSlash + 1) : fullName;
-
-    return {
-      provider: this.id,
-      deliveryId: headers['x-gitlab-event-uuid'] ?? '',
-      kind,
-      action: this.normalizeAction(attrs.action),
-      owner,
-      repo,
-      repoFullName: fullName,
-      defaultBranch: project.default_branch ?? '',
-      number: attrs.iid,
-      title: attrs.title ?? '',
-      body: attrs.description ?? '',
-      labels: (data.labels ?? []).map((label) => label.title),
-    };
-  }
-
-  /**
-   * Normalize GitLab's action verbs (open/reopen/close/merge) to the common
-   * ForgeWebhookEvent vocabulary (GitHub-style: opened/reopened/closed/merged)
-   * that the provider-agnostic WebhooksService gates on.
-   */
-  private normalizeAction(action: string | undefined): string {
-    switch (action) {
-      case 'open':
-        return 'opened';
-      case 'reopen':
-        return 'reopened';
-      case 'close':
-        return 'closed';
-      case 'merge':
-        return 'merged';
-      default:
-        return action ?? '';
-    }
+    return parseGitlabWebhookEvent(headers, payload, this.id);
   }
 
   bustCache(): void {

@@ -190,6 +190,37 @@ describe('GitlabForgeProvider', () => {
     expect(headers.get('Authorization')).toBe('Bearer glpat-test-token');
   });
 
+  it('requires Developer access or higher for webhook feedback authors', async () => {
+    process.env.GITLAB_TOKEN = 'glpat-test-token';
+    const calls: FetchCall[] = [];
+    provider.fetchOverride = (async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, init });
+      const body = url.includes('/users?')
+        ? [{ id: 27, username: 'maintainer' }]
+        : { access_level: 30 };
+      return { ok: true, status: 200, json: async () => body } as Response;
+    }) as typeof fetch;
+
+    await expect(
+      provider.canWriteRepository({ owner: 'group/subgroup', repo: 'nuncio' }, 'maintainer'),
+    ).resolves.toBe(true);
+    expect(calls.map((call) => call.url)).toEqual([
+      'https://gitlab.com/api/v4/users?username=maintainer',
+      'https://gitlab.com/api/v4/projects/group%2Fsubgroup%2Fnuncio/members/all/27',
+    ]);
+
+    provider.fetchOverride = (async (input: unknown) => {
+      const body = String(input).includes('/users?')
+        ? [{ id: 28, username: 'reporter' }]
+        : { access_level: 20 };
+      return { ok: true, status: 200, json: async () => body } as Response;
+    }) as typeof fetch;
+    await expect(
+      provider.canWriteRepository({ owner: 'group', repo: 'nuncio' }, 'reporter'),
+    ).resolves.toBe(false);
+  });
+
   it('getCurrentUser returns name as null when GitLab omits it', async () => {
     process.env.GITLAB_TOKEN = 'glpat-test-token';
     const { fetchOverride } = makeFetchStub({ username: 'ghost', name: null });

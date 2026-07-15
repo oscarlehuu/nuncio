@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { DatabaseModule } from '../db/database.module';
 import { ForgesModule } from '../forges/forges.module';
 import { GitModule } from '../git/git.module';
@@ -23,7 +23,7 @@ import { AttentionService } from './attention.service';
     DatabaseModule,
     ProjectsModule,
     LoopsModule,
-    ForgesModule,
+    forwardRef(() => ForgesModule),
     GitModule,
     SessionsPersistenceModule,
   ],

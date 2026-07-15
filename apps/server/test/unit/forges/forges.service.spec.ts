@@ -20,11 +20,15 @@ describe('ForgesService', () => {
   let dataDir: string;
 
   let createCalls: Array<{ repo: ForgeRepoRef; opts: CreatePullRequestOptions }>;
+  let permissionCalls: number;
+  let permissionResult: boolean;
+  let permissionError: Error | null;
   let stubProvider: {
     id: string;
     createPullRequest: (repo: ForgeRepoRef, opts: CreatePullRequestOptions) => Promise<ForgePullRequest>;
     getPullRequest: (repo: ForgeRepoRef, n: number) => Promise<ForgePullRequest>;
     listChecks: (repo: ForgeRepoRef, ref: string) => Promise<unknown[]>;
+    canWriteRepository: (repo: ForgeRepoRef, author: string) => Promise<boolean>;
   };
   let registryStub: { getAvailable: (id: string) => Promise<typeof stubProvider>; get: (id: string) => typeof stubProvider };
   let gitStub: { remoteInfo: (path: string) => Promise<{ host: string; owner: string; repo: string }> };
@@ -48,6 +52,9 @@ describe('ForgesService', () => {
 
   beforeEach(() => {
     createCalls = [];
+    permissionCalls = 0;
+    permissionResult = true;
+    permissionError = null;
     stubProvider = {
       id: 'github',
       createPullRequest: async (repo, opts) => {
@@ -66,6 +73,11 @@ describe('ForgesService', () => {
         title: 'PR',
       }),
       listChecks: async () => [{ name: 'build', status: 'completed', conclusion: 'success' }],
+      canWriteRepository: async () => {
+        permissionCalls += 1;
+        if (permissionError) throw permissionError;
+        return permissionResult;
+      },
     };
     registryStub = {
       getAvailable: async () => stubProvider,
@@ -80,7 +92,7 @@ describe('ForgesService', () => {
   it('derives the title from the session title and the body from the prompt', async () => {
     const s = sessions.create({
       prompt: 'Implement the rate limiter so requests are throttled',
-      projectPath: '/repo',
+      projectPath: '/repo/derived-title',
       branch: 'nuncio/abc-rate-limit',
       baseBranch: 'main',
     });
@@ -97,10 +109,35 @@ describe('ForgesService', () => {
     expect(opts.body).toContain('Implement the rate limiter');
   });
 
+  it('briefly caches author write permission per provider, repository, and author', async () => {
+    await expect(service.canAuthorWriteRepository(
+      'github',
+      { owner: 'Octo', repo: 'Nuncio' },
+      'Reviewer',
+    )).resolves.toBe(true);
+    permissionResult = false;
+    await expect(service.canAuthorWriteRepository(
+      'github',
+      { owner: 'octo', repo: 'nuncio' },
+      'reviewer',
+    )).resolves.toBe(true);
+    expect(permissionCalls).toBe(1);
+  });
+
+  it('fails closed when author permission lookup errors', async () => {
+    permissionError = new Error('forge unavailable');
+    await expect(service.canAuthorWriteRepository(
+      'github',
+      { owner: 'octo', repo: 'nuncio' },
+      'reviewer',
+    )).resolves.toBe(false);
+    expect(permissionCalls).toBe(1);
+  });
+
   it('honours explicit title/body/base overrides', async () => {
     const s = sessions.create({
       prompt: 'do the thing',
-      projectPath: '/repo',
+      projectPath: '/repo/explicit-overrides',
       branch: 'nuncio/x',
       baseBranch: 'main',
     });
@@ -122,7 +159,7 @@ describe('ForgesService', () => {
   it('persists PR metadata onto the session via updateForgeState', async () => {
     const s = sessions.create({
       prompt: 'persist me',
-      projectPath: '/repo',
+      projectPath: '/repo/persist-metadata',
       branch: 'nuncio/persist',
       baseBranch: 'main',
     });

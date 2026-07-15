@@ -1,15 +1,12 @@
-import { Test, TestingModule } from '@nestjs/testing';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Database } from 'bun:sqlite';
-import { DatabaseModule } from '../../../src/db/database.module';
 import { DatabaseService } from '../../../src/db/database.service';
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
-import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
 
 describe('SessionsRepository — forge state', () => {
-  let module: TestingModule;
+  let database: DatabaseService;
   let repo: SessionsRepository;
   let dataDir: string;
 
@@ -17,15 +14,12 @@ describe('SessionsRepository — forge state', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-sessions-forge-'));
     process.env.NUNCIO_DATA_DIR = dataDir;
 
-    module = await Test.createTestingModule({
-      imports: [DatabaseModule, SessionsPersistenceModule],
-    }).compile();
-
-    repo = module.get(SessionsRepository);
+    database = new DatabaseService();
+    repo = new SessionsRepository(database);
   });
 
   afterAll(async () => {
-    await module.close();
+    database.onModuleDestroy();
     rmSync(dataDir, { recursive: true, force: true });
     delete process.env.NUNCIO_DATA_DIR;
   });
@@ -68,6 +62,207 @@ describe('SessionsRepository — forge state', () => {
     });
     expect(after.forgeStatus).toBe('opening');
     expect(after.pullRequestUrl).toBe('https://github.com/octo/nuncio/pull/5');
+  });
+
+  it('persists PR ownership on the initial session insert', () => {
+    const owner = repo.create({
+      prompt: 'adopt atomically',
+      projectPath: '/projects/nuncio',
+      forgeProvider: 'github',
+      pullRequestUrl: 'https://github.com/octo/nuncio/pull/45',
+      pullRequestNumber: 45,
+      pullRequestState: 'open',
+      forgeStatus: 'open',
+    });
+
+    expect(repo.findByProjectPullRequest('/projects/nuncio', 45)?.id).toBe(owner.id);
+    expect(repo.claimPullRequestAdoption('/projects/nuncio', 45, 'retry')).toEqual({
+      status: 'existing',
+      sessionId: owner.id,
+    });
+  });
+
+  it('finds the owning session by project path and pull-request number', () => {
+    const owner = repo.create({ prompt: 'owner', projectPath: '/projects/nuncio' });
+    const collision = repo.create({ prompt: 'other repo', projectPath: '/projects/other' });
+    repo.updateForgeState(owner.id, { pullRequestNumber: 17, forgeProvider: 'github' });
+    repo.updateForgeState(collision.id, { pullRequestNumber: 17, forgeProvider: 'github' });
+
+    expect(repo.findByProjectPullRequest('/projects/nuncio', 17)?.id).toBe(owner.id);
+    expect(repo.findByProjectPullRequest('/projects/missing', 17)).toBeNull();
+  });
+
+  it('includes an archived owner only when lifecycle routing requests it', () => {
+    const owner = repo.create({ prompt: 'archived owner', projectPath: '/projects/nuncio' });
+    repo.updateForgeState(owner.id, { pullRequestNumber: 18, forgeProvider: 'github' });
+    repo.updateStatus(owner.id, 'RUNNING');
+    repo.updateStatus(owner.id, 'IDLE');
+    repo.updateStatus(owner.id, 'ARCHIVED');
+
+    expect(repo.findByProjectPullRequest('/projects/nuncio', 18)).toBeNull();
+    expect(
+      repo.findByProjectPullRequest('/projects/nuncio', 18, { includeArchived: true })?.id,
+    ).toBe(owner.id);
+  });
+
+  it('prefers a live owner over a more recently updated archived owner', () => {
+    const archived = repo.create({ prompt: 'archived owner', projectPath: '/projects/ranked' });
+    repo.updateForgeState(archived.id, { pullRequestNumber: 19, forgeProvider: 'github' });
+    repo.updateStatus(archived.id, 'RUNNING');
+    repo.updateStatus(archived.id, 'IDLE');
+    repo.updateStatus(archived.id, 'ARCHIVED');
+    const live = repo.create({ prompt: 'live owner', projectPath: '/projects/ranked' });
+    repo.updateForgeState(live.id, { pullRequestNumber: 19, forgeProvider: 'github' });
+    database.db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?')
+      .run(Date.now() + 10_000, archived.id);
+
+    expect(repo.findByProjectPullRequest(
+      '/projects/ranked',
+      19,
+      { includeArchived: true },
+    )?.id).toBe(live.id);
+  });
+
+  it('atomically reserves one active session owner per project pull request', () => {
+    const competingDatabase = new DatabaseService();
+    const competingRepo = new SessionsRepository(competingDatabase);
+    const claims = repo as unknown as {
+      claimPullRequestAdoption: (path: string, number: number, token: string) =>
+        | { status: 'claimed' }
+        | { status: 'existing'; sessionId: string }
+        | { status: 'pending' };
+      completePullRequestAdoption: (
+        path: string,
+        number: number,
+        token: string,
+        sessionId: string,
+        state: Record<string, unknown>,
+      ) => void;
+    };
+    const competingClaims = competingRepo as unknown as Pick<
+      typeof claims,
+      'claimPullRequestAdoption'
+    >;
+
+    try {
+      expect(claims.claimPullRequestAdoption('/projects/nuncio', 44, 'first')).toEqual({
+        status: 'claimed',
+      });
+      expect(competingClaims.claimPullRequestAdoption('/projects/nuncio', 44, 'second')).toEqual({
+        status: 'pending',
+      });
+
+      const owner = repo.create({ prompt: 'adopt PR', projectPath: '/projects/nuncio' });
+      claims.completePullRequestAdoption('/projects/nuncio', 44, 'first', owner.id, {
+        forgeProvider: 'github',
+        pullRequestUrl: 'https://github.com/octo/nuncio/pull/44',
+        pullRequestState: 'open',
+        forgeStatus: 'open',
+      });
+      expect(competingClaims.claimPullRequestAdoption('/projects/nuncio', 44, 'third')).toEqual({
+        status: 'existing',
+        sessionId: owner.id,
+      });
+
+      repo.updateStatus(owner.id, 'RUNNING');
+      repo.updateStatus(owner.id, 'IDLE');
+      repo.updateStatus(owner.id, 'ARCHIVED');
+      expect(competingClaims.claimPullRequestAdoption('/projects/nuncio', 44, 'fourth')).toEqual({
+        status: 'claimed',
+      });
+    } finally {
+      competingDatabase.onModuleDestroy();
+    }
+  });
+
+  it('does not let a later database connection erase a live pending claim', () => {
+    expect(repo.claimPullRequestAdoption('/projects/nuncio', 46, 'first-process')).toEqual({
+      status: 'claimed',
+    });
+    const lateDatabase = new DatabaseService();
+    try {
+      const lateRepo = new SessionsRepository(lateDatabase);
+      expect(lateRepo.claimPullRequestAdoption('/projects/nuncio', 46, 'second-process')).toEqual({
+        status: 'pending',
+      });
+    } finally {
+      repo.releasePullRequestAdoption('/projects/nuncio', 46, 'first-process');
+      lateDatabase.onModuleDestroy();
+    }
+  });
+
+  it('allows an abandoned adoption claim to be reclaimed after its lease expires', () => {
+    expect(repo.claimPullRequestAdoption('/projects/nuncio', 47, 'crashed-request')).toEqual({
+      status: 'claimed',
+    });
+    database.db
+      .prepare(
+        `UPDATE forge_pr_session_claims SET lease_expires_at = 0
+         WHERE project_path = ? AND pull_request_number = ?`,
+      )
+      .run('/projects/nuncio', 47);
+
+    expect(repo.claimPullRequestAdoption('/projects/nuncio', 47, 'replacement')).toEqual({
+      status: 'claimed',
+    });
+    repo.releasePullRequestAdoption('/projects/nuncio', 47, 'replacement');
+  });
+
+  it('allows only one non-archived session owner after an expired claimant resumes', () => {
+    expect(repo.claimPullRequestAdoption('/projects/nuncio', 48, 'stale-request')).toEqual({
+      status: 'claimed',
+    });
+    database.db
+      .prepare(
+        `UPDATE forge_pr_session_claims SET lease_expires_at = 0
+         WHERE project_path = ? AND pull_request_number = ?`,
+      )
+      .run('/projects/nuncio', 48);
+    expect(repo.claimPullRequestAdoption('/projects/nuncio', 48, 'replacement')).toEqual({
+      status: 'claimed',
+    });
+
+    const winner = repo.create({
+      prompt: 'replacement owner',
+      projectPath: '/projects/nuncio',
+      pullRequestNumber: 48,
+    });
+    expect(() => repo.create({
+      prompt: 'stale request resumed',
+      projectPath: '/projects/nuncio',
+      pullRequestNumber: 48,
+    })).toThrow();
+
+    repo.updateStatus(winner.id, 'RUNNING');
+    repo.updateStatus(winner.id, 'IDLE');
+    repo.updateStatus(winner.id, 'ARCHIVED');
+    expect(() => repo.create({
+      prompt: 'new owner after archive',
+      projectPath: '/projects/nuncio',
+      pullRequestNumber: 48,
+    })).not.toThrow();
+  });
+
+  it('reclaims a completed claim whose session no longer owns that pull request', () => {
+    expect(repo.claimPullRequestAdoption('/projects/nuncio', 49, 'original')).toEqual({
+      status: 'claimed',
+    });
+    const owner = repo.create({ prompt: 'moving owner', projectPath: '/projects/nuncio' });
+    repo.completePullRequestAdoption('/projects/nuncio', 49, 'original', owner.id, {
+      forgeProvider: 'github',
+      pullRequestUrl: 'https://github.com/octo/nuncio/pull/49',
+      pullRequestState: 'open',
+      forgeStatus: 'open',
+    });
+    repo.updateForgeState(owner.id, {
+      pullRequestUrl: 'https://github.com/octo/nuncio/pull/50',
+      pullRequestNumber: 50,
+    });
+
+    expect(repo.claimPullRequestAdoption('/projects/nuncio', 49, 'replacement')).toEqual({
+      status: 'claimed',
+    });
+    repo.releasePullRequestAdoption('/projects/nuncio', 49, 'replacement');
   });
 });
 
@@ -141,5 +336,47 @@ describe('DatabaseService — forge column migration', () => {
     expect(row.forge_provider).toBeNull();
     expect(row.pull_request_number).toBeNull();
     expect(row.forge_status).toBe('none');
+  });
+
+  it('keeps the newest active PR owner when adding the uniqueness index', () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-forge-owner-migrate-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
+
+    db = new DatabaseService();
+    db.db.exec('DROP INDEX sessions_active_project_pr_unique');
+    const legacyRepo = new SessionsRepository(db);
+    const older = legacyRepo.create({
+      prompt: 'older owner',
+      projectPath: '/projects/nuncio',
+      pullRequestNumber: 70,
+      forgeProvider: 'github',
+      pullRequestUrl: 'https://github.com/octo/nuncio/pull/70',
+      pullRequestState: 'open',
+      forgeStatus: 'open',
+    });
+    const newer = legacyRepo.create({
+      prompt: 'newer owner',
+      projectPath: '/projects/nuncio',
+      pullRequestNumber: 70,
+      forgeProvider: 'github',
+      pullRequestUrl: 'https://github.com/octo/nuncio/pull/70',
+      pullRequestState: 'open',
+      forgeStatus: 'open',
+    });
+    db.db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?').run(1, older.id);
+    db.db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?').run(2, newer.id);
+    db.onModuleDestroy();
+    db = undefined;
+
+    db = new DatabaseService();
+    const migratedRepo = new SessionsRepository(db);
+    expect(migratedRepo.findById(newer.id)?.pullRequestNumber).toBe(70);
+    expect(migratedRepo.findById(older.id)).toMatchObject({
+      forgeProvider: null,
+      pullRequestUrl: null,
+      pullRequestNumber: null,
+      pullRequestState: null,
+      forgeStatus: 'none',
+    });
   });
 });

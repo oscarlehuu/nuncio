@@ -1,10 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
-import { Test, TestingModule } from '@nestjs/testing';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
-import { DatabaseModule } from '../../../src/db/database.module';
-import { GitModule } from '../../../src/git/git.module';
 import { GitService } from '../../../src/git/git.service';
 
 async function runGitAsync(cwd: string, args: string[]): Promise<void> {
@@ -45,11 +42,9 @@ async function initRepo(
 }
 
 describe('GitService', () => {
-  let module: TestingModule;
   let service: GitService;
   let rootsDir: string;
   let workspacesDir: string;
-  let dataDir: string;
   let repoA: string;
   let repoB: string;
   let nestedRepo: string;
@@ -57,8 +52,6 @@ describe('GitService', () => {
   beforeAll(async () => {
     rootsDir = mkdtempSync(join(tmpdir(), 'nuncio-roots-'));
     workspacesDir = mkdtempSync(join(tmpdir(), 'nuncio-ws-'));
-    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-git-data-'));
-    process.env.NUNCIO_DATA_DIR = dataDir;
     process.env.NUNCIO_PROJECT_ROOTS = rootsDir;
     process.env.NUNCIO_WORKSPACES_DIR = workspacesDir;
 
@@ -71,18 +64,14 @@ describe('GitService', () => {
     mkdirSync(join(rootsDir, 'nested'), { recursive: true });
     await initRepo(nestedRepo);
 
-    module = await Test.createTestingModule({
-      imports: [DatabaseModule, GitModule],
-    }).compile();
-    service = module.get(GitService);
+    service = new GitService({
+      resolve: (key: string) => process.env[key],
+    } as never);
   });
 
   afterAll(async () => {
-    await module.close();
     rmSync(rootsDir, { recursive: true, force: true });
     rmSync(workspacesDir, { recursive: true, force: true });
-    rmSync(dataDir, { recursive: true, force: true });
-    delete process.env.NUNCIO_DATA_DIR;
     delete process.env.NUNCIO_PROJECT_ROOTS;
     delete process.env.NUNCIO_WORKSPACES_DIR;
   });
@@ -290,6 +279,150 @@ describe('GitService', () => {
       rmSync(developWs, { recursive: true, force: true });
     }
   });
+
+  it('creates the generated branch at the exact remote-only base commit', async () => {
+    await runGitAsync(repoA, ['checkout', '-b', 'temporary-pr-head']);
+    await runGitAsync(repoA, ['commit', '--allow-empty', '-m', 'remote PR head']);
+    const expectedHead = await readGitAsync(repoA, ['rev-parse', 'HEAD']);
+    await runGitAsync(repoA, ['checkout', 'main']);
+    await runGitAsync(repoA, ['update-ref', 'refs/remotes/origin/feat/pr-head', expectedHead]);
+    await runGitAsync(repoA, ['branch', '-D', 'temporary-pr-head']);
+
+    const result = await service.createWorktree(repoA, 'feat/pr-head', 'remote01', 'pr-head');
+    try {
+      expect(await readGitAsync(result.worktreePath, ['branch', '--show-current']))
+        .toBe('nuncio/remote01-pr-head');
+      expect(await readGitAsync(result.worktreePath, ['rev-parse', 'HEAD'])).toBe(expectedHead);
+    } finally {
+      await service.removeWorktree(repoA, result.worktreePath);
+    }
+  });
+
+  it('fetches a GitHub pull-request head into an exact local ref', async () => {
+    const origin = mkdtempSync(join(tmpdir(), 'nuncio-pr-origin-'));
+    const source = mkdtempSync(join(tmpdir(), 'nuncio-pr-source-'));
+    try {
+      await runGitAsync(origin, ['init', '--bare']);
+      await initRepo(source);
+      await runGitAsync(source, ['remote', 'add', 'origin', origin]);
+      await runGitAsync(source, ['checkout', '-b', 'feat/pull-head']);
+      await runGitAsync(source, ['commit', '--allow-empty', '-m', 'pull head']);
+      const expectedHead = await readGitAsync(source, ['rev-parse', 'HEAD']);
+      await runGitAsync(source, ['push', 'origin', 'HEAD:refs/pull/42/head']);
+
+      const ref = await service.fetchPullRequestHead(source, 'github', 42);
+
+      expect(ref).toBe('refs/nuncio/pull-requests/github/42');
+      expect(await readGitAsync(source, ['rev-parse', ref])).toBe(expectedHead);
+    } finally {
+      rmSync(origin, { recursive: true, force: true });
+      rmSync(source, { recursive: true, force: true });
+    }
+  });
+
+  it('tracks an adopted source branch and pulls later remote updates', async () => {
+    const origin = mkdtempSync(join(tmpdir(), 'nuncio-upstream-origin-'));
+    const source = mkdtempSync(join(tmpdir(), 'nuncio-upstream-source-'));
+    try {
+      await runGitAsync(origin, ['init', '--bare']);
+      await initRepo(source);
+      await runGitAsync(source, ['remote', 'add', 'origin', origin]);
+      await runGitAsync(source, ['checkout', '-b', 'feat/pr-head']);
+      await runGitAsync(source, ['commit', '--allow-empty', '-m', 'pull request head']);
+      await runGitAsync(source, ['push', '-u', 'origin', 'feat/pr-head']);
+      await runGitAsync(source, ['checkout', 'main']);
+
+      const upstream = await service.fetchRemoteBranch(source, 'feat/pr-head');
+      const worktree = await service.createWorktree(
+        source,
+        upstream,
+        'upstream1',
+        'adopted-pr',
+      );
+      try {
+        await service.setWorktreeUpstream(worktree.worktreePath, worktree.branch, upstream);
+        expect(await readGitAsync(worktree.worktreePath, [
+          'rev-parse', '--abbrev-ref', '@{upstream}',
+        ])).toBe('origin/feat/pr-head');
+        expect(await readGitAsync(worktree.worktreePath, [
+          'config', '--worktree', '--get', 'push.default',
+        ])).toBe('upstream');
+
+        await runGitAsync(worktree.worktreePath, ['commit', '--allow-empty', '-m', 'adopted update']);
+        const adoptedHead = await readGitAsync(worktree.worktreePath, ['rev-parse', 'HEAD']);
+        await runGitAsync(worktree.worktreePath, ['push']);
+        expect(await readGitAsync(origin, ['rev-parse', 'refs/heads/feat/pr-head'])).toBe(adoptedHead);
+        await expect(readGitAsync(origin, [
+          'rev-parse', `refs/heads/${worktree.branch}`,
+        ])).rejects.toThrow();
+
+        await runGitAsync(source, ['checkout', 'feat/pr-head']);
+        await runGitAsync(source, ['fetch', 'origin', 'feat/pr-head']);
+        await runGitAsync(source, ['reset', '--hard', 'origin/feat/pr-head']);
+        await runGitAsync(source, ['commit', '--allow-empty', '-m', 'remote update']);
+        const remoteHead = await readGitAsync(source, ['rev-parse', 'HEAD']);
+        await runGitAsync(source, ['push', 'origin', 'feat/pr-head']);
+        await runGitAsync(source, ['checkout', 'main']);
+
+        await service.pull(worktree.worktreePath);
+        expect(await readGitAsync(worktree.worktreePath, ['rev-parse', 'HEAD'])).toBe(remoteHead);
+      } finally {
+        await service.removeWorktree(source, worktree.worktreePath);
+      }
+    } finally {
+      rmSync(origin, { recursive: true, force: true });
+      rmSync(source, { recursive: true, force: true });
+    }
+  });
+
+  it('strict non-forced removal preserves a worktree that became dirty', async () => {
+    const result = await service.createWorktree(repoA, 'main', 'dirty001', 'dirty');
+    writeFileSync(join(result.worktreePath, 'untracked.txt'), 'keep me');
+
+    await expect(service.removeWorktree(repoA, result.worktreePath, {
+      force: false,
+      bestEffort: false,
+    })).rejects.toBeInstanceOf(BadRequestException);
+    expect(existsSync(result.worktreePath)).toBe(true);
+
+    await service.removeWorktree(repoA, result.worktreePath);
+  });
+
+  it('safe removal preserves a clean worktree with an unpushed commit', async () => {
+    const result = await service.createWorktree(repoA, 'main', 'unpushed1', 'unpushed');
+    await runGitAsync(result.worktreePath, ['commit', '--allow-empty', '-m', 'not pushed']);
+
+    const removal = await service.removeWorktreeIfSafe(repoA, result.worktreePath, {
+      fallbackBase: 'main',
+    });
+
+    expect(removal).toEqual({ removed: false, reason: 'unpushed-after-archive' });
+    expect(existsSync(result.worktreePath)).toBe(true);
+    await service.removeWorktree(repoA, result.worktreePath);
+  });
+
+  it('safe removal deletes a clean worktree while holding the head ref lock', async () => {
+    const result = await service.createWorktree(repoA, 'main', 'safe0001', 'safe');
+
+    expect(await service.removeWorktreeIfSafe(repoA, result.worktreePath, {
+      fallbackBase: 'main',
+    })).toEqual({ removed: true });
+    expect(existsSync(result.worktreePath)).toBe(false);
+  });
+
+  it('reports a vanished worktree as a non-removal result', async () => {
+    const result = await service.createWorktree(repoA, 'main', 'vanished1', 'vanished');
+    rmSync(result.worktreePath, { recursive: true, force: true });
+    mkdirSync(result.worktreePath, { recursive: true });
+
+    await expect(service.removeWorktreeIfSafe(repoA, result.worktreePath, {
+      fallbackBase: 'main',
+    })).resolves.toEqual({ removed: false, reason: 'worktree-missing' });
+    expect(existsSync(result.worktreePath)).toBe(true);
+    rmSync(result.worktreePath, { recursive: true, force: true });
+    await runGitAsync(repoA, ['worktree', 'prune']);
+  });
+
   describe('Phase 1 — status / diff / stage / commit / push', () => {
     let repo: string;
 
@@ -630,6 +763,22 @@ describe('GitService', () => {
       }
     });
 
+    it('pushes a local worktree branch to a different PR source branch', async () => {
+      const bare = mkdtempSync(join(tmpdir(), 'nuncio-bare-pr-'));
+      try {
+        await runGitAsync(bare, ['init', '--bare']);
+        await runGitAsync(repo, ['remote', 'add', 'origin', bare]);
+
+        const result = await service.push(repo, 'main', { remoteBranch: 'feat/pr-head' });
+
+        expect(result).toEqual({ pushed: true, remoteBranch: 'feat/pr-head' });
+        expect(await readGitAsync(bare, ['rev-parse', 'refs/heads/feat/pr-head']))
+          .toBe(await readGitAsync(repo, ['rev-parse', 'main']));
+      } finally {
+        rmSync(bare, { recursive: true, force: true });
+      }
+    });
+
     it('force push uses --force-with-lease and succeeds after diverging history', async () => {
       const bare = mkdtempSync(join(tmpdir(), 'nuncio-bare-force-'));
       try {
@@ -693,6 +842,22 @@ describe('GitService', () => {
       await runGitAsync(repo, ['remote', 'add', 'origin', 'https://github.com/octo/nuncio']);
       const info = await service.remoteInfo(repo);
       expect(info).toEqual({ host: 'github.com', owner: 'octo', repo: 'nuncio' });
+    });
+
+    it('preserves nested GitLab namespaces for ssh and https origins', async () => {
+      await runGitAsync(repo, [
+        'remote', 'add', 'origin', 'git@gitlab.com:group/subgroup/nuncio.git',
+      ]);
+      expect(await service.remoteInfo(repo)).toEqual({
+        host: 'gitlab.com', owner: 'group/subgroup', repo: 'nuncio',
+      });
+
+      await runGitAsync(repo, [
+        'remote', 'set-url', 'origin', 'https://gitlab.com/group/subgroup/nuncio.git',
+      ]);
+      expect(await service.remoteInfo(repo)).toEqual({
+        host: 'gitlab.com', owner: 'group/subgroup', repo: 'nuncio',
+      });
     });
   });
 

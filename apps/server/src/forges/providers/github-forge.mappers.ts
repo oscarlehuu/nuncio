@@ -19,8 +19,8 @@ export interface GithubPullSummaryResponse {
   draft?: boolean;
   merged_at?: string | null;
   user?: { login?: string };
-  head?: { ref?: string };
-  base?: { ref?: string };
+  head?: { ref?: string; repo?: { full_name?: string } };
+  base?: { ref?: string; repo?: { full_name?: string } };
   html_url: string;
   updated_at?: string;
 }
@@ -139,6 +139,11 @@ export function mapGithubPullDetail(
     author: data.user?.login ?? '',
     draft: data.draft ?? false,
     sourceBranch: data.head?.ref ?? '',
+    sourceRepositoryMatchesTarget: Boolean(
+      data.head?.repo?.full_name &&
+      data.base?.repo?.full_name &&
+      data.head.repo.full_name.toLowerCase() === data.base.repo.full_name.toLowerCase(),
+    ),
     targetBranch: data.base?.ref ?? '',
     mergeable: mapGithubMergeable(data.mergeable_state),
     reviewDecision,
