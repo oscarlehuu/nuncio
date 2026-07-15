@@ -427,15 +427,19 @@ export class PiAgentProvider extends BaseAgentProvider {
     const maxBytes = Number.isInteger(configuredBudget) && configuredBudget >= 0
       ? Math.min(configuredBudget, EXTERNAL_MEMORIES_MAX_BYTES)
       : EXTERNAL_MEMORIES_DEFAULT_BYTES;
+    // A blank stored value must fall through like an unset one, matching
+    // how buildCodexEnv in the Codex provider treats NUNCIO_CODEX_HOME.
+    const claudeDirSetting = this.settings.resolve('NUNCIO_CLAUDE_CONFIG_DIR')?.trim();
+    const codexHomeSetting = this.settings.resolve('NUNCIO_CODEX_HOME')?.trim();
     return {
       mode: normalizeExternalMemoriesMode(this.settings.resolve('PI_EXTERNAL_MEMORIES')),
       maxBytes,
       roots: {
-        claudeDir: expandHome(this.settings.resolve('NUNCIO_CLAUDE_CONFIG_DIR') ?? '~/.claude'),
+        claudeDir: expandHome(claudeDirSetting || '~/.claude'),
         // Match buildCodexEnv in the Codex provider: an inherited CODEX_HOME
         // env points the app-server at a custom store, so read the same one.
         codexHome: expandHome(
-          this.settings.resolve('NUNCIO_CODEX_HOME') ?? process.env.CODEX_HOME ?? '~/.codex',
+          codexHomeSetting || process.env.CODEX_HOME?.trim() || '~/.codex',
         ),
       },
     };

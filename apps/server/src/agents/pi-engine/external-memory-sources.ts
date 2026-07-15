@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
-import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { expandHome } from '../providers/cli-path.helpers';
 
 interface ClaudeMemoryFile {
@@ -44,6 +45,32 @@ export function projectPathCandidates(projectPath: string): string[] {
   const markerIndex = normalized.indexOf(marker);
   if (markerIndex < 0) return [normalized];
   return [normalized, normalized.slice(0, markerIndex)];
+}
+
+/**
+ * Claude Code derives the memory slug from the git repository — worktrees and
+ * subdirectories share the main checkout's store. `--git-common-dir` points at
+ * the main checkout's .git from any of them; fail soft outside a repo.
+ */
+function gitRepositoryRoot(projectPath: string): string | null {
+  try {
+    const commonDir = execFileSync(
+      'git',
+      ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+      { cwd: projectPath, stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000 },
+    ).toString().trim();
+    if (!commonDir) return null;
+    return basename(commonDir) === '.git' ? dirname(commonDir) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Path-shape candidates plus the git-truthful repository root, most specific first. */
+function resolveProjectCandidates(projectPath: string): string[] {
+  const candidates = projectPathCandidates(projectPath);
+  const gitRoot = gitRepositoryRoot(candidates[0]!);
+  return gitRoot && !candidates.includes(gitRoot) ? [...candidates, gitRoot] : candidates;
 }
 
 /**
@@ -116,8 +143,12 @@ function containsPath(parent: string, child: string): boolean {
   return pathFromParent === '' || (!pathFromParent.startsWith('..') && !isAbsolute(pathFromParent));
 }
 
-export function codexGroupMatchesProject(group: CodexTaskGroup, projectPath: string): boolean {
-  return projectPathCandidates(projectPath).some((candidate) =>
+export function codexGroupMatchesProject(
+  group: CodexTaskGroup,
+  projectPath: string,
+  candidates = projectPathCandidates(projectPath),
+): boolean {
+  return candidates.some((candidate) =>
     group.appliesTo.some((appliesTo) => containsPath(candidate, appliesTo)));
 }
 
@@ -162,7 +193,7 @@ function safeContainedRead(directory: string, filename: string): string | null {
 export class ExternalMemorySources {
   loadClaude(projectPath: string, claudeDir: string): ClaudeMemorySource {
     try {
-      const candidates = projectPathCandidates(projectPath);
+      const candidates = resolveProjectCandidates(projectPath);
       const override = claudeAutoMemoryDirectory(candidates, claudeDir);
       const locations = override
         ? [override]
@@ -190,9 +221,10 @@ export class ExternalMemorySources {
     try {
       const memoryDir = join(codexHome, 'memories');
       const index = safeRead(join(memoryDir, 'MEMORY.md'));
+      const candidates = resolveProjectCandidates(projectPath);
       return {
         groups: index ? parseCodexMemoryIndex(index)
-          .filter((group) => codexGroupMatchesProject(group, projectPath)) : [],
+          .filter((group) => codexGroupMatchesProject(group, projectPath, candidates)) : [],
         hasSummary: existsSync(join(memoryDir, 'memory_summary.md')),
       };
     } catch {

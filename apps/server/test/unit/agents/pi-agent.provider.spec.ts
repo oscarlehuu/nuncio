@@ -443,9 +443,12 @@ describe('PiAgentProvider', () => {
     ].join('\n'));
     const created = sessions.create({ prompt: 'env home probe', provider: 'pi', projectPath });
     const originalResolve = settings.resolve.bind(settings);
-    settings.resolve = ((key: string) => key === 'PI_EXTERNAL_MEMORIES'
-      ? 'codex'
-      : originalResolve(key)) as SettingsService['resolve'];
+    settings.resolve = ((key: string) => {
+      if (key === 'PI_EXTERNAL_MEMORIES') return 'codex';
+      // A blank stored root must behave like unset and fall through to CODEX_HOME.
+      if (key === 'NUNCIO_CODEX_HOME') return '  ';
+      return originalResolve(key);
+    }) as SettingsService['resolve'];
     const originalEnvHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = codexHome;
 

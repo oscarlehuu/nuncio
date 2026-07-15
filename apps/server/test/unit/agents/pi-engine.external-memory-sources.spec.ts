@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -47,6 +48,32 @@ describe('external memory source paths', () => {
       expect(sources.readClaude(loaded, 'safe')).toBe('safe body');
       expect(sources.readClaude(loaded, 'unlinked')).toBeNull();
       expect(sources.readClaude(loaded, 'escape')).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves plain git worktrees and subdirectories to the repository-root store', () => {
+    // realpath so git's absolute output matches the slug we compute (/var vs /private/var).
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'nuncio-claude-git-')));
+    const repo = join(root, 'repo');
+    const worktree = join(root, 'linked-worktree');
+    mkdirSync(repo, { recursive: true });
+    const git = (args: string[], cwd: string) =>
+      execFileSync('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    git(['init', '-q'], repo);
+    git(['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-q', '-m', 'init'], repo);
+    git(['worktree', 'add', '-q', worktree], repo);
+    mkdirSync(join(repo, 'packages', 'web'), { recursive: true });
+    const memoryDir = join(root, 'projects', claudeProjectSlug(repo), 'memory');
+    mkdirSync(memoryDir, { recursive: true });
+    writeFileSync(join(memoryDir, 'MEMORY.md'), '- [Repo note](repo-note.md) — root store');
+    writeFileSync(join(memoryDir, 'repo-note.md'), 'root body');
+
+    try {
+      const sources = new ExternalMemorySources();
+      expect(sources.loadClaude(worktree, root).ids).toEqual(['repo-note']);
+      expect(sources.loadClaude(join(repo, 'packages', 'web'), root).ids).toEqual(['repo-note']);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
