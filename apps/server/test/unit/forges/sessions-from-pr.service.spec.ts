@@ -6,11 +6,13 @@ describe('POST /sessions/from-pr orchestration', () => {
   let createCalls: Array<Record<string, unknown>>;
   let forgeStateUpdates: Array<{ id: string; state: Record<string, unknown> }>;
   let fetchedHeads: Array<{ path: string; provider: string; number: number }>;
+  let fetchedBranches: Array<{ path: string; branch: string }>;
 
   function makeService(projects = [{ path }], sameRepository = true) {
     createCalls = [];
     forgeStateUpdates = [];
     fetchedHeads = [];
+    fetchedBranches = [];
     const provider = {
       id: 'github',
       getPullRequestDetail: async () => ({
@@ -30,6 +32,10 @@ describe('POST /sessions/from-pr orchestration', () => {
       fetchPullRequestHead: async (projectPath: string, providerId: string, number: number) => {
         fetchedHeads.push({ path: projectPath, provider: providerId, number });
         return 'refs/nuncio/pull-requests/github/42';
+      },
+      fetchRemoteBranch: async (projectPath: string, branch: string) => {
+        fetchedBranches.push({ path: projectPath, branch });
+        return `origin/${branch}`;
       },
     };
     const records = {
@@ -64,8 +70,10 @@ describe('POST /sessions/from-pr orchestration', () => {
       baseBranch: 'refs/nuncio/pull-requests/github/42',
       useWorktree: true,
       pushBranch: 'feat/fix-race',
+      upstreamBranch: 'origin/feat/fix-race',
     });
     expect(fetchedHeads).toEqual([{ path, provider: 'github', number: 42 }]);
+    expect(fetchedBranches).toEqual([{ path, branch: 'feat/fix-race' }]);
     expect(String(createCalls[0].prompt)).toContain('Fix the race');
     expect(String(createCalls[0].prompt)).toContain('Avoid duplicate dispatch.');
     expect(String(createCalls[0].prompt)).toContain('https://github.com/octo/nuncio/pull/42');

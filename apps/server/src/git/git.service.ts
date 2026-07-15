@@ -480,6 +480,45 @@ export class GitService {
     }
   }
 
+  async fetchRemoteBranch(projectPath: string, branch: string): Promise<string> {
+    const repoRoot = await this.resolveRepoRoot(projectPath);
+    const remoteBranch = branch.trim();
+    try {
+      await git(['check-ref-format', '--branch', remoteBranch], repoRoot);
+      await git([
+        'fetch',
+        '--force',
+        'origin',
+        `refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}`,
+      ], repoRoot);
+      return `origin/${remoteBranch}`;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new BadRequestException(`Failed to fetch source branch: ${message}`);
+    }
+  }
+
+  async setWorktreeUpstream(
+    worktreePath: string,
+    localBranch: string,
+    upstreamBranch: string,
+  ): Promise<void> {
+    const repoRoot = await this.resolveRepoRoot(worktreePath);
+    const remotePrefix = 'origin/';
+    const remoteBranch = upstreamBranch.startsWith(remotePrefix)
+      ? upstreamBranch.slice(remotePrefix.length)
+      : '';
+    try {
+      await git(['check-ref-format', '--branch', localBranch], repoRoot);
+      await git(['check-ref-format', '--branch', remoteBranch], repoRoot);
+      await git(['rev-parse', '--verify', `refs/remotes/${upstreamBranch}^{commit}`], repoRoot);
+      await git(['branch', '--set-upstream-to', upstreamBranch, localBranch], repoRoot);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new BadRequestException(`Failed to configure source branch upstream: ${message}`);
+    }
+  }
+
   private async resolveWorktreeBase(repoRoot: string, base: string): Promise<string> {
     const candidates = base.startsWith('refs/')
       ? [base]

@@ -320,6 +320,48 @@ describe('GitService', () => {
     }
   });
 
+  it('tracks an adopted source branch and pulls later remote updates', async () => {
+    const origin = mkdtempSync(join(tmpdir(), 'nuncio-upstream-origin-'));
+    const source = mkdtempSync(join(tmpdir(), 'nuncio-upstream-source-'));
+    try {
+      await runGitAsync(origin, ['init', '--bare']);
+      await initRepo(source);
+      await runGitAsync(source, ['remote', 'add', 'origin', origin]);
+      await runGitAsync(source, ['checkout', '-b', 'feat/pr-head']);
+      await runGitAsync(source, ['commit', '--allow-empty', '-m', 'pull request head']);
+      await runGitAsync(source, ['push', '-u', 'origin', 'feat/pr-head']);
+      await runGitAsync(source, ['checkout', 'main']);
+
+      const upstream = await service.fetchRemoteBranch(source, 'feat/pr-head');
+      const worktree = await service.createWorktree(
+        source,
+        upstream,
+        'upstream1',
+        'adopted-pr',
+      );
+      try {
+        await service.setWorktreeUpstream(worktree.worktreePath, worktree.branch, upstream);
+        expect(await readGitAsync(worktree.worktreePath, [
+          'rev-parse', '--abbrev-ref', '@{upstream}',
+        ])).toBe('origin/feat/pr-head');
+
+        await runGitAsync(source, ['checkout', 'feat/pr-head']);
+        await runGitAsync(source, ['commit', '--allow-empty', '-m', 'remote update']);
+        const remoteHead = await readGitAsync(source, ['rev-parse', 'HEAD']);
+        await runGitAsync(source, ['push', 'origin', 'feat/pr-head']);
+        await runGitAsync(source, ['checkout', 'main']);
+
+        await service.pull(worktree.worktreePath);
+        expect(await readGitAsync(worktree.worktreePath, ['rev-parse', 'HEAD'])).toBe(remoteHead);
+      } finally {
+        await service.removeWorktree(source, worktree.worktreePath);
+      }
+    } finally {
+      rmSync(origin, { recursive: true, force: true });
+      rmSync(source, { recursive: true, force: true });
+    }
+  });
+
   it('strict non-forced removal preserves a worktree that became dirty', async () => {
     const result = await service.createWorktree(repoA, 'main', 'dirty001', 'dirty');
     writeFileSync(join(result.worktreePath, 'untracked.txt'), 'keep me');

@@ -38,6 +38,7 @@ export abstract class BaseForgeProvider implements ForgeProvider {
   abstract isAvailable(): Promise<boolean>;
   abstract resolveAuth(): Promise<ForgeAuth | null>;
   abstract getCurrentUser(): Promise<ForgeUser>;
+  abstract canWriteRepository(repo: ForgeRepoRef, username: string): Promise<boolean>;
   abstract listRepositories(): Promise<ForgeRepository[]>;
   abstract createPullRequest(
     repo: ForgeRepoRef,

@@ -38,4 +38,33 @@ describe('SessionsRepository workspace field', () => {
     const created = sessions.create({ prompt: 'p', provider: 'cursor' });
     expect(created.workspace).toBeNull();
   });
+
+  it('falls back to the project after a removed worktree is cleared', () => {
+    const created = sessions.create({
+      prompt: 'merged worktree',
+      projectPath: '/projects/nuncio',
+      workspace: '/worktrees/session',
+      worktreePath: '/worktrees/session',
+      baseBranch: 'refs/nuncio/pull-requests/github/42',
+      branch: 'feat/pr-head',
+      runtimePolicy: {
+        filesystem: 'workspace-write',
+        network: 'disabled',
+        workspaceRoot: '/worktrees/session',
+      },
+    });
+
+    const updated = sessions.clearWorktreeMetadata(created.id);
+
+    expect(updated.workspace).toBe('/projects/nuncio');
+    expect(updated.projectPath).toBe('/projects/nuncio');
+    expect(updated.worktreePath).toBeNull();
+    expect(updated.baseBranch).toBeNull();
+    expect(updated.branch).toBeNull();
+    expect(updated.runtimePolicy).toEqual({
+      filesystem: 'workspace-write',
+      network: 'disabled',
+      workspaceRoot: '/projects/nuncio',
+    });
+  });
 });

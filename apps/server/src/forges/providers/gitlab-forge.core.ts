@@ -15,8 +15,13 @@ import type {
 } from '../forges.types';
 
 interface GitlabUserResponse {
+  id?: number;
   username: string;
   name?: string | null;
+}
+
+interface GitlabMemberResponse {
+  access_level?: number;
 }
 
 interface GitlabMergeRequestResponse {
@@ -66,6 +71,22 @@ export abstract class GitlabForgeCore extends BaseForgeProvider {
       headers: await this.authHeaders(),
     });
     return { login: data.username, name: data.name ?? null };
+  }
+
+  async canWriteRepository(repo: ForgeRepoRef, username: string): Promise<boolean> {
+    const users = await this.request<GitlabUserResponse[]>(
+      `${this.resolveApiBase()}/users?username=${encodeURIComponent(username)}`,
+      { headers: await this.authHeaders() },
+    );
+    const user = (users ?? []).find(
+      (candidate) => candidate.username.toLowerCase() === username.toLowerCase(),
+    );
+    if (!user || !Number.isInteger(user.id)) return false;
+    const member = await this.request<GitlabMemberResponse>(
+      `${this.projectUrl(repo)}/members/all/${user.id}`,
+      { headers: await this.authHeaders() },
+    );
+    return (member.access_level ?? 0) >= 30;
   }
 
   async createPullRequest(

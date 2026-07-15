@@ -19,6 +19,11 @@ interface GithubUserResponse {
   name?: string | null;
 }
 
+interface GithubCollaboratorPermissionResponse {
+  permission?: string;
+  role_name?: string;
+}
+
 interface GithubPullRequestResponse {
   number: number;
   html_url: string;
@@ -77,6 +82,15 @@ export abstract class GithubForgeCore extends BaseForgeProvider {
       headers: await this.authHeaders(),
     });
     return { login: data.login, name: data.name ?? null };
+  }
+
+  async canWriteRepository(repo: ForgeRepoRef, username: string): Promise<boolean> {
+    const data = await this.request<GithubCollaboratorPermissionResponse>(
+      `${this.repoUrl(repo)}/collaborators/${encodeURIComponent(username)}/permission`,
+      { headers: await this.authHeaders() },
+    );
+    const permission = (data.permission ?? data.role_name ?? '').toLowerCase();
+    return ['write', 'push', 'maintain', 'admin'].includes(permission);
   }
 
   async createPullRequest(

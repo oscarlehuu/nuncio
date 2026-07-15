@@ -300,6 +300,8 @@ export interface ForgeProvider {
   isAvailable(): Promise<boolean>;
   resolveAuth(): Promise<ForgeAuth | null>;
   getCurrentUser(): Promise<ForgeUser>;
+  /** Whether this forge user may write to the repository. */
+  canWriteRepository(repo: ForgeRepoRef, username: string): Promise<boolean>;
   capabilities(): ForgeCapabilities;
   /** Enumerate the authenticated user's repositories (forge-aware picker). */
   listRepositories(): Promise<ForgeRepository[]>;

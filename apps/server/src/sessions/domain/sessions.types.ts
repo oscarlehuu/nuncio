@@ -184,6 +184,8 @@ export interface CreateSessionDto {
   useWorktree?: boolean;
   /** Remote branch updated by the session push action when it differs from the local worktree branch. */
   pushBranch?: string;
+  /** Existing remote-tracking branch configured before an adopted session starts. */
+  upstreamBranch?: string;
   worktreePath?: string;
   branch?: string;
   providerThreadId?: string | null;

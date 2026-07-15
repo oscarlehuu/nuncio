@@ -11,6 +11,7 @@ import { CursorLocalModule } from '../../../src/cursor-local/cursor-local.module
 import { DatabaseModule } from '../../../src/db/database.module';
 import { DatabaseService } from '../../../src/db/database.service';
 import { GitModule } from '../../../src/git/git.module';
+import { GitService } from '../../../src/git/git.service';
 import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
@@ -46,6 +47,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
   let events: EventsRepository;
   let registry: AgentRegistry;
   let database: DatabaseService;
+  let git: GitService;
   let dataDir: string;
   let repoPath: string;
   let workspacesDir: string;
@@ -71,6 +73,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
     events = module.get(EventsRepository);
     registry = module.get(AgentRegistry);
     database = module.get(DatabaseService);
+    git = module.get(GitService);
   });
 
   afterAll(async () => {
@@ -511,6 +514,36 @@ describe('SessionsService lifecycle (phase 3)', () => {
       const last = after[after.length - 1];
       expect(last.type).toBe('status');
       expect(last.payload).toEqual({ status: 'IDLE' });
+    });
+
+    it('repairs stale worktree metadata before restoring an archived session', () => {
+      const missingWorktree = join(workspacesDir, 'removed-worktree');
+      const created = sessions.create({
+        prompt: 'Restore after merge cleanup',
+        provider: 'cursor',
+        projectPath: repoPath,
+        workspace: missingWorktree,
+        worktreePath: missingWorktree,
+        branch: 'feat/pr-head',
+        runtimePolicy: {
+          filesystem: 'workspace-write',
+          network: 'disabled',
+          workspaceRoot: missingWorktree,
+        },
+      });
+      sessions.updateStatus(created.id, 'RUNNING');
+      sessions.updateStatus(created.id, 'IDLE');
+      sessions.updateStatus(created.id, 'ARCHIVED');
+
+      const restored = service.restore(created.id);
+
+      expect(restored).toMatchObject({
+        status: 'IDLE',
+        workspace: repoPath,
+        worktreePath: null,
+        branch: null,
+      });
+      expect(restored.runtimePolicy?.workspaceRoot).toBe(repoPath);
     });
 
     it('rejects restore on a non-archived session', () => {
@@ -1175,6 +1208,37 @@ describe('SessionsService lifecycle (phase 3)', () => {
       expect(session.branch).toBe(`nuncio/${session.id}-fix-diff-review`);
 
       await waitForIdle(service, session.id);
+    });
+
+    it('configures an adopted source branch upstream before starting the session', async () => {
+      const original = git.setWorktreeUpstream.bind(git);
+      const calls: Array<[string, string, string]> = [];
+      git.setWorktreeUpstream = async (...args) => {
+        calls.push(args);
+      };
+      let worktreePath: string | null = null;
+      try {
+        const session = await service.create({
+          prompt: 'Continue pull request',
+          provider: 'cursor',
+          projectPath: repoPath,
+          baseBranch: 'main',
+          useWorktree: true,
+          pushBranch: 'feat/pr-head',
+          upstreamBranch: 'origin/feat/pr-head',
+        });
+        worktreePath = session.worktreePath;
+        expect(calls).toEqual([[
+          session.worktreePath!,
+          `nuncio/${session.id}-continue-pull-request`,
+          'origin/feat/pr-head',
+        ]]);
+        expect(session.branch).toBe('feat/pr-head');
+        await waitForIdle(service, session.id);
+      } finally {
+        git.setWorktreeUpstream = original;
+        if (worktreePath) await git.removeWorktree(repoPath, worktreePath);
+      }
     });
 
     it('does not persist a session when worktree creation fails', async () => {

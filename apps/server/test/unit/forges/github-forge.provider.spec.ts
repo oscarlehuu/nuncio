@@ -130,6 +130,24 @@ describe('GithubForgeProvider', () => {
     expect(headers.get('Accept')).toBe('application/vnd.github+json');
   });
 
+  it('trusts only repository write-level collaborator permissions', async () => {
+    process.env.GITHUB_TOKEN = 'ghp_test_token';
+    const { fetchOverride, calls } = makeFetchStub({ permission: 'push' });
+    provider.fetchOverride = fetchOverride;
+
+    await expect(
+      provider.canWriteRepository({ owner: 'octo', repo: 'nuncio' }, 'trusted reviewer'),
+    ).resolves.toBe(true);
+    expect(calls[0].url).toBe(
+      'https://api.github.com/repos/octo/nuncio/collaborators/trusted%20reviewer/permission',
+    );
+
+    provider.fetchOverride = makeFetchStub({ permission: 'read' }).fetchOverride;
+    await expect(
+      provider.canWriteRepository({ owner: 'octo', repo: 'nuncio' }, 'reader'),
+    ).resolves.toBe(false);
+  });
+
   it('capabilities reports listRepositories support', () => {
     expect(provider.capabilities().listRepositories).toBe(true);
   });

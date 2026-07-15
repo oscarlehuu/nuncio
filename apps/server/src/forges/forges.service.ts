@@ -19,6 +19,8 @@ export interface OpenPullRequestOptions {
   base?: string;
 }
 
+const AUTHOR_PERMISSION_TTL_MS = 60_000;
+
 /**
  * Session-facing facade for the forge layer: maps a session's branch + origin
  * remote onto a forge provider and opens / refreshes a pull request. Provider
@@ -27,6 +29,11 @@ export interface OpenPullRequestOptions {
  */
 @Injectable()
 export class ForgesService {
+  private readonly authorPermissionCache = new Map<
+    string,
+    { allowed: boolean; expiresAt: number }
+  >();
+
   constructor(
     private readonly registry: ForgeRegistry,
     private readonly git: GitService,
@@ -62,6 +69,7 @@ export class ForgesService {
       throw new BadRequestException(`Pull request worktrees are unsupported for ${provider.id}`);
     }
     const pullRequestHead = await this.git.fetchPullRequestHead(path, provider.id, number);
+    const upstreamBranch = await this.git.fetchRemoteBranch(path, pullRequest.sourceBranch);
     const prompt = [
       `Continue pull request #${number}: ${pullRequest.title}`,
       '',
@@ -78,6 +86,7 @@ export class ForgesService {
       baseBranch: pullRequestHead,
       useWorktree: true,
       pushBranch: pullRequest.sourceBranch,
+      upstreamBranch,
     });
     this.sessions.updateForgeState(session.id, {
       forgeProvider: provider.id,
@@ -212,6 +221,29 @@ export class ForgesService {
         };
       }),
     );
+  }
+
+  async canAuthorWriteRepository(
+    providerId: string,
+    repo: ForgeRepoRef,
+    author: string,
+  ): Promise<boolean> {
+    const key = `${providerId}:${repo.owner.toLowerCase()}/${repo.repo.toLowerCase()}:${author.toLowerCase()}`;
+    const cached = this.authorPermissionCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) return cached.allowed;
+
+    let allowed = false;
+    try {
+      const provider = await this.registry.getAvailable(providerId);
+      allowed = await provider.canWriteRepository(repo, author);
+    } catch {
+      // A missing or failed authorization proof must never reach the steer sink.
+    }
+    this.authorPermissionCache.set(key, {
+      allowed,
+      expiresAt: Date.now() + AUTHOR_PERMISSION_TTL_MS,
+    });
+    return allowed;
   }
 
   private withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {

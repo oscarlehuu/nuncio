@@ -41,10 +41,26 @@ export async function routeWebhookFeedback(
     return { created: false, reason: 'no-owning-session' } as const;
   }
 
-  if (!author) return { created: false, reason: 'missing-feedback-author' } as const;
+  if (!author) {
+    raiseUntrustedFeedbackAttention(deps.attention, provider, projectPath, event, 'missing-feedback-author');
+    return { created: false, reason: 'missing-feedback-author' } as const;
+  }
   // If identity cannot be established, steering could feed Nuncio's own output
-  // back into the same session. Dropping the automation is the safe outcome.
-  if (!login) return { created: false, reason: 'forge-login-unavailable' } as const;
+  // back into the same session. Attention preserves the feedback without executing it.
+  if (!login) {
+    raiseUntrustedFeedbackAttention(deps.attention, provider, projectPath, event, 'forge-login-unavailable');
+    return { created: false, reason: 'forge-login-unavailable' } as const;
+  }
+
+  const trustedAuthor = await deps.forges.canAuthorWriteRepository(
+    provider,
+    { owner: event.owner, repo: event.repo },
+    author,
+  );
+  if (!trustedAuthor) {
+    raiseUntrustedFeedbackAttention(deps.attention, provider, projectPath, event, 'untrusted-author');
+    return { created: false, reason: 'untrusted-feedback-author' } as const;
+  }
 
   await deps.sessions.steer(
     session.id,
@@ -54,6 +70,31 @@ export async function routeWebhookFeedback(
     `forge:${provider}:pr-feedback`,
   );
   return { created: false, steered: true, sessionId: session.id } as const;
+}
+
+function raiseUntrustedFeedbackAttention(
+  attention: AttentionService,
+  provider: string,
+  projectPath: string,
+  event: ForgePullRequestFeedbackWebhookEvent,
+  reason: string,
+): void {
+  attention.raise({
+    kind: 'pr-feedback',
+    subjectId: `${event.repoFullName}#${event.number}`,
+    projectPath,
+    title: `PR #${event.number} received feedback from an untrusted author`,
+    payload: {
+      provider,
+      repo: event.repoFullName,
+      number: event.number,
+      url: event.url,
+      author: event.author,
+      reviewState: event.reviewState ?? null,
+      comments: event.comments,
+      reason,
+    },
+  });
 }
 
 function buildFeedbackPrompt(event: ForgePullRequestFeedbackWebhookEvent): string {

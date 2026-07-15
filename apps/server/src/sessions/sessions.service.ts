@@ -338,6 +338,18 @@ export class SessionsService implements OnModuleDestroy {
         worktreePath = worktree.worktreePath;
         branch = input.pushBranch?.trim() || worktree.branch;
         baseBranch = worktree.baseBranch;
+        if (input.upstreamBranch?.trim()) {
+          try {
+            await this.git.setWorktreeUpstream(
+              worktreePath,
+              worktree.branch,
+              input.upstreamBranch.trim(),
+            );
+          } catch (error) {
+            await this.git.removeWorktree(projectPath, worktreePath);
+            throw error;
+          }
+        }
       } else {
         workspace = workspace ?? projectPath;
       }
@@ -1321,6 +1333,11 @@ export class SessionsService implements OnModuleDestroy {
     const session = this.requirePublicMutableSession(id);
     if (session.status !== 'ARCHIVED') {
       throw new BadRequestException(`Cannot restore session in status ${session.status}`);
+    }
+    // Filesystem removal and SQLite cannot share a transaction. Repairing a
+    // missing worktree here closes the crash window between those two writes.
+    if (session.worktreePath && session.projectPath && !existsSync(session.worktreePath)) {
+      this.sessions.clearWorktreeMetadata(id);
     }
     this.transition(id, 'IDLE');
     return this.requireSession(id);

@@ -91,6 +91,7 @@ export async function routePullRequestLifecycle(
       removal.reason ?? 'worktree-removal-failed',
     );
   }
+  deps.sessionRecords.clearWorktreeMetadata(session.id);
   return { created: false, closed: true, archived: true, sessionId: session.id } as const;
 }
 

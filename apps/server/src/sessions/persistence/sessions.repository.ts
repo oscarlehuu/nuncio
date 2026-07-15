@@ -384,6 +384,23 @@ export class SessionsRepository {
     return this.findById(id)!;
   }
 
+  clearWorktreeMetadata(id: string): SessionDto {
+    const current = this.findById(id);
+    if (!current) throw new Error(`Session ${id} not found`);
+    const runtimePolicy = current.runtimePolicy && current.projectPath
+      ? { ...current.runtimePolicy, workspaceRoot: current.projectPath }
+      : current.runtimePolicy;
+    this.database.db
+      .prepare(
+        `UPDATE sessions
+         SET workspace = project_path, base_branch = NULL, worktree_path = NULL,
+             branch = NULL, runtime_policy_json = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(stringifyAgentRuntimePolicy(runtimePolicy), Date.now(), id);
+    return this.findById(id)!;
+  }
+
   delete(id: string): void {
     const deleteProviderRequests = this.database.db.prepare(
       'DELETE FROM provider_requests WHERE session_id = ?',
