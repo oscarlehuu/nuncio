@@ -24,7 +24,7 @@ describe('external memory source paths', () => {
     ]);
   });
 
-  it('loads only indexed Claude files from the repository-root fallback and blocks symlink escapes', () => {
+  it('records actual Claude filenames from the repository-root fallback and blocks symlink escapes', () => {
     const root = mkdtempSync(join(tmpdir(), 'nuncio-claude-memory-'));
     const projectPath = '/repo/.claude/worktrees/feature-a';
     const memoryDir = join(root, 'projects', claudeProjectSlug('/repo'), 'memory');
@@ -33,7 +33,7 @@ describe('external memory source paths', () => {
       '- [Safe memory](safe.md) — use this',
       '- [Escape](escape.md) — must not escape',
     ].join('\n'));
-    writeFileSync(join(memoryDir, 'safe.md'), 'safe body');
+    writeFileSync(join(memoryDir, 'Safe.MD'), 'safe body');
     writeFileSync(join(memoryDir, 'unlinked.md'), 'not advertised');
     const outside = join(root, 'outside.md');
     writeFileSync(outside, 'outside body');
@@ -43,9 +43,10 @@ describe('external memory source paths', () => {
       const sources = new ExternalMemorySources();
       const loaded = sources.loadClaude(projectPath, root);
       expect(loaded.ids).toEqual(['safe', 'escape']);
-      expect(sources.readClaude(projectPath, root, 'safe')).toBe('safe body');
-      expect(sources.readClaude(projectPath, root, 'unlinked')).toBeNull();
-      expect(sources.readClaude(projectPath, root, 'escape')).toBeNull();
+      expect(loaded.files.get('safe')?.filename).toBe('Safe.MD');
+      expect(sources.readClaude(loaded, 'safe')).toBe('safe body');
+      expect(sources.readClaude(loaded, 'unlinked')).toBeNull();
+      expect(sources.readClaude(loaded, 'escape')).toBeNull();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -54,7 +55,7 @@ describe('external memory source paths', () => {
   it('fails soft when external stores do not exist', () => {
     const sources = new ExternalMemorySources();
     expect(sources.loadClaude('/repo', '/missing/claude')).toEqual({
-      indexContent: '', ids: [], locations: [],
+      indexContent: '', ids: [], locations: [], files: new Map(),
     });
     expect(sources.loadCodex('/repo', '/missing/codex')).toEqual({
       groups: [], hasSummary: false,
@@ -89,7 +90,11 @@ applies_to: cwd=/tmp/unrelated; reuse_rule=never elsewhere
     expect(groups[1]).toMatchObject({
       title: 'Cross checkout habits',
       scope: 'shared workflow',
-      appliesTo: ['/Users/me/other', '/Users/me/repo/.claude/worktrees/feature-a'],
+      appliesTo: [
+        '/Users/me/other',
+        '/Users/me/repo/.claude/worktrees/feature-a',
+        '/Users/me/other and /Users/me/repo/.claude/worktrees/feature-a',
+      ],
     });
     expect(groups[1]?.content).toContain('## User preferences');
   });
@@ -101,5 +106,15 @@ applies_to: cwd=/tmp/unrelated; reuse_rule=never elsewhere
     expect(codexGroupMatchesProject(repo!, '/Users/me/repo/packages/web')).toBe(false);
     expect(codexGroupMatchesProject(cross!, '/Users/me/repo')).toBe(true);
     expect(codexGroupMatchesProject(temp!, '/Users/me/repo')).toBe(false);
+  });
+
+  it('keeps an unsplit absolute applies_to path containing the word and', () => {
+    const [group] = parseCodexMemoryIndex(`# Task Group: Ampersand path
+scope: repository-specific
+applies_to: cwd=/Users/me/research and development/repo; reuse_rule=safe
+`);
+
+    expect(group?.appliesTo).toContain('/Users/me/research and development/repo');
+    expect(codexGroupMatchesProject(group!, '/Users/me/research and development/repo')).toBe(true);
   });
 });

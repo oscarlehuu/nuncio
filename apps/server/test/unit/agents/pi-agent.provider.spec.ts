@@ -460,13 +460,15 @@ describe('PiAgentProvider', () => {
         'scope: added after session creation',
         `applies_to: cwd=${projectPath}; reuse_rule=safe`,
       ].join('\n');
-      writeFileSync(join(memoryDir, 'MEMORY.md'), `${newSection}\n\n${oldSection}`);
+      const changedOldSection = oldSection.replace('Original content.', 'Mutated content.');
+      writeFileSync(join(memoryDir, 'MEMORY.md'), `${newSection}\n\n${changedOldSection}`);
       const newId = parseCodexMemoryIndex(newSection)[0]!.id;
 
       expect((await tool.execute?.('new', { source: 'codex', id: newId }))?.isError).toBe(true);
       const existing = await tool.execute?.('old', { source: 'codex', id: oldId });
       expect(existing?.isError).toBeUndefined();
       expect(existing?.content[0]?.text).toContain('Original content.');
+      expect(existing?.content[0]?.text).not.toContain('Mutated content.');
     } finally {
       settings.resolve = originalResolve as SettingsService['resolve'];
       rmSync(codexHome, { recursive: true, force: true });

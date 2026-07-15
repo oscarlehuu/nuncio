@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { byteLength, truncateHeadBytes } from '../../orchestration/byte-truncate';
+import { singleLineFactText } from './nuncio-context';
 import {
   ExternalMemorySources,
   type ClaudeMemorySource,
@@ -16,108 +17,142 @@ const CLAUDE_HEADER = '### Claude Code memories (this project)';
 const CODEX_HEADER = '### Codex CLI memories (this project)';
 const OMITTED = '_(more omitted)_';
 const FOOTER = 'Call `read_external_memory` with a source and id to read any indexed memory in full.';
+const SUMMARY_LINE = '- Global Codex memory summary  [id: summary]';
 
 export type ExternalMemoriesMode = 'off' | 'claude' | 'codex' | 'all';
 
 export interface ExternalMemoriesInput {
-  claude?: Pick<ClaudeMemorySource, 'indexContent'>;
+  claude?: ClaudeMemorySource;
   codex?: CodexMemorySource;
 }
 
-function singleLine(value: string): string {
-  return value.replace(/\s*[\r\n\u2028\u2029]+\s*/g, ' ').trim();
+export interface ExternalMemoriesBuildResult {
+  block: string;
+  claudeIds: string[];
+  codexIds: string[];
 }
 
-function render(
-  claudeLines: string[],
-  claudeOmitted: boolean,
-  codexLines: string[],
-  codexOmitted: boolean,
-  includeClaude: boolean,
-  includeCodex: boolean,
-): string {
+/** Authorization and parsed content stay fixed for the lifetime of one Pi session. */
+export interface ExternalMemoriesSnapshot extends ExternalMemoriesBuildResult {
+  claude?: ClaudeMemorySource;
+  codex?: CodexMemorySource;
+  codexContentById: Map<string, string>;
+  roots: ExternalMemoryRoots;
+}
+
+interface Candidate {
+  line: string;
+  ids: string[];
+}
+
+interface RenderSection {
+  lines: string[];
+  omitted: boolean;
+}
+
+function claudeLineIds(line: string, available: Map<string, string>): string[] {
+  const ids = [...line.matchAll(/\]\(([^)#]+)\.md(?:#[^)]+)?\)/gi)]
+    .map((match) => match[1] ?? '')
+    .filter((id) => id.length > 0 && !id.includes('/') && !id.includes('\\'))
+    .map((id) => available.get(id.toLowerCase()))
+    .filter((id): id is string => id !== undefined);
+  return [...new Set(ids)];
+}
+
+function render(input: { claude?: RenderSection; codex?: RenderSection }): string {
   const lines = [HEADER, '', NOTICE];
-  if (includeClaude) {
-    lines.push('', CLAUDE_HEADER, ...claudeLines);
-    if (claudeOmitted) lines.push(OMITTED);
+  if (input.claude) {
+    lines.push('', CLAUDE_HEADER, ...input.claude.lines);
+    if (input.claude.omitted) lines.push(OMITTED);
   }
-  if (includeCodex) {
-    lines.push('', CODEX_HEADER, ...codexLines);
-    if (codexOmitted) lines.push(OMITTED);
+  if (input.codex) {
+    lines.push('', CODEX_HEADER, ...input.codex.lines);
+    if (input.codex.omitted) lines.push(OMITTED);
   }
   lines.push('', FOOTER);
   return lines.join('\n');
+}
+
+function uniqueIds(candidates: Candidate[]): string[] {
+  return [...new Set(candidates.flatMap((candidate) => candidate.ids))];
 }
 
 /** Build deterministic informational context without splitting a UTF-8 line. */
 export function buildExternalMemoriesBlock(
   input: ExternalMemoriesInput,
   maxBytes = EXTERNAL_MEMORIES_DEFAULT_BYTES,
-): string {
+): ExternalMemoriesBuildResult {
   const requestedBudget = Number.isFinite(maxBytes) ? Math.floor(maxBytes) : 0;
   const budget = Math.min(Math.max(0, requestedBudget), EXTERNAL_MEMORIES_MAX_BYTES);
-  const claudeCandidates = input.claude?.indexContent
-    .split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean) ?? [];
-  const codexCandidates = input.codex?.groups.map((group) =>
-    `- ${singleLine(group.title)} — ${singleLine(group.scope)}  [id: ${group.id}]`) ?? [];
-  if (input.codex?.hasSummary) {
-    codexCandidates.unshift('- Global Codex memory summary  [id: summary]');
-  }
+  const availableClaudeIds = new Map(
+    input.claude?.ids.map((id) => [id.toLowerCase(), id]) ?? [],
+  );
+  const claudeCandidates: Candidate[] = input.claude?.indexContent
+    .split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean)
+    .map((line) => ({ line, ids: claudeLineIds(line, availableClaudeIds) })) ?? [];
+  const codexCandidates: Candidate[] = input.codex?.groups.map((group) => ({
+    line: `- ${singleLineFactText(group.title)} — ${singleLineFactText(group.scope)}  [id: ${group.id}]`,
+    ids: [group.id],
+  })) ?? [];
+  if (input.codex?.hasSummary) codexCandidates.unshift({ line: SUMMARY_LINE, ids: ['summary'] });
   const includeClaude = claudeCandidates.length > 0;
   const includeCodex = codexCandidates.length > 0;
-  if (!includeClaude && !includeCodex) return '';
+  if (!includeClaude && !includeCodex) return { block: '', claudeIds: [], codexIds: [] };
 
-  const selectedClaude: string[] = [];
-  const selectedCodex: string[] = [];
-  const baseline = render([], includeClaude, [], includeCodex, includeClaude, includeCodex);
-  if (byteLength(baseline) > budget) return '';
-
-  // Reserve Codex bullets first so a large Claude index cannot starve the other enabled store.
-  for (const candidate of codexCandidates) {
-    const nextCodex = [...selectedCodex, candidate];
-    const next = render(
-      selectedClaude,
-      includeClaude,
-      nextCodex,
-      nextCodex.length < codexCandidates.length,
-      includeClaude,
-      includeCodex,
-    );
-    if (byteLength(next) > budget) continue;
-    selectedCodex.push(candidate);
-  }
-  for (const candidate of claudeCandidates) {
-    const nextClaude = [...selectedClaude, candidate];
-    const next = render(
-      nextClaude,
-      nextClaude.length < claudeCandidates.length,
-      selectedCodex,
-      selectedCodex.length < codexCandidates.length,
-      includeClaude,
-      includeCodex,
-    );
-    if (byteLength(next) > budget) continue;
-    selectedClaude.push(candidate);
-  }
-  return render(
-    selectedClaude,
-    selectedClaude.length < claudeCandidates.length,
-    selectedCodex,
-    selectedCodex.length < codexCandidates.length,
-    includeClaude,
-    includeCodex,
+  const encoder = new TextEncoder();
+  const encodedBytes = (value: string) => encoder.encode(value).byteLength;
+  const skeletonLines = [HEADER, '', NOTICE];
+  if (includeClaude) skeletonLines.push('', CLAUDE_HEADER);
+  if (includeCodex) skeletonLines.push('', CODEX_HEADER);
+  skeletonLines.push('', FOOTER);
+  let runningBytes = skeletonLines.reduce((total, line) => total + encodedBytes(line), 0)
+    + skeletonLines.length - 1;
+  const markerCost = 1 + encodedBytes(OMITTED);
+  const lineCost = (candidate: Candidate) => 1 + encodedBytes(candidate.line);
+  const minimumCost = (candidates: Candidate[]) => Math.min(
+    markerCost,
+    candidates.reduce((total, candidate) => total + lineCost(candidate), 0),
   );
+  runningBytes += includeCodex ? minimumCost(codexCandidates) : 0;
+  runningBytes += includeClaude ? minimumCost(claudeCandidates) : 0;
+  if (runningBytes > budget) return { block: '', claudeIds: [], codexIds: [] };
+
+  const select = (candidates: Candidate[]): { selected: Candidate[]; omitted: boolean } => {
+    const allLinesCost = candidates.reduce((total, candidate) => total + lineCost(candidate), 0);
+    const reservedCost = Math.min(markerCost, allLinesCost);
+    const completeDelta = allLinesCost - reservedCost;
+    if (runningBytes + completeDelta <= budget) {
+      runningBytes += completeDelta;
+      return { selected: candidates, omitted: false };
+    }
+    const selected: Candidate[] = [];
+    let sectionBytes = markerCost;
+    for (let index = 0; index < candidates.length; index += 1) {
+      const omittedAfter = index + 1 < candidates.length;
+      const nextSectionBytes = sectionBytes + lineCost(candidates[index]!)
+        - (omittedAfter ? 0 : markerCost);
+      const incrementalBytes = nextSectionBytes - sectionBytes;
+      if (runningBytes + incrementalBytes > budget) break;
+      runningBytes += incrementalBytes;
+      sectionBytes = nextSectionBytes;
+      selected.push(candidates[index]!);
+    }
+    return { selected, omitted: selected.length < candidates.length };
+  };
+
+  // Codex is selected first so a large Claude index cannot starve the other enabled store.
+  const codex = includeCodex ? select(codexCandidates) : { selected: [], omitted: false };
+  const claude = includeClaude ? select(claudeCandidates) : { selected: [], omitted: false };
+  const block = render({
+    ...(includeClaude ? { claude: { lines: claude.selected.map((item) => item.line), omitted: claude.omitted } } : {}),
+    ...(includeCodex ? { codex: { lines: codex.selected.map((item) => item.line), omitted: codex.omitted } } : {}),
+  });
+  return { block, claudeIds: uniqueIds(claude.selected), codexIds: uniqueIds(codex.selected) };
 }
 
 export function normalizeExternalMemoriesMode(value: string | undefined): ExternalMemoriesMode {
   return value === 'off' || value === 'claude' || value === 'codex' || value === 'all'
-    ? value
-    : 'all';
-}
-
-function sourceEnabled(mode: ExternalMemoriesMode, source: 'claude-code' | 'codex'): boolean {
-  return mode === 'all' || (mode === 'claude' && source === 'claude-code')
-    || (mode === 'codex' && source === 'codex');
+    ? value : 'all';
 }
 
 @Injectable()
@@ -129,58 +164,32 @@ export class ExternalMemoriesService {
     mode: ExternalMemoriesMode,
     maxBytes: number,
     roots: ExternalMemoryRoots,
-  ): string {
-    if (!projectPath || mode === 'off') return '';
-    return buildExternalMemoriesBlock({
-      ...(mode === 'claude' || mode === 'all'
-        ? { claude: this.sources.loadClaude(projectPath, roots.claudeDir) } : {}),
-      ...(mode === 'codex' || mode === 'all'
-        ? { codex: this.sources.loadCodex(projectPath, roots.codexHome) } : {}),
-    }, maxBytes);
+  ): ExternalMemoriesSnapshot {
+    const claude = projectPath && (mode === 'claude' || mode === 'all')
+      ? this.sources.loadClaude(projectPath, roots.claudeDir) : undefined;
+    const codex = projectPath && (mode === 'codex' || mode === 'all')
+      ? this.sources.loadCodex(projectPath, roots.codexHome) : undefined;
+    const built = projectPath && mode !== 'off'
+      ? buildExternalMemoriesBlock({ claude, codex }, maxBytes)
+      : { block: '', claudeIds: [], codexIds: [] };
+    return {
+      ...built,
+      claude,
+      codex,
+      codexContentById: new Map(codex?.groups.map((group) => [group.id, group.content]) ?? []),
+      roots,
+    };
   }
 
-  availableIds(
-    projectPath: string | null,
-    mode: ExternalMemoriesMode,
-    source: 'claude-code' | 'codex',
-    roots: ExternalMemoryRoots,
-    maxBytes = EXTERNAL_MEMORIES_DEFAULT_BYTES,
-  ): string[] {
-    if (!projectPath || !sourceEnabled(mode, source)) return [];
-    const exposedBlock = this.buildForProject(projectPath, mode, maxBytes, roots);
-    return this.availableIdsFromBlock(projectPath, source, roots, exposedBlock);
-  }
-
-  availableIdsFromBlock(
-    projectPath: string,
-    source: 'claude-code' | 'codex',
-    roots: ExternalMemoryRoots,
-    exposedBlock: string,
-  ): string[] {
+  read(snapshot: ExternalMemoriesSnapshot, source: 'claude-code' | 'codex', id: string): string | null {
     if (source === 'claude-code') {
-      const available = new Set(this.sources.loadClaude(projectPath, roots.claudeDir).ids);
-      const exposedIds = [...exposedBlock.matchAll(/\]\(([^)#]+)\.md(?:#[^)]+)?\)/gi)]
-        .map((match) => match[1] ?? '')
-        .filter((id) => available.has(id));
-      return [...new Set(exposedIds)];
+      return snapshot.claudeIds.includes(id) && snapshot.claude
+        ? this.sources.readClaude(snapshot.claude, id) : null;
     }
-    const exposedIds = [...exposedBlock.matchAll(/\[id:\s*([^\]]+)\]/g)]
-      .map((match) => match[1]?.trim() ?? '')
-      .filter(Boolean);
-    return [...new Set(exposedIds)];
-  }
-
-  async read(
-    projectPath: string | null,
-    mode: ExternalMemoriesMode,
-    source: 'claude-code' | 'codex',
-    id: string,
-    roots: ExternalMemoryRoots,
-  ): Promise<string | null> {
-    if (!projectPath || !sourceEnabled(mode, source)) return null;
-    return source === 'claude-code'
-      ? this.sources.readClaude(projectPath, roots.claudeDir, id)
-      : this.sources.readCodex(projectPath, roots.codexHome, id);
+    if (!snapshot.codexIds.includes(id)) return null;
+    return id === 'summary'
+      ? this.sources.readCodexSummary(snapshot.roots.codexHome)
+      : snapshot.codexContentById.get(id) ?? null;
   }
 }
 

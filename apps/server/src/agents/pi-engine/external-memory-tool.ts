@@ -1,11 +1,9 @@
-import { byteLength, truncateHeadBytes } from '../../orchestration/byte-truncate';
 import { truncateExternalMemory } from './external-memories';
 
 export const EXTERNAL_MEMORY_TOOL_NAME = 'read_external_memory';
 export const EXTERNAL_MEMORY_READ_MAX_BYTES = 24576;
 
 const RESULT_TRUNCATED = '_(external memory truncated)_';
-const AVAILABLE_IDS_MAX_BYTES = 2048;
 
 export type ExternalMemorySourceId = 'claude-code' | 'codex';
 
@@ -47,12 +45,7 @@ function error(text: string) {
 }
 
 function unknownIdText(source: ExternalMemorySourceId, id: string, ids: string[]): string {
-  const prefix = `Unknown ${source} memory id "${id}". Available ids: `;
-  const list = ids.length > 0 ? ids.join(', ') : '(none)';
-  const available = byteLength(prefix) >= AVAILABLE_IDS_MAX_BYTES
-    ? ''
-    : truncateHeadBytes(list, AVAILABLE_IDS_MAX_BYTES - byteLength(prefix));
-  return `${prefix}${available}`;
+  return `Unknown ${source} memory id "${id}". Available ids: ${ids.join(', ') || '(none)'}`;
 }
 
 /** A session-bound, read-only view over ids advertised in the external-memory index. */

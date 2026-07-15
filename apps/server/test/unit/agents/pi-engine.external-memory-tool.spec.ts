@@ -30,14 +30,19 @@ describe('read_external_memory', () => {
     }
   });
 
-  it('returns a bounded available-id list for an unknown id', async () => {
-    const tool = buildExternalMemoryTool(deps as never) as ExternalMemoryTool;
+  it('returns the complete session-bound id list for an unknown id', async () => {
+    const ids = Array.from({ length: 400 }, (_, index) => `memory-${index}`);
+    const tool = buildExternalMemoryTool({
+      availableIds: () => ids,
+      read: async () => null,
+    }) as ExternalMemoryTool;
     const result = await tool.execute('call', { source: 'claude-code', id: 'missing' });
 
     expect(tool.name).toBe(EXTERNAL_MEMORY_TOOL_NAME);
     expect(result.isError).toBe(true);
-    expect(result.content[0]?.text).toContain('safe-one');
-    expect(result.content[0]?.text).toContain('safe-two');
+    expect(result.content[0]?.text).toBe(
+      `Unknown claude-code memory id "missing". Available ids: ${ids.join(', ')}`,
+    );
   });
 
   it('wraps with defineTool and truncates full reads without breaking UTF-8', async () => {

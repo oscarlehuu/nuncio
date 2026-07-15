@@ -175,6 +175,16 @@ describe('SettingsService', () => {
         /must be one of: auto, in_app, external/i,
       );
     });
+
+    it('rejects non-integer values for number settings', () => {
+      for (const value of ['12.5', '-1', '+1', '1e3', ' 12', '']) {
+        expect(() => service.set('PI_EXTERNAL_MEMORIES_MAX_BYTES', value)).toThrow(
+          /PI_EXTERNAL_MEMORIES_MAX_BYTES must be a non-negative integer/i,
+        );
+      }
+      service.set('PI_EXTERNAL_MEMORIES_MAX_BYTES', '0');
+      expect(service.resolve('PI_EXTERNAL_MEMORIES_MAX_BYTES')).toBe('0');
+    });
   });
 
   describe('clear (delete DB row, fallback to env/default)', () => {

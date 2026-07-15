@@ -1,17 +1,18 @@
 import { Injectable } from '@nestjs/common';
 import { createHash } from 'node:crypto';
-import {
-  existsSync,
-  readFileSync,
-  readdirSync,
-  realpathSync,
-} from 'node:fs';
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path';
+
+export interface ClaudeMemoryFile {
+  directory: string;
+  filename: string;
+}
 
 export interface ClaudeMemorySource {
   indexContent: string;
   ids: string[];
   locations: string[];
+  files: Map<string, ClaudeMemoryFile>;
 }
 
 export interface CodexTaskGroup {
@@ -44,11 +45,15 @@ export function projectPathCandidates(projectPath: string): string[] {
   return [normalized, normalized.slice(0, markerIndex)];
 }
 
+function normalizedAppliesTo(value: string): string {
+  return value.replace(/^cwd=/, '').trim().replace(/^[`'"]|[`'"]$/g, '');
+}
+
 function parseAppliesTo(line: string): string[] {
   const value = line.slice('applies_to:'.length).split(';', 1)[0]?.trim() ?? '';
-  return value
-    .split(/\s+and\s+/)
-    .map((entry) => entry.replace(/^cwd=/, '').trim().replace(/^[`'"]|[`'"]$/g, ''))
+  const split = value.split(/\s+and\s+/).map(normalizedAppliesTo);
+  const unsplit = normalizedAppliesTo(value);
+  return [...new Set([...split, ...(isAbsolute(unsplit) ? [unsplit] : [])])]
     .filter((entry) => isAbsolute(entry));
 }
 
@@ -89,17 +94,21 @@ function safeRead(path: string): string | null {
   }
 }
 
-function indexedClaudeIds(index: string, memoryDir: string): string[] {
+function indexedClaudeFiles(index: string, memoryDir: string): Map<string, ClaudeMemoryFile> {
   try {
-    const files = new Set(readdirSync(memoryDir)
-      .filter((name) => extname(name).toLowerCase() === '.md' && name !== 'MEMORY.md'));
-    const ids = [...index.matchAll(/\]\(([^)#]+\.md)(?:#[^)]+)?\)/gi)]
-      .map((match) => match[1] ?? '')
-      .filter((name) => basename(name) === name && files.has(name))
-      .map((name) => name.slice(0, -3));
-    return [...new Set(ids)];
+    const actualByLowercase = new Map(readdirSync(memoryDir)
+      .filter((name) => extname(name).toLowerCase() === '.md' && name !== 'MEMORY.md')
+      .map((name) => [name.toLowerCase(), name]));
+    const files = new Map<string, ClaudeMemoryFile>();
+    for (const match of index.matchAll(/\]\(([^)#]+\.md)(?:#[^)]+)?\)/gi)) {
+      const linkedName = match[1] ?? '';
+      const filename = actualByLowercase.get(linkedName.toLowerCase());
+      if (basename(linkedName) !== linkedName || !filename) continue;
+      files.set(linkedName.slice(0, -3), { directory: memoryDir, filename });
+    }
+    return files;
   } catch {
-    return [];
+    return new Map();
   }
 }
 
@@ -122,15 +131,20 @@ export class ExternalMemorySources {
         .map((candidate) => join(claudeDir, 'projects', claudeProjectSlug(candidate), 'memory'));
       const loaded = locations.flatMap((location) => {
         const index = safeRead(join(location, 'MEMORY.md'));
-        return index === null ? [] : [{ location, index, ids: indexedClaudeIds(index, location) }];
+        return index === null ? [] : [{ location, index, files: indexedClaudeFiles(index, location) }];
       });
+      const files = new Map<string, ClaudeMemoryFile>();
+      for (const entry of loaded) {
+        for (const [id, file] of entry.files) if (!files.has(id)) files.set(id, file);
+      }
       return {
         indexContent: loaded.map((entry) => entry.index).join('\n'),
-        ids: [...new Set(loaded.flatMap((entry) => entry.ids))],
+        ids: [...files.keys()],
         locations: loaded.map((entry) => entry.location),
+        files,
       };
     } catch {
-      return { indexContent: '', ids: [], locations: [] };
+      return { indexContent: '', ids: [], locations: [], files: new Map() };
     }
   }
 
@@ -148,19 +162,12 @@ export class ExternalMemorySources {
     }
   }
 
-  readClaude(projectPath: string, claudeDir: string, id: string): string | null {
-    const source = this.loadClaude(projectPath, claudeDir);
-    if (!source.ids.includes(id)) return null;
-    for (const location of source.locations) {
-      const content = safeContainedRead(location, `${id}.md`);
-      if (content !== null) return content;
-    }
-    return null;
+  readClaude(source: ClaudeMemorySource, id: string): string | null {
+    const file = source.files.get(id);
+    return file ? safeContainedRead(file.directory, file.filename) : null;
   }
 
-  readCodex(projectPath: string, codexHome: string, id: string): string | null {
-    const memoryDir = join(codexHome, 'memories');
-    if (id === 'summary') return safeContainedRead(memoryDir, 'memory_summary.md');
-    return this.loadCodex(projectPath, codexHome).groups.find((group) => group.id === id)?.content ?? null;
+  readCodexSummary(codexHome: string): string | null {
+    return safeContainedRead(join(codexHome, 'memories'), 'memory_summary.md');
   }
 }

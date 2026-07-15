@@ -43,6 +43,7 @@ import {
   ExternalMemoriesService,
   normalizeExternalMemoriesMode,
   type ExternalMemoriesMode,
+  type ExternalMemoriesSnapshot,
 } from '../pi-engine/external-memories';
 import { buildExternalMemoryTool, EXTERNAL_MEMORY_TOOL_NAME } from '../pi-engine/external-memory-tool';
 import type { ExternalMemoryRoots } from '../pi-engine/external-memory-sources';
@@ -462,14 +463,21 @@ export class PiAgentProvider extends BaseAgentProvider {
       ? ''
       : (this.nuncioContext?.buildForProject(projectPath, contextBudget, session?.originTaskId) ?? '');
     const externalConfig = this.resolveExternalMemoriesConfig();
-    const externalMemoryBlock = this.externalMemories?.buildForProject(
-      projectPath,
-      externalConfig.mode,
-      externalConfig.maxBytes,
-      externalConfig.roots,
-    ) ?? '';
+    const externalMemorySnapshot: ExternalMemoriesSnapshot =
+      this.externalMemories?.buildForProject(
+        projectPath,
+        externalConfig.mode,
+        externalConfig.maxBytes,
+        externalConfig.roots,
+      ) ?? {
+        block: '',
+        claudeIds: [],
+        codexIds: [],
+        codexContentById: new Map(),
+        roots: externalConfig.roots,
+      };
     const fullDiscovery = this.settings.resolve('PI_EXTENSION_DISCOVERY') === 'full';
-    const systemAppend = [context, externalMemoryBlock, runtimeInstructions]
+    const systemAppend = [context, externalMemorySnapshot.block, runtimeInstructions]
       .filter(Boolean).join('\n\n');
     const resourceLoader = new pi.DefaultResourceLoader({
       cwd: resolvedCwd,
@@ -482,7 +490,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       ...(systemAppend ? { appendSystemPrompt: [systemAppend] } : {}),
     });
     await resourceLoader.reload();
-    return { resourceLoader, settingsManager, externalMemoryBlock, externalConfig };
+    return { resourceLoader, settingsManager, externalMemorySnapshot };
   }
 
   private async createPiSession(
@@ -534,7 +542,6 @@ export class PiAgentProvider extends BaseAgentProvider {
         throw new Error(`Cannot resume Pi session: ${reason}`);
       }
     }
-    const projectPath = this.sessions.findById(sessionId)?.projectPath ?? null;
     const engineResources = policyOptions
       ? undefined
       : await this.createEngineResources(
@@ -544,26 +551,10 @@ export class PiAgentProvider extends BaseAgentProvider {
           context.cwd,
           runtimeInstructions,
         );
-    const externalConfig = engineResources?.externalConfig
-      ?? this.resolveExternalMemoriesConfig();
-    const externalMemoryBlock = engineResources?.externalMemoryBlock ?? '';
+    const externalMemorySnapshot = engineResources?.externalMemorySnapshot;
     const exposedExternalIds = {
-      'claude-code': projectPath && this.externalMemories
-        ? this.externalMemories.availableIdsFromBlock(
-            projectPath,
-            'claude-code',
-            externalConfig.roots,
-            externalMemoryBlock,
-          )
-        : [],
-      codex: projectPath && this.externalMemories
-        ? this.externalMemories.availableIdsFromBlock(
-            projectPath,
-            'codex',
-            externalConfig.roots,
-            externalMemoryBlock,
-          )
-        : [],
+      'claude-code': externalMemorySnapshot?.claudeIds ?? [],
+      codex: externalMemorySnapshot?.codexIds ?? [],
     };
     const runtimeCustomTools = buildPiRuntimeTools(
       runtimeTools,
@@ -574,13 +565,11 @@ export class PiAgentProvider extends BaseAgentProvider {
       buildAskUserQuestionTool(pi.defineTool as (tool: unknown) => unknown),
       buildExternalMemoryTool({
         availableIds: (source) => exposedExternalIds[source],
-        read: (source, id) => this.externalMemories?.read(
-          projectPath,
-          externalConfig.mode,
-          source,
-          id,
-          externalConfig.roots,
-        ) ?? Promise.resolve(null),
+        read: (source, id) => Promise.resolve(
+          externalMemorySnapshot && this.externalMemories
+            ? this.externalMemories.read(externalMemorySnapshot, source, id)
+            : null,
+        ),
       }, pi.defineTool as (tool: unknown) => unknown),
     ];
     const customTools = policyOptions

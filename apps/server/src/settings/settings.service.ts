@@ -163,6 +163,9 @@ export class SettingsService {
   }
 
   private validateOptionValue(def: SettingDefinition, value: string): void {
+    if (def.type === 'number' && !/^\d+$/.test(value)) {
+      throw new BadRequestException(`${def.key} must be a non-negative integer`);
+    }
     if (!def.options || value === '') return;
     const allowed = def.options.map((option) => option.value);
     if (!allowed.includes(value)) {
