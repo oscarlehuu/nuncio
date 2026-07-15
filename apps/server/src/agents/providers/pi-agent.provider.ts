@@ -423,7 +423,8 @@ export class PiAgentProvider extends BaseAgentProvider {
     roots: ExternalMemoryRoots;
   } {
     const configuredBudget = Number(this.settings.resolve('PI_EXTERNAL_MEMORIES_MAX_BYTES'));
-    const maxBytes = Number.isInteger(configuredBudget) && configuredBudget > 0
+    // Zero is a valid configured budget: it suppresses the index entirely.
+    const maxBytes = Number.isInteger(configuredBudget) && configuredBudget >= 0
       ? Math.min(configuredBudget, EXTERNAL_MEMORIES_MAX_BYTES)
       : EXTERNAL_MEMORIES_DEFAULT_BYTES;
     return {

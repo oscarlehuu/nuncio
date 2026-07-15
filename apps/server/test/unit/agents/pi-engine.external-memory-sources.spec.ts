@@ -93,10 +93,19 @@ applies_to: cwd=/tmp/unrelated; reuse_rule=never elsewhere
       appliesTo: [
         '/Users/me/other',
         '/Users/me/repo/.claude/worktrees/feature-a',
-        '/Users/me/other and /Users/me/repo/.claude/worktrees/feature-a',
       ],
     });
     expect(groups[1]?.content).toContain('## User preferences');
+  });
+
+  it('keeps a single path containing " and " whole instead of granting its split prefix', () => {
+    const [group] = parseCodexMemoryIndex(
+      '# Task Group: Mixed dir\nscope: naming\napplies_to: cwd=/Users/me/research and development/repo; reuse_rule=safe\n',
+    );
+
+    expect(group?.appliesTo).toEqual(['/Users/me/research and development/repo']);
+    expect(codexGroupMatchesProject(group!, '/Users/me/research and development/repo')).toBe(true);
+    expect(codexGroupMatchesProject(group!, '/Users/me/research')).toBe(false);
   });
 
   it('matches equal and descendant applies_to paths without inheriting ancestor scopes', () => {

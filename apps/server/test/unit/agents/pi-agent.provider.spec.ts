@@ -404,6 +404,34 @@ describe('PiAgentProvider', () => {
     }
   });
 
+  it('honors a zero index budget by suppressing the external-memory index', async () => {
+    const projectPath = `/tmp/nuncio-external-zero-${Date.now()}`;
+    const codexHome = mkdtempSync(join(tmpdir(), 'nuncio-codex-memory-'));
+    mkdirSync(join(codexHome, 'memories'));
+    writeFileSync(join(codexHome, 'memories', 'MEMORY.md'), [
+      '# Task Group: Engine memory work',
+      'scope: external memory implementation',
+      `applies_to: cwd=${projectPath}; reuse_rule=safe`,
+    ].join('\n'));
+    const created = sessions.create({ prompt: 'zero budget probe', provider: 'pi', projectPath });
+    const originalResolve = settings.resolve.bind(settings);
+    settings.resolve = ((key: string) => {
+      if (key === 'PI_EXTERNAL_MEMORIES') return 'codex';
+      if (key === 'PI_EXTERNAL_MEMORIES_MAX_BYTES') return '0';
+      if (key === 'NUNCIO_CODEX_HOME') return codexHome;
+      return originalResolve(key);
+    }) as SettingsService['resolve'];
+
+    try {
+      await provider.run(created.id, created.prompt, { emit: () => {} });
+      const appended = (lastLoaderOptions?.appendSystemPrompt as string[] | undefined)?.[0] ?? '';
+      expect(appended).not.toContain('## External agent memories');
+    } finally {
+      settings.resolve = originalResolve as SettingsService['resolve'];
+      rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
+
   it('omits external memories when the Nuncio Engine setting is off', async () => {
     const originalResolve = settings.resolve.bind(settings);
     settings.resolve = ((key: string) => key === 'PI_EXTERNAL_MEMORIES'

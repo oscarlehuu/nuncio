@@ -5,7 +5,7 @@ export const EXTERNAL_MEMORY_READ_MAX_BYTES = 24576;
 
 const RESULT_TRUNCATED = '_(external memory truncated)_';
 
-export type ExternalMemorySourceId = 'claude-code' | 'codex';
+type ExternalMemorySourceId = 'claude-code' | 'codex';
 
 export interface ExternalMemoryToolDeps {
   availableIds(source: ExternalMemorySourceId): string[];

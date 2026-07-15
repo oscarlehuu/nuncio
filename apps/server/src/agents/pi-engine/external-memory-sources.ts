@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path';
 
-export interface ClaudeMemoryFile {
+interface ClaudeMemoryFile {
   directory: string;
   filename: string;
 }
@@ -51,10 +51,15 @@ function normalizedAppliesTo(value: string): string {
 
 function parseAppliesTo(line: string): string[] {
   const value = line.slice('applies_to:'.length).split(';', 1)[0]?.trim() ?? '';
-  const split = value.split(/\s+and\s+/).map(normalizedAppliesTo);
-  const unsplit = normalizedAppliesTo(value);
-  return [...new Set([...split, ...(isAbsolute(unsplit) ? [unsplit] : [])])]
-    .filter((entry) => isAbsolute(entry));
+  const split = value.split(/\s+and\s+/).map(normalizedAppliesTo).filter(Boolean);
+  // " and " is ambiguous: separator between paths, or part of one path name.
+  // Trust the split only when every piece is absolute; otherwise a split
+  // prefix of a single path would grant an unrelated sibling scope.
+  if (split.length > 1 && split.every((entry) => isAbsolute(entry))) {
+    return [...new Set(split)];
+  }
+  const whole = normalizedAppliesTo(value);
+  return isAbsolute(whole) ? [whole] : split.filter((entry) => isAbsolute(entry));
 }
 
 export function parseCodexMemoryIndex(content: string): CodexTaskGroup[] {
