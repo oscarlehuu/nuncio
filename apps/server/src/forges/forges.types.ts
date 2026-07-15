@@ -102,6 +102,8 @@ export interface ForgePullRequestDetail extends ForgePullRequest {
   author: string;
   draft: boolean;
   sourceBranch: string;
+  /** True only when the PR head is in the same repository as the target. */
+  sourceRepositoryMatchesTarget?: boolean;
   targetBranch: string;
   mergeable: ForgeMergeableState;
   reviewDecision: ForgeReviewDecision | null;
@@ -229,20 +231,68 @@ export interface CreateIssueOptions {
   labels?: string[];
 }
 
-export interface ForgeWebhookEvent {
+interface ForgeWebhookEventBase {
   provider: string;
   deliveryId: string;
-  kind: 'issue' | 'pull_request';
-  action: string;
   owner: string;
   repo: string;
   repoFullName: string;
   defaultBranch: string;
+  /** Retained on every event because scheduler webhook filters match labels generically. */
+  labels: string[];
+}
+
+export interface ForgeIssueWebhookEvent extends ForgeWebhookEventBase {
+  kind: 'issue';
+  action: string;
   number: number;
   title: string;
   body: string;
-  labels: string[];
 }
+
+export interface ForgePullRequestWebhookEvent extends ForgeWebhookEventBase {
+  kind: 'pull_request';
+  action: string;
+  number: number;
+  title: string;
+  body: string;
+  merged?: boolean;
+  url?: string;
+}
+
+export type ForgeReviewState = 'approved' | 'changes_requested' | 'commented';
+
+export interface ForgeFeedbackComment {
+  body: string;
+  path?: string;
+  line?: number;
+}
+
+export interface ForgePullRequestFeedbackWebhookEvent extends ForgeWebhookEventBase {
+  kind: 'pull_request_feedback';
+  action: string;
+  number: number;
+  author: string;
+  reviewState?: ForgeReviewState;
+  comments: ForgeFeedbackComment[];
+  url: string;
+}
+
+export interface ForgeCiFailureWebhookEvent extends ForgeWebhookEventBase {
+  kind: 'ci_failure';
+  action: 'failed';
+  number: number;
+  runId?: number;
+  jobId?: number;
+  jobName: string;
+  url: string;
+}
+
+export type ForgeWebhookEvent =
+  | ForgeIssueWebhookEvent
+  | ForgePullRequestWebhookEvent
+  | ForgePullRequestFeedbackWebhookEvent
+  | ForgeCiFailureWebhookEvent;
 
 export interface ForgeProvider {
   readonly id: string;

@@ -182,6 +182,8 @@ export interface CreateSessionDto {
   projectPath?: string;
   baseBranch?: string;
   useWorktree?: boolean;
+  /** Remote branch updated by the session push action when it differs from the local worktree branch. */
+  pushBranch?: string;
   worktreePath?: string;
   branch?: string;
   providerThreadId?: string | null;

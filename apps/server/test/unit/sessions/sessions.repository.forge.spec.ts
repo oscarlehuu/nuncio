@@ -1,15 +1,12 @@
-import { Test, TestingModule } from '@nestjs/testing';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Database } from 'bun:sqlite';
-import { DatabaseModule } from '../../../src/db/database.module';
 import { DatabaseService } from '../../../src/db/database.service';
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
-import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
 
 describe('SessionsRepository — forge state', () => {
-  let module: TestingModule;
+  let database: DatabaseService;
   let repo: SessionsRepository;
   let dataDir: string;
 
@@ -17,15 +14,12 @@ describe('SessionsRepository — forge state', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-sessions-forge-'));
     process.env.NUNCIO_DATA_DIR = dataDir;
 
-    module = await Test.createTestingModule({
-      imports: [DatabaseModule, SessionsPersistenceModule],
-    }).compile();
-
-    repo = module.get(SessionsRepository);
+    database = new DatabaseService();
+    repo = new SessionsRepository(database);
   });
 
   afterAll(async () => {
-    await module.close();
+    database.onModuleDestroy();
     rmSync(dataDir, { recursive: true, force: true });
     delete process.env.NUNCIO_DATA_DIR;
   });
@@ -68,6 +62,29 @@ describe('SessionsRepository — forge state', () => {
     });
     expect(after.forgeStatus).toBe('opening');
     expect(after.pullRequestUrl).toBe('https://github.com/octo/nuncio/pull/5');
+  });
+
+  it('finds the owning session by project path and pull-request number', () => {
+    const owner = repo.create({ prompt: 'owner', projectPath: '/projects/nuncio' });
+    const collision = repo.create({ prompt: 'other repo', projectPath: '/projects/other' });
+    repo.updateForgeState(owner.id, { pullRequestNumber: 17, forgeProvider: 'github' });
+    repo.updateForgeState(collision.id, { pullRequestNumber: 17, forgeProvider: 'github' });
+
+    expect(repo.findByProjectPullRequest('/projects/nuncio', 17)?.id).toBe(owner.id);
+    expect(repo.findByProjectPullRequest('/projects/missing', 17)).toBeNull();
+  });
+
+  it('includes an archived owner only when lifecycle routing requests it', () => {
+    const owner = repo.create({ prompt: 'archived owner', projectPath: '/projects/nuncio' });
+    repo.updateForgeState(owner.id, { pullRequestNumber: 18, forgeProvider: 'github' });
+    repo.updateStatus(owner.id, 'RUNNING');
+    repo.updateStatus(owner.id, 'IDLE');
+    repo.updateStatus(owner.id, 'ARCHIVED');
+
+    expect(repo.findByProjectPullRequest('/projects/nuncio', 18)).toBeNull();
+    expect(
+      repo.findByProjectPullRequest('/projects/nuncio', 18, { includeArchived: true })?.id,
+    ).toBe(owner.id);
   });
 });
 

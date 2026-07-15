@@ -15,6 +15,7 @@ export type AttentionKind =
   | 'crew-blocked'
   | 'zombie-session'
   | 'pr-review'
+  | 'pr-feedback'
   | 'dispatcher-proposal'
   | 'anomaly'
   | 'session-empty-diff'
@@ -39,6 +40,7 @@ export const SEVERITY_BY_KIND: Readonly<Record<AttentionKind, number>> = {
   'crew-blocked': 4,
   'zombie-session': 3,
   'pr-review': 2,
+  'pr-feedback': 2,
   'dispatcher-proposal': 2,
   anomaly: 1,
   'session-empty-diff': 1,

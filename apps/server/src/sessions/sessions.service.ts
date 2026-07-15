@@ -336,7 +336,7 @@ export class SessionsService implements OnModuleDestroy {
         const slug = input.prompt.trim().split('\n')[0] ?? 'task';
         const worktree = await this.git.createWorktree(projectPath, baseBranch, id, slug);
         worktreePath = worktree.worktreePath;
-        branch = worktree.branch;
+        branch = input.pushBranch?.trim() || worktree.branch;
         baseBranch = worktree.baseBranch;
       } else {
         workspace = workspace ?? projectPath;

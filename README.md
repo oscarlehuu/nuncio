@@ -27,6 +27,7 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 - **Dispatcher proposals** — every evening, Nuncio drafts tomorrow's plan from durable attention, verify, task, loop, and PR facts as a dispatcher proposal; approve it in one tap to create queued tasks idempotently.
 - **Home cockpit** — `/` is now the latest digest entry point and attention queue only. Fleet health stays available as a data layer for future project pages, while **Workbench** remains the multi-session grid at `/grid`; the new-session composer lives at `/new`.
 - **Forge-aware project picker** — browse your GitHub/GitLab repos straight from the project picker (via your existing CLI credentials) and clone one directly into `NUNCIO_CLONE_DIR`; public repos clone anonymously first, while private clones inject a one-shot credential header for that single `git clone` that never persists into the repo
+- **Forge feedback loop** — adopt an existing same-repository pull request into an isolated session with `POST /api/sessions/from-pr`; Nuncio checks out the provider's exact PR head and sends session pushes back to its source branch. Fork PR adoption fails closed so a push can never target the base repository by mistake. Signed GitHub/GitLab webhooks route review feedback and failed CI to that repo + PR's owning session. Nuncio ignores feedback from its own connected forge login, raises `pr-feedback` Attention when no owner exists, and only archives/removes a merged worktree when its session is IDLE, clean, and has no unpushed commits. Auto-steer and merge cleanup default on; configure `forges.autoSteer` / `forges.autoCloseOnMerge` or the `NUNCIO_FORGES_AUTO_STEER` / `NUNCIO_FORGES_AUTO_CLOSE_ON_MERGE` env fallbacks.
 - **Pause / archive / restore / delete** — suspend a running session, retire it to the Archived tab, restore it back to IDLE, or permanently delete it; a session FSM enforces valid transitions and a confirm dialog guards deletes
 - **Real-time + replay** — WebSocket relay (subscribe/steer on one duplex browser connection per complete relay URL, multiplexed session channels, gap-free resume via the event-log cursor — see [docs/ws-relay-contract.md](docs/ws-relay-contract.md)) plus the SSE stream and cursor replay endpoints for API consumers; each logical output segment commits and fans out its first delta immediately, later deltas coalesce in bounded bursts, and the web renders every received burst without a typewriter backlog. The web opens the relay after one microtask instead of waiting on REST, while per-consumer `seq` replay, late-bootstrap dedupe, half-open detection, and bounded slow-link recovery keep long answers exact
 - **Mobile-first PWA** — installable on iPhone via Tailscale HTTPS; standalone dark UI, safe-area aware
@@ -307,6 +308,7 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 | GET | `/api/relay/health` | Probe `{ lan, tailnet, funnel }`; each path returns `status` (`up\|down\|unknown`), `latencyMs`, `probedAt`, and an optional `reason`. LAN and tailnet latency use their health URLs; Funnel reports read-only CLI configuration health because an ambiguous same-host fetch cannot prove public reachability. |
 | GET | `/api/sessions` | List sessions (`?includeArchived=1`) |
 | POST | `/api/sessions` | Create session `{ "prompt": "...", "provider?": "pi\|codex\|cursor\|claude", "model?": "...", "attachments?": [{ "kind": "image", "mimeType": "image/png", "data": "base64" }], "projectPath?": "/abs/repo", "useWorktree?": true, "baseBranch?": "main" }`; `projectPath` without `useWorktree` runs in the selected repo and records `baseBranch` as the selected branch, while `useWorktree: true` creates a generated `nuncio/<id>-<slug>` worktree from `baseBranch` |
+| POST | `/api/sessions/from-pr` | Adopt an existing GitHub PR or GitLab MR `{ "path": "/abs/repo", "number": 123 }` into a new worktree session based on its source branch; returns `{ "sessionId": "..." }` |
 | POST | `/api/sessions/handoff` | Import a Cursor IDE/CLI chat `{ "cursorChatId": "...", "workspace": "/abs/path", "title?": "..." }` or Pi CLI session `{ "piSessionPath": "/abs/session.jsonl", "workspace": "/abs/path", "title?": "..." }` → `IDLE` session with transcript hydrated |
 | GET | `/api/cursor/local-sessions?workspace=` | List in-progress Cursor chats on this Mac for the handoff picker |
 | GET | `/api/pi/local-sessions?workspace=` | List local Pi CLI sessions for a workspace using the Pi SDK session store |
@@ -437,8 +439,8 @@ Phase plans and milestones: [plans/260626-nuncio-roadmap/](plans/260626-nuncio-r
 | 3 | Steer, pause, model picker | Done |
 | — | Agent-provider abstraction + Pi/Codex/Cursor providers | Done |
 | — | Provider-neutral Quality Crew workspace harness | Implemented and verified for the `dev` lane |
-| 4 | Git workspace, branch, PR | Workspace support partially shipped; PR/cleanup planned |
-| 5 | Web Push + webhooks | Planned |
+| 4 | Git workspace, branch, PR | Workspace, PR adoption, feedback routing, and guarded merge cleanup shipped |
+| 5 | Web Push + webhooks | Push and forge webhook automation shipped |
 
 ## Contributing
 

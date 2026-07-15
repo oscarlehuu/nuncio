@@ -184,7 +184,21 @@ describe('GitSessionController', () => {
     const { controller, git } = controllerFor(makeSession({ branch: null }));
     await controller.push('s1', { force: true });
     expect(git.status.calls).toEqual([[gitDir]]);
-    expect(git.push.calls).toEqual([[gitDir, 'nuncio/s1-slug', { force: true }]]);
+    expect(git.push.calls).toEqual([[
+      gitDir,
+      'nuncio/s1-slug',
+      { force: true, remoteBranch: 'nuncio/s1-slug' },
+    ]]);
+  });
+
+  it('pushes an adopted PR worktree branch back to the PR source branch', async () => {
+    const { controller, git } = controllerFor(makeSession({ branch: 'feat/pr-head' }));
+    await controller.push('s1', {});
+    expect(git.push.calls).toEqual([[
+      gitDir,
+      'nuncio/s1-slug',
+      { force: false, remoteBranch: 'feat/pr-head' },
+    ]]);
   });
 
   it('push rejects sessions without a pushable branch', async () => {

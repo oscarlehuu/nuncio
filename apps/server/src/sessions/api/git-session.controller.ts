@@ -121,11 +121,14 @@ export class GitSessionController {
       throw new BadRequestException('Session has no git working directory');
     }
 
-    const branch = session.branch ?? (await this.git.status(path)).branch;
-    if (!branch || branch === 'HEAD') {
+    const localBranch = (await this.git.status(path)).branch;
+    if (!localBranch || localBranch === 'HEAD') {
       throw new BadRequestException('Session has no pushable branch');
     }
-    return this.git.push(path, branch, { force: body?.force === true });
+    return this.git.push(path, localBranch, {
+      force: body?.force === true,
+      remoteBranch: session.branch ?? localBranch,
+    });
   }
 
   private requireSessionGitDir(id: string): string {

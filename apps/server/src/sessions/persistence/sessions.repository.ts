@@ -136,6 +136,24 @@ export class SessionsRepository {
     return row ? toDto(row) : null;
   }
 
+  findByProjectPullRequest(
+    projectPath: string,
+    pullRequestNumber: number,
+    options: { includeArchived?: boolean } = {},
+  ): SessionDto | null {
+    const archivedFilter = options.includeArchived ? '' : "AND status != 'ARCHIVED'";
+    const row = this.database.db
+      .prepare<SessionRow, [string, number]>(
+        `SELECT * FROM sessions
+         WHERE project_path = ? AND pull_request_number = ?
+           ${archivedFilter} AND verify_owner = 'session'
+         ORDER BY updated_at DESC, rowid DESC
+         LIMIT 1`,
+      )
+      .get(projectPath, pullRequestNumber);
+    return row ? toDto(row) : null;
+  }
+
   /** Direct tree children of a session, oldest first (insertion order on a created_at tie). */
   childrenOf(parentSessionId: string): SessionDto[] {
     const rows = this.database.db

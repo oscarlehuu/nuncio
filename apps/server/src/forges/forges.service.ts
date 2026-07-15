@@ -1,6 +1,7 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { GitService } from '../git/git.service';
 import { SessionsRepository } from '../sessions/persistence/sessions.repository';
+import { SessionsService } from '../sessions/sessions.service';
 import { ForgeRegistry, providerIdForHost } from './forges.registry';
 import type {
   ForgeCheck,
@@ -30,7 +31,63 @@ export class ForgesService {
     private readonly registry: ForgeRegistry,
     private readonly git: GitService,
     private readonly sessions: SessionsRepository,
+    @Optional() private readonly sessionService?: SessionsService,
   ) {}
+
+  async createSessionFromPullRequest(
+    rawPath: string,
+    number: number,
+  ): Promise<{ sessionId: string }> {
+    const path = rawPath?.trim();
+    if (!path) throw new BadRequestException('path is required');
+    if (!Number.isInteger(number) || number <= 0) {
+      throw new BadRequestException('number must be a positive integer');
+    }
+    const projects = await this.git.listProjects();
+    if (!projects.some((project) => project.path === path)) {
+      throw new NotFoundException(`Project ${path} not found`);
+    }
+    if (!this.sessionService) throw new BadRequestException('Session creation is unavailable');
+
+    const remote = await this.git.remoteInfo(path);
+    const provider = await this.registry.getAvailable(this.providerIdForHost(remote.host));
+    const pullRequest = await provider.getPullRequestDetail(this.repoRef(remote), number);
+    if (!pullRequest.sourceBranch?.trim()) {
+      throw new BadRequestException(`Pull request #${number} has no source branch`);
+    }
+    if (pullRequest.sourceRepositoryMatchesTarget !== true) {
+      throw new BadRequestException('Pull requests from fork repositories cannot be adopted safely');
+    }
+    if (provider.id !== 'github' && provider.id !== 'gitlab') {
+      throw new BadRequestException(`Pull request worktrees are unsupported for ${provider.id}`);
+    }
+    const pullRequestHead = await this.git.fetchPullRequestHead(path, provider.id, number);
+    const prompt = [
+      `Continue pull request #${number}: ${pullRequest.title}`,
+      '',
+      pullRequest.body?.trim(),
+      '',
+      `Pull request: ${pullRequest.url}`,
+    ]
+      .filter((line) => line !== undefined)
+      .join('\n')
+      .trim();
+    const session = await this.sessionService.create({
+      prompt,
+      projectPath: path,
+      baseBranch: pullRequestHead,
+      useWorktree: true,
+      pushBranch: pullRequest.sourceBranch,
+    });
+    this.sessions.updateForgeState(session.id, {
+      forgeProvider: provider.id,
+      pullRequestUrl: pullRequest.url,
+      pullRequestNumber: pullRequest.number,
+      pullRequestState: pullRequest.state,
+      forgeStatus: pullRequest.state,
+    });
+    return { sessionId: session.id };
+  }
 
   async openPullRequestForSession(
     id: string,

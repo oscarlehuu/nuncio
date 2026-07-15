@@ -1437,7 +1437,7 @@ The forge layer (`apps/server/src/forges/`) exposes a lightweight connection-sta
 - **Agents** → provider-neutral local task/subagent defaults such as `NUNCIO_TASK_CONCURRENCY`, `NUNCIO_SUBAGENT_PROVIDER`, `NUNCIO_SUBAGENT_MODEL`, and `NUNCIO_SUBAGENT_CLEANUP_POLICY`.
 - **Workspaces** → local project/worktree paths such as `NUNCIO_PROJECT_ROOTS` and `NUNCIO_WORKSPACES_DIR`.
 - **Remote access** → access token, Tailscale status/trust controls, and network settings such as `NUNCIO_HUB_MODE`.
-- **Advanced** → lower-frequency machine controls such as provider update checks.
+- **Advanced** → lower-frequency machine controls such as provider update checks and forge automation. `forges.autoSteer` falls back to `NUNCIO_FORGES_AUTO_STEER`; `forges.autoCloseOnMerge` falls back to `NUNCIO_FORGES_AUTO_CLOSE_ON_MERGE`. Both are boolean settings with a default of true.
 
 Each provider row is a single line (monochrome brand glyph + name + status subtitle + right-aligned pill button). Rows are **collapsed by default**; clicking Manage/Connect toggles `aria-expanded` and reveals that provider's underlying setting keys using the unchanged `SettingRow` component (`apps/web/src/components/setting-row.tsx`), preserving all edit/save/clear/mask/source-badge behavior. `SettingRow` also renders `SettingDto.options` as finite option buttons for defaults like the browser target.
 
@@ -1525,18 +1525,31 @@ Routes (`apps/server/src/forges/api/forges.controller.ts:11`, `@Controller('sess
 | POST | `/api/sessions/:id/forge/pull-request` (`{ title?, body?, draft?, base? }`) | `ForgePullRequest` |
 | GET | `/api/sessions/:id/forge/pull-request` | `ForgePullRequest` (refreshed status + checks) |
 | POST | `/api/sessions/:id/forge/pull-request/comment` (`{ body }`) | `{ ok }` |
+| POST | `/api/sessions/from-pr` (`{ path, number }`) | `{ sessionId }` |
 
-Web helpers `openPullRequest(id)`/`fetchPullRequest(id)` (`apps/web/src/lib/api.ts`) back `<PrPanel>`. The `Session` type in `api.ts` carries the forge fields.
+`POST /api/sessions/from-pr` resolves the repository's origin forge, reads the existing GitHub PR or GitLab MR, requires its source branch, creates a new worktree session from that branch, and persists the forge provider/number/URL/state on the new session. The project path must be one of Nuncio's discovered projects and `number` must be a positive integer.
 
-## Inbound webhooks (issue/PR → session)
+Web helpers `openPullRequest(id)`/`fetchPullRequest(id)` (`apps/web/src/lib/api.ts`) back `<PrPanel>`. The `Session` type in `api.ts` carries the forge fields. PR adoption currently has a server route only; it adds no web or mobile surface.
+
+## Inbound forge webhooks
 
 `WebhooksController` (`apps/server/src/forges/webhooks/webhooks.controller.ts:21`, `@Controller('webhooks/forge')`) exposes a single `@Post(':provider')` returning `202`. It reads `req.rawBody` (enabled by `rawBody: true` in `main.ts`), verifies `registry.get(provider).verifyWebhookSignature(headers, rawBody)` (`401` on failure), parses via `provider.parseWebhookEvent(headers, payload)` (ignored events return `{ ok, ignored }`), then delegates to `WebhooksService.handleEvent`.
 
-`WebhooksService.handleEvent` (`webhooks.service.ts:30`):
+Providers normalize signed deliveries into a shared event union:
+
+- GitHub: labeled issues, pull-request close, submitted reviews, created/edited review comments, created/edited PR issue comments, and failed completed workflow/check runs associated with a pull request.
+- GitLab: issue hooks, merge-request merge/close, MR note hooks, and failed pipeline hooks associated with a merge request.
+
+`WebhooksService.handleEvent` then applies these routes:
 
 - **Refuses header-less deliveries:** no `event.deliveryId` → `{ created: false, reason: 'missing-delivery-id' }` (cannot dedupe a replay safely).
-- **Idempotency:** `recordDelivery(provider, deliveryId)` is an `INSERT OR IGNORE` into `forge_webhook_deliveries(provider, delivery_id, created_at)`; a replay returns `false` and no session is created.
-- On a fresh known event, calls `SessionsService.create({ prompt, projectPath, baseBranch, useWorktree: true })`.
+- **Idempotency:** `recordDelivery(provider, deliveryId)` is an `INSERT OR IGNORE` into `forge_webhook_deliveries(provider, delivery_id, created_at)`; a replay performs no second action.
+- **Issues:** an opened issue carrying the `nuncio` label creates a worktree session as before.
+- **Review feedback:** when `forges.autoSteer` is enabled, reviews and comments resolve the newest non-archived session owning the same project path + PR/MR number. When several local clones share the remote, ownership selects the correct clone. Nuncio fetches the connected forge login and refuses to steer feedback authored by that login; a missing author/login also fails closed. Accepted feedback steers the owner with a forge-specific origin. If there is no owner, Nuncio raises severity-2 `pr-feedback` Attention instead of creating or steering a session.
+- **CI failures:** when `forges.autoSteer` is enabled, a failed workflow/check/pipeline resolves the same owner, loads the failing job log best-effort, and steers the owner with the failure context. A missing owner raises `pr-feedback` Attention.
+- **PR/MR close:** the owning session's forge state becomes `merged` or `closed`. A non-merged close preserves the session/worktree. On merge, Nuncio clears resolved PR attentions and, when `forges.autoCloseOnMerge` is enabled, attempts cleanup only if the owner is `IDLE`, its worktree is clean, and it has no unpushed commits. It archives first, then holds the linked worktree's HEAD lock across a final clean/unpushed check and non-forced removal. Missing ownership/path, non-IDLE state, dirty files, unpushed commits, a lifecycle race, or git inspection/removal failure skips cleanup non-destructively and raises `pr-feedback` Attention.
+
+The automation settings default to true and can be overridden in SQLite or through `NUNCIO_FORGES_AUTO_STEER` and `NUNCIO_FORGES_AUTO_CLOSE_ON_MERGE`.
 
 **NEVER** verify a webhook against a re-serialized JSON body — always the raw bytes; GitHub uses HMAC-SHA256 over `x-hub-signature-256`, GitLab compares the shared `x-gitlab-token` (handled inside each provider so the `ForgeProvider` interface stays uniform).
 

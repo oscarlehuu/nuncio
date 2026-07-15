@@ -153,10 +153,10 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 | | |
 |---|---|
 | **Web** | Session inspector: `forge/scm-panel.tsx` (live path — Changes / PR / issues). Standalone: `/forge/pr` → `standalone-pr-route.tsx` + `pr-detail.tsx`. Project picker may browse/clone. Attention can deep-link PR review |
-| **Mobile** | None |
-| **Settings** | Source control (GitHub / GitLab) |
-| **Server** | `forges/`, `git/` (`sync`, `unpushed`, `commits/:sha/diff`, `stash`, `blame`, `history`, `pull`, status/diff/push), webhooks, session git/PR routes |
-| **Also check** | Settings credentials + live `scm-panel` + standalone PR + attention PR items |
+| **Mobile** | None; forge automation is backend-only |
+| **Settings** | Source control (GitHub / GitLab) + Advanced automation toggles `forges.autoSteer` and `forges.autoCloseOnMerge` (both default true; env fallbacks `NUNCIO_FORGES_AUTO_STEER` / `NUNCIO_FORGES_AUTO_CLOSE_ON_MERGE`) |
+| **Server** | `forges/`, `git/` (`sync`, `unpushed`, `commits/:sha/diff`, `stash`, `blame`, `history`, `pull`, status/diff/push), `POST /api/sessions/from-pr`, signed forge webhooks, session git/PR routes. GitHub normalizes reviews, review comments, PR issue comments, failed workflow/check runs, and PR close; GitLab normalizes MR notes, failed associated pipelines, and MR merge/close. Feedback and failures auto-steer the repo + PR owner unless authored by the connected forge login; missing owners raise `pr-feedback` Attention. A merged owner is archived and its worktree removed only when IDLE, clean, and without unpushed commits; every failed gate skips cleanup non-destructively and raises Attention. |
+| **Also check** | Settings credentials/automation toggles + live `scm-panel` + standalone PR + `pr-review`/`pr-feedback` attention items |
 | **Legacy** | `review-changes.tsx` is unwired orphan; prefer `scm-panel` / `session-changes-panel`. Do not “fix PR UI” only in orphans |
 
 ### Verify / auto-fix / diff / evidence

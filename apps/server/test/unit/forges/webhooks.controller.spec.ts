@@ -57,7 +57,7 @@ describe('WebhooksController', () => {
     const { controller, handleCalls } = controllerFor({ parse: null });
     await expect(
       controller.receive('github', { 'x-github-event': 'ping' }, {}, rawReq(Buffer.from('{}'))),
-    ).resolves.toEqual({ ok: true, ignored: true });
+    ).resolves.toEqual({ ok: true, ignored: true, reason: 'unsupported-event' });
     expect(handleCalls).toHaveLength(0);
   });
 
