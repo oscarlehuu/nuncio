@@ -59,4 +59,20 @@ describe('WebhookDeliveryTracker', () => {
     tracker.release(claim!);
     expect(tracker.claim('gitlab', 'delivery-2').status).toBe('claimed');
   });
+
+  it('preserves a reserved session id when a released delivery is reclaimed', () => {
+    const firstResult = tracker.claim('github', 'issue-delivery');
+    if (firstResult.status !== 'claimed') throw new Error('expected first claim');
+
+    const reservedId = tracker.reserveSessionId(firstResult.claim);
+    expect(reservedId).toHaveLength(8);
+    expect(tracker.reserveSessionId(firstResult.claim)).toBe(reservedId);
+
+    tracker.release(firstResult.claim);
+    const retryResult = tracker.claim('github', 'issue-delivery');
+    if (retryResult.status !== 'claimed') throw new Error('expected retry claim');
+
+    expect(retryResult.claim.sessionId).toBe(reservedId);
+    expect(tracker.reserveSessionId(retryResult.claim)).toBe(reservedId);
+  });
 });

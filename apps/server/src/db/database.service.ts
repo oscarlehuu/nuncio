@@ -282,6 +282,7 @@ export class DatabaseService implements OnModuleDestroy {
         lease_expires_at INTEGER,
         updated_at INTEGER,
         checkpoint TEXT,
+        accepted_session_id TEXT,
         PRIMARY KEY (provider, delivery_id)
       )
     `);
@@ -294,6 +295,7 @@ export class DatabaseService implements OnModuleDestroy {
       ['lease_expires_at', 'INTEGER'],
       ['updated_at', 'INTEGER'],
       ['checkpoint', 'TEXT'],
+      ['accepted_session_id', 'TEXT'],
     ] as const;
     for (const [column, type] of deliveryColumns) {
       if (!forgeDeliveryColumns.some((entry) => entry.name === column)) {

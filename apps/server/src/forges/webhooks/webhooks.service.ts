@@ -116,10 +116,14 @@ export class WebhooksService implements OnModuleDestroy {
     if (event.action !== 'opened') return { created: false, reason: 'ignored-action' };
     if (!event.labels.includes(AUTO_CREATE_LABEL)) return { created: false, reason: 'no-label' };
     if (!event.deliveryId) return { created: false, reason: 'missing-delivery-id' };
-    return this.withDelivery(provider, event.deliveryId, async (accept) => {
+    return this.withDelivery(provider, event.deliveryId, async (accept, claim) => {
       const projectPath = await findWebhookProject(this.git, event);
       if (!projectPath) return accept(() => ({ created: false, reason: 'unknown-repo' }));
+      const sessionId = this.deliveries.reserveSessionId(claim);
+      const existing = this.sessionRecords.findById(sessionId);
+      if (existing) return accept(() => ({ created: true, sessionId }));
       const session = await this.sessions.create({
+        id: sessionId,
         prompt: `${event.title}\n\n${event.body}`.trim(),
         projectPath,
         baseBranch: event.defaultBranch,

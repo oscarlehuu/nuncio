@@ -42,29 +42,25 @@ export async function routePullRequestLifecycle(
   }
 
   const state = event.merged === true ? 'merged' : 'closed';
-  if (!event.merged) {
-    return deps.accept(() => {
-      deps.sessionRecords.updateForgeState(session.id, {
-        forgeProvider: provider,
-        pullRequestUrl: event.url,
-        pullRequestNumber: event.number,
-        pullRequestState: state,
-        forgeStatus: state,
-      });
-      return { created: false, closed: true, sessionId: session.id } as const;
+  const acceptTerminal: WebhookDeliveryAcceptance = (work) => deps.accept(() => {
+    deps.sessionRecords.updateForgeState(session.id, {
+      forgeProvider: provider,
+      pullRequestUrl: event.url,
+      pullRequestNumber: event.number,
+      pullRequestState: state,
+      forgeStatus: state,
     });
-  }
-  deps.sessionRecords.updateForgeState(session.id, {
-    forgeProvider: provider,
-    pullRequestUrl: event.url,
-    pullRequestNumber: event.number,
-    pullRequestState: state,
-    forgeStatus: state,
+    clearPullRequestAttention(deps.attention, projectPath, event);
+    return work();
   });
 
-  clearPullRequestAttention(deps.attention, projectPath, event);
+  if (!event.merged) {
+    return acceptTerminal(() => (
+      { created: false, closed: true, sessionId: session.id } as const
+    ));
+  }
   if (!autoCloseOnMerge) {
-    return deps.accept(() => ({
+    return acceptTerminal(() => ({
       created: false,
       closed: true,
       sessionId: session.id,
@@ -83,14 +79,14 @@ export async function routePullRequestLifecycle(
         { fallbackBase: session.baseBranch },
       );
       if (!removal.removed && removal.reason !== 'worktree-missing') {
-        return deps.accept(() => skipCleanup(
+        return acceptTerminal(() => skipCleanup(
           deps.attention,
           projectPath,
           event,
           removal.reason ?? 'worktree-removal-failed',
         ));
       }
-      return deps.accept(() => {
+      return acceptTerminal(() => {
         deps.sessionRecords.clearWorktreeMetadata(session.id);
         return {
           created: false,
@@ -101,14 +97,14 @@ export async function routePullRequestLifecycle(
       });
     }
     if (deps.deliveryRetrying && session.worktreePath) {
-      return deps.accept(() => skipCleanup(
+      return acceptTerminal(() => skipCleanup(
         deps.attention,
         projectPath,
         event,
         'cleanup-authorization-missing',
       ));
     }
-    return deps.accept(() => ({
+    return acceptTerminal(() => ({
         created: false,
         closed: true,
         sessionId: session.id,
@@ -116,36 +112,36 @@ export async function routePullRequestLifecycle(
       } as const));
   }
   if (session.status !== 'IDLE') {
-    return deps.accept(() =>
+    return acceptTerminal(() =>
       skipCleanup(deps.attention, projectPath, event, `session-${session.status.toLowerCase()}`));
   }
   if (!session.projectPath || !session.worktreePath) {
-    return deps.accept(() => skipCleanup(deps.attention, projectPath, event, 'missing-worktree'));
+    return acceptTerminal(() => skipCleanup(deps.attention, projectPath, event, 'missing-worktree'));
   }
 
   try {
     const status = await deps.git.status(session.worktreePath);
     if (!status.clean) {
-      return deps.accept(() => skipCleanup(deps.attention, projectPath, event, 'dirty-worktree'));
+      return acceptTerminal(() => skipCleanup(deps.attention, projectPath, event, 'dirty-worktree'));
     }
     const unpushed = await deps.git.unpushedCommits(session.worktreePath, {
       fallbackBase: session.baseBranch,
     });
     if (unpushed.commits.length > 0) {
-      return deps.accept(() => skipCleanup(deps.attention, projectPath, event, 'unpushed-commits'));
+      return acceptTerminal(() => skipCleanup(deps.attention, projectPath, event, 'unpushed-commits'));
     }
   } catch {
-    return deps.accept(() => skipCleanup(deps.attention, projectPath, event, 'git-check-failed'));
+    return acceptTerminal(() => skipCleanup(deps.attention, projectPath, event, 'git-check-failed'));
   }
 
   let archived: ReturnType<SessionsService['archive']>;
   try {
     archived = deps.sessions.archive(session.id);
   } catch {
-    return deps.accept(() => skipCleanup(deps.attention, projectPath, event, 'archive-race'));
+    return acceptTerminal(() => skipCleanup(deps.attention, projectPath, event, 'archive-race'));
   }
   if (archived.status !== 'ARCHIVED') {
-    return deps.accept(() => skipCleanup(deps.attention, projectPath, event, 'archive-pending'));
+    return acceptTerminal(() => skipCleanup(deps.attention, projectPath, event, 'archive-pending'));
   }
   deps.markCleanupCheckpoint();
   const removal = await deps.git.removeWorktreeIfSafe(session.projectPath, session.worktreePath, {
@@ -153,19 +149,19 @@ export async function routePullRequestLifecycle(
   });
   if (!removal.removed) {
     if (removal.reason === 'worktree-missing') {
-      return deps.accept(() => {
+      return acceptTerminal(() => {
         deps.sessionRecords.clearWorktreeMetadata(session.id);
         return skipCleanup(deps.attention, projectPath, event, removal.reason!);
       });
     }
-    return deps.accept(() => skipCleanup(
+    return acceptTerminal(() => skipCleanup(
         deps.attention,
         projectPath,
         event,
         removal.reason ?? 'worktree-removal-failed',
       ));
   }
-  return deps.accept(() => {
+  return acceptTerminal(() => {
     deps.sessionRecords.clearWorktreeMetadata(session.id);
     return {
       created: false,

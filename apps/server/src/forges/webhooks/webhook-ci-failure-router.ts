@@ -15,7 +15,10 @@ interface CiDependencies {
   forgeRepos: ForgeRepoService;
   attention: AttentionService;
   accept: WebhookDeliveryAcceptance;
+  enrichmentTimeoutMs?: number;
 }
+
+const CI_ENRICHMENT_TIMEOUT_MS = 2_000;
 
 export async function routeWebhookCiFailure(
   deps: CiDependencies,
@@ -37,11 +40,21 @@ export async function routeWebhookCiFailure(
     });
   }
 
-  const job = await resolveFailingJob(deps.forgeRepos, projectPath, event);
+  const enrichmentDeadline = Date.now() +
+    (deps.enrichmentTimeoutMs ?? CI_ENRICHMENT_TIMEOUT_MS);
+  const job = await resolveFailingJob(
+    deps.forgeRepos,
+    projectPath,
+    event,
+    enrichmentDeadline,
+  );
   let log = '[Job log unavailable]';
   if (job.id !== null) {
     try {
-      log = (await deps.forgeRepos.getJobLog(projectPath, job.id)).log;
+      log = (await withinDeadline(
+        deps.forgeRepos.getJobLog(projectPath, job.id),
+        enrichmentDeadline,
+      )).log;
     } catch {
       // External checks and expired logs may not expose a downloadable log.
     }
@@ -94,15 +107,38 @@ async function resolveFailingJob(
   forgeRepos: ForgeRepoService,
   projectPath: string,
   event: ForgeCiFailureWebhookEvent,
+  enrichmentDeadline: number,
 ): Promise<{ id: number | null; name: string }> {
   if (event.jobId !== undefined) return { id: event.jobId, name: event.jobName };
   if (event.runId === undefined) return { id: null, name: event.jobName };
   let jobs: Awaited<ReturnType<ForgeRepoService['getWorkflowRunJobs']>>;
   try {
-    jobs = await forgeRepos.getWorkflowRunJobs(projectPath, event.runId);
+    jobs = await withinDeadline(
+      forgeRepos.getWorkflowRunJobs(projectPath, event.runId),
+      enrichmentDeadline,
+    );
   } catch {
     return { id: null, name: event.jobName };
   }
   const failed = jobs.find((job) => ['failure', 'failed'].includes(job.conclusion ?? ''));
   return failed ? { id: failed.id, name: failed.name } : { id: null, name: event.jobName };
+}
+
+async function withinDeadline<T>(work: Promise<T>, deadline: number): Promise<T> {
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) throw new Error('Forge enrichment timed out');
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<T>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error('Forge enrichment timed out')),
+          remainingMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }

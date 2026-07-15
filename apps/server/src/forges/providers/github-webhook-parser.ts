@@ -180,7 +180,7 @@ function ciEvent(
     kind: 'ci_failure',
     action: 'failed',
     number,
-    ...(type === 'workflow' ? { runId: run.id } : { jobId: run.id }),
+    ...(type === 'workflow' ? { runId: run.id } : {}),
     jobName: run.name ?? (type === 'workflow' ? 'workflow' : 'check'),
     url: run.html_url ?? '',
   };

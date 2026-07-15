@@ -105,7 +105,9 @@ describe('forge webhook event parsing', () => {
     );
 
     expect(workflow).toMatchObject({ kind: 'ci_failure', number: 42, runId: 90, jobName: 'CI' });
-    expect(check).toMatchObject({ kind: 'ci_failure', number: 42, jobId: 91, jobName: 'test' });
+    expect(check).toMatchObject({ kind: 'ci_failure', number: 42, jobName: 'test' });
+    expect(check).not.toHaveProperty('jobId');
+    expect(check).not.toHaveProperty('runId');
   });
 
   it('normalizes GitLab merge-request notes and failed associated pipelines', () => {

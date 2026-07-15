@@ -317,7 +317,7 @@ export class SessionsService implements OnModuleDestroy {
       throw new BadRequestException(error instanceof Error ? error.message : String(error));
     }
 
-    const id = uuidv4().slice(0, 8);
+    const id = input.id?.trim() || uuidv4().slice(0, 8);
     let workspace = input.workspace?.trim() || undefined;
     let projectPath: string | undefined;
     let baseBranch: string | undefined;

@@ -70,6 +70,7 @@ describe('WebhooksService (Phase 4)', () => {
   let projectListFailures: number;
   let forgeStateUpdateFailures: number;
   let clearWorktreeMetadataFailures: number;
+  let issueSessions: Map<string, { id: string }>;
   let sessionsStub: {
     create: (dto: CreateSessionDto) => Promise<{ id: string }>;
     steer: (id: string, message: string, force?: boolean, attachments?: unknown, origin?: string) => Promise<{ id: string }>;
@@ -151,10 +152,13 @@ describe('WebhooksService (Phase 4)', () => {
     projectListFailures = 0;
     forgeStateUpdateFailures = 0;
     clearWorktreeMetadataFailures = 0;
+    issueSessions = new Map();
     sessionsStub = {
       create: async (dto) => {
         createCalls.push(dto);
-        return { id: 'sess-123' };
+        const session = { id: dto.id ?? 'sess-123' };
+        issueSessions.set(session.id, session);
+        return session;
       },
       steer: async (id, message, _force, _attachments, origin) => {
         if (steerError) throw steerError;
@@ -223,6 +227,7 @@ describe('WebhooksService (Phase 4)', () => {
       gitStub as never,
       db as never,
       {
+        findById: (id: string) => issueSessions.get(id) ?? null,
         findByProjectPullRequest: (
           path: string,
           _number: number,
@@ -272,7 +277,7 @@ describe('WebhooksService (Phase 4)', () => {
     const result = await service.handleEvent('github', makeEvent());
 
     expect(result.created).toBe(true);
-    expect(result.sessionId).toBe('sess-123');
+    expect(result.sessionId).toBe(createCalls[0].id);
     expect(createCalls).toHaveLength(1);
     const dto = createCalls[0];
     expect(dto.prompt).toContain('Implement the rate limiter');
@@ -280,6 +285,33 @@ describe('WebhooksService (Phase 4)', () => {
     expect(dto.projectPath).toBe(KNOWN_PATH);
     expect(dto.baseBranch).toBe('main');
     expect(dto.useWorktree).toBe(true);
+  });
+
+  it('reuses the issue session after creation succeeds but delivery completion fails', async () => {
+    const tracker = (service as unknown as {
+      deliveries: { complete: <T>(claim: unknown, work: () => T) => T };
+    }).deliveries;
+    const originalComplete = tracker.complete.bind(tracker);
+    let failures = 1;
+    tracker.complete = (claim, work) => {
+      if (failures-- > 0) throw new Error('delivery completion unavailable');
+      return originalComplete(claim, work);
+    };
+    const event = makeEvent({ deliveryId: 'issue-create-recovery' });
+
+    try {
+      await expect(service.handleEvent('github', event)).rejects.toThrow(
+        'delivery completion unavailable',
+      );
+      const createdId = createCalls[0].id;
+      await expect(service.handleEvent('github', event)).resolves.toMatchObject({
+        created: true,
+        sessionId: createdId,
+      });
+      expect(createCalls).toHaveLength(1);
+    } finally {
+      tracker.complete = originalComplete;
+    }
   });
 
   it('ignores an unknown repo (no local match) without creating a session', async () => {
@@ -633,6 +665,20 @@ describe('WebhooksService (Phase 4)', () => {
     expect(steerCalls[0].message).toContain('AssertionError: expected 2 to be 3');
   });
 
+  it('does not request an Actions job log for a check-run failure without a job id', async () => {
+    const result = await service.handleEvent('github', {
+      provider: 'github', deliveryId: 'ci-check-run', kind: 'ci_failure', action: 'failed',
+      owner: 'octo', repo: 'nuncio', repoFullName: 'octo/nuncio', defaultBranch: 'main',
+      number: 7, jobName: 'test', url: 'https://github.com/octo/nuncio/runs/91',
+      labels: [],
+    });
+
+    expect(result).toMatchObject({ steered: true, sessionId: 'sess-pr' });
+    expect(jobLogCalls).toHaveLength(0);
+    expect(steerCalls[0].message).toContain('Job: test');
+    expect(steerCalls[0].message).toContain('[Job log unavailable]');
+  });
+
   it('acknowledges a CI failure without waiting for the provider turn', async () => {
     sessionsStub.steer = () => new Promise(() => undefined);
     const handled = service.handleEvent('github', {
@@ -860,6 +906,12 @@ describe('WebhooksService (Phase 4)', () => {
     expect(forgeStateUpdates[0].state).toMatchObject({ pullRequestState: 'closed', forgeStatus: 'closed' });
     expect(archiveCalls).toHaveLength(0);
     expect(removeWorktreeCalls).toHaveLength(0);
+    expect(resolvedAttention).toEqual([
+      ['pr-review', `${KNOWN_PATH}#7`],
+      ['pr-feedback', 'octo/nuncio#7'],
+      ['pr-feedback', 'octo/nuncio#7:delivery'],
+      ['pr-feedback', 'octo/nuncio#7:cleanup'],
+    ]);
     expect(replay).toEqual({ created: false, reason: 'duplicate' });
   });
 
@@ -892,6 +944,44 @@ describe('WebhooksService (Phase 4)', () => {
     expect(forgeStateUpdates[0].state).toMatchObject({ pullRequestState: 'merged' });
     expect(resolvedAttention).toContainEqual(['pr-review', `${KNOWN_PATH}#7`]);
     expect(archiveCalls).toHaveLength(0);
+  });
+
+  it('does not persist merged state or attention before delivery acceptance', async () => {
+    ownerSession = {
+      id: 'sess-pr', status: 'IDLE', projectPath: KNOWN_PATH, pullRequestNumber: 7,
+      worktreePath: '/worktrees/sess-pr', baseBranch: 'main',
+    } as never;
+    autoCloseOnMerge = '0';
+    const tracker = (service as unknown as {
+      deliveries: { complete: <T>(claim: unknown, work: () => T) => T };
+    }).deliveries;
+    const originalComplete = tracker.complete.bind(tracker);
+    let failures = 1;
+    tracker.complete = (claim, work) => {
+      if (failures-- > 0) throw new Error('delivery completion unavailable');
+      return originalComplete(claim, work);
+    };
+    const event = {
+      ...makeEvent({ deliveryId: 'merged-acceptance-retry' }), kind: 'pull_request', action: 'closed',
+      merged: true, url: 'https://github.com/octo/nuncio/pull/7', labels: [],
+    } as never;
+
+    try {
+      await expect(service.handleEvent('github', event)).rejects.toThrow(
+        'delivery completion unavailable',
+      );
+      expect(forgeStateUpdates).toHaveLength(0);
+      expect(resolvedAttention).toHaveLength(0);
+
+      await expect(service.handleEvent('github', event)).resolves.toMatchObject({
+        reason: 'auto-close-disabled',
+        sessionId: 'sess-pr',
+      });
+      expect(forgeStateUpdates).toHaveLength(1);
+      expect(resolvedAttention).toHaveLength(4);
+    } finally {
+      tracker.complete = originalComplete;
+    }
   });
 
   it('updates merged state for an already archived owner without repeating cleanup', async () => {

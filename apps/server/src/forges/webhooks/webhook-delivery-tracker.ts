@@ -8,6 +8,7 @@ interface DeliveryRow {
   claim_token: string | null;
   lease_expires_at: number | null;
   checkpoint: string | null;
+  accepted_session_id: string | null;
 }
 
 export interface WebhookDeliveryClaim {
@@ -16,6 +17,7 @@ export interface WebhookDeliveryClaim {
   token: string;
   retrying: boolean;
   checkpoint: string | null;
+  sessionId: string | null;
 }
 
 export type WebhookDeliveryClaimResult =
@@ -44,13 +46,20 @@ export class WebhookDeliveryTracker {
       if (inserted.changes === 1) {
         return {
           status: 'claimed' as const,
-          claim: { provider, deliveryId, token, retrying: false, checkpoint: null },
+          claim: {
+            provider,
+            deliveryId,
+            token,
+            retrying: false,
+            checkpoint: null,
+            sessionId: null,
+          },
         };
       }
 
       const row = this.database.db
         .prepare<DeliveryRow, [string, string]>(
-          `SELECT status, claim_token, lease_expires_at, checkpoint
+          `SELECT status, claim_token, lease_expires_at, checkpoint, accepted_session_id
            FROM forge_webhook_deliveries WHERE provider = ? AND delivery_id = ?`,
         )
         .get(provider, deliveryId);
@@ -76,6 +85,7 @@ export class WebhookDeliveryTracker {
               token,
               retrying: true,
               checkpoint: row.checkpoint,
+              sessionId: row.accepted_session_id,
             },
           }
         : { status: 'in-progress' as const };
@@ -138,6 +148,27 @@ export class WebhookDeliveryTracker {
       );
     if (updated.changes !== 1) throw new Error('Webhook delivery claim is no longer owned');
     claim.checkpoint = checkpoint;
+  }
+
+  reserveSessionId(claim: WebhookDeliveryClaim): string {
+    if (claim.sessionId) return claim.sessionId;
+    const sessionId = randomUUID().slice(0, 8);
+    const updated = this.database.db
+      .prepare(
+        `UPDATE forge_webhook_deliveries SET accepted_session_id = ?, updated_at = ?
+         WHERE provider = ? AND delivery_id = ?
+           AND status = 'processing' AND claim_token = ? AND accepted_session_id IS NULL`,
+      )
+      .run(
+        sessionId,
+        Date.now(),
+        claim.provider,
+        claim.deliveryId,
+        claim.token,
+      );
+    if (updated.changes !== 1) throw new Error('Webhook delivery claim is no longer owned');
+    claim.sessionId = sessionId;
+    return sessionId;
   }
 
   release(claim: WebhookDeliveryClaim): void {

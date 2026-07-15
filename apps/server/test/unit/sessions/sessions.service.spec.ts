@@ -1231,6 +1231,22 @@ describe('SessionsService lifecycle (phase 3)', () => {
       await waitForIdle(service, session.id);
     });
 
+    it('uses an internally reserved id for the session and its worktree', async () => {
+      const session = await service.create({
+        id: 'reserved',
+        prompt: 'Recover issue delivery',
+        provider: 'cursor',
+        projectPath: repoPath,
+        baseBranch: 'main',
+        useWorktree: true,
+      });
+
+      expect(session.id).toBe('reserved');
+      expect(session.worktreePath).toBe(join(workspacesDir, 'reserved'));
+      expect(session.branch).toBe('nuncio/reserved-recover-issue-delivery');
+      await waitForIdle(service, session.id);
+    });
+
     it('persists the resolved default base branch for worktree sessions when omitted', async () => {
       const session = await service.create({
         prompt: 'Fix diff review',
