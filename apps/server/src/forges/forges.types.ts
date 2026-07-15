@@ -262,7 +262,7 @@ export interface ForgePullRequestWebhookEvent extends ForgeWebhookEventBase {
 
 export type ForgeReviewState = 'approved' | 'changes_requested' | 'commented';
 
-export interface ForgeFeedbackComment {
+interface ForgeFeedbackComment {
   body: string;
   path?: string;
   line?: number;
