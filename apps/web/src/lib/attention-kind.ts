@@ -1,6 +1,7 @@
 import {
   GitPullRequestArrow,
   ListChecks,
+  MessageSquareWarning,
   Radar,
   ShieldQuestion,
   TriangleAlert,
@@ -30,6 +31,9 @@ const KIND_META: Record<string, AttentionKindMeta> = {
   'verify-dead': { label: 'Verify stuck', icon: Wrench, tone: 'warning' },
   'tripped-breaker': { label: 'Loop paused', icon: TriangleAlert, tone: 'warning' },
   'pr-review': { label: 'PR review', icon: GitPullRequestArrow, tone: 'info' },
+  // Webhook feedback that could not be auto-steered (untrusted author, failed
+  // delivery, skipped cleanup) — a needs-you item, so it shares the amber class.
+  'pr-feedback': { label: 'PR feedback', icon: MessageSquareWarning, tone: 'warning' },
   anomaly: { label: 'Anomaly', icon: Radar, tone: 'neutral' },
   'dispatcher-proposal': { label: 'Dispatcher proposal', icon: ListChecks, tone: 'info' },
   'crew-blocked': { label: 'Crew blocked', icon: ShieldQuestion, tone: 'warning' },
@@ -117,6 +121,7 @@ export function openTargetFor(item: AttentionItemDto): OpenTarget | null {
     case 'tripped-breaker':
       return { to: `/autopilot/${loopId ?? item.subjectId}` };
     case 'pr-review':
+    case 'pr-feedback':
       return prReviewTarget(item);
     default:
       return sessionId ? { to: `/session/${sessionId}` } : url ? { href: url } : null;

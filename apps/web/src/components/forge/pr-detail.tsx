@@ -15,6 +15,7 @@ import { ChecksList, ForgeStateBadge } from './forge-ui';
 import { PrConversation } from './pr-conversation';
 import { PrFiles } from './pr-files';
 import { PrMergeBar } from './pr-merge-bar';
+import { PrOpenSessionButton } from './pr-open-session-button';
 import { PrReviewBar } from './pr-review-bar';
 import { cn } from '@/lib/utils';
 
@@ -96,6 +97,10 @@ export function PrDetail({ path, number, onBack, headerVariant = 'compact' }: Pr
 
   const body = (
     <>
+      <div className="flex items-center justify-end">
+        <PrOpenSessionButton path={path} number={number} capabilities={capabilities} />
+      </div>
+
       <div className="flex items-center gap-1 border-b border-border/50">
         {tabs.map((t) => (
           <button

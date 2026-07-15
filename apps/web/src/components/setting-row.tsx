@@ -36,8 +36,9 @@ export function SettingRow({ setting, onUpdate, onClear }: SettingRowProps) {
   const handleToggle = async () => {
     setSaving(true);
     try {
-      if (isOn) await onClear(setting.key);
-      else await onUpdate(setting.key, '1');
+      // Persist an explicit '0' when turning off — clearing would fall back to a
+      // registry default, which leaves defaults-on flags stuck on.
+      await onUpdate(setting.key, isOn ? '0' : '1');
     } finally {
       setSaving(false);
     }

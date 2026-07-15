@@ -211,6 +211,19 @@ export function mergeForgePull(
   return forgeFetch(`/api/forge/pulls/${number}/merge?${q(path)}`, post(opts), 'Failed to merge');
 }
 
+/**
+ * Adopt a pull request into a working session (fetches its head, builds a
+ * worktree, seeds the prompt). Returns the owning session — an existing one when
+ * the PR is already adopted, so callers never create a duplicate.
+ */
+export function createSessionFromPull(path: string, number: number): Promise<{ sessionId: string }> {
+  return forgeFetch(
+    '/api/sessions/from-pr',
+    post({ path, number }),
+    'Could not open a session for this pull request',
+  );
+}
+
 export function setForgePullState(
   path: string,
   number: number,

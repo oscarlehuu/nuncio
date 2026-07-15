@@ -60,6 +60,22 @@ describe('openTargetFor', () => {
   it('pr-review with no route data → no target (button hidden)', () => {
     expect(openTargetFor(item({ kind: 'pr-review', payload: {} }))).toBeNull();
   });
+  it('pr-feedback → the in-app forge PR route using the item project path and payload number', () => {
+    expect(
+      openTargetFor(item({
+        kind: 'pr-feedback',
+        projectPath: '/Users/me/nuncio',
+        payload: { number: 12, url: 'https://ex/pr/12', reason: 'untrusted-author' },
+      })),
+    ).toEqual({ to: '/forge/pr?path=%2FUsers%2Fme%2Fnuncio&number=12' });
+  });
+
+  it('pr-feedback with only a url keeps the external fallback', () => {
+    expect(openTargetFor(item({ kind: 'pr-feedback', payload: { url: 'https://ex/pr/12' } }))).toEqual({
+      href: 'https://ex/pr/12',
+    });
+  });
+
   it('crew blocker → the exact task and run projection', () => {
     expect(openTargetFor(item({
       kind: 'crew-blocked',
