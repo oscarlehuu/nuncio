@@ -1,13 +1,17 @@
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { projectCrewDependencies } from './crew-dependency-projection';
+import type { CrewDependencyMount } from './crew-command-sandbox';
+import { projectCrewEcosystemDependencies } from './crew-dependency-ecosystems';
 
 export const CREW_VERIFICATION_WORKSPACE_FACTORY = Symbol('CREW_VERIFICATION_WORKSPACE_FACTORY');
 
 export interface CrewPreparedVerificationWorkspace {
   path: string;
   dependencyRoot: string | null;
+  // Additional per-ecosystem read-only caches (Python/Go/Rust). Optional so existing factory mocks
+  // that omit it stay valid; the verifier treats absence as no extra mounts.
+  dependencyMounts?: CrewDependencyMount[];
   cleanup(): Promise<void>;
 }
 
@@ -64,9 +68,11 @@ export async function prepareCrewVerificationWorkspace(input: {
       throw new Error('Crew verification snapshot did not resolve the frozen head');
     }
     assertPreparationActive(control);
-    const dependencyRoot = projectCrewDependencies({ snapshotPath: path, sourcePath, worktrees });
+    const { dependencyRoot, mounts } = projectCrewEcosystemDependencies({
+      snapshotPath: path, sourcePath, worktrees,
+    });
     assertPreparationActive(control);
-    return preparedWorkspace(path, dependencyRoot);
+    return preparedWorkspace(path, dependencyRoot, mounts);
   } catch (error) {
     rmSync(path, { recursive: true, force: true });
     throw error;
@@ -74,9 +80,11 @@ export async function prepareCrewVerificationWorkspace(input: {
 
 }
 
-function preparedWorkspace(path: string, dependencyRoot: string | null): CrewPreparedVerificationWorkspace {
+function preparedWorkspace(
+  path: string, dependencyRoot: string | null, dependencyMounts: CrewDependencyMount[],
+): CrewPreparedVerificationWorkspace {
   let cleaned = false;
-  return { path, dependencyRoot, cleanup: async () => {
+  return { path, dependencyRoot, dependencyMounts, cleanup: async () => {
     if (cleaned) return;
     cleaned = true;
     rmSync(path, { recursive: true, force: true });

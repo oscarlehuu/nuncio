@@ -25,8 +25,29 @@ export interface CrewSandboxLaunch {
   onTerminate?(): void;
 }
 
+// A read-only per-ecosystem dependency cache projected into the verifier sandbox. It carries the
+// same deny-by-default contract as the JS store: the toolchain's cache is readable but never
+// writable inside the sandbox. Seatbelt cannot remap paths, so on macOS the toolchain reads
+// `hostPath` directly; on Linux the cache is bind-mounted read-only at `guestPath`. `env` and
+// `pathPrepend` are resolved for the target platform by the projection (guest paths on Linux, host
+// paths on macOS) and point the toolchain at the projected cache.
+export interface CrewDependencyMount {
+  hostPath: string;
+  guestPath: string;
+  env: Record<string, string>;
+  pathPrepend: string[];
+  // Linux only: a writable tmpfs directory to create before binding `hostPath` read-only inside it,
+  // so a toolchain that writes metadata beside a read-only cache subdirectory keeps working (for
+  // example cargo's writable CARGO_HOME containing a read-only registry). Ignored on macOS, where
+  // paths are not remapped.
+  writableGuestParent?: string;
+}
+
 export interface CrewSandboxOptions {
   dependencyRoot?: string | null;
+  // Additional per-ecosystem read-only caches (Python venv, Go module cache, Cargo registry) to
+  // project alongside the JS store. Empty/absent leaves behavior unchanged.
+  dependencyMounts?: CrewDependencyMount[];
   sourceRoot?: string | null;
   // Selects the confinement backend (default 'host'). Selection happens in the runner; the chosen
   // backend receives these same options, so an unrecognized value here is inert for the host build.
@@ -60,6 +81,7 @@ export function buildCrewSandboxLaunch(
   }
   const canonicalCwd = realpathSync.native(cwd);
   const dependencyRoot = options.dependencyRoot ? realpathSync.native(options.dependencyRoot) : null;
+  const dependencyMounts = normalizeDependencyMounts(options.dependencyMounts);
   const sourceRoot = options.sourceRoot ? realpathSync.native(options.sourceRoot) : null;
   if (dependencyRoot && !statSync(dependencyRoot).isDirectory()) {
     throw new Error('Crew verifier dependency root is not a directory');
@@ -75,11 +97,13 @@ export function buildCrewSandboxLaunch(
   try {
     const toolBin = dirname(process.execPath);
     const macosToolchainRoots = platform === 'darwin' ? macosToolchainReadRoots(toolBin) : [];
+    const mountPathPrepend = dependencyMounts.flatMap((mount) => mount.pathPrepend);
+    const mountEnv = Object.assign({}, ...dependencyMounts.map((mount) => mount.env));
     const pathEntries = platform === 'darwin'
-      ? ['/usr/bin', '/bin', '/usr/sbin', '/sbin', ...MACOS_TOOLCHAIN_PREFIXES
+      ? [...mountPathPrepend, '/usr/bin', '/bin', '/usr/sbin', '/sbin', ...MACOS_TOOLCHAIN_PREFIXES
           .flatMap((prefix) => ['bin', 'sbin'].map((name) => join(prefix, name)))
           .filter(existsSync), toolBin]
-      : ['/nuncio-tools', '/usr/bin', '/bin', '/usr/sbin', '/sbin'];
+      : [...mountPathPrepend, '/nuncio-tools', '/usr/bin', '/bin', '/usr/sbin', '/sbin'];
     const path = pathEntries
       .filter((entry, index, all) => all.indexOf(entry) === index).join(':');
     const env = {
@@ -92,12 +116,14 @@ export function buildCrewSandboxLaunch(
       CI: '1',
       LANG: 'en_US.UTF-8',
       NO_COLOR: '1',
+      ...mountEnv,
     };
     if (platform === 'linux') return linuxLaunch(
-      sandboxExecutable, command, canonicalCwd, tempDir, env, dependencyRoot,
+      sandboxExecutable, command, canonicalCwd, tempDir, env, dependencyRoot, dependencyMounts,
     );
     const readRoots = [
       canonicalCwd, tempDir, ...macosToolchainRoots, ...(dependencyRoot ? [dependencyRoot] : []),
+      ...dependencyMounts.map((mount) => mount.hostPath),
       ...MACOS_SYSTEM_READ_ROOTS.filter(existsSync),
     ];
     // Seatbelt evaluates directory traversal of the filesystem root as
@@ -114,6 +140,7 @@ export function buildCrewSandboxLaunch(
       `(deny file-write* (require-all (require-not (subpath ${seatbelt(canonicalCwd)}))`,
       `  (require-not (subpath ${seatbelt(tempDir)})) (require-not (literal "/dev/null"))))`,
       ...(dependencyRoot ? [`(deny file-write* (subpath ${seatbelt(dependencyRoot)}))`] : []),
+      ...dependencyMounts.map((mount) => `(deny file-write* (subpath ${seatbelt(mount.hostPath)}))`),
       ...(sourceRoot ? [
         `(deny file-read-data (subpath ${seatbelt(sourceRoot)}))`,
         `(deny file-write* (subpath ${seatbelt(sourceRoot)}))`,
@@ -150,7 +177,7 @@ function probeSandbox(platform: string, executable: string): boolean {
 
 function linuxLaunch(
   executable: string, command: string, cwd: string, tempDir: string, env: Record<string, string>,
-  dependencyRoot: string | null,
+  dependencyRoot: string | null, dependencyMounts: CrewDependencyMount[],
 ): CrewSandboxLaunch {
   // Run the verifier command as PID 1 so bubblewrap does not leave a readable
   // helper process in the sandbox's /proc tree with pre-clearenv state.
@@ -161,6 +188,14 @@ function linuxLaunch(
     if (existsSync(root)) argv.push('--ro-bind', root, root);
   }
   if (dependencyRoot) argv.push('--dir', '/nuncio-deps', '--ro-bind', dependencyRoot, '/nuncio-deps');
+  for (const mount of dependencyMounts) {
+    // Create the mount point (or a writable parent that lets a toolchain write metadata beside a
+    // read-only cache subdirectory) on the tmpfs root, then bind the cache read-only over it — the
+    // same create-then-ro-bind order the JS store uses. The cache itself is never writable, so
+    // deny-by-default holds.
+    argv.push('--dir', mount.writableGuestParent ?? mount.guestPath);
+    argv.push('--ro-bind', mount.hostPath, mount.guestPath);
+  }
   argv.push(
     '--proc', '/proc', '--dev', '/dev', '--bind', cwd, '/workspace',
     '--bind', tempDir, '/tmp', '--dir', '/nuncio-tools',
@@ -172,6 +207,20 @@ function linuxLaunch(
   }
   argv.push('--chdir', '/workspace', '/bin/sh', '-c', command);
   return { argv, cwd, env: {}, tempDir };
+}
+
+function normalizeDependencyMounts(mounts?: CrewDependencyMount[]): CrewDependencyMount[] {
+  if (!mounts?.length) return [];
+  return mounts.map((mount) => {
+    // The projection already realpath-canonicalizes; re-resolving here makes the sandbox the trust
+    // boundary for its own bind/deny rules and fails closed on a mount that vanished after
+    // projection rather than binding a stale path.
+    const hostPath = realpathSync.native(mount.hostPath);
+    if (!statSync(hostPath).isDirectory()) {
+      throw new Error('Crew verifier dependency mount is not a directory');
+    }
+    return { ...mount, hostPath };
+  });
 }
 
 function seatbelt(value: string): string { return JSON.stringify(value); }

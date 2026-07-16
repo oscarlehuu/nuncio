@@ -84,7 +84,9 @@ export class CrewVerifierService {
             command, verification.path, Math.max(1, deadlineAt - Date.now()),
             input.outputCapBytes, input.signal,
             {
-              dependencyRoot: verification.dependencyRoot, sourceRoot: boundary.canonicalPath,
+              dependencyRoot: verification.dependencyRoot,
+              dependencyMounts: verification.dependencyMounts ?? [],
+              sourceRoot: boundary.canonicalPath,
               backend: input.sandboxBackend, container: input.container,
             },
           );

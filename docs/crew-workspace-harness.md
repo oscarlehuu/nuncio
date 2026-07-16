@@ -2,7 +2,7 @@
 
 **Status:** implemented and verified for the `dev` integration lane. This is not a claim that Crew
 is in a stable release.
-**Last synchronized:** 2026-07-11.
+**Last synchronized:** 2026-07-16.
 **Authority companion:** [CrewRun Authority Boundary and State Machine](crew-run-authority-and-state-machine.md).
 
 ## Purpose and fixed scope
@@ -190,6 +190,28 @@ resolve to the frozen snapshot. These installed bytes are trusted-host input: th
 against Crew members and the verifier mutating them, but it does not cryptographically attest
 changes made by the machine owner or another host process.
 
+Dependency projection is keyed by the ecosystem detected in the frozen snapshot, so a Python, Go,
+or Rust repository verifies offline from an already-populated host cache the same way a JavaScript
+repository verifies from `node_modules`:
+
+- **Python** (`poetry.lock` or `uv.lock`): an installed virtualenv (`$VIRTUAL_ENV`, else a
+  worktree `.venv` with a POSIX `bin/`) is mounted read-only and exposed through `VIRTUAL_ENV` and
+  a `bin/`-prefixed `PATH`.
+- **Go** (`go.sum`): the module cache (`$GOMODCACHE`, else `$GOPATH/pkg/mod`, else
+  `$HOME/go/pkg/mod`) is mounted read-only and exposed through `GOMODCACHE` with `-mod=readonly`
+  and `GOPROXY=off`; the writable build cache stays under the sandbox's isolated cache dir.
+- **Rust** (`Cargo.lock`): the crate registry (`$CARGO_HOME/registry`, else `$HOME/.cargo/registry`)
+  is mounted read-only inside a writable `CARGO_HOME` with `CARGO_NET_OFFLINE=true`, so cargo may
+  hold its package-cache lock while the registry cannot be mutated.
+
+A multi-ecosystem repository projects every detected ecosystem into a distinct read-only mount. An
+ecosystem whose host cache is absent, and any unrecognized ecosystem, receive no projection: the
+verify command runs unchanged and an uncached install simply fails closed under the disabled
+network rather than reaching out. Every ecosystem cache carries the same read-only, trusted-host
+boundary as the JavaScript store. Because Seatbelt allows or denies paths but cannot remap them,
+macOS points each toolchain at the host cache path directly while Linux bind-mounts it read-only at
+a fixed guest path; both profiles deny writes to the cache.
+
 Supported host sandboxes are:
 
 - macOS: Seatbelt through `/usr/bin/sandbox-exec`;
@@ -198,8 +220,8 @@ Supported host sandboxes are:
 Readiness runs and caches a minimal sandbox probe; binary existence alone is not enough. A host
 that cannot actually apply Seatbelt or bubblewrap resolves `needs_setup` before a run is created.
 On macOS, file data is denied globally outside the disposable snapshot, isolated temp/cache,
-read-only dependency store, Nuncio's executable directory, and narrowly required system runtime
-paths. Host locations such as the user's home, sibling temp files, `/private/etc`, and `/Library`
+read-only dependency stores (the JavaScript store plus any projected Python/Go/Rust cache),
+Nuncio's executable directory, and narrowly required system runtime paths. Host locations such as the user's home, sibling temp files, `/private/etc`, and `/Library`
 remain unreadable. Both modes disable network, protect Git metadata and dependency stores, and
 constrain filesystem access. Nuncio never falls back to an unsandboxed command.
 
