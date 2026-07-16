@@ -11,6 +11,7 @@ import {
   type ModelOptionsMap,
 } from '../../models/model-options.types';
 import { assertTransition } from '../domain/sessions.fsm';
+import { toSessionModeOrNull } from '../domain/session-modes';
 import type { CreateSessionDto, SessionDto, SessionRow, SessionStatus } from '../domain/sessions.types';
 
 export const PULL_REQUEST_ADOPTION_LEASE_MS = 30_000;
@@ -50,6 +51,7 @@ function toDto(row: SessionRow): SessionDto {
     provider: row.provider,
     model: row.model,
     modelOptions: parseModelOptionsJson(row.model_options),
+    mode: toSessionModeOrNull(row.mode),
     workspace: row.workspace ?? null,
     prompt: row.prompt,
     preview: row.preview,
@@ -332,6 +334,7 @@ export class SessionsRepository {
       provider: input.provider ?? 'pi',
       model: input.model ?? null,
       model_options: stringifyModelOptions(input.modelOptions),
+      mode: input.mode ?? null,
       workspace: input.workspace?.trim() || null,
       prompt: input.prompt,
       preview: null,
@@ -398,6 +401,7 @@ export class SessionsRepository {
       provider: isPi ? 'pi' : 'cursor',
       model: input.model ?? null,
       model_options: stringifyModelOptions(input.modelOptions),
+      mode: null,
       workspace: input.workspace.trim(),
       prompt: input.prompt,
       preview: null,
@@ -612,7 +616,7 @@ export class SessionsRepository {
     this.database.db
       .prepare(
         `INSERT INTO sessions (
-          id, title, status, provider, model, model_options, workspace, prompt, preview,
+          id, title, status, provider, model, model_options, mode, workspace, prompt, preview,
           project_path, base_branch, worktree_path, branch,
           provider_thread_id, provider_active_turn_id, provider_state_json,
           runtime_policy_json, verify_owner,
@@ -620,7 +624,7 @@ export class SessionsRepository {
           forge_provider, pull_request_url, pull_request_number, pull_request_state, forge_status,
           parent_session_id, origin_task_id, prior_session_id,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -629,6 +633,7 @@ export class SessionsRepository {
         row.provider,
         row.model,
         row.model_options,
+        row.mode,
         row.workspace,
         row.prompt,
         row.preview,

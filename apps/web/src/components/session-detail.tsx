@@ -28,6 +28,7 @@ import { isComposingEvent } from '../lib/keyboard';
 import { useStickToBottom } from '../lib/use-stick-to-bottom';
 import { deriveVerifyStatus } from '../lib/derive-verify-status';
 import { VerifyChip } from './verify-chip';
+import { SessionModeChip } from './session-mode-picker';
 import { projectDisplayName } from '../lib/projects';
 import {
   FALLBACK_PROVIDERS,
@@ -696,6 +697,11 @@ export function SessionDetail({
           <span className="ml-2">
             <VerifyChip status={verifyStatus} />
           </span>
+          {session.mode && (
+            <span className="ml-2">
+              <SessionModeChip mode={session.mode} />
+            </span>
+          )}
           <LineageChips
             parent={parentRef}
             childSessions={childRefs}

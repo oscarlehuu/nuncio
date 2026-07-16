@@ -60,6 +60,15 @@ const CURSOR_AND_PI: ModelProvider[] = [
   },
 ];
 
+const PI_WITH_MODES: ModelProvider[] = [
+  {
+    id: 'pi',
+    name: 'Nuncio Engine',
+    capabilities: { modes: ['debug', 'multitask'] },
+    groups: [{ id: 'g', name: 'G', models: [{ id: 'anthropic:claude-haiku-4', name: 'Haiku' }] }],
+  },
+];
+
 const CODEX_ONLY_PROVIDERS: ModelProvider[] = [
   {
     id: 'codex',
@@ -262,6 +271,7 @@ describe('HomeView', () => {
       undefined,
       false,
       undefined,
+      undefined,
     );
   });
 
@@ -281,6 +291,7 @@ describe('HomeView', () => {
       'main',
       undefined,
       true,
+      undefined,
       undefined,
     );
   });
@@ -334,6 +345,7 @@ describe('HomeView', () => {
       undefined,
       undefined,
       false,
+      undefined,
       undefined,
     );
   });
@@ -500,5 +512,35 @@ describe('HomeView', () => {
     expect(await screen.findByText('Needs setup')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /send/i })).toBeDisabled();
     expect(screen.getByRole('link', { name: /set up profile/i })).toHaveAttribute('href', '/settings?section=crew-profiles');
+  });
+
+  it('hides the mode picker when the provider advertises no modes', async () => {
+    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={PI_ONLY_PROVIDERS} />);
+    expect(await screen.findByRole('button', { name: /haiku/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /session mode/i })).not.toBeInTheDocument();
+  });
+
+  it('selecting Debug switches the placeholder and forwards the mode on submit', async () => {
+    const onSubmit = vi.fn();
+    render(<HomeView sessionCount={0} onSubmit={onSubmit} providers={PI_WITH_MODES} />);
+    const modeTrigger = await screen.findByRole('button', { name: /session mode/i });
+    await userEvent.click(modeTrigger);
+    await userEvent.click(await screen.findByRole('menuitemradio', { name: /debug/i }));
+
+    // Placeholder reflects the active mode (Debug voice).
+    const textarea = screen.getByPlaceholderText(/debug and troubleshoot/i);
+    await userEvent.type(textarea, 'trace the crash{Enter}');
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      'trace the crash',
+      'anthropic:claude-haiku-4',
+      'pi',
+      undefined,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      'debug',
+    );
   });
 });

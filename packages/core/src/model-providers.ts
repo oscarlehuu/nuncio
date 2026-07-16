@@ -30,6 +30,8 @@ export interface ModelGroup {
  * The web only declares what it gates UI on; extra server flags are ignored. */
 export interface ModelProviderCapabilities {
   images?: boolean;
+  /** Session modes this engine implements (e.g. 'debug', 'multitask'). */
+  modes?: string[];
 }
 
 export interface ModelProvider {

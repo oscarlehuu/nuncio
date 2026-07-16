@@ -21,6 +21,7 @@ import {
   type MessageAttachment,
   type ProviderRequestDecision,
   type Session,
+  type SessionMode,
 } from './lib/api';
 import { clearSetting, fetchSettings, updateSetting, type Setting } from './lib/settings-api';
 import { projectDisplayName } from './lib/projects';
@@ -266,6 +267,7 @@ export default function App() {
     modelOptions?: ModelOptionsMap,
     useWorktree = false,
     attachments?: MessageAttachment[],
+    mode?: SessionMode,
   ) => {
     setCreating(true);
     try {
@@ -279,6 +281,7 @@ export default function App() {
         useWorktree,
         '',
         attachments,
+        mode,
       );
       const list = await refresh();
       navigate(`/session/${session.id}`);
@@ -367,6 +370,7 @@ export default function App() {
       modelOptions?: ModelOptionsMap,
       useWorktree?: boolean,
       attachments?: MessageAttachment[],
+      mode?: SessionMode,
     ): Promise<Session | null> => {
       setCreating(true);
       try {
@@ -380,6 +384,7 @@ export default function App() {
           useWorktree ?? false,
           '',
           attachments,
+          mode,
         );
         const list = await refresh();
         if (!list?.find((s) => s.id === session.id)) {

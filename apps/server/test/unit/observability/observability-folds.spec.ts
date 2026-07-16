@@ -15,7 +15,7 @@ function session(overrides: Partial<SessionDto> & { id: string }): SessionDto {
   return {
     id: overrides.id, title: overrides.title ?? overrides.id,
     status: overrides.status ?? 'IDLE',
-    provider: overrides.provider ?? 'pi', model: null, modelOptions: null, workspace: null,
+    provider: overrides.provider ?? 'pi', model: null, modelOptions: null, mode: null, workspace: null,
     prompt: 'do work', preview: null,
     projectPath: overrides.projectPath ?? '/repo/a',
     baseBranch: null, worktreePath: null, branch: null,

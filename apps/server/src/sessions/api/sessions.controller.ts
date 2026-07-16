@@ -56,6 +56,7 @@ export class SessionsController {
       provider: body.provider,
       model: body.model,
       modelOptions: body.modelOptions,
+      mode: body.mode,
       attachments: body.attachments,
       workspace: body.workspace,
       projectPath: body.projectPath,

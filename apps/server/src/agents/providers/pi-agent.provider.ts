@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { ModelOptionsMap } from '../../models/model-options.types';
 import type { ModelGroupDto, ModelItemDto, ModelProviderDto } from '../../models/models.types';
 import { truncatePayload } from '../../sessions/domain/events.types';
+import { modeOverlay } from '../../sessions/domain/session-modes';
 import { formatInteractionAnswers } from '../../sessions/domain/format-interaction-answers';
 import {
   buildUserInputRequestedPayload,
@@ -137,6 +138,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     effortSwitch: 'in-session',
     images: true,
     steerWhileRunning: true,
+    modes: ['debug', 'multitask'],
     runtimePolicies: [
       { filesystem: 'read-only', network: 'disabled' },
       { filesystem: 'workspace-write', network: 'disabled' },
@@ -524,9 +526,15 @@ export class PiAgentProvider extends BaseAgentProvider {
     // "Work locally" session (no worktree, no runtime policy) still runs the
     // agent's tools in the selected project rather than the server's process.cwd().
     const cwd = policyOptions?.workspaceRoot ?? context.cwd ?? context.workspace ?? undefined;
-    const runtimeInstructions = context.runtimeEnvironment
+    const baseRuntimeInstructions = context.runtimeEnvironment
       ? renderRuntimeInstructions(context.runtimeEnvironment, runtimeTools)
       : runtimeTools?.systemPromptAppend?.trim() ?? '';
+    // Per-mode behavioural overlay (debug hypothesis-first / multitask decompose)
+    // rides the same system-prompt seam as the runtime instructions. Empty for a
+    // normal (mode-less) session.
+    const runtimeInstructions = [baseRuntimeInstructions, modeOverlay(context.mode)]
+      .filter(Boolean)
+      .join('\n\n');
     const policyResourceLoader = policyOptions
       ? new pi.DefaultResourceLoader({
           cwd: policyOptions.workspaceRoot,

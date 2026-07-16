@@ -46,6 +46,7 @@ import { composeSessionPreamble } from '../orchestration/session-preamble';
 import { PromptProfileService } from '../prompts/prompt-profile.service';
 import { PiLocalSessionsService } from '../pi-local/pi-local-sessions.service';
 import { canTransition } from './domain/sessions.fsm';
+import { assertModeSupported } from './domain/session-modes';
 import { deriveHasPendingInput } from './domain/derive-pending-input';
 import type { SessionEventType } from './domain/events.types';
 import type {
@@ -313,6 +314,11 @@ export class SessionsService implements OnModuleDestroy {
     const provider = await this.agents.getAvailable(providerId);
     try {
       assertRuntimePolicyCapabilitySupported(input.runtimePolicy, provider.capabilities);
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : String(error));
+    }
+    try {
+      assertModeSupported(input.mode, provider.capabilities.modes);
     } catch (error) {
       throw new BadRequestException(error instanceof Error ? error.message : String(error));
     }
@@ -2253,6 +2259,7 @@ export class SessionsService implements OnModuleDestroy {
       requestProviderApproval: (request) => this.requestProviderApproval(session.id, request),
       model: session.model,
       modelOptions: session.modelOptions,
+      mode: session.mode,
       workspace,
       cwd: session.worktreePath ?? (runtimePolicy ? workspace : undefined),
       cursorChatId: session.cursorChatId,

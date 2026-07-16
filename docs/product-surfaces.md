@@ -82,10 +82,10 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 
 | | |
 |---|---|
-| **Web** | Home: `home-view.tsx` (scope `home:new-agent`). Workbench empty slot: `grid-slot-composer.tsx` (scope `workbench-slot:N`, default `workbench:new-agent`). Shared leaves: `model-picker.tsx`, `project-picker.tsx`, `branch-picker.tsx`, `workspace-mode-picker.tsx`, `attachment-tray.tsx`, `use-composer-attachments.ts`. |
+| **Web** | Home: `home-view.tsx` (scope `home:new-agent`). Workbench empty slot: `grid-slot-composer.tsx` (scope `workbench-slot:N`, default `workbench:new-agent`). Shared leaves: `model-picker.tsx`, `project-picker.tsx`, `branch-picker.tsx`, `workspace-mode-picker.tsx`, `session-mode-picker.tsx` (Home only; capability-gated on `capabilities.modes`), `attachment-tray.tsx`, `use-composer-attachments.ts`. |
 | **Mobile** | `apps/mobile/src/app/new.tsx` |
 | **Settings** | Providers / Projects defaults affect create; not the composer UI itself |
-| **Server** | `POST /api/sessions`, `sessions/`, `models/`, `git/`, `projects/` |
+| **Server** | `POST /api/sessions` (`mode?`), `sessions/`, `models/`, `git/`, `projects/`; per-mode prompt overlay in `sessions/domain/session-modes.ts` |
 | **Also check** | Both Home **and** Workbench composers; mobile `/new` if create UX changes; Crew create only on Home + mobile (Workbench has **no** Crew path today); hub machine picker only on Workbench |
 | **Prefs** | `packages/core/src/model-preference.ts` — scoped keys above |
 

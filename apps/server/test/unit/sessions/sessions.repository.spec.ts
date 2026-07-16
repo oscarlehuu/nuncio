@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseModule } from '../../../src/db/database.module';
+import { DatabaseService } from '../../../src/db/database.service';
 import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
@@ -185,6 +186,28 @@ describe('SessionsRepository', () => {
     const updated = repo.updateStatus(s.id, 'RUNNING');
     expect(updated.status).toBe('RUNNING');
     expect(repo.findById(s.id)?.status).toBe('RUNNING');
+  });
+
+  describe('session mode', () => {
+    it('persists a mode and reads it back on findById', () => {
+      const s = repo.create({ prompt: 'debug it', provider: 'pi', mode: 'debug' });
+      expect(s.mode).toBe('debug');
+      expect(repo.findById(s.id)?.mode).toBe('debug');
+    });
+
+    it('defaults mode to null when omitted', () => {
+      const s = repo.create({ prompt: 'plain', provider: 'pi' });
+      expect(s.mode).toBeNull();
+      expect(repo.findById(s.id)?.mode).toBeNull();
+    });
+
+    it('coerces a corrupt stored mode value to null instead of throwing', () => {
+      const s = repo.create({ prompt: 'legacy row', provider: 'pi' });
+      // Simulate a legacy/corrupt row where the mode column holds an unknown value.
+      const db = module.get(DatabaseService);
+      db.db.prepare('UPDATE sessions SET mode = ? WHERE id = ?').run('bogus', s.id);
+      expect(repo.findById(s.id)?.mode).toBeNull();
+    });
   });
 
   describe('delete', () => {

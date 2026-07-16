@@ -19,6 +19,7 @@ function session(overrides: Partial<SessionDto> & { id: string }): SessionDto {
     provider: overrides.provider ?? 'pi',
     model: null,
     modelOptions: null,
+    mode: null,
     workspace: null,
     prompt: 'p',
     preview: null,

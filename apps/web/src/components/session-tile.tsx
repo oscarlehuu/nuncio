@@ -10,6 +10,7 @@ import { derivePendingUserInput } from '../lib/derive-pending-user-input';
 import { derivePlan, planProgress } from '../lib/derive-plan';
 import { deriveVerifyStatus } from '../lib/derive-verify-status';
 import { VerifyChip } from './verify-chip';
+import { SessionModeChip } from './session-mode-picker';
 import { projectDisplayName } from '../lib/projects';
 import { prettyModelName } from '../lib/model-providers';
 import { ProviderIcon } from './provider-icon';
@@ -219,6 +220,7 @@ export function SessionTile({
           <div className="flex items-center gap-1.5">
             <span className="truncate text-[13px] font-medium leading-tight">{session.title}</span>
             <VerifyChip status={verifyStatus} />
+            {session.mode && <SessionModeChip mode={session.mode} className="shrink-0" />}
           </div>
           <div className="truncate text-[11px] text-muted-foreground leading-tight">
             {pending ? (
