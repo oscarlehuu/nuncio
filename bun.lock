@@ -24,6 +24,7 @@
         "@electron/rebuild": "^4.1.0",
         "electron": "^42.5.2",
         "electron-builder": "^26.0.12",
+        "oxlint": "^1.69.0",
       },
     },
     "apps/landing": {

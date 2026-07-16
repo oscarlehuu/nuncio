@@ -7,10 +7,11 @@
   "scripts": {
     "dev": "electron .",
     "test": "bun test",
-    "lint": "echo \"(desktop lint: n/a during spike)\"",
+    "lint": "oxlint src test scripts",
     "postinstall": "electron-rebuild -w node-pty",
     "rebuild": "electron-rebuild -w node-pty",
     "build:resources": "bun scripts/build-resources.mjs",
+    "smoke": "bun scripts/smoke-desktop.mjs",
     "dist": "bun run build:resources && electron-builder --config electron-builder.config.cjs",
     "dist:stable": "NUNCIO_CHANNEL=stable bun run dist",
     "dist:dev": "NUNCIO_CHANNEL=dev bun run dist"
@@ -19,7 +20,8 @@
     "@electron/notarize": "^3.0.1",
     "@electron/rebuild": "^4.1.0",
     "electron": "^42.5.2",
-    "electron-builder": "^26.0.12"
+    "electron-builder": "^26.0.12",
+    "oxlint": "^1.69.0"
   },
   "dependencies": {
     "electron-updater": "^6.6.2",
