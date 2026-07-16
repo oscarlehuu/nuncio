@@ -42,8 +42,9 @@ output — the gates are for local runs, not a CI replacement.
   floor up with `bun run check-coverage-ratchet:update`.
 
 **Failure evidence (CI).** The real-browser smoke records a Playwright trace for the whole run and
-saves it (plus failure screenshots) to `smoke-artifacts/` only when a step fails; CI uploads that
-directory as the `smoke-artifacts` artifact. Open traces with `bunx playwright show-trace <zip>`.
+saves it (plus a failure screenshot, both named for the failing `journey-step`) to
+`smoke-artifacts/` only when a step fails; CI uploads that directory as the `smoke-artifacts`
+artifact. Open traces with `bunx playwright show-trace <zip>`.
 
 ## Self-verify playbook (no user in the loop)
 
@@ -174,9 +175,18 @@ Priority order when adding test depth (highest leverage first):
 1. Conformance suite rows for any session-layer behavior that currently only one provider tests.
 2. Pure projections + their table tests for every event-derived UI state (row 2 above).
 3. Restart/reconnect specs (rows 3–4) for any new durable state.
-4. The scripted level-5 browser smoke — **`bun run test:smoke-ui`** (`scripts/smoke-ui.mjs`:
-   hermetic ephemeral-port stack, `NUNCIO_FORCE_MOCK=1`, create → stream → steer → archive in
-   real Chrome) — extend it when a UI flow becomes load-bearing.
+4. The scripted level-5 browser **journey suite** — **`bun run test:smoke-ui`**
+   (`scripts/smoke-ui.mjs` orchestrates one hermetic ephemeral-port stack, `NUNCIO_FORCE_MOCK=1`,
+   and drives real Chrome through small per-feature journeys under `scripts/journeys/`). Beyond the
+   Solo lifecycle + delegation + Crew golden paths, it carries regression guards for the UI bugs
+   that have escaped: `archive-last-session` (no blank-screen when the final session is archived),
+   `model-preferences-per-composer` (model choice is scoped per composer, no cross-leak),
+   `transcript-selection-copy` (highlight survives and auto-copies), `theme-switch-mid-session`
+   (dark ↔ light keeps the transcript/composer usable and styled), and `websocket-reconnect` (the
+   harness restarts the server process mid-session; the client resubscribes from `lastSeq`,
+   gap-free and duplicate-free). Add a journey — a kebab-case module under `scripts/journeys/` that
+   registers named steps via the shared `record()` — when a UI flow becomes load-bearing; do **not**
+   stand up a second stack.
 5. Real-provider integration only for adapter seams that stubs cannot prove (auth discovery,
    cwd/tool binding, resume).
 
