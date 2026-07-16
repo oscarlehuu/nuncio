@@ -520,7 +520,10 @@ export class PiAgentProvider extends BaseAgentProvider {
     const policyOptions = context.runtimePolicy
       ? buildPiRuntimePolicyOptions(context.runtimePolicy, pi)
       : undefined;
-    const cwd = policyOptions?.workspaceRoot ?? context.cwd;
+    // Fall back to the session workspace like the Codex/Claude adapters do, so a
+    // "Work locally" session (no worktree, no runtime policy) still runs the
+    // agent's tools in the selected project rather than the server's process.cwd().
+    const cwd = policyOptions?.workspaceRoot ?? context.cwd ?? context.workspace ?? undefined;
     const runtimeInstructions = context.runtimeEnvironment
       ? renderRuntimeInstructions(context.runtimeEnvironment, runtimeTools)
       : runtimeTools?.systemPromptAppend?.trim() ?? '';
@@ -557,7 +560,7 @@ export class PiAgentProvider extends BaseAgentProvider {
           pi,
           agentDir,
           sessionId,
-          context.cwd,
+          cwd,
           runtimeInstructions,
         );
     const externalMemorySnapshot = engineResources?.externalMemorySnapshot;
@@ -583,7 +586,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     ];
     const customTools = policyOptions
       ? [...policyOptions.customTools, ...runtimeCustomTools, ...engineTools]
-      : [...(buildPiCustomTools(context.cwd, pi, context.tools) ?? []), ...engineTools];
+      : [...(buildPiCustomTools(cwd, pi, context.tools) ?? []), ...engineTools];
     // Pi 0.80.6 treats `tools` as the allowlist for built-ins AND customTools.
     // Include the already-vetted Crew definitions or the SDK silently removes
     // submit_* from the registry despite receiving it in customTools.
