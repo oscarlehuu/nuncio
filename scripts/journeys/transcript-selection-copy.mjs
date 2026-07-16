@@ -1,6 +1,7 @@
 // Journey (regression guard): highlighting text in the chat transcript keeps
 // the selection AND auto-copies it to the clipboard on release — no Cmd/Ctrl+C.
 import { createMockSession, waitSessionIdle } from '../lib/mock-session.mjs';
+import { transcriptText } from '../lib/transcript.mjs';
 
 const MARKER = 'I received your task';
 
@@ -10,7 +11,7 @@ export async function runTranscriptSelectionCopy(ctx) {
   const setup = record('selection: open a settled mock session with a reply to highlight');
   const session = await createMockSession(baseUrl, 'Selection smoke: produce a reply to highlight');
   await page.goto(`${baseUrl}/session/${session.id}`, { waitUntil: 'domcontentloaded' });
-  await waitFor(async () => (await page.getByText(MARKER, { exact: false }).count()) > 0, {
+  await waitFor(async () => (await transcriptText(page, MARKER, { exact: false }).count()) > 0, {
     label: 'assistant reply to highlight',
   });
   await waitSessionIdle(baseUrl, session.id, waitFor);

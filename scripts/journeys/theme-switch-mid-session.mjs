@@ -2,6 +2,7 @@
 // the transcript and steer composer usable and fully styled — the flip is only a
 // class change on <html>, never an unstyled flash.
 import { createMockSession, MOCK_TASK_REPLY, waitSessionIdle } from '../lib/mock-session.mjs';
+import { transcriptText } from '../lib/transcript.mjs';
 
 async function htmlIsDark(page) {
   return page.locator('html').evaluate((el) => el.classList.contains('dark'));
@@ -14,7 +15,7 @@ function bodyBackground(page) {
 
 async function assertUsableAndStyled(page, waitFor, themeLabel) {
   // Transcript still rendered with its content.
-  if ((await page.getByText(MOCK_TASK_REPLY, { exact: true }).count()) === 0) {
+  if ((await transcriptText(page, MOCK_TASK_REPLY, { exact: true }).count()) === 0) {
     throw new Error(`transcript lost its content after switching to ${themeLabel}`);
   }
   // Steer composer still present and enabled.
@@ -36,7 +37,7 @@ export async function runThemeSwitchMidSession(ctx) {
   const setup = record('theme: open a settled mock session, then reveal the theme control');
   const session = await createMockSession(baseUrl, 'Theme smoke: session that survives theme flips');
   await page.goto(`${baseUrl}/session/${session.id}`, { waitUntil: 'domcontentloaded' });
-  await waitFor(async () => (await page.getByText(MOCK_TASK_REPLY, { exact: true }).count()) > 0, {
+  await waitFor(async () => (await transcriptText(page, MOCK_TASK_REPLY, { exact: true }).count()) > 0, {
     label: 'reply present before theme flips',
   });
   await waitSessionIdle(baseUrl, session.id, waitFor);

@@ -2,12 +2,15 @@
 // the browser transcript survives (durable replay) and the client resubscribes
 // from its last seq — the next turn streams in live, gap-free and duplicate-free.
 import { createMockSession, MOCK_TASK_REPLY, waitSessionIdle } from '../lib/mock-session.mjs';
+import { transcriptText } from '../lib/transcript.mjs';
 
 // The completed reply renders across nested transcript elements, so the exact
 // text matches more than one node. Duplication is proven by the count STAYING
 // stable across the reconnect (replay must not re-append), not by an absolute 1.
+// Scoped to the transcript container so the sidebar's recent-session preview
+// (which echoes the same reply text) can never stand in for a broken replay.
 function replyMatchCount(page, text) {
-  return page.getByText(text, { exact: true }).count();
+  return transcriptText(page, text, { exact: true }).count();
 }
 
 export async function runWebsocketReconnect(ctx) {
@@ -48,7 +51,7 @@ export async function runWebsocketReconnect(ctx) {
     throw new Error(`post-restart steer failed: ${steerRes.status} ${await steerRes.text()}`);
   }
   const steerReply = `Steer received: "${steerText}". Continuing in mock mode.`;
-  await waitFor(async () => (await page.getByText(steerReply, { exact: true }).count()) > 0, {
+  await waitFor(async () => (await transcriptText(page, steerReply, { exact: true }).count()) > 0, {
     label: 'post-restart steer reply streams into the live transcript',
   });
   // Still gap-free + duplicate-free: the original reply was not re-delivered.

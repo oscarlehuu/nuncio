@@ -3,6 +3,7 @@
 // capture a Light-theme screenshot, steer, and archive out of the active list.
 import { join } from 'node:path';
 import { createMockSession, MOCK_TASK_REPLY, waitSessionIdle } from '../lib/mock-session.mjs';
+import { transcriptText } from '../lib/transcript.mjs';
 
 export async function runSoloLifecycle(ctx) {
   const { page, baseUrl, waitFor, record, artifactsDir } = ctx;
@@ -19,10 +20,10 @@ export async function runSoloLifecycle(ctx) {
   const composer = page.getByPlaceholder(/Steer the agent/i);
   await waitFor(() => composer.count(), { label: 'session detail to hydrate' });
   const replyMark = 'I received your task';
-  await waitFor(async () => (await page.getByText(replyMark, { exact: false }).count()) > 0, {
+  await waitFor(async () => (await transcriptText(page, replyMark, { exact: false }).count()) > 0, {
     label: 'streamed assistant reply',
   });
-  await waitFor(async () => (await page.getByText(MOCK_TASK_REPLY, { exact: true }).count()) > 0, {
+  await waitFor(async () => (await transcriptText(page, MOCK_TASK_REPLY, { exact: true }).count()) > 0, {
     label: 'exact completed assistant reply',
   });
   streamStep.ok = true;
@@ -60,18 +61,18 @@ export async function runSoloLifecycle(ctx) {
   await composer.click();
   await composer.fill(steerText);
   await page.getByRole('button', { name: 'Send', exact: true }).click();
-  await waitFor(async () => (await page.getByText(steerText, { exact: false }).count()) > 0, {
+  await waitFor(async () => (await transcriptText(page, steerText, { exact: false }).count()) > 0, {
     label: 'steer echoed into transcript',
   });
   const steerReply = `Steer received: "${steerText}". Continuing in mock mode.`;
   const steerReplyHead = steerReply.slice(0, 8);
   await waitFor(
     async () =>
-      (await page.getByText(steerReplyHead, { exact: false }).count()) > 0 &&
-      (await page.getByText(steerReply, { exact: true }).count()) === 0,
+      (await transcriptText(page, steerReplyHead, { exact: false }).count()) > 0 &&
+      (await transcriptText(page, steerReply, { exact: true }).count()) === 0,
     { interval: 10, label: 'partial mock steer reply before completion' },
   );
-  await waitFor(async () => (await page.getByText(steerReply, { exact: true }).count()) > 0, {
+  await waitFor(async () => (await transcriptText(page, steerReply, { exact: true }).count()) > 0, {
     label: 'exact completed mock steer reply',
   });
   steerStep.ok = true;
