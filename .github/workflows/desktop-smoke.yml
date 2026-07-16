@@ -1,0 +1,51 @@
+name: Desktop Smoke
+
+# Packaged-desktop boot gate. The main CI (ci.yml) runs on ubuntu and can't build or
+# launch the packaged Electron app, so this lives on its own macOS runner. It builds
+# an unsigned packaged app and asserts it actually boots and renders — catching the
+# packaged-only regressions plain unit tests miss (server bundle breaks, SDK runtime
+# chunks failing to load, a blank window when the renderer can't reach the server).
+on:
+  pull_request:
+    paths:
+      - 'apps/desktop/**'
+      - 'apps/server/**'
+      - 'apps/web/**'
+      - 'scripts/**'
+      - '.github/workflows/desktop-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: packaged boot smoke
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Boot smoke (build unsigned package + launch)
+        run: bun run --filter @nuncio/desktop smoke
+
+      - name: Upload smoke artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-smoke-artifacts
+          path: apps/desktop/smoke-artifacts/
+          if-no-files-found: ignore

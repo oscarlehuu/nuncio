@@ -149,6 +149,21 @@ describe('desktop daemon helpers', () => {
     expect(healthy).toBe(false);
   });
 
+  test('waitForHealth treats a non-200 /api/health as unhealthy', async () => {
+    const server = http.createServer((request, response) => {
+      response.writeHead(request.url === '/api/health' ? 503 : 404);
+      response.end();
+    });
+    const address = await listen(server);
+
+    try {
+      const healthy = await waitForHealth(address.port, { timeoutMs: 200, intervalMs: 20 });
+      expect(healthy).toBe(false);
+    } finally {
+      await close(server);
+    }
+  });
+
   test('resolveBunPath prefers NUNCIO_BUN_PATH when set', () => {
     process.env.NUNCIO_BUN_PATH = '/tmp/nuncio-test-bun';
 
