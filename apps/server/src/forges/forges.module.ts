@@ -1,6 +1,7 @@
 import { forwardRef, Module } from '@nestjs/common';
 import { AttentionModule } from '../attention/attention.module';
 import { GitModule } from '../git/git.module';
+import { SchedulerModule } from '../scheduler/scheduler.module';
 import { SessionsModule } from '../sessions/sessions.module';
 import { SessionsPersistenceModule } from '../sessions/sessions.persistence.module';
 import { SettingsModule } from '../settings/settings.module';
@@ -20,6 +21,7 @@ import { WebhooksService } from './webhooks/webhooks.service';
   imports: [
     SettingsModule,
     GitModule,
+    SchedulerModule,
     SessionsPersistenceModule,
     SessionsModule,
     forwardRef(() => AttentionModule),

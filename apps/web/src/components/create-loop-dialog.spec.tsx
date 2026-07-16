@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../lib/api', async () => {
@@ -133,5 +133,30 @@ describe('CreateLoopDialog', () => {
     await userEvent.click(screen.getByRole('button', { name: /create loop/i }));
     await waitFor(() => expect(createLoop).toHaveBeenCalled());
     expect(vi.mocked(createLoop).mock.calls[0]![0].stop).toEqual({ kind: 'maxTotalRuns', n: 5 });
+  });
+
+  it('builds an event-trigger spec from the On-event tab', async () => {
+    render(<CreateLoopDialog open onOpenChange={vi.fn()} onCreated={vi.fn()} />);
+    await userEvent.type(screen.getByLabelText('Goal'), 'Triage new issues');
+    await userEvent.click(screen.getByRole('tab', { name: 'On event' }));
+    // Default event is issue.opened; add a label filter.
+    await userEvent.type(screen.getByLabelText(/required label filter/i), 'agent');
+    expect(screen.getByText(/On Issue opened · label/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /create loop/i }));
+    await waitFor(() => expect(createLoop).toHaveBeenCalled());
+    const payload = vi.mocked(createLoop).mock.calls[0]![0];
+    expect(payload.schedule.kind).toBe('event');
+    expect(JSON.parse(payload.schedule.spec)).toEqual({ event: 'issue.opened', label: 'agent' });
+  });
+
+  it('sends an edited breaker threshold instead of the constant default', async () => {
+    render(<CreateLoopDialog open onOpenChange={vi.fn()} onCreated={vi.fn()} />);
+    await userEvent.type(screen.getByLabelText('Goal'), 'Careful loop');
+    const breaker = screen.getByLabelText(/consecutive failures before pausing/i);
+    // A clamped controlled number input: one change event mirrors select-all-then-type.
+    fireEvent.change(breaker, { target: { value: '5' } });
+    await userEvent.click(screen.getByRole('button', { name: /create loop/i }));
+    await waitFor(() => expect(createLoop).toHaveBeenCalled());
+    expect(vi.mocked(createLoop).mock.calls[0]![0].maxConsecutiveFailures).toBe(5);
   });
 });

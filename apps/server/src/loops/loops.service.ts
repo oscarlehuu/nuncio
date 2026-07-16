@@ -19,10 +19,10 @@ import {
   totalRuns,
   verifyGreenStreak,
 } from './loop-accounting';
-import { buildRunContext, withRunContext } from './loop-context';
+import { buildRunContext, withRunContext, withTriggerContext } from './loop-context';
 import { computeLoopStats, type LoopStats } from './loop-stats';
 import { parseScheduleSpec } from '../scheduler/schedule-spec';
-import type { Clock } from '../scheduler/scheduler.types';
+import type { Clock, LoopTriggerContext } from '../scheduler/scheduler.types';
 import type { TaskDto } from '../tasks/tasks.types';
 import {
   DEFAULT_MAX_CONSECUTIVE_FAILURES,
@@ -141,8 +141,9 @@ export class LoopsService implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
-    // Resolve a scheduler {kind:'loop',loopId} fire into a budget-checked run.
-    this.scheduler?.setLoopFireHandler((loopId) => this.fire(loopId));
+    // Resolve a scheduler {kind:'loop',loopId} fire into a budget-checked run; a
+    // webhook fire threads the triggering issue/PR context into the run's prompt.
+    this.scheduler?.setLoopFireHandler((loopId, trigger) => this.fire(loopId, trigger));
     // Fold every settled loop task back into its run + re-evaluate breaker/stop.
     this.tasks?.onTaskFinished((task) => this.onTaskSettled(task));
     // A run left 'pending' by a crash before its task settled is reconciled from
@@ -275,7 +276,9 @@ export class LoopsService implements OnModuleInit {
     });
     const schedule = this.scheduler?.create({
       kind: input.schedule.kind,
-      spec: input.schedule.spec,
+      // Scope an event trigger to this loop's project so an identical event+label
+      // on another repo can never fire it (unscoped when the loop has no project).
+      spec: this.scopeEventSpec(input.schedule.kind, input.schedule.spec, projectPath),
       target: { kind: 'loop', loopId: created.id },
     });
     if (schedule) {
@@ -320,8 +323,8 @@ export class LoopsService implements OnModuleInit {
    * Returns the pending run row, or null when skipped (paused/broken/completed or
    * day budget exhausted). The task is enqueued with a FORCED fresh worktree.
    */
-  fire(loopId: string): LoopRunDto | null {
-    const result = this.fireInternal(loopId);
+  fire(loopId: string, trigger?: LoopTriggerContext): LoopRunDto | null {
+    const result = this.fireInternal(loopId, trigger);
     return 'run' in result ? result.run : null;
   }
 
@@ -330,9 +333,12 @@ export class LoopsService implements OnModuleInit {
    * scheduler ({@link fire}) collapses a skip to null, while a manual fire
    * ({@link fireManual}) maps overlap/budget to a 409. `inactive` covers a
    * missing / paused / broken / completed loop (the scheduler ignores it).
+   * `trigger` is the webhook (issue/PR) that fired an event loop, threaded into
+   * the run's prompt so the agent knows which subject it is reacting to.
    */
   private fireInternal(
     loopId: string,
+    trigger?: LoopTriggerContext,
   ): { run: LoopRunDto } | { skipped: 'overlap' | 'budget' | 'inactive' } {
     const loop = this.loops.findById(loopId);
     if (!loop || loop.status !== 'active') return { skipped: 'inactive' };
@@ -363,14 +369,15 @@ export class LoopsService implements OnModuleInit {
       (loop.projectPath ? this.projectDefaults?.resolveDefaultEngine(loop.projectPath) : null) ??
       undefined;
 
-    // Memories v1: prepend a compact previous-run context block to the goal.
+    // Memories v1: prepend a compact previous-run context block to the goal, and
+    // (for a webhook fire) the triggering issue/PR so the agent knows its subject.
     const context = buildRunContext({
       runs,
       lastVerifyTail: this.lastVerifyTail(runs),
       maxRunsPerDay: loop.maxRunsPerDay,
       now: this.clock.now(),
     });
-    const prompt = withRunContext(loop.goal, context);
+    const prompt = withTriggerContext(trigger, withRunContext(loop.goal, context));
 
     // Enqueue a task: goal (+context) as prompt, project scope, FORCED fresh
     // worktree (a loop NEVER runs in-place — locked write policy).
@@ -508,7 +515,31 @@ export class LoopsService implements OnModuleInit {
         patch.engine !== undefined ? repoPatch.engine ?? null : existing.engine;
       repoPatch.model = await this.validateModel(patch.model, effectiveEngine, existing.projectPath);
     }
-    return this.loops.update(id, repoPatch) ?? existing;
+    // Editing the trigger re-specs the loop's OWNED schedule row IN PLACE (id kept),
+    // so run history + streaks (derived from durable loop_runs) survive the change.
+    // Validate BEFORE any mutation; apply after every validation has passed so a
+    // later throw never leaves a re-specced schedule on an otherwise-unchanged loop.
+    if (patch.schedule !== undefined) this.validateSchedule(patch.schedule);
+    if (
+      patch.schedule !== undefined &&
+      existing.scheduleId &&
+      existing.scheduleId !== 'pending'
+    ) {
+      // Re-scope the trigger to the loop's project on every edit (an event trigger
+      // must stay pinned to its own repo).
+      const scopedSpec = this.scopeEventSpec(
+        patch.schedule.kind,
+        patch.schedule.spec,
+        existing.projectPath,
+      );
+      this.scheduler?.updateSpec(existing.scheduleId, patch.schedule.kind, scopedSpec);
+    }
+    const applied = this.loops.update(id, repoPatch) ?? existing;
+    // Lowering the breaker threshold must trip NOW if the current streak already
+    // meets it — re-evaluate immediately rather than waiting for the next failure.
+    if (repoPatch.maxConsecutiveFailures !== undefined) this.evaluate(id);
+    // Return the schedule-joined, post-evaluation DTO (status may have flipped).
+    return this.withSchedule(this.loops.findById(id) ?? applied);
   }
 
   /** Manual run-now: bypass the schedule, but a manual fire is still a consumed
@@ -705,5 +736,22 @@ export class LoopsService implements OnModuleInit {
     }
     // cron / heartbeat: must parse against the v1 subset (throws BadRequest on typos).
     parseScheduleSpec(spec);
+  }
+
+  /**
+   * Pin an event trigger to the loop's project so an identical event+label on
+   * another repo can never fire it. Injects `projectPath` into the filter JSON
+   * (idempotent — overwrites any client-supplied scope). A non-event spec, a
+   * project-less loop, or an unparseable filter is returned unchanged (validation
+   * has already run; matching just stays unscoped).
+   */
+  private scopeEventSpec(kind: string, spec: string, projectPath: string | null): string {
+    if (kind !== 'event' || !projectPath) return spec;
+    try {
+      const filter = JSON.parse(spec) as Record<string, unknown>;
+      return JSON.stringify({ ...filter, projectPath });
+    } catch {
+      return spec;
+    }
   }
 }

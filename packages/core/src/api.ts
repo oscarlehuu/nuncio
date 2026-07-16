@@ -895,11 +895,15 @@ export interface UpdateLoopInput {
   /** null clears the label (display falls back to the goal). */
   name?: string | null;
   goal?: string;
+  /** Re-spec the loop's owned trigger in place; run history/streaks survive. */
+  schedule?: { kind: ScheduleKind; spec: string };
   /** null clears the per-loop engine override (inherit from project). */
   engine?: string | null;
   /** null clears the per-loop model override (the resolved engine's default). */
   model?: string | null;
   maxRunsPerDay?: number;
+  /** Consecutive-failure breaker threshold (min 1). */
+  maxConsecutiveFailures?: number;
   stop?: StopCondition;
 }
 

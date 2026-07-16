@@ -14,7 +14,13 @@ import {
   type LoopRunDto,
 } from '../lib/api';
 import type { ModelProvider } from '../lib/model-providers';
-import { failureStreak, loopDisplayName } from '@nuncio/core/loop-schedule';
+import {
+  buildScheduleSpec,
+  failureStreak,
+  loopDisplayName,
+  parseSpecToFields,
+  type ScheduleFormFields,
+} from '@nuncio/core/loop-schedule';
 import { LoopStatusChip } from './loop-status-chip';
 import { LoopSettingsTab } from './loop-settings-tab';
 import { LoopRunHistory } from './loop-run-history';
@@ -67,6 +73,12 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
   const [engine, setEngine] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null);
   const [maxRuns, setMaxRuns] = useState(24);
+  const [maxFailures, setMaxFailures] = useState(3);
+  const [sched, setSched] = useState<ScheduleFormFields>(() => parseSpecToFields('cron', ''));
+  // A trigger PATCH ships ONLY when the user touched the controls — a stored spec
+  // the form can't round-trip (a legacy/heartbeat kind) must not start dirty or let
+  // an unrelated save silently replace the trigger.
+  const [scheduleTouched, setScheduleTouched] = useState(false);
   const seeded = useRef<string | null>(null);
 
   const seedDraft = useCallback((l: LoopDto) => {
@@ -77,6 +89,9 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
     setEngine(l.engine ?? null);
     setModel(l.model ?? null);
     setMaxRuns(l.maxRunsPerDay);
+    setMaxFailures(l.maxConsecutiveFailures);
+    setSched(parseSpecToFields(l.schedule?.kind ?? 'cron', l.schedule?.spec ?? ''));
+    setScheduleTouched(false);
   }, []);
 
   const load = useCallback(async () => {
@@ -111,12 +126,28 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
 
   if (!loop) return <DetailSkeleton onBack={() => navigate('/autopilot')} />;
 
+  // Trigger draft, projected to the {kind, spec} the server stores, vs the original.
+  // Only a user-touched trigger counts as changed — a stored spec the form can't
+  // round-trip (legacy/heartbeat) otherwise reads "dirty" and an unrelated save
+  // would replace it.
+  const nextKind: 'cron' | 'event' = sched.mode === 'event' ? 'event' : 'cron';
+  const nextSpec = buildScheduleSpec(sched.mode, sched);
+  const scheduleChanged =
+    scheduleTouched &&
+    (nextSpec !== (loop.schedule?.spec ?? '') || nextKind !== (loop.schedule?.kind ?? 'cron'));
+  const scheduleValid =
+    !scheduleTouched ||
+    ((sched.mode === 'interval' || sched.mode === 'event' || /^\d{1,2}:\d{2}$/.test(sched.time)) &&
+      (sched.mode !== 'interval' || (Number.isInteger(sched.interval) && sched.interval > 0)));
+
   const dirty =
     name.trim() !== (loop.name ?? '') ||
     goal.trim() !== loop.goal ||
     (engine ?? null) !== (loop.engine ?? null) ||
     (model ?? null) !== (loop.model ?? null) ||
-    maxRuns !== loop.maxRunsPerDay;
+    maxRuns !== loop.maxRunsPerDay ||
+    maxFailures !== loop.maxConsecutiveFailures ||
+    scheduleChanged;
   const fireReason = fireDisabledReason(loop.status);
 
   const run = async (action: () => Promise<unknown>, okMsg?: string) => {
@@ -154,6 +185,10 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
       patch.model = model; // includes explicit clear-to-null on the same engine
     }
     if (maxRuns !== loop.maxRunsPerDay) patch.maxRunsPerDay = maxRuns;
+    if (maxFailures !== loop.maxConsecutiveFailures) patch.maxConsecutiveFailures = maxFailures;
+    // Re-spec the owned trigger in place — the server keeps the schedule id, so run
+    // history + streaks survive the change.
+    if (scheduleChanged) patch.schedule = { kind: nextKind, spec: nextSpec };
     return patch;
   };
 
@@ -219,7 +254,7 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
             <Play className="size-3.5" />
             <span className="hidden sm:inline">Run now</span>
           </Button>
-          <Button size="sm" disabled={!dirty || busy} onClick={handleSave}>
+          <Button size="sm" disabled={!dirty || !scheduleValid || busy} onClick={handleSave}>
             Save
           </Button>
           <DropdownMenu>
@@ -310,6 +345,13 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
               }}
               maxRunsPerDay={maxRuns}
               onMaxRunsChange={setMaxRuns}
+              schedule={sched}
+              onScheduleChange={(next) => {
+                setSched(next);
+                setScheduleTouched(true);
+              }}
+              maxConsecutiveFailures={maxFailures}
+              onMaxFailuresChange={setMaxFailures}
             />
           ) : (
             <LoopRunHistory

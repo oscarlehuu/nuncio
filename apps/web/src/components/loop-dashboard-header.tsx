@@ -1,18 +1,25 @@
+import { ArrowRight } from 'lucide-react';
 import type { LoopStatsDto } from '../lib/api';
 import { cn } from '@/lib/utils';
 
 /**
  * Autopilot fleet dashboard: three at-a-glance counters and a 14-day success/fail
- * sparkline. Quiet by default (muted stat cards over the surface ladder); the
- * sparkline reads runs stacked per day — success below, failures above in warning.
+ * sparkline that doubles as the entry to the full run history. Quiet by default
+ * (muted stat cards over the surface ladder); the sparkline reads runs stacked per
+ * day — success below, failures above in warning. Renders even with zero loops so
+ * the fleet frame is always present (Cursor-parity).
  */
 interface LoopDashboardHeaderProps {
   stats: LoopStatsDto | null;
   loading?: boolean;
+  /** Navigate to the full run history — the sparkline tile becomes this button. */
+  onOpenRunHistory?: () => void;
 }
 
-export function LoopDashboardHeader({ stats, loading }: LoopDashboardHeaderProps) {
-  if (loading || !stats) {
+export function LoopDashboardHeader({ stats, loading, onOpenRunHistory }: LoopDashboardHeaderProps) {
+  // Only the initial fetch shows the skeleton. If stats fail to load we still
+  // render the frame with zeros so the run-history entry never becomes unreachable.
+  if (loading) {
     return (
       <div className="grid grid-cols-3 gap-3" aria-hidden>
         {[0, 1, 2].map((i) => (
@@ -22,15 +29,28 @@ export function LoopDashboardHeader({ stats, loading }: LoopDashboardHeaderProps
     );
   }
 
+  const view = stats ?? { total: 0, active: 0, successful7d: 0, failed7d: 0, sparkline: [] };
+
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-      <StatCard label="Loops" value={stats.total} hint={`${stats.active} active`} />
-      <StatCard label="Successful · 7d" value={stats.successful7d} tone="success" />
-      <StatCard label="Failed · 7d" value={stats.failed7d} tone={stats.failed7d > 0 ? 'warning' : undefined} />
-      <div className="surface-lit col-span-2 flex flex-col justify-between rounded-xl border border-border bg-card px-4 py-3 shadow-e1 sm:col-span-1">
-        <span className="text-ui-sm text-muted-foreground">Last 14 days</span>
-        <Sparkline days={stats.sparkline} />
-      </div>
+      <StatCard label="Loops" value={view.total} hint={`${view.active} active`} />
+      <StatCard label="Successful · 7d" value={view.successful7d} tone="success" />
+      <StatCard label="Failed · 7d" value={view.failed7d} tone={view.failed7d > 0 ? 'warning' : undefined} />
+      <button
+        type="button"
+        onClick={onOpenRunHistory}
+        aria-label="View all run history"
+        className="surface-lit group col-span-2 flex flex-col justify-between rounded-xl border border-border bg-card px-4 py-3 text-left shadow-e1 transition-shadow hover:shadow-e2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:col-span-1"
+      >
+        <span className="flex items-center justify-between text-ui-sm text-muted-foreground">
+          <span>Last 14 days</span>
+          <span className="inline-flex items-center gap-0.5 opacity-70 transition-opacity group-hover:opacity-100">
+            Run history
+            <ArrowRight className="size-3" />
+          </span>
+        </span>
+        <Sparkline days={view.sparkline} />
+      </button>
     </div>
   );
 }

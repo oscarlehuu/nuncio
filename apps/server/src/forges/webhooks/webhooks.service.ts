@@ -1,7 +1,8 @@
-import { Injectable, OnModuleDestroy, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, Optional, OnModuleDestroy, ServiceUnavailableException } from '@nestjs/common';
 import { AttentionService } from '../../attention/attention.service';
 import { DatabaseService } from '../../db/database.service';
 import { GitService } from '../../git/git.service';
+import { SchedulerService } from '../../scheduler/scheduler.service';
 import { SessionsRepository } from '../../sessions/persistence/sessions.repository';
 import { SessionsService } from '../../sessions/sessions.service';
 import { SettingsService } from '../../settings/settings.service';
@@ -48,6 +49,8 @@ export class WebhooksService implements OnModuleDestroy {
     private readonly forges: ForgesService,
     private readonly forgeRepos: ForgeRepoService,
     private readonly attention: AttentionService,
+    // Optional: event-triggered loops match issue/PR deliveries through the scheduler.
+    @Optional() private readonly scheduler?: SchedulerService,
   ) {
     this.deliveries = new WebhookDeliveryTracker(this.db);
     this.stopFailureReporting = this.sessions.onBackgroundSteerFailure(
@@ -64,6 +67,9 @@ export class WebhooksService implements OnModuleDestroy {
   }
 
   async handleEvent(provider: string, event: ForgeWebhookEvent): Promise<WebhookHandleResult> {
+    // Event-triggered loops react to issue/PR deliveries independent of the narrow
+    // auto-create / PR-lifecycle policies below, scoped to the delivery's project.
+    await this.dispatchEventLoops(provider, event);
     if (event.kind === 'issue') return this.handleIssue(provider, event);
     if (event.kind === 'pull_request') return this.handlePullRequest(provider, event);
     if (event.kind !== 'pull_request_feedback' && event.kind !== 'ci_failure') {
@@ -172,6 +178,29 @@ export class WebhooksService implements OnModuleDestroy {
         this.settingEnabled(AUTO_CLOSE_SETTING),
       );
     });
+  }
+
+  /**
+   * Match a de-duplicated issue/PR delivery against event-triggered loops. Resolves
+   * the delivery's local project and passes it to the scheduler so a loop scoped to
+   * that project fires while a same-named event on another repo does not. Uses an
+   * independent delivery-dedup keyspace (`#loops`) so a replay never double-fires a
+   * loop and never collides with the auto-session / PR-lifecycle claim on the same id.
+   */
+  private async dispatchEventLoops(provider: string, event: ForgeWebhookEvent): Promise<void> {
+    if (!this.scheduler) return;
+    if (event.kind !== 'issue' && event.kind !== 'pull_request') return;
+    if (!event.deliveryId) return;
+    const claimed = this.deliveries.claim(provider, `${event.deliveryId}#loops`);
+    if (claimed.status !== 'claimed') return; // completed (replay) or in-progress → skip
+    try {
+      const projectPath = await findWebhookProject(this.git, event);
+      this.scheduler.handleWebhookEvent(provider, event, projectPath);
+      this.deliveries.complete(claimed.claim, () => undefined);
+    } catch {
+      // A resolve/dispatch failure stays retryable — release the lease.
+      this.deliveries.release(claimed.claim);
+    }
   }
 
   private settingEnabled(key: string): boolean {

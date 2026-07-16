@@ -15,11 +15,17 @@ export interface LoopTemplate {
   blurb: string;
   icon: LucideIcon;
   goal: string;
-  schedule: { mode: ScheduleMode; time?: string; interval?: number; unit?: 'm' | 'h'; weekday?: string };
+  schedule: {
+    mode: ScheduleMode;
+    time?: string;
+    interval?: number;
+    unit?: 'm' | 'h';
+    weekday?: string;
+    event?: string;
+    label?: string;
+  };
   maxRunsPerDay?: number;
   stop?: StopCondition;
-  /** Set when the template needs a capability we don't ship yet (rendered as a note). */
-  comingSoon?: string;
 }
 
 export const LOOP_TEMPLATES: readonly LoopTemplate[] = [
@@ -74,8 +80,7 @@ export const LOOP_TEMPLATES: readonly LoopTemplate[] = [
     blurb: 'React to a new issue labeled agent and open a triage task automatically.',
     icon: GitPullRequestArrow,
     goal: 'Triage a newly opened issue labeled agent: reproduce, label, and draft an initial fix.',
-    schedule: { mode: 'daily', time: '08:00' },
-    comingSoon: 'Event triggers land in a later update — this runs on a daily schedule for now.',
+    schedule: { mode: 'event', event: 'issue.opened', label: 'agent' },
   },
 ];
 
@@ -107,9 +112,6 @@ export function LoopTemplates({ onPick }: LoopTemplatesProps) {
                 <h3 className="text-ui-lg font-medium text-foreground">{template.name}</h3>
               </div>
               <p className="flex-1 text-ui text-muted-foreground leading-relaxed">{template.blurb}</p>
-              {template.comingSoon && (
-                <p className="text-ui-sm text-muted-foreground/80 italic">{template.comingSoon}</p>
-              )}
               <div className="pt-1">
                 <Button
                   variant="outline"

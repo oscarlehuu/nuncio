@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../lib/api', async () => {
@@ -83,6 +83,52 @@ describe('AutopilotView', () => {
     await waitFor(() => expect(screen.getByText('No loops yet')).toBeInTheDocument());
     expect(screen.getByText(/standing task nuncio runs on a schedule/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /create your first loop/i })).toBeInTheDocument();
+  });
+
+  it('renders the fleet stat tiles even with zero loops (Cursor-parity)', async () => {
+    vi.mocked(fetchLoops).mockResolvedValue([]);
+    renderView();
+    await waitFor(() => expect(screen.getByText('No loops yet')).toBeInTheDocument());
+    // The dashboard frame is present alongside the empty state, not gated behind loops.
+    expect(screen.getByText('Loops')).toBeInTheDocument();
+    expect(screen.getByText('Successful · 7d')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /view all run history/i })).toBeInTheDocument();
+  });
+
+  it('keeps run history reachable when the stats fetch fails', async () => {
+    vi.mocked(fetchLoops).mockResolvedValue([loop({ id: 'a', status: 'active' })]);
+    vi.mocked(fetchLoopStats).mockReset().mockRejectedValue(new Error('stats down'));
+    render(
+      <MemoryRouter initialEntries={['/autopilot']}>
+        <Routes>
+          <Route path="/autopilot" element={<AutopilotView onBack={vi.fn()} providers={[]} />} />
+          <Route path="/autopilot/runs" element={<div>all-runs-view</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByText('Triage new issues')).toBeInTheDocument());
+    // Stats failed → the dashboard still renders and the run-history entry works.
+    const tile = screen.getByRole('button', { name: /view all run history/i });
+    await userEvent.click(tile);
+    expect(await screen.findByText('all-runs-view')).toBeInTheDocument();
+  });
+
+  it('folds run history into a single clickable sparkline tile (no header duplicate)', async () => {
+    vi.mocked(fetchLoops).mockResolvedValue([loop({ id: 'a', status: 'active' })]);
+    render(
+      <MemoryRouter initialEntries={['/autopilot']}>
+        <Routes>
+          <Route path="/autopilot" element={<AutopilotView onBack={vi.fn()} providers={[]} />} />
+          <Route path="/autopilot/runs" element={<div>all-runs-view</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByText('Triage new issues')).toBeInTheDocument());
+    // Exactly one run-history affordance (the folded tile), not a header button too.
+    const tiles = screen.getAllByRole('button', { name: /view all run history/i });
+    expect(tiles).toHaveLength(1);
+    await userEvent.click(tiles[0]!);
+    expect(await screen.findByText('all-runs-view')).toBeInTheDocument();
   });
 
   it('renders each of the four loop statuses with its chip', async () => {

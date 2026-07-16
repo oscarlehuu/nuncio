@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, ListChecks, Plus, Repeat } from 'lucide-react';
+import { ArrowLeft, Plus, Repeat } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   deleteLoop,
@@ -151,16 +151,6 @@ export function AutopilotView({ onBack, providers }: AutopilotViewProps) {
         </Button>
         <h1 className="text-lg font-semibold tracking-tight">Autopilot</h1>
         <div className="ml-auto flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="gap-1.5"
-            onClick={() => navigate('/autopilot/runs')}
-            aria-label="View all run history"
-          >
-            <ListChecks className="size-4" />
-            <span className="hidden sm:inline">Run history</span>
-          </Button>
           <Button size="sm" className="gap-1.5" onClick={() => openCreate(null)}>
             <Plus className="size-4" />
             <span className="hidden sm:inline">New loop</span>
@@ -185,12 +175,14 @@ export function AutopilotView({ onBack, providers }: AutopilotViewProps) {
             </>
           ) : loops.length === 0 ? (
             <>
+              {/* The fleet stat frame stays present even with zero loops (Cursor-parity). */}
+              <LoopDashboardHeader stats={stats} onOpenRunHistory={() => navigate('/autopilot/runs')} />
               <EmptyState onCreate={() => openCreate(null)} />
               <LoopTemplates onPick={pickTemplate} />
             </>
           ) : (
             <>
-              <LoopDashboardHeader stats={stats} />
+              <LoopDashboardHeader stats={stats} onOpenRunHistory={() => navigate('/autopilot/runs')} />
               <ul className="flex flex-col gap-3">
                 {loops.map((loop) => (
                   <LoopRow

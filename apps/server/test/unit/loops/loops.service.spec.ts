@@ -41,6 +41,14 @@ class SpyScheduler {
     this.enabledCalls.push({ id, enabled });
     return { id, enabled };
   }
+  readonly specUpdates: Array<{ id: string; kind: string; spec: string }> = [];
+  updateSpec(id: string, kind: string, spec: string) {
+    this.specUpdates.push({ id, kind, spec });
+    const row = this.rows.get(id);
+    // Event schedules have no clock fire; cron/heartbeat keep a placeholder next fire.
+    this.rows.set(id, { kind, spec, nextFireAt: kind === 'event' ? null : 1_800_000 });
+    void row;
+  }
   deleteSchedule(id: string) {
     this.deleted.push(id);
     this.rows.delete(id);
@@ -973,6 +981,119 @@ describe('LoopsService', () => {
       tasks.settle(run.taskId!, 'DONE', { verify: { ok: true } });
       expect(loops.findById(loop.id)!.status).toBe('completed');
       await expect(loops.update(loop.id, { goal: 'nope' })).rejects.toThrow(/completed/i);
+    });
+
+    it('patches the schedule through the scheduler, preserving the loop id and runs', async () => {
+      const loop = await loops.create(create({ schedule: { kind: 'cron', spec: 'daily@02:00' } }));
+      // Bank a run so we can assert streak/history survive a schedule edit.
+      const fired = loops.fire(loop.id)!;
+      tasks.settle(fired.taskId!, 'DONE', { verify: { ok: true } });
+
+      const patched = await loops.update(loop.id, {
+        schedule: { kind: 'cron', spec: 'daily@09:30' },
+      });
+
+      expect(patched.id).toBe(loop.id);
+      expect(patched.scheduleId).toBe(loop.scheduleId); // same owned schedule row
+      expect(scheduler.specUpdates).toEqual([
+        { id: loop.scheduleId, kind: 'cron', spec: 'daily@09:30' },
+      ]);
+      expect(patched.schedule).toEqual({ kind: 'cron', spec: 'daily@09:30' });
+      // Run history is untouched by a schedule edit.
+      expect(loops.runs(loop.id).filter((r) => r.outcome === 'ok')).toHaveLength(1);
+    });
+
+    it('switches a cron loop to an event trigger', async () => {
+      const loop = await loops.create(create({ schedule: { kind: 'cron', spec: 'daily@02:00' } }));
+      const patched = await loops.update(loop.id, {
+        schedule: { kind: 'event', spec: JSON.stringify({ event: 'issue.opened', label: 'agent' }) },
+      });
+      expect(patched.schedule?.kind).toBe('event');
+      expect(scheduler.specUpdates[0]).toMatchObject({ kind: 'event' });
+    });
+
+    it('rejects an invalid schedule spec without touching the scheduler', async () => {
+      const loop = await loops.create(create());
+      await expect(
+        loops.update(loop.id, { schedule: { kind: 'cron', spec: 'not-a-spec' } }),
+      ).rejects.toThrow(/spec/i);
+      await expect(
+        loops.update(loop.id, { schedule: { kind: 'event', spec: '{not json}' } }),
+      ).rejects.toThrow(/event/i);
+      expect(scheduler.specUpdates).toHaveLength(0);
+    });
+
+    it('re-evaluates the breaker immediately when the threshold drops below the streak', async () => {
+      // Streak of 2 while the threshold is 5 → still active.
+      const loop = await loops.create(create({ maxConsecutiveFailures: 5 }));
+      for (let i = 0; i < 2; i += 1) {
+        const r = loops.fire(loop.id)!;
+        loops.recordTaskOutcome(loop.id, r.taskId ?? `t${i}`, false);
+      }
+      expect(repo.findById(loop.id)!.status).toBe('active');
+      // Lower the threshold to 2 → the existing streak trips it NOW, not next failure.
+      const patched = await loops.update(loop.id, { maxConsecutiveFailures: 2 });
+      expect(patched.status).toBe('broken');
+      expect(repo.findById(loop.id)!.status).toBe('broken');
+    });
+  });
+
+  describe('event trigger scope + webhook context', () => {
+    it('pins an event trigger to the loop project (encoded in the filter)', async () => {
+      const created = await loops.create(
+        create({
+          projectPath: '/repos/mine',
+          schedule: { kind: 'event', spec: JSON.stringify({ event: 'issue.opened', label: 'agent' }) },
+        }),
+      );
+      // Read the joined schedule via the service read path (create returns the bare row).
+      const loop = loops.findById(created.id)!;
+      expect(JSON.parse(loop.schedule!.spec)).toEqual({
+        event: 'issue.opened',
+        label: 'agent',
+        projectPath: '/repos/mine',
+      });
+    });
+
+    it('leaves an event trigger unscoped when the loop has no project', async () => {
+      const created = await loops.create(
+        create({
+          projectPath: undefined,
+          schedule: { kind: 'event', spec: JSON.stringify({ event: 'issue.opened' }) },
+        }),
+      );
+      const loop = loops.findById(created.id)!;
+      expect(JSON.parse(loop.schedule!.spec).projectPath).toBeUndefined();
+    });
+
+    it('threads the triggering issue/PR into the fired run prompt', () => {
+      const created = repo.create({
+        name: null,
+        goal: 'Triage the issue',
+        scheduleId: 'pending',
+        maxRunsPerDay: 5,
+        maxConsecutiveFailures: 5,
+        stopJson: null,
+        escalation: 'needs-attention',
+        projectPath: '/repos/mine',
+        engine: null,
+        model: null,
+      });
+      loops.fire(created.id, {
+        kind: 'issue',
+        action: 'opened',
+        repo: 'octo/app',
+        number: 42,
+        title: 'Login crashes',
+        url: 'https://example.test/issues/42',
+      });
+      const prompt = tasks.enqueued.at(-1)!.prompt;
+      expect(prompt).toContain('Triggered by:');
+      expect(prompt).toContain('#42');
+      expect(prompt).toContain('octo/app');
+      expect(prompt).toContain('Login crashes');
+      // The goal is preserved after the trigger preamble.
+      expect(prompt).toContain('Triage the issue');
     });
   });
 
