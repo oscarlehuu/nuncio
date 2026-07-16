@@ -192,25 +192,42 @@ changes made by the machine owner or another host process.
 
 Dependency projection is keyed by the ecosystem detected in the frozen snapshot, so a Python, Go,
 or Rust repository verifies offline from an already-populated host cache the same way a JavaScript
-repository verifies from `node_modules`:
+repository verifies from `node_modules`. Each ecosystem projects only when its toolchain is
+reachable in the sandbox and, where correctness depends on it, only when the cache provably matches
+the frozen snapshot:
 
-- **Python** (`poetry.lock` or `uv.lock`): an installed virtualenv (`$VIRTUAL_ENV`, else a
-  worktree `.venv` with a POSIX `bin/`) is mounted read-only and exposed through `VIRTUAL_ENV` and
-  a `bin/`-prefixed `PATH`.
+- **Python** (`poetry.lock` or `uv.lock`): a virtualenv is borrowed only from a worktree whose
+  python lockfile bytes match the snapshot exactly — the same byte-equal check as the JavaScript
+  store — so an ambient `$VIRTUAL_ENV` or a sibling `.venv` installed for a different lock never
+  becomes gate evidence. The matched venv is mounted read-only at its original absolute path (so its
+  console-script shebangs resolve) and exposed through `VIRTUAL_ENV` and a `bin/`-prefixed `PATH`.
 - **Go** (`go.sum`): the module cache (`$GOMODCACHE`, else `$GOPATH/pkg/mod`, else
   `$HOME/go/pkg/mod`) is mounted read-only and exposed through `GOMODCACHE` with `-mod=readonly`
-  and `GOPROXY=off`; the writable build cache stays under the sandbox's isolated cache dir.
-- **Rust** (`Cargo.lock`): the crate registry (`$CARGO_HOME/registry`, else `$HOME/.cargo/registry`)
-  is mounted read-only inside a writable `CARGO_HOME` with `CARGO_NET_OFFLINE=true`, so cargo may
-  hold its package-cache lock while the registry cannot be mutated.
+  and `GOPROXY=off`; the writable build cache stays under the sandbox's isolated cache dir. The `go`
+  install root is mounted read-only and its `bin/` added to `PATH`, since the sandbox clears `PATH`.
+- **Rust** (`Cargo.lock`): the crate registry (`$CARGO_HOME/registry`) is mounted read-only inside a
+  writable `CARGO_HOME` with `CARGO_NET_OFFLINE=true`, so cargo may hold its package-cache lock while
+  the registry cannot be mutated. When the lock references git dependencies, `$CARGO_HOME/git` is
+  mounted read-only alongside it; if that cache is missing, Rust is not projected. The `cargo`
+  install root is mounted read-only and its `bin/` added to `PATH`.
 
-A multi-ecosystem repository projects every detected ecosystem into a distinct read-only mount. An
-ecosystem whose host cache is absent, and any unrecognized ecosystem, receive no projection: the
-verify command runs unchanged and an uncached install simply fails closed under the disabled
-network rather than reaching out. Every ecosystem cache carries the same read-only, trusted-host
-boundary as the JavaScript store. Because Seatbelt allows or denies paths but cannot remap them,
-macOS points each toolchain at the host cache path directly while Linux bind-mounts it read-only at
-a fixed guest path; both profiles deny writes to the cache.
+The toolchain binary is resolved on the host and projected only when it lives outside the
+sandbox-denied home directory. A home-installed toolchain (rustup `~/.cargo/bin`, mise/asdf) cannot
+be made visible under the cleared `PATH` and home deny, so that ecosystem is not projected here — the
+container backend, which brings its own toolchain image, is the path for those.
+
+A multi-ecosystem repository projects every detected ecosystem into distinct read-only mounts. An
+ecosystem whose toolchain or cache is absent (or unmatched), and any unrecognized ecosystem, receive
+no projection: the verify command runs unchanged and an uncached install simply fails closed under
+the disabled network rather than reaching out. Every projected cache carries the same read-only,
+trusted-host boundary as the JavaScript store; a cache projected from inside the source worktree
+(such as its own `.venv`) is carved out of the macOS source-root read-deny so it stays readable
+without weakening that deny. Because Seatbelt allows or denies paths but cannot remap them, macOS
+reads each cache at its host path while Linux bind-mounts it read-only; both profiles deny writes to
+the cache. Per-ecosystem projection through the container backend (which today mounts only the
+JavaScript store at `/nuncio-deps`) is a follow-up: its Linux-namespace paths differ from the
+host-resolved mount env, so the mount contract needs a container-namespace env before it can carry
+these caches.
 
 Supported host sandboxes are:
 

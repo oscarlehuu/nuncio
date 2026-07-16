@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -12,6 +12,11 @@ afterEach(() => { while (cleanups.length) rmSync(cleanups.pop()!, { recursive: t
 function dir(prefix: string): string {
   const path = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
   cleanups.push(path);
+  return path;
+}
+function makeDir(...parts: string[]): string {
+  const path = join(...parts);
+  mkdirSync(path, { recursive: true });
   return path;
 }
 function launch(platform: 'darwin' | 'linux', mounts: CrewDependencyMount[]) {
@@ -79,22 +84,57 @@ describe('Crew sandbox per-ecosystem dependency mounts', () => {
     expect(mac.argv[2]!).toContain(`(deny file-write* (subpath ${JSON.stringify(registry)}))`);
   });
 
-  it('prepends the venv bin to PATH and mounts the venv read-only', () => {
+  it('binds a venv at its real path (so shebangs resolve), read-only, PATH-prepended', () => {
     const venv = dir('crew-sandbox-venv-');
-    const macMount: CrewDependencyMount = {
-      hostPath: venv, guestPath: '/nuncio-venv', pathPrepend: [join(venv, 'bin')],
+    const mount: CrewDependencyMount = {
+      hostPath: venv, guestPath: venv, pathPrepend: [join(venv, 'bin')],
       env: { VIRTUAL_ENV: venv },
     };
-    const mac = launch('darwin', [macMount]);
+    const mac = launch('darwin', [mount]);
     expect(mac.env.PATH.split(':')[0]).toBe(join(venv, 'bin'));
     expect(mac.env.VIRTUAL_ENV).toBe(venv);
     expect(mac.argv[2]!).toContain(`(deny file-write* (subpath ${JSON.stringify(venv)}))`);
 
-    const linux = launch('linux', [{
-      ...macMount, pathPrepend: ['/nuncio-venv/bin'], env: { VIRTUAL_ENV: '/nuncio-venv' },
-    }]);
-    expect(linuxSetenv(linux.argv).PATH.split(':')[0]).toBe('/nuncio-venv/bin');
-    expect(hasTriple(linux.argv, '--ro-bind', venv, '/nuncio-venv')).toBe(true);
+    const linux = launch('linux', [mount]);
+    expect(linuxSetenv(linux.argv).PATH.split(':')[0]).toBe(join(venv, 'bin'));
+    expect(linuxSetenv(linux.argv).VIRTUAL_ENV).toBe(venv);
+    expect(hasTriple(linux.argv, '--ro-bind', venv, venv)).toBe(true);
+    // An original-path bind (guestPath === hostPath) must NOT be `--dir`-ed: its parent may sit
+    // under a read-only bind, and the mount point already exists / is auto-created with the bind.
+    expect(linux.argv.findIndex((a, i) => a === '--dir' && linux.argv[i + 1] === venv)).toBe(-1);
+  });
+
+  it('binds a toolchain install root at its real path without a --dir', () => {
+    const root = dir('crew-sandbox-toolchain-');
+    const binDir = makeDir(root, 'bin');
+    const mount: CrewDependencyMount = { hostPath: root, guestPath: root, pathPrepend: [binDir], env: {} };
+    const linux = launch('linux', [mount]);
+    expect(hasTriple(linux.argv, '--ro-bind', root, root)).toBe(true);
+    expect(linux.argv.findIndex((a, i) => a === '--dir' && linux.argv[i + 1] === root)).toBe(-1);
+    expect(linuxSetenv(linux.argv).PATH.split(':')[0]).toBe(binDir);
+    const mac = launch('darwin', [mount]);
+    expect(mac.env.PATH.split(':')[0]).toBe(binDir);
+    expect(mac.argv[2]!).toContain(`(require-not (subpath ${JSON.stringify(root)}))`); // readable
+  });
+
+  it('carves a source-root venv out of the macOS source-root read-deny so it stays readable', () => {
+    const source = dir('crew-sandbox-src-');
+    const venv = realpathSync.native(makeDir(source, '.venv'));
+    const mount: CrewDependencyMount = {
+      hostPath: venv, guestPath: venv, pathPrepend: [join(venv, 'bin')], env: { VIRTUAL_ENV: venv },
+    };
+    const mac = buildCrewSandboxLaunch('true', process.cwd(), 'darwin', '/usr/bin/true', {
+      sourceRoot: source, dependencyMounts: [mount],
+    });
+    cleanups.push(mac.tempDir);
+    const profile = mac.argv[2]!;
+    // The later source-root read-deny would otherwise win over the read-allow and nullify it; the
+    // venv must be carved out with a require-not so it remains readable.
+    expect(profile).toContain(
+      `(deny file-read-data (require-all (subpath ${JSON.stringify(source)}) `
+      + `(require-not (subpath ${JSON.stringify(venv)}))))`,
+    );
+    expect(profile).toContain(`(require-not (subpath ${JSON.stringify(venv)}))`); // in read roots
   });
 
   it('projects multiple ecosystems side by side without weakening deny-by-default', () => {

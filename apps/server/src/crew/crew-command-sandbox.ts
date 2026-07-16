@@ -142,7 +142,11 @@ export function buildCrewSandboxLaunch(
       ...(dependencyRoot ? [`(deny file-write* (subpath ${seatbelt(dependencyRoot)}))`] : []),
       ...dependencyMounts.map((mount) => `(deny file-write* (subpath ${seatbelt(mount.hostPath)}))`),
       ...(sourceRoot ? [
-        `(deny file-read-data (subpath ${seatbelt(sourceRoot)}))`,
+        // A dependency cache projected from inside the source worktree (e.g. its own .venv) must
+        // stay readable: carve it out of the source-root read-deny, which Seatbelt would otherwise
+        // apply as the later, winning rule and nullify the earlier read-allow.
+        denySourceRead(sourceRoot, dependencyMounts
+          .map((mount) => mount.hostPath).filter((path) => within(sourceRoot, path))),
         `(deny file-write* (subpath ${seatbelt(sourceRoot)}))`,
       ] : []),
       `(deny file-write* (subpath ${seatbelt(join(canonicalCwd, '.git'))}))`,
@@ -189,11 +193,12 @@ function linuxLaunch(
   }
   if (dependencyRoot) argv.push('--dir', '/nuncio-deps', '--ro-bind', dependencyRoot, '/nuncio-deps');
   for (const mount of dependencyMounts) {
-    // Create the mount point (or a writable parent that lets a toolchain write metadata beside a
-    // read-only cache subdirectory) on the tmpfs root, then bind the cache read-only over it — the
-    // same create-then-ro-bind order the JS store uses. The cache itself is never writable, so
-    // deny-by-default holds.
-    argv.push('--dir', mount.writableGuestParent ?? mount.guestPath);
+    // A remapped guest path (guestPath !== hostPath) needs its mount point — or a writable tmpfs
+    // parent that lets a toolchain write metadata beside a read-only cache subdirectory — created on
+    // the tmpfs root first. An original-path bind (guestPath === hostPath, kept so venv/toolchain
+    // shebangs and PATH resolve) already exists via another bind or is auto-created with the bind,
+    // and its parent may be read-only, so it must not be `--dir`-ed. The cache is always read-only.
+    if (mount.guestPath !== mount.hostPath) argv.push('--dir', mount.writableGuestParent ?? mount.guestPath);
     argv.push('--ro-bind', mount.hostPath, mount.guestPath);
   }
   argv.push(
@@ -224,6 +229,14 @@ function normalizeDependencyMounts(mounts?: CrewDependencyMount[]): CrewDependen
 }
 
 function seatbelt(value: string): string { return JSON.stringify(value); }
+// Deny reads of the original source worktree, but carve out any dependency cache mounted from inside
+// it so the read-allow above is not overridden by this later (winning) rule. With no carve-outs this
+// is byte-identical to the prior plain subpath deny.
+function denySourceRead(sourceRoot: string, carveOuts: string[]): string {
+  if (!carveOuts.length) return `(deny file-read-data (subpath ${seatbelt(sourceRoot)}))`;
+  return `(deny file-read-data (require-all (subpath ${seatbelt(sourceRoot)}) ${carveOuts
+    .map((path) => `(require-not (subpath ${seatbelt(path)}))`).join(' ')}))`;
+}
 function denyReadOutside(root: string, exceptions: string[], exactExceptions: string[]): string {
   return `(deny file-read-data (require-all (subpath ${seatbelt(root)}) ${exceptions
     .map((path) => `(require-not (subpath ${seatbelt(path)}))`).join(' ')} ${exactExceptions
