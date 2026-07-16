@@ -14,6 +14,7 @@ function makeSession(overrides: Partial<SessionDto> = {}): SessionDto {
     provider: 'cursor',
     model: null,
     modelOptions: null,
+    mode: null,
     workspace: null,
     prompt: 'hello',
     preview: null,

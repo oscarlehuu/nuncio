@@ -1,6 +1,7 @@
 import type { AgentAttachment, AgentRuntimePolicy } from '../../agents/agents.types';
 import type { ModelOptionsMap } from '../../models/model-options.types';
 import type { HandoffBrief } from '../../orchestration/handoff-brief.types';
+import type { SessionMode } from './session-modes';
 
 export type SessionStatus =
   | 'CREATED'
@@ -17,6 +18,7 @@ export interface SessionRow {
   provider: string;
   model: string | null;
   model_options: string | null;
+  mode: string | null;
   workspace: string | null;
   prompt: string;
   preview: string | null;
@@ -106,6 +108,8 @@ export interface SessionDto {
   provider: string;
   model: string | null;
   modelOptions: ModelOptionsMap | null;
+  /** Session mode (debug/multitask); null = normal agent. */
+  mode: SessionMode | null;
   workspace: string | null;
   prompt: string;
   preview: string | null;
@@ -176,6 +180,8 @@ export interface CreateSessionDto {
   provider?: string;
   model?: string;
   modelOptions?: ModelOptionsMap;
+  /** Session mode; validated against the provider's `capabilities.modes` at create. */
+  mode?: SessionMode;
   attachments?: AgentAttachment[];
   workspace?: string;
   id?: string;

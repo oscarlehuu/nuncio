@@ -17,6 +17,9 @@ export type SessionStatus =
   | 'ARCHIVED'
   | 'ERROR';
 
+/** Session modes (capability-gated per provider via `capabilities.modes`). */
+export type SessionMode = 'debug' | 'multitask';
+
 export interface GitFileChange {
   path: string;
   index: string;
@@ -130,6 +133,8 @@ export interface Session {
   provider: string;
   model: string | null;
   modelOptions: ModelOptionsMap | null;
+  /** Session mode (e.g. 'debug', 'multitask'); null = normal agent. */
+  mode: SessionMode | null;
   prompt: string;
   preview: string | null;
   workspace: string | null;
@@ -337,6 +342,7 @@ export async function createSession(
   useWorktree = false,
   base = '',
   attachments?: MessageAttachment[],
+  mode?: SessionMode,
 ): Promise<Session> {
   const body: {
     prompt: string;
@@ -348,9 +354,11 @@ export async function createSession(
     modelOptions?: ModelOptionsMap;
     useWorktree?: boolean;
     attachments?: MessageAttachment[];
+    mode?: SessionMode;
   } = { prompt };
   if (model) body.model = model;
   if (provider) body.provider = provider;
+  if (mode) body.mode = mode;
   if (projectPath) {
     body.projectPath = projectPath;
     if (baseBranch) body.baseBranch = baseBranch;

@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   status TEXT NOT NULL DEFAULT 'CREATED',
   provider TEXT NOT NULL DEFAULT 'pi',
   model TEXT,
+  mode TEXT,
   workspace TEXT,
   prompt TEXT NOT NULL,
   preview TEXT,
@@ -161,6 +162,10 @@ export class DatabaseService implements OnModuleDestroy {
 
     if (!sessionColumns.some((column) => column.name === 'model_options')) {
       this.db.exec('ALTER TABLE sessions ADD COLUMN model_options TEXT');
+    }
+
+    if (!sessionColumns.some((column) => column.name === 'mode')) {
+      this.db.exec('ALTER TABLE sessions ADD COLUMN mode TEXT');
     }
 
     if (!sessionColumns.some((column) => column.name === 'cursor_backend')) {

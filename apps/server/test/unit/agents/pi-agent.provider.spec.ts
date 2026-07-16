@@ -210,6 +210,7 @@ describe('PiAgentProvider', () => {
       effortSwitch: 'in-session',
       images: true,
       steerWhileRunning: true,
+      modes: ['debug', 'multitask'],
       runtimePolicies: [
         { filesystem: 'read-only', network: 'disabled' },
         { filesystem: 'workspace-write', network: 'disabled' },
@@ -351,6 +352,26 @@ describe('PiAgentProvider', () => {
     await provider.run(created.id, created.prompt, { emit: () => {} });
 
     expect(lastLoaderOptions?.appendSystemPrompt).toBeUndefined();
+  });
+
+  it('injects the debug-mode overlay through the system-prompt seam', async () => {
+    const created = sessions.create({ prompt: 'find the bug', provider: 'pi', mode: 'debug' });
+
+    await provider.run(created.id, created.prompt, { emit: () => {}, mode: 'debug' });
+
+    const appended = (lastLoaderOptions?.appendSystemPrompt as string[] | undefined)?.[0] ?? '';
+    expect(appended).toContain('Debug mode');
+    expect(appended).toContain('// nuncio-debug');
+  });
+
+  it('injects no mode overlay for a normal session', async () => {
+    const created = sessions.create({ prompt: 'just run', provider: 'pi' });
+
+    await provider.run(created.id, created.prompt, { emit: () => {} });
+
+    const appended = (lastLoaderOptions?.appendSystemPrompt as string[] | undefined)?.[0] ?? '';
+    expect(appended).not.toContain('Debug mode');
+    expect(appended).not.toContain('Multitask mode');
   });
 
   it('composes project context, external memories, then runtime instructions', async () => {

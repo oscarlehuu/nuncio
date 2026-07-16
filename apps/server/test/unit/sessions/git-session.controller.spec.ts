@@ -17,6 +17,7 @@ function makeSession(over: Partial<SessionDto> = {}): SessionDto {
     provider: 'pi',
     model: null,
     modelOptions: null,
+    mode: null,
     workspace: '/repo',
     prompt: 'p',
     preview: null,

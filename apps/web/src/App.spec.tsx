@@ -490,6 +490,7 @@ describe('App create flow', () => {
       false,
       '',
       undefined,
+      undefined,
     );
       expect(fetchSessions).toHaveBeenCalled();
   });

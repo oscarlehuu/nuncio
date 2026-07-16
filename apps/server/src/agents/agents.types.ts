@@ -6,6 +6,7 @@ import type {
   SessionDto,
 } from '../sessions/domain/sessions.types';
 import type { UserInputAnswer } from '../sessions/domain/user-input.types';
+import type { SessionMode } from '../sessions/domain/session-modes';
 import type { AgentRuntimeTools } from './tools/agent-runtime-tools.types';
 
 /**
@@ -26,6 +27,8 @@ export interface AgentCapabilities {
   images: boolean;
   /** Whether the provider can inject a steer message into a run that is already streaming. */
   steerWhileRunning: boolean;
+  /** Session modes this engine implements (debug/multitask). Absent = no mode support. */
+  modes?: readonly SessionMode[];
   /** Explicit per-session policies this adapter enforces without relying on prompt instructions. */
   runtimePolicies?: readonly AgentRuntimePolicySupport[];
 }
@@ -88,6 +91,8 @@ export interface AgentRunContext {
   emit?: EventEmitter;
   model?: string | null;
   modelOptions?: ModelOptionsMap | null;
+  /** Session mode (debug/multitask); drives the per-mode prompt overlay. */
+  mode?: SessionMode | null;
   attachments?: AgentAttachment[];
   workspace?: string | null;
   cwd?: string;

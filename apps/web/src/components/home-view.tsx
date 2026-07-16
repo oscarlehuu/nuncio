@@ -12,6 +12,9 @@ import { BranchPicker } from './branch-picker';
 import { ModelPicker } from './model-picker';
 import { ProjectPicker } from './project-picker';
 import { WorkspaceModePicker, type WorkspaceMode } from './workspace-mode-picker';
+import { SessionModePicker } from './session-mode-picker';
+import { modePlaceholder } from '../lib/session-modes';
+import type { SessionMode } from '../lib/api';
 import { cn } from '@/lib/utils';
 import { defaultOptionsForModel } from '../lib/model-picker-catalog';
 import type { ModelOptionsMap } from '../lib/model-options';
@@ -78,6 +81,7 @@ interface HomeViewProps {
     modelOptions?: ModelOptionsMap,
     useWorktree?: boolean,
     attachments?: MessageAttachment[],
+    mode?: SessionMode,
   ) => Promise<void>;
   onContinueOnMobile?: () => void;
   loading?: boolean;
@@ -107,6 +111,7 @@ export function HomeView({
   );
   const [baseBranch, setBaseBranch] = useState<string | undefined>(initialWorkspace.baseBranch);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('local');
+  const [mode, setMode] = useState<SessionMode | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const crew = useCrewComposer({ projectPath, baseBranch, onCreated: onCrewCreated });
   const imageAttachments = useComposerAttachments(setPrompt);
@@ -125,6 +130,16 @@ export function HomeView({
     () => crew.mode === 'solo' && modelSupportsImages(catalog, provider, model),
     [provider, model, catalog, crew.mode],
   );
+  // Modes are capability-gated per provider (`capabilities.modes`). Only the
+  // known modes we render metadata for are offered.
+  const supportedModes = useMemo<SessionMode[]>(() => {
+    const declared = providers?.find((p) => p.id === provider)?.capabilities?.modes ?? [];
+    return declared.filter((m): m is SessionMode => m === 'debug' || m === 'multitask');
+  }, [providers, provider]);
+  // Clear a stale selection when the provider no longer supports it.
+  useEffect(() => {
+    if (mode && !supportedModes.includes(mode)) setMode(null);
+  }, [mode, supportedModes]);
   const useWorktree = workspaceMode === 'worktree';
   useEffect(() => {
     if (!catalogLoaded || !providers) return;
@@ -182,6 +197,7 @@ export function HomeView({
         optionsPayload,
         useWorktree,
         attachments.length > 0 ? attachments : undefined,
+        mode ?? undefined,
       );
     } catch (error) {
       imageAttachments.restore(stagedItems);
@@ -189,6 +205,7 @@ export function HomeView({
     }
     setPrompt('');
     setWorkspaceMode('local');
+    setMode(null);
   };
 
   const handleModelChange = (
@@ -302,7 +319,7 @@ export function HomeView({
                   void handleSubmit();
                 }
               }}
-              placeholder="Ask Nuncio to build features, fix bugs, or work on your code…"
+              placeholder={crew.mode === 'solo' ? modePlaceholder(mode) : 'Ask Nuncio to build features, fix bugs, or work on your code…'}
               className={cn(
                 'shrink-0 resize-none border-0 shadow-none bg-transparent text-md px-5 pb-2.5 focus-visible:ring-0 focus-visible:border-0',
                 // Embedded (board top bar) reads as a docked task bar, not a hero:
@@ -329,14 +346,23 @@ export function HomeView({
             <div className="home-composer-pickers flex min-w-0 flex-1 items-center overflow-x-auto [&_button]:shrink-0">
               <ExecutionModePicker value={crew.mode} onChange={crew.setMode} />
               {crew.mode === 'solo' ? (
-                <ModelPicker
-                  value={model}
-                  modelOptions={modelOptions}
-                  onChange={handleModelChange}
-                  providers={providers}
-                  variant="text"
-                  compact
-                />
+                <>
+                  <ModelPicker
+                    value={model}
+                    modelOptions={modelOptions}
+                    onChange={handleModelChange}
+                    providers={providers}
+                    variant="text"
+                    compact
+                  />
+                  <SessionModePicker
+                    value={mode}
+                    onChange={setMode}
+                    supportedModes={supportedModes}
+                    disabled={loading}
+                    className="ml-1"
+                  />
+                </>
               ) : (
                 <CrewProfilePicker
                   profiles={crew.profiles}

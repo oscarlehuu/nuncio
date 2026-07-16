@@ -23,6 +23,7 @@ import { chromium } from 'playwright-core';
 import { ensureWebBuild, findFreePort, repoRoot, startServer } from './smoke-ui-stack.mjs';
 import { runCrewSmoke } from './lib/crew-smoke-flow.mjs';
 import { runComposerControls } from './journeys/composer-controls.mjs';
+import { runSessionModes } from './journeys/session-modes.mjs';
 import { runSoloLifecycle } from './journeys/solo-session-lifecycle.mjs';
 import { runSubagentDelegation } from './journeys/subagent-delegation.mjs';
 import { runArchiveLastSession } from './journeys/archive-last-session.mjs';
@@ -45,6 +46,7 @@ const STEP_TIMEOUT_MS = 20000;
 const JOURNEYS = [
   { name: 'archive-last-session', run: runArchiveLastSession },
   { name: 'composer-controls', run: runComposerControls },
+  { name: 'session-modes', run: runSessionModes },
   { name: 'solo-session-lifecycle', run: runSoloLifecycle },
   { name: 'subagent-delegation', run: runSubagentDelegation },
   { name: 'model-preferences-per-composer', run: runModelPreferencesPerComposer },

@@ -10,6 +10,7 @@ function makeSession(over: Partial<SessionDto> = {}): SessionDto {
     provider: 'cursor',
     model: null,
     modelOptions: null,
+    mode: null,
     workspace: null,
     prompt: 'p',
     preview: null,

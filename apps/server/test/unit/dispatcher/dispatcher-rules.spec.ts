@@ -96,6 +96,7 @@ function session(overrides: Partial<SessionDto> & { id: string }): SessionDto {
     provider: overrides.provider ?? 'cursor',
     model: overrides.model ?? null,
     modelOptions: overrides.modelOptions ?? null,
+    mode: overrides.mode ?? null,
     workspace: overrides.workspace ?? null,
     prompt: overrides.prompt ?? 'fix verify',
     preview: overrides.preview ?? null,

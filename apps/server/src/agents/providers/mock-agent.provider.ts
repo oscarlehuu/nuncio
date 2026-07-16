@@ -34,6 +34,9 @@ export class MockAgentProvider extends BaseAgentProvider {
     effortSwitch: 'none',
     images: false,
     steerWhileRunning: false,
+    // Modes are accepted + persisted so the zero-credential smoke can drive the
+    // composer's mode picker; the overlay itself is a Pi-side implementation.
+    modes: ['debug', 'multitask'],
     // The smoke adapter never reads/writes the workspace, starts a shell, or
     // opens a network connection. Its only tool path is a trusted in-process
     // Crew stage submission with schema-bound authority fields.
