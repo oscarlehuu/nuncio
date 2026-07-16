@@ -82,8 +82,8 @@ export function runSummaryFrom(value: unknown): CrewRunSummaryDto {
   return summary as unknown as CrewRunSummaryDto;
 }
 
-export async function request(path: string, init?: RequestInit): Promise<JsonRecord> {
-  const response = await apiFetch(path, init);
+export async function request(path: string, init?: RequestInit, base = ''): Promise<JsonRecord> {
+  const response = await apiFetch(`${base}${path}`, init);
   let body: unknown;
   try {
     body = await response.json();

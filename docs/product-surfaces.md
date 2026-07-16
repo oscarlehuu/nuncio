@@ -86,7 +86,7 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 | **Mobile** | `apps/mobile/src/app/new.tsx` |
 | **Settings** | Providers / Projects defaults affect create; not the composer UI itself |
 | **Server** | `POST /api/sessions` (`mode?`), `sessions/`, `models/`, `git/`, `projects/`; per-mode prompt overlay in `sessions/domain/session-modes.ts` |
-| **Also check** | Both Home **and** Workbench composers; mobile `/new` if create UX changes; Crew create only on Home + mobile (Workbench has **no** Crew path today); hub machine picker only on Workbench |
+| **Also check** | Both Home **and** Workbench composers; mobile `/new` if create UX changes; Crew create only on Home + mobile (Workbench has **no** Crew path today); hub machine picker on Workbench slots **and** Home Crew create (routes the run to the chosen machine, which then owns it) |
 | **Prefs** | `packages/core/src/model-preference.ts` — scoped keys above |
 
 ### Steer / chat input (existing session)
@@ -122,11 +122,11 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 
 | | |
 |---|---|
-| **Web** | Create: Home `use-crew-composer.ts` + `execution-mode-picker.tsx`. Detail: `/crew/:taskId` → `crew/*`. Recent: `recent-crew-runs.tsx` on Home. Profiles: Settings → Crew profiles |
+| **Web** | Create: Home `use-crew-composer.ts` + `execution-mode-picker.tsx`, plus `crew/crew-machine-picker.tsx` to route the run to a tailnet machine (which then owns it end to end). Detail: `/crew/:taskId`, or `/m/<machine>/crew/:taskId` for a run owned by another machine → `crew/*`. Recent: `recent-crew-runs.tsx` on Home (local runs only). Profiles: Settings → Crew profiles |
 | **Mobile** | Create on `/new`; detail `/crew/[taskId]` |
 | **Settings** | `crew-profiles` |
-| **Server** | `crew/` (see [`crew-workspace-harness.md`](crew-workspace-harness.md)) |
-| **Also check** | Web create + Settings profiles + mobile create/detail; member sessions stay readable but not publicly mutable |
+| **Server** | `crew/` (see [`crew-workspace-harness.md`](crew-workspace-harness.md)); unchanged for hub routing — the owning machine serves the full Crew API under `/m/<machine>/` |
+| **Also check** | Web create + Settings profiles + mobile create/detail; hub-routed create (Home machine picker → full nav to `/m/<machine>/crew/:taskId`) keeps every locked invariant on the owning machine (ADR-013); remote runs raise attention on that machine, not Home; member sessions stay readable but not publicly mutable |
 
 ### Autopilot / loops
 
@@ -196,11 +196,11 @@ changing a **tool** means the panel + its server module.
 
 | | |
 |---|---|
-| **Web** | Workbench: hub machine picker in `grid-slot-composer.tsx`, `remote-session-tile.tsx`, `machine-switcher.tsx`, `lib/hub-api.ts` |
+| **Web** | Workbench slots: hub machine picker in `grid-slot-composer.tsx`. Home Crew create: `crew/crew-machine-picker.tsx` (routes a run to the owning machine). Shared: `remote-session-tile.tsx`, `machine-switcher.tsx`, `lib/hub-api.ts` (`machineApiBase` is the per-call base seam) |
 | **Mobile** | Pairing / connection store (not full hub grid) |
 | **Settings** | Remote access |
 | **Server** | `hub/`, `relay/`, `pairing/`, `devices/`, `auth/` |
-| **Also check** | Grid hub UX + remote access settings + pairing/auth |
+| **Also check** | Grid hub UX + Home Crew machine routing + remote access settings + pairing/auth |
 
 ### Handoff (Continue on mobile)
 

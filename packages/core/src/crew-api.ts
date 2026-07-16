@@ -53,8 +53,8 @@ export async function fetchCrewArtifactRange(
   return range ?? malformed('artifact range');
 }
 
-export async function fetchCrewProfiles(): Promise<CrewProfileDto[]> {
-  const profiles = (await request('/api/crew/profiles')).profiles;
+export async function fetchCrewProfiles(base = ''): Promise<CrewProfileDto[]> {
+  const profiles = (await request('/api/crew/profiles', undefined, base)).profiles;
   if (!Array.isArray(profiles)) malformed('profiles');
   return (profiles as unknown[]).map(profileFrom);
 }
@@ -76,13 +76,14 @@ export async function resolveCrewProfile(
   projectPath?: string,
   baseBranch?: string,
   signal?: AbortSignal,
+  base = '',
 ): Promise<ResolvedCrewProfileDto> {
   const body = {
     ...(projectPath ? { projectPath } : {}),
     ...(baseBranch?.trim() ? { baseBranch: baseBranch.trim() } : {}),
   };
   const init = { ...jsonInit('POST', body), signal };
-  const resolution = (await request(`/api/crew/profiles/${idPath(id)}/resolve`, init)).resolution;
+  const resolution = (await request(`/api/crew/profiles/${idPath(id)}/resolve`, init, base)).resolution;
   if (
     !isRecord(resolution) || !['ready', 'needs_setup'].includes(String(resolution.state)) ||
     !isRecord(resolution.snapshot) || !Array.isArray(resolution.issues)
@@ -91,8 +92,9 @@ export async function resolveCrewProfile(
 }
 export async function createCrewTask(
   input: CreateCrewTaskInput,
+  base = '',
 ): Promise<{ task: CrewTaskDto; run: CrewRunDto }> {
-  const body = await request('/api/crew/tasks', jsonInit('POST', input));
+  const body = await request('/api/crew/tasks', jsonInit('POST', input), base);
   return { task: taskFrom(body.task), run: runFrom(body.run) };
 }
 export async function fetchCrewTask(

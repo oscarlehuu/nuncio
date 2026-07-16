@@ -23,7 +23,7 @@ interface HomeSurfaceProps {
   ) => Promise<void>;
   onContinueOnMobile?: () => void;
   loading?: boolean;
-  onCrewCreated?: (taskId: string) => void;
+  onCrewCreated?: (taskId: string, machine?: string | null) => void;
   /** Increment to focus the composer (the new-agent shortcut). */
   composerFocusKey?: number;
   /** True when the unpinned desktop sidebar rail overlays the content's left edge. */

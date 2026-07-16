@@ -106,6 +106,36 @@ describe('crew api', () => {
     ]);
   });
 
+  it('routes the create-path calls through a machine base for hub-routed runs', async () => {
+    // The owning machine's base is prepended to the path, so profile listing,
+    // resolution, and create all land on that daemon — authority never leaves it.
+    const base = '/m/studio';
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ profiles: [profile] }))
+      .mockResolvedValueOnce(jsonResponse({ resolution: { state: 'ready', snapshot, issues: [] } }))
+      .mockResolvedValueOnce(jsonResponse({ task, run }));
+    await fetchCrewProfiles(base);
+    await resolveCrewProfile('p/1', '/repo', 'main', undefined, base);
+    await createCrewTask({ objective: task.objective, projectPath: '/repo', profileId: 'p/1' }, base);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'https://mac.test/m/studio/api/crew/profiles',
+      'https://mac.test/m/studio/api/crew/profiles/p%2F1/resolve',
+      'https://mac.test/m/studio/api/crew/tasks',
+    ]);
+  });
+
+  it('keeps the create-path calls page-relative when no machine base is given', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ profiles: [profile] }))
+      .mockResolvedValueOnce(jsonResponse({ task, run }));
+    await fetchCrewProfiles();
+    await createCrewTask({ objective: task.objective, projectPath: '/repo', profileId: 'p/1' });
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'https://mac.test/api/crew/profiles',
+      'https://mac.test/api/crew/tasks',
+    ]);
+  });
+
   it('normalizes run detail and reads the durable event cursor', async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse({ run, members: [], results: [], artifacts: [], gates: { verify: { retriesUsed: 0, retryLimit: 2, extraRounds: 0 }, review: { retriesUsed: 0, retryLimit: 2, extraRounds: 0 } } }))
