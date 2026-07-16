@@ -305,6 +305,53 @@ describe('useSessionStream', () => {
     warn.mockRestore();
   });
 
+  it('cancels the pending rAF flush with the window receiver (no Illegal invocation on unmount)', async () => {
+    // Real browsers brand-check cancelAnimationFrame: invoking it with a receiver
+    // that is not the global throws "TypeError: Illegal invocation". A cancel
+    // callback that forwards through the window receiver survives; a bare
+    // reference stored on the ScheduledFlush object and called as
+    // `scheduled.cancel(id)` would run with `this` bound to that object and crash
+    // the app to a blank screen on unmount. Stub the real receiver check here —
+    // a plain vi.fn() (as elsewhere) ignores `this` and cannot catch this.
+    const frames: FrameRequestCallback[] = [];
+    const cancelCalls: boolean[] = [];
+    vi.stubGlobal(
+      'requestAnimationFrame',
+      vi.fn((callback: FrameRequestCallback) => {
+        frames.push(callback);
+        return frames.length;
+      }),
+    );
+    vi.stubGlobal(
+      'cancelAnimationFrame',
+      vi.fn(function (this: unknown) {
+        if (this !== globalThis && this !== window) {
+          throw new TypeError('Illegal invocation');
+        }
+        cancelCalls.push(true);
+      }),
+    );
+    vi.mocked(fetchEvents).mockResolvedValue([ev(1)]);
+
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { getByTestId, unmount } = render(<Harness sid="s1" />);
+    await waitFor(() => expect(getByTestId('count').textContent).toBe('1'));
+    await waitFor(() => expect(lastSocket).toBeDefined());
+
+    // Schedule a flush (pending rAF), then unmount before the frame fires so the
+    // teardown path cancels it.
+    act(() => {
+      lastSocket!.push(ev(2, 'assistant_delta', { delta: 'x' }));
+    });
+    expect(frames.length).toBe(1);
+
+    expect(() => unmount()).not.toThrow();
+    // Cancel ran exactly once and with a valid (global) receiver — the bare
+    // reference would have thrown before recording anything.
+    expect(cancelCalls).toEqual([true]);
+    warn.mockRestore();
+  });
+
   it('clears events and skips fetch when the session id is null', async () => {
     vi.mocked(fetchEvents).mockResolvedValue([ev(1)]);
     const { getByTestId } = render(<Harness sid={null} />);
