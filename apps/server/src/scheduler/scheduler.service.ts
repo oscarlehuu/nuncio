@@ -7,6 +7,7 @@ import type {
   CreateScheduleDto,
   EventFilter,
   ScheduleDto,
+  StaleScheduleSkip,
 } from './scheduler.types';
 import type { ForgeWebhookEvent } from '../forges/forges.types';
 
@@ -31,6 +32,13 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly inFlight = new Set<string>();
   /** Schedule ids that missed a slot during downtime — their next fire records 'missed'. */
   private readonly missed = new Set<string>();
+  /**
+   * Schedules whose stored next-fire was older than the missed-fire window on
+   * boot (machine offline > 24h): rehydrate skipped them forward. Buffered here
+   * until an observer (the heartbeat) drains + surfaces them, so the skip is not
+   * silent. Bounded — one entry per stale schedule, cleared on drain.
+   */
+  private staleSkips: StaleScheduleSkip[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
   private destroyed = false;
   /**
@@ -112,8 +120,32 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
       const next = this.computeNextFire(s.kind, s.spec, now);
+      // A next-fire that passed longer ago than the window is a genuinely-skipped
+      // slot (machine was offline > 24h): we advance it silently to the future.
+      // Record the skip so an observer can surface it instead of it vanishing.
+      if (s.nextFireAt !== null && s.nextFireAt < now - MISSED_FIRE_WINDOW_MS) {
+        this.staleSkips.push({
+          scheduleId: s.id,
+          kind: s.kind,
+          spec: s.spec,
+          target: s.target,
+          previousFireAt: s.nextFireAt,
+          recomputedFireAt: next,
+        });
+      }
       this.schedules.setNextFire(s.id, next);
     }
+  }
+
+  /**
+   * Take and clear the buffered stale-skip records (schedules advanced past a
+   * >24h-stale next-fire on boot). The heartbeat drains this once after boot to
+   * raise a missed-schedule attention item; a second drain returns empty.
+   */
+  drainStaleSkips(): StaleScheduleSkip[] {
+    const drained = this.staleSkips;
+    this.staleSkips = [];
+    return drained;
   }
 
   /** Fire every due schedule once. The single-timer scan; called directly in tests. */

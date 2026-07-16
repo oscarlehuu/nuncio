@@ -15,10 +15,23 @@ import { buildGlobalTimeline, foldObservabilityRollups } from '../../observabili
 import type { ObservabilitySources } from '../../observability/observability.types';
 import type { Clock } from '../../scheduler/scheduler.types';
 import { DigestRepository } from './digest.repository';
+import { HeartbeatHealthRepository } from './heartbeat-health.repository';
 import { InfraChecks } from './infra-checks';
 import { buildDigest, digestPushContent, type DigestInput } from './digest';
 import { gatherDigestCounts } from './digest-counts';
-import type { DigestCounts, DigestVariant, HeartbeatJob, InfraCheckResult } from './heartbeat.types';
+import type {
+  DigestCounts,
+  DigestVariant,
+  HeartbeatHealthOutcome,
+  HeartbeatJob,
+  InfraCheckResult,
+} from './heartbeat.types';
+
+/** The settled outcome of one bounded layer run, for the health record. */
+interface LayerResult {
+  outcome: HeartbeatHealthOutcome;
+  detail: string | null;
+}
 
 /** Bounded run of one layer's work, so a hung layer can never wedge the scan. */
 export const DEFAULT_LAYER_TIMEOUT_MS = 10_000;
@@ -75,6 +88,14 @@ export class HeartbeatService implements OnModuleInit {
   /** Window-scoped digest counts from durable rows — bound in onModuleInit. */
   gatherDigestCounts: (from: number, to: number) => DigestCounts = () => EMPTY_COUNTS;
   isClosed: () => boolean = () => this.database?.closed ?? false;
+  /**
+   * Health-record seam — persist a job's last-run timestamp + outcome. Default
+   * no-op (unit dispatch tests construct the service bare); bound to the repo in
+   * onModuleInit so a swallowed layer failure leaves a durable `error`/`timeout`
+   * fact instead of vanishing.
+   */
+  recordHealth: (job: HeartbeatJob, outcome: HeartbeatHealthOutcome, detail: string | null, at: number) => void =
+    () => {};
 
   constructor(
     @Optional() private readonly scheduler?: SchedulerService,
@@ -91,13 +112,80 @@ export class HeartbeatService implements OnModuleInit {
     @Optional() private readonly tasks?: TasksService,
     @Optional() private readonly collectors?: AttentionCollectors,
     @Optional() private readonly attentionItems?: AttentionRepository,
+    @Optional() private readonly health?: HeartbeatHealthRepository,
   ) {}
 
   onModuleInit(): void {
     this.bindInfraProbes();
     this.bindDataSeams();
+    this.bindLoopSeams();
+    if (this.health) {
+      this.recordHealth = (job, outcome, detail, at) => {
+        try {
+          this.health!.record(job, outcome, detail, at);
+        } catch {
+          // Health is best-effort observability; never let it break dispatch.
+        }
+      };
+    }
     this.scheduler?.setSystemFireHandler((job) => this.dispatch(job as HeartbeatJob));
     this.ensureSchedules();
+    this.surfaceMissedSchedules();
+  }
+
+  /**
+   * Drain the scheduler's boot stale-skip buffer (schedules whose next-fire was
+   * >24h overdue and got silently advanced) and raise a `missed-schedule`
+   * attention item per skip, so the skipped fires are visible instead of
+   * vanishing. Runs once at boot — after the scheduler has rehydrated (Nest inits
+   * a dependency before its dependents). Best-effort: never fail module init.
+   */
+  surfaceMissedSchedules(): void {
+    if (!this.scheduler || !this.attention) return;
+    for (const skip of this.scheduler.drainStaleSkips()) {
+      try {
+        const projectPath =
+          skip.target.kind === 'loop'
+            ? this.loops?.findById(skip.target.loopId)?.projectPath ?? null
+            : null;
+        const overdueMs = this.clock.now() - skip.previousFireAt;
+        this.attention.raise({
+          kind: 'missed-schedule',
+          subjectId: skip.scheduleId,
+          projectPath,
+          title: `Schedule "${skip.spec}" missed fires while offline (${describeOverdue(overdueMs)} overdue)`,
+          payload: {
+            scheduleId: skip.scheduleId,
+            kind: skip.kind,
+            spec: skip.spec,
+            target: skip.target,
+            previousFireAt: skip.previousFireAt,
+            recomputedFireAt: skip.recomputedFireAt,
+            overdueMs,
+          },
+        });
+      } catch {
+        // A single bad raise must not abort the drain or module init.
+      }
+    }
+  }
+
+  /**
+   * Bind the loop primitive's attention seam to the real queue (avoids a
+   * loops→attention module dependency — the attention module already imports
+   * loops) and its wedged-run threshold from settings. A tripped breaker or a
+   * stuck run then raises an attention item immediately, not only on the next
+   * hourly sweep.
+   */
+  private bindLoopSeams(): void {
+    if (!this.loops) return;
+    if (this.attention) {
+      this.loops.raiseAttention = (signal) => this.attention!.raise(signal);
+    }
+    const stuckAgeMin = Number(this.settings?.resolve('NUNCIO_LOOP_STUCK_PENDING_AGE_MIN'));
+    if (Number.isInteger(stuckAgeMin) && stuckAgeMin > 0) {
+      this.loops.maxPendingAgeMs = stuckAgeMin * 60_000;
+    }
   }
 
   /** Bind the sweep + digest-count seams to real collaborators (findings #1, #5). */
@@ -173,45 +261,64 @@ export class HeartbeatService implements OnModuleInit {
     }
   }
 
-  /** Route a fired system job to its layer. NEVER throws into the scheduler scan. */
+  /**
+   * Route a fired system job to its layer. NEVER throws into the scheduler scan.
+   * The layer's settled outcome (ok / error / timeout) is persisted per job so a
+   * swallowed failure surfaces in the health block instead of vanishing.
+   */
   async dispatch(job: HeartbeatJob): Promise<void> {
     if (this.isClosed()) return; // fire during shutdown → no-op
+    const startedAt = this.clock.now();
+    let result: LayerResult = { outcome: 'ok', detail: null };
     try {
       if (job === 'infra') {
-        await this.withTimeout(this.onInfra());
+        result = await this.runBoundedLayer(this.onInfra());
       } else if (job === 'reconcile') {
         this.reconcileAttention();
         this.reconcileLoops();
         // Re-run the poll collectors so post-boot loop trips / new PRs enter the
         // queue without a restart (finding #1).
-        await this.withTimeout(this.onSweep());
+        result = await this.runBoundedLayer(this.onSweep());
       } else if (job === 'digest-morning') {
-        await this.withTimeout(this.onDigest('morning'));
+        result = await this.runBoundedLayer(this.onDigest('morning'));
       } else if (job === 'digest-evening') {
-        await this.withTimeout(this.onDigest('evening'));
+        result = await this.runBoundedLayer(this.onDigest('evening'));
+      } else {
+        return; // unknown job — nothing ran, nothing to record
       }
-    } catch {
-      // A layer failure is recorded via the layer's own paths (attention items /
-      // best-effort push); it must never escape into scanDue.
+    } catch (error) {
+      // A synchronous reconcile pass (reconcileAttention/reconcileLoops) threw —
+      // record it rather than swallowing silently, and never escape into scanDue.
+      result = { outcome: 'error', detail: error instanceof Error ? error.message : String(error) };
     }
+    this.recordHealth(job, result.outcome, result.detail, startedAt);
   }
 
   /**
-   * Bound a layer's promise: settle (resolve) at `layerTimeoutMs` even if the work
-   * hangs, so the schedule's inFlight releases and the next fire proceeds (finding
-   * #2). The underlying work keeps running best-effort; we just stop waiting.
+   * Bound a layer's promise: settle at `layerTimeoutMs` even if the work hangs,
+   * so the schedule's inFlight releases and the next fire proceeds (finding #2).
+   * Captures the settled outcome (ok / error / timeout) so a swallowed layer
+   * failure becomes a durable health fact. The underlying work keeps running
+   * best-effort; we just stop waiting.
    */
-  private withTimeout(work: Promise<unknown>): Promise<void> {
-    return new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, this.layerTimeoutMs);
-      const settle = (): void => {
-        clearTimeout(timer);
-        resolve();
-      };
-      // Settle on BOTH success and failure — the layer records its own failures;
-      // the bounded wrapper only stops waiting and must swallow the rejection so
-      // it never surfaces as an unhandled rejection.
-      work.then(settle, settle);
+  private runBoundedLayer(work: Promise<unknown>): Promise<LayerResult> {
+    return new Promise<LayerResult>((resolve) => {
+      const timer = setTimeout(
+        () => resolve({ outcome: 'timeout', detail: `layer exceeded ${this.layerTimeoutMs}ms` }),
+        this.layerTimeoutMs,
+      );
+      // Settle on BOTH success and failure — swallow the rejection so it never
+      // surfaces as an unhandled rejection, but record it as the outcome.
+      work.then(
+        () => {
+          clearTimeout(timer);
+          resolve({ outcome: 'ok', detail: null });
+        },
+        (error) => {
+          clearTimeout(timer);
+          resolve({ outcome: 'error', detail: error instanceof Error ? error.message : String(error) });
+        },
+      );
     });
   }
 
@@ -340,4 +447,11 @@ export class HeartbeatService implements OnModuleInit {
 
 function pad(n: number): string {
   return n < 10 ? `0${n}` : String(n);
+}
+
+/** Coarse human duration for a missed-schedule title (hours below 2 days, else days). */
+function describeOverdue(ms: number): string {
+  const hours = Math.max(0, Math.round(ms / 3_600_000));
+  if (hours < 48) return `~${hours}h`;
+  return `~${Math.round(hours / 24)}d`;
 }

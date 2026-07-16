@@ -9,6 +9,7 @@ import { SessionsPersistenceModule } from '../../sessions/sessions.persistence.m
 import { SettingsModule } from '../../settings/settings.module';
 import { TasksModule } from '../../tasks/tasks.module';
 import { DigestRepository } from './digest.repository';
+import { HeartbeatHealthRepository } from './heartbeat-health.repository';
 import { HeartbeatController } from './heartbeat.controller';
 import { HeartbeatService } from './heartbeat.service';
 import { InfraChecks } from './infra-checks';
@@ -33,7 +34,7 @@ import { InfraChecks } from './infra-checks';
     TasksModule,
   ],
   controllers: [HeartbeatController],
-  providers: [HeartbeatService, InfraChecks, DigestRepository],
-  exports: [HeartbeatService, DigestRepository],
+  providers: [HeartbeatService, InfraChecks, DigestRepository, HeartbeatHealthRepository],
+  exports: [HeartbeatService, DigestRepository, HeartbeatHealthRepository],
 })
 export class HeartbeatModule {}

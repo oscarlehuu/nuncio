@@ -95,3 +95,23 @@ export interface DigestRunDto {
   windowTo: number;
   digest: Digest;
 }
+
+/** Per-system-job health outcome. `timeout` = the bounded layer never settled. */
+export type HeartbeatHealthOutcome = 'ok' | 'error' | 'timeout';
+
+/** The last-run health of one system job — read-only observability, not a signal. */
+export interface HeartbeatHealthDto {
+  job: HeartbeatJob;
+  lastRunAt: number;
+  outcome: HeartbeatHealthOutcome;
+  /** Error/timeout detail when the run did not succeed, else null. */
+  detail: string | null;
+}
+
+export interface HeartbeatHealthRow {
+  job: string;
+  last_run_at: number;
+  outcome: string;
+  detail: string | null;
+  updated_at: number;
+}

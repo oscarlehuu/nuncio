@@ -65,6 +65,23 @@ export interface ScheduleRow {
   updated_at: number;
 }
 
+/**
+ * A schedule whose stored next-fire was so stale on boot (older than the
+ * missed-fire window, i.e. the machine was offline > 24h) that rehydrate skipped
+ * it forward instead of firing it. Buffered so an observer (the heartbeat) can
+ * surface it — otherwise the skipped fires would advance silently.
+ */
+export interface StaleScheduleSkip {
+  scheduleId: string;
+  kind: ScheduleKind;
+  spec: string;
+  target: ScheduleTarget;
+  /** The overdue next-fire that was skipped (epoch ms). */
+  previousFireAt: number;
+  /** The recomputed future next-fire (epoch ms), or null for an unparseable spec. */
+  recomputedFireAt: number | null;
+}
+
 /** Injectable clock seam — deterministic in tests, Date.now() in production. */
 export interface Clock {
   now(): number;

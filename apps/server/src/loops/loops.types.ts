@@ -141,3 +141,27 @@ export interface LoopRunRow {
 
 export const DEFAULT_MAX_RUNS_PER_DAY = 24;
 export const DEFAULT_MAX_CONSECUTIVE_FAILURES = 3;
+
+/**
+ * A signal the loop primitive asks the attention queue to raise. Kept local
+ * (structurally identical to the attention module's RaiseSignal) so the loops
+ * module never imports the attention module — the heartbeat, which already has
+ * both, binds the {@link LoopDto} service's attention seam. Avoids a DI cycle
+ * (AttentionModule already imports LoopsModule).
+ */
+export interface LoopAttentionSignal {
+  kind: string;
+  subjectId: string;
+  projectPath?: string | null;
+  title: string;
+  payload?: Record<string, unknown> | null;
+}
+
+/**
+ * Default wedged-run safety-net threshold. A loop run born `pending` whose task
+ * is still RUNNING this long has almost certainly wedged (a silent session that
+ * never settles) — long enough that a legitimately long agent run rarely trips
+ * it, short enough to recover within a work session. Founder-tunable via
+ * NUNCIO_LOOP_STUCK_PENDING_AGE_MIN.
+ */
+export const DEFAULT_STUCK_PENDING_AGE_MS = 180 * 60 * 1000;

@@ -31,6 +31,7 @@ import { SubagentModelsSettingsSection } from './subagent-models-settings-sectio
 import { UsageSettingsSection } from './usage-settings-section';
 import { SettingsSectionNav, type SettingsSectionNavItem } from './settings-section-nav';
 import { CrewProfilesSettingsSection } from './crew/crew-profiles-settings-section';
+import { HeartbeatHealthSection } from './heartbeat-health-section';
 
 interface SettingsViewProps {
   settings: Setting[];
@@ -457,7 +458,12 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
           </div>
         );
       case 'advanced':
-        return renderSettingGroup('Advanced', advanced, 'No advanced settings are available.');
+        return (
+          <div className="space-y-6">
+            {renderSettingGroup('Advanced', advanced, 'No advanced settings are available.')}
+            <HeartbeatHealthSection />
+          </div>
+        );
       default: {
         const _exhaustive: never = activeSection;
         return _exhaustive;

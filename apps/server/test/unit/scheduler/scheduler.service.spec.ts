@@ -187,6 +187,48 @@ describe('SchedulerService firing loop', () => {
     });
   });
 
+  describe('stale-skip visibility (missed > 24h → surfaced, not silent)', () => {
+    it('buffers a stale-skip when next_fire is older than the 24h window, then advances silently', () => {
+      const s = scheduler.create(cron('daily@09:30'));
+      // 3 days stale — older than the 24h missed-fire window.
+      const stale = at(2026, 7, 4, 9, 30);
+      repo.setNextFire(s.id, stale);
+      scheduler.rehydrate();
+
+      const skips = scheduler.drainStaleSkips();
+      expect(skips).toHaveLength(1);
+      expect(skips[0]).toMatchObject({ scheduleId: s.id, spec: 'daily@09:30', previousFireAt: stale });
+      expect(skips[0]!.recomputedFireAt).toBeGreaterThan(clockNow);
+      // The stored next-fire was advanced to the future (no 'missed' catch-up fire).
+      expect(repo.findById(s.id)!.nextFireAt).toBeGreaterThan(clockNow);
+      scheduler.scanDue();
+      expect(tasks.enqueued).toHaveLength(0);
+    });
+
+    it('a RECENTLY-missed slot (within 24h) is fired-once, not buffered as a stale-skip', () => {
+      const s = scheduler.create(cron('daily@09:30'));
+      repo.setNextFire(s.id, at(2026, 7, 7, 7, 0)); // 1h ago — within the window
+      scheduler.rehydrate();
+      expect(scheduler.drainStaleSkips()).toHaveLength(0);
+    });
+
+    it('drain is idempotent — a second drain returns empty', () => {
+      const s = scheduler.create(cron('daily@09:30'));
+      repo.setNextFire(s.id, at(2026, 7, 1, 9, 30));
+      scheduler.rehydrate();
+      expect(scheduler.drainStaleSkips()).toHaveLength(1);
+      expect(scheduler.drainStaleSkips()).toHaveLength(0);
+    });
+
+    it('a disabled schedule is never buffered', () => {
+      const s = scheduler.create(cron('daily@09:30'));
+      repo.setNextFire(s.id, at(2026, 7, 1, 9, 30));
+      scheduler.setEnabled(s.id, false);
+      scheduler.rehydrate();
+      expect(scheduler.drainStaleSkips()).toHaveLength(0);
+    });
+  });
+
   describe('overlap skip', () => {
     it('skips with a marker when the prior fire of the SAME schedule is still in flight', async () => {
       // A gated task runner: the first enqueue stays "in flight" until released, so
