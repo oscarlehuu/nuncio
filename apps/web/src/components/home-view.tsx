@@ -45,10 +45,12 @@ import {
   pickDefaultModelSelection,
   type ModelProvider,
 } from '../lib/model-providers';
+import { CrewMachinePicker } from './crew/crew-machine-picker';
 import { CrewProfilePicker } from './crew/crew-profile-picker';
-import { ExecutionModePicker } from './crew/execution-mode-picker';
+import { ExecutionModePicker, type ExecutionMode } from './crew/execution-mode-picker';
 import { ResolvedCrewPreview } from './crew/resolved-crew-preview';
 import { useCrewComposer } from './crew/use-crew-composer';
+import { machineApiBase } from '../lib/hub-api';
 
 const HOME_MODEL_PREFERENCE_SCOPE = 'home:new-agent';
 
@@ -85,8 +87,12 @@ interface HomeViewProps {
   ) => Promise<void>;
   onContinueOnMobile?: () => void;
   loading?: boolean;
-  /** Lead-owned routing callback after the Crew task is durably created. */
-  onCrewCreated?: (taskId: string) => void;
+  /**
+   * Lead-owned routing callback after the Crew task is durably created. `machine`
+   * is the tailnet peer that OWNS the run (null = local): the caller navigates to
+   * that machine's base so follow/steer polls the owning daemon.
+   */
+  onCrewCreated?: (taskId: string, machine?: string | null) => void;
 }
 
 export function HomeView({
@@ -113,7 +119,17 @@ export function HomeView({
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('local');
   const [mode, setMode] = useState<SessionMode | null>(null);
   const [dragActive, setDragActive] = useState(false);
-  const crew = useCrewComposer({ projectPath, baseBranch, onCreated: onCrewCreated });
+  // Hub mode: a Crew run can be routed to any tailnet peer, which then owns it
+  // end to end. null = local (the machine this page talks to). Only Crew create
+  // routes remotely — Solo create always stays on this machine.
+  const [machine, setMachine] = useState<string | null>(null);
+  const remoteBase = machineApiBase(machine);
+  const crew = useCrewComposer({
+    projectPath,
+    baseBranch,
+    remoteBase,
+    onCreated: (taskId) => onCrewCreated?.(taskId, machine),
+  });
   const imageAttachments = useComposerAttachments(setPrompt);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -229,13 +245,32 @@ export function HomeView({
     setProjectPath(path);
     const savedBranch = loadProjectPreference().lastBranchByProject?.[path];
     setBaseBranch(isNuncioSessionBranch(savedBranch) ? undefined : savedBranch);
-    recordProjectSelection(path, projectDisplayName(path) ?? undefined);
-  }, []);
+    // Recents are this-browser, this-machine only — never remember a remote path.
+    if (!machine) recordProjectSelection(path, projectDisplayName(path) ?? undefined);
+  }, [machine]);
 
   const handleBranchChange = useCallback((branch: string) => {
     setBaseBranch(branch);
-    if (projectPath) recordBranchSelection(projectPath, branch);
-  }, [projectPath]);
+    if (!machine && projectPath) recordBranchSelection(projectPath, branch);
+  }, [machine, projectPath]);
+
+  // Switching the target machine clears the per-machine inputs: a project path
+  // and branch chosen on one machine are meaningless on another.
+  const selectMachine = (next: string | null) => {
+    if (next === machine) return;
+    setMachine(next);
+    const local = resolveWorkspacePreference();
+    setProjectPath(next ? undefined : local.projectPath);
+    setBaseBranch(next ? undefined : local.baseBranch);
+    setWorkspaceMode('local');
+  };
+
+  // Solo create always runs on this machine, so leaving Crew drops any remote
+  // target (and restores the local project/branch).
+  const handleExecutionModeChange = (next: ExecutionMode) => {
+    if (next !== 'crew') selectMachine(null);
+    crew.setMode(next);
+  };
 
   const canSend = Boolean(prompt.trim()) && !loading && (
     crew.mode === 'crew' ? crew.canSubmit : catalogLoaded && !!model && !!provider
@@ -257,7 +292,12 @@ export function HomeView({
       <div className="w-full max-w-[720px]">
         {/* Quiet context row — Cursor's text-pickers sit above the composer. */}
         <div className="home-composer-context-row flex flex-wrap items-center justify-center gap-x-1 gap-y-1 mb-3">
-          <ProjectPicker value={projectPath} onChange={handleProjectChange} variant="text" />
+          <ProjectPicker
+            value={projectPath}
+            onChange={handleProjectChange}
+            variant="text"
+            apiBase={remoteBase}
+          />
           <span aria-hidden className="text-muted-foreground/40 select-none">
             ·
           </span>
@@ -266,6 +306,7 @@ export function HomeView({
             value={baseBranch}
             onChange={handleBranchChange}
             variant="text"
+            apiBase={remoteBase}
           />
           {crew.mode === 'solo' ? (
             <>
@@ -344,7 +385,7 @@ export function HomeView({
               />
             )}
             <div className="home-composer-pickers flex min-w-0 flex-1 items-center overflow-x-auto [&_button]:shrink-0">
-              <ExecutionModePicker value={crew.mode} onChange={crew.setMode} />
+              <ExecutionModePicker value={crew.mode} onChange={handleExecutionModeChange} />
               {crew.mode === 'solo' ? (
                 <>
                   <ModelPicker
@@ -364,13 +405,20 @@ export function HomeView({
                   />
                 </>
               ) : (
-                <CrewProfilePicker
-                  profiles={crew.profiles}
-                  value={crew.profileId}
-                  onChange={crew.setProfileId}
-                  disabled={crew.loadingProfiles || crew.resolving || crew.submitting}
-                  loading={crew.loadingProfiles}
-                />
+                <>
+                  <CrewMachinePicker
+                    value={machine}
+                    onChange={selectMachine}
+                    disabled={crew.submitting}
+                  />
+                  <CrewProfilePicker
+                    profiles={crew.profiles}
+                    value={crew.profileId}
+                    onChange={crew.setProfileId}
+                    disabled={crew.loadingProfiles || crew.resolving || crew.submitting}
+                    loading={crew.loadingProfiles}
+                  />
+                </>
               )}
             </div>
             <QuotaChip

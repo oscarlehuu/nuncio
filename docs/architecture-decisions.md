@@ -160,3 +160,28 @@ provider-neutral, and safe on the user's machine.
 **Reverse only if:** the user explicitly approves a new Crew contract. General workflow graphs,
 custom roles/prompts, provider substitution policy, outbound forge/deployment actions, broader
 context reads, and automated cleanup/retention require separate decisions.
+
+## ADR-013 — Remote Crew runs are routing, not distributed execution
+
+**Status:** locked, shipped.
+**Decision:** a Crew run created from one machine's Home can target another same-account tailnet
+peer (the machine picker beside the Crew controls). The chosen machine then **owns everything** —
+the `CrewTask`/`CrewRun`, the append-only event stream and projection, the profile snapshot, the
+single worktree and Builder writer lease, the verifier sandbox, recovery, and terminal outcomes —
+because it *is* a local run from that machine's perspective. The creating machine is a pure
+viewer/creator: it lists+resolves the profile against the owning machine's catalog and posts the
+create request through the hub proxy (`POST /m/<machine>/api/crew/tasks`), then navigates to
+`/m/<machine>/crew/<taskId>` so the detail view's existing HTTP polling follows the owning daemon.
+No Crew authority, lease, worktree bytes, or state ever crosses the network; the wire carries only
+the create request, the profile list/resolve, and read-only run polling. The profile is resolved
+and frozen **on the owning machine**, never shipped as a snapshot minted elsewhere.
+**Why:** every ADR-012 invariant (one canonical worktree, one writer lease, deterministic sandboxed
+verify, LOCAL Git-truth recovery) is expressed in terms of one daemon's local filesystem. Splitting
+any of them across a network boundary would re-open all of them. Keeping the whole reducer on the
+owning machine means the Crew module and hub server are unchanged — remote is a client base +
+navigation concern, and every failure mode reduces to an already-solved single-daemon recovery plus
+a transient viewer reconnect.
+**Reverse only if:** the user explicitly wants split/distributed Crew execution (an orchestrator on
+one machine driving an executor on another), which requires re-deriving the ADR-012 authority model
+across a network boundary. Cross-machine attention aggregation on Home is a separate, additive
+decision — its absence does not reverse this one.

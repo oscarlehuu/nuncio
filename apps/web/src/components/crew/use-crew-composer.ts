@@ -11,10 +11,17 @@ import type { ExecutionMode } from './execution-mode-picker';
 export function useCrewComposer({
   projectPath,
   baseBranch,
+  remoteBase = '',
   onCreated,
 }: {
   projectPath?: string;
   baseBranch?: string;
+  /**
+   * Origin-absolute API base of the machine that will OWN this run. Empty = the
+   * machine this page already talks to (local). When set, profiles list, resolve,
+   * and create all target that machine — authority never leaves it.
+   */
+  remoteBase?: string;
   onCreated?: (taskId: string) => void;
 }) {
   const [mode, setModeState] = useState<ExecutionMode>('solo');
@@ -32,8 +39,11 @@ export function useCrewComposer({
   useEffect(() => {
     if (mode !== 'crew') return;
     let cancelled = false;
+    // Switching the target machine re-lists profiles from that machine's own
+    // catalog, so hold the loading state until the new list arrives.
+    setLoadingProfiles(true);
     setError(null);
-    fetchCrewProfiles()
+    fetchCrewProfiles(remoteBase)
       .then((next) => {
         if (cancelled) return;
         setProfiles(next);
@@ -51,7 +61,7 @@ export function useCrewComposer({
       })
       .finally(() => { if (!cancelled) setLoadingProfiles(false); });
     return () => { cancelled = true; };
-  }, [mode]);
+  }, [mode, remoteBase]);
 
   useEffect(() => {
     if (mode !== 'crew' || loadingProfiles || !profileId || !projectPath) {
@@ -63,7 +73,7 @@ export function useCrewComposer({
     const current = ++requestId.current;
     setResolving(true);
     setError(null);
-    resolveCrewProfile(profileId, projectPath, baseBranch, controller.signal)
+    resolveCrewProfile(profileId, projectPath, baseBranch, controller.signal, remoteBase)
       .then((next) => {
         if (current === requestId.current) setResolution(next);
       })
@@ -76,7 +86,7 @@ export function useCrewComposer({
         if (current === requestId.current) setResolving(false);
       });
     return () => controller.abort();
-  }, [baseBranch, loadingProfiles, mode, profileId, profileRefresh, projectPath]);
+  }, [baseBranch, loadingProfiles, mode, profileId, profileRefresh, projectPath, remoteBase]);
 
   const setMode = (next: ExecutionMode) => {
     if (next === 'crew' && mode !== 'crew') {
@@ -92,7 +102,7 @@ export function useCrewComposer({
     setSubmitting(true);
     setError(null);
     try {
-      const { task } = await createCrewTask({ objective, projectPath, baseBranch, profileId });
+      const { task } = await createCrewTask({ objective, projectPath, baseBranch, profileId }, remoteBase);
       onCreated?.(task.id);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Failed to create Crew task');

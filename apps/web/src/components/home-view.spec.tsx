@@ -480,15 +480,15 @@ describe('HomeView', () => {
     await userEvent.click(screen.getByRole('switch', { name: /crew/i }));
     expect(await screen.findByText('Ready')).toBeInTheDocument();
     expect(resolveCrewProfile).toHaveBeenCalledWith(
-      'quality', '/code/nuncio', 'main', expect.any(AbortSignal),
+      'quality', '/code/nuncio', 'main', expect.any(AbortSignal), '',
     );
     await userEvent.type(screen.getByPlaceholderText(/ask nuncio/i), 'Ship it');
     const send = screen.getByRole('button', { name: /send/i });
     expect(send).toBeEnabled();
     await userEvent.dblClick(send);
     expect(createCrewTask).toHaveBeenCalledTimes(1);
-    expect(createCrewTask).toHaveBeenCalledWith({ objective: 'Ship it', projectPath: '/code/nuncio', baseBranch: 'main', profileId: 'quality' });
-    expect(onCrewCreated).toHaveBeenCalledWith('task-1');
+    expect(createCrewTask).toHaveBeenCalledWith({ objective: 'Ship it', projectPath: '/code/nuncio', baseBranch: 'main', profileId: 'quality' }, '');
+    expect(onCrewCreated).toHaveBeenCalledWith('task-1', null);
   });
 
   it('re-resolves Crew readiness when the selected base branch changes', async () => {
@@ -500,7 +500,7 @@ describe('HomeView', () => {
     await userEvent.click(screen.getByRole('button', { name: /^main$/i }));
 
     await waitFor(() => expect(resolveCrewProfile).toHaveBeenCalledWith(
-      'quality', '/code/nuncio', 'release', expect.any(AbortSignal),
+      'quality', '/code/nuncio', 'release', expect.any(AbortSignal), '',
     ));
   });
 

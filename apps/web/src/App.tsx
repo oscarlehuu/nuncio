@@ -683,7 +683,15 @@ export default function App() {
                 onSubmit={handleCreate}
                 onContinueOnMobile={() => openHandoff()}
                 loading={creating}
-                onCrewCreated={(taskId) => navigate(`/crew/${taskId}`)}
+                onCrewCreated={(taskId, machine) =>
+                  // Remote runs live on their owning daemon: a full navigation to
+                  // /m/<machine>/ reboots the SPA under that machine's base, so the
+                  // detail view's polling auto-routes to it through the hub proxy.
+                  // Local runs keep the lightweight client-side route change.
+                  machine
+                    ? window.location.assign(`/m/${machine}/crew/${taskId}`)
+                    : navigate(`/crew/${taskId}`)
+                }
                 composerFocusKey={composerFocusKey}
                 railOverlay={!desktopSidebar.pinned}
               />

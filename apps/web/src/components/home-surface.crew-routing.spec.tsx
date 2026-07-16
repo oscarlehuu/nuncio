@@ -4,8 +4,11 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
 vi.mock('./home-view', () => ({
-  HomeView: ({ onCrewCreated }: { onCrewCreated?: (taskId: string) => void }) => (
-    <button type="button" onClick={() => onCrewCreated?.('task-1')}>Create Crew fixture</button>
+  HomeView: ({ onCrewCreated }: { onCrewCreated?: (taskId: string, machine?: string | null) => void }) => (
+    <>
+      <button type="button" onClick={() => onCrewCreated?.('task-1', null)}>Create local Crew fixture</button>
+      <button type="button" onClick={() => onCrewCreated?.('task-2', 'studio')}>Create remote Crew fixture</button>
+    </>
   ),
 }));
 vi.mock('./digest-card', () => ({ DigestCard: () => null }));
@@ -15,8 +18,7 @@ vi.mock('./crew/recent-crew-runs', () => ({ RecentCrewRuns: () => null }));
 import { HomeSurface } from './home-surface';
 
 describe('HomeSurface Crew routing', () => {
-  it('forwards the durable CrewTask id from the composer', async () => {
-    const onCrewCreated = vi.fn();
+  const renderSurface = (onCrewCreated: (taskId: string, machine?: string | null) => void) =>
     render(
       <MemoryRouter>
         <HomeSurface
@@ -28,7 +30,17 @@ describe('HomeSurface Crew routing', () => {
       </MemoryRouter>,
     );
 
-    await userEvent.click(screen.getByRole('button', { name: 'Create Crew fixture' }));
-    expect(onCrewCreated).toHaveBeenCalledWith('task-1');
+  it('forwards a local CrewTask id with no owning machine', async () => {
+    const onCrewCreated = vi.fn();
+    renderSurface(onCrewCreated);
+    await userEvent.click(screen.getByRole('button', { name: 'Create local Crew fixture' }));
+    expect(onCrewCreated).toHaveBeenCalledWith('task-1', null);
+  });
+
+  it('forwards the owning machine so the router can navigate to it', async () => {
+    const onCrewCreated = vi.fn();
+    renderSurface(onCrewCreated);
+    await userEvent.click(screen.getByRole('button', { name: 'Create remote Crew fixture' }));
+    expect(onCrewCreated).toHaveBeenCalledWith('task-2', 'studio');
   });
 });
