@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 
@@ -297,6 +297,45 @@ describe('LoopDetailView', () => {
     const payload = vi.mocked(updateLoop).mock.calls[0]![1];
     expect(payload).toEqual({ engine: 'cursor' });
     expect(payload).not.toHaveProperty('model');
+  });
+
+  it('edits the breaker threshold and PATCHes maxConsecutiveFailures', async () => {
+    renderDetail();
+    const breaker = await screen.findByLabelText(/consecutive failures before pausing/i);
+    // A clamped controlled number input: one change event mirrors select-all-then-type.
+    fireEvent.change(breaker, { target: { value: '6' } });
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateLoop).toHaveBeenCalled());
+    expect(vi.mocked(updateLoop).mock.calls[0]![1].maxConsecutiveFailures).toBe(6);
+  });
+
+  it('re-specs the trigger in place and PATCHes {schedule}', async () => {
+    renderDetail();
+    // Settings tab is default; switch the trigger family to Interval.
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Interval' })).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('tab', { name: 'Interval' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateLoop).toHaveBeenCalled());
+    expect(vi.mocked(updateLoop).mock.calls[0]![1].schedule).toEqual({ kind: 'cron', spec: 'every:6h' });
+  });
+
+  it('switches the trigger to an event and PATCHes {schedule:{kind:event}}', async () => {
+    renderDetail();
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'On event' })).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('tab', { name: 'On event' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateLoop).toHaveBeenCalled());
+    const patch = vi.mocked(updateLoop).mock.calls[0]![1];
+    expect(patch.schedule!.kind).toBe('event');
+    expect(JSON.parse(patch.schedule!.spec)).toEqual({ event: 'issue.opened' });
+  });
+
+  it('Save stays disabled when the schedule is edited to an invalid time', async () => {
+    renderDetail();
+    // Default family is daily (a time input). Clear it → invalid → Save disabled.
+    const time = await screen.findByLabelText('Time of day');
+    await userEvent.clear(time);
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
   });
 
   it('deletes via the overflow menu after confirming', async () => {

@@ -18,9 +18,58 @@ const WEEKDAY_LABELS: Record<string, string> = {
   sat: 'Saturday',
 };
 
+/** The schedule families the create/edit form offers. */
+export type ScheduleFormMode = 'daily' | 'interval' | 'weekday' | 'event';
+
+/**
+ * The event trigger catalog — grounded in what the forge webhook layer ACTUALLY
+ * delivers: `<kind>.<action>` where kind ∈ {issue, pull_request} and action is the
+ * common vocabulary both GitHub and GitLab emit (GitLab normalizes open/reopen/
+ * close/merge → opened/reopened/closed/merged). No invented events; a filter here
+ * matches the server's `${event.kind}.${event.action}` comparison exactly.
+ */
+export const EVENT_CATALOG: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'issue.opened', label: 'Issue opened' },
+  { value: 'issue.closed', label: 'Issue closed' },
+  { value: 'issue.reopened', label: 'Issue reopened' },
+  { value: 'pull_request.opened', label: 'Pull request opened' },
+  { value: 'pull_request.closed', label: 'Pull request closed' },
+  { value: 'pull_request.reopened', label: 'Pull request reopened' },
+  { value: 'pull_request.merged', label: 'Pull request merged' },
+];
+
+/** Default event when a form switches to the event trigger family. */
+export const DEFAULT_EVENT = 'issue.opened';
+
+function eventLabel(value: string): string {
+  return EVENT_CATALOG.find((e) => e.value === value)?.label ?? value;
+}
+
+/** Parse an event-filter spec (`{event, label?}` JSON), or null if it is not one. */
+function parseEventFilter(spec: string): { event: string; label?: string } | null {
+  const trimmed = spec.trim();
+  if (!trimmed.startsWith('{')) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as { event?: unknown; label?: unknown };
+    if (typeof parsed.event !== 'string' || !parsed.event) return null;
+    return {
+      event: parsed.event,
+      label: typeof parsed.label === 'string' && parsed.label ? parsed.label : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function formatScheduleSpec(spec: string): string {
   const trimmed = (spec ?? '').trim();
   if (!trimmed) return 'No schedule';
+
+  const filter = parseEventFilter(trimmed);
+  if (filter) {
+    const base = `On ${eventLabel(filter.event)}`;
+    return filter.label ? `${base} · label “${filter.label}”` : base;
+  }
 
   if (trimmed.startsWith('daily@')) {
     const time = trimmed.slice('daily@'.length);
@@ -52,12 +101,84 @@ function isHhMm(value: string): boolean {
 
 /** Build a valid spec string from the create-form fields — the inverse of the parser. */
 export function buildScheduleSpec(
-  mode: 'daily' | 'interval' | 'weekday',
-  fields: { time?: string; interval?: number; unit?: 'm' | 'h'; weekday?: string },
+  mode: ScheduleFormMode,
+  fields: { time?: string; interval?: number; unit?: 'm' | 'h'; weekday?: string; event?: string; label?: string },
 ): string {
+  if (mode === 'event') {
+    const event = fields.event ?? DEFAULT_EVENT;
+    const label = fields.label?.trim();
+    // Serialize with `event` first for a stable, human-diffable filter string.
+    return JSON.stringify(label ? { event, label } : { event });
+  }
   if (mode === 'interval') return `every:${fields.interval ?? 1}${fields.unit ?? 'h'}`;
   if (mode === 'weekday') return `${fields.weekday ?? 'mon'}@${fields.time ?? '22:00'}`;
   return `daily@${fields.time ?? '22:00'}`;
+}
+
+/** All schedule-form fields, fully populated with sane defaults. */
+export interface ScheduleFormFields {
+  mode: ScheduleFormMode;
+  time: string;
+  interval: number;
+  unit: 'm' | 'h';
+  weekday: string;
+  event: string;
+  label: string;
+}
+
+const DEFAULT_SCHEDULE_FIELDS: ScheduleFormFields = {
+  mode: 'daily',
+  time: '22:00',
+  interval: 6,
+  unit: 'h',
+  weekday: 'mon',
+  event: DEFAULT_EVENT,
+  label: '',
+};
+
+/**
+ * Seed the edit form from a stored `{kind, spec}` — the inverse of
+ * {@link buildScheduleSpec}. Every field is populated (defaults for the ones the
+ * parsed family doesn't use) so the form never binds an undefined input. An
+ * unrecognized spec falls back to the daily default rather than throwing, so a
+ * legacy/hand-written spec still opens an editable form.
+ */
+export function parseSpecToFields(kind: string, spec: string): ScheduleFormFields {
+  const trimmed = (spec ?? '').trim();
+
+  const filter = parseEventFilter(trimmed);
+  if (kind === 'event' || filter) {
+    return {
+      ...DEFAULT_SCHEDULE_FIELDS,
+      mode: 'event',
+      event: filter?.event ?? DEFAULT_EVENT,
+      label: filter?.label ?? '',
+    };
+  }
+
+  if (trimmed.startsWith('daily@')) {
+    const time = trimmed.slice('daily@'.length);
+    if (isHhMm(time)) return { ...DEFAULT_SCHEDULE_FIELDS, mode: 'daily', time };
+  }
+
+  if (trimmed.startsWith('every:')) {
+    const match = /^(\d+)([mh])$/.exec(trimmed.slice('every:'.length));
+    if (match) {
+      return {
+        ...DEFAULT_SCHEDULE_FIELDS,
+        mode: 'interval',
+        interval: Number(match[1]),
+        unit: match[2] === 'h' ? 'h' : 'm',
+      };
+    }
+  }
+
+  const weekday = /^([a-z]{3})@(.+)$/.exec(trimmed);
+  if (weekday && WEEKDAY_LABELS[weekday[1]!] && isHhMm(weekday[2]!)) {
+    return { ...DEFAULT_SCHEDULE_FIELDS, mode: 'weekday', weekday: weekday[1]!, time: weekday[2]! };
+  }
+
+  return { ...DEFAULT_SCHEDULE_FIELDS };
 }
 
 /**

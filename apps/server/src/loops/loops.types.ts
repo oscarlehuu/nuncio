@@ -88,13 +88,15 @@ export interface CreateLoopDto {
 }
 
 /**
- * Patch subset for PATCH /loops/:id (v1.1). Omitted fields unchanged. The
- * schedule spec is NOT editable via this route in v1. Rejected on completed
- * loops (their config is history); allowed on active/paused/broken.
+ * Patch subset for PATCH /loops/:id. Omitted fields unchanged. Editing the
+ * `schedule` re-specs the loop's OWNED schedule row in place (id preserved), so
+ * run history + streaks (derived from durable loop_runs) survive a trigger change.
+ * Rejected on completed loops (their config is history); allowed on active/paused/broken.
  */
 export interface UpdateLoopDto {
   name?: string | null;
   goal?: string;
+  schedule?: { kind: 'cron' | 'heartbeat' | 'event'; spec: string };
   maxRunsPerDay?: number;
   maxConsecutiveFailures?: number;
   stop?: StopCondition;

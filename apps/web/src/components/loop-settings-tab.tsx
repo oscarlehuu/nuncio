@@ -1,9 +1,15 @@
 import { type LoopDto, type StopCondition } from '../lib/api';
 import type { ModelProvider } from '../lib/model-providers';
-import { formatNextFire, formatScheduleSpec } from '@nuncio/core/loop-schedule';
+import {
+  buildScheduleSpec,
+  formatNextFire,
+  formatScheduleSpec,
+  type ScheduleFormFields,
+} from '@nuncio/core/loop-schedule';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { ModelPicker } from './model-picker';
+import { ScheduleFields } from './loop-schedule-fields';
 
 /** Absolute time — the detail view shows this next to the relative countdown. */
 function absoluteTime(ts: number): string {
@@ -34,13 +40,19 @@ interface LoopSettingsTabProps {
   onEngineModelChange: (engine: string | null, model: string | null) => void;
   maxRunsPerDay: number;
   onMaxRunsChange: (n: number) => void;
+  /** Editable trigger fields (seeded from the loop's owned schedule). */
+  schedule: ScheduleFormFields;
+  onScheduleChange: (next: ScheduleFormFields) => void;
+  maxConsecutiveFailures: number;
+  onMaxFailuresChange: (n: number) => void;
 }
 
 /**
  * The Settings tab of a loop's detail page. Editable name + goal + engine override +
- * daily budget; read-only trigger/stop/breaker facts (changing a schedule is a rarer
- * op, deferred). The trigger line pairs the human schedule with an absolute next-run
- * time beside the relative countdown so "in 2h" is never ambiguous.
+ * daily budget + trigger + breaker; only the stop condition and output policy stay
+ * read-only. Editing the trigger re-specs the loop's owned schedule in place, so run
+ * history and streaks survive. The live preview pairs the human schedule with an
+ * absolute next-run time beside the relative countdown so "in 2h" is never ambiguous.
  */
 export function LoopSettingsTab({
   loop,
@@ -54,8 +66,17 @@ export function LoopSettingsTab({
   onEngineModelChange,
   maxRunsPerDay,
   onMaxRunsChange,
+  schedule,
+  onScheduleChange,
+  maxConsecutiveFailures,
+  onMaxFailuresChange,
 }: LoopSettingsTabProps) {
-  const schedule = loop.schedule?.spec ? formatScheduleSpec(loop.schedule.spec) : 'No schedule';
+  const set = (patch: Partial<ScheduleFormFields>) => onScheduleChange({ ...schedule, ...patch });
+  const timeValid =
+    schedule.mode === 'interval' || schedule.mode === 'event' || /^\d{1,2}:\d{2}$/.test(schedule.time);
+  const intervalValid =
+    schedule.mode !== 'interval' || (Number.isInteger(schedule.interval) && schedule.interval > 0);
+  const previewSpec = buildScheduleSpec(schedule.mode, schedule);
 
   return (
     <div className="flex flex-col gap-5">
@@ -106,6 +127,35 @@ export function LoopSettingsTab({
         </div>
       </div>
 
+      <Field label="Trigger">
+        <ScheduleFields
+          mode={schedule.mode}
+          onModeChange={(mode) => set({ mode })}
+          time={schedule.time}
+          onTimeChange={(time) => set({ time })}
+          interval={schedule.interval}
+          onIntervalChange={(interval) => set({ interval })}
+          unit={schedule.unit}
+          onUnitChange={(unit) => set({ unit })}
+          weekday={schedule.weekday}
+          onWeekdayChange={(weekday) => set({ weekday })}
+          event={schedule.event}
+          onEventChange={(event) => set({ event })}
+          label={schedule.label}
+          onLabelChange={(label) => set({ label })}
+          timeValid={timeValid}
+          intervalValid={intervalValid}
+        />
+        <p className="mt-1.5 text-ui-sm text-muted-foreground">
+          {timeValid && intervalValid ? formatScheduleSpec(previewSpec) : 'Enter a valid time'}
+          {loop.nextFireAt != null && loop.status === 'active' && (
+            <span className="block">
+              {formatNextFire(loop.nextFireAt)} · {absoluteTime(loop.nextFireAt)}
+            </span>
+          )}
+        </p>
+      </Field>
+
       <div className="grid gap-5 sm:grid-cols-2">
         <Field label="Runs per day" htmlFor="loop-budget-edit">
           <Input
@@ -116,19 +166,20 @@ export function LoopSettingsTab({
             onChange={(e) => onMaxRunsChange(Math.max(1, Number(e.target.value) || 1))}
           />
         </Field>
+        <Field label="Pause after failures" htmlFor="loop-breaker-edit">
+          <Input
+            id="loop-breaker-edit"
+            type="number"
+            min={1}
+            aria-label="Consecutive failures before pausing"
+            value={maxConsecutiveFailures}
+            onChange={(e) => onMaxFailuresChange(Math.max(1, Number(e.target.value) || 1))}
+          />
+        </Field>
       </div>
 
       <dl className="grid gap-3 rounded-xl border border-border bg-card px-4 py-3 shadow-e0 sm:grid-cols-2">
-        <Fact term="Trigger">
-          {schedule}
-          {loop.nextFireAt != null && loop.status === 'active' && (
-            <span className="block text-ui-sm text-muted-foreground">
-              {formatNextFire(loop.nextFireAt)} · {absoluteTime(loop.nextFireAt)}
-            </span>
-          )}
-        </Fact>
         <Fact term="Stop condition">{stopText(loop.stop)}</Fact>
-        <Fact term="Breaker">Pauses after {loop.maxConsecutiveFailures} failures in a row</Fact>
         <Fact term="Output">Fresh worktree → pull request</Fact>
       </dl>
     </div>

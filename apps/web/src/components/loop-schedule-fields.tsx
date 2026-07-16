@@ -7,14 +7,16 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { EVENT_CATALOG } from '@nuncio/core/loop-schedule';
 import { cn } from '@/lib/utils';
 
-export type ScheduleMode = 'daily' | 'interval' | 'weekday';
+export type ScheduleMode = 'daily' | 'interval' | 'weekday' | 'event';
 
 const MODES: Array<{ value: ScheduleMode; label: string }> = [
   { value: 'daily', label: 'Daily' },
   { value: 'interval', label: 'Interval' },
   { value: 'weekday', label: 'Weekly' },
+  { value: 'event', label: 'On event' },
 ];
 
 const WEEKDAYS: Array<{ value: string; label: string }> = [
@@ -38,14 +40,21 @@ interface ScheduleFieldsProps {
   onUnitChange: (unit: 'm' | 'h') => void;
   weekday: string;
   onWeekdayChange: (weekday: string) => void;
+  /** The `<kind>.<action>` webhook event (event mode). */
+  event: string;
+  onEventChange: (event: string) => void;
+  /** Optional label filter the event must carry (event mode). */
+  label: string;
+  onLabelChange: (label: string) => void;
   timeValid: boolean;
   intervalValid: boolean;
 }
 
 /**
- * The schedule half of the create-loop form. A segmented control picks the
+ * The schedule half of the create/edit loop form. A segmented control picks the
  * trigger family; the conditional fields below build a spec the server parses.
  * Invalid time/interval is flagged inline (aria-invalid) so a bad spec can't ship.
+ * The "On event" family fires the loop from an inbound forge webhook (issue/PR).
  */
 export function ScheduleFields({
   mode,
@@ -58,10 +67,15 @@ export function ScheduleFields({
   onUnitChange,
   weekday,
   onWeekdayChange,
+  event,
+  onEventChange,
+  label,
+  onLabelChange,
   timeValid,
   intervalValid,
 }: ScheduleFieldsProps) {
   const weekdayLabel = WEEKDAYS.find((d) => d.value === weekday)?.label ?? 'Monday';
+  const eventLabel = EVENT_CATALOG.find((e) => e.value === event)?.label ?? event;
 
   return (
     <div className="flex flex-col gap-2.5">
@@ -85,7 +99,44 @@ export function ScheduleFields({
         ))}
       </div>
 
-      {mode === 'interval' ? (
+      {mode === 'event' ? (
+        <div className="flex flex-col gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 w-full justify-between px-3"
+                aria-label={`Trigger event: ${eventLabel}`}
+              >
+                <span className="truncate">{eventLabel}</span>
+                <ChevronDown className="size-3.5 opacity-70" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-[var(--radix-dropdown-menu-trigger-width)]">
+              {EVENT_CATALOG.map((e) => (
+                <DropdownMenuItem key={e.value} onClick={() => onEventChange(e.value)}>
+                  {e.label}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <div className="flex items-center gap-2">
+            <span className="shrink-0 text-ui text-muted-foreground">with label</span>
+            <Input
+              aria-label="Required label filter (optional)"
+              placeholder="any label"
+              value={label}
+              onChange={(e) => onLabelChange(e.target.value)}
+              className="flex-1"
+            />
+          </div>
+          <p className="text-ui-sm text-muted-foreground">
+            Fires when a matching issue or pull request webhook arrives. Leave the label blank to match
+            every one.
+          </p>
+        </div>
+      ) : mode === 'interval' ? (
         <div className="flex items-center gap-2">
           <span className="text-ui text-muted-foreground">Every</span>
           <Input

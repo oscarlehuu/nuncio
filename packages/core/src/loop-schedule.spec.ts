@@ -1,12 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildScheduleSpec,
+  EVENT_CATALOG,
   failureStreak,
   formatNextFire,
   formatScheduleSpec,
   lastExecutedRun,
   localDayBucket,
   loopDisplayName,
+  parseSpecToFields,
   runsToday,
   verifyLabel,
 } from './loop-schedule';
@@ -55,6 +57,76 @@ describe('buildScheduleSpec round-trips through the formatter', () => {
   });
   it('weekday', () => {
     expect(buildScheduleSpec('weekday', { weekday: 'sat', time: '10:00' })).toBe('sat@10:00');
+  });
+});
+
+describe('event schedules (webhook triggers)', () => {
+  it('the catalog only lists events the forge webhook layer actually delivers', () => {
+    const values = EVENT_CATALOG.map((e) => e.value);
+    // <kind>.<action> pairs parseWebhookEvent + normalizeAction emit.
+    expect(values).toContain('issue.opened');
+    expect(values).toContain('pull_request.merged');
+    // No invented events (e.g. no `push` — the webhook layer never delivers one).
+    expect(values).not.toContain('push');
+    expect(values.every((v) => /^(issue|pull_request)\./.test(v))).toBe(true);
+  });
+
+  it('builds an event filter spec as JSON, omitting a blank label', () => {
+    expect(buildScheduleSpec('event', { event: 'issue.opened' })).toBe('{"event":"issue.opened"}');
+    expect(buildScheduleSpec('event', { event: 'issue.opened', label: '  ' })).toBe(
+      '{"event":"issue.opened"}',
+    );
+    expect(buildScheduleSpec('event', { event: 'issue.opened', label: 'agent' })).toBe(
+      '{"event":"issue.opened","label":"agent"}',
+    );
+  });
+
+  it('formats an event filter in plain English, with the optional label', () => {
+    expect(formatScheduleSpec('{"event":"issue.opened"}')).toBe('On Issue opened');
+    expect(formatScheduleSpec('{"event":"pull_request.merged","label":"agent"}')).toBe(
+      'On Pull request merged · label “agent”',
+    );
+  });
+
+  it('falls back to the raw event string for an unknown event value', () => {
+    expect(formatScheduleSpec('{"event":"issue.pinned"}')).toBe('On issue.pinned');
+  });
+
+  it('round-trips: build → parse recovers the event + label', () => {
+    const spec = buildScheduleSpec('event', { event: 'pull_request.opened', label: 'agent' });
+    const fields = parseSpecToFields('event', spec);
+    expect(fields.mode).toBe('event');
+    expect(fields.event).toBe('pull_request.opened');
+    expect(fields.label).toBe('agent');
+  });
+});
+
+describe('parseSpecToFields (seed the edit form from a stored spec)', () => {
+  it('parses each cron family back into form fields', () => {
+    expect(parseSpecToFields('cron', 'daily@09:30')).toMatchObject({ mode: 'daily', time: '09:30' });
+    expect(parseSpecToFields('cron', 'every:4h')).toMatchObject({ mode: 'interval', interval: 4, unit: 'h' });
+    expect(parseSpecToFields('cron', 'sat@10:00')).toMatchObject({ mode: 'weekday', weekday: 'sat', time: '10:00' });
+  });
+
+  it('returns safe daily defaults for an unparseable spec (never throws)', () => {
+    const fields = parseSpecToFields('cron', '*/5 * * * *');
+    expect(fields.mode).toBe('daily');
+    expect(fields.time).toBe('22:00');
+  });
+
+  it('always populates every field so the form has no undefined inputs', () => {
+    const fields = parseSpecToFields('cron', 'every:2h');
+    expect(fields).toEqual(
+      expect.objectContaining({
+        mode: expect.any(String),
+        time: expect.any(String),
+        interval: expect.any(Number),
+        unit: expect.any(String),
+        weekday: expect.any(String),
+        event: expect.any(String),
+        label: expect.any(String),
+      }),
+    );
   });
 });
 

@@ -8,7 +8,7 @@ import {
   type LoopDto,
   type StopCondition,
 } from '../lib/api';
-import { buildScheduleSpec, formatScheduleSpec } from '@nuncio/core/loop-schedule';
+import { buildScheduleSpec, DEFAULT_EVENT, formatScheduleSpec } from '@nuncio/core/loop-schedule';
 import type { ModelProvider } from '../lib/model-providers';
 import { ModelPicker } from './model-picker';
 import { ProjectPicker } from './project-picker';
@@ -43,7 +43,15 @@ const STOP_LABELS: Record<StopKind, string> = {
 /** A template prefill — schedule fields + goal/budget/stop, project still user-picked. */
 export interface CreateLoopPrefill {
   goal: string;
-  schedule: { mode: ScheduleMode; time?: string; interval?: number; unit?: 'm' | 'h'; weekday?: string };
+  schedule: {
+    mode: ScheduleMode;
+    time?: string;
+    interval?: number;
+    unit?: 'm' | 'h';
+    weekday?: string;
+    event?: string;
+    label?: string;
+  };
   maxRunsPerDay?: number;
   stop?: StopCondition;
 }
@@ -72,20 +80,24 @@ export function CreateLoopDialog({
   const [interval, setInterval] = useState(6);
   const [unit, setUnit] = useState<'m' | 'h'>('h');
   const [weekday, setWeekday] = useState('mon');
+  const [event, setEvent] = useState(DEFAULT_EVENT);
+  const [eventLabel, setEventLabel] = useState('');
   const [maxRunsPerDay, setMaxRunsPerDay] = useState(DEFAULT_MAX_RUNS_PER_DAY);
+  const [maxConsecutiveFailures, setMaxConsecutiveFailures] = useState(DEFAULT_MAX_CONSECUTIVE_FAILURES);
   const [stopKind, setStopKind] = useState<StopKind>('standing');
   const [stopN, setStopN] = useState(5);
   const [engine, setEngine] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const timeValid = mode === 'interval' || /^\d{1,2}:\d{2}$/.test(time);
+  // Time/interval only gate the clock families; event mode carries neither.
+  const timeValid = mode === 'interval' || mode === 'event' || /^\d{1,2}:\d{2}$/.test(time);
   const intervalValid = mode !== 'interval' || (Number.isInteger(interval) && interval > 0);
   const goalValid = goal.trim().length > 0;
   const stopValid = stopKind === 'standing' || (Number.isInteger(stopN) && stopN > 0);
   const canSubmit = goalValid && timeValid && intervalValid && stopValid && !submitting;
 
-  const spec = buildScheduleSpec(mode, { time, interval, unit, weekday });
+  const spec = buildScheduleSpec(mode, { time, interval, unit, weekday, event, label: eventLabel });
 
   const reset = () => {
     setGoal('');
@@ -95,7 +107,10 @@ export function CreateLoopDialog({
     setInterval(6);
     setUnit('h');
     setWeekday('mon');
+    setEvent(DEFAULT_EVENT);
+    setEventLabel('');
     setMaxRunsPerDay(DEFAULT_MAX_RUNS_PER_DAY);
+    setMaxConsecutiveFailures(DEFAULT_MAX_CONSECUTIVE_FAILURES);
     setStopKind('standing');
     setStopN(5);
     setEngine(null);
@@ -113,6 +128,8 @@ export function CreateLoopDialog({
     if (prefill.schedule.interval) setInterval(prefill.schedule.interval);
     if (prefill.schedule.unit) setUnit(prefill.schedule.unit);
     if (prefill.schedule.weekday) setWeekday(prefill.schedule.weekday);
+    if (prefill.schedule.event) setEvent(prefill.schedule.event);
+    setEventLabel(prefill.schedule.label ?? '');
     setMaxRunsPerDay(prefill.maxRunsPerDay ?? DEFAULT_MAX_RUNS_PER_DAY);
     if (prefill.stop?.kind === 'maxTotalRuns') {
       setStopKind('maxTotalRuns');
@@ -142,9 +159,9 @@ export function CreateLoopDialog({
     setSubmitting(true);
     const input: CreateLoopInput = {
       goal: goal.trim(),
-      schedule: { kind: 'cron', spec },
+      schedule: { kind: mode === 'event' ? 'event' : 'cron', spec },
       maxRunsPerDay,
-      maxConsecutiveFailures: DEFAULT_MAX_CONSECUTIVE_FAILURES,
+      maxConsecutiveFailures,
       stop: buildStop(),
       ...(projectPath ? { projectPath } : {}),
       ...(engine !== null ? { engine } : {}),
@@ -229,6 +246,10 @@ export function CreateLoopDialog({
               onUnitChange={setUnit}
               weekday={weekday}
               onWeekdayChange={setWeekday}
+              event={event}
+              onEventChange={setEvent}
+              label={eventLabel}
+              onLabelChange={setEventLabel}
               timeValid={timeValid}
               intervalValid={intervalValid}
             />
@@ -247,10 +268,15 @@ export function CreateLoopDialog({
                 onChange={(e) => setMaxRunsPerDay(Math.max(1, Number(e.target.value) || 1))}
               />
             </Field>
-            <Field label="Pause after failures">
-              <div className="flex h-9 items-center rounded-md border border-border bg-muted/30 px-3 text-ui text-muted-foreground">
-                {DEFAULT_MAX_CONSECUTIVE_FAILURES} in a row
-              </div>
+            <Field label="Pause after failures" htmlFor="loop-breaker">
+              <Input
+                id="loop-breaker"
+                type="number"
+                min={1}
+                aria-label="Consecutive failures before pausing"
+                value={maxConsecutiveFailures}
+                onChange={(e) => setMaxConsecutiveFailures(Math.max(1, Number(e.target.value) || 1))}
+              />
             </Field>
           </div>
 

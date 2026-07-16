@@ -508,7 +508,20 @@ export class LoopsService implements OnModuleInit {
         patch.engine !== undefined ? repoPatch.engine ?? null : existing.engine;
       repoPatch.model = await this.validateModel(patch.model, effectiveEngine, existing.projectPath);
     }
-    return this.loops.update(id, repoPatch) ?? existing;
+    // Editing the trigger re-specs the loop's OWNED schedule row IN PLACE (id kept),
+    // so run history + streaks (derived from durable loop_runs) survive the change.
+    // Validate BEFORE any mutation; apply after every validation has passed so a
+    // later throw never leaves a re-specced schedule on an otherwise-unchanged loop.
+    if (patch.schedule !== undefined) this.validateSchedule(patch.schedule);
+    if (
+      patch.schedule !== undefined &&
+      existing.scheduleId &&
+      existing.scheduleId !== 'pending'
+    ) {
+      this.scheduler?.updateSpec(existing.scheduleId, patch.schedule.kind, patch.schedule.spec);
+    }
+    // Return the schedule-joined DTO so a PATCH response reflects the current trigger.
+    return this.withSchedule(this.loops.update(id, repoPatch) ?? existing);
   }
 
   /** Manual run-now: bypass the schedule, but a manual fire is still a consumed

@@ -7,6 +7,7 @@ import type {
   CreateScheduleDto,
   EventFilter,
   ScheduleDto,
+  ScheduleKind,
   StaleScheduleSkip,
 } from './scheduler.types';
 import type { ForgeWebhookEvent } from '../forges/forges.types';
@@ -87,9 +88,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Change a schedule's kind + spec and recompute next fire (used when a heartbeat
-   * cadence setting changes). Clears any pending missed-fire marker.
+   * cadence setting changes, or a loop edits its trigger). Clears any pending
+   * missed-fire marker. An `event` kind has no clock fire — computeNextFire yields
+   * null, so the row stops being scanned and starts matching webhook deliveries.
    */
-  updateSpec(id: string, kind: 'cron' | 'heartbeat', spec: string): void {
+  updateSpec(id: string, kind: ScheduleKind, spec: string): void {
     this.missed.delete(id);
     const nextFireAt = this.computeNextFire(kind, spec, this.clock.now());
     this.schedules.setSpec(id, kind, spec, nextFireAt);
