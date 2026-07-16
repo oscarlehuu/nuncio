@@ -95,6 +95,24 @@ describe('AutopilotView', () => {
     expect(screen.getByRole('button', { name: /view all run history/i })).toBeInTheDocument();
   });
 
+  it('keeps run history reachable when the stats fetch fails', async () => {
+    vi.mocked(fetchLoops).mockResolvedValue([loop({ id: 'a', status: 'active' })]);
+    vi.mocked(fetchLoopStats).mockReset().mockRejectedValue(new Error('stats down'));
+    render(
+      <MemoryRouter initialEntries={['/autopilot']}>
+        <Routes>
+          <Route path="/autopilot" element={<AutopilotView onBack={vi.fn()} providers={[]} />} />
+          <Route path="/autopilot/runs" element={<div>all-runs-view</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByText('Triage new issues')).toBeInTheDocument());
+    // Stats failed → the dashboard still renders and the run-history entry works.
+    const tile = screen.getByRole('button', { name: /view all run history/i });
+    await userEvent.click(tile);
+    expect(await screen.findByText('all-runs-view')).toBeInTheDocument();
+  });
+
   it('folds run history into a single clickable sparkline tile (no header duplicate)', async () => {
     vi.mocked(fetchLoops).mockResolvedValue([loop({ id: 'a', status: 'active' })]);
     render(

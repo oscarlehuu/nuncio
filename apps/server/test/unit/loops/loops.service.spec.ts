@@ -1022,6 +1022,79 @@ describe('LoopsService', () => {
       ).rejects.toThrow(/event/i);
       expect(scheduler.specUpdates).toHaveLength(0);
     });
+
+    it('re-evaluates the breaker immediately when the threshold drops below the streak', async () => {
+      // Streak of 2 while the threshold is 5 → still active.
+      const loop = await loops.create(create({ maxConsecutiveFailures: 5 }));
+      for (let i = 0; i < 2; i += 1) {
+        const r = loops.fire(loop.id)!;
+        loops.recordTaskOutcome(loop.id, r.taskId ?? `t${i}`, false);
+      }
+      expect(repo.findById(loop.id)!.status).toBe('active');
+      // Lower the threshold to 2 → the existing streak trips it NOW, not next failure.
+      const patched = await loops.update(loop.id, { maxConsecutiveFailures: 2 });
+      expect(patched.status).toBe('broken');
+      expect(repo.findById(loop.id)!.status).toBe('broken');
+    });
+  });
+
+  describe('event trigger scope + webhook context', () => {
+    it('pins an event trigger to the loop project (encoded in the filter)', async () => {
+      const created = await loops.create(
+        create({
+          projectPath: '/repos/mine',
+          schedule: { kind: 'event', spec: JSON.stringify({ event: 'issue.opened', label: 'agent' }) },
+        }),
+      );
+      // Read the joined schedule via the service read path (create returns the bare row).
+      const loop = loops.findById(created.id)!;
+      expect(JSON.parse(loop.schedule!.spec)).toEqual({
+        event: 'issue.opened',
+        label: 'agent',
+        projectPath: '/repos/mine',
+      });
+    });
+
+    it('leaves an event trigger unscoped when the loop has no project', async () => {
+      const created = await loops.create(
+        create({
+          projectPath: undefined,
+          schedule: { kind: 'event', spec: JSON.stringify({ event: 'issue.opened' }) },
+        }),
+      );
+      const loop = loops.findById(created.id)!;
+      expect(JSON.parse(loop.schedule!.spec).projectPath).toBeUndefined();
+    });
+
+    it('threads the triggering issue/PR into the fired run prompt', () => {
+      const created = repo.create({
+        name: null,
+        goal: 'Triage the issue',
+        scheduleId: 'pending',
+        maxRunsPerDay: 5,
+        maxConsecutiveFailures: 5,
+        stopJson: null,
+        escalation: 'needs-attention',
+        projectPath: '/repos/mine',
+        engine: null,
+        model: null,
+      });
+      loops.fire(created.id, {
+        kind: 'issue',
+        action: 'opened',
+        repo: 'octo/app',
+        number: 42,
+        title: 'Login crashes',
+        url: 'https://example.test/issues/42',
+      });
+      const prompt = tasks.enqueued.at(-1)!.prompt;
+      expect(prompt).toContain('Triggered by:');
+      expect(prompt).toContain('#42');
+      expect(prompt).toContain('octo/app');
+      expect(prompt).toContain('Login crashes');
+      // The goal is preserved after the trigger preamble.
+      expect(prompt).toContain('Triage the issue');
+    });
   });
 
   describe('create with name (v1.1)', () => {

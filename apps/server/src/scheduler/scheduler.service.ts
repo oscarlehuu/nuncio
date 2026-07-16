@@ -6,6 +6,7 @@ import type {
   Clock,
   CreateScheduleDto,
   EventFilter,
+  LoopTriggerContext,
   ScheduleDto,
   ScheduleKind,
   StaleScheduleSkip,
@@ -47,7 +48,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
    * SchedulerModule and LoopsModule. Resolves a {kind:'loop',loopId} target to a
    * budget-checked loop run.
    */
-  private loopFireHandler: ((loopId: string) => unknown) | null = null;
+  private loopFireHandler:
+    | ((loopId: string, trigger?: LoopTriggerContext) => unknown)
+    | null = null;
 
   /**
    * System-fire handlers (HeartbeatService + dispatcher, registered to avoid DI cycles).
@@ -166,10 +169,21 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Match an inbound (already de-duplicated) webhook event against event schedules. */
-  handleWebhookEvent(_provider: string, event: ForgeWebhookEvent): void {
+  /**
+   * Match an inbound (already de-duplicated) webhook event against event schedules.
+   * `projectPath` is the local project the delivery's repo resolved to (from the
+   * webhook layer). A schedule whose filter is scoped to a project fires ONLY when
+   * that project matches — so a same-named event+label on another repo can never
+   * fire the wrong loop. An unscoped filter (no projectPath) matches any repo.
+   */
+  handleWebhookEvent(
+    _provider: string,
+    event: ForgeWebhookEvent,
+    projectPath?: string | null,
+  ): void {
     if (this.destroyed) return;
     const now = this.clock.now();
+    const trigger = this.triggerContext(event);
     for (const s of this.schedules.listEnabledEvents()) {
       let filter: EventFilter;
       try {
@@ -177,8 +191,8 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       } catch {
         continue; // malformed filter — skip, never crash the dispatch
       }
-      if (this.eventMatches(filter, event)) {
-        this.fire(s, now, 'ok');
+      if (this.eventMatches(filter, event, projectPath ?? null)) {
+        this.fire(s, now, 'ok', trigger);
       }
     }
   }
@@ -197,7 +211,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Register the loop-fire handler (LoopsService, to avoid a DI cycle). */
-  setLoopFireHandler(handler: (loopId: string) => unknown): void {
+  setLoopFireHandler(handler: (loopId: string, trigger?: LoopTriggerContext) => unknown): void {
     this.loopFireHandler = handler;
   }
 
@@ -218,7 +232,12 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
    * the overlap window). Never throws — an enqueue failure downgrades the result
    * to `error:<reason>`.
    */
-  private fire(schedule: ScheduleDto, now: number, result: 'ok' | 'missed'): void {
+  private fire(
+    schedule: ScheduleDto,
+    now: number,
+    result: 'ok' | 'missed',
+    trigger?: LoopTriggerContext,
+  ): void {
     if (this.destroyed) return;
     this.inFlight.add(schedule.id);
     const next = this.advance(schedule, now);
@@ -235,7 +254,8 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         returned = this.tasks?.enqueue({ ...target.template, prompt: target.template.prompt });
       } else if (target.kind === 'loop') {
         // Loop targets resolve through the registered handler (budget-checked run).
-        returned = this.loopFireHandler?.(target.loopId);
+        // A webhook fire threads the triggering issue/PR context into the run.
+        returned = this.loopFireHandler?.(target.loopId, trigger);
       } else if (target.kind === 'system') {
         // System layers (heartbeat, dispatcher) share this seam.
         returned = Promise.all([...this.systemFireHandlers].map((handler) => handler(target.job)));
@@ -268,9 +288,41 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private eventMatches(filter: EventFilter, event: ForgeWebhookEvent): boolean {
-    if (filter.event !== `${event.kind}.${event.action}`) return false;
+  private eventMatches(
+    filter: EventFilter,
+    event: ForgeWebhookEvent,
+    projectPath: string | null,
+  ): boolean {
+    if (filter.event !== `${event.kind}.${this.effectiveAction(event)}`) return false;
     if (filter.label && !event.labels.includes(filter.label)) return false;
+    // Scope guard: a project-scoped filter fires ONLY for its own project.
+    if (filter.projectPath && filter.projectPath !== projectPath) return false;
     return true;
+  }
+
+  /**
+   * The action a loop filter matches on. A GitHub PR merge arrives as
+   * `pull_request.closed` with `merged:true` (the parser keeps `closed` so the
+   * PR-lifecycle router still sees a close); for loop matching we normalize it to
+   * `merged`, so `pull_request.merged` fires on a merge and `pull_request.closed`
+   * fires only on a non-merged close — mirroring GitLab's distinct actions.
+   */
+  private effectiveAction(event: ForgeWebhookEvent): string {
+    if (event.kind === 'pull_request' && event.merged === true) return 'merged';
+    return event.action;
+  }
+
+  /** Minimal identifying context for the triggering issue/PR (loop fires only). */
+  private triggerContext(event: ForgeWebhookEvent): LoopTriggerContext {
+    const title = event.kind === 'issue' || event.kind === 'pull_request' ? event.title : undefined;
+    const url = 'url' in event ? event.url : undefined;
+    return {
+      kind: event.kind,
+      action: this.effectiveAction(event),
+      repo: event.repoFullName,
+      number: event.number,
+      ...(title ? { title } : {}),
+      ...(url ? { url } : {}),
+    };
   }
 }

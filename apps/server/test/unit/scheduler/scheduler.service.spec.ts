@@ -48,6 +48,28 @@ function webhook(action: string, labels: string[]): ForgeWebhookEvent {
   };
 }
 
+/** A GitHub PR close delivery (action stays 'closed'; `merged` distinguishes the two). */
+function pr(merged: boolean): ForgeWebhookEvent {
+  return {
+    provider: 'github',
+    deliveryId: `d-${Math.random()}`,
+    kind: 'pull_request',
+    action: 'closed',
+    owner: 'o',
+    repo: 'r',
+    repoFullName: 'o/r',
+    defaultBranch: 'main',
+    number: 9,
+    title: 't',
+    body: 'b',
+    labels: [],
+    merged,
+    url: 'https://example.test/pr/9',
+  };
+}
+const mergedPr = () => pr(true);
+const closedPr = () => pr(false);
+
 describe('SchedulerService firing loop', () => {
   let dataDir: string;
   let module: TestingModule;
@@ -340,6 +362,65 @@ describe('SchedulerService firing loop', () => {
       clockNow = at(2030, 1, 1, 0, 0); // far future
       scheduler.scanDue();
       expect(tasks.enqueued).toHaveLength(0);
+    });
+
+    it('a project-scoped filter fires ONLY for its own project', () => {
+      scheduler.create({
+        kind: 'event',
+        spec: JSON.stringify({ event: 'issue.opened', label: 'agent', projectPath: '/repos/mine' }),
+        target: taskTarget('triage'),
+      });
+      // Same event+label, but the delivery resolved to a DIFFERENT project → no fire.
+      scheduler.handleWebhookEvent('github', webhook('opened', ['agent']), '/repos/other');
+      expect(tasks.enqueued).toHaveLength(0);
+      // The matching project fires it.
+      scheduler.handleWebhookEvent('github', webhook('opened', ['agent']), '/repos/mine');
+      expect(tasks.enqueued.map((t) => t.prompt)).toContain('triage');
+    });
+
+    it('an unscoped filter still matches any project (back-compat)', () => {
+      scheduler.create({
+        kind: 'event',
+        spec: JSON.stringify({ event: 'issue.opened' }),
+        target: taskTarget('triage'),
+      });
+      scheduler.handleWebhookEvent('github', webhook('opened', []), '/repos/anything');
+      expect(tasks.enqueued).toHaveLength(1);
+    });
+
+    it('normalizes a merged closed PR to pull_request.merged (not .closed)', () => {
+      scheduler.create({
+        kind: 'event',
+        spec: JSON.stringify({ event: 'pull_request.merged' }),
+        target: taskTarget('on-merge'),
+      });
+      scheduler.create({
+        kind: 'event',
+        spec: JSON.stringify({ event: 'pull_request.closed' }),
+        target: taskTarget('on-close'),
+      });
+      // GitHub delivers a merge as action='closed' + merged:true.
+      scheduler.handleWebhookEvent('github', mergedPr());
+      const prompts = tasks.enqueued.map((t) => t.prompt);
+      expect(prompts).toContain('on-merge');
+      expect(prompts).not.toContain('on-close');
+    });
+
+    it('a non-merged close matches pull_request.closed only', () => {
+      scheduler.create({
+        kind: 'event',
+        spec: JSON.stringify({ event: 'pull_request.closed' }),
+        target: taskTarget('on-close'),
+      });
+      scheduler.create({
+        kind: 'event',
+        spec: JSON.stringify({ event: 'pull_request.merged' }),
+        target: taskTarget('on-merge'),
+      });
+      scheduler.handleWebhookEvent('github', closedPr());
+      const prompts = tasks.enqueued.map((t) => t.prompt);
+      expect(prompts).toContain('on-close');
+      expect(prompts).not.toContain('on-merge');
     });
   });
 

@@ -338,6 +338,33 @@ describe('LoopDetailView', () => {
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
   });
 
+  it('an opaque/legacy stored spec does not start the form dirty', async () => {
+    // A trigger kind the form cannot round-trip (heartbeat/legacy) must NOT read as
+    // dirty on load — otherwise Save is enabled with nothing actually changed.
+    vi.mocked(fetchLoop).mockResolvedValue({
+      ...loop(),
+      schedule: { kind: 'heartbeat', spec: 'system:some-internal-cadence' },
+    });
+    renderDetail();
+    await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+
+  it('a rename-only save never replaces an untouched (opaque) trigger', async () => {
+    vi.mocked(fetchLoop).mockResolvedValue({
+      ...loop(),
+      schedule: { kind: 'heartbeat', spec: 'system:some-internal-cadence' },
+    });
+    renderDetail();
+    await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
+    await userEvent.type(screen.getByLabelText('Name'), 'Renamed');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateLoop).toHaveBeenCalled());
+    const patch = vi.mocked(updateLoop).mock.calls[0]![1];
+    expect(patch).toEqual({ name: 'Renamed' });
+    expect(patch).not.toHaveProperty('schedule');
+  });
+
   it('deletes via the overflow menu after confirming', async () => {
     renderDetail();
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Nightly dependency bump' })).toBeInTheDocument());

@@ -17,7 +17,9 @@ interface LoopDashboardHeaderProps {
 }
 
 export function LoopDashboardHeader({ stats, loading, onOpenRunHistory }: LoopDashboardHeaderProps) {
-  if (loading || !stats) {
+  // Only the initial fetch shows the skeleton. If stats fail to load we still
+  // render the frame with zeros so the run-history entry never becomes unreachable.
+  if (loading) {
     return (
       <div className="grid grid-cols-3 gap-3" aria-hidden>
         {[0, 1, 2].map((i) => (
@@ -27,11 +29,13 @@ export function LoopDashboardHeader({ stats, loading, onOpenRunHistory }: LoopDa
     );
   }
 
+  const view = stats ?? { total: 0, active: 0, successful7d: 0, failed7d: 0, sparkline: [] };
+
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-      <StatCard label="Loops" value={stats.total} hint={`${stats.active} active`} />
-      <StatCard label="Successful · 7d" value={stats.successful7d} tone="success" />
-      <StatCard label="Failed · 7d" value={stats.failed7d} tone={stats.failed7d > 0 ? 'warning' : undefined} />
+      <StatCard label="Loops" value={view.total} hint={`${view.active} active`} />
+      <StatCard label="Successful · 7d" value={view.successful7d} tone="success" />
+      <StatCard label="Failed · 7d" value={view.failed7d} tone={view.failed7d > 0 ? 'warning' : undefined} />
       <button
         type="button"
         onClick={onOpenRunHistory}
@@ -45,7 +49,7 @@ export function LoopDashboardHeader({ stats, loading, onOpenRunHistory }: LoopDa
             <ArrowRight className="size-3" />
           </span>
         </span>
-        <Sparkline days={stats.sparkline} />
+        <Sparkline days={view.sparkline} />
       </button>
     </div>
   );

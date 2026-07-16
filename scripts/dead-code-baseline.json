@@ -166,7 +166,6 @@
     "types:apps/server/src/orchestration/engine-routing.ts:EngineRoute",
     "types:apps/server/src/orchestration/tools/orchestration-tools.types.ts:OrchestrationTool",
     "types:apps/server/src/provider-updates/provider-updates.types.ts:ProviderUpdateStatus",
-    "types:apps/server/src/scheduler/scheduler.types.ts:ScheduleKind",
     "types:apps/server/src/sessions/diff/session-diff.types.ts:DiffCollapseReason",
     "types:apps/server/src/sessions/diff/session-diff.types.ts:DiffFileStatus",
     "types:apps/server/src/sessions/diff/session-diff.types.ts:DiffLine",

@@ -30,6 +30,27 @@ export interface EventFilter {
   event: string;
   /** Optional label that must be present on the event. */
   label?: string;
+  /**
+   * Local project the loop is scoped to (absolute path, as resolved from the
+   * loop's projectPath). When set, the filter fires ONLY for a webhook whose repo
+   * resolves to this same project — so a same-named event+label on another repo
+   * can never fire the wrong loop. Absent = unscoped (matches any repo).
+   */
+  projectPath?: string;
+}
+
+/**
+ * The webhook that triggered an event-loop fire, threaded into the run's prompt so
+ * the agent knows WHICH issue/PR it is reacting to. Minimal + additive: only the
+ * identifying fields, all optional-safe for a non-event (clock) fire.
+ */
+export interface LoopTriggerContext {
+  kind: string;
+  action: string;
+  repo: string;
+  number: number;
+  title?: string;
+  url?: string;
 }
 
 export interface ScheduleDto {

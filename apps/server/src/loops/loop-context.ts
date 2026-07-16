@@ -1,8 +1,10 @@
 import { dayBucket, failureStreak, runsOnDay } from './loop-accounting';
+import type { LoopTriggerContext } from '../scheduler/scheduler.types';
 import type { LoopRunDto } from './loops.types';
 
 const VERIFY_TAIL_CAP = 1500;
 export const CONTEXT_HEADER = 'Previous run context:';
+const TRIGGER_HEADER = 'Triggered by:';
 
 export interface RunContextInput {
   /** All prior loop_runs (settled + bookkeeping), oldest→newest. */
@@ -51,4 +53,24 @@ export function buildRunContext(input: RunContextInput): string {
 /** Prepend the context block to the goal, delimited; goal unchanged when empty. */
 export function withRunContext(goal: string, context: string): string {
   return context ? `${context}\n\n---\n\n${goal}` : goal;
+}
+
+/**
+ * Prepend a compact "Triggered by" block naming the issue/PR that fired an event
+ * loop, so the agent reacts to the RIGHT subject. Pure + additive: `prompt`
+ * unchanged for a clock/manual fire (no trigger). URL/title omitted when absent.
+ */
+export function withTriggerContext(
+  trigger: LoopTriggerContext | undefined,
+  prompt: string,
+): string {
+  if (!trigger) return prompt;
+  const subject = trigger.kind === 'pull_request' ? 'Pull request' : 'Issue';
+  const lines: string[] = [
+    TRIGGER_HEADER,
+    `- ${subject} #${trigger.number} (${trigger.repo}) — ${trigger.action}`,
+  ];
+  if (trigger.title) lines.push(`- Title: ${trigger.title}`);
+  if (trigger.url) lines.push(`- URL: ${trigger.url}`);
+  return `${lines.join('\n')}\n\n---\n\n${prompt}`;
 }

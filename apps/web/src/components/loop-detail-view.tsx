@@ -75,6 +75,10 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
   const [maxRuns, setMaxRuns] = useState(24);
   const [maxFailures, setMaxFailures] = useState(3);
   const [sched, setSched] = useState<ScheduleFormFields>(() => parseSpecToFields('cron', ''));
+  // A trigger PATCH ships ONLY when the user touched the controls — a stored spec
+  // the form can't round-trip (a legacy/heartbeat kind) must not start dirty or let
+  // an unrelated save silently replace the trigger.
+  const [scheduleTouched, setScheduleTouched] = useState(false);
   const seeded = useRef<string | null>(null);
 
   const seedDraft = useCallback((l: LoopDto) => {
@@ -87,6 +91,7 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
     setMaxRuns(l.maxRunsPerDay);
     setMaxFailures(l.maxConsecutiveFailures);
     setSched(parseSpecToFields(l.schedule?.kind ?? 'cron', l.schedule?.spec ?? ''));
+    setScheduleTouched(false);
   }, []);
 
   const load = useCallback(async () => {
@@ -122,13 +127,18 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
   if (!loop) return <DetailSkeleton onBack={() => navigate('/autopilot')} />;
 
   // Trigger draft, projected to the {kind, spec} the server stores, vs the original.
+  // Only a user-touched trigger counts as changed — a stored spec the form can't
+  // round-trip (legacy/heartbeat) otherwise reads "dirty" and an unrelated save
+  // would replace it.
   const nextKind: 'cron' | 'event' = sched.mode === 'event' ? 'event' : 'cron';
   const nextSpec = buildScheduleSpec(sched.mode, sched);
   const scheduleChanged =
-    nextSpec !== (loop.schedule?.spec ?? '') || nextKind !== (loop.schedule?.kind ?? 'cron');
+    scheduleTouched &&
+    (nextSpec !== (loop.schedule?.spec ?? '') || nextKind !== (loop.schedule?.kind ?? 'cron'));
   const scheduleValid =
-    (sched.mode === 'interval' || sched.mode === 'event' || /^\d{1,2}:\d{2}$/.test(sched.time)) &&
-    (sched.mode !== 'interval' || (Number.isInteger(sched.interval) && sched.interval > 0));
+    !scheduleTouched ||
+    ((sched.mode === 'interval' || sched.mode === 'event' || /^\d{1,2}:\d{2}$/.test(sched.time)) &&
+      (sched.mode !== 'interval' || (Number.isInteger(sched.interval) && sched.interval > 0)));
 
   const dirty =
     name.trim() !== (loop.name ?? '') ||
@@ -336,7 +346,10 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
               maxRunsPerDay={maxRuns}
               onMaxRunsChange={setMaxRuns}
               schedule={sched}
-              onScheduleChange={setSched}
+              onScheduleChange={(next) => {
+                setSched(next);
+                setScheduleTouched(true);
+              }}
               maxConsecutiveFailures={maxFailures}
               onMaxFailuresChange={setMaxFailures}
             />
