@@ -16,7 +16,8 @@ export { ensureWebBuild, findFreePort, repoRoot, webDist };
 /**
  * Boot the isolated stack WITH the web bundle served same-origin — the smoke
  * drives real Chrome against it. Delegates lifecycle to the shared lib.
+ * `dataDir` lets a caller reboot on the SAME durable DB (WS-reconnect journey).
  */
-export function startServer({ port, healthTimeoutMs = 45000 } = {}) {
-  return startHermeticServer({ port, healthTimeoutMs, serveWebDist: webDist });
+export function startServer({ port, healthTimeoutMs = 45000, dataDir } = {}) {
+  return startHermeticServer({ port, healthTimeoutMs, serveWebDist: webDist, dataDir });
 }

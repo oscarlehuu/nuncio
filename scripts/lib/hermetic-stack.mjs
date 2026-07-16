@@ -103,10 +103,22 @@ export async function ensureWebBuild({ force = false } = {}) {
  *                                         build is required to run evals)
  * @param {object}  [opts.env]             extra env merged OVER the defaults
  *                                         (e.g. NUNCIO_VERIFY_COMMAND for evals)
+ * @param {string}  [opts.dataDir]         reuse an EXISTING data dir instead of a
+ *                                         fresh temp one — used to reboot on the
+ *                                         same durable DB (WS-reconnect smoke). The
+ *                                         caller then owns removing it; pass
+ *                                         `stop({ removeDataDir:false })` when the
+ *                                         dir must outlive this process for a reboot.
  * @returns {Promise<{baseUrl,dataDir,port,stop,logs}>}
  */
-export async function startServer({ port, healthTimeoutMs = 45000, serveWebDist, env = {} } = {}) {
-  const dataDir = await mkdtemp(join(tmpdir(), 'nuncio-hermetic-'));
+export async function startServer({
+  port,
+  healthTimeoutMs = 45000,
+  serveWebDist,
+  env = {},
+  dataDir: reuseDataDir,
+} = {}) {
+  const dataDir = reuseDataDir ?? (await mkdtemp(join(tmpdir(), 'nuncio-hermetic-')));
   const baseUrl = `http://127.0.0.1:${port}`;
 
   const child = spawn(process.execPath, ['src/main.ts'], {
@@ -139,7 +151,9 @@ export async function startServer({ port, healthTimeoutMs = 45000, serveWebDist,
   child.stderr.on('data', capture);
 
   let stopped = false;
-  const stop = async () => {
+  // removeDataDir:false tears down the process but KEEPS the DB on disk, so a
+  // caller can reboot on the same durable state (the WS-reconnect smoke).
+  const stop = async ({ removeDataDir = true } = {}) => {
     if (stopped) return;
     stopped = true;
     liveStacks.delete(stackHandle);
@@ -156,7 +170,7 @@ export async function startServer({ port, healthTimeoutMs = 45000, serveWebDist,
         });
       });
     }
-    await rm(dataDir, { recursive: true, force: true });
+    if (removeDataDir) await rm(dataDir, { recursive: true, force: true });
   };
 
   // Fail fast if the child dies before it becomes healthy.

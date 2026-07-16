@@ -98,7 +98,12 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
     if (scheduledFlushRef.current) return;
     if (typeof requestAnimationFrame === 'function') {
       const id = requestAnimationFrame(flushPendingEvents);
-      scheduledFlushRef.current = { id, cancel: cancelAnimationFrame };
+      // Wrap the canceller so it always runs with the window receiver. A bare
+      // `cancelAnimationFrame` reference, stored here and later invoked as
+      // `scheduled.cancel(id)`, would run with `this` bound to the ScheduledFlush
+      // object and throw "Illegal invocation" — crashing the app to a blank
+      // screen when the flush is cancelled on unmount/navigation.
+      scheduledFlushRef.current = { id, cancel: (handle) => window.cancelAnimationFrame(handle) };
       return;
     }
     const id = window.setTimeout(() => flushPendingEvents(), 16);
