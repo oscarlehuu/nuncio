@@ -131,6 +131,26 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
     expect(sessionManagerOpenCalls).toEqual([]);
   });
 
+  it('binds built-in tools to the local workspace when no explicit cwd or worktree is set', async () => {
+    const created = sessions.create({ prompt: 'work locally', provider: 'pi' });
+
+    await provider.run(created.id, created.prompt, {
+      workspace: '/tmp/workspaces/local-project',
+      emit: () => {},
+    });
+
+    const options = latestCreateOptions();
+    expect(options.cwd).toBe('/tmp/workspaces/local-project');
+    const builtins = (options.customTools as Array<{ name: string; cwd?: string }>)
+      .filter((tool) => ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'].includes(tool.name));
+    expect(builtins.map((tool) => tool.name).sort()).toEqual(
+      ['bash', 'edit', 'find', 'grep', 'ls', 'read', 'write'].sort(),
+    );
+    for (const tool of builtins) {
+      expect(tool.cwd).toBe('/tmp/workspaces/local-project');
+    }
+  });
+
   it('passes a resume manager opened from the persisted Pi session file', async () => {
     const persistedFile = '/tmp/custom-pi-agent/sessions/persisted.jsonl';
     fakeSessionFile = persistedFile;
