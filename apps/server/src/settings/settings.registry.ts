@@ -390,6 +390,16 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     default: '30',
   },
   {
+    key: 'NUNCIO_LOOP_STUCK_PENDING_AGE_MIN',
+    category: 'advanced',
+    type: 'string',
+    label: 'Heartbeat: loop stuck-run threshold (minutes)',
+    description:
+      'A loop run whose task has been RUNNING this many minutes without settling is force-failed so the loop can fire again, and raised for attention. Coarse safety net for a silent/wedged session; the finer zombie-session check runs sooner. Default 180.',
+    envVar: 'NUNCIO_LOOP_STUCK_PENDING_AGE_MIN',
+    default: '180',
+  },
+  {
     key: 'NUNCIO_ANOMALY_EMPTY_DIFF_MIN',
     category: 'advanced',
     type: 'string',

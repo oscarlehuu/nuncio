@@ -10,7 +10,7 @@ import { AgentRegistry } from '../../../src/agents/agents.registry';
 import { TasksService } from '../../../src/tasks/tasks.service';
 import { LoopsRepository } from '../../../src/loops/loops.repository';
 import { LoopsService } from '../../../src/loops/loops.service';
-import type { CreateLoopDto } from '../../../src/loops/loops.types';
+import type { CreateLoopDto, LoopAttentionSignal } from '../../../src/loops/loops.types';
 
 /** Known engine ids for the validation seam — mirrors the real AgentRegistry. */
 const KNOWN_ENGINES = new Set(['mock', 'pi', 'cursor', 'codex']);
@@ -126,6 +126,7 @@ describe('LoopsService', () => {
   let scheduler: SpyScheduler;
   let tasks: SpyTasks;
   let clockNow = at(2026, 7, 7, 8, 0);
+  let raised: LoopAttentionSignal[] = [];
   const dirsToClean: string[] = [];
 
   async function build(): Promise<TestingModule> {
@@ -152,6 +153,11 @@ describe('LoopsService', () => {
     clockNow = at(2026, 7, 7, 8, 0);
     loops.clock = { now: () => clockNow };
     loops.assertKnownEngine = assertKnownEngine;
+    raised = [];
+    // The heartbeat binds this seam in production; capture raised signals here.
+    loops.raiseAttention = (signal) => {
+      raised.push(signal);
+    };
     // compile() does not run lifecycle hooks — invoke onModuleInit so the
     // scheduler/task-settlement handlers are registered (as in production).
     loops.onModuleInit();
@@ -529,6 +535,96 @@ describe('LoopsService', () => {
       const r = loops.fire(loop.id)!;
       loops.recordTaskOutcome(loop.id, r.taskId ?? 't', false);
       expect(repo.findById(loop.id)!.status).toBe('active');
+    });
+  });
+
+  describe('immediate breaker attention (rung-3 seam)', () => {
+    it('a trip raises a tripped-breaker attention item immediately', async () => {
+      const loop = await loops.create(create({ maxConsecutiveFailures: 2 }));
+      for (let i = 0; i < 2; i += 1) {
+        const r = loops.fire(loop.id)!;
+        tasks.settle(r.taskId!, 'FAILED');
+      }
+      expect(repo.findById(loop.id)!.status).toBe('broken');
+      const item = raised.find((s) => s.kind === 'tripped-breaker');
+      expect(item).toBeDefined();
+      // Same (kind, subjectId) the collector sweep uses (collectBrokenLoops keys
+      // subjectId = loop.id) so the immediate raise and any later sweep dedup.
+      expect(item!.subjectId).toBe(loop.id);
+      expect(item!.payload).toMatchObject({ loopId: loop.id });
+      expect(item!.title).toContain('tripped its breaker');
+    });
+
+    it('does not raise while the loop is still active (below the threshold)', async () => {
+      const loop = await loops.create(create({ maxConsecutiveFailures: 3 }));
+      const r = loops.fire(loop.id)!;
+      tasks.settle(r.taskId!, 'FAILED'); // one failure, not tripped
+      expect(repo.findById(loop.id)!.status).toBe('active');
+      expect(raised.some((s) => s.kind === 'tripped-breaker')).toBe(false);
+    });
+  });
+
+  describe('wedged-run safety net (stuck pending, finding #1)', () => {
+    it('force-fails a run whose task is RUNNING past the threshold and raises attention', async () => {
+      const loop = await loops.create(create({ maxConsecutiveFailures: 10, maxRunsPerDay: 10 }));
+      const run = loops.fire(loop.id)!;
+      tasks.setStatus(run.taskId!, 'RUNNING'); // never settled — wedged
+      // Advance the clock well past a small threshold (run.createdAt is wall time).
+      loops.maxPendingAgeMs = 1000;
+      const base = Date.now();
+      loops.clock = { now: () => base + 60_000 };
+
+      loops.reconcilePendingRuns();
+
+      expect(repo.listRuns(loop.id).find((r) => r.id === run.id)!.outcome).toBe('failed');
+      const item = raised.find((s) => s.kind === 'loop-stuck');
+      expect(item).toBeDefined();
+      expect(item!.subjectId).toBe(loop.id);
+      expect(item!.payload).toMatchObject({ loopId: loop.id, runId: run.id });
+    });
+
+    it('leaves a fresh RUNNING run pending (no phantom fail before the threshold)', async () => {
+      const loop = await loops.create(create({ maxConsecutiveFailures: 1, maxRunsPerDay: 10 }));
+      const run = loops.fire(loop.id)!;
+      tasks.setStatus(run.taskId!, 'RUNNING');
+      loops.maxPendingAgeMs = 60 * 60 * 1000; // 1h; run is fresh
+      loops.clock = { now: () => Date.now() };
+
+      loops.reconcilePendingRuns();
+
+      expect(repo.listRuns(loop.id).find((r) => r.id === run.id)!.outcome).toBe('pending');
+      // maxConsecutiveFailures=1: a phantom fail would have tripped the breaker.
+      expect(repo.findById(loop.id)!.status).toBe('active');
+      expect(raised.some((s) => s.kind === 'loop-stuck')).toBe(false);
+    });
+
+    it('never force-fails a QUEUED task (legitimately waiting for a slot)', async () => {
+      const loop = await loops.create(create({ maxConsecutiveFailures: 10, maxRunsPerDay: 10 }));
+      const run = loops.fire(loop.id)!;
+      tasks.setStatus(run.taskId!, 'QUEUED');
+      loops.maxPendingAgeMs = 1000;
+      const base = Date.now();
+      loops.clock = { now: () => base + 60_000 };
+
+      loops.reconcilePendingRuns();
+
+      expect(repo.listRuns(loop.id).find((r) => r.id === run.id)!.outcome).toBe('pending');
+      expect(raised.some((s) => s.kind === 'loop-stuck')).toBe(false);
+    });
+
+    it('a later real settlement of a force-failed run is a no-op (no double count)', async () => {
+      const loop = await loops.create(create({ maxConsecutiveFailures: 10, maxRunsPerDay: 10 }));
+      const run = loops.fire(loop.id)!;
+      tasks.setStatus(run.taskId!, 'RUNNING');
+      loops.maxPendingAgeMs = 1000;
+      const base = Date.now();
+      loops.clock = { now: () => base + 60_000 };
+      loops.reconcilePendingRuns();
+      expect(repo.listRuns(loop.id).find((r) => r.id === run.id)!.outcome).toBe('failed');
+
+      // The task finally settles DONE — the already-failed run must not flip back.
+      tasks.settle(run.taskId!, 'DONE', { verify: { ok: true } });
+      expect(repo.listRuns(loop.id).find((r) => r.id === run.id)!.outcome).toBe('failed');
     });
   });
 

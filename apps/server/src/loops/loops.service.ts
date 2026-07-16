@@ -27,7 +27,9 @@ import type { TaskDto } from '../tasks/tasks.types';
 import {
   DEFAULT_MAX_CONSECUTIVE_FAILURES,
   DEFAULT_MAX_RUNS_PER_DAY,
+  DEFAULT_STUCK_PENDING_AGE_MS,
   type CreateLoopDto,
+  type LoopAttentionSignal,
   type LoopDto,
   type LoopRunDto,
   type LoopRunVerify,
@@ -66,6 +68,23 @@ export function outcomeFromTask(task: TaskDto): RunOutcome {
 export class LoopsService implements OnModuleInit {
   /** Injectable clock seam — deterministic in tests. */
   clock: Clock = { now: () => Date.now() };
+
+  /**
+   * Attention-raise seam. Default no-op so the loops module stays decoupled from
+   * the attention module (which imports it — binding here would cycle). The
+   * heartbeat, which already injects both, binds this to `attention.raise` in its
+   * onModuleInit. Best-effort at the call sites: a raise failure never
+   * destabilizes a trip or a reconcile.
+   */
+  raiseAttention: (signal: LoopAttentionSignal) => void = () => {};
+
+  /**
+   * Wedged-run safety-net threshold (ms). A run born `pending` whose task is
+   * still RUNNING past this age is force-failed so the loop's overlap guard stops
+   * blocking every future fire. Founder-tunable; bound from
+   * NUNCIO_LOOP_STUCK_PENDING_AGE_MIN by the heartbeat.
+   */
+  maxPendingAgeMs = DEFAULT_STUCK_PENDING_AGE_MS;
 
   /**
    * Engine-id validation seam. Defaults to the injected AgentRegistry; tests can
@@ -150,6 +169,17 @@ export class LoopsService implements OnModuleInit {
    * before this since TasksService is constructed first), each firing the hook.
    * Eagerly failing a live run would corrupt the streak with a phantom failure
    * the later real settlement could never correct.
+   *
+   * Wedged-run safety net: the task lane cannot leave a run pending FOREVER
+   * across a restart (boot `failInterrupted` terminalizes RUNNING tasks, so
+   * they fold here). But within a live process a task can hang RUNNING and never
+   * settle (a silent/zombie session that never errors). Its run then stays
+   * `pending` and the loop-level overlap guard blocks every future fire silently.
+   * On the reconcile cadence, a task still RUNNING past {@link maxPendingAgeMs}
+   * is treated as wedged: force-fail the run so the loop recovers and raise an
+   * attention item. QUEUED tasks are never force-failed (legitimately waiting for
+   * a slot; the pump re-drives them). A later real settlement of a force-failed
+   * run finds no pending row → no double-count.
    */
   reconcilePendingRuns(): void {
     for (const loop of this.loops.list()) {
@@ -165,10 +195,40 @@ export class LoopsService implements OnModuleInit {
           // ok:false, so the run settles failed and stops bricking the overlap guard.
           const { ok, verify } = outcomeFromTask(task);
           this.loops.updateRunOutcome(run.id, ok ? 'ok' : 'failed', verify);
+        } else if (
+          task.status === 'RUNNING' &&
+          this.clock.now() - run.createdAt > this.maxPendingAgeMs
+        ) {
+          // Wedged: a RUNNING task that has never settled past the generous
+          // threshold. Force-fail the run to unblock the overlap guard, and
+          // surface it. At boot this branch is inert — failInterrupted has
+          // already terminalized RUNNING tasks, so they fold above instead.
+          this.loops.updateRunOutcome(run.id, 'failed', 'none');
+          this.raiseStuckPending(loop, run);
         }
-        // else: task is QUEUED/RUNNING — still alive; leave the run pending.
+        // else: task is QUEUED, or RUNNING-but-fresh — still alive; leave pending.
       }
       this.evaluate(loop.id);
+    }
+  }
+
+  /** Raise a wedged-run attention item (best-effort; keyed per loop so re-wedges dedup). */
+  private raiseStuckPending(loop: LoopDto, run: LoopRunDto): void {
+    try {
+      this.raiseAttention({
+        kind: 'loop-stuck',
+        subjectId: loop.id,
+        projectPath: loop.projectPath,
+        title: `Loop "${loop.name ?? loop.goal}" had a run stuck too long`,
+        payload: {
+          loopId: loop.id,
+          runId: run.id,
+          taskId: run.taskId,
+          pendingAgeMs: this.clock.now() - run.createdAt,
+        },
+      });
+    } catch {
+      // A raise failure must never break the reconcile sweep.
     }
   }
 
@@ -535,11 +595,26 @@ export class LoopsService implements OnModuleInit {
     this.emitNeedsAttention(loop);
   }
 
-  /** Emit the needs-attention signal for a tripped breaker (rung-3 seam). */
+  /**
+   * Emit the needs-attention signal for a tripped breaker. Raises the
+   * `tripped-breaker` attention item IMMEDIATELY — using the exact same
+   * (kind, subjectId) the periodic collector sweep uses, so the immediate raise
+   * and any later sweep dedup to a single open item. Without this, a broken loop
+   * would not surface until the next hourly heartbeat sweep. Best-effort: a raise
+   * failure must never destabilize the trip that already set status='broken'.
+   */
   private emitNeedsAttention(loop: LoopDto): void {
-    // v1: the durable 'broken' status IS the attention signal a fleet view reads.
-    // A richer event/push emission lands with rung 3; this method is the seam.
-    void loop;
+    try {
+      this.raiseAttention({
+        kind: 'tripped-breaker',
+        subjectId: loop.id,
+        projectPath: loop.projectPath,
+        title: `Loop "${loop.name ?? loop.goal}" tripped its breaker`,
+        payload: { loopId: loop.id },
+      });
+    } catch {
+      // The durable 'broken' status already stands as the fallback signal.
+    }
   }
 
   private stopSatisfied(stop: StopCondition, runs: LoopRunDto[]): boolean {

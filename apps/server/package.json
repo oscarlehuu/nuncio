@@ -10,7 +10,7 @@
     "start:prod": "bun run dist/main.js",
     "test": "bun test test/unit/",
     "test:coverage": "bun test test/unit/ --coverage --coverage-reporter=text --coverage-reporter=lcov",
-    "test:e2e": "bun test ./test/e2e/app.e2e-spec.ts ./test/e2e/crew.e2e-spec.ts",
+    "test:e2e": "bun test ./test/e2e/app.e2e-spec.ts ./test/e2e/crew.e2e-spec.ts ./test/e2e/loops.e2e-spec.ts",
     "test:integration": "bun test test/integration/",
     "test:integration:codex": "NUNCIO_CODEX_INTEGRATION=1 bun test test/integration/codex-agent.integration.spec.ts",
     "test:integration:claude": "NUNCIO_CLAUDE_INTEGRATION=1 bun test test/integration/claude-agent.integration.spec.ts",

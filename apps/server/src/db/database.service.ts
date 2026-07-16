@@ -460,6 +460,19 @@ export class DatabaseService implements OnModuleDestroy {
     `);
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_digest_runs_sent ON digest_runs(sent_at DESC)');
 
+    // Heartbeat health (rung 3 sub-phase B). One row per system job — the durable
+    // last-run timestamp + outcome so a swallowed layer failure surfaces in the
+    // Settings health block instead of vanishing. Read-only observability.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS heartbeat_health (
+        job TEXT PRIMARY KEY,
+        last_run_at INTEGER NOT NULL,
+        outcome TEXT NOT NULL,
+        detail TEXT,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+
     // Per-project importance weight (rung 3 ranking + fleet home). Guarded ALTER on
     // a pre-existing projects table; default 1 (equal importance) applied by the repo.
     const projectColumns = this.db.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>;
