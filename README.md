@@ -1,4 +1,10 @@
+<div align="center">
+
+<img src="assets/logo-mark.png" alt="Nuncio logo" width="120" />
+
 # Nuncio
+
+**Self-hosted, mobile-first AI coding agents you run on your own machine.**
 
 [![CI](https://github.com/oscarlehuu/nuncio/actions/workflows/ci.yml/badge.svg)](https://github.com/oscarlehuu/nuncio/actions/workflows/ci.yml)
 [![Release](https://github.com/oscarlehuu/nuncio/actions/workflows/release.yml/badge.svg)](https://github.com/oscarlehuu/nuncio/actions/workflows/release.yml)
@@ -6,7 +12,11 @@
 [![runtime: Bun](https://img.shields.io/badge/runtime-Bun%20%E2%89%A5%201.3-f9f1e1?logo=bun)](https://bun.sh)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-A self-hosted, mobile-first web app for delegating tasks to AI coding agents. Run it on your own machine, point it at your own Pi / Codex / Cursor / Claude credentials, and assign work from your phone — agents keep going while you're away, and you can steer them mid-task.
+[Features](#features) · [Screenshots](#screenshots) · [Quick start](#quick-start) · [Architecture](#architecture) · [Contributing](#contributing)
+
+</div>
+
+Run it on your own machine, point it at your own Pi / Codex / Cursor / Claude credentials, and assign work from your phone — agents keep going while you're away, and you can steer them mid-task.
 
 Think Devin, but self-hosted and provider-neutral: the agent layer is a single interface, so Pi, Codex, Cursor, and future agent SDKs plug in uniformly.
 
@@ -49,7 +59,19 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 
 ## Screenshots
 
-> Screenshots live in [`assets/`](assets/) (added as needed). Until then, the in-app UI matches [`mockup.html`](mockup.html) (the UI blueprint used during development).
+**Home cockpit** — pick a repo, choose Solo/Crew, provider and model, then delegate a task.
+
+![Nuncio home cockpit with the task composer and session sidebar](assets/home-cockpit.png)
+
+**A session at work** — the agent streams its plan, tool calls, and results live; the inspector dock gives you source control, files, and a terminal alongside the transcript.
+
+![A Nuncio session streaming an agent's plan, tool calls, and terminal](assets/session-agent-run.png)
+
+**Provider-neutral model picker** — Pi ("Nuncio Engine"), Codex, Cursor, and Claude plug into one interface; switch model and thinking level per session.
+
+![The per-session provider and model picker showing Nuncio Engine and Codex models](assets/model-picker.png)
+
+> More images live in [`assets/`](assets/). The in-app UI also matches [`mockup.html`](mockup.html) (the UI blueprint used during development).
 
 ## Status
 
