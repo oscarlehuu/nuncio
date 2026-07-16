@@ -2,6 +2,7 @@ import { Inject, Injectable, Optional } from '@nestjs/common';
 import { CrewArtifactStore } from './crew-artifact.store';
 import { CrewCommandRunner, type CrewCommandResult } from './crew-command.runner';
 import { CREW_WORKSPACE_PORT, type CrewWorkspacePort } from './crew-execution.ports';
+import { CrewValidationError } from './domain/crew-errors';
 import {
   CREW_VERIFICATION_WORKSPACE_FACTORY,
   CrewVerificationPreparationStopped,
@@ -9,6 +10,10 @@ import {
   type CrewPreparedVerificationWorkspace,
   type CrewVerificationWorkspaceFactory,
 } from './crew-verification-workspace';
+import {
+  CrewVerificationWorkspaceRegistry,
+  DEFAULT_CREW_VERIFICATION_WORKSPACE,
+} from './crew-verification-workspace-registry';
 
 export interface CrewVerifyResult extends CrewCommandResult {
   passed: boolean; workspaceHead: string; artifactId: string; preview: string; previewTruncated: boolean;
@@ -24,17 +29,21 @@ export class CrewVerifierService {
     private readonly artifacts: CrewArtifactStore,
     @Optional() @Inject(CREW_VERIFICATION_WORKSPACE_FACTORY)
     verificationWorkspaces?: CrewVerificationWorkspaceFactory,
+    @Optional() @Inject(CrewVerificationWorkspaceRegistry)
+    private readonly workspaceRegistry?: CrewVerificationWorkspaceRegistry,
   ) {
     this.verificationWorkspaces = verificationWorkspaces ?? defaultCrewVerificationWorkspaceFactory;
   }
   async verify(input: {
     runId: string; command: string; cwd: string; expectedHead: string;
     expectedBranch?: string | null; timeoutMs?: number; previewBytes?: number; signal?: AbortSignal;
+    verificationWorkspace?: string; sandboxBackend?: string; outputCapBytes?: number;
   }): Promise<CrewVerifyResult> {
     const command = input.command.trim();
     if (!command) throw new Error('Crew verify command is required');
     const timeoutMs = input.timeoutMs ?? 120_000;
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1) throw new Error('Crew verify timeout must be positive');
+    const workspaceFactory = this.resolveWorkspaceFactory(input.verificationWorkspace);
     const boundary = await this.workspace.inspectBoundary(input.cwd, input.expectedBranch ?? undefined);
     if (boundary.ok === false) throw new Error(`Crew verify workspace boundary failed: ${boundary.reason ?? 'unknown'}`);
     if (!boundary.exists) throw new Error('Crew verify workspace does not exist');
@@ -53,7 +62,7 @@ export class CrewVerifierService {
     let result: CrewCommandResult | null = null;
     try {
       try {
-        verification = await this.verificationWorkspaces.prepare({
+        verification = await workspaceFactory.prepare({
           sourcePath: boundary.canonicalPath,
           expectedHead: input.expectedHead,
           signal: input.signal,
@@ -70,8 +79,12 @@ export class CrewVerifierService {
         if (stopped) result = stoppedResult(stopped, Date.now() - startedAt);
         else {
           const commandResult = await this.runner.run(
-            command, verification.path, Math.max(1, deadlineAt - Date.now()), undefined, input.signal,
-            { dependencyRoot: verification.dependencyRoot, sourceRoot: boundary.canonicalPath },
+            command, verification.path, Math.max(1, deadlineAt - Date.now()),
+            input.outputCapBytes, input.signal,
+            {
+              dependencyRoot: verification.dependencyRoot, sourceRoot: boundary.canonicalPath,
+              backend: input.sandboxBackend,
+            },
           );
           result = { ...commandResult, durationMs: Date.now() - startedAt };
         }
@@ -112,6 +125,17 @@ export class CrewVerifierService {
       workspaceHead: input.expectedHead, artifactId: stored.artifact.id,
       preview: stored.preview, previewTruncated: stored.truncated,
     };
+  }
+
+  // Absent strategy keeps the injected default factory (byte-identical to prior behavior). A named
+  // strategy is resolved through the registry, which throws a clean validation error for an unknown
+  // name. The profile resolver already gates unknown names, so this is a defensive backstop.
+  private resolveWorkspaceFactory(strategy?: string): CrewVerificationWorkspaceFactory {
+    const name = strategy?.trim();
+    if (!name) return this.verificationWorkspaces;
+    if (this.workspaceRegistry) return this.workspaceRegistry.resolve(name);
+    if (name === DEFAULT_CREW_VERIFICATION_WORKSPACE) return this.verificationWorkspaces;
+    throw new CrewValidationError(`Unknown Crew verification workspace strategy: ${name}`);
   }
 
   private async inspectAfter(

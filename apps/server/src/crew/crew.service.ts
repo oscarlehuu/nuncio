@@ -9,6 +9,8 @@ import type {
 } from './domain/crew.types';
 import { CrewProfileResolver, QUALITY_CREW_PRESET, savedProfileFromSnapshot } from './crew-profile.resolver';
 import { CrewProviderCatalogService } from './crew-provider-catalog.service';
+import { CrewSandboxBackendRegistry } from './crew-sandbox-backend';
+import { CrewVerificationWorkspaceRegistry } from './crew-verification-workspace-registry';
 import { CrewVerifyCommandResolver, pickExplicitVerifyCommand } from './crew-verify-command.resolver';
 import { CrewRunnerService } from './crew-runner.service';
 import { CrewRunQueryService } from './crew-run-query.service';
@@ -33,6 +35,8 @@ export class CrewService {
     private readonly queries: CrewRunQueryService,
     private readonly controls: CrewRunControlService,
     private readonly successors: CrewSuccessorService,
+    private readonly sandboxBackends: CrewSandboxBackendRegistry,
+    private readonly verificationWorkspaces: CrewVerificationWorkspaceRegistry,
     @Inject(CREW_WORKSPACE_PORT) private readonly workspace: CrewWorkspacePort,
   ) {}
 
@@ -85,6 +89,8 @@ export class CrewService {
         explicitVerifyCommand,
         projectScriptAtHead,
       ),
+      verificationWorkspaceStrategies: this.verificationWorkspaces?.names(),
+      sandboxBackends: this.sandboxBackends?.names(),
       ...(input.projectOverride ? { projectOverride: input.projectOverride } : {}),
       ...(input.runOverride ? { runOverride: input.runOverride } : {}),
     });
