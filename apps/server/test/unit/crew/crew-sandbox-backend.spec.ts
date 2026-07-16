@@ -76,4 +76,23 @@ describe('CrewCommandRunner sandbox backend seam', () => {
     await expect(runner.run('true', process.cwd(), 1000, undefined, undefined, { backend: 'docker' }))
       .rejects.toThrow(CrewValidationError);
   });
+
+  it('invokes the backend teardown hook so daemon-owned resources are released', async () => {
+    let terminated = 0;
+    const tempDir = mkdtempSync(join(tmpdir(), 'crew-teardown-backend-'));
+    const backend: CrewSandboxBackend = {
+      name: 'teardown', isAvailable: () => true,
+      build: (command, cwd): CrewSandboxLaunch => ({
+        argv: ['/bin/sh', '-c', command], cwd, env: { PATH: '/usr/bin:/bin' }, tempDir,
+        onTerminate: () => { terminated += 1; },
+      }),
+    };
+    const registry = new CrewSandboxBackendRegistry();
+    registry.register(backend);
+    const result = await new CrewCommandRunner(registry).run(
+      'printf ok; exit 0', process.cwd(), 1000, undefined, undefined, { backend: 'teardown' },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(terminated).toBe(1);
+  });
 });

@@ -115,6 +115,7 @@ export class CrewRunnerExecutionService {
       expectedHead: run.workspaceHead!, expectedBranch: run.branch, signal: controller.signal,
       verificationWorkspace: policy.verificationWorkspace, sandboxBackend: policy.sandboxBackend,
       timeoutMs: policy.verifyTimeoutMs, outputCapBytes: policy.verifyOutputCapBytes,
+      container: policy.container,
     });
     const settled = verification.then(() => {}, () => {});
     this.activeVerifications.set(run.id, { controller, settled });

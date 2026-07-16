@@ -1,6 +1,6 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import { rmSync } from 'node:fs';
-import { type CrewSandboxOptions } from './crew-command-sandbox';
+import { type CrewSandboxLaunch, type CrewSandboxOptions } from './crew-command-sandbox';
 import { CrewSandboxBackendRegistry } from './crew-sandbox-backend';
 
 export interface CrewCommandResult {
@@ -37,8 +37,9 @@ export class CrewCommandRunner {
     };
     let child: ReturnType<typeof Bun.spawn>;
     let tempDir: string | null = null;
+    let launch: CrewSandboxLaunch | null = null;
     try {
-      const launch = backend.build(command, cwd, sandbox);
+      launch = backend.build(command, cwd, sandbox);
       tempDir = launch.tempDir;
       child = Bun.spawn(launch.argv, {
         cwd: launch.cwd, env: launch.env, stdout: 'pipe', stderr: 'pipe', detached: true,
@@ -92,6 +93,10 @@ export class CrewCommandRunner {
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
+      // Stop any confinement-owned resource the killed process group does not (e.g. a daemon-owned
+      // container). Runs on every path; the host backend leaves this undefined. Guarded because
+      // teardown must never mask the real result.
+      try { launch?.onTerminate?.(); } catch { /* best-effort teardown */ }
       if (tempDir) rmSync(tempDir, { recursive: true, force: true });
     }
   }

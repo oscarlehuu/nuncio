@@ -20,6 +20,16 @@ export interface CrewRoleBinding {
   provider: CrewProviderId;
   model: string;
 }
+// Container-sandbox configuration, applied only when `sandboxBackend === 'container'`. Every field is
+// optional; omission uses the backend defaults (a slim image and conservative memory/cpu/pids caps).
+// The verify command runs inside this image with the workspace snapshot bind-mounted read-write,
+// dependency stores read-only, and networking disabled.
+export interface CrewContainerPolicy {
+  image?: string;
+  memoryMb?: number;
+  cpus?: number;
+  pidsLimit?: number;
+}
 export interface CrewProfilePolicy {
   maxVerifyRetries: number;
   maxReviewRetries: number;
@@ -40,6 +50,9 @@ export interface CrewProfilePolicy {
   // combined-output cap. The output cap accepts 1 byte..64 MiB, matching the runner's hard bound.
   verifyTimeoutMs?: number;
   verifyOutputCapBytes?: number;
+  // Container-backend configuration, consumed only when `sandboxBackend === 'container'`. Ignored by
+  // the default host backend, so an unrelated profile is byte-identical.
+  container?: CrewContainerPolicy;
 }
 export interface CrewProfileDefinition {
   bindings: Record<CrewRole, CrewRoleBinding>;
@@ -80,7 +93,7 @@ export interface CrewProfileIssue {
   code: 'missing_binding' | 'unsupported_provider' | 'provider_unavailable' | 'model_unavailable'
     | 'runtime_policy_unsupported' | 'reviewer_not_independent' | 'verify_command_missing'
     | 'verifier_sandbox_unavailable' | 'verification_workspace_unknown' | 'sandbox_backend_unknown'
-    | 'verify_limit_invalid';
+    | 'verify_limit_invalid' | 'container_image_invalid' | 'container_resource_invalid';
   role?: CrewRole;
   message: string;
 }

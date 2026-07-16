@@ -2,6 +2,7 @@ import { Inject, Injectable, Optional } from '@nestjs/common';
 import { CrewArtifactStore } from './crew-artifact.store';
 import { CrewCommandRunner, type CrewCommandResult } from './crew-command.runner';
 import { CREW_WORKSPACE_PORT, type CrewWorkspacePort } from './crew-execution.ports';
+import type { CrewContainerPolicy } from './domain/crew.types';
 import { CrewValidationError } from './domain/crew-errors';
 import {
   CREW_VERIFICATION_WORKSPACE_FACTORY,
@@ -38,6 +39,7 @@ export class CrewVerifierService {
     runId: string; command: string; cwd: string; expectedHead: string;
     expectedBranch?: string | null; timeoutMs?: number; previewBytes?: number; signal?: AbortSignal;
     verificationWorkspace?: string; sandboxBackend?: string; outputCapBytes?: number;
+    container?: CrewContainerPolicy;
   }): Promise<CrewVerifyResult> {
     const command = input.command.trim();
     if (!command) throw new Error('Crew verify command is required');
@@ -83,7 +85,7 @@ export class CrewVerifierService {
             input.outputCapBytes, input.signal,
             {
               dependencyRoot: verification.dependencyRoot, sourceRoot: boundary.canonicalPath,
-              backend: input.sandboxBackend,
+              backend: input.sandboxBackend, container: input.container,
             },
           );
           result = { ...commandResult, durationMs: Date.now() - startedAt };
