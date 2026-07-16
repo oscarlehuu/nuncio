@@ -22,6 +22,9 @@ export interface CrewSandboxLaunch {
 export interface CrewSandboxOptions {
   dependencyRoot?: string | null;
   sourceRoot?: string | null;
+  // Selects the confinement backend (default 'host'). Selection happens in the runner; the chosen
+  // backend receives these same options, so an unrecognized value here is inert for the host build.
+  backend?: string;
 }
 
 export function isCrewVerifierSandboxAvailable(

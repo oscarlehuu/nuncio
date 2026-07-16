@@ -25,6 +25,21 @@ export interface CrewProfilePolicy {
   maxReviewRetries: number;
   strictFreshFinalReviewer: boolean;
   verifyCommand: string | null;
+  // Additive verify-execution seam configuration. Every field is optional; when omitted the
+  // consumer applies the historical default and the frozen snapshot bytes are unchanged. This is
+  // how an alternate isolation backend (e.g. container-based) plugs in without touching existing
+  // profiles or the reducer/authority model.
+  //
+  // `verificationWorkspace` selects how the disposable exact-head verification workspace is
+  // prepared (default 'git-snapshot'). `sandboxBackend` selects how the verify command is confined
+  // (default 'host' = Seatbelt on macOS / bubblewrap on Linux). Both names are validated against
+  // the registered strategies at profile resolution.
+  verificationWorkspace?: string;
+  sandboxBackend?: string;
+  // Verify resource limits, overridable per profile. Omission keeps the 120s timeout and 16 MiB
+  // combined-output cap. The output cap accepts 1 byte..64 MiB, matching the runner's hard bound.
+  verifyTimeoutMs?: number;
+  verifyOutputCapBytes?: number;
 }
 export interface CrewProfileDefinition {
   bindings: Record<CrewRole, CrewRoleBinding>;
@@ -64,7 +79,8 @@ export interface CrewProviderCapability {
 export interface CrewProfileIssue {
   code: 'missing_binding' | 'unsupported_provider' | 'provider_unavailable' | 'model_unavailable'
     | 'runtime_policy_unsupported' | 'reviewer_not_independent' | 'verify_command_missing'
-    | 'verifier_sandbox_unavailable';
+    | 'verifier_sandbox_unavailable' | 'verification_workspace_unknown' | 'sandbox_backend_unknown'
+    | 'verify_limit_invalid';
   role?: CrewRole;
   message: string;
 }

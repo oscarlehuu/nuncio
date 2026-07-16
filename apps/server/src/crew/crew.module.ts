@@ -42,6 +42,11 @@ import { CrewWriterLeaseService } from './crew-writer-lease.service';
 import { CrewContextService } from './crew-context.service';
 import { CrewRecoveryService } from './crew-recovery.service';
 import { CrewSuccessorService } from './crew-successor.service';
+import { CrewSandboxBackendRegistry } from './crew-sandbox-backend';
+import { CrewVerificationWorkspaceRegistry } from './crew-verification-workspace-registry';
+import {
+  CREW_VERIFICATION_WORKSPACE_FACTORY, defaultCrewVerificationWorkspaceFactory,
+} from './crew-verification-workspace';
 
 @Module({
   imports: [
@@ -51,6 +56,8 @@ import { CrewSuccessorService } from './crew-successor.service';
   controllers: [CrewController],
   providers: [
     CrewProfileResolver, CrewProviderCatalogService, CrewVerifyCommandResolver,
+    CrewSandboxBackendRegistry, CrewVerificationWorkspaceRegistry,
+    { provide: CREW_VERIFICATION_WORKSPACE_FACTORY, useValue: defaultCrewVerificationWorkspaceFactory },
     CrewArtifactStore, CrewCommandRunner, CrewContextService, CrewWriterLeaseService,
     CrewGitWorkspaceAdapter, CrewTaskExecutionAdapter, CrewAttentionAdapter,
     { provide: CREW_WORKSPACE_PORT, useExisting: CrewGitWorkspaceAdapter },

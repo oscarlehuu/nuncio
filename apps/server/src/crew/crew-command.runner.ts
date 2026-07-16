@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { rmSync } from 'node:fs';
-import { buildCrewSandboxLaunch, type CrewSandboxOptions } from './crew-command-sandbox';
+import { type CrewSandboxOptions } from './crew-command-sandbox';
+import { CrewSandboxBackendRegistry } from './crew-sandbox-backend';
 
 export interface CrewCommandResult {
   exitCode: number | null; stdout: string; stderr: string; durationMs: number;
@@ -9,6 +10,14 @@ export interface CrewCommandResult {
 
 @Injectable()
 export class CrewCommandRunner {
+  private readonly backends: CrewSandboxBackendRegistry;
+
+  constructor(
+    @Optional() @Inject(CrewSandboxBackendRegistry) backends?: CrewSandboxBackendRegistry,
+  ) {
+    this.backends = backends ?? new CrewSandboxBackendRegistry();
+  }
+
   async run(
     command: string, cwd: string, timeoutMs: number, maxOutputBytes = 16 * 1024 * 1024,
     signal?: AbortSignal,
@@ -18,6 +27,10 @@ export class CrewCommandRunner {
     if (!Number.isInteger(maxOutputBytes) || maxOutputBytes < 1 || maxOutputBytes > 64 * 1024 * 1024) {
       throw new Error('Crew command output cap must be from 1 byte to 64 MiB');
     }
+    // Backend selection is a clean, loud failure for an unknown name; it happens before the spawn
+    // try so it is never masked as a captured spawn error. The profile resolver already rejects an
+    // unknown backend, so this is a defensive backstop.
+    const backend = this.backends.resolve(sandbox.backend);
     if (signal?.aborted) return {
       exitCode: null, stdout: '', stderr: '', durationMs: 0, timedOut: false,
       aborted: true, spawnError: null, outputOverflow: false,
@@ -25,7 +38,7 @@ export class CrewCommandRunner {
     let child: ReturnType<typeof Bun.spawn>;
     let tempDir: string | null = null;
     try {
-      const launch = buildCrewSandboxLaunch(command, cwd, process.platform, undefined, sandbox);
+      const launch = backend.build(command, cwd, sandbox);
       tempDir = launch.tempDir;
       child = Bun.spawn(launch.argv, {
         cwd: launch.cwd, env: launch.env, stdout: 'pipe', stderr: 'pipe', detached: true,

@@ -109,9 +109,12 @@ export class CrewRunnerExecutionService {
       event: { type: 'verify_started', basedOnWorkspaceHead: run.workspaceHead! },
     });
     const controller = new AbortController();
+    const policy = run.profileSnapshot.policy;
     const verification = this.verifier.verify({
-      runId: run.id, command: run.profileSnapshot.policy.verifyCommand!, cwd: run.worktreePath!,
+      runId: run.id, command: policy.verifyCommand!, cwd: run.worktreePath!,
       expectedHead: run.workspaceHead!, expectedBranch: run.branch, signal: controller.signal,
+      verificationWorkspace: policy.verificationWorkspace, sandboxBackend: policy.sandboxBackend,
+      timeoutMs: policy.verifyTimeoutMs, outputCapBytes: policy.verifyOutputCapBytes,
     });
     const settled = verification.then(() => {}, () => {});
     this.activeVerifications.set(run.id, { controller, settled });

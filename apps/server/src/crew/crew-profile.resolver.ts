@@ -1,10 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import type {
-  CrewProfileDefinition, CrewProfileIssue, CrewProfileOverride, CrewProfileResolution, CrewProfileSnapshot,
+  CrewProfileDefinition, CrewProfileIssue, CrewProfileOverride, CrewProfilePolicy,
+  CrewProfileResolution, CrewProfileSnapshot,
   CrewProviderCapability, CrewRole, CrewRoleBinding, CrewRuntimePolicy,
 } from './domain/crew.types';
 import { CrewValidationError } from './domain/crew-errors';
 import { isCrewVerifierSandboxAvailable } from './crew-command-sandbox';
+import { DEFAULT_CREW_SANDBOX_BACKEND } from './crew-sandbox-backend';
+import { DEFAULT_CREW_VERIFICATION_WORKSPACE } from './crew-verification-workspace-registry';
+
+const MAX_VERIFY_OUTPUT_CAP_BYTES = 64 * 1024 * 1024;
 
 export const QUALITY_CREW_PRESET = {
   id: 'quality' as const,
@@ -19,6 +24,11 @@ export interface ResolveCrewProfileInput {
   catalog: CrewProviderCapability[];
   resolvedVerifyCommand: string | null;
   verifierSandboxAvailable?: boolean;
+  // Registered isolation strategy names. Defaults keep the resolver a pure function usable in
+  // isolation; the service passes the live registry names so a newly registered backend is
+  // accepted without editing the resolver.
+  verificationWorkspaceStrategies?: string[];
+  sandboxBackends?: string[];
 }
 
 @Injectable()
@@ -44,6 +54,7 @@ export class CrewProfileResolver {
       && bindings.builder.model === bindings.reviewer.model) {
       issues.push({ code: 'reviewer_not_independent', role: 'reviewer', message: 'reviewer must differ from builder' });
     }
+    this.validatePolicySeam(policy, input, issues);
     const verifyCommand = input.resolvedVerifyCommand?.trim() || null;
     if (!verifyCommand) {
       issues.push({
@@ -71,6 +82,45 @@ export class CrewProfileResolver {
       policy: { ...policy, verifyCommand },
     });
     return { state: issues.length ? 'needs_setup' : 'ready', issues, snapshot };
+  }
+
+  // Validates the additive verify-execution seam fields, but only when a profile actually sets
+  // them. An untouched profile produces no new issues and an unchanged snapshot.
+  private validatePolicySeam(
+    policy: CrewProfilePolicy, input: ResolveCrewProfileInput, issues: CrewProfileIssue[],
+  ): void {
+    const workspaceStrategies = input.verificationWorkspaceStrategies
+      ?? [DEFAULT_CREW_VERIFICATION_WORKSPACE];
+    const sandboxBackends = input.sandboxBackends ?? [DEFAULT_CREW_SANDBOX_BACKEND];
+    const workspace = policy.verificationWorkspace?.trim();
+    if (workspace && !workspaceStrategies.includes(workspace)) {
+      issues.push({
+        code: 'verification_workspace_unknown',
+        message: `Unknown Crew verification workspace strategy: ${workspace}`,
+      });
+    }
+    const backend = policy.sandboxBackend?.trim();
+    if (backend && !sandboxBackends.includes(backend)) {
+      issues.push({
+        code: 'sandbox_backend_unknown',
+        message: `Unknown Crew sandbox backend: ${backend}`,
+      });
+    }
+    if (policy.verifyTimeoutMs !== undefined
+      && (!Number.isInteger(policy.verifyTimeoutMs) || policy.verifyTimeoutMs < 1)) {
+      issues.push({
+        code: 'verify_limit_invalid',
+        message: 'Crew verify timeout must be a positive integer number of milliseconds',
+      });
+    }
+    if (policy.verifyOutputCapBytes !== undefined
+      && (!Number.isInteger(policy.verifyOutputCapBytes) || policy.verifyOutputCapBytes < 1
+        || policy.verifyOutputCapBytes > MAX_VERIFY_OUTPUT_CAP_BYTES)) {
+      issues.push({
+        code: 'verify_limit_invalid',
+        message: 'Crew verify output cap must be from 1 byte to 64 MiB',
+      });
+    }
   }
 
   private validateBinding(
