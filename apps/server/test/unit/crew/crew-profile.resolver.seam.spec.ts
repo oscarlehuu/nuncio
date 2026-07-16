@@ -104,4 +104,55 @@ describe('CrewProfileResolver verify-execution seam', () => {
     const result = resolve({ verifyTimeoutMs: 1, verifyOutputCapBytes: 64 * 1024 * 1024 });
     expect(result.state).toBe('ready');
   });
+
+  it('accepts a valid container policy and freezes it into the snapshot', () => {
+    const result = resolve(
+      { sandboxBackend: 'container', container: { image: 'ghcr.io/acme/verify:1', memoryMb: 4096, cpus: 1.5, pidsLimit: 256 } },
+      { verifierSandboxAvailable: true },
+    );
+    expect(result.state).toBe('ready');
+    expect(result.snapshot.policy.container).toMatchObject({
+      image: 'ghcr.io/acme/verify:1', memoryMb: 4096, cpus: 1.5, pidsLimit: 256,
+    });
+    expect(Object.isFrozen(result.snapshot.policy.container)).toBe(true);
+  });
+
+  it('flags a blank container image', () => {
+    const result = resolve({ container: { image: '   ' } }, { verifierSandboxAvailable: true });
+    expect(result.state).toBe('needs_setup');
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: 'container_image_invalid' }));
+  });
+
+  it.each([
+    [{ cpus: 0 }],
+    [{ cpus: -1 }],
+    [{ memoryMb: 0 }],
+    [{ memoryMb: 512.5 }],
+    [{ pidsLimit: 0 }],
+    [{ pidsLimit: -5 }],
+  ])('flags an invalid container resource limit %o', (container) => {
+    const result = resolve({ container }, { verifierSandboxAvailable: true });
+    expect(result.state).toBe('needs_setup');
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: 'container_resource_invalid' }));
+  });
+
+  it('reports a Docker/Podman-specific message when the container backend is unavailable', () => {
+    const result = resolve(
+      { sandboxBackend: 'container' },
+      { verifierSandboxAvailable: false },
+    );
+    expect(result.state).toBe('needs_setup');
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: 'verifier_sandbox_unavailable',
+      message: expect.stringContaining('Docker or Podman'),
+    }));
+  });
+
+  it('keeps the host-sandbox message when the default backend is unavailable', () => {
+    const result = resolve({}, { verifierSandboxAvailable: false });
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: 'verifier_sandbox_unavailable',
+      message: expect.stringContaining('Seatbelt'),
+    }));
+  });
 });

@@ -9,7 +9,7 @@ import type {
 } from './domain/crew.types';
 import { CrewProfileResolver, QUALITY_CREW_PRESET, savedProfileFromSnapshot } from './crew-profile.resolver';
 import { CrewProviderCatalogService } from './crew-provider-catalog.service';
-import { CrewSandboxBackendRegistry } from './crew-sandbox-backend';
+import { CrewSandboxBackendRegistry, DEFAULT_CREW_SANDBOX_BACKEND } from './crew-sandbox-backend';
 import { CrewVerificationWorkspaceRegistry } from './crew-verification-workspace-registry';
 import { CrewVerifyCommandResolver, pickExplicitVerifyCommand } from './crew-verify-command.resolver';
 import { CrewRunnerService } from './crew-runner.service';
@@ -91,9 +91,25 @@ export class CrewService {
       ),
       verificationWorkspaceStrategies: this.verificationWorkspaces?.names(),
       sandboxBackends: this.sandboxBackends?.names(),
+      ...this.selectedSandboxAvailability(profile.definition.policy, input),
       ...(input.projectOverride ? { projectOverride: input.projectOverride } : {}),
       ...(input.runOverride ? { runOverride: input.runOverride } : {}),
     });
+  }
+
+  // Readiness gates on the availability of the *selected* confinement backend, not always the host
+  // sandbox: a `container` profile needs a reachable Docker/Podman daemon, a `host` profile needs
+  // Seatbelt/bubblewrap. An unknown backend name is left to the resolver (it emits its own issue).
+  private selectedSandboxAvailability(
+    policy: CrewProfileDefinition['policy'],
+    input: { projectOverride?: CrewProfileOverride; runOverride?: CrewProfileOverride },
+  ): { verifierSandboxAvailable?: boolean } {
+    const selected = input.runOverride?.policy?.sandboxBackend
+      ?? input.projectOverride?.policy?.sandboxBackend
+      ?? policy?.sandboxBackend
+      ?? DEFAULT_CREW_SANDBOX_BACKEND;
+    if (!this.sandboxBackends?.has(selected)) return {};
+    return { verifierSandboxAvailable: this.sandboxBackends.resolve(selected).isAvailable() };
   }
 
   async createTask(input: {

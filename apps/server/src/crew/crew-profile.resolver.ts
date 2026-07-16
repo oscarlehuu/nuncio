@@ -7,6 +7,7 @@ import type {
 import { CrewValidationError } from './domain/crew-errors';
 import { isCrewVerifierSandboxAvailable } from './crew-command-sandbox';
 import { DEFAULT_CREW_SANDBOX_BACKEND } from './crew-sandbox-backend';
+import { CONTAINER_CREW_SANDBOX_BACKEND } from './crew-container-sandbox';
 import { DEFAULT_CREW_VERIFICATION_WORKSPACE } from './crew-verification-workspace-registry';
 
 const MAX_VERIFY_OUTPUT_CAP_BYTES = 64 * 1024 * 1024;
@@ -65,7 +66,9 @@ export class CrewProfileResolver {
     if (!(input.verifierSandboxAvailable ?? isCrewVerifierSandboxAvailable())) {
       issues.push({
         code: 'verifier_sandbox_unavailable',
-        message: 'Crew requires Seatbelt on macOS or bubblewrap on Linux for deterministic verification',
+        message: policy.sandboxBackend?.trim() === CONTAINER_CREW_SANDBOX_BACKEND
+          ? 'Crew requires a reachable Docker or Podman daemon for container-backed verification'
+          : 'Crew requires Seatbelt on macOS or bubblewrap on Linux for deterministic verification',
       });
     }
     const snapshot = deepFreeze({
@@ -120,6 +123,32 @@ export class CrewProfileResolver {
         code: 'verify_limit_invalid',
         message: 'Crew verify output cap must be from 1 byte to 64 MiB',
       });
+    }
+    this.validateContainerPolicy(policy, issues);
+  }
+
+  // The container config is inert unless the container backend is selected, but an invalid value is
+  // still a configuration error worth surfacing at resolve time rather than mid-run.
+  private validateContainerPolicy(policy: CrewProfilePolicy, issues: CrewProfileIssue[]): void {
+    const container = policy.container;
+    if (!container) return;
+    if (container.image !== undefined && !container.image.trim()) {
+      issues.push({
+        code: 'container_image_invalid',
+        message: 'Crew container image must be a non-empty string when set',
+      });
+    }
+    if (container.cpus !== undefined && (!Number.isFinite(container.cpus) || container.cpus <= 0)) {
+      issues.push({ code: 'container_resource_invalid', message: 'Crew container cpus must be a positive number' });
+    }
+    for (const field of ['memoryMb', 'pidsLimit'] as const) {
+      const value = container[field];
+      if (value !== undefined && (!Number.isInteger(value) || value <= 0)) {
+        issues.push({
+          code: 'container_resource_invalid',
+          message: `Crew container ${field} must be a positive integer`,
+        });
+      }
     }
   }
 

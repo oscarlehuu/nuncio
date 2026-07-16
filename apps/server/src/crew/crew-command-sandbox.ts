@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, realpathSync, rmSync, statSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import type { CrewContainerPolicy } from './domain/crew.types';
 
 const LINUX_HOST_READ_ROOTS = ['/usr', '/bin', '/sbin', '/lib', '/lib64', '/etc'];
 const MACOS_SYSTEM_READ_ROOTS = [
@@ -17,6 +18,11 @@ export interface CrewSandboxLaunch {
   cwd: string;
   env: Record<string, string>;
   tempDir: string;
+  // Optional best-effort teardown for confinement that owns a resource the spawned argv does not
+  // (e.g. a container whose lifetime is managed by a daemon, not by the launched client process).
+  // The runner invokes this once in its cleanup path; the host backend leaves it undefined because
+  // killing its process group already stops everything. Must not throw and must not block.
+  onTerminate?(): void;
 }
 
 export interface CrewSandboxOptions {
@@ -25,6 +31,8 @@ export interface CrewSandboxOptions {
   // Selects the confinement backend (default 'host'). Selection happens in the runner; the chosen
   // backend receives these same options, so an unrecognized value here is inert for the host build.
   backend?: string;
+  // Container-backend configuration; consumed only by the 'container' backend and inert elsewhere.
+  container?: CrewContainerPolicy;
 }
 
 export function isCrewVerifierSandboxAvailable(

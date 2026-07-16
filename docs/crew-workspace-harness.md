@@ -209,6 +209,34 @@ or cancellation also kills the process group. Snapshot preparation and command e
 owner abort signal and total deadline; preparation failure is infrastructure evidence and does not
 consume a verify-fix retry.
 
+### Container sandbox backend
+
+The confinement strategy is pluggable per profile. The default `host` backend uses Seatbelt or
+bubblewrap as above. A profile may instead set `sandboxBackend: "container"` to confine the same
+frozen verify command inside a Docker or Podman container. The container mounts the disposable
+exact-head snapshot read-write at `/workspace` (the working directory), mounts any projected
+dependency store read-only at `/nuncio-deps`, disables networking (`--network none`), drops all
+capabilities with `no-new-privileges`, and applies memory, cpu, and pid limits. It runs as the host
+uid/gid so files written into the bind-mounted snapshot stay host-owned and cleanable. The image and
+resource limits are configured through the profile's optional `container` policy
+(`{ image, memoryMb, cpus, pidsLimit }`); the image defaults to a slim base and is expected to be
+overridden with a toolchain image the verify command needs, present on the host because the container
+has no network.
+
+Readiness probes the *selected* backend, not always the host sandbox: a container profile requires a
+reachable Docker or Podman daemon (binary on `PATH` plus an answering `info` probe, mirroring the host
+sandbox probe) and otherwise resolves `needs_setup` before a run is created, with a container-specific
+issue message. Nuncio never falls back to an unsandboxed command. Because the runner terminates a
+timed-out or cancelled verify by killing the client's process group — which does not stop a
+daemon-owned container — the backend registers a bounded best-effort teardown that force-removes the
+container on those paths; `--rm` covers normal exit.
+
+Dependency projection uses the Linux mount layout (`/workspace`, `/nuncio-deps`), so container-backed
+dependency resolution is correct when the host that prepared the snapshot is Linux (the CI target). On
+a non-Linux host the default `git-snapshot` workspace projects dependency symlinks to host paths that
+are not visible inside a Linux container; a project with no separately installed dependencies is
+unaffected. The container backend does not change the reducer, authority model, or the host sandbox.
+
 ## Redacted artifacts and progressive reads
 
 Nuncio retains the complete captured verify output and current workspace diff up to their

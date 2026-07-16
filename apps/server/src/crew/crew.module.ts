@@ -42,7 +42,8 @@ import { CrewWriterLeaseService } from './crew-writer-lease.service';
 import { CrewContextService } from './crew-context.service';
 import { CrewRecoveryService } from './crew-recovery.service';
 import { CrewSuccessorService } from './crew-successor.service';
-import { CrewSandboxBackendRegistry } from './crew-sandbox-backend';
+import { CrewSandboxBackendRegistry, hostCrewSandboxBackend } from './crew-sandbox-backend';
+import { containerCrewSandboxBackend } from './crew-container-sandbox';
 import { CrewVerificationWorkspaceRegistry } from './crew-verification-workspace-registry';
 import {
   CREW_VERIFICATION_WORKSPACE_FACTORY, defaultCrewVerificationWorkspaceFactory,
@@ -56,7 +57,16 @@ import {
   controllers: [CrewController],
   providers: [
     CrewProfileResolver, CrewProviderCatalogService, CrewVerifyCommandResolver,
-    CrewSandboxBackendRegistry, CrewVerificationWorkspaceRegistry,
+    {
+      provide: CrewSandboxBackendRegistry,
+      // Register the host backend (default) alongside the container backend so a profile may select
+      // `sandboxBackend: 'container'`. Both are always registered; per-run availability is probed by
+      // each backend's isAvailable().
+      useFactory: () => new CrewSandboxBackendRegistry([
+        hostCrewSandboxBackend, containerCrewSandboxBackend,
+      ]),
+    },
+    CrewVerificationWorkspaceRegistry,
     { provide: CREW_VERIFICATION_WORKSPACE_FACTORY, useValue: defaultCrewVerificationWorkspaceFactory },
     CrewArtifactStore, CrewCommandRunner, CrewContextService, CrewWriterLeaseService,
     CrewGitWorkspaceAdapter, CrewTaskExecutionAdapter, CrewAttentionAdapter,
