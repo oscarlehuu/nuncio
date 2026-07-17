@@ -113,8 +113,11 @@ jobs:
             # an existing tag lets `gh release create --draft` attach cleanly.
             gh api "repos/${{ github.repository }}/git/refs" \
               -f ref="refs/tags/$TAG" -f sha="${{ steps.sha.outputs.sha }}" >/dev/null 2>&1 || true
+            # `commit:` marker lets the dev gate detect a commit that already shipped
+            # and skip a duplicate rebuild on a manual CI/smoke re-run.
             gh release create "$TAG" --title "$TAG" \
-              --notes "Automated ${{ inputs.channel }} build of Nuncio." --draft $PRERELEASE
+              --notes "Automated ${{ inputs.channel }} build of Nuncio. commit: ${{ steps.sha.outputs.sha }}" \
+              --draft $PRERELEASE
           fi
 
       - name: Build, sign, notarize, publish

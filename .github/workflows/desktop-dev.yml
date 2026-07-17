@@ -6,16 +6,21 @@ name: Desktop Dev
 # after every required check has concluded success on that exact commit:
 #   - CI            (ci + e2e + real-browser smoke)
 #   - Desktop Smoke (packaged app boots and renders)
-# The publish never fires on a red or still-running commit.
+# The publish never fires on a red or still-running commit, and each commit ships at
+# most once.
 #
 # Mechanism: this workflow is chained off the required workflows with `workflow_run`.
 # Each time a required workflow finishes on dev, the gate re-checks the conclusion of
-# every required workflow at that commit; when all are green it publishes from the run
-# that finished last, so the publish fires exactly once no matter which check crosses
-# the line last. Re-running a failed CI to green re-fires the chain and publishes.
+# every required workflow at that commit. Whichever check finishes last is the first
+# trigger to see all-green, so it publishes — there is no "who finished last" timestamp
+# compare that could tie and drop the publish. A commit that already shipped a dev
+# release is skipped, so re-running CI/smoke on a shipped commit is a no-op. Re-running
+# a failed CI to green re-fires the chain and publishes. The decision is a unit-tested
+# script (scripts/desktop-dev-gate.mjs), not inline bash.
 #
 # Signing secrets stay isolated in the reusable build workflow — the gate only reads
-# check conclusions with the default token, and only the build job touches the certs.
+# check conclusions and releases with the default token, and only the build job touches
+# the certs.
 #
 # Note: `workflow_run` triggers are registered from the repository default branch, so
 # this file must live on that branch for the chain to fire.
@@ -31,13 +36,6 @@ permissions:
   contents: write
   actions: read
 
-# Serialize every dev build: the reusable build sweeps stale draft dev releases, so
-# two builds must never run concurrently. `false` so an in-flight sign/notarize/publish
-# is never cancelled midway by a newer commit.
-concurrency:
-  group: desktop-dev
-  cancel-in-progress: false
-
 jobs:
   gate:
     name: gate
@@ -52,73 +50,28 @@ jobs:
       publish: ${{ steps.decide.outputs.publish }}
       sha: ${{ steps.decide.outputs.sha }}
     steps:
+      - uses: actions/checkout@v4
+
       - name: Decide whether every required check passed on this commit
         id: decide
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-
-          # Manual dispatch force-publishes the ref it was dispatched from.
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "Manual dispatch — publishing ${GITHUB_SHA}."
-            {
-              echo "publish=true"
-              echo "sha=${GITHUB_SHA}"
-            } >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          SHA="${{ github.event.workflow_run.head_sha }}"
-          TRIGGER="${{ github.event.workflow_run.path }}"
-          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
-          echo "Triggered by ${TRIGGER} @ ${SHA}"
-
-          # Required workflows whose same-commit success gates the publish.
-          REQUIRED=".github/workflows/ci.yml .github/workflows/desktop-smoke.yml"
-
-          all_success=true
-          last_path=""
-          last_time=""
-          for wf in $REQUIRED; do
-            file="${wf##*/}"
-            run=$(gh api \
-              "repos/${REPO}/actions/workflows/${file}/runs?head_sha=${SHA}&branch=dev&event=push&per_page=1" \
-              --jq '.workflow_runs[0] | {conclusion: (.conclusion // "pending"), updated: (.updated_at // ""), path: (.path // "")}')
-            conclusion=$(echo "$run" | jq -r '.conclusion')
-            updated=$(echo "$run" | jq -r '.updated')
-            path=$(echo "$run" | jq -r '.path')
-            echo "  ${wf}: ${conclusion} (${updated:-no run})"
-            if [ "$conclusion" != "success" ]; then
-              all_success=false
-            fi
-            if [ -n "$updated" ] && { [ -z "$last_time" ] || [[ "$updated" > "$last_time" ]]; }; then
-              last_time="$updated"
-              last_path="$path"
-            fi
-          done
-
-          if [ "$all_success" != "true" ]; then
-            echo "Not every required check is green on this commit — holding."
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # All green: publish from the run that finished last so exactly one trigger
-          # event crosses into publishing (dedupe on near-simultaneous completion;
-          # deterministic tiebreak toward the first-listed workflow on an exact tie).
-          if [ "$last_path" = "$TRIGGER" ]; then
-            echo "All checks green and this run finished last — publishing."
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "All checks green but ${last_path} finished later — it will publish."
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-          fi
+          EVENT_NAME: ${{ github.event_name }}
+          TRIGGER_SHA: ${{ github.event.workflow_run.head_sha }}
+          DISPATCH_SHA: ${{ github.sha }}
+        run: node scripts/desktop-dev-gate.mjs
 
   publish:
     needs: gate
     if: needs.gate.outputs.publish == 'true'
+    # Serialize ONLY the publish, never the gate — every gate evaluation must run so a
+    # later event can't drop the last green commit. `false` never cancels an in-flight
+    # sign/notarize/publish, and one-at-a-time keeps the reusable build's stale-draft
+    # sweep from racing a parallel build.
+    concurrency:
+      group: desktop-dev-publish
+      cancel-in-progress: false
     uses: ./.github/workflows/desktop-build.yml
     with:
       channel: dev
