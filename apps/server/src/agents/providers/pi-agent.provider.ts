@@ -4,6 +4,13 @@ import type { ModelOptionsMap } from '../../models/model-options.types';
 import type { ModelGroupDto, ModelItemDto, ModelProviderDto } from '../../models/models.types';
 import { truncatePayload } from '../../sessions/domain/events.types';
 import { modeOverlay } from '../../sessions/domain/session-modes';
+import {
+  clampSubtaskCap,
+  normalizeDecomposition,
+  MULTITASK_MIN_SUBTASKS,
+  type MultitaskDecomposeInput,
+  type MultitaskDecomposition,
+} from '../../sessions/domain/multitask-decompose';
 import { formatInteractionAnswers } from '../../sessions/domain/format-interaction-answers';
 import {
   buildUserInputRequestedPayload,
@@ -334,6 +341,102 @@ export class PiAgentProvider extends BaseAgentProvider {
     await handle.session.setModel(model);
     const thinkingLevel = resolvePiThinkingLevel(options, model);
     if (thinkingLevel) handle.session.setThinkingLevel(thinkingLevel);
+  }
+
+  /**
+   * Split a multitask goal into independent subtasks via ONE bounded model call
+   * on the inherited model. The Pi SDK exposes no native structured-output seam,
+   * so this uses a strict JSON-schema prompt against a tool-less, in-memory
+   * session, then parses robustly with a single retry on invalid output.
+   * `normalizeDecomposition` is the final guard (clamp + minimum-subtasks check).
+   *
+   * The call is isolated: no extensions/skills/context, no tools, no persisted
+   * thread, no parent events — it neither reads the workspace nor mutates session
+   * state. On unrecoverable failure it throws a descriptive Error; the multitask
+   * coordinator catches that and lands the parent in ERROR with a transcript
+   * note, rather than crashing the daemon on malformed model output.
+   */
+  async decompose(input: MultitaskDecomposeInput): Promise<MultitaskDecomposition> {
+    // input.maxSubtasks is nominally pre-clamped by the coordinator, but decompose
+    // is a public boundary — clamp again so the prompt never asks for a bad range.
+    const cap = clampSubtaskCap(input.maxSubtasks);
+    let lastError = '';
+    // One initial attempt plus exactly one retry with a stricter reminder.
+    for (const retry of [false, true]) {
+      let text: string;
+      try {
+        text = await this.runDecomposeCompletion(input, buildDecomposeUserPrompt(input.goal, cap, retry));
+      } catch (error) {
+        // A model/SDK failure (e.g. no auth, provider error) is a failed attempt,
+        // not a crash — record it and let the retry run.
+        lastError = error instanceof Error ? error.message : String(error);
+        continue;
+      }
+      const parsed = extractDecompositionJson(text);
+      if (!parsed) {
+        lastError = 'the model did not return a parseable JSON object';
+        continue;
+      }
+      try {
+        return normalizeDecomposition(parsed, cap);
+      } catch (error) {
+        // A structurally-present but invalid split (e.g. fewer than the minimum
+        // independent subtasks) — retry once before giving up.
+        lastError = error instanceof Error ? error.message : String(error);
+      }
+    }
+    throw new Error(
+      `Nuncio Engine could not decompose the goal into ${MULTITASK_MIN_SUBTASKS}+ independent ` +
+        `subtasks after a retry${lastError ? `: ${lastError}` : ''}`,
+    );
+  }
+
+  /**
+   * Run one tool-less completion for decompose and return the assistant's final
+   * text. Builds a throwaway in-memory session on the inherited model so nothing
+   * is persisted and no workspace tool can run. Always disposes the session.
+   */
+  private async runDecomposeCompletion(
+    input: MultitaskDecomposeInput,
+    userPrompt: string,
+  ): Promise<string> {
+    const pi = await this.loadSdk();
+    const agentDir = this.resolveAgentDir(pi);
+    const { authStorage, modelRegistry } = createPiEngineModelRegistry(pi, agentDir, this.settings);
+    // Honor the parent's inherited model; never a hardcoded one. When it cannot be
+    // resolved the SDK falls back to its default, same as the normal run path.
+    const model = resolveModelId(input.model, (provider, id) => modelRegistry.find(provider, id));
+    const cwd = input.cwd ?? process.cwd();
+    const resourceLoader = new pi.DefaultResourceLoader({
+      cwd,
+      agentDir,
+      noExtensions: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+      appendSystemPrompt: [DECOMPOSE_SYSTEM_PROMPT],
+    });
+    await resourceLoader.reload();
+    const sessionManager = pi.SessionManager.inMemory(cwd);
+    const { session } = await pi.createAgentSession({
+      agentDir,
+      cwd,
+      authStorage,
+      modelRegistry,
+      resourceLoader,
+      sessionManager,
+      // No built-in or custom tools: decompose is pure reasoning and must not be
+      // able to read/write the workspace or start a shell.
+      noTools: 'all',
+      ...(model ? { model } : {}),
+    });
+    try {
+      await session.prompt(userPrompt);
+      return session.getLastAssistantText?.() ?? '';
+    } finally {
+      session.dispose?.();
+    }
   }
 
   protected async executePrompt(
@@ -976,4 +1079,62 @@ function samePiRuntimeTools(
     (tool, index) => tool.definition === next[index]?.definition
       && (!requireExecuteIdentity || tool.execute === next[index]?.execute),
   );
+}
+
+/**
+ * System framing for the decompose completion. The per-call user prompt carries
+ * the concrete subtask-count range and the goal; this fixes the role and the
+ * "JSON object only" contract so the assistant's final message is machine-parseable.
+ */
+const DECOMPOSE_SYSTEM_PROMPT = `You are a task-decomposition planner. You split a single goal into \
+independent, parallelizable subtasks that each stand entirely on their own. You reply with a single \
+JSON object and nothing else — no prose, no explanation, no markdown code fence.`;
+
+/**
+ * Build the decompose user prompt. `cap` is the resolved upper bound on subtasks;
+ * `retry` adds a stricter reminder after an unparseable/invalid first attempt.
+ */
+function buildDecomposeUserPrompt(goal: string, cap: number, retry: boolean): string {
+  const lead = retry
+    ? 'Your previous reply was not a valid JSON object matching the schema. ' +
+      'Reply again with ONLY the JSON object.\n\n'
+    : '';
+  return (
+    `${lead}Split the goal below into between ${MULTITASK_MIN_SUBTASKS} and ${cap} independent, ` +
+    'parallelizable subtasks. Return ONLY a JSON object with exactly this shape:\n' +
+    '{"subtasks":[{"scope":"<one-line scope>","prompt":"<self-contained instructions for a fresh ' +
+    'agent with no other context>","files":["<path or area this subtask touches>"]}],' +
+    '"nonOverlap":"<one sentence on why the subtasks do not conflict>"}\n\n' +
+    'Rules: each subtask must stand alone (a fresh agent runs it with no sibling output), touch a ' +
+    'disjoint set of files, and impose no ordering on the others. Do not wrap the JSON in a code ' +
+    `fence.\n\nGoal:\n${goal}`
+  );
+}
+
+/**
+ * Robustly pull the decomposition object out of a model reply. Tries the raw
+ * text, a fenced ```json block, and the outermost `{...}` slice, returning the
+ * first that parses to an object. Returns null when nothing parses — the caller
+ * treats that as an invalid attempt (retry, then a clean throw). Never throws.
+ */
+function extractDecompositionJson(text: string): unknown | null {
+  const trimmed = typeof text === 'string' ? text.trim() : '';
+  if (!trimmed) return null;
+  const candidates: string[] = [];
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) candidates.push(fenced[1].trim());
+  candidates.push(trimmed);
+  const first = trimmed.indexOf('{');
+  const last = trimmed.lastIndexOf('}');
+  if (first >= 0 && last > first) candidates.push(trimmed.slice(first, last + 1));
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      const parsed: unknown = JSON.parse(candidate);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    } catch {
+      // Not this candidate — try the next extraction strategy.
+    }
+  }
+  return null;
 }
