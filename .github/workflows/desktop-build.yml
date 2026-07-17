@@ -11,6 +11,11 @@ on:
         description: dev | stable
         required: true
         type: string
+      ref:
+        description: Commit SHA to build. Empty = the caller's default checkout.
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -24,6 +29,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # When chained off another workflow (dev channel) the default checkout
+          # would be the default branch, not the gated commit — build the exact ref.
+          ref: ${{ inputs.ref }}
+
+      - name: Resolve built commit
+        id: sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -100,7 +112,7 @@ jobs:
             # not exist yet and fail with HTTP 422 "Reference does not exist";
             # an existing tag lets `gh release create --draft` attach cleanly.
             gh api "repos/${{ github.repository }}/git/refs" \
-              -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" >/dev/null 2>&1 || true
+              -f ref="refs/tags/$TAG" -f sha="${{ steps.sha.outputs.sha }}" >/dev/null 2>&1 || true
             gh release create "$TAG" --title "$TAG" \
               --notes "Automated ${{ inputs.channel }} build of Nuncio." --draft $PRERELEASE
           fi
