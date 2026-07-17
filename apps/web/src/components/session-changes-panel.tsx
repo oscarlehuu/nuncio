@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import {
+  countDebugSentinelLines,
   fetchGitBranchSync,
   fetchGitHistory,
   fetchGitStash,
@@ -14,6 +15,7 @@ import {
   type SessionDiff,
   type SessionStatus,
 } from '../lib/api';
+import { AlertTriangle } from 'lucide-react';
 import { SessionChangeFileRow } from './session-change-file-row';
 import { SessionScmBranchStrip } from './session-scm-branch-strip';
 import { SessionScmCommitList } from './session-scm-commit-list';
@@ -92,6 +94,10 @@ export function SessionChangesPanel({
       { additions: 0, deletions: 0 },
     );
   }, [diff]);
+
+  // D3 guard: a debug session's final diff must be free of `// nuncio-debug`
+  // instrumentation. Warn if the sweep left any behind.
+  const sentinels = useMemo(() => countDebugSentinelLines(diff), [diff]);
 
   const toggle = (file: DiffFile) => {
     if (file.collapsed || file.hunks.length === 0) return;
@@ -200,6 +206,20 @@ export function SessionChangesPanel({
             {diff?.truncated && (
               <div className="border-t border-border/50 bg-amber-500/10 px-3 py-2 text-xs text-muted-foreground">
                 Diff truncated. {diff.omittedFiles} file{diff.omittedFiles === 1 ? '' : 's'} omitted.
+              </div>
+            )}
+            {sentinels.count > 0 && (
+              <div
+                data-testid="debug-sentinel-warning"
+                className="flex items-start gap-2 border-t border-border/50 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400"
+              >
+                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+                <span>
+                  {sentinels.count} debug instrumentation line{sentinels.count === 1 ? '' : 's'}{' '}
+                  (<span className="font-mono">// nuncio-debug</span>) still in the diff across{' '}
+                  {sentinels.files.length} file{sentinels.files.length === 1 ? '' : 's'}. Remove them
+                  before finishing.
+                </span>
               </div>
             )}
             <ul>

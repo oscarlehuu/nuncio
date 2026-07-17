@@ -20,6 +20,7 @@ export type AttentionKind =
   | 'pr-feedback'
   | 'dispatcher-proposal'
   | 'spawn-task'
+  | 'reproduce-requested'
   | 'anomaly'
   | 'session-empty-diff'
   | 'loop-failing';
@@ -44,6 +45,9 @@ export const SEVERITY_BY_KIND: Readonly<Record<AttentionKind, number>> = {
   'crew-blocked': 4,
   'zombie-session': 3,
   'missed-schedule': 3,
+  // A debug run paused on a reproduction gate is actively blocked on the human —
+  // surface it above passive review items but below infra outages.
+  'reproduce-requested': 4,
   'pr-review': 2,
   'pr-feedback': 2,
   'dispatcher-proposal': 2,

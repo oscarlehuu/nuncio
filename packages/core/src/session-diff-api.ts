@@ -42,6 +42,42 @@ export interface DiffCommentInput {
   comment: string;
 }
 
+/**
+ * The debug-mode instrumentation sentinel. Every log line a debug agent adds
+ * carries this exact token so cleanup is a mechanical sweep. Must stay in sync
+ * with the server overlay's `DEBUG_SENTINEL`.
+ */
+export const DEBUG_SENTINEL = '// nuncio-debug';
+
+export interface DebugSentinelReport {
+  /** Total number of ADDED lines that still carry the sentinel. */
+  count: number;
+  /** Distinct files those lines live in. */
+  files: string[];
+}
+
+/**
+ * Scan a session diff for leftover debug instrumentation (D3). Counts only
+ * ADDED lines carrying {@link DEBUG_SENTINEL}: a removed line (`del`) is the
+ * cleanup itself and an unchanged context line was not added by this session, so
+ * neither is a leak. A clean sweep yields `{ count: 0, files: [] }`.
+ */
+export function countDebugSentinelLines(diff: SessionDiff | null | undefined): DebugSentinelReport {
+  const files = new Set<string>();
+  let count = 0;
+  for (const file of diff?.files ?? []) {
+    for (const hunk of file.hunks) {
+      for (const line of hunk.lines) {
+        if (line.kind === 'add' && line.text.includes(DEBUG_SENTINEL)) {
+          count += 1;
+          files.add(file.path);
+        }
+      }
+    }
+  }
+  return { count, files: [...files] };
+}
+
 export async function fetchSessionDiff(sessionId: string): Promise<SessionDiff> {
   const res = await apiFetch(`/api/sessions/${sessionId}/diff`);
   if (!res.ok) throw new Error('Failed to load session diff');

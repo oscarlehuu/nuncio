@@ -9,12 +9,13 @@ export const MOCK_TASK_REPLY =
   'I received your task. In mock mode (agent auth not configured), I simulate agent output. ' +
   'Configure a real provider to use an agent SDK harness.';
 
-/** POST a Mock session and assert the create response shape. */
-export async function createMockSession(baseUrl, prompt) {
+/** POST a Mock session and assert the create response shape. Extra fields (e.g.
+ * `{ mode: 'debug' }`) are merged into the create body. */
+export async function createMockSession(baseUrl, prompt, extra = {}) {
   const res = await fetch(`${baseUrl}/api/sessions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ prompt, provider: 'mock' }),
+    body: JSON.stringify({ prompt, provider: 'mock', ...extra }),
   });
   if (!res.ok) throw new Error(`create failed: ${res.status} ${await res.text()}`);
   const session = await res.json();
