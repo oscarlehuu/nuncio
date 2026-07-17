@@ -127,11 +127,11 @@ describe('terminal theme tokens', () => {
     render(<TerminalPanel cwd="/tmp" />);
     await waitFor(() => expect(xtermMocks.instances).toHaveLength(1));
     const term = xtermMocks.instances[0];
-    // No literal hex surface colors leak through — the theme is var-resolved
-    // (falls back to the dark oklch surface when computed vars are unavailable).
-    expect(term.options.theme?.background).not.toMatch(/#[0-9a-f]{6}/i);
-    expect(term.options.theme?.foreground).not.toMatch(/#[0-9a-f]{6}/i);
-    expect(term.options.theme?.background).toMatch(/^oklch/);
+    // The theme is token-derived (reads --terminal-bg / --terminal-fg); when the
+    // computed vars are unavailable (jsdom), it falls back to the dark content
+    // surface hex so xterm always gets a concrete, parseable color.
+    expect(term.options.theme?.background).toBe('#181818');
+    expect(term.options.theme?.foreground).toBe('#E6E6E6');
   });
 });
 

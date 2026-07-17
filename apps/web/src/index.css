@@ -13,20 +13,21 @@
  * or mono/serif font tokens, so those are defined here as the explicit
  * "self-make where shadcn lacks" set.
  *
- * ─── Elevation convention (Cursor-style: luminance, not borders) ─────────────
- * Panes are told apart by how light they are, not by a visible outline. In dark
- * mode luminance climbs as you move toward the user; in light mode the base is
- * the brightest and recessed chrome steps down. Borders are near-invisible
- * hairlines (white/black at low alpha) that only firm up an edge, never define
- * the block.
+ * ─── Two-neutrals + alpha-ramp convention (exact Cursor tokens) ──────────────
+ * Two surface neutrals plus one foreground at a fixed opacity ramp. Chrome
+ * (sidebar/panels/menus) sits on the darker/greyer neutral; content (transcript,
+ * cards, tiles, editors) sits one step toward the eye. Cards are NOT lifted by
+ * luminance — they share the content surface and are told apart by a hairline
+ * border. Real drop shadow appears only under floating overlays (popover/menu,
+ * dialog). Borders/hover/selection are the foreground at a low alpha step.
  *
- *   Layer            Token              Dark        Light
- *   ---------------  -----------------  ----------  ----------
- *   app chrome       --sidebar          darkest     off-white gray (recessed)
- *   content surface  --background       near-black  pure-ish white (raised)
- *   card / popover   --card/--popover   +2–3% L     white, shadow-lifted
- *   inset field      --muted/--input    subtle well subtle well
- *   hairline edge    --border           white 6–9%  black 6–9%
+ *   Layer            Token              Dark      Light
+ *   ---------------  -----------------  --------  --------
+ *   app chrome       --sidebar          #141414   #F3F3F3
+ *   content surface  --background/card  #181818   #FCFCFC
+ *   menu / popover   --popover          #141414   #F3F3F3  (+ real shadow)
+ *   inset field      --muted/--input    fg @ ~4%  ink @ ~4%
+ *   hairline edge    --border           fg 7.5%   ink 7.8%
  *
  * Status + terminal tokens are theme-aware so utilities like `text-error` and
  * the xterm surface resolve correctly in both themes.
@@ -113,52 +114,45 @@
 }
 
 /*
- * LIGHT — polished as a first-class theme, not a dark inversion.
- * Base content is the brightest surface; chrome (sidebar) recedes to a faint
- * gray so the two panes read apart without the border. All neutrals are pure
- * achromatic grays — luminance alone builds the hierarchy. Cards are pure
- * white and lifted by shadow rather than outline.
+ * LIGHT — "Cursor Light", exact tokens. Content is the brightest surface
+ * (#FCFCFC); chrome (sidebar/panels/menus) recedes to #F3F3F3. Ink is #141414
+ * and every border, hover and selection tone is that ink at a fixed alpha step
+ * (the same ramp inverted). Light stays even more achromatic than dark.
  */
 :root {
-  --background: oklch(0.995 0 0);   /* near-white content, a hair off pure */
-  --foreground: oklch(0.205 0 0);   /* soft near-black ink, not #000 */
-  --card: oklch(1 0 0);                    /* pure white, shadow-lifted */
-  --card-foreground: oklch(0.205 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.205 0 0);
-  --primary: oklch(0.24 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.965 0 0);
-  --secondary-foreground: oklch(0.24 0 0);
-  --muted: oklch(0.965 0 0);         /* inset well */
-  --muted-foreground: oklch(0.53 0 0); /* lower-contrast meta text */
-  --accent: oklch(0.955 0 0);        /* hover wash */
-  --accent-foreground: oklch(0.24 0 0);
-  --destructive: oklch(0.577 0.235 27.2);
-  --border: oklch(0.145 0 0 / 8%);    /* black at low alpha — hairline */
-  --input: oklch(0.145 0 0 / 12%);
-  --ring: oklch(0.62 0 0);
+  --background: #FCFCFC;             /* content: transcript, cards, tiles, editors */
+  --foreground: #141414;            /* ink — primary text */
+  --card: #FCFCFC;                  /* cards sit on content, told apart by hairline */
+  --card-foreground: #141414;
+  --popover: #F3F3F3;               /* menus/popovers = chrome, lifted by shadow */
+  --popover-foreground: #141414;
+  --primary: #141414;               /* mono CTA: ink fill, light text */
+  --primary-foreground: #FCFCFC;
+  --secondary: #ECECEC;             /* ink @ ~8% — selected / secondary surface */
+  --secondary-foreground: #141414;
+  --muted: #F1F1F1;                 /* ink @ ~4% — inset well */
+  --muted-foreground: #6E6E6E;      /* ink @ ~60% — muted / meta text */
+  --accent: #EFEFEF;                /* ink @ ~6% — hover wash */
+  --accent-foreground: #141414;
+  --destructive: #BE1744;
+  --border: rgb(20 20 20 / 0.078);   /* ink hairline — every border */
+  --input: rgb(20 20 20 / 0.12);
+  --ring: #737373;                  /* focus ring kept solid + visible for a11y */
 
-  /* Elevation — restrained, Cursor/Linear discipline: e1 (in-flow cards/tiles)
-   * barely lifts — a tight 2-layer contact shadow that reads as "sits on the
-   * surface", NOT a float. Real float (e2/e3) is reserved for overlays that
-   * sit ABOVE content (popover, dialog, sheet), so the hierarchy stays legible.
-   * Light has no top-highlight (white card is already max luminance). */
+  /* Elevation — flat at rest (cards read via the hairline border). Real drop
+   * shadow (Cursor light widget.shadow ≈ ink @ 14%) is reserved for overlays
+   * that float ABOVE content: e2 = popover/menu, e3 = dialog/sheet. */
   --elevation-0:
-    0 1px 2px oklch(0.22 0 0 / 0.10),
-    inset 0 1px 0 oklch(1 0 0 / 0.12);
+    0 1px 1px rgb(20 20 20 / 0.04);
   --elevation-1:
-    0 1px 2px oklch(0.22 0 0 / 0.05),
-    0 2px 5px oklch(0.22 0 0 / 0.05);
+    0 1px 2px rgb(20 20 20 / 0.06);
   --elevation-2:
-    0 2px 4px oklch(0.22 0 0 / 0.05),
-    0 6px 16px -4px oklch(0.22 0 0 / 0.08),
-    0 16px 30px -12px oklch(0.22 0 0 / 0.10);
+    0 2px 6px rgb(20 20 20 / 0.08),
+    0 6px 20px -4px rgb(20 20 20 / 0.12);
   --elevation-3:
-    0 4px 8px oklch(0.22 0 0 / 0.07),
-    0 14px 28px -6px oklch(0.22 0 0 / 0.10),
-    0 34px 56px -16px oklch(0.22 0 0 / 0.14);
-  /* Barely-there bottom-shading on white cards. */
+    0 4px 12px rgb(20 20 20 / 0.10),
+    0 16px 44px -12px rgb(20 20 20 / 0.16);
+  /* Barely-there bottom-shading on light cards. */
   --surface-gradient:
     linear-gradient(180deg, oklch(0.145 0 0 / 0) 60%, oklch(0.145 0 0 / 0.01));
 
@@ -167,26 +161,27 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.965 0 0);       /* recessed cool gray chrome */
-  --sidebar-foreground: oklch(0.205 0 0);
-  --sidebar-primary: oklch(0.24 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.93 0 0);
-  --sidebar-accent-foreground: oklch(0.24 0 0);
-  --sidebar-border: oklch(0.145 0 0 / 7%);
-  --sidebar-ring: oklch(0.62 0 0);
+  --radius: 0.25rem;
+  --sidebar: #F3F3F3;               /* chrome — recessed */
+  --sidebar-foreground: #141414;
+  --sidebar-primary: #141414;
+  --sidebar-primary-foreground: #FCFCFC;
+  --sidebar-accent: #ECECEC;        /* selected nav pill */
+  --sidebar-accent-foreground: #141414;
+  --sidebar-border: rgb(20 20 20 / 0.078);
+  --sidebar-ring: #737373;
 
-  /* Status — muted, desaturated so they read premium, not alert-bright. */
-  --status-success: oklch(0.6 0.11 150);
-  --status-error: oklch(0.58 0.19 27);
-  --status-warning: oklch(0.7 0.13 70);
-  --status-info: oklch(0.6 0.11 240);
-  --status-neutral: oklch(0.6 0 0);
+  /* Semantic — state ONLY. Cursor Light values, darkened for contrast on white;
+   * "info" is neutral gray so the mono direction keeps no blue. */
+  --status-success: #00854C;
+  --status-error: #BE1744;
+  --status-warning: #CD4500;
+  --status-info: #6C6C6C;
+  --status-neutral: #6C6C6C;
 
   /* Terminal — matches the light content surface, dark ink. */
-  --terminal-bg: oklch(0.985 0 0);
-  --terminal-fg: oklch(0.28 0 0);
+  --terminal-bg: #FCFCFC;
+  --terminal-fg: #333333;
 
   --chat-font-scale: 1;
   --chat-gap: 0.375rem;
@@ -194,52 +189,46 @@
 }
 
 /*
- * DARK — Cursor's near-black. Sidebar is the darkest layer; content sits one
- * step lighter; cards/popovers climb ~2–3% L above content. Neutrals are pure
- * achromatic grays. Borders are white at low alpha.
+ * DARK — "Cursor Dark Anysphere", exact tokens. Chrome (sidebar/panels/menus)
+ * is the darkest layer (#141414); content (transcript/cards/tiles/editors) sits
+ * one step lighter (#181818). Foreground is #F0F0F0 and EVERY border, hover and
+ * selection tone is that foreground at a fixed alpha step — there is no gray
+ * scale; luminance + the alpha ramp carry the whole hierarchy.
  */
 .dark {
-  --background: oklch(0.185 0 0);    /* near-black content, raised over chrome */
-  --foreground: oklch(0.955 0 0);    /* slightly-off white ink */
-  --card: oklch(0.215 0 0);          /* +3% L over content */
-  --card-foreground: oklch(0.955 0 0);
-  --popover: oklch(0.225 0 0);
-  --popover-foreground: oklch(0.955 0 0);
-  --primary: oklch(0.92 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.265 0 0);
-  --secondary-foreground: oklch(0.955 0 0);
-  --muted: oklch(0.255 0 0);         /* inset well */
-  --muted-foreground: oklch(0.62 0 0); /* noticeably lower contrast */
-  --accent: oklch(0.27 0 0);         /* hover wash */
-  --accent-foreground: oklch(0.955 0 0);
-  --destructive: oklch(0.68 0.185 25);
-  --border: oklch(1 0 0 / 8%);             /* white hairline */
-  --input: oklch(1 0 0 / 12%);
-  --ring: oklch(0.5 0 0);
+  --background: #181818;             /* content surface */
+  --foreground: #F0F0F0;
+  --card: #181818;                   /* cards sit on content, told apart by hairline */
+  --card-foreground: #F0F0F0;
+  --popover: #141414;                /* menus/popovers = chrome, lifted by shadow */
+  --popover-foreground: #F0F0F0;
+  --primary: #F0F0F0;                /* mono CTA: light fill, dark text */
+  --primary-foreground: #141414;
+  --secondary: #2E2E2E;              /* fg @ ~12% — selected / secondary surface */
+  --secondary-foreground: #F0F0F0;
+  --muted: #212121;                  /* fg @ ~4% — inset well */
+  --muted-foreground: #999999;       /* fg @ 60% — muted / meta text */
+  --accent: #262626;                 /* fg @ ~6.7% — hover wash */
+  --accent-foreground: #F0F0F0;
+  --destructive: #E34671;
+  --border: rgb(240 240 240 / 0.075); /* fg hairline — every border */
+  --input: rgb(240 240 240 / 0.12);
+  --ring: #808080;                   /* focus ring kept solid + visible for a11y */
 
-  /* Elevation — restrained, Cursor/Linear discipline. Near-black content eats
-   * shadow, so the inset white top-highlight (light-from-above) carries most of
-   * the read at rest. e1 (in-flow cards/tiles) is a tight 2-layer lift that just
-   * "sits on the surface"; real float (e2/e3) is reserved for overlays that sit
-   * ABOVE content (popover, dialog, sheet) so the hierarchy stays legible. */
+  /* Elevation — flat at rest (cards read via hairline border + the inset
+   * top-highlight). Real drop shadow (~#00000066) is reserved for overlays that
+   * float ABOVE content: e2 = popover/menu, e3 = dialog/sheet. */
   --elevation-0:
-    0 1px 2px oklch(0 0 0 / 0.28),
-    inset 0 1px 0 oklch(1 0 0 / 0.08);
+    inset 0 1px 0 rgb(240 240 240 / 0.04);
   --elevation-1:
-    0 1px 2px oklch(0 0 0 / 0.28),
-    0 4px 10px -3px oklch(0 0 0 / 0.36),
-    inset 0 1px 0 oklch(1 0 0 / 0.06);
+    0 1px 2px rgb(0 0 0 / 0.28),
+    inset 0 1px 0 rgb(240 240 240 / 0.03);
   --elevation-2:
-    0 2px 4px oklch(0 0 0 / 0.30),
-    0 8px 18px -4px oklch(0 0 0 / 0.44),
-    0 18px 34px -12px oklch(0 0 0 / 0.50),
-    inset 0 1px 0 oklch(1 0 0 / 0.08);
+    0 2px 6px rgb(0 0 0 / 0.30),
+    0 6px 20px -4px rgb(0 0 0 / 0.40);
   --elevation-3:
-    0 4px 8px oklch(0 0 0 / 0.40),
-    0 14px 30px -6px oklch(0 0 0 / 0.50),
-    0 36px 60px -16px oklch(0 0 0 / 0.60),
-    inset 0 1px 0 oklch(1 0 0 / 0.10);
+    0 4px 12px rgb(0 0 0 / 0.40),
+    0 16px 44px -12px rgb(0 0 0 / 0.55);
   /* Barely-there top-lit gradient over the card surface — sits under content. */
   --surface-gradient:
     linear-gradient(180deg, oklch(1 0 0 / 0.022), oklch(1 0 0 / 0) 42%);
@@ -249,25 +238,26 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.155 0 0);       /* darkest layer — chrome recedes */
-  --sidebar-foreground: oklch(0.955 0 0);
-  --sidebar-primary: oklch(0.92 0 0);
-  --sidebar-primary-foreground: oklch(0.205 0 0);
-  --sidebar-accent: oklch(0.25 0 0);
-  --sidebar-accent-foreground: oklch(0.955 0 0);
-  --sidebar-border: oklch(1 0 0 / 7%);
-  --sidebar-ring: oklch(0.5 0 0);
+  --sidebar: #141414;                /* chrome — darkest layer */
+  --sidebar-foreground: #F0F0F0;
+  --sidebar-primary: #F0F0F0;
+  --sidebar-primary-foreground: #141414;
+  --sidebar-accent: #2E2E2E;         /* selected nav pill */
+  --sidebar-accent-foreground: #F0F0F0;
+  --sidebar-border: rgb(240 240 240 / 0.075);
+  --sidebar-ring: #808080;
 
-  /* Status — lifted, still desaturated for the dark surface. */
-  --status-success: oklch(0.72 0.13 150);
-  --status-error: oklch(0.7 0.17 25);
-  --status-warning: oklch(0.78 0.13 75);
-  --status-info: oklch(0.72 0.12 240);
-  --status-neutral: oklch(0.62 0 0);
+  /* Semantic — state ONLY (Cursor Dark values). Everything else is achromatic;
+   * "info" is neutral gray so the mono direction keeps no blue. */
+  --status-success: #3FA266;
+  --status-error: #E34671;
+  --status-warning: #F1B467;
+  --status-info: #868686;
+  --status-neutral: #868686;
 
-  /* Terminal — near-black, matched to the dark content surface. */
-  --terminal-bg: oklch(0.165 0 0);
-  --terminal-fg: oklch(0.9 0 0);
+  /* Terminal — matched to the dark content surface. */
+  --terminal-bg: #181818;
+  --terminal-fg: #E6E6E6;
 }
 
 @layer base {

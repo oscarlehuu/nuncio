@@ -183,8 +183,8 @@ export function readTerminalTheme(el: Element): { background: string; foreground
   const bg = styles.getPropertyValue('--terminal-bg').trim();
   const fg = styles.getPropertyValue('--terminal-fg').trim();
   return {
-    background: bg || 'oklch(0.165 0 0)',
-    foreground: fg || 'oklch(0.9 0 0)',
+    background: bg || '#181818',
+    foreground: fg || '#E6E6E6',
   };
 }
 
