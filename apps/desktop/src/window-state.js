@@ -171,7 +171,6 @@ module.exports = {
   fitBoundsToWorkArea,
   loadWindowState,
   manageWindowState,
-  normalizeBounds,
   restoreWindowState,
   saveWindowState,
 };

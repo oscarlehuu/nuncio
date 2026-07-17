@@ -2,7 +2,13 @@ const { describe, expect, test } = require('bun:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const windowState = require('../src/window-state');
+const {
+  fitBoundsToWorkArea,
+  loadWindowState,
+  manageWindowState,
+  restoreWindowState,
+  saveWindowState,
+} = require('../src/window-state');
 
 const minimums = { minWidth: 960, minHeight: 640 };
 
@@ -15,8 +21,8 @@ describe('window state persistence', () => {
   test('missing, corrupt, and malformed state files are ignored', () => {
     const { dir, file } = tempStateFile();
     try {
-      expect(windowState.loadWindowState(null)).toBeNull();
-      expect(windowState.loadWindowState(file)).toBeNull();
+      expect(loadWindowState(null)).toBeNull();
+      expect(loadWindowState(file)).toBeNull();
 
       for (const invalid of [
         '{bad json',
@@ -26,7 +32,7 @@ describe('window state persistence', () => {
         JSON.stringify({ bounds: { x: Number.MAX_VALUE, y: 0, width: Infinity, height: 700 } }),
       ]) {
         fs.writeFileSync(file, invalid);
-        expect(windowState.loadWindowState(file)).toBeNull();
+        expect(loadWindowState(file)).toBeNull();
       }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -40,7 +46,7 @@ describe('window state persistence', () => {
         bounds: { x: -1439.6, y: 20.4, width: 1100.5, height: 719.5 },
         maximized: 'true',
       }));
-      expect(windowState.loadWindowState(file)).toEqual({
+      expect(loadWindowState(file)).toEqual({
         bounds: { x: -1440, y: 20, width: 1101, height: 720 },
         maximized: false,
       });
@@ -50,26 +56,26 @@ describe('window state persistence', () => {
   });
 
   test('saves and reloads normal bounds plus maximized state', () => {
-    expect(typeof windowState.saveWindowState).toBe('function');
+    expect(typeof saveWindowState).toBe('function');
     const { dir, file } = tempStateFile();
     try {
       const state = {
         bounds: { x: 120, y: 80, width: 1100, height: 720 },
         maximized: true,
       };
-      expect(windowState.saveWindowState(file, state)).toBe(true);
-      expect(windowState.loadWindowState(file)).toEqual(state);
+      expect(saveWindowState(file, state)).toBe(true);
+      expect(loadWindowState(file)).toEqual(state);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
   test('a persistence failure is non-fatal', () => {
-    expect(typeof windowState.saveWindowState).toBe('function');
+    expect(typeof saveWindowState).toBe('function');
     const parentFile = path.join(os.tmpdir(), `nuncio-window-parent-${Date.now()}`);
     fs.writeFileSync(parentFile, 'not a directory');
     try {
-      expect(windowState.saveWindowState(path.join(parentFile, 'window-state.json'), {
+      expect(saveWindowState(path.join(parentFile, 'window-state.json'), {
         bounds: { x: 0, y: 0, width: 1280, height: 900 },
         maximized: false,
       })).toBe(false);
@@ -82,7 +88,7 @@ describe('window state persistence', () => {
 describe('display-safe restoration', () => {
   test('keeps valid bounds unchanged on a negative-origin display', () => {
     const bounds = { x: -1400, y: 40, width: 1100, height: 720 };
-    expect(windowState.fitBoundsToWorkArea(
+    expect(fitBoundsToWorkArea(
       bounds,
       { x: -1440, y: 0, width: 1440, height: 900 },
       minimums,
@@ -90,7 +96,7 @@ describe('display-safe restoration', () => {
   });
 
   test('re-homes removed-monitor bounds inside the selected current work area', () => {
-    expect(windowState.fitBoundsToWorkArea(
+    expect(fitBoundsToWorkArea(
       { x: 4000, y: 2000, width: 1100, height: 720 },
       { x: 0, y: 0, width: 1920, height: 1080 },
       minimums,
@@ -98,13 +104,13 @@ describe('display-safe restoration', () => {
   });
 
   test('shrinks oversized bounds and pins below-minimum work areas at their origin', () => {
-    expect(windowState.fitBoundsToWorkArea(
+    expect(fitBoundsToWorkArea(
       { x: -100, y: -100, width: 3000, height: 2000 },
       { x: 10, y: 20, width: 1600, height: 1000 },
       minimums,
     )).toEqual({ x: 10, y: 20, width: 1600, height: 1000 });
 
-    expect(windowState.fitBoundsToWorkArea(
+    expect(fitBoundsToWorkArea(
       { x: 900, y: 700, width: 1200, height: 800 },
       { x: 10, y: 20, width: 800, height: 500 },
       minimums,
@@ -118,7 +124,7 @@ describe('display-safe restoration', () => {
         bounds: { x: 120, y: 80, width: 1100, height: 720 },
         maximized: true,
       }));
-      expect(windowState.restoreWindowState(
+      expect(restoreWindowState(
         file,
         { getDisplayMatching: () => { throw new Error('screen unavailable'); } },
         { width: 1280, height: 900 },
@@ -132,7 +138,7 @@ describe('display-safe restoration', () => {
 
 describe('window lifecycle tracking', () => {
   test('coalesces geometry writes and flushes normal bounds on state changes and close', () => {
-    expect(typeof windowState.manageWindowState).toBe('function');
+    expect(typeof manageWindowState).toBe('function');
 
     const handlers = new Map();
     const win = {
@@ -164,7 +170,7 @@ describe('window lifecycle tracking', () => {
     let nextTimerId = 0;
     const timers = new Map();
     const writes = [];
-    const manager = windowState.manageWindowState(win, '/window-state.json', {
+    const manager = manageWindowState(win, '/window-state.json', {
       save: (_filePath, state) => {
         writes.push(state);
         return true;

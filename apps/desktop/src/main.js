@@ -15,7 +15,10 @@ const {
 const { DaemonSupervisor } = require('./daemon');
 const serverProfiles = require('./server-profiles');
 const shellSettings = require('./shell-settings');
-const windowState = require('./window-state');
+const {
+  manageWindowState,
+  restoreWindowState,
+} = require('./window-state');
 const { normalizeBrowserUrl } = require('./browser-url');
 const {
   buildPickerInstallScript,
@@ -98,7 +101,7 @@ let localServerUrl = null;
 let updater = null;
 
 function createWindow(url) {
-  const restoredState = windowState.restoreWindowState(
+  const restoredState = restoreWindowState(
     windowStatePath,
     screen,
     { width: 1280, height: 900 },
@@ -115,7 +118,7 @@ function createWindow(url) {
     },
   });
   mainWindow = win;
-  const stateManager = windowState.manageWindowState(win, windowStatePath);
+  const stateManager = manageWindowState(win, windowStatePath);
   mainWindowStateManager = stateManager;
   if (restoredState.maximized) win.maximize();
 
