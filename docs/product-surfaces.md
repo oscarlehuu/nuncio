@@ -69,7 +69,9 @@ Mobile has **no** Workbench, Autopilot, Settings shell, Forge dock, File explore
 ### Desktop
 
 Electron (`apps/desktop`) wraps the same web UI. Browser dock and `node-pty` terminal are
-desktop-capable; web/PWA uses WS terminal and does **not** expose the browser dock.
+desktop-capable; web/PWA uses WS terminal and does **not** expose the browser dock. The shell also
+persists normal window bounds plus maximized state under Electron `userData`, revalidating them
+against the current display work area whenever it creates a window.
 
 ---
 
