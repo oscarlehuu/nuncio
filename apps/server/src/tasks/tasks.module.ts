@@ -6,6 +6,7 @@ import { PromptsModule } from '../prompts/prompts.module';
 import { SessionsModule } from '../sessions/sessions.module';
 import { SessionsPersistenceModule } from '../sessions/sessions.persistence.module';
 import { SettingsModule } from '../settings/settings.module';
+import { MultitaskCoordinatorService } from './multitask-coordinator.service';
 import { TasksController } from './tasks.controller';
 import { TasksRepository } from './tasks.repository';
 import { TasksService } from './tasks.service';
@@ -18,7 +19,12 @@ import { TasksService } from './tasks.service';
 @Module({
   imports: [AgentsModule, EvidenceModule, PromptsModule, SessionsModule, SessionsPersistenceModule, SettingsModule],
   controllers: [TasksController],
-  providers: [TasksRepository, TasksService, { provide: TASK_ENQUEUER, useExisting: TasksService }],
+  providers: [
+    TasksRepository,
+    TasksService,
+    MultitaskCoordinatorService,
+    { provide: TASK_ENQUEUER, useExisting: TasksService },
+  ],
   exports: [TasksService, TasksRepository, TASK_ENQUEUER],
 })
 export class TasksModule {}

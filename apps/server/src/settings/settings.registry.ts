@@ -497,6 +497,16 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     default: '15',
   },
   {
+    key: 'NUNCIO_MULTITASK_MAX_SUBTASKS',
+    category: 'agents',
+    type: 'string',
+    label: 'Multitask subtask cap',
+    description:
+      'Maximum number of subtasks a multitask goal is decomposed into before fan-out. Clamped between 2 and 5.',
+    envVar: 'NUNCIO_MULTITASK_MAX_SUBTASKS',
+    default: '5',
+  },
+  {
     key: 'NUNCIO_SUBAGENT_CLEANUP_POLICY',
     category: 'agents',
     type: 'string',
