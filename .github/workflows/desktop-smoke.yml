@@ -6,6 +6,10 @@ name: Desktop Smoke
 # packaged-only regressions plain unit tests miss (server bundle breaks, SDK runtime
 # chunks failing to load, a blank window when the renderer can't reach the server).
 on:
+  # The dev release publish gates on this workflow succeeding on the exact commit,
+  # so it runs on every push to dev — not just the paths that touch the app.
+  push:
+    branches: [dev]
   pull_request:
     paths:
       - 'apps/desktop/**'

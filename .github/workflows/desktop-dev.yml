@@ -1,23 +1,85 @@
 name: Desktop Dev
 
-# Every push to `dev` (the integration branch) ships a signed, notarized dev build
-# to the GitHub `dev` prerelease channel — the installed "Nuncio Dev" app auto-updates.
-# Public repo → macOS runners are free, so per-push builds cost nothing.
+# Gated dev release channel — the installed "Nuncio Dev" app auto-updates from here.
+#
+# Behavior: a signed, notarized dev prerelease is published for a dev commit ONLY
+# after every required check has concluded success on that exact commit:
+#   - CI            (ci + e2e + real-browser smoke)
+#   - Desktop Smoke (packaged app boots and renders)
+# The publish never fires on a red or still-running commit, and each commit ships at
+# most once.
+#
+# Mechanism: this workflow is chained off the required workflows with `workflow_run`.
+# Each time a required workflow finishes on dev, the gate (a unit-tested script,
+# scripts/desktop-dev-gate.mjs, not inline bash) re-checks every required workflow's
+# conclusion at that commit and publishes when all are green, subject to three guards:
+#   - never drop the last green commit: publish on any all-green, unshipped commit —
+#     whichever check finishes last is the first to see all-green, so there is no
+#     "who finished last" timestamp compare that a tie could deadlock.
+#   - exactly once: skip a commit that already has a dev release (draft = building, or
+#     published). The build re-checks this AGAIN after taking the publish slot, so two
+#     gates that both green-lit a commit before either published don't both build.
+#   - never go backward: refuse a commit that is behind the last shipped dev commit, so
+#     a late green on an old commit can't auto-update dev apps to older code.
+# Re-running a failed CI to green re-fires the chain and publishes. A GitHub API lookup
+# that keeps failing fails the gate job (retryable) instead of silently holding.
+#
+# Signing secrets stay isolated in the reusable build workflow — the gate only reads
+# check conclusions and releases with the default token, and only the build job touches
+# the certs.
+#
+# Note: `workflow_run` triggers are registered from the repository default branch, so
+# this file must live on that branch for the chain to fire.
+
 on:
-  push:
+  workflow_run:
+    workflows: [CI, Desktop Smoke]
+    types: [completed]
     branches: [dev]
   workflow_dispatch:
 
 permissions:
   contents: write
-
-concurrency:
-  group: desktop-dev
-  cancel-in-progress: true
+  actions: read
 
 jobs:
-  dev:
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Only dev-branch push runs gate a publish; skip PR runs. Manual dispatch forces one.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'dev')
+    outputs:
+      publish: ${{ steps.decide.outputs.publish }}
+      sha: ${{ steps.decide.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Decide whether every required check passed on this commit
+        id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          TRIGGER_SHA: ${{ github.event.workflow_run.head_sha }}
+          DISPATCH_SHA: ${{ github.sha }}
+        run: node scripts/desktop-dev-gate.mjs
+
+  publish:
+    needs: gate
+    if: needs.gate.outputs.publish == 'true'
+    # Serialize ONLY the publish, never the gate — every gate evaluation must run so a
+    # later event can't drop the last green commit. `false` never cancels an in-flight
+    # sign/notarize/publish, and one-at-a-time keeps the reusable build's stale-draft
+    # sweep from racing a parallel build.
+    concurrency:
+      group: desktop-dev-publish
+      cancel-in-progress: false
     uses: ./.github/workflows/desktop-build.yml
     with:
       channel: dev
+      ref: ${{ needs.gate.outputs.sha }}
     secrets: inherit

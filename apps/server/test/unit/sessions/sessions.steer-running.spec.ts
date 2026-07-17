@@ -1080,6 +1080,20 @@ describe('SessionsService steer while RUNNING', () => {
       },
     }));
     (service as unknown as { stalledRunForceIdleMs: number }).stalledRunForceIdleMs = 20;
+
+    // Drive the recovery retry deterministically instead of racing the wall
+    // clock: capture the scheduled retry and fire it by hand once the first
+    // transition has failed, so the test never depends on a fixed setTimeout
+    // landing inside a fixed wait window. `service` is shared across the file, so
+    // the override is restored below to keep later tests on the real scheduler.
+    const seam = service as unknown as {
+      scheduleStalledRunRetry?: (id: string, run: () => void) => void;
+    };
+    const pendingRetries: Array<() => void> = [];
+    seam.scheduleStalledRunRetry = (_id, run) => {
+      pendingRetries.push(run);
+    };
+
     const originalAppend = events.append.bind(events);
     let failures = 1;
     events.append = ((sessionId: string, type: string, payload: unknown) => {
@@ -1091,11 +1105,24 @@ describe('SessionsService steer while RUNNING', () => {
 
     try {
       const created = await service.create({ prompt: 'stalled transition retry', provider: 'cursor' });
-      await new Promise((resolve) => setTimeout(resolve, 320));
+      // Condition-based wait (not a fixed sleep): the stall watch fires, the
+      // first IDLE transition throws, runtime_stalled is durable and a retry is
+      // queued — the session stays RUNNING because the IDLE append failed.
+      await waitFor(() =>
+        events.list(created.id).some((event) => event.type === 'runtime_stalled') &&
+        pendingRetries.length > 0,
+      );
+      expect(sessions.findById(created.id)?.status).toBe('RUNNING');
+
+      // The transient failure is spent; firing the captured retry lands the IDLE
+      // transition and leaves exactly the one runtime_stalled annotation.
+      pendingRetries.shift()?.();
+
       expect(sessions.findById(created.id)?.status).toBe('IDLE');
       expect(events.list(created.id).filter((event) => event.type === 'runtime_stalled')).toHaveLength(1);
     } finally {
       events.append = originalAppend as EventsRepository['append'];
+      delete seam.scheduleStalledRunRetry;
     }
   });
 
@@ -1217,3 +1244,12 @@ describe('SessionsService steer while RUNNING', () => {
     expect(retainedTail).toBe(false);
   });
 });
+
+async function waitFor(assertion: () => boolean, timeoutMs = 2000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (assertion()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('Timed out waiting for condition');
+}

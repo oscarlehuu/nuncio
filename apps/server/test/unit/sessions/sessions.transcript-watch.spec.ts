@@ -75,6 +75,9 @@ describe('SessionsService transcript file watcher', () => {
 
     const received: SessionEvent[] = [];
     const unsubscribe = service.subscribe(session.id, (event) => received.push(event));
+    // Drive refreshes only through the deterministic fire() below; stop the real
+    // interval poller so it can't race the appended-line assertions under load.
+    watcher.get(session.id)?.disablePolling();
 
     appendFileSync(piPath, `${JSON.stringify(piMessage('assistant', 'live reply'))}\n`);
     bumpMtime(piPath);
@@ -159,7 +162,7 @@ type MinimalWatcher = {
 
 type TranscriptWatchInternals = {
   createTranscriptWatcher: (id: string, path: string) => MinimalWatcher | null;
-  transcriptWatchers?: Map<string, unknown>;
+  transcriptWatchers?: Map<string, { poller?: ReturnType<typeof setInterval> }>;
   locallyProducing: Set<string>;
   refreshTranscriptIfNeeded: (session: unknown) => void;
   requireSession: (id: string) => unknown;
@@ -167,7 +170,7 @@ type TranscriptWatchInternals = {
 
 function installDeterministicTranscriptWatcher(service: SessionsService) {
   const internals = service as unknown as TranscriptWatchInternals;
-  const handles = new Map<string, { fire: () => void; isClosed: () => boolean }>();
+  const handles = new Map<string, { fire: () => void; disablePolling: () => void; isClosed: () => boolean }>();
 
   internals.createTranscriptWatcher = (id: string) => {
     let closed = false;
@@ -178,6 +181,14 @@ function installDeterministicTranscriptWatcher(service: SessionsService) {
       on: () => watcher,
     };
     handles.set(id, {
+      // Kill the real 250ms interval poller so only the manual fire() below
+      // drives refreshes — the wall-clock timer must not race the assertions.
+      disablePolling: () => {
+        const entry = internals.transcriptWatchers?.get(id);
+        if (!entry?.poller) return;
+        clearInterval(entry.poller);
+        delete entry.poller;
+      },
       fire: () => {
         if (closed || !internals.transcriptWatchers?.has(id) || internals.locallyProducing.has(id)) {
           return;
