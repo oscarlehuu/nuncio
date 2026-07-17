@@ -20,10 +20,12 @@ interface AttentionRowProps {
   onApprove: (id: string, proposalCount: number) => void;
   onAck: (id: string) => void;
   onResolve: (id: string) => void;
+  /** Spawn-task chip: one-tap spin the follow-up into its own session. */
+  onCreate?: (id: string) => void;
 }
 
-/** A row carries at most two actions: one primary (Open or Approve) plus Dismiss. */
-export function AttentionRow({ item, busy, onOpen, onApprove, onAck, onResolve }: AttentionRowProps) {
+/** A row carries at most two actions: one primary (Open/Approve/Create) plus Dismiss. */
+export function AttentionRow({ item, busy, onOpen, onApprove, onAck, onResolve, onCreate }: AttentionRowProps) {
   const meta = attentionKindMeta(item.kind);
   const Icon = meta.icon;
   const target = openTargetFor(item);
@@ -31,6 +33,8 @@ export function AttentionRow({ item, busy, onOpen, onApprove, onAck, onResolve }
   const external = target !== null && 'href' in target;
   const dispatcher = dispatcherPayload(item);
   const isDispatcher = item.kind === 'dispatcher-proposal' && dispatcher.proposals.length > 0;
+  const isSpawnTask = item.kind === 'spawn-task';
+  const spawnTaskTldr = isSpawnTask ? payloadText(item, 'tldr') : null;
   const approved = dispatcher.approvedAt !== null || dispatcher.taskIds.length > 0;
   const project = isDispatcher ? null : projectDisplayName(item.projectPath);
   const crew = isCrewAttentionKind(item.kind);
@@ -62,7 +66,12 @@ export function AttentionRow({ item, busy, onOpen, onApprove, onAck, onResolve }
         {isDispatcher ? (
           <DispatcherProposalSummary payload={dispatcher} />
         ) : (
-          <p className="mt-1.5 text-ui-lg font-medium text-foreground">{item.title}</p>
+          <>
+            <p className="mt-1.5 text-ui-lg font-medium text-foreground">{item.title}</p>
+            {spawnTaskTldr && (
+              <p className="mt-0.5 text-ui-sm text-muted-foreground line-clamp-2">{spawnTaskTldr}</p>
+            )}
+          </>
         )}
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-ui-sm text-muted-foreground">
           {project && <span className="truncate">{project}</span>}
@@ -109,6 +118,18 @@ export function AttentionRow({ item, busy, onOpen, onApprove, onAck, onResolve }
           >
             Open
             {external ? <ExternalLink className="size-3.5" /> : <ArrowUpRight className="size-3.5" />}
+          </Button>
+        )}
+        {isSpawnTask && onCreate && (
+          <Button
+            size="sm"
+            className="min-h-11 gap-1.5 px-3"
+            disabled={busy}
+            onClick={() => onCreate(item.id)}
+            aria-label={`Create a session for "${item.title}"`}
+          >
+            Create
+            <ArrowUpRight className="size-3.5" />
           </Button>
         )}
       </div>
@@ -166,6 +187,12 @@ function DispatcherProposalSummary({
 
 function doneLabel(taskCount: number): string {
   return `Done - ${taskCount} task${taskCount === 1 ? '' : 's'} queued`;
+}
+
+/** Read a trimmed string field off an item's payload, or null. */
+function payloadText(item: AttentionItemDto, key: string): string | null {
+  const value = item.payload?.[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function dispatcherPayload(item: AttentionItemDto): DispatcherPayload {

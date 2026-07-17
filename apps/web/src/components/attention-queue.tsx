@@ -5,6 +5,8 @@ import { toast } from 'sonner';
 import {
   approveDispatcherProposal,
   ackAttentionItem,
+  actChip,
+  dismissChip,
   fetchAttention,
   resolveAttentionItem,
   type AttentionItemDto,
@@ -109,7 +111,17 @@ export function AttentionQueue({ compactEmpty = false }: AttentionQueueProps) {
             })
           }
           onAck={(id) => void act(id, ackAttentionItem)}
-          onResolve={(id) => void act(id, resolveAttentionItem)}
+          onResolve={(id) =>
+            item.kind === 'spawn-task'
+              ? void act(id, (chipId) => dismissChip(chipId))
+              : void act(id, resolveAttentionItem)
+          }
+          onCreate={(id) =>
+            void act(id, actChip, (result) => {
+              const childId = (result as { session?: { id?: unknown } }).session?.id;
+              if (typeof childId === 'string') navigate(`/session/${childId}`);
+            })
+          }
         />
       ))}
     </ul>

@@ -8,6 +8,7 @@ import type {
 } from '../../sessions/domain/multitask-decompose';
 import type { AgentCapabilities, AgentRunContext } from '../agents.types';
 import { BaseAgentProvider } from '../agents.base-provider';
+import { spawnTaskRef } from '../pi-engine/spawn-task-tool';
 import { isCrewRuntimeToolAllowed } from '../tools/agent-runtime-tools-policy';
 import {
   normalizeAgentRuntimeToolResult,
@@ -38,6 +39,8 @@ export class MockAgentProvider extends BaseAgentProvider {
     effortSwitch: 'none',
     images: false,
     steerWhileRunning: false,
+    // The smoke drives the spawn-task chip flow against this offline engine.
+    spawnTask: true,
     // Modes are accepted + persisted so the zero-credential smoke can drive the
     // composer's mode picker; the overlay itself is a Pi-side implementation.
     modes: ['debug', 'multitask'],
@@ -129,8 +132,38 @@ export class MockAgentProvider extends BaseAgentProvider {
     }
 
     this.pushEvent(sessionId, 'assistant_message', { text: reply }, context.emit);
+    if (!isSteer && wantsSpawnChip(userText)) {
+      this.emitMockSpawnChip(sessionId, context);
+    }
     await submitMockCrewResult(context);
   }
+
+  /**
+   * Deterministic spawn-task chip so the offline smoke can drive the whole
+   * propose → tap → child-session flow without a real model. Only fires when the
+   * prompt asks for it, so it never pollutes the other Mock-driven smokes.
+   */
+  private emitMockSpawnChip(sessionId: string, context: AgentRunContext): void {
+    const title = 'Remove the dead retry path in relay.ts';
+    const prompt =
+      'In apps/server/src/relay/relay.service.ts the second retry branch (guarded by legacyMode) has been unreachable since the queue refactor. Delete it and its helper, then update the relay unit test to match.';
+    this.pushEvent(
+      sessionId,
+      'spawn_task_proposed',
+      {
+        title,
+        tldr: 'The legacy retry branch in relay.ts is unreachable after the queue refactor and should be removed.',
+        prompt,
+        ref: spawnTaskRef(title, prompt),
+      },
+      context.emit,
+    );
+  }
+}
+
+/** The offline smoke asks for a chip with this marker; real prompts never carry it. */
+function wantsSpawnChip(userText: string): boolean {
+  return /\bspawn-chip\b/i.test(userText);
 }
 
 async function submitMockCrewResult(context: AgentRunContext): Promise<void> {

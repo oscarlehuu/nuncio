@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AttentionModule } from './attention/attention.module';
+import { ChipsModule } from './chips/chips.module';
 import { HeartbeatModule } from './attention/heartbeat/heartbeat.module';
 import { FleetModule } from './attention/fleet/fleet.module';
 import { AuthModule } from './auth/auth.module';
@@ -42,6 +43,7 @@ import { UsageModule } from './usage/usage.module';
     DevicesModule,
     DispatcherModule,
     AttentionModule,
+    ChipsModule,
     HeartbeatModule,
     FleetModule,
     AuthModule,

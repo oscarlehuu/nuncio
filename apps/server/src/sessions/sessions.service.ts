@@ -48,6 +48,7 @@ import { PiLocalSessionsService } from '../pi-local/pi-local-sessions.service';
 import { canTransition } from './domain/sessions.fsm';
 import { assertModeSupported } from './domain/session-modes';
 import type { MultitaskCoordinator } from './domain/multitask-coordinator.types';
+import type { SpawnTaskEventHandler } from '../chips/chips.types';
 import { deriveHasPendingInput } from './domain/derive-pending-input';
 import type { SessionEventType } from './domain/events.types';
 import type {
@@ -153,6 +154,7 @@ export class SessionsService implements OnModuleDestroy {
   // A multitask parent's coordinating turn runs here instead of a provider turn.
   // Registered by TasksModule at boot (the session layer never imports Tasks).
   private multitaskCoordinator: MultitaskCoordinator | null = null;
+  private chipHandler: SpawnTaskEventHandler | null = null;
   // Verify-feedback loop settlement: resolves when the loop reaches a terminal
   // state (green verify / needs-attention / no-command). Task-lane consumers
   // await this instead of a bare awaitRun so they wait for the whole loop.
@@ -2359,6 +2361,13 @@ export class SessionsService implements OnModuleDestroy {
       else this.emit(id, { seq: 0, type: event.type, payload: event.payload, createdAt: Date.now() });
     }
     this.updateStalledRunWatchForEvent(id, event);
+    if (event.type === 'spawn_task_proposed' || event.type === 'spawn_task_dismissed') {
+      try {
+        this.chipHandler?.onSpawnTaskEvent(id, event);
+      } catch {
+        // A chip side-effect must never break the session's event fan-out.
+      }
+    }
     if (event.type !== 'status') return;
     const status = (event.payload as { status?: SessionStatus } | null)?.status;
     if (status !== 'IDLE' && status !== 'ERROR') return;
@@ -2481,6 +2490,15 @@ export class SessionsService implements OnModuleDestroy {
   /** TasksModule registers the multitask coordinator at boot (one-way edge). */
   registerMultitaskCoordinator(coordinator: MultitaskCoordinator): void {
     this.multitaskCoordinator = coordinator;
+  }
+
+  /**
+   * Register the spawn-task chip handler (ChipsService). onAgentEvent forwards
+   * spawn-task provider events to it so the session layer never imports the
+   * chips module — a one-directional edge like the multitask coordinator.
+   */
+  registerChipHandler(handler: SpawnTaskEventHandler): void {
+    this.chipHandler = handler;
   }
 
   /**

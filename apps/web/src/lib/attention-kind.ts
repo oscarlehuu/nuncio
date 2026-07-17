@@ -4,6 +4,7 @@ import {
   MessageSquareWarning,
   Radar,
   ShieldQuestion,
+  Sparkles,
   TriangleAlert,
   Wrench,
   type LucideIcon,
@@ -36,6 +37,9 @@ const KIND_META: Record<string, AttentionKindMeta> = {
   'pr-feedback': { label: 'PR feedback', icon: MessageSquareWarning, tone: 'warning' },
   anomaly: { label: 'Anomaly', icon: Radar, tone: 'neutral' },
   'dispatcher-proposal': { label: 'Dispatcher proposal', icon: ListChecks, tone: 'info' },
+  // A follow-up the agent flagged mid-turn — a proposal, so it shares the calmer
+  // review class rather than the amber needs-you one.
+  'spawn-task': { label: 'Follow-up', icon: Sparkles, tone: 'info' },
   'crew-blocked': { label: 'Crew blocked', icon: ShieldQuestion, tone: 'warning' },
   'crew-run-blocked': { label: 'Crew blocked', icon: ShieldQuestion, tone: 'warning' },
 };

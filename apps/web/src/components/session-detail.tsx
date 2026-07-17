@@ -29,6 +29,7 @@ import { useStickToBottom } from '../lib/use-stick-to-bottom';
 import { deriveVerifyStatus } from '../lib/derive-verify-status';
 import { VerifyChip } from './verify-chip';
 import { SessionModeChip } from './session-mode-picker';
+import { SessionChipRow } from './session-chip-row';
 import { projectDisplayName } from '../lib/projects';
 import {
   FALLBACK_PROVIDERS,
@@ -290,6 +291,14 @@ export function SessionDetail({
   const isArchived = session.status === 'ARCHIVED';
   const pendingUserInput = useMemo(() => derivePendingUserInput(events), [events]);
   const verifyStatus = useMemo(() => deriveVerifyStatus(events), [events]);
+  // Re-fetch the chip row the instant the agent proposes or withdraws a chip.
+  const spawnTaskEventCount = useMemo(
+    () =>
+      events.filter(
+        (event) => event.type === 'spawn_task_proposed' || event.type === 'spawn_task_dismissed',
+      ).length,
+    [events],
+  );
   const pendingQueued = useMemo(() => derivePendingQueuedSteers(events), [events]);
   const pendingRequestIds = useMemo(
     () => new Set(pendingUserInput.map((item) => item.requestId)),
@@ -883,6 +892,14 @@ export function SessionDetail({
             onStartMultitasking={handleStartMultitasking}
           />
         </div>
+        <SessionChipRow
+          sessionId={session.id}
+          refreshKey={spawnTaskEventCount}
+          onCreated={(childSessionId) => {
+            void refreshLineage();
+            onOpenSession?.(childSessionId);
+          }}
+        />
         <div
           className={`max-w-[760px] mx-auto rounded-2xl border bg-card shadow-e2 surface-lit transition-shadow focus-within:ring-2 focus-within:ring-ring/40 ${dragActive ? 'border-primary ring-2 ring-primary/40' : 'border-border/70'}`}
           onDragOver={

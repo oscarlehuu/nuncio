@@ -255,7 +255,7 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
         network: 'disabled',
       });
       expect(options.tools).toEqual([
-        'read', 'grep', 'ls', 'todo_write', 'AskUserQuestion', 'read_external_memory',
+        'read', 'grep', 'ls', 'todo_write', 'AskUserQuestion', 'spawn_task', 'dismiss_task', 'read_external_memory',
       ]);
       expect((options.resourceLoader as { options?: Record<string, unknown> }).options).toMatchObject({
         cwd: realpathSync(workspaceRoot),
@@ -273,6 +273,8 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
         'ls',
         'todo_write',
         'AskUserQuestion',
+        'spawn_task',
+        'dismiss_task',
         'read_external_memory',
       ]);
     } finally {
@@ -307,6 +309,8 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
         'ls',
         'todo_write',
         'AskUserQuestion',
+        'spawn_task',
+        'dismiss_task',
         'read_external_memory',
       ]);
       const writeTool = (options.customTools as Array<{
@@ -405,6 +409,8 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
           testCase.toolName,
           'todo_write',
           'AskUserQuestion',
+          'spawn_task',
+          'dismiss_task',
           'read_external_memory',
         ]);
         expect(customTools.map((tool) => tool.name)).toEqual([
@@ -412,6 +418,8 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
           testCase.toolName,
           'todo_write',
           'AskUserQuestion',
+          'spawn_task',
+          'dismiss_task',
           'read_external_memory',
         ]);
         expect(customTools.map((tool) => tool.name)).not.toContain('bash');
@@ -470,6 +478,8 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
           'submit_synthesis',
           'todo_write',
           'AskUserQuestion',
+          'spawn_task',
+          'dismiss_task',
           'read_external_memory',
         ]);
 
@@ -497,6 +507,8 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
           'submit_synthesis',
           'todo_write',
           'AskUserQuestion',
+          'spawn_task',
+          'dismiss_task',
           'read_external_memory',
         ]);
       const refreshedSynthesis = (createAgentSessionOptions[1]!.customTools as Array<{

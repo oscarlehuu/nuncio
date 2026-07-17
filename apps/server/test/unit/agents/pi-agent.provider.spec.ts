@@ -210,6 +210,7 @@ describe('PiAgentProvider', () => {
       effortSwitch: 'in-session',
       images: true,
       steerWhileRunning: true,
+      spawnTask: true,
       modes: ['debug', 'multitask'],
       runtimePolicies: [
         { filesystem: 'read-only', network: 'disabled' },

@@ -27,6 +27,7 @@ import { runSessionModes } from './journeys/session-modes.mjs';
 import { runSoloLifecycle } from './journeys/solo-session-lifecycle.mjs';
 import { runSubagentDelegation } from './journeys/subagent-delegation.mjs';
 import { runMultitaskFanout } from './journeys/multitask-fanout.mjs';
+import { runSessionChips } from './journeys/session-chips.mjs';
 import { runArchiveLastSession } from './journeys/archive-last-session.mjs';
 import { runModelPreferencesPerComposer } from './journeys/model-preferences-per-composer.mjs';
 import { runTranscriptSelectionCopy } from './journeys/transcript-selection-copy.mjs';
@@ -51,6 +52,7 @@ const JOURNEYS = [
   { name: 'solo-session-lifecycle', run: runSoloLifecycle },
   { name: 'subagent-delegation', run: runSubagentDelegation },
   { name: 'multitask-fanout', run: runMultitaskFanout },
+  { name: 'session-chips', run: runSessionChips },
   { name: 'model-preferences-per-composer', run: runModelPreferencesPerComposer },
   { name: 'transcript-selection-copy', run: runTranscriptSelectionCopy },
   { name: 'theme-switch-mid-session', run: runThemeSwitchMidSession },

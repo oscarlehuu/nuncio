@@ -31,6 +31,12 @@ export interface AgentCapabilities {
   images: boolean;
   /** Whether the provider can inject a steer message into a run that is already streaming. */
   steerWhileRunning: boolean;
+  /**
+   * Whether the engine can flag out-of-scope follow-ups as one-tap spawn-task
+   * chips (the `spawn_task` / `dismiss_task` tools). Absent = no chip support;
+   * the chip service rejects proposals from a session on such an engine.
+   */
+  spawnTask?: boolean;
   /** Session modes this engine implements (debug/multitask). Absent = no mode support. */
   modes?: readonly SessionMode[];
   /** Explicit per-session policies this adapter enforces without relying on prompt instructions. */
