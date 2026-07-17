@@ -45,17 +45,56 @@ export function summarize(samples) {
 }
 
 /**
+ * Fail CLOSED on a malformed baseline. A baseline that parses as JSON but is
+ * schema-broken (missing `tolerancePct`, non-numeric `median`) would make the
+ * ceiling NaN, and `measured > NaN` is always false — so every regression would
+ * silently PASS. Reject it as corrupt instead, matching the "present-but-corrupt
+ * baseline is a hard error" contract. Every gating input must be a finite number.
+ * @param {unknown} baseline
+ */
+export function assertValidBaseline(baseline) {
+  if (!baseline || typeof baseline !== 'object' || Array.isArray(baseline)) {
+    throw new Error('perf baseline must be an object');
+  }
+  if (!Number.isFinite(baseline.tolerancePct) || baseline.tolerancePct <= 0) {
+    throw new Error(`perf baseline tolerancePct must be a positive finite number, got ${baseline.tolerancePct}`);
+  }
+  const { metrics } = baseline;
+  if (!metrics || typeof metrics !== 'object' || Array.isArray(metrics)) {
+    throw new Error('perf baseline.metrics must be an object');
+  }
+  const names = Object.keys(metrics);
+  if (names.length === 0) {
+    throw new Error('perf baseline.metrics is empty — nothing to gate');
+  }
+  for (const name of names) {
+    const base = metrics[name];
+    if (!base || typeof base !== 'object' || Array.isArray(base)) {
+      throw new Error(`perf baseline metric ${name} must be an object`);
+    }
+    if (!Number.isFinite(base.median)) {
+      throw new Error(`perf baseline metric ${name}.median must be a finite number, got ${base.median}`);
+    }
+    if ('gated' in base && typeof base.gated !== 'boolean') {
+      throw new Error(`perf baseline metric ${name}.gated must be a boolean, got ${base.gated}`);
+    }
+  }
+}
+
+/**
  * Compare measured medians against the committed baseline. Only metrics marked
  * `gated: true` in the baseline can fail; report-only ones are returned for
  * printing. Lower is better, so the ceiling is baseline*(1+tolerance) — at the
  * ceiling PASSES, strictly above fails. Near-zero baselines fall back to an
- * additive band (baseline + max(NEAR_ZERO_MS, baseline*tolerance)).
+ * additive band (baseline + max(NEAR_ZERO_MS, baseline*tolerance)). Throws on a
+ * malformed baseline (see assertValidBaseline) rather than failing open.
  *
  * @param {Record<string, { median: number }>} current  metric → measured summary
  * @param {{ tolerancePct: number, metrics: Record<string, { median: number, gated?: boolean }> }} baseline
  * @returns {{ failures: Array<{metric,current,baseline,ceiling}>, reportOnly: string[], improved: string[], extras: string[] }}
  */
 export function compareMetricsToBaseline(current, baseline) {
+  assertValidBaseline(baseline);
   const failures = [];
   const reportOnly = [];
   const improved = [];

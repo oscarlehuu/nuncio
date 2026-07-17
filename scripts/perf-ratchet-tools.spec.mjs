@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  assertValidBaseline,
   ceilingFor,
   compareMetricsToBaseline,
   floorFor,
@@ -100,5 +101,58 @@ describe('compareMetricsToBaseline', () => {
     );
     expect(result.extras).toEqual(['keyEchoMs']);
     expect(result.failures).toEqual([]);
+  });
+
+  // A schema-malformed-but-valid-JSON baseline used to make tol/ceiling NaN, and
+  // `measured > NaN` is always false — so a clear regression printed PASS
+  // (fail-open). It must instead be rejected as corrupt, per the gate's contract.
+  test('rejects a baseline missing tolerancePct instead of failing open on a regression', () => {
+    const malformed = { metrics: { ttfdMs: { median: 100, gated: true } } };
+    expect(() => compareMetricsToBaseline({ ttfdMs: { median: 9999 } }, malformed)).toThrow(
+      /tolerancePct/i,
+    );
+  });
+
+  test('rejects a baseline whose gated metric has a non-numeric median', () => {
+    const malformed = { tolerancePct: 0.3, metrics: { ttfdMs: { median: 'fast', gated: true } } };
+    expect(() => compareMetricsToBaseline({ ttfdMs: { median: 9999 } }, malformed)).toThrow(/median/i);
+  });
+});
+
+describe('assertValidBaseline', () => {
+  test('accepts a well-formed baseline', () => {
+    expect(() =>
+      assertValidBaseline({ tolerancePct: 0.3, metrics: { ttfdMs: { median: 82.6, gated: true } } }),
+    ).not.toThrow();
+  });
+
+  test('throws when tolerancePct is missing or not a positive finite number', () => {
+    expect(() => assertValidBaseline({ metrics: { a: { median: 1 } } })).toThrow(/tolerancePct/i);
+    expect(() =>
+      assertValidBaseline({ tolerancePct: 0, metrics: { a: { median: 1 } } }),
+    ).toThrow(/tolerancePct/i);
+    expect(() =>
+      assertValidBaseline({ tolerancePct: 'wide', metrics: { a: { median: 1 } } }),
+    ).toThrow(/tolerancePct/i);
+  });
+
+  test('throws when a metric median is missing or non-numeric', () => {
+    expect(() =>
+      assertValidBaseline({ tolerancePct: 0.3, metrics: { a: { gated: true } } }),
+    ).toThrow(/median/i);
+    expect(() =>
+      assertValidBaseline({ tolerancePct: 0.3, metrics: { a: { median: Infinity } } }),
+    ).toThrow(/median/i);
+  });
+
+  test('throws when metrics is empty or not an object', () => {
+    expect(() => assertValidBaseline({ tolerancePct: 0.3, metrics: {} })).toThrow(/metrics/i);
+    expect(() => assertValidBaseline({ tolerancePct: 0.3 })).toThrow(/metrics/i);
+  });
+
+  test('throws when a gated flag is present but not a boolean', () => {
+    expect(() =>
+      assertValidBaseline({ tolerancePct: 0.3, metrics: { a: { median: 1, gated: 'yes' } } }),
+    ).toThrow(/gated/i);
   });
 });

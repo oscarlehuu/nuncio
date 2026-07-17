@@ -18,6 +18,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import {
+  assertValidBaseline,
   ceilingFor,
   compareMetricsToBaseline,
 } from './perf-ratchet-utils.mjs';
@@ -88,6 +89,17 @@ try {
     process.exit(0);
   }
   console.error(`[perf] baseline at ${BASELINE_PATH} is unreadable/corrupt: ${err.message}`);
+  process.exit(1);
+}
+
+// A baseline can parse as JSON yet be schema-broken (missing tolerancePct, a
+// non-numeric median). Reject it here — before the print loop and the compare —
+// so a malformed baseline is a hard error, never a silent fail-open PASS.
+try {
+  assertValidBaseline(baseline);
+} catch (err) {
+  console.error(`[perf] baseline at ${BASELINE_PATH} is malformed: ${err.message}`);
+  console.error('[perf] regenerate it with: bun run perf:ui && bun run check-perf-ratchet:update');
   process.exit(1);
 }
 
