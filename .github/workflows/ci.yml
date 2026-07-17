@@ -115,6 +115,14 @@ jobs:
           NUNCIO_SMOKE_CHROME_EXECUTABLE: ${{ steps.setup-chrome.outputs.chrome-path }}
         run: bun run test:smoke-ui --build
 
+      - name: UI perf measurement (median of samples; reuses the smoke's web build)
+        env:
+          NUNCIO_SMOKE_CHROME_EXECUTABLE: ${{ steps.setup-chrome.outputs.chrome-path }}
+        run: bun run perf:ui
+
+      - name: Perf ratchet (UI smoothness budgets; report-only until a CI baseline is committed)
+        run: bun run check-perf-ratchet
+
       - name: Upload smoke artifacts (screenshots + trace)
         if: failure()
         uses: actions/upload-artifact@v4
