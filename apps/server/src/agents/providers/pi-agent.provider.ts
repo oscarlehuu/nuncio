@@ -38,6 +38,14 @@ import {
   ASK_USER_QUESTION_TOOL_NAME,
   buildAskUserQuestionTool,
 } from '../pi-engine/ask-user-question-tool';
+import {
+  buildDismissTaskTool,
+  buildSpawnTaskTool,
+  DISMISS_TASK_TOOL_NAME,
+  normalizeSpawnTaskInput,
+  spawnTaskRef,
+  SPAWN_TASK_TOOL_NAME,
+} from '../pi-engine/spawn-task-tool';
 import { normalizePlanItems } from '../../sessions/domain/plan.types';
 import { buildPiRuntimePolicyOptions } from './pi-runtime-policy';
 import {
@@ -145,6 +153,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     effortSwitch: 'in-session',
     images: true,
     steerWhileRunning: true,
+    spawnTask: true,
     modes: ['debug', 'multitask'],
     runtimePolicies: [
       { filesystem: 'read-only', network: 'disabled' },
@@ -686,6 +695,8 @@ export class PiAgentProvider extends BaseAgentProvider {
     const engineTools = [
       buildTodoTool(pi.defineTool as (tool: unknown) => unknown),
       buildAskUserQuestionTool(pi.defineTool as (tool: unknown) => unknown),
+      buildSpawnTaskTool(pi.defineTool as (tool: unknown) => unknown),
+      buildDismissTaskTool(pi.defineTool as (tool: unknown) => unknown),
       buildExternalMemoryTool({
         availableIds: (source) => exposedExternalIds[source],
         read: (source, id) => Promise.resolve(
@@ -707,6 +718,8 @@ export class PiAgentProvider extends BaseAgentProvider {
           ...(runtimeTools?.tools.map((tool) => tool.name) ?? []),
           TODO_TOOL_NAME,
           ASK_USER_QUESTION_TOOL_NAME,
+          SPAWN_TASK_TOOL_NAME,
+          DISMISS_TASK_TOOL_NAME,
           EXTERNAL_MEMORY_TOOL_NAME,
         ])]
       : undefined;
@@ -745,6 +758,8 @@ export class PiAgentProvider extends BaseAgentProvider {
     const userInputRequests = new Set<string>();
     /** todo_write calls surfaced as plan_updated — no tool_start/tool_end pair. */
     const planToolCalls = new Set<string>();
+    /** spawn_task/dismiss_task calls surfaced as chip events — no tool_start/tool_end pair. */
+    const spawnTaskCalls = new Set<string>();
 
     const resetThinking = () => {
       accumulatedThinking = '';
@@ -765,6 +780,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       openTools.clear();
       userInputRequests.clear();
       planToolCalls.clear();
+      spawnTaskCalls.clear();
     };
 
     const unsubscribe = session.subscribe((event: { type: string; [key: string]: unknown }) => {
@@ -816,6 +832,34 @@ export class PiAgentProvider extends BaseAgentProvider {
             return;
           }
         }
+        if (tool === SPAWN_TASK_TOOL_NAME) {
+          const normalized = normalizeSpawnTaskInput(event.args);
+          if ('value' in normalized) {
+            spawnTaskCalls.add(callId);
+            const { title, tldr, prompt, cwd } = normalized.value;
+            this.pushEvent(
+              sessionId,
+              'spawn_task_proposed',
+              { title, tldr, prompt, ...(cwd ? { cwd } : {}), ref: spawnTaskRef(title, prompt) },
+              currentEmit,
+            );
+            return;
+          }
+        }
+        if (tool === DISMISS_TASK_TOOL_NAME) {
+          const id = (event.args as { id?: unknown } | undefined)?.id;
+          const reason = (event.args as { reason?: unknown } | undefined)?.reason;
+          if (typeof id === 'string' && id.trim()) {
+            spawnTaskCalls.add(callId);
+            this.pushEvent(
+              sessionId,
+              'spawn_task_dismissed',
+              { id: id.trim(), ...(typeof reason === 'string' && reason.trim() ? { reason: reason.trim() } : {}) },
+              currentEmit,
+            );
+            return;
+          }
+        }
         openTools.set(callId, tool);
         const input = event.args !== undefined ? truncatePayload(event.args).value : undefined;
         this.pushEvent(
@@ -829,6 +873,7 @@ export class PiAgentProvider extends BaseAgentProvider {
         const callId = typeof event.toolCallId === 'string' ? event.toolCallId : undefined;
         if (callId && userInputRequests.delete(callId)) return;
         if (callId && planToolCalls.delete(callId)) return;
+        if (callId && spawnTaskCalls.delete(callId)) return;
         const tool = typeof event.toolName === 'string' ? event.toolName : 'unknown';
         if (callId) openTools.delete(callId);
         const output = event.result !== undefined ? truncatePayload(event.result).value : undefined;

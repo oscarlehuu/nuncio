@@ -19,6 +19,7 @@ export type AttentionKind =
   | 'pr-review'
   | 'pr-feedback'
   | 'dispatcher-proposal'
+  | 'spawn-task'
   | 'anomaly'
   | 'session-empty-diff'
   | 'loop-failing';
@@ -46,6 +47,7 @@ export const SEVERITY_BY_KIND: Readonly<Record<AttentionKind, number>> = {
   'pr-review': 2,
   'pr-feedback': 2,
   'dispatcher-proposal': 2,
+  'spawn-task': 2,
   anomaly: 1,
   'session-empty-diff': 1,
   'loop-failing': 1,

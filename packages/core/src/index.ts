@@ -1,5 +1,6 @@
 export * from './api';
 export * from './attention-api';
+export * from './chips-api';
 export * from './cursor-context';
 export * from './crew-api';
 export * from './crew-run-projection';

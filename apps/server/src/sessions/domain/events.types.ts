@@ -30,6 +30,8 @@ export type SessionEventType =
   | 'steer_queued'
   | 'steer_queue_cleared'
   | 'task_completed'
+  | 'spawn_task_proposed'
+  | 'spawn_task_dismissed'
   | 'interrupted';
 
 export type UserInputResolvedBy = 'user' | 'timeout' | 'skip' | 'provider';
