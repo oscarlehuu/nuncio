@@ -124,6 +124,12 @@ export function SubagentsPanel({
 
   if (tasks.length === 0) return null;
 
+  // Live "N working" summary (queued + running) — the coordinator footer from
+  // the multitask board; quiet until at least one child is still in flight.
+  const working = tasks.filter(
+    (task) => task.status === 'QUEUED' || task.status === 'RUNNING',
+  ).length;
+
   const runRowAction =
     (action: (id: string) => void | Promise<void>) => async (id: string) => {
       setBusyId(id);
@@ -161,6 +167,15 @@ export function SubagentsPanel({
         <GitBranch className="size-3" />
         <span className="font-medium">Subagents</span>
         <span className="text-muted-foreground/70">{tasks.length}</span>
+        {working > 0 && (
+          <span
+            data-testid="subagents-working-count"
+            className="ml-auto tabular-nums text-primary"
+            aria-label={`${working} working`}
+          >
+            {working} working
+          </span>
+        )}
       </div>
       <ul className="divide-y divide-border/30">
         {tasks.map((task) => (

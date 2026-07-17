@@ -173,10 +173,10 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 
 | | |
 |---|---|
-| **Web** | Composer multitask affordances; session `subagents-panel.tsx`, `subagent-row.tsx` |
-| **Settings** | Agents → subagent models |
-| **Server** | `tasks/` |
-| **Also check** | Session panel + Settings model overrides + create/steer multitask flag |
+| **Web** | Composer multitask affordances; session `subagents-panel.tsx` (live "N working" footer), `subagent-row.tsx`; parent transcript board via `transcript-blocks/task-digest-card.tsx` + lineage chips in `session-detail.tsx` |
+| **Settings** | Agents → subagent models; `NUNCIO_MULTITASK_MAX_SUBTASKS` (2–5 cap), `NUNCIO_MULTITASK_COUNTDOWN_SECONDS` (launch grace) |
+| **Server** | `tasks/` — `startMultitask` fan-out + `multitask-coordinator.service.ts` (decompose → announce → fan-out → wait on children), `multitask-board.ts` projection. A multitask-mode parent whose engine implements `AgentProvider.decompose` (capability-gated on `capabilities.modes`) runs a coordinating turn instead of a normal agent turn: RUNNING until every child settles or the parent detaches. An engine WITHOUT `decompose` falls back to a normal run with the multitask prompt overlay. |
+| **Also check** | Session panel + Settings model overrides + create-with-`mode: 'multitask'`; the `/multitask <prompt>` steer path still fans a single prompt out manually; child model must equal the parent's (no silent swap) |
 
 ### Session inspector dock
 

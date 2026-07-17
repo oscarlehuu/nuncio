@@ -7,6 +7,10 @@ import type {
 } from '../sessions/domain/sessions.types';
 import type { UserInputAnswer } from '../sessions/domain/user-input.types';
 import type { SessionMode } from '../sessions/domain/session-modes';
+import type {
+  MultitaskDecomposeInput,
+  MultitaskDecomposition,
+} from '../sessions/domain/multitask-decompose';
 import type { AgentRuntimeTools } from './tools/agent-runtime-tools.types';
 
 /**
@@ -176,4 +180,11 @@ export interface AgentProvider {
    * process is replaced (durable thread handle exists outside daemon memory).
    */
   canResumeThread?(session: SessionDto): boolean;
+  /**
+   * Split a multitask goal into independent subtasks (a structured-output step
+   * against this engine). Only engines that advertise the `multitask` mode and
+   * implement this are auto-fanned-out; a modes-capable engine WITHOUT it falls
+   * back to a normal run with the multitask prompt overlay.
+   */
+  decompose?(input: MultitaskDecomposeInput): Promise<MultitaskDecomposition>;
 }

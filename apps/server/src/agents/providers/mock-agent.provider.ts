@@ -2,6 +2,10 @@ import { Injectable } from '@nestjs/common';
 import type { ModelProviderDto } from '../../models/models.types';
 import { EventsRepository } from '../../sessions/persistence/events.repository';
 import { SessionsRepository } from '../../sessions/persistence/sessions.repository';
+import type {
+  MultitaskDecomposeInput,
+  MultitaskDecomposition,
+} from '../../sessions/domain/multitask-decompose';
 import type { AgentCapabilities, AgentRunContext } from '../agents.types';
 import { BaseAgentProvider } from '../agents.base-provider';
 import { isCrewRuntimeToolAllowed } from '../tools/agent-runtime-tools-policy';
@@ -52,6 +56,32 @@ export class MockAgentProvider extends BaseAgentProvider {
 
   async isAvailable(): Promise<boolean> {
     return true;
+  }
+
+  /**
+   * Deterministic 2-way split so the offline smoke can exercise the whole
+   * multitask decompose → fan-out path without a real model. Always two
+   * independent subtasks derived from the goal, regardless of the cap (cap only
+   * ever raises the ceiling; the floor is two).
+   */
+  async decompose(input: MultitaskDecomposeInput): Promise<MultitaskDecomposition> {
+    const goal = input.goal.trim() || 'the requested work';
+    const summary = goal.split('\n')[0]?.slice(0, 80) ?? goal;
+    return {
+      subtasks: [
+        {
+          scope: `First half of: ${summary}`,
+          prompt: `Multitask subtask 1 of 2 for "${goal}". Handle the first, independent half of the work.`,
+          files: [],
+        },
+        {
+          scope: `Second half of: ${summary}`,
+          prompt: `Multitask subtask 2 of 2 for "${goal}". Handle the second, independent half of the work.`,
+          files: [],
+        },
+      ],
+      nonOverlap: 'The two subtasks touch disjoint areas and can run in parallel without ordering.',
+    };
   }
 
   async listModels(): Promise<ModelProviderDto[]> {

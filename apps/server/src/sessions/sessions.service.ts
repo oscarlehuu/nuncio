@@ -47,6 +47,7 @@ import { PromptProfileService } from '../prompts/prompt-profile.service';
 import { PiLocalSessionsService } from '../pi-local/pi-local-sessions.service';
 import { canTransition } from './domain/sessions.fsm';
 import { assertModeSupported } from './domain/session-modes';
+import type { MultitaskCoordinator } from './domain/multitask-coordinator.types';
 import { deriveHasPendingInput } from './domain/derive-pending-input';
 import type { SessionEventType } from './domain/events.types';
 import type {
@@ -149,6 +150,9 @@ export class SessionsService implements OnModuleDestroy {
   private readonly crewStartAttempts = new Map<string, Set<CrewStartAttempt>>();
   private readonly crewQuiesceCounts = new Map<string, number>();
   private readonly drainingSteerQueues = new Set<string>();
+  // A multitask parent's coordinating turn runs here instead of a provider turn.
+  // Registered by TasksModule at boot (the session layer never imports Tasks).
+  private multitaskCoordinator: MultitaskCoordinator | null = null;
   // Verify-feedback loop settlement: resolves when the loop reaches a terminal
   // state (green verify / needs-attention / no-command). Task-lane consumers
   // await this instead of a bare awaitRun so they wait for the whole loop.
@@ -409,7 +413,15 @@ export class SessionsService implements OnModuleDestroy {
     if (worktreePath && projectPath) {
       this.materializeWorktreeContextFile(worktreePath, projectPath, profile?.contextFileName, session.id);
     }
-    void this.startRun(session, input.attachments);
+    // A multitask parent whose engine can decompose runs a coordinating turn
+    // (decompose → fan-out → wait on children) instead of a normal agent turn.
+    // A modes-capable engine WITHOUT decompose falls back to the normal run so
+    // its multitask overlay still applies (non-regressive).
+    if (session.mode === 'multitask' && provider.decompose && this.multitaskCoordinator) {
+      void this.startMultitaskRun(session);
+    } else {
+      void this.startRun(session, input.attachments);
+    }
     return this.enrichSession(session);
   }
 
@@ -2464,6 +2476,56 @@ export class SessionsService implements OnModuleDestroy {
   /** Resolves when the in-flight local run — including post-turn verification — settles. */
   awaitRun(id: string): Promise<void> {
     return this.runPromises.get(id) ?? Promise.resolve();
+  }
+
+  /** TasksModule registers the multitask coordinator at boot (one-way edge). */
+  registerMultitaskCoordinator(coordinator: MultitaskCoordinator): void {
+    this.multitaskCoordinator = coordinator;
+  }
+
+  /**
+   * A multitask parent's coordinating turn. Holds the parent in RUNNING while
+   * the coordinator decomposes the goal, fans children out, and waits for them
+   * to settle or the parent to detach — then lands IDLE. Mirrors startRun's
+   * run-promise + locallyProducing bookkeeping so awaitRun and shutdown behave.
+   * A coordination throw lands the parent in ERROR with a transcript note.
+   */
+  private startMultitaskRun(session: SessionDto): void {
+    const coordinator = this.multitaskCoordinator;
+    if (!coordinator) {
+      void this.startRun(session);
+      return;
+    }
+    this.locallyProducing.add(session.id);
+    const run = (async () => {
+      try {
+        this.transition(session.id, 'RUNNING');
+        await coordinator.coordinate(session, {
+          emitParentEvent: (type, payload) => {
+            this.appendOrchestrationEvent(session.id, type, payload);
+          },
+          parentDetached: () => this.sessions.findById(session.id)?.status !== 'RUNNING',
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.appendAndEmit(session.id, 'error', { message: `Multitask decomposition failed: ${message}` });
+        const current = this.sessions.findById(session.id);
+        if (current && canTransition(current.status, 'ERROR')) this.transition(session.id, 'ERROR');
+        return;
+      } finally {
+        this.locallyProducing.delete(session.id);
+      }
+      // Only settle to IDLE if we still own a RUNNING parent; a detach may have
+      // already moved it to PAUSED/ARCHIVED/ERROR, where IDLE is invalid.
+      if (this.sessions.findById(session.id)?.status === 'RUNNING') this.transition(session.id, 'IDLE');
+    })();
+    this.runPromises.set(session.id, run);
+    run
+      .catch(() => undefined)
+      .finally(() => {
+        this.settleVerify(session.id);
+        if (this.runPromises.get(session.id) === run) this.runPromises.delete(session.id);
+      });
   }
 
   private startRun(session: SessionDto, attachments?: AgentAttachment[]): void {
