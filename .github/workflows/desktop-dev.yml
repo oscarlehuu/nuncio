@@ -10,13 +10,19 @@ name: Desktop Dev
 # most once.
 #
 # Mechanism: this workflow is chained off the required workflows with `workflow_run`.
-# Each time a required workflow finishes on dev, the gate re-checks the conclusion of
-# every required workflow at that commit. Whichever check finishes last is the first
-# trigger to see all-green, so it publishes — there is no "who finished last" timestamp
-# compare that could tie and drop the publish. A commit that already shipped a dev
-# release is skipped, so re-running CI/smoke on a shipped commit is a no-op. Re-running
-# a failed CI to green re-fires the chain and publishes. The decision is a unit-tested
-# script (scripts/desktop-dev-gate.mjs), not inline bash.
+# Each time a required workflow finishes on dev, the gate (a unit-tested script,
+# scripts/desktop-dev-gate.mjs, not inline bash) re-checks every required workflow's
+# conclusion at that commit and publishes when all are green, subject to three guards:
+#   - never drop the last green commit: publish on any all-green, unshipped commit —
+#     whichever check finishes last is the first to see all-green, so there is no
+#     "who finished last" timestamp compare that a tie could deadlock.
+#   - exactly once: skip a commit that already has a dev release (draft = building, or
+#     published). The build re-checks this AGAIN after taking the publish slot, so two
+#     gates that both green-lit a commit before either published don't both build.
+#   - never go backward: refuse a commit that is behind the last shipped dev commit, so
+#     a late green on an old commit can't auto-update dev apps to older code.
+# Re-running a failed CI to green re-fires the chain and publishes. A GitHub API lookup
+# that keeps failing fails the gate job (retryable) instead of silently holding.
 #
 # Signing secrets stay isolated in the reusable build workflow — the gate only reads
 # check conclusions and releases with the default token, and only the build job touches

@@ -37,6 +37,20 @@ jobs:
         id: sha
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      # Post-slot idempotency re-check (dev only). This runs AFTER the caller's
+      # `desktop-dev-publish` concurrency slot is acquired, so if two gate jobs both
+      # green-lit the same commit before either publish landed, the second build finds
+      # the first's release here and skips — no duplicate build or re-notarization.
+      - name: Re-check whether this commit already has a dev release
+        id: idem
+        if: inputs.channel == 'dev'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MODE: idempotency
+          REPO: ${{ github.repository }}
+          SHA: ${{ steps.sha.outputs.sha }}
+        run: node scripts/desktop-dev-gate.mjs
+
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
@@ -62,6 +76,7 @@ jobs:
           echo "Building Nuncio (${{ inputs.channel }}) ${{ steps.ver.outputs.version }}"
 
       - name: Import Developer ID certificate into a temporary keychain
+        if: steps.idem.outputs.shipped != 'true'
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
@@ -80,6 +95,7 @@ jobs:
           echo "SIGN_KEYCHAIN=$KC" >> "$GITHUB_ENV"
 
       - name: Write App Store Connect API key
+        if: steps.idem.outputs.shipped != 'true'
         run: printf '%s' "${{ secrets.APPLE_API_KEY_P8 }}" > "$RUNNER_TEMP/authkey.p8"
 
       # Pre-create the release so electron-builder only uploads assets to it. Letting
@@ -89,6 +105,7 @@ jobs:
       # installed app's update check 404 for the whole build window, so both dev
       # and stable releases go live only after all assets are attached.
       - name: Ensure the GitHub release exists (draft until assets upload)
+        if: steps.idem.outputs.shipped != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -121,6 +138,7 @@ jobs:
           fi
 
       - name: Build, sign, notarize, publish
+        if: steps.idem.outputs.shipped != 'true'
         working-directory: apps/desktop
         env:
           NUNCIO_CHANNEL: ${{ inputs.channel }}
@@ -139,6 +157,7 @@ jobs:
       # release instead of a 404. The isDraft guard means an already-published
       # release is never PATCHed again on a manual retry.
       - name: Publish the release
+        if: steps.idem.outputs.shipped != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
