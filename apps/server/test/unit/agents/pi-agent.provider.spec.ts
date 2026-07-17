@@ -211,6 +211,7 @@ describe('PiAgentProvider', () => {
       images: true,
       steerWhileRunning: true,
       spawnTask: true,
+      reproduceGate: true,
       modes: ['debug', 'multitask'],
       runtimePolicies: [
         { filesystem: 'read-only', network: 'disabled' },

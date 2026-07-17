@@ -30,6 +30,7 @@ import { deriveVerifyStatus } from '../lib/derive-verify-status';
 import { VerifyChip } from './verify-chip';
 import { SessionModeChip } from './session-mode-picker';
 import { SessionChipRow } from './session-chip-row';
+import { SessionReproduceGate } from './session-reproduce-gate';
 import { projectDisplayName } from '../lib/projects';
 import {
   FALLBACK_PROVIDERS,
@@ -297,6 +298,11 @@ export function SessionDetail({
       events.filter(
         (event) => event.type === 'spawn_task_proposed' || event.type === 'spawn_task_dismissed',
       ).length,
+    [events],
+  );
+  // Re-fetch the reproduction gate the instant the agent requests reproduction.
+  const reproduceEventCount = useMemo(
+    () => events.filter((event) => event.type === 'reproduce_requested').length,
     [events],
   );
   const pendingQueued = useMemo(() => derivePendingQueuedSteers(events), [events]);
@@ -890,6 +896,13 @@ export function SessionDetail({
             steers={pendingQueued}
             starting={startingMultitask}
             onStartMultitasking={handleStartMultitasking}
+          />
+        </div>
+        <div className="max-w-[760px] mx-auto w-full">
+          <SessionReproduceGate
+            sessionId={session.id}
+            refreshKey={reproduceEventCount}
+            onResumed={() => composerRef.current?.focus()}
           />
         </div>
         <SessionChipRow

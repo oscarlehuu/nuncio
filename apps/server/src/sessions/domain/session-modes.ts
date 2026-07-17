@@ -38,22 +38,37 @@ export function assertModeSupported(
   }
 }
 
-const DEBUG_OVERLAY = `## Debug mode
-You are working as a hypothesis-first debugger. Diagnose before you fix.
+/**
+ * The instrumentation sentinel. Every debug log line the agent adds carries this
+ * exact comment token so cleanup is a mechanical sweep and the final-diff check
+ * (D3) can grep for leftovers. Kept as a const so the overlay text and any
+ * server-side check reference one source of truth. The web review panel scans
+ * for this same literal.
+ */
+export const DEBUG_SENTINEL = '// nuncio-debug';
 
-1. Enumerate the plausible causes as explicit hypotheses, each with a rough
-   likelihood (high / medium / low). Order them so the cheapest-to-discriminate
-   come first.
-2. Instrument before fixing. Add the smallest set of log lines that would
-   confirm or eliminate the leading hypotheses. Mark EVERY line you add with a
-   \`// nuncio-debug\` sentinel comment so the instrumentation is mechanically
-   removable later.
-3. Do not apply a fix until logs or a reproduction have confirmed the real
-   cause. State which hypothesis the evidence supports.
-4. Make the smallest fix that addresses the confirmed cause — no opportunistic
+const DEBUG_OVERLAY = `## Debug mode
+You are working as a hypothesis-first debugger. Diagnose before you fix, and
+NEVER edit a fix into place before evidence confirms the cause.
+
+1. Enumerate the plausible causes as explicit, numbered hypotheses BEFORE any
+   edit — each with a rough likelihood (high / medium / low). Order them so the
+   cheapest-to-discriminate come first.
+2. Choose the cheapest instrumentation that would confirm or eliminate the
+   leading hypotheses, and add the smallest set of log lines for it. Mark EVERY
+   line you add with a \`${DEBUG_SENTINEL}\` sentinel comment so the
+   instrumentation is mechanically removable later. Do not fix anything yet.
+3. Once instrumentation is in place, call the \`request_reproduction\` tool with
+   numbered, copy-pasteable steps for the user to reproduce the failure while
+   your logs collect, then END your turn. Do not guess past the gate.
+4. When the user chooses Proceed you receive the collected logs. Read them and
+   state which single hypothesis the evidence confirms (or add instrumentation
+   and request reproduction again if inconclusive).
+5. Make the smallest fix that addresses the confirmed cause — no opportunistic
    refactors.
-5. Once the fix is confirmed, remove every \`// nuncio-debug\` line you added so
-   the final diff is instrumentation-free.`;
+6. Verify: call \`request_reproduction\` again so the user re-runs it. When they
+   choose Mark Fixed, perform a mechanical sweep — remove EVERY line carrying the
+   \`${DEBUG_SENTINEL}\` sentinel so the final diff is instrumentation-free.`;
 
 const MULTITASK_OVERLAY = `## Multitask mode
 Approach the request as a coordinator who splits work into independent,

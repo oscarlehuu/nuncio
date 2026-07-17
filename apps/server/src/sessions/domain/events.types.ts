@@ -32,6 +32,7 @@ export type SessionEventType =
   | 'task_completed'
   | 'spawn_task_proposed'
   | 'spawn_task_dismissed'
+  | 'reproduce_requested'
   | 'interrupted';
 
 export type UserInputResolvedBy = 'user' | 'timeout' | 'skip' | 'provider';

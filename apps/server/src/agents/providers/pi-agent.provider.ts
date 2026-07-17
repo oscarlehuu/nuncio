@@ -46,6 +46,12 @@ import {
   spawnTaskRef,
   SPAWN_TASK_TOOL_NAME,
 } from '../pi-engine/spawn-task-tool';
+import {
+  buildRequestReproductionTool,
+  normalizeReproductionInput,
+  reproductionGateRef,
+  REQUEST_REPRODUCTION_TOOL_NAME,
+} from '../pi-engine/request-reproduction-tool';
 import { normalizePlanItems } from '../../sessions/domain/plan.types';
 import { buildPiRuntimePolicyOptions } from './pi-runtime-policy';
 import {
@@ -154,6 +160,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     images: true,
     steerWhileRunning: true,
     spawnTask: true,
+    reproduceGate: true,
     modes: ['debug', 'multitask'],
     runtimePolicies: [
       { filesystem: 'read-only', network: 'disabled' },
@@ -697,6 +704,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       buildAskUserQuestionTool(pi.defineTool as (tool: unknown) => unknown),
       buildSpawnTaskTool(pi.defineTool as (tool: unknown) => unknown),
       buildDismissTaskTool(pi.defineTool as (tool: unknown) => unknown),
+      buildRequestReproductionTool(pi.defineTool as (tool: unknown) => unknown),
       buildExternalMemoryTool({
         availableIds: (source) => exposedExternalIds[source],
         read: (source, id) => Promise.resolve(
@@ -720,6 +728,7 @@ export class PiAgentProvider extends BaseAgentProvider {
           ASK_USER_QUESTION_TOOL_NAME,
           SPAWN_TASK_TOOL_NAME,
           DISMISS_TASK_TOOL_NAME,
+          REQUEST_REPRODUCTION_TOOL_NAME,
           EXTERNAL_MEMORY_TOOL_NAME,
         ])]
       : undefined;
@@ -758,7 +767,10 @@ export class PiAgentProvider extends BaseAgentProvider {
     const userInputRequests = new Set<string>();
     /** todo_write calls surfaced as plan_updated — no tool_start/tool_end pair. */
     const planToolCalls = new Set<string>();
-    /** spawn_task/dismiss_task calls surfaced as chip events — no tool_start/tool_end pair. */
+    /**
+     * Engine tool-calls surfaced as their own session event (spawn-task chips,
+     * the reproduce gate) rather than a generic tool_start/tool_end pair.
+     */
     const spawnTaskCalls = new Set<string>();
 
     const resetThinking = () => {
@@ -855,6 +867,24 @@ export class PiAgentProvider extends BaseAgentProvider {
               sessionId,
               'spawn_task_dismissed',
               { id: id.trim(), ...(typeof reason === 'string' && reason.trim() ? { reason: reason.trim() } : {}) },
+              currentEmit,
+            );
+            return;
+          }
+        }
+        if (tool === REQUEST_REPRODUCTION_TOOL_NAME) {
+          const normalized = normalizeReproductionInput(event.args);
+          if ('value' in normalized) {
+            spawnTaskCalls.add(callId);
+            const { steps, logsHint } = normalized.value;
+            this.pushEvent(
+              sessionId,
+              'reproduce_requested',
+              {
+                steps,
+                ...(logsHint ? { logsHint } : {}),
+                ref: reproductionGateRef(sessionId, callId),
+              },
               currentEmit,
             );
             return;

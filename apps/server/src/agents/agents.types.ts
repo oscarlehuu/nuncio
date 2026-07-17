@@ -37,6 +37,14 @@ export interface AgentCapabilities {
    * the chip service rejects proposals from a session on such an engine.
    */
   spawnTask?: boolean;
+  /**
+   * Whether the engine can pause a debug run into a structured reproduction gate
+   * (the `request_reproduction` tool → `reproduce_requested` event). Absent = no
+   * gate support; the reproduce service rejects gates from a session on such an
+   * engine. Distinct from `modes` so an engine can carry the debug overlay
+   * without the interactive human-in-the-loop pause.
+   */
+  reproduceGate?: boolean;
   /** Session modes this engine implements (debug/multitask). Absent = no mode support. */
   modes?: readonly SessionMode[];
   /** Explicit per-session policies this adapter enforces without relying on prompt instructions. */

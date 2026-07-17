@@ -68,6 +68,8 @@ describe('session-modes', () => {
       expect(overlay.toLowerCase()).toContain('remove');
       // Never fix before evidence.
       expect(overlay.toLowerCase()).toContain('confirm');
+      // D1: the protocol routes diagnosis through the reproduction gate.
+      expect(overlay).toContain('request_reproduction');
     });
 
     it('multitask overlay frames a decompose-into-parallel-subtasks split', () => {

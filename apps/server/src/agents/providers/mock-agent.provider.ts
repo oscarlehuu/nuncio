@@ -9,6 +9,7 @@ import type {
 import type { AgentCapabilities, AgentRunContext } from '../agents.types';
 import { BaseAgentProvider } from '../agents.base-provider';
 import { spawnTaskRef } from '../pi-engine/spawn-task-tool';
+import { reproductionGateRef } from '../pi-engine/request-reproduction-tool';
 import { isCrewRuntimeToolAllowed } from '../tools/agent-runtime-tools-policy';
 import {
   normalizeAgentRuntimeToolResult,
@@ -41,6 +42,8 @@ export class MockAgentProvider extends BaseAgentProvider {
     steerWhileRunning: false,
     // The smoke drives the spawn-task chip flow against this offline engine.
     spawnTask: true,
+    // The smoke drives the debug reproduction gate against this offline engine.
+    reproduceGate: true,
     // Modes are accepted + persisted so the zero-credential smoke can drive the
     // composer's mode picker; the overlay itself is a Pi-side implementation.
     modes: ['debug', 'multitask'],
@@ -135,7 +138,34 @@ export class MockAgentProvider extends BaseAgentProvider {
     if (!isSteer && wantsSpawnChip(userText)) {
       this.emitMockSpawnChip(sessionId, context);
     }
+    if (!isSteer && wantsReproduceGate(userText)) {
+      this.emitMockReproduceGate(sessionId, context);
+    }
     await submitMockCrewResult(context);
+  }
+
+  /**
+   * Deterministic reproduction gate so the offline smoke can drive the whole
+   * request → gate → Proceed/Mark-Fixed flow without a real model. The turn ends
+   * after emitting it, so the session goes IDLE and the gate's actions can steer
+   * it back into a run. Only fires on the marker so it never pollutes other
+   * Mock-driven smokes.
+   */
+  private emitMockReproduceGate(sessionId: string, context: AgentRunContext): void {
+    this.pushEvent(
+      sessionId,
+      'reproduce_requested',
+      {
+        steps: [
+          'From the worktree root, run: NUNCIO_SMOKE_DEBUG_FAIL=signal bun run test:smoke-ui',
+          'When it exits, note any Chrome/server PIDs still alive (ps -p <pid>).',
+          'Press Proceed when the logs are captured, or Mark Fixed once the bug is gone.',
+        ],
+        logsHint: 'Watch stderr for the "// nuncio-debug" NDJSON lines the instrumentation prints.',
+        ref: reproductionGateRef(sessionId, 'mock-1'),
+      },
+      context.emit,
+    );
   }
 
   /**
@@ -164,6 +194,11 @@ export class MockAgentProvider extends BaseAgentProvider {
 /** The offline smoke asks for a chip with this marker; real prompts never carry it. */
 function wantsSpawnChip(userText: string): boolean {
   return /\bspawn-chip\b/i.test(userText);
+}
+
+/** The offline smoke asks for a reproduction gate with this marker. */
+function wantsReproduceGate(userText: string): boolean {
+  return /\breproduce-gate\b/i.test(userText);
 }
 
 async function submitMockCrewResult(context: AgentRunContext): Promise<void> {

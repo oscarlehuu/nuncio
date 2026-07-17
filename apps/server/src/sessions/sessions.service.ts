@@ -49,6 +49,7 @@ import { canTransition } from './domain/sessions.fsm';
 import { assertModeSupported } from './domain/session-modes';
 import type { MultitaskCoordinator } from './domain/multitask-coordinator.types';
 import type { SpawnTaskEventHandler } from '../chips/chips.types';
+import type { ReproduceEventHandler } from '../reproduce/reproduce.types';
 import { deriveHasPendingInput } from './domain/derive-pending-input';
 import type { SessionEventType } from './domain/events.types';
 import type {
@@ -155,6 +156,7 @@ export class SessionsService implements OnModuleDestroy {
   // Registered by TasksModule at boot (the session layer never imports Tasks).
   private multitaskCoordinator: MultitaskCoordinator | null = null;
   private chipHandler: SpawnTaskEventHandler | null = null;
+  private reproduceHandler: ReproduceEventHandler | null = null;
   // Verify-feedback loop settlement: resolves when the loop reaches a terminal
   // state (green verify / needs-attention / no-command). Task-lane consumers
   // await this instead of a bare awaitRun so they wait for the whole loop.
@@ -2370,6 +2372,13 @@ export class SessionsService implements OnModuleDestroy {
         // A chip side-effect must never break the session's event fan-out.
       }
     }
+    if (event.type === 'reproduce_requested') {
+      try {
+        this.reproduceHandler?.onReproduceEvent(id, event);
+      } catch {
+        // A reproduction-gate side-effect must never break the event fan-out.
+      }
+    }
     if (event.type !== 'status') return;
     const status = (event.payload as { status?: SessionStatus } | null)?.status;
     if (status !== 'IDLE' && status !== 'ERROR') return;
@@ -2508,6 +2517,16 @@ export class SessionsService implements OnModuleDestroy {
    */
   registerChipHandler(handler: SpawnTaskEventHandler): void {
     this.chipHandler = handler;
+  }
+
+  /**
+   * Register the reproduction-gate handler (ReproduceService). onAgentEvent
+   * forwards `reproduce_requested` provider events to it so the session layer
+   * never imports the reproduce module — a one-directional edge like the chips
+   * handler.
+   */
+  registerReproduceHandler(handler: ReproduceEventHandler): void {
+    this.reproduceHandler = handler;
   }
 
   /**
