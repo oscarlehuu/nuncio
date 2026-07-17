@@ -180,6 +180,8 @@ export class SessionsService implements OnModuleDestroy {
     }
   >();
   private stalledRunForceIdleMs = resolveStalledRunForceIdleMs();
+  /** Backoff before re-attempting a stalled-run recovery step after a transient failure. */
+  private readonly stalledRunRetryMs = 250;
 
   constructor(
     private readonly sessions: SessionsRepository,
@@ -2389,6 +2391,16 @@ export class SessionsService implements OnModuleDestroy {
     this.stalledRunTimers.delete(id);
   }
 
+  /**
+   * Single scheduling point for stalled-run recovery retries. Isolated behind
+   * one method so the retry can be driven deterministically instead of racing a
+   * wall-clock timer; by default the step re-runs on a fixed backoff.
+   */
+  private scheduleStalledRunRetry(id: string, run: () => void): void {
+    const timer = setTimeout(run, this.stalledRunRetryMs);
+    this.stalledRunTimers.set(id, timer);
+  }
+
   private forceIdleStalledRun(id: string): void {
     this.stalledRunTimers.delete(id);
     if (this.destroyed) return;
@@ -2403,8 +2415,7 @@ export class SessionsService implements OnModuleDestroy {
     } catch (error) {
       if (error instanceof RetainedEventFlushError) {
         // Keep the accepted tail before the eventual runtime_stalled/status rows.
-        const retry = setTimeout(() => this.forceIdleStalledRun(id), 250);
-        this.stalledRunTimers.set(id, retry);
+        this.scheduleStalledRunRetry(id, () => this.forceIdleStalledRun(id));
         return;
       }
       // Permanent adapter teardown failures must not hot-loop or wedge RUNNING.
@@ -2432,8 +2443,7 @@ export class SessionsService implements OnModuleDestroy {
       current = null;
     }
     if (!current) {
-      const retry = setTimeout(() => this.finishStalledRunTransition(id), 250);
-      this.stalledRunTimers.set(id, retry);
+      this.scheduleStalledRunRetry(id, () => this.finishStalledRunTransition(id));
       return;
     }
     if (current.status !== 'RUNNING') return;
@@ -2442,8 +2452,7 @@ export class SessionsService implements OnModuleDestroy {
     } catch {
       // runtime_stalled is already durable; retry only the atomic transition to
       // avoid both a zombie RUNNING row and duplicate recovery annotations.
-      const retry = setTimeout(() => this.finishStalledRunTransition(id), 250);
-      this.stalledRunTimers.set(id, retry);
+      this.scheduleStalledRunRetry(id, () => this.finishStalledRunTransition(id));
     }
   }
 
