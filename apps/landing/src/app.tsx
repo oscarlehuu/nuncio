@@ -1,5 +1,6 @@
 import { AnthropicLogo, OpenAILogo, GeminiLogo, CursorLogo } from './components/logos';
 import { ChangelogSection } from './components/changelog-section';
+import { InteractiveDemo } from './components/interactive-demo';
 
 const REPO_URL = 'https://github.com/oscarlehuu/nuncio';
 
@@ -14,6 +15,7 @@ export function App() {
     <>
       <Nav />
       <Hero />
+      <ProductShots />
       <HowItWorks />
       <SelfHosted />
       <MobilePWA />
@@ -37,6 +39,7 @@ function Nav() {
           nuncio
         </a>
         <div className="nav-links">
+          <a href="#demo">Demo</a>
           <a href="#how-it-works">How it works</a>
           <a href="#selfhosted">Self-hosted</a>
           <a href="#changelog">Changelog</a>
@@ -66,95 +69,166 @@ function Hero() {
           <a className="btn btn-primary btn-mono" href={REPO_URL}>
             Star on GitHub →
           </a>
+          <a className="btn btn-ghost btn-mono" href="#demo">
+            Try the demo ↓
+          </a>
         </div>
       </div>
-      <div className="wrap">
-        <div className="diptych">
-          {/* LEFT: phone */}
-          <div className="pane">
-            <div className="pane-h">
-              <span>nuncio</span>
-              <span className="where">iphone · café</span>
-            </div>
-            <div className="pane-body">
-              <div className="ph-session">
-                <div className="top">
-                  <span className="t">Fix empty-array edge case</span>
-                  <span className="row-status">
-                    <span className="sd run" />
-                    <span className="live-tag">RUN</span>
-                  </span>
-                </div>
-                <div className="meta">cursor:composer-2 · 14m</div>
-              </div>
-              <div className="ph-session">
-                <div className="top">
-                  <span className="t">Refactor auth module</span>
-                  <span className="row-status">
-                    <span className="sd" />
-                    IDLE
-                  </span>
-                </div>
-                <div className="meta">pi:claude-sonnet-4 · 2h</div>
-              </div>
-              <div className="ph-session">
-                <div className="top">
-                  <span className="t">Add landing page</span>
-                  <span className="row-status">
-                    <span className="sd" />
-                    ARCH
-                  </span>
-                </div>
-                <div className="meta">cursor:composer-2 · yest</div>
-              </div>
-              <div className="ph-steer">
-                <span>also handle empty array…</span>
-                <span className="arr">↵</span>
-              </div>
-            </div>
-            <div className="pane-foot">you · out and about</div>
+      <div className="wrap" id="demo">
+        <div className="demo-wrap">
+          <div className="demo-lead">
+            <span className="demo-eyebrow">Live demo</span>
+            <span className="demo-note">
+              Runs entirely in your browser — pick a task, watch it stream, then steer it. Nothing is
+              sent anywhere.
+            </span>
           </div>
-
-          {/* connecting tailnet */}
-          <div className="tailnet">
-            <span className="tailnet-tag">tailnet</span>
-          </div>
-
-          {/* RIGHT: mac */}
-          <div className="pane">
-            <div className="pane-h">
-              <span>nuncio</span>
-              <span className="where">mac mini · home</span>
-            </div>
-            <div className="pane-body">
-              <div className="mc-line">
-                <span className="row-status">
-                  <span className="sd run" />
-                  <span className="live-tag">RUNNING</span>{' '}
-                  <span style={{ color: 'var(--fg-faint)' }}>· composer-2</span>
-                </span>
-              </div>
-              <div className="mc-line" style={{ marginTop: '14px' }}>
-                <span className="pre">›</span>editing src/parse.ts
-              </div>
-              <div className="mc-line mc-add">
-                <span className="pre">+</span>if (arr.length === 0) return [];
-              </div>
-              <div className="mc-line mc-del">
-                <span className="pre">−</span>return arr.map(parse);
-              </div>
-              <div className="mc-line mc-add">
-                <span className="pre">+</span>return arr.length ? arr.map(parse) : [];
-              </div>
-              <div className="mc-line mc-stream" style={{ marginTop: '8px' }}>
-                running tests…
-              </div>
-            </div>
-            <div className="pane-foot">always-on · your machine</div>
-          </div>
+          <InteractiveDemo />
         </div>
       </div>
     </header>
+  );
+}
+
+/* ============ Real product screenshots ============ */
+function ProductShots() {
+  return (
+    <section id="product">
+      <div className="wrap">
+        <div className="eyebrow">The actual app — not a mockup</div>
+        <h2>A real workbench for your background agents.</h2>
+        <div className="shots">
+          <figure className="shot shot-wide">
+            <div className="shot-frame">
+              <img
+                src="shots/session-dark.png"
+                alt="A Nuncio session transcript: thinking, tool calls, a diff, and a passing test suite"
+                loading="lazy"
+              />
+            </div>
+            <figcaption>
+              <b>Session transcript.</b> Thinking, tool calls, diffs and test results — streamed live,
+              replayable from any point.
+            </figcaption>
+          </figure>
+          <figure className="shot">
+            <div className="shot-frame">
+              <img
+                src="shots/workbench-dark.png"
+                alt="The Nuncio workbench grid running multiple agent sessions at once"
+                loading="lazy"
+              />
+            </div>
+            <figcaption>
+              <b>Workbench grid.</b> Run several agents side by side — 1×1 up to 3×2.
+            </figcaption>
+          </figure>
+          <figure className="shot">
+            <div className="shot-frame">
+              <img
+                src="shots/inspector-light.png"
+                alt="The Nuncio inspector panel showing source control, changes and pull request actions"
+                loading="lazy"
+              />
+            </div>
+            <figcaption>
+              <b>Source-control inspector.</b> Review changes, push, and open a PR without leaving the
+              session. Light or dark.
+            </figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* Phone → tailnet → Mac: the self-hosted, drive-from-anywhere story. */
+function HomeBaseDiptych() {
+  return (
+    <div className="diptych">
+      {/* LEFT: phone */}
+      <div className="pane">
+        <div className="pane-h">
+          <span>nuncio</span>
+          <span className="where">iphone · café</span>
+        </div>
+        <div className="pane-body">
+          <div className="ph-session">
+            <div className="top">
+              <span className="t">Fix empty-array edge case</span>
+              <span className="row-status">
+                <span className="sd run" />
+                <span className="live-tag">RUN</span>
+              </span>
+            </div>
+            <div className="meta">cursor:composer-2 · 14m</div>
+          </div>
+          <div className="ph-session">
+            <div className="top">
+              <span className="t">Refactor auth module</span>
+              <span className="row-status">
+                <span className="sd" />
+                IDLE
+              </span>
+            </div>
+            <div className="meta">pi:claude-sonnet-4 · 2h</div>
+          </div>
+          <div className="ph-session">
+            <div className="top">
+              <span className="t">Add landing page</span>
+              <span className="row-status">
+                <span className="sd" />
+                ARCH
+              </span>
+            </div>
+            <div className="meta">cursor:composer-2 · yest</div>
+          </div>
+          <div className="ph-steer">
+            <span>also handle empty array…</span>
+            <span className="arr">↵</span>
+          </div>
+        </div>
+        <div className="pane-foot">you · out and about</div>
+      </div>
+
+      {/* connecting tailnet */}
+      <div className="tailnet">
+        <span className="tailnet-tag">tailnet</span>
+      </div>
+
+      {/* RIGHT: mac */}
+      <div className="pane">
+        <div className="pane-h">
+          <span>nuncio</span>
+          <span className="where">mac mini · home</span>
+        </div>
+        <div className="pane-body">
+          <div className="mc-line">
+            <span className="row-status">
+              <span className="sd run" />
+              <span className="live-tag">RUNNING</span>{' '}
+              <span style={{ color: 'var(--fg-faint)' }}>· composer-2</span>
+            </span>
+          </div>
+          <div className="mc-line" style={{ marginTop: '14px' }}>
+            <span className="pre">›</span>editing src/parse.ts
+          </div>
+          <div className="mc-line mc-add">
+            <span className="pre">+</span>if (arr.length === 0) return [];
+          </div>
+          <div className="mc-line mc-del">
+            <span className="pre">−</span>return arr.map(parse);
+          </div>
+          <div className="mc-line mc-add">
+            <span className="pre">+</span>return arr.length ? arr.map(parse) : [];
+          </div>
+          <div className="mc-line mc-stream" style={{ marginTop: '8px' }}>
+            running tests…
+          </div>
+        </div>
+        <div className="pane-foot">always-on · your machine</div>
+      </div>
+    </div>
   );
 }
 
@@ -268,6 +342,7 @@ function SelfHosted() {
       <div className="wrap">
         <div className="eyebrow">Your data stays yours</div>
         <h2>Nothing leaves your tailnet.</h2>
+        <HomeBaseDiptych />
         <div className="pillars">
           <div className="pillar">
             <h3>Local-first</h3>
