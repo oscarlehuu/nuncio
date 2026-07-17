@@ -30,7 +30,7 @@ is the pre-promotion (dev→main) bar: everything in `gate` plus levels 2 (web u
 and 5 (real-browser smoke via `test:smoke-ui`). CI keeps these as separate steps for readable failure
 output — the gates are for local runs, not a CI replacement.
 
-**Ratchet gates (CI).** Two baseline-diff gates run on every PR; both fail only on *new* debt:
+**Ratchet gates (CI).** Three baseline-diff gates run on every PR; each fails only on *new* debt:
 
 - **Dead code** — `bun run check-dead-code` runs knip over the monorepo and compares against
   `scripts/dead-code-baseline.json`. New unused files/exports/deps fail CI; existing findings are
@@ -40,6 +40,48 @@ output — the gates are for local runs, not a CI replacement.
   (produced by each package's `test:coverage`) and fails any target whose line coverage dropped
   below `scripts/coverage-baseline.json` minus the tolerance. When coverage improves, ratchet the
   floor up with `bun run check-coverage-ratchet:update`.
+- **UI smoothness** — `bun run check-perf-ratchet` fails any *gated* smoothness budget that got more
+  than 30% slower than `scripts/perf-baseline.json`. See the section below.
+
+### UI smoothness budgets (perf ratchet)
+
+`bun run perf:ui` rides the same hermetic stack as the level-5 smoke (isolated ephemeral-port
+daemon, `NUNCIO_FORCE_MOCK=1`, real system Chrome via playwright-core) and measures four things a
+user feels, each as the **median of ≥3 samples** (default 5) so one noisy frame can't move it:
+
+| Metric | What it measures | Gated? |
+|---|---|---|
+| `ttfdMs` | time-to-first-delta — send a steer → the reply's first chunk visible in the transcript | yes |
+| `scrollSweepMs` | forced-reflow sweep of a ~600-block seeded transcript — the O(n) layout cost the browser pays on any geometry change (streamed insert, resize, scroll-into-view) | yes |
+| `keyEchoMs` | composer keypress → the echoed character painted | yes |
+| `streamBlockingMs` | main-thread blocking (long-task time over 50 ms) while a reply streams | **report-only** |
+
+Everything is measured under a large seeded transcript (the scroll seam bulk-inserts events straight
+into the durable log via a second SQLite connection — `seedTranscript` in `scripts/lib/mock-session.mjs`
+— because driving hundreds of streamed turns would take minutes). `streamBlockingMs` is report-only,
+not gated: the mock stream is small enough that main-thread blocking is normally 0, so gating it would
+flap on a single incidental long task (GC, a CI hiccup) — it is printed as a regression signal for a
+human, not a pass/fail. Raw frame timing (fps) is deliberately **not** a metric: it is too noisy on a
+shared CI runner to gate honestly; the forced-reflow sweep is the stable proxy that scales with
+transcript length.
+
+**Two-step, like the coverage ratchet — measure, then check:**
+
+```bash
+bun run perf:ui              # writes scripts/perf-metrics.json (gitignored)
+bun run check-perf-ratchet   # gates the medians against scripts/perf-baseline.json
+```
+
+The gate is a **generous median-vs-baseline band**: a metric regresses only when its median climbs
+more than 30% above the committed baseline. When a change legitimately shifts a budget (or after a
+runner change), regenerate the baseline with `bun run perf:ui && bun run check-perf-ratchet:update`
+and commit `scripts/perf-baseline.json` — justify a *slower* baseline in the PR.
+
+**The baseline is CI-runner numbers, not a dev laptop.** A laptop is far faster than a GitHub-hosted
+Linux runner, so a laptop baseline would make CI fail. `check-perf-ratchet` therefore treats a
+**missing** baseline as a loud non-fatal bootstrap (prints the medians, exits 0) rather than a hard
+error: harvest the numbers from the first CI run's `perf:ui` step, commit them with `--update`, and
+the gate engages from the next run. A present-but-corrupt baseline is a hard error.
 
 **Failure evidence (CI).** The real-browser smoke records a Playwright trace for the whole run and
 saves it (plus a failure screenshot, both named for the failing `journey-step`) to

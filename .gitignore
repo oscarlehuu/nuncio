@@ -10,6 +10,10 @@
 # Real-browser smoke artifacts (screenshots + failure traces; CI uploads them)
 smoke-artifacts/
 
+# UI perf measurement output (regenerated per run; the committed gate reference
+# is scripts/perf-baseline.json)
+scripts/perf-metrics.json
+
 # OS
 .DS_Store
 Thumbs.db
