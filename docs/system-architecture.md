@@ -926,6 +926,27 @@ explicit unavailable result without launching Chrome or writing media; Simulator
 independent. Desktop server bundling keeps `playwright-core` external so Bun does not follow its
 runtime-only Chromium/BiDi modules into the packaged daemon bundle.
 
+## Desktop window state
+
+The Electron shell persists window geometry through `apps/desktop/src/window-state.js` at
+`<app.getPath('userData')>/window-state.json`. Dev and stable builds already use distinct app
+identities, so their shell state remains separate while session data continues to use the shared
+`NUNCIO_DATA_DIR`.
+
+- The file contains `{ bounds: { x, y, width, height }, maximized }`. Bounds always come from
+  `BrowserWindow.getNormalBounds()`, so maximizing, minimizing, or quitting while maximized never
+  replaces the usable normal rectangle with full-screen geometry. Minimized and fullscreen state
+  are intentionally not restored.
+- Every `createWindow()` loads the saved rectangle, asks Electron `screen.getDisplayMatching()`
+  for a current display, and clamps the rectangle to that display's `workArea`. Negative origins
+  remain valid for left/upper monitors; stale coordinates from a removed or rearranged display are
+  moved into the current work area before the window is constructed, then maximization is reapplied.
+- Move/resize writes are trailing-debounced. Maximize changes, close (including close-to-tray), and
+  `before-quit` flush synchronously using a temporary-file rename. Missing, corrupt, invalid, or
+  unwritable state is fail-soft and preserves the existing `1280x900` startup defaults.
+- Pure persistence/display tests live in `apps/desktop/test/window-state.test.js`; lifecycle wiring
+  is covered by the `main-dev-mode.test.js` Electron VM harness.
+
 ## Desktop server profiles (connect the shell to a remote nuncio)
 
 The Electron shell can load either its own local daemon or a saved remote nuncio server

@@ -14,6 +14,8 @@ async function runMain({
   onDaemonStart,
   appIsPackaged = false,
   resourcesPath = path.join(__dirname, 'missing-resources'),
+  userDataPath = null,
+  displays = [{ workArea: { x: 0, y: 0, width: 2560, height: 1440 } }],
 } = {}) {
   const state = {
     appHandlers: {},
@@ -42,6 +44,7 @@ async function runMain({
     logs: [],
     errors: [],
     externalOpens: [],
+    maximizeCalls: 0,
     quitCalls: 0,
     trays: [],
     singleInstanceLock,
@@ -98,6 +101,10 @@ async function runMain({
       state.appName = name;
       this.name = name;
     },
+    getPath(name) {
+      if (name === 'userData' && userDataPath) return userDataPath;
+      throw new Error(`Unavailable app path: ${name}`);
+    },
   };
 
   class FakeBrowserWindow {
@@ -109,6 +116,13 @@ async function runMain({
       this.shown = true;
       this.focused = false;
       this.minimized = false;
+      this.maximized = false;
+      this.normalBounds = {
+        x: options.x ?? 0,
+        y: options.y ?? 0,
+        width: options.width,
+        height: options.height,
+      };
       this.webContents = {
         handlers: webContentsHandlers,
         openDevTools: (options) => state.devToolsCalls.push(options),
@@ -127,11 +141,19 @@ async function runMain({
     }
 
     on(eventName, handler) {
-      this.handlers[eventName] = handler;
+      const listeners = this.handlers[eventName] ?? [];
+      listeners.push(handler);
+      this.handlers[eventName] = listeners;
+    }
+
+    removeListener(eventName, handler) {
+      this.handlers[eventName] = (this.handlers[eventName] ?? []).filter(
+        (listener) => listener !== handler,
+      );
     }
 
     emit(eventName, ...args) {
-      this.handlers[eventName]?.(...args);
+      for (const handler of this.handlers[eventName] ?? []) handler(...args);
     }
 
     loadURL(url) {
@@ -159,6 +181,20 @@ async function runMain({
 
     restore() {
       this.minimized = false;
+    }
+
+    maximize() {
+      this.maximized = true;
+      state.maximizeCalls += 1;
+      this.emit('maximize');
+    }
+
+    isMaximized() {
+      return this.maximized;
+    }
+
+    getNormalBounds() {
+      return { ...this.normalBounds };
     }
 
     setBrowserView(view) {
@@ -307,6 +343,29 @@ async function runMain({
               return { isEmpty: () => true, setTemplateImage() {} };
             },
           },
+          screen: {
+            getAllDisplays() {
+              return displays;
+            },
+            getDisplayMatching(bounds) {
+              const intersectionArea = (left, right) => {
+                const width = Math.max(
+                  0,
+                  Math.min(left.x + left.width, right.x + right.width) - Math.max(left.x, right.x),
+                );
+                const height = Math.max(
+                  0,
+                  Math.min(left.y + left.height, right.y + right.height) - Math.max(left.y, right.y),
+                );
+                return width * height;
+              };
+              return displays.reduce((best, display) =>
+                intersectionArea(bounds, display.workArea) > intersectionArea(bounds, best.workArea)
+                  ? display
+                  : best,
+              displays[0]);
+            },
+          },
           Menu: {
             buildFromTemplate: (template) => ({ template }),
             setApplicationMenu() {},
@@ -356,6 +415,9 @@ async function runMain({
         // Real module: pure + filesystem-defensive, safe inside the sandbox.
         return require(path.resolve(__dirname, '../src/shell-settings.js'));
       }
+      if (specifier === './window-state') {
+        return require(path.resolve(__dirname, '../src/window-state.js'));
+      }
       if (specifier === './updater') {
         return {
           initAutoUpdater() {},
@@ -376,6 +438,64 @@ async function runMain({
 }
 
 describe('desktop main dev-mode loading', () => {
+  test('restores saved normal bounds and maximized state on launch', async () => {
+    const userDataPath = fs.mkdtempSync(path.join(__dirname, 'window-state-'));
+    fs.writeFileSync(
+      path.join(userDataPath, 'window-state.json'),
+      JSON.stringify({
+        bounds: { x: 144, y: 92, width: 1110, height: 740 },
+        maximized: true,
+      }),
+    );
+
+    try {
+      const state = await runMain({
+        userDataPath,
+        fetchImpl: async () => ({ ok: false }),
+      });
+
+      expect(state.windows[0].options).toMatchObject({
+        x: 144,
+        y: 92,
+        width: 1110,
+        height: 740,
+        minWidth: 960,
+        minHeight: 640,
+      });
+      expect(state.maximizeCalls).toBe(1);
+    } finally {
+      fs.rmSync(userDataPath, { recursive: true, force: true });
+    }
+  });
+
+  test('re-homes saved bounds when their previous display no longer exists', async () => {
+    const userDataPath = fs.mkdtempSync(path.join(__dirname, 'window-state-display-'));
+    fs.writeFileSync(
+      path.join(userDataPath, 'window-state.json'),
+      JSON.stringify({
+        bounds: { x: 4000, y: 2000, width: 1100, height: 720 },
+        maximized: false,
+      }),
+    );
+
+    try {
+      const state = await runMain({
+        userDataPath,
+        displays: [{ workArea: { x: 0, y: 23, width: 1440, height: 877 } }],
+        fetchImpl: async () => ({ ok: false }),
+      });
+
+      expect(state.windows[0].options).toMatchObject({
+        x: 340,
+        y: 180,
+        width: 1100,
+        height: 720,
+      });
+    } finally {
+      fs.rmSync(userDataPath, { recursive: true, force: true });
+    }
+  });
+
   test('NUNCIO_DESKTOP_DEV=1 waits for the Vite dev server without starting the daemon', async () => {
     let fetchCalls = 0;
     const state = await runMain({
@@ -700,6 +820,37 @@ describe('desktop tray + close-to-tray + single instance', () => {
     expect(state.daemonStopCalls).toBe(0);
   });
 
+  test('closing to the tray flushes the latest normal window bounds first', async () => {
+    const userDataPath = fs.mkdtempSync(path.join(__dirname, 'window-state-close-'));
+    try {
+      const state = await runMain({
+        userDataPath,
+        fetchImpl: async () => ({ ok: false }),
+      });
+      const window = state.windows[0];
+      window.normalBounds = { x: 210, y: 130, width: 1160, height: 780 };
+      window.emit('move');
+
+      let prevented = false;
+      window.emit('close', {
+        preventDefault() {
+          prevented = true;
+        },
+      });
+
+      expect(prevented).toBe(true);
+      expect(window.shown).toBe(false);
+      const stateFile = path.join(userDataPath, 'window-state.json');
+      expect(fs.existsSync(stateFile)).toBe(true);
+      expect(JSON.parse(fs.readFileSync(stateFile, 'utf8'))).toEqual({
+        bounds: { x: 210, y: 130, width: 1160, height: 780 },
+        maximized: false,
+      });
+    } finally {
+      fs.rmSync(userDataPath, { recursive: true, force: true });
+    }
+  });
+
   test('window-all-closed does not quit while close-to-tray is on', async () => {
     const state = await runMain({ fetchImpl: async () => ({ ok: false }) });
     const before = state.quitCalls;
@@ -792,6 +943,36 @@ describe('desktop tray + close-to-tray + single instance', () => {
     // The window is allowed to close (not hidden), so the install proceeds.
     expect(prevented).toBe(false);
     expect(window.shown).toBe(true);
+  });
+
+  test('before-quit flushes pending bounds before asynchronous daemon shutdown', async () => {
+    const userDataPath = fs.mkdtempSync(path.join(__dirname, 'window-state-quit-'));
+    try {
+      const state = await runMain({
+        userDataPath,
+        fetchImpl: async () => ({ ok: false }),
+      });
+      state.windows[0].normalBounds = { x: 260, y: 170, width: 1210, height: 810 };
+      state.windows[0].emit('resize');
+
+      let prevented = false;
+      state.appHandlers['before-quit']({
+        preventDefault() {
+          prevented = true;
+        },
+      });
+
+      expect(prevented).toBe(true);
+      expect(JSON.parse(fs.readFileSync(
+        path.join(userDataPath, 'window-state.json'),
+        'utf8',
+      ))).toEqual({
+        bounds: { x: 260, y: 170, width: 1210, height: 810 },
+        maximized: false,
+      });
+    } finally {
+      fs.rmSync(userDataPath, { recursive: true, force: true });
+    }
   });
 
   test('second-instance during boot focuses the single real window without racing a second', async () => {

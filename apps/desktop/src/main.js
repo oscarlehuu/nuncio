@@ -8,12 +8,17 @@ const {
   Menu,
   nativeImage,
   Notification,
+  screen,
   shell,
   Tray,
 } = require('electron');
 const { DaemonSupervisor } = require('./daemon');
 const serverProfiles = require('./server-profiles');
 const shellSettings = require('./shell-settings');
+const {
+  manageWindowState,
+  restoreWindowState,
+} = require('./window-state');
 const { normalizeBrowserUrl } = require('./browser-url');
 const {
   buildPickerInstallScript,
@@ -58,6 +63,7 @@ const SERVER_RECONNECT_INTERVAL_MS = 1000;
 const EMBEDDED_BROWSER_PARTITION = 'persist:nuncio-browser';
 
 let mainWindow = null;
+let mainWindowStateManager = null;
 let serverReconnectTimer = null;
 let supervisor = null;
 let quittingAfterDaemonStop = false;
@@ -82,6 +88,7 @@ let activeEmbeddedBrowserId = null;
 // bar until an explicit Quit.
 let shellSettingsState = { closeToTray: true };
 let shellSettingsPath = null;
+let windowStatePath = null;
 
 // Server-connection state: the shell can load the local daemon or a saved
 // remote nuncio server. 'local' is always available as the fallback target.
@@ -94,9 +101,14 @@ let localServerUrl = null;
 let updater = null;
 
 function createWindow(url) {
+  const restoredState = restoreWindowState(
+    windowStatePath,
+    screen,
+    { width: 1280, height: 900 },
+    { minWidth: 960, minHeight: 640 },
+  );
   const win = new BrowserWindow({
-    width: 1280,
-    height: 900,
+    ...restoredState.bounds,
     minWidth: 960,
     minHeight: 640,
     webPreferences: {
@@ -106,6 +118,9 @@ function createWindow(url) {
     },
   });
   mainWindow = win;
+  const stateManager = manageWindowState(win, windowStatePath);
+  mainWindowStateManager = stateManager;
+  if (restoredState.maximized) win.maximize();
 
   // Closing to the tray keeps the local daemon running so paired phones stay
   // connected; the window is hidden, not destroyed. An explicit quit sets
@@ -120,13 +135,17 @@ function createWindow(url) {
   });
 
   win.on('closed', () => {
+    stateManager.dispose();
     destroyAllEmbeddedBrowsers();
     killAllTerminalPtys();
     clearTimeout(serverReconnectTimer);
     serverReconnectTimer = null;
     // Only clear the module ref if this is still the current window — a recreate
     // may already have pointed it at a newer one.
-    if (mainWindow === win) mainWindow = null;
+    if (mainWindow === win) {
+      mainWindow = null;
+      mainWindowStateManager = null;
+    }
   });
 
   // Escape hatch: a remote server that stops responding would leave the shell
@@ -177,6 +196,17 @@ function resolveShellSettingsPath() {
     }
   } catch {
     // userData unavailable (tests); settings stay in-memory.
+  }
+  return null;
+}
+
+function resolveWindowStatePath() {
+  try {
+    if (typeof app.getPath === 'function') {
+      return path.join(app.getPath('userData'), 'window-state.json');
+    }
+  } catch {
+    // userData unavailable (tests); window state stays in-memory.
   }
   return null;
 }
@@ -1036,6 +1066,7 @@ app.whenReady().then(async () => {
   serverProfilesState = serverProfiles.loadProfiles(serverProfilesPath);
   shellSettingsPath = resolveShellSettingsPath();
   shellSettingsState = shellSettings.loadSettings(shellSettingsPath);
+  windowStatePath = resolveWindowStatePath();
 
   // A packaged .app has no dev server and must never probe for one — it runs the
   // bundled server script with the Bun runtime shipped in Resources. The dev-server path stays for
@@ -1178,6 +1209,7 @@ app.on('before-quit', (event) => {
   // intercepting to the tray. This also covers the updater's install-on-quit
   // path, which triggers a normal app quit.
   quitting = true;
+  mainWindowStateManager?.flush();
   destroyAllEmbeddedBrowsers();
   killAllTerminalPtys();
 
