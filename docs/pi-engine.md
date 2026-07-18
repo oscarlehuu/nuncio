@@ -4,8 +4,9 @@
 `@earendil-works/pi-coding-agent` 0.80.6. **Step 0** (extension allowlist) shipped 2026-07-11;
 **Step 1** (`nuncio-context` injection) shipped on `dev`. **Multi-provider model catalog**
 (auth-truthful `ModelRegistry` groups) and **provider-neutral evidence capture** (headless Chrome
-screenshots bound to workspace HEAD) also shipped on `dev`. Step 2 (in-repo extension factories)
-remains planned.
+screenshots bound to workspace HEAD) also shipped on `dev`. **Extension rail + gate-integrity
+hook, diff-aware verify + evidence layers 2–3, and the recorded-session eval extractor** shipped
+2026-07-18. Step 2 (porting foreman/subagent into in-repo factories) remains planned.
 **Companions:** [Crew workspace harness](crew-workspace-harness.md),
 [CrewRun authority and state machine](crew-run-authority-and-state-machine.md).
 
@@ -17,10 +18,10 @@ Nuncio Engine claims the four questions above that loop:
 
 | Question | Today | Nuncio Engine seam |
 |---|---|---|
-| What does the agent **know**? | Pi default system prompt | `ResourceLoader.systemPrompt/appendSystemPrompt`, `before_agent_start` (per-turn replace) |
-| What can it **do**? | Pi generic tools + whatever `.pi/` discovery finds | `extensionFactories` + `registerTool` (nuncio tool belt) |
-| What is it **blocked from**? | nothing | `tool_call` handlers (verify gate, allowlists) |
-| What does it **remember**? | Pi default compaction | `session_before_compact` + exported compaction module |
+| What does the agent **know**? | `nuncio-context` facts + HandoffBrief + external memories | `ResourceLoader.systemPrompt/appendSystemPrompt`, `before_agent_start` (per-turn replace) |
+| What can it **do**? | engine tool belt (todo, AskUserQuestion, spawn_task, request_reproduction, read_external_memory, capture_evidence) | `extensionFactories` + `registerTool` (nuncio tool belt) |
+| What is it **blocked from**? | editing its own `.nuncio` verify gate (gate-integrity `tool_call` hook) | `tool_call` handlers on the `nuncio-engine` rail |
+| What does it **remember**? | Pi default compaction (still unclaimed) | `session_before_compact` + exported compaction module |
 
 Why Pi gets this treatment and Claude/Codex do not: Claude Agent SDK and Codex app-server are
 black-box vendor runtimes — Nuncio can only orchestrate their outer loop. Pi is the one runtime
@@ -131,25 +132,46 @@ this recipe; use `noContextFiles`/`agentsFilesOverride` if the personal file sho
   indexed item with a separate result cap. `PI_EXTERNAL_MEMORIES` gates each source and
   `PI_EXTERNAL_MEMORIES_MAX_BYTES` controls the index budget. Worktrees also match their owning
   repository path, and every filesystem read fails soft.
+- **Extension rail + first `tool_call` hook. DONE (2026-07-18).** Solo Engine sessions carry the
+  in-repo `nuncio-engine` inline extension (`apps/server/src/agents/pi-engine/engine-extension.ts`,
+  loaded via `extensionFactories`, so it holds under both allowlist and full discovery). Its first
+  hook is the **gate-integrity guard** (`gate-integrity.ts`, toggle `NUNCIO_ENGINE_GATE_GUARD`):
+  edit/write into any `.nuncio/` directory is blocked pre-execution (lexical + symlink-realpath
+  check), bash gets a best-effort advisory block, and the shared turn-diff classifier's
+  `gate-protected` class is the durable backstop. This claims the "blocked from" quadrant.
+- **Verify gate + evidence layers 2–3. DONE (2026-07-18), provider-neutral where possible.**
+  The done-gate is the session-layer post-turn verify loop (auto-steer, max rounds, futility stop),
+  now diff-aware: `sessions/diff/turn-diff-classifier.ts` fingerprints the workspace so a no-change
+  turn skips verify entirely, and `verify_start`/`verify_result` carry files/classes/fingerprint.
+  A green verify on a `ui`-classified turn auto-captures after-evidence (known target →
+  `NUNCIO_EVIDENCE_URL` fallback; fail-open). Solo Engine sessions also get the `capture_evidence`
+  tool over the layer-1 service.
+- **Eval mechanism (principle 4). DONE (2026-07-18).** `bun run eval:extract -- --session <id>`
+  folds a recorded real session (durable event log) into a replayable `eval/tasks/*.json` with a
+  `{ repo, baseSha }` pin; `eval:engines` clones the pinned SHA into a throwaway workspace and
+  replays it, folding recorded human steers into the prompt. Extraction is curation — review the
+  JSON (secrets, baseSha, verifyCommand) before committing.
 - **Step 2 — replace allowlisted paths with in-repo factories** once foreman/subagent are ported
-  from `~/.pi/agent/extensions/` into the repo; deny-by-default remains unchanged.
+  from `~/.pi/agent/extensions/` into the repo; deny-by-default remains unchanged. New in-repo
+  hooks now ride the shipped `nuncio-engine` rail.
 
 Extension roadmap after that, in order:
 
 1. `nuncio-tools` — tool belt over tasks/attention/artifacts/forge, building on the existing
    `AgentRuntimeTools`/`buildPiCustomTools` wiring.
-2. `verify-gate` — `tool_call` hook: UI-touching diffs cannot report done without green verify +
-   evidence (see below).
-3. Ported `foreman`/`subagent` (inner fan-out), custom compaction, `additionalSkillPaths`.
+2. Ported `foreman`/`subagent` (inner fan-out), custom compaction (`session_before_compact`),
+   `additionalSkillPaths`.
 
 Code layout: `apps/server/src/agents/pi-engine/` — one kebab-case file per extension, under ~200
 lines, independently disableable. `pi-agent.provider.ts` upgrades in place to build the loader.
 
 ## Evidence capture (before/after proof)
 
-**Status on `dev`:** layer 1 (provider-neutral capture service) shipped — see
-`apps/server/src/evidence/evidence-capture.service.ts` and the session evidence API. Layers 2–3
-(Engine tool belt + done gate) remain on the Engine roadmap below.
+**Status:** all three layers shipped. Layer 1 (provider-neutral capture service) — see
+`apps/server/src/evidence/evidence-capture.service.ts` and the session evidence API. Layer 2 —
+the `capture_evidence` engine tool (`pi-engine/capture-evidence-tool.ts`, solo sessions only).
+Layer 3 — the green-verify auto-capture in `SessionsService.captureVerifyEvidence` (ui-classified
+turns; known target → `NUNCIO_EVIDENCE_URL`; fail-open, never blocks the loop).
 
 Principle: **harness-guaranteed, not model-hoped.** Three layers; layer 1 is provider-neutral and
 ships independently of Nuncio Engine (all engines benefit — candidate for the mobile sprint).

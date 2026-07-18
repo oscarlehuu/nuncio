@@ -8,12 +8,10 @@ export const CAPTURE_EVIDENCE_TOOL_NAME = 'capture_evidence';
  * validates and delegates — capture policy stays in the injected callback.
  */
 
-export type CaptureEvidencePhase = 'before' | 'after';
-
 export interface CaptureEvidenceInput {
   url?: string;
   route?: string;
-  phase: CaptureEvidencePhase;
+  phase: 'before' | 'after';
 }
 
 export type CaptureEvidenceResult =

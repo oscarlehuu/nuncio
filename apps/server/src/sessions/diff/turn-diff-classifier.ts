@@ -28,7 +28,7 @@ export interface WorkspaceDiffSnapshot {
 }
 
 /** Keeps the verify_start payload well under the event-payload byte ceiling. */
-export const DIFF_SNAPSHOT_MAX_FILES = 20;
+const DIFF_SNAPSHOT_MAX_FILES = 20;
 
 /**
  * Extensions that render UI — classification is file-type based, not repo-layout
@@ -76,7 +76,7 @@ async function git(args: string[], cwd: string): Promise<string | null> {
  * `-z` entries are NUL-separated; a rename/copy entry is followed by one extra
  * NUL-separated field (the original path), which is skipped.
  */
-export function parsePorcelainZ(output: string): string[] {
+function parsePorcelainZ(output: string): string[] {
   const fields = output.split('\0').filter((field) => field.length > 0);
   const paths: string[] = [];
   let skipNext = false;

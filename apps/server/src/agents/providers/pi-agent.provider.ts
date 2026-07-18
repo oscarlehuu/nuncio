@@ -632,7 +632,7 @@ export class PiAgentProvider extends BaseAgentProvider {
         noExtensions: true,
         additionalExtensionPaths: piEngineExtensionPaths(agentDir),
       } : {}),
-      ...(extensionFactories.length > 0 ? { extensionFactories } : {}),
+      ...(extensionFactories.length > 0 ? { extensionFactories: extensionFactories as never[] } : {}),
       ...(systemAppend ? { appendSystemPrompt: [systemAppend] } : {}),
     });
     await resourceLoader.reload();
@@ -738,7 +738,7 @@ export class PiAgentProvider extends BaseAgentProvider {
             reason: 'No url given and this session has no previously captured target — pass a url.',
           };
         }
-        if ('unavailable' in outcome && outcome.unavailable === true) {
+        if ('unavailable' in outcome) {
           return { ok: false, reason: outcome.reason };
         }
         this.pushEvent(sessionId, 'evidence_captured', outcome, currentEmit);
