@@ -14,7 +14,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { buildTaskFromSession } from './lib/eval-extract.mjs';
+import { buildTaskFromSession, earliestRecordedHead } from './lib/eval-extract.mjs';
 import { tasksDir, validateTask } from './lib/eval-suite.mjs';
 
 function parseArgs(argv) {
@@ -61,7 +61,7 @@ async function main() {
   const db = new Database(dbPath, { readonly: true });
   try {
     const row = db
-      .prepare('SELECT id, prompt, project_path, workspace, verify_owner FROM sessions WHERE id = ?')
+      .prepare('SELECT id, prompt, project_path, workspace, worktree_path, verify_owner FROM sessions WHERE id = ?')
       .get(args.session);
     if (!row) throw new Error(`session ${args.session} not found in ${dbPath}`);
     const events = db
@@ -77,9 +77,24 @@ async function main() {
       verifyOwner: row.verify_owner,
     };
     const repo = session.projectPath ?? session.workspace;
+    // Pin priority: explicit flag → earliest HEAD the session's own verify
+    // recorded (closest to its true starting state) → the repo's current HEAD
+    // (last resort — may already contain the finished work; review it).
+    let baseSha = args.baseSha ?? earliestRecordedHead(events);
+    if (!baseSha && repo) {
+      baseSha = headSha(repo);
+      console.warn(
+        `warning: no --base-sha and no recorded head in the session log; defaulting to ${repo}'s CURRENT HEAD (${baseSha.slice(0, 12)}…) — it may already contain the completed work. Review or pass --base-sha.`,
+      );
+    }
+    if (row.worktree_path) {
+      console.warn(
+        `note: session ran in worktree ${row.worktree_path}; the task replays the project repo at the pin, not the worktree branch.`,
+      );
+    }
     const task = buildTaskFromSession(session, events, {
       slug: args.slug,
-      baseSha: args.baseSha ?? (repo ? headSha(repo) : undefined),
+      baseSha,
       verifyCommand: args.verifyCommand,
       timeoutMs: args.timeoutMs,
     });

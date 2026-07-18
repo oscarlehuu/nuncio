@@ -197,6 +197,31 @@ describe('SessionsService verify skip-on-clean', () => {
   );
 
   it(
+    're-verifies committed work and keeps its classes visible via the pin head',
+    async () => {
+      initGitWorkspace();
+      writeVerifyScript('echo ok\nexit 0\n');
+      const session = await service.create({ prompt: 'first', provider: 'cursor', workspace });
+      await service.awaitRun(session.id);
+      await waitForCount(session.id, 'verify_result', 1);
+
+      // The agent commits its UI work — the tree is clean again, but the
+      // committed delta must still re-verify and classify as ui.
+      writeFileSync(join(workspace, 'App.tsx'), 'export const App = () => null;\n');
+      runGit(workspace, ['add', 'App.tsx']);
+      runGit(workspace, ['commit', '-q', '-m', 'ui work']);
+      await steerAndSettle(session.id, 'committed my work');
+
+      const starts = await waitForCount(session.id, 'verify_start', 2);
+      expect(starts).toHaveLength(2);
+      const second = starts[1]!.payload as { files?: string[]; classes?: string[] };
+      expect(second.files).toContain('App.tsx');
+      expect(second.classes).toContain('ui');
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'annotates verify_start with the dirty files/classes and verify_result with the fingerprint',
     async () => {
       initGitWorkspace();

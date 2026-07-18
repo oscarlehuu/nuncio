@@ -8,7 +8,14 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const { buildTaskFromSession, buildRepoWorkspace, promptWithSteers, taskSlug } = await import('./lib/eval-extract.mjs');
+const {
+  buildTaskFromSession,
+  buildRepoWorkspace,
+  earliestRecordedHead,
+  extractOriginalPrompt,
+  promptWithSteers,
+  taskSlug,
+} = await import('./lib/eval-extract.mjs');
 const { validateTask } = await import('./lib/eval-suite.mjs');
 
 function git(cwd, ...args) {
@@ -109,6 +116,49 @@ describe('buildTaskFromSession', () => {
     ];
     const task = buildTaskFromSession(baseSession, events, { baseSha: 'a' });
     expect(task.verifyCommand).toBe('sh .nuncio/verify');
+  });
+});
+
+describe('extractOriginalPrompt', () => {
+  test('returns a raw prompt untouched', () => {
+    expect(extractOriginalPrompt('Fix the bug')).toEqual({ prompt: 'Fix the bug', stripped: false });
+  });
+
+  test('strips a composed preamble (brief/facts) down to the final user prompt', () => {
+    const stored = ['## Handoff brief\ngoal…', '## Project facts\n- key: value', 'Fix the bug'].join(
+      '\n\n---\n\n',
+    );
+    expect(extractOriginalPrompt(stored)).toEqual({ prompt: 'Fix the bug', stripped: true });
+  });
+});
+
+describe('buildTaskFromSession preamble stripping', () => {
+  test('the extracted task prompt never carries the composed brief/facts', () => {
+    const stored = ['## Project facts\n- build: bun test', 'Fix the slugify bug'].join('\n\n---\n\n');
+    const task = buildTaskFromSession({ ...baseSession, prompt: stored }, verifyEvents, {
+      baseSha: 'abc123',
+    });
+    expect(task.prompt).toBe('Fix the slugify bug');
+  });
+});
+
+describe('earliestRecordedHead', () => {
+  test('returns the first verify head in the log', () => {
+    expect(
+      earliestRecordedHead([
+        { type: 'verify_start', payload: { command: 'bun test' } },
+        { type: 'verify_result', payload: { ok: true, head: 'aaa111' } },
+        { type: 'verify_result', payload: { ok: true, head: 'bbb222' } },
+      ]),
+    ).toBe('aaa111');
+  });
+
+  test('ignores placeholder and missing heads', () => {
+    expect(
+      earliestRecordedHead([{ type: 'verify_result', payload: { ok: true, head: '(no-head)' } }]),
+    ).toBeNull();
+    expect(earliestRecordedHead([{ type: 'verify_result', payload: { ok: true } }])).toBeNull();
+    expect(earliestRecordedHead([])).toBeNull();
   });
 });
 

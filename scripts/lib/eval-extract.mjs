@@ -33,6 +33,35 @@ function recordedVerifyCommand(events) {
   return null;
 }
 
+const PREAMBLE_SEPARATOR = '\n\n---\n\n';
+
+/**
+ * The stored session prompt is the COMPOSED preamble (handoff brief → project
+ * facts → the user's prompt, joined by a markdown rule, per
+ * composeSessionPreamble). Replaying it verbatim would double-compose stale
+ * context into the eval, so extraction keeps only the final section — the
+ * user's original prompt, which the composer guarantees comes last.
+ */
+export function extractOriginalPrompt(storedPrompt) {
+  const sections = String(storedPrompt ?? '').split(PREAMBLE_SEPARATOR);
+  return { prompt: sections[sections.length - 1].trim(), stripped: sections.length > 1 };
+}
+
+/**
+ * Default replay pin: the EARLIEST workspace HEAD recorded on the session's
+ * verify results — far closer to the state the session actually started from
+ * than the repo's current HEAD (which may already contain the finished work).
+ * Null when the log carries no head (pre-classifier sessions).
+ */
+export function earliestRecordedHead(events) {
+  for (const event of events) {
+    if (event?.type !== 'verify_result') continue;
+    const head = event.payload?.head;
+    if (typeof head === 'string' && head && !head.startsWith('(')) return head;
+  }
+  return null;
+}
+
 /** Human follow-up steers (origin-tagged auto-steers are loop mechanics, not task input). */
 function humanSteers(events) {
   return events
@@ -61,7 +90,7 @@ export function buildTaskFromSession(session, events, options = {}) {
   if (!repo) throw new Error('session has no projectPath/workspace to replay');
   const baseSha = String(options.baseSha ?? '').trim();
   if (!baseSha) throw new Error('baseSha is required (the repo state the task replays from)');
-  const prompt = String(session.prompt ?? '').trim();
+  const { prompt } = extractOriginalPrompt(session.prompt);
   if (!prompt) throw new Error('session has no prompt');
 
   const verifyCommand = options.verifyCommand?.trim() || recordedVerifyCommand(events);

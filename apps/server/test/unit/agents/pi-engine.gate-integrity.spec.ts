@@ -97,6 +97,18 @@ describe('evaluateGateIntegrity', () => {
     expect(verdict('bash', { command: 'chmod +x .nuncio/verify' })).toMatchObject({ block: true });
   });
 
+  it('advisory-blocks absolute-path and git-restore mutations of the gate directory', () => {
+    expect(
+      verdict('bash', { command: `echo hacked > ${workspace}/.nuncio/verify` }),
+    ).toMatchObject({ block: true });
+    expect(verdict('bash', { command: 'git checkout -- .nuncio/verify' })).toMatchObject({
+      block: true,
+    });
+    expect(verdict('bash', { command: 'git restore .nuncio/verify' })).toMatchObject({
+      block: true,
+    });
+  });
+
   it('allows bash commands that only read the gate directory', () => {
     expect(verdict('bash', { command: 'cat .nuncio/verify' })).toBeUndefined();
     expect(verdict('bash', { command: 'ls .nuncio' })).toBeUndefined();

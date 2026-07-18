@@ -52,12 +52,17 @@ export function isGateProtectedPath(cwd: string, target: string): boolean {
 
 /**
  * Write-intent heuristic for the bash advisory block: redirection into a path,
- * or a mutating command word. Reads (`cat`, `ls`, `sh .nuncio/verify`) pass.
+ * a mutating command word, or a git command that rewrites the work tree.
+ * Reads (`cat`, `ls`, `sh .nuncio/verify`) pass. This is best-effort string
+ * matching by design — an interpreter one-liner can evade it; the edit/write
+ * hook is the enforced layer and the classifier's `gate-protected` class keeps
+ * the change visible on the verify payloads.
  */
-const BASH_WRITE_HINTS = /(^|[\s;|&])(rm|mv|cp|chmod|chown|tee|touch|truncate|ln|mkdir|rmdir|sed\s+-i|dd|install)\b|>>?/;
+const BASH_WRITE_HINTS =
+  /(^|[\s;|&])(rm|mv|cp|chmod|chown|tee|touch|truncate|ln|mkdir|rmdir|sed\s+-i|dd|install|git\s+(checkout|restore|clean|stash|reset))\b|>>?/;
 
-/** Non-word boundary match for a `.nuncio` path token inside a command string. */
-const BASH_GATE_TOKEN = /(^|[\s"'=(:;|&])\.nuncio(\/|\b)/;
+/** Boundary match for a `.nuncio` path token (relative or inside an absolute path). */
+const BASH_GATE_TOKEN = /(^|[\s"'=(:;|&/])\.nuncio(\/|\b)/;
 
 function blockReason(target: string): string {
   return (

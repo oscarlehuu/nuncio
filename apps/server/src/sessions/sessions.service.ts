@@ -81,7 +81,7 @@ import {
   buildFeedbackMessage,
   decideNextStep,
   foldLoopState,
-  latestGreenVerifyFingerprint,
+  latestGreenVerifyPin,
   parseAutoSteerEnabled,
   parseMaxRounds,
   type VerifyResultPayload,
@@ -2659,8 +2659,10 @@ export class SessionsService implements OnModuleDestroy {
     // Skip-on-clean: when the workspace fingerprint has not moved since the
     // last GREEN verify, the result is already known — emit nothing. A red pin
     // never skips (the feedback loop keeps its re-verify semantics) and a
-    // non-git workspace (null snapshot) always verifies.
-    const preSnapshot = await captureWorkspaceDiffSnapshot(cwd);
+    // non-git workspace (null snapshot) always verifies. The pin's HEAD widens
+    // files/classes to work the agent COMMITTED since that green run.
+    const pin = latestGreenVerifyPin(this.events.list(sessionId));
+    const preSnapshot = await captureWorkspaceDiffSnapshot(cwd, pin?.head);
     // The snapshot await opened a gap since the entry guards: another pass may
     // own the verifier now, or the session may have left IDLE.
     if (this.destroyed || this.verifying.has(sessionId)) return;
@@ -2668,12 +2670,9 @@ export class SessionsService implements OnModuleDestroy {
       this.settleVerify(sessionId);
       return;
     }
-    if (preSnapshot) {
-      const pin = latestGreenVerifyFingerprint(this.events.list(sessionId));
-      if (pin !== null && pin === preSnapshot.fingerprint) {
-        this.settleVerify(sessionId);
-        return;
-      }
+    if (preSnapshot && pin !== null && pin.fingerprint === preSnapshot.fingerprint) {
+      this.settleVerify(sessionId);
+      return;
     }
 
     let result: VerifyResultPayload | null = null;
@@ -2702,14 +2701,25 @@ export class SessionsService implements OnModuleDestroy {
       ) return;
       // The pin fingerprint is captured AFTER the command ran, so state the
       // command itself writes (build outputs, counters) is folded in and a
-      // no-op follow-up turn compares equal.
-      const postSnapshot = await captureWorkspaceDiffSnapshot(cwd);
-      if (this.destroyed || controller.signal.aborted) return;
+      // no-op follow-up turn compares equal. The capture is another await gap:
+      // re-apply the same discard conditions before appending, or a steer that
+      // started mid-capture could freeze its half-edited workspace into a
+      // green pin and silently skip its own verify later.
+      const postSnapshot = await captureWorkspaceDiffSnapshot(cwd, pin?.head);
+      if (
+        this.destroyed ||
+        controller.signal.aborted ||
+        this.sessions.findById(sessionId)?.status !== 'IDLE'
+      ) return;
       result = {
         command: command.display,
         ...run,
         ...(postSnapshot
-          ? { fingerprint: postSnapshot.fingerprint, classes: postSnapshot.classes }
+          ? {
+              fingerprint: postSnapshot.fingerprint,
+              head: postSnapshot.head,
+              classes: postSnapshot.classes,
+            }
           : {}),
       };
       this.appendAndEmit(sessionId, 'verify_result', result);

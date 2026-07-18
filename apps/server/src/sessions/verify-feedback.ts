@@ -39,22 +39,34 @@ export interface VerifyResultPayload {
   timedOut: boolean;
   /** Workspace diff fingerprint captured after the command ran (git workspaces only). */
   fingerprint?: string;
-  /** Distinct turn-diff classes of the dirty workspace at result time. */
+  /** Workspace HEAD at result time (feeds the next turn's committed-diff window). */
+  head?: string;
+  /** Distinct turn-diff classes of the changed workspace at result time. */
   classes?: string[];
 }
 
+export interface GreenVerifyPin {
+  fingerprint: string;
+  head: string | null;
+}
+
 /**
- * The skip-on-clean pin: the fingerprint recorded on the LATEST verify_result,
- * but only when that result was green. A newer red result always invalidates
- * the pin so the feedback loop's re-verify semantics stay intact.
+ * The skip-on-clean pin: the fingerprint (+ HEAD) recorded on the LATEST
+ * verify_result, but only when that result was green. A newer red result
+ * always invalidates the pin so the feedback loop's re-verify semantics stay
+ * intact.
  */
-export function latestGreenVerifyFingerprint(events: SessionEvent[]): string | null {
+export function latestGreenVerifyPin(events: SessionEvent[]): GreenVerifyPin | null {
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const event = events[i]!;
     if (event.type !== 'verify_result') continue;
     const payload = event.payload as VerifyResultPayload;
     if (payload.ok !== true) return null;
-    return typeof payload.fingerprint === 'string' ? payload.fingerprint : null;
+    if (typeof payload.fingerprint !== 'string') return null;
+    return {
+      fingerprint: payload.fingerprint,
+      head: typeof payload.head === 'string' ? payload.head : null,
+    };
   }
   return null;
 }

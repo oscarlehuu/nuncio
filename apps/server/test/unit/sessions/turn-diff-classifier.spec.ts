@@ -138,6 +138,46 @@ describe('captureWorkspaceDiffSnapshot', () => {
     expect(snapshot!.classes).toContain('gate-protected');
   });
 
+  it('changes the fingerprint on a same-size tracked edit even with a restored mtime', async () => {
+    writeFileSync(join(repo, 'work.txt'), 'aaaa\n');
+    runGit(repo, ['add', 'work.txt']);
+    runGit(repo, ['commit', '-q', '-m', 'work']);
+    writeFileSync(join(repo, 'work.txt'), 'bbbb\n');
+    const fixed = new Date('2020-01-01T00:00:00Z');
+    utimesSync(join(repo, 'work.txt'), fixed, fixed);
+    const before = await captureWorkspaceDiffSnapshot(repo);
+    writeFileSync(join(repo, 'work.txt'), 'cccc\n');
+    utimesSync(join(repo, 'work.txt'), fixed, fixed);
+    const after = await captureWorkspaceDiffSnapshot(repo);
+    // Same path, same size, same mtime — only the CONTENT differs. The
+    // fingerprint must still move (tracked content rides `git diff HEAD`).
+    expect(after!.fingerprint).not.toBe(before!.fingerprint);
+  });
+
+  it('folds commits since a prior head into files/classes when sinceHead is given', async () => {
+    const firstHead = (await captureWorkspaceDiffSnapshot(repo))!.head;
+    writeFileSync(join(repo, 'App.tsx'), 'export const App = () => null;\n');
+    runGit(repo, ['add', '.']);
+    runGit(repo, ['commit', '-q', '-m', 'ui work, committed']);
+
+    const withoutSince = await captureWorkspaceDiffSnapshot(repo);
+    expect(withoutSince!.files).toEqual([]);
+    expect(withoutSince!.classes).toEqual([]);
+
+    const withSince = await captureWorkspaceDiffSnapshot(repo, firstHead);
+    expect(withSince!.files).toContain('App.tsx');
+    expect(withSince!.classes).toContain('ui');
+  });
+
+  it('ignores an unknown sinceHead instead of failing', async () => {
+    const snapshot = await captureWorkspaceDiffSnapshot(
+      repo,
+      'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+    );
+    expect(snapshot).not.toBeNull();
+    expect(snapshot!.files).toEqual([]);
+  });
+
   it('caps the reported file list but keeps the fingerprint sensitive to all files', async () => {
     for (let i = 0; i < 30; i += 1) {
       writeFileSync(join(repo, `f${String(i).padStart(2, '0')}.txt`), `${i}\n`);

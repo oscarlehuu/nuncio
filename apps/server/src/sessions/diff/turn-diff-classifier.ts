@@ -14,15 +14,17 @@ export type TurnDiffClass = 'ui' | 'gate-protected' | 'other';
 export interface WorkspaceDiffSnapshot {
   /** HEAD sha, or `(no-head)` for a repo without commits. */
   head: string;
-  /** Changed paths relative to the repo root, capped at {@link DIFF_SNAPSHOT_MAX_FILES}. */
+  /** Changed paths relative to the repo root, capped at the payload budget. */
   files: string[];
   /** Total changed paths before the cap. */
   filesTotal: number;
   /** Distinct classes across ALL changed files (not just the capped list), sorted. */
   classes: TurnDiffClass[];
   /**
-   * Stable digest of HEAD + every dirty path + its size/mtime. Two equal
-   * fingerprints mean "no observable workspace change between the captures".
+   * Stable digest of HEAD + the tracked content diff + every dirty path with
+   * its size/mtime. Two equal fingerprints mean "no observable workspace
+   * change between the captures". Tracked edits are content-true (they ride
+   * `git diff HEAD`); untracked files fall back to path+size+mtime.
    */
   fingerprint: string;
 }
@@ -96,13 +98,17 @@ function parsePorcelainZ(output: string): string[] {
 }
 
 /**
- * Capture the workspace's diff state: HEAD plus every dirty path with its
- * size/mtime, folded into one fingerprint. Returns null when `cwd` is not a git
- * work tree (caller must then behave as if the workspace always changed).
- * All failures are soft — a broken git never breaks the verify loop.
+ * Capture the workspace's diff state: HEAD, the tracked content diff, and
+ * every dirty path with its size/mtime, folded into one fingerprint. When
+ * `sinceHead` names a prior commit still in the repo, files/classes also fold
+ * in the paths COMMITTED between it and HEAD, so work the agent committed does
+ * not vanish from classification. Returns null when `cwd` is not a git work
+ * tree (caller must then behave as if the workspace always changed). All
+ * failures are soft — a broken git never breaks the verify loop.
  */
 export async function captureWorkspaceDiffSnapshot(
   cwd: string,
+  sinceHead?: string | null,
 ): Promise<WorkspaceDiffSnapshot | null> {
   const toplevel = (await git(['rev-parse', '--show-toplevel'], cwd))?.trim();
   if (!toplevel) return null;
@@ -110,9 +116,26 @@ export async function captureWorkspaceDiffSnapshot(
   const status = await git(['status', '--porcelain', '-uall', '-z'], cwd);
   if (status === null) return null;
 
-  const files = parsePorcelainZ(status).sort();
+  const dirty = parsePorcelainZ(status).sort();
+
+  // Tracked content truth: a same-size edit with a restored mtime still moves
+  // the patch. Untracked files are covered by the size/mtime stats below.
+  const trackedDiff = (await git(['diff', 'HEAD'], cwd)) ?? '';
+
+  // Committed-work visibility: paths that changed between the caller's pin and
+  // the current HEAD (an unknown/garbage pin degrades to the dirty set only).
+  const since = sinceHead?.trim();
+  const committed = since && since !== head && !since.startsWith('(')
+    ? ((await git(['diff', '--name-only', '-z', `${since}..HEAD`], cwd)) ?? '')
+        .split('\0')
+        .filter(Boolean)
+    : [];
+
+  const files = [...new Set([...dirty, ...committed])].sort();
+
   const hash = createHash('sha256').update(head);
-  for (const file of files) {
+  hash.update(`\0patch\0${trackedDiff}`);
+  for (const file of dirty) {
     let size = -1;
     let mtimeMs = 0;
     try {
