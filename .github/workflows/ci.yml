@@ -53,6 +53,9 @@ jobs:
       - name: Unit tests (core, mobile)
         run: bun run --filter @nuncio/core test && bun run --filter @nuncio/mobile test
 
+      - name: Unit tests (desktop, landing)
+        run: bun run --filter @nuncio/desktop test && bun run --filter @nuncio/landing test
+
       - name: Web unit tests + coverage
         run: bun run --filter @nuncio/web test:coverage
 
