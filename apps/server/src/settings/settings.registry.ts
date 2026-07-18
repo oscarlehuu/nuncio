@@ -133,6 +133,21 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     envVar: 'PI_EXTENSION_DISCOVERY',
   },
   {
+    key: 'NUNCIO_ENGINE_GATE_GUARD',
+    category: 'provider',
+    providerId: 'pi',
+    type: 'string',
+    label: 'Nuncio Engine gate guard',
+    description:
+      'Blocks Nuncio Engine sessions from editing .nuncio/ (the harness-owned verify gate) inside their own workspace, so an agent can never rewrite its gate to force green. Reads stay allowed.',
+    envVar: 'NUNCIO_ENGINE_GATE_GUARD',
+    default: 'on',
+    options: [
+      { value: 'on', label: 'On', description: 'Block agent writes to the .nuncio gate directory.' },
+      { value: 'off', label: 'Off', description: 'Allow the agent to modify .nuncio (not recommended).' },
+    ],
+  },
+  {
     key: 'PI_EXTERNAL_MEMORIES',
     category: 'provider',
     providerId: 'pi',

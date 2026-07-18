@@ -68,6 +68,7 @@ import {
   type ExternalMemoriesSnapshot,
 } from '../pi-engine/external-memories';
 import { buildExternalMemoryTool, EXTERNAL_MEMORY_TOOL_NAME } from '../pi-engine/external-memory-tool';
+import { buildNuncioEngineExtension } from '../pi-engine/engine-extension';
 import type { ExternalMemoryRoots } from '../pi-engine/external-memory-sources';
 import { expandHome } from './cli-path.helpers';
 
@@ -609,6 +610,13 @@ export class PiAgentProvider extends BaseAgentProvider {
     const fullDiscovery = this.settings.resolve('PI_EXTENSION_DISCOVERY') === 'full';
     const systemAppend = [context, externalMemorySnapshot.block, runtimeInstructions]
       .filter(Boolean).join('\n\n');
+    // The in-repo engine rail loads through extensionFactories, so it holds in
+    // BOTH allowlist and full-discovery modes. With the single gate-guard hook
+    // toggled off there is nothing left to register, so the rail is omitted.
+    const gateGuard = this.settings.resolve('NUNCIO_ENGINE_GATE_GUARD') !== 'off';
+    const extensionFactories = gateGuard
+      ? [buildNuncioEngineExtension({ cwd: resolvedCwd, gateGuard })]
+      : [];
     const resourceLoader = new pi.DefaultResourceLoader({
       cwd: resolvedCwd,
       agentDir,
@@ -617,6 +625,7 @@ export class PiAgentProvider extends BaseAgentProvider {
         noExtensions: true,
         additionalExtensionPaths: piEngineExtensionPaths(agentDir),
       } : {}),
+      ...(extensionFactories.length > 0 ? { extensionFactories } : {}),
       ...(systemAppend ? { appendSystemPrompt: [systemAppend] } : {}),
     });
     await resourceLoader.reload();
