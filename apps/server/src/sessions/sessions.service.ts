@@ -80,10 +80,12 @@ import {
   buildFeedbackMessage,
   decideNextStep,
   foldLoopState,
+  latestGreenVerifyFingerprint,
   parseAutoSteerEnabled,
   parseMaxRounds,
   type VerifyResultPayload,
 } from './verify-feedback';
+import { captureWorkspaceDiffSnapshot } from './diff/turn-diff-classifier';
 import { SettingsService } from '../settings/settings.service';
 import { ProjectDefaultsResolver } from '../projects/project-defaults-resolver';
 
@@ -2650,12 +2652,41 @@ export class SessionsService implements OnModuleDestroy {
       return;
     }
 
+    // Skip-on-clean: when the workspace fingerprint has not moved since the
+    // last GREEN verify, the result is already known — emit nothing. A red pin
+    // never skips (the feedback loop keeps its re-verify semantics) and a
+    // non-git workspace (null snapshot) always verifies.
+    const preSnapshot = await captureWorkspaceDiffSnapshot(cwd);
+    // The snapshot await opened a gap since the entry guards: another pass may
+    // own the verifier now, or the session may have left IDLE.
+    if (this.destroyed || this.verifying.has(sessionId)) return;
+    if (this.sessions.findById(sessionId)?.status !== 'IDLE') {
+      this.settleVerify(sessionId);
+      return;
+    }
+    if (preSnapshot) {
+      const pin = latestGreenVerifyFingerprint(this.events.list(sessionId));
+      if (pin !== null && pin === preSnapshot.fingerprint) {
+        this.settleVerify(sessionId);
+        return;
+      }
+    }
+
     let result: VerifyResultPayload | null = null;
     const controller = new AbortController();
     this.verifierControllers.set(sessionId, controller);
     this.verifying.add(sessionId);
     try {
-      this.appendAndEmit(sessionId, 'verify_start', { command: command.display });
+      this.appendAndEmit(sessionId, 'verify_start', {
+        command: command.display,
+        ...(preSnapshot
+          ? {
+              files: preSnapshot.files,
+              filesTotal: preSnapshot.filesTotal,
+              classes: preSnapshot.classes,
+            }
+          : {}),
+      });
       const run = await runVerifyCommand(command, cwd, VERIFY_TIMEOUT_MS, controller.signal);
       // The verify command is a spawned shell that can outlive a shutdown; after
       // it resolves the DB handle may be closed. Lifecycle cancellation is not a
@@ -2665,7 +2696,18 @@ export class SessionsService implements OnModuleDestroy {
         controller.signal.aborted ||
         this.sessions.findById(sessionId)?.status !== 'IDLE'
       ) return;
-      result = { command: command.display, ...run };
+      // The pin fingerprint is captured AFTER the command ran, so state the
+      // command itself writes (build outputs, counters) is folded in and a
+      // no-op follow-up turn compares equal.
+      const postSnapshot = await captureWorkspaceDiffSnapshot(cwd);
+      if (this.destroyed || controller.signal.aborted) return;
+      result = {
+        command: command.display,
+        ...run,
+        ...(postSnapshot
+          ? { fingerprint: postSnapshot.fingerprint, classes: postSnapshot.classes }
+          : {}),
+      };
       this.appendAndEmit(sessionId, 'verify_result', result);
     } catch (error) {
       if (

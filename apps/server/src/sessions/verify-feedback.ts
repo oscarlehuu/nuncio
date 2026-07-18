@@ -37,6 +37,26 @@ export interface VerifyResultPayload {
   durationMs: number;
   outputTail: string;
   timedOut: boolean;
+  /** Workspace diff fingerprint captured after the command ran (git workspaces only). */
+  fingerprint?: string;
+  /** Distinct turn-diff classes of the dirty workspace at result time. */
+  classes?: string[];
+}
+
+/**
+ * The skip-on-clean pin: the fingerprint recorded on the LATEST verify_result,
+ * but only when that result was green. A newer red result always invalidates
+ * the pin so the feedback loop's re-verify semantics stay intact.
+ */
+export function latestGreenVerifyFingerprint(events: SessionEvent[]): string | null {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i]!;
+    if (event.type !== 'verify_result') continue;
+    const payload = event.payload as VerifyResultPayload;
+    if (payload.ok !== true) return null;
+    return typeof payload.fingerprint === 'string' ? payload.fingerprint : null;
+  }
+  return null;
 }
 
 /** State of the CURRENT verify-feedback loop, folded from the event tail. */
