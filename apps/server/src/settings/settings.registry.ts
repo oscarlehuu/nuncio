@@ -644,6 +644,15 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     envVar: 'NUNCIO_VERIFY_COMMAND',
   },
   {
+    key: 'NUNCIO_EVIDENCE_URL',
+    category: 'agents',
+    type: 'string',
+    label: 'Evidence fallback URL',
+    description:
+      'Default http(s) page screenshotted as after-evidence when a UI-touching turn reaches a green verify and the session has no previously captured target (e.g. your dev server URL). Empty skips the fallback.',
+    envVar: 'NUNCIO_EVIDENCE_URL',
+  },
+  {
     key: 'NUNCIO_VERIFY_AUTO_STEER',
     category: 'agents',
     type: 'boolean',

@@ -37,6 +37,7 @@ import { turnsToSessionEvents } from '../cursor-local/cursor-transcript-hydrate'
 import { readCursorChatMetadata } from '../cursor-local/cursor-chat-store';
 import { ContextFactsService } from '../context/context-facts.service';
 import { DatabaseService } from '../db/database.service';
+import { EvidenceCaptureService } from '../evidence/evidence-capture.service';
 import { renderContextFacts } from '../context/context-facts.renderer';
 import { materializeContextFile } from '../context/context-file.materializer';
 import { GitService } from '../git/git.service';
@@ -212,6 +213,9 @@ export class SessionsService implements OnModuleDestroy {
     @Optional() private readonly contextFacts?: ContextFactsService,
     @Optional() private readonly profiles?: PromptProfileService,
     @Optional() private readonly database?: DatabaseService,
+    // Optional: when present, a green ui-touching verify auto-captures
+    // after-evidence (fail-open — capture never affects the loop).
+    @Optional() private readonly evidence?: EvidenceCaptureService,
   ) {
     // A crash mid-fan-out can leave steer rows leased forever; a claim must
     // never outlive the process that took it. Release before restore so the
@@ -2739,8 +2743,43 @@ export class SessionsService implements OnModuleDestroy {
     if (result && !result.ok) {
       await this.driveVerifyFeedback(sessionId);
     } else {
+      // A green verify on a ui-touching turn earns after-evidence. Deliberately
+      // NOT awaited: capture can take seconds and must never delay loop
+      // settlement (fail-open, annotate-don't-block).
+      if (result?.ok && result.classes?.includes('ui')) {
+        this.trackPendingWork(this.captureVerifyEvidence(sessionId));
+      }
       // Green verify (or nothing to drive): the loop, if any, has settled.
       this.settleVerify(sessionId);
+    }
+  }
+
+  /**
+   * Evidence auto-fallback (doc layer 3): after a green verify on a turn whose
+   * dirty classes include `ui`, capture after-evidence — the session's known
+   * target first, else the `NUNCIO_EVIDENCE_URL` fallback. Every failure path
+   * logs and returns; the verify loop and session status are never touched.
+   */
+  private async captureVerifyEvidence(sessionId: string): Promise<void> {
+    if (!this.evidence || this.destroyed) return;
+    const session = this.sessions.findById(sessionId);
+    if (!session) return;
+    try {
+      let outcome = await this.evidence.captureKnown(session, 'after');
+      if (outcome === null) {
+        const url = this.settings?.resolve('NUNCIO_EVIDENCE_URL')?.trim();
+        if (!url) return;
+        outcome = await this.evidence.capture(session, { url, phase: 'after' });
+      }
+      if (this.destroyed || !outcome) return;
+      if ('unavailable' in outcome && outcome.unavailable === true) {
+        console.warn(`[sessions] verify evidence unavailable for ${sessionId}: ${outcome.reason}`);
+        return;
+      }
+      this.appendAndEmit(sessionId, 'evidence_captured', outcome);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.warn(`[sessions] verify evidence capture failed for ${sessionId}: ${reason}`);
     }
   }
 

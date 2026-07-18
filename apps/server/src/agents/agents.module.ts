@@ -2,6 +2,7 @@ import { Module, type Provider } from '@nestjs/common';
 import { SessionsPersistenceModule } from '../sessions/sessions.persistence.module';
 import { SettingsModule } from '../settings/settings.module';
 import { ContextModule } from '../context/context.module';
+import { EvidenceModule } from '../evidence/evidence.module';
 import {
   NuncioContextRepository,
   NuncioContextService,
@@ -50,7 +51,7 @@ const mockProviderBinding: Provider = {
 };
 
 @Module({
-  imports: [SessionsPersistenceModule, SettingsModule, ContextModule],
+  imports: [SessionsPersistenceModule, SettingsModule, ContextModule, EvidenceModule],
   providers: [
     PiAgentProvider,
     CursorAgentProvider,

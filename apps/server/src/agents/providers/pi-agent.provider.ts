@@ -69,6 +69,12 @@ import {
 } from '../pi-engine/external-memories';
 import { buildExternalMemoryTool, EXTERNAL_MEMORY_TOOL_NAME } from '../pi-engine/external-memory-tool';
 import { buildNuncioEngineExtension } from '../pi-engine/engine-extension';
+import {
+  buildCaptureEvidenceTool,
+  type CaptureEvidenceInput,
+  type CaptureEvidenceResult,
+} from '../pi-engine/capture-evidence-tool';
+import { EvidenceCaptureService } from '../../evidence/evidence-capture.service';
 import type { ExternalMemoryRoots } from '../pi-engine/external-memory-sources';
 import { expandHome } from './cli-path.helpers';
 
@@ -179,6 +185,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     private readonly settings: SettingsService,
     @Optional() private readonly nuncioContext?: NuncioContextService,
     @Optional() private readonly externalMemories?: ExternalMemoriesService,
+    @Optional() private readonly evidence?: EvidenceCaptureService,
   ) {
     super(sessions, events);
   }
@@ -708,6 +715,38 @@ export class PiAgentProvider extends BaseAgentProvider {
       runtimeTools,
       pi.defineTool,
     );
+    // Declared before the tools so the capture callback can hand fresh events
+    // to whichever run is live when the tool actually executes.
+    let currentEmit = context.emit;
+    const captureEvidence = async (input: CaptureEvidenceInput): Promise<CaptureEvidenceResult> => {
+      if (!this.evidence) {
+        return { ok: false, reason: 'Evidence capture is unavailable on this server.' };
+      }
+      const session = this.sessions.findById(sessionId);
+      if (!session) return { ok: false, reason: 'Session no longer exists.' };
+      try {
+        const outcome = input.url
+          ? await this.evidence.capture(session, {
+              url: input.url,
+              ...(input.route ? { route: input.route } : {}),
+              phase: input.phase,
+            })
+          : await this.evidence.captureKnown(session, input.phase);
+        if (!outcome) {
+          return {
+            ok: false,
+            reason: 'No url given and this session has no previously captured target — pass a url.',
+          };
+        }
+        if ('unavailable' in outcome && outcome.unavailable === true) {
+          return { ok: false, reason: outcome.reason };
+        }
+        this.pushEvent(sessionId, 'evidence_captured', outcome, currentEmit);
+        return { ok: true, route: outcome.route, workspaceHead: outcome.workspaceHead };
+      } catch (error) {
+        return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+      }
+    };
     const engineTools = [
       buildTodoTool(pi.defineTool as (tool: unknown) => unknown),
       buildAskUserQuestionTool(pi.defineTool as (tool: unknown) => unknown),
@@ -723,9 +762,18 @@ export class PiAgentProvider extends BaseAgentProvider {
         ),
       }, pi.defineTool as (tool: unknown) => unknown),
     ];
+    // capture_evidence hits the local dev server over HTTP, so it stays out of
+    // hermetic runtime-policy (disabled-network) sessions.
+    const soloEngineTools = [
+      ...engineTools,
+      buildCaptureEvidenceTool(
+        { capture: captureEvidence },
+        pi.defineTool as (tool: unknown) => unknown,
+      ),
+    ];
     const customTools = policyOptions
       ? [...policyOptions.customTools, ...runtimeCustomTools, ...engineTools]
-      : [...(buildPiCustomTools(cwd, pi, context.tools) ?? []), ...engineTools];
+      : [...(buildPiCustomTools(cwd, pi, context.tools) ?? []), ...soloEngineTools];
     // Pi 0.80.6 treats `tools` as the allowlist for built-ins AND customTools.
     // Include the already-vetted Crew definitions or the SDK silently removes
     // submit_* from the registry despite receiving it in customTools.
@@ -764,7 +812,6 @@ export class PiAgentProvider extends BaseAgentProvider {
       this.sessions.updateProviderRuntimeState(sessionId, { providerThreadId: session.sessionFile });
     }
 
-    let currentEmit = context.emit;
     let assistantText = '';
     let assistantTurnsEmitted = 0;
     let lastTurnError: string | null = null;
