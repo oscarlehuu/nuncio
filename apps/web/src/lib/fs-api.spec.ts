@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   deleteEntry, fetchDirectories, listEntries, makeDir, readFile, renameEntry, writeFile,
+  type DirEntry,
 } from './fs-api';
 
 function jsonRes(body: unknown, ok = true, status = 200): Response {
@@ -20,7 +21,8 @@ describe('fs-api', () => {
   });
 
   it('fetchDirectories GETs the dirs route, encoding the optional path', async () => {
-    const listing = { current: '/Users/me', parent: '/Users', entries: [] };
+    const entries: DirEntry[] = [{ name: 'nuncio', path: '/Users/me/nuncio', isGit: true }];
+    const listing = { current: '/Users/me', parent: '/Users', entries };
     fetchMock.mockResolvedValue(jsonRes(listing));
 
     await expect(fetchDirectories()).resolves.toEqual(listing);
