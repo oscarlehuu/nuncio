@@ -167,9 +167,9 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 |---|---|
 | **Web** | `verify-chip.tsx`, transcript `verify-rows`, `session-changes-panel.tsx`, `edit-project-config-dialog.tsx`, Crew `crew-gates.tsx`, Autopilot run detail |
 | **Shared** | `derive-verify-status.ts` (and related helpers) |
-| **Settings** | Projects (verify command / policy) |
-| **Server** | sessions verify/diff, `evidence/`, Crew verifier, loop verify |
-| **Also check** | Settings/projects + session/tile chips + transcript + Crew gates + loop run detail |
+| **Settings** | Projects (verify command / policy); Agents: `NUNCIO_EVIDENCE_URL` (green-verify auto-evidence fallback); Providers → Nuncio Engine: `NUNCIO_ENGINE_GATE_GUARD` (blocks agent writes to `.nuncio/`) |
+| **Server** | sessions verify/diff (`diff/turn-diff-classifier.ts` skip-on-clean fingerprint + file classes), `evidence/` (+ `SessionsService.captureVerifyEvidence` auto-capture, `pi-engine/capture-evidence-tool.ts`), `pi-engine/gate-integrity.ts` + `engine-extension.ts`, Crew verifier, loop verify |
+| **Also check** | Settings/projects + session/tile chips + transcript (incl. evidence blocks) + Crew gates + loop run detail |
 
 ### Tasks / subagents / multitask
 

@@ -65,6 +65,24 @@ export function validateTask(task, name) {
   if (missing.length) {
     throw new Error(`eval/tasks/${name} missing required field(s): ${missing.join(', ')}`);
   }
+  // A fixture is either a directory id under eval/fixtures (string) or a
+  // recorded-session pin { repo, baseSha } produced by scripts/eval-extract-task.mjs.
+  if (typeof task.fixture === 'object' && task.fixture !== null) {
+    if (typeof task.fixture.repo !== 'string' || !task.fixture.repo) {
+      throw new Error(`eval/tasks/${name} recorded fixture requires a repo path`);
+    }
+    if (typeof task.fixture.baseSha !== 'string' || !task.fixture.baseSha) {
+      throw new Error(`eval/tasks/${name} recorded fixture requires a baseSha pin`);
+    }
+  } else if (typeof task.fixture !== 'string') {
+    throw new Error(`eval/tasks/${name} fixture must be a directory id or { repo, baseSha }`);
+  }
+  // Follow-up steers replay the human's mid-session course corrections in order.
+  if (task.followUpSteers !== undefined) {
+    if (!Array.isArray(task.followUpSteers) || task.followUpSteers.some((s) => typeof s !== 'string' || !s.trim())) {
+      throw new Error(`eval/tasks/${name} followUpSteers must be an array of non-empty strings`);
+    }
+  }
   task.tags = task.tags ?? [];
   // A missing verifyCommand SILENTLY lowers a task's bar, so it is only allowed
   // when the task explicitly opts in with "scoring": "hidden-only" — an author

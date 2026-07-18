@@ -133,6 +133,21 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     envVar: 'PI_EXTENSION_DISCOVERY',
   },
   {
+    key: 'NUNCIO_ENGINE_GATE_GUARD',
+    category: 'provider',
+    providerId: 'pi',
+    type: 'string',
+    label: 'Nuncio Engine gate guard',
+    description:
+      'Blocks Nuncio Engine sessions from editing .nuncio/ (the harness-owned verify gate) inside their own workspace, so an agent can never rewrite its gate to force green. Reads stay allowed.',
+    envVar: 'NUNCIO_ENGINE_GATE_GUARD',
+    default: 'on',
+    options: [
+      { value: 'on', label: 'On', description: 'Block agent writes to the .nuncio gate directory.' },
+      { value: 'off', label: 'Off', description: 'Allow the agent to modify .nuncio (not recommended).' },
+    ],
+  },
+  {
     key: 'PI_EXTERNAL_MEMORIES',
     category: 'provider',
     providerId: 'pi',
@@ -627,6 +642,15 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     description:
       'Shell command run in the session workspace after each turn; the result is annotated on the transcript (verify chip). A project-level .nuncio/verify script takes precedence. Empty disables verification.',
     envVar: 'NUNCIO_VERIFY_COMMAND',
+  },
+  {
+    key: 'NUNCIO_EVIDENCE_URL',
+    category: 'agents',
+    type: 'string',
+    label: 'Evidence fallback URL',
+    description:
+      'Default http(s) page screenshotted as after-evidence when a UI-touching turn reaches a green verify and the session has no previously captured target (e.g. your dev server URL). Empty skips the fallback.',
+    envVar: 'NUNCIO_EVIDENCE_URL',
   },
   {
     key: 'NUNCIO_VERIFY_AUTO_STEER',

@@ -37,6 +37,7 @@ import { turnsToSessionEvents } from '../cursor-local/cursor-transcript-hydrate'
 import { readCursorChatMetadata } from '../cursor-local/cursor-chat-store';
 import { ContextFactsService } from '../context/context-facts.service';
 import { DatabaseService } from '../db/database.service';
+import { EvidenceCaptureService } from '../evidence/evidence-capture.service';
 import { renderContextFacts } from '../context/context-facts.renderer';
 import { materializeContextFile } from '../context/context-file.materializer';
 import { GitService } from '../git/git.service';
@@ -80,10 +81,12 @@ import {
   buildFeedbackMessage,
   decideNextStep,
   foldLoopState,
+  latestGreenVerifyPin,
   parseAutoSteerEnabled,
   parseMaxRounds,
   type VerifyResultPayload,
 } from './verify-feedback';
+import { captureWorkspaceDiffSnapshot } from './diff/turn-diff-classifier';
 import { SettingsService } from '../settings/settings.service';
 import { ProjectDefaultsResolver } from '../projects/project-defaults-resolver';
 
@@ -210,6 +213,9 @@ export class SessionsService implements OnModuleDestroy {
     @Optional() private readonly contextFacts?: ContextFactsService,
     @Optional() private readonly profiles?: PromptProfileService,
     @Optional() private readonly database?: DatabaseService,
+    // Optional: when present, a green ui-touching verify auto-captures
+    // after-evidence (fail-open — capture never affects the loop).
+    @Optional() private readonly evidence?: EvidenceCaptureService,
   ) {
     // A crash mid-fan-out can leave steer rows leased forever; a claim must
     // never outlive the process that took it. Release before restore so the
@@ -2650,12 +2656,40 @@ export class SessionsService implements OnModuleDestroy {
       return;
     }
 
+    // Skip-on-clean: when the workspace fingerprint has not moved since the
+    // last GREEN verify, the result is already known — emit nothing. A red pin
+    // never skips (the feedback loop keeps its re-verify semantics) and a
+    // non-git workspace (null snapshot) always verifies. The pin's HEAD widens
+    // files/classes to work the agent COMMITTED since that green run.
+    const pin = latestGreenVerifyPin(this.events.list(sessionId));
+    const preSnapshot = await captureWorkspaceDiffSnapshot(cwd, pin?.head);
+    // The snapshot await opened a gap since the entry guards: another pass may
+    // own the verifier now, or the session may have left IDLE.
+    if (this.destroyed || this.verifying.has(sessionId)) return;
+    if (this.sessions.findById(sessionId)?.status !== 'IDLE') {
+      this.settleVerify(sessionId);
+      return;
+    }
+    if (preSnapshot && pin !== null && pin.fingerprint === preSnapshot.fingerprint) {
+      this.settleVerify(sessionId);
+      return;
+    }
+
     let result: VerifyResultPayload | null = null;
     const controller = new AbortController();
     this.verifierControllers.set(sessionId, controller);
     this.verifying.add(sessionId);
     try {
-      this.appendAndEmit(sessionId, 'verify_start', { command: command.display });
+      this.appendAndEmit(sessionId, 'verify_start', {
+        command: command.display,
+        ...(preSnapshot
+          ? {
+              files: preSnapshot.files,
+              filesTotal: preSnapshot.filesTotal,
+              classes: preSnapshot.classes,
+            }
+          : {}),
+      });
       const run = await runVerifyCommand(command, cwd, VERIFY_TIMEOUT_MS, controller.signal);
       // The verify command is a spawned shell that can outlive a shutdown; after
       // it resolves the DB handle may be closed. Lifecycle cancellation is not a
@@ -2665,7 +2699,29 @@ export class SessionsService implements OnModuleDestroy {
         controller.signal.aborted ||
         this.sessions.findById(sessionId)?.status !== 'IDLE'
       ) return;
-      result = { command: command.display, ...run };
+      // The pin fingerprint is captured AFTER the command ran, so state the
+      // command itself writes (build outputs, counters) is folded in and a
+      // no-op follow-up turn compares equal. The capture is another await gap:
+      // re-apply the same discard conditions before appending, or a steer that
+      // started mid-capture could freeze its half-edited workspace into a
+      // green pin and silently skip its own verify later.
+      const postSnapshot = await captureWorkspaceDiffSnapshot(cwd, pin?.head);
+      if (
+        this.destroyed ||
+        controller.signal.aborted ||
+        this.sessions.findById(sessionId)?.status !== 'IDLE'
+      ) return;
+      result = {
+        command: command.display,
+        ...run,
+        ...(postSnapshot
+          ? {
+              fingerprint: postSnapshot.fingerprint,
+              head: postSnapshot.head,
+              classes: postSnapshot.classes,
+            }
+          : {}),
+      };
       this.appendAndEmit(sessionId, 'verify_result', result);
     } catch (error) {
       if (
@@ -2697,8 +2753,43 @@ export class SessionsService implements OnModuleDestroy {
     if (result && !result.ok) {
       await this.driveVerifyFeedback(sessionId);
     } else {
+      // A green verify on a ui-touching turn earns after-evidence. Deliberately
+      // NOT awaited: capture can take seconds and must never delay loop
+      // settlement (fail-open, annotate-don't-block).
+      if (result?.ok && result.classes?.includes('ui')) {
+        this.trackPendingWork(this.captureVerifyEvidence(sessionId));
+      }
       // Green verify (or nothing to drive): the loop, if any, has settled.
       this.settleVerify(sessionId);
+    }
+  }
+
+  /**
+   * Evidence auto-fallback (doc layer 3): after a green verify on a turn whose
+   * dirty classes include `ui`, capture after-evidence — the session's known
+   * target first, else the `NUNCIO_EVIDENCE_URL` fallback. Every failure path
+   * logs and returns; the verify loop and session status are never touched.
+   */
+  private async captureVerifyEvidence(sessionId: string): Promise<void> {
+    if (!this.evidence || this.destroyed) return;
+    const session = this.sessions.findById(sessionId);
+    if (!session) return;
+    try {
+      let outcome = await this.evidence.captureKnown(session, 'after');
+      if (outcome === null) {
+        const url = this.settings?.resolve('NUNCIO_EVIDENCE_URL')?.trim();
+        if (!url) return;
+        outcome = await this.evidence.capture(session, { url, phase: 'after' });
+      }
+      if (this.destroyed || !outcome) return;
+      if ('unavailable' in outcome && outcome.unavailable === true) {
+        console.warn(`[sessions] verify evidence unavailable for ${sessionId}: ${outcome.reason}`);
+        return;
+      }
+      this.appendAndEmit(sessionId, 'evidence_captured', outcome);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.warn(`[sessions] verify evidence capture failed for ${sessionId}: ${reason}`);
     }
   }
 
