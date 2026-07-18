@@ -243,9 +243,13 @@ bun run --filter @nuncio/server test:integration:claude # real Claude Agent SDK 
 bun run --filter @nuncio/web test                  # web component tests (vitest)
 bun run test:daily-driver                          # server unit + e2e, core, web
 bun run test:daily-driver:codex                    # daily-driver + real Codex smoke
+bun run canary                                     # provider canary: cheapest-tier echo run per available real engine
+bun run canary:mock                                # zero-credential canary on the Mock provider (CI runs this)
 ```
 
 All server tests run on `bun test` (no jest). The Pi integration suite is gated on `~/.pi/agent/auth.json` and self-skips when absent, so it is CI-safe. The Codex integration suite is explicitly opt-in via `NUNCIO_CODEX_INTEGRATION=1` (the script sets it), requires `codex login status`, and makes a real app-server model discovery call plus a short run/resume check. The Claude integration suite is opt-in via `NUNCIO_CLAUDE_INTEGRATION=1`, self-skips unless the Agent SDK reports a logged-in Claude Code (or `ANTHROPIC_API_KEY`), and exercises a real run, steer, interrupt, and resume-from-a-fresh-provider against the cheapest model in an isolated tmp workspace.
+
+**Provider canary** (`scripts/provider-canary.mjs`) proves the whole production path — HTTP → sessions service → provider adapter → real SDK → stream → event log — with one deterministic echo run per engine, always on the cheapest model tier (haiku / mini / composer), never a flagship. It boots a hermetic daemon (ephemeral port, temp data dir) so your real sessions are untouched. `bun run canary` exercises every real engine available on the machine (`--providers pi,codex` to filter, `--model pi=<id>` to pin a per-machine model, `--timeout <ms>` for the per-provider budget); `bun run canary:mock` is the zero-credential variant that CI runs on every PR, and the same mock loop is also covered by `bun run test:scripts`.
 
 ## Production deploy (Tailscale)
 

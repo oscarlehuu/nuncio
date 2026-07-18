@@ -5,7 +5,12 @@
     ".": {
       "entry": ["scripts/**/*.mjs", "eval/**/*.mjs"],
       "project": ["scripts/**/*.mjs", "eval/**/*.mjs"],
-      "ignoreBinaries": ["scripts/engine-eval.mjs", "scripts/engine-eval-compare.mjs", "pgrep"]
+      "ignoreBinaries": [
+        "scripts/engine-eval.mjs",
+        "scripts/engine-eval-compare.mjs",
+        "scripts/provider-canary.mjs",
+        "pgrep"
+      ]
     },
     "apps/server": {
       "entry": ["src/main.ts"],
