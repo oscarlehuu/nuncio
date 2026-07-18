@@ -126,6 +126,11 @@ jobs:
       - name: Perf ratchet (UI smoothness budgets; report-only until a CI baseline is committed)
         run: bun run check-perf-ratchet
 
+      # Runs LAST so its hermetic daemon boot/teardown can never sit adjacent to
+      # the timing-sensitive perf sampling above.
+      - name: Provider canary (mock, zero-credential)
+        run: bun run canary:mock
+
       - name: Upload smoke artifacts (screenshots + trace)
         if: failure()
         uses: actions/upload-artifact@v4

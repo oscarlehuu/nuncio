@@ -173,6 +173,8 @@ bun run test         # server unit (bun test test/unit/)
 bun run lint         # server tsc --noEmit + web oxlint
 bun run gate         # pre-commit gate: build + lint + all unit layers + test:scripts (minimum bar before commit)
 bun run gate:full    # pre-promotion gate (dev→main): gate + server e2e + real-browser smoke
+bun run canary       # provider canary: hermetic daemon + one cheap-tier echo run per available real engine (run after provider-adapter changes)
+bun run canary:mock  # zero-credential Mock canary — CI runs this on every PR
 bun run setup-hooks  # install versioned git hooks for protected-branch pre-push gates
 bun run add-changeset patch "…"   # create a changeset fragment (preferred for agents)
 bun run check-changeset           # verify PR will pass CI changeset gate

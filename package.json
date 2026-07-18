@@ -39,6 +39,8 @@
     "perf:relay": "cd apps/server && bun run ../../scripts/relay-perf-harness.mjs",
     "perf:ui": "bun scripts/perf-ui-harness.mjs",
     "test:smoke-ui": "bun scripts/smoke-ui.mjs",
+    "canary": "bun scripts/provider-canary.mjs",
+    "canary:mock": "bun scripts/provider-canary.mjs --mock",
     "test:coverage": "bun run --filter @nuncio/server test:coverage && bun run --filter @nuncio/web test:coverage",
     "eval:engines": "bun scripts/engine-eval.mjs",
     "eval:compare": "bun scripts/engine-eval-compare.mjs",

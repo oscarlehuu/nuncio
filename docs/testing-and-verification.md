@@ -20,6 +20,7 @@ reach without user help**, plus the levels below it.
 | 4 | Aggregate gate | `bun run test:daily-driver` | no |
 | 5 | Real browser against a live dev stack | playwright-core → system Chrome (below) | no (Mock provider) |
 | 6 | Real-provider integration | `test:integration` / `test:integration:codex` | yes (gated, self-skipping) |
+| 6b | Provider canary (production path, cheapest tier) | `bun run canary` (local) / `bun run canary:mock` (CI) | real mode yes; mock mode no |
 
 Plus always: `bun run build` and `bun run lint` — a change that doesn't compile is not at level 0,
 it is nowhere.
@@ -231,6 +232,43 @@ Priority order when adding test depth (highest leverage first):
    stand up a second stack.
 5. Real-provider integration only for adapter seams that stubs cannot prove (auth discovery,
    cwd/tool binding, resume).
+
+## Provider canary (level 6b)
+
+`scripts/provider-canary.mjs` proves the **whole production path** — HTTP → `SessionsService` →
+`AgentRegistry` → provider adapter → real SDK → stream → event log — with one deterministic echo
+run per engine. It differs from `test:integration` (which instantiates a provider class directly):
+the canary only talks to the daemon's HTTP surface, exactly like a phone client.
+
+Design rules, both enforced in code (`scripts/provider-canary-utils.mjs`, unit-tested in
+`scripts/provider-canary-tools.spec.mjs`):
+
+- **Mechanical assertions only.** The verdict is event-log shape (RUNNING status event, ≥1
+  `assistant_delta`, terminal `assistant_message` echoing `NUNCIO_CANARY_OK`, settled `IDLE`, no
+  `error` events) — never model smarts. The prompt is a one-line echo so the cheapest tier
+  completes it near-deterministically.
+- **Never burn a flagship.** `pickCanaryModel` matches only cheap tiers (Pi/Claude → haiku,
+  Codex → mini, Cursor → composer); when none matches it **skips with a reason** instead of
+  falling back to an expensive model (`--allow-any-model` is the explicit opt-in; `--model
+  pi=<id>` pins a per-machine choice, with a warning when the pin is not a recognized cheap
+  tier). A run that exercised zero providers exits non-zero, and a provider named in
+  `--providers` that could not be exercised (unavailable, or no cheap tier) is a FAIL, not a
+  skip — a canary must never green while testing nothing it was asked to ensure. Unknown flags
+  are rejected outright so a typo can never flip the canary into a token-spending mode.
+- **Hermetic.** Rides `scripts/lib/hermetic-stack.mjs` (ephemeral port, temp `NUNCIO_DATA_DIR`),
+  so real sessions/data are untouched. Real-provider credentials come from the machine
+  (Pi auth file, Codex CLI login, Claude keychain, `CURSOR_API_KEY` env); settings that live only
+  in the real DB are invisible to the hermetic daemon and surface as skips.
+- **Budget guard.** `--timeout` (default 120s) bounds each provider; a cheap model that cannot
+  finish a one-line echo inside the budget is itself a regression signal, and extra turns are
+  reported.
+
+Where it runs: **CI** runs `bun run canary:mock` on every PR (zero credentials; the same mock loop
+is also asserted by `scripts/provider-canary-e2e.spec.mjs` inside `test:scripts`, so `bun run
+gate` covers it too). **Locally**, run `bun run canary` on the credentialed machine after touching
+any provider adapter, and periodically as a scheduled health check — e.g. a `launchd` user agent
+that runs `bun run canary` nightly from the repo root and alerts on a non-zero exit. Real-engine
+cost is a few hundred tokens per provider per run.
 
 ## Interactive desktop smokes: engine/model cost rule
 
