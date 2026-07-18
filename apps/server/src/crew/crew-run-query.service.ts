@@ -74,6 +74,6 @@ export function publicCrewRun<T>(run: T): T {
 function publicArtifactMetadata(kind: string, metadata: Record<string, unknown>): Record<string, unknown> {
   const allowed = kind === 'verify-log'
     ? ['workspaceHead', 'passed', 'exitCode', 'durationMs', 'timedOut', 'outputOverflow', 'postBoundaryOk']
-    : kind === 'workspace-diff' ? ['workspaceHead', 'baseHead', 'truncated'] : [];
+    : kind === 'workspace-diff' ? ['workspaceHead', 'baseHead', 'truncated', 'uiTouched', 'uiFileCount'] : [];
   return Object.fromEntries(allowed.flatMap((key) => key in metadata ? [[key, metadata[key]]] : []));
 }

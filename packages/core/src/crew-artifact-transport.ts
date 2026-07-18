@@ -74,6 +74,8 @@ export function crewArtifactFrom(value: unknown): CrewArtifactDto | null {
       typeof metadata.workspaceHead !== 'string' || typeof metadata.baseHead !== 'string' ||
       typeof metadata.truncated !== 'boolean'
     ) return null;
+    const uiImpact = uiImpactMetadataFrom(metadata);
+    if (uiImpact === null) return null;
     return {
       ...base,
       kind: 'workspace-diff',
@@ -81,10 +83,21 @@ export function crewArtifactFrom(value: unknown): CrewArtifactDto | null {
         workspaceHead: metadata.workspaceHead,
         baseHead: metadata.baseHead,
         truncated: metadata.truncated,
+        ...uiImpact,
       },
     };
   }
   return null;
+}
+
+/** UI-impact fields are optional (pre-classification servers omit them), but
+ * when present they must both be well-typed or the artifact is malformed. */
+function uiImpactMetadataFrom(
+  metadata: JsonRecord,
+): { uiTouched: boolean; uiFileCount: number } | Record<string, never> | null {
+  if (metadata.uiTouched === undefined && metadata.uiFileCount === undefined) return {};
+  if (typeof metadata.uiTouched !== 'boolean' || !integer(metadata.uiFileCount)) return null;
+  return { uiTouched: metadata.uiTouched, uiFileCount: metadata.uiFileCount };
 }
 
 export function crewArtifactRangeFrom(

@@ -17,6 +17,12 @@ describe('CrewRunQueryService', () => {
       { listByRun: () => [{
         id: 'artifact-1', kind: 'verify-log', relativeStoragePath: 'private/path',
         metadata: { workspaceHead: 'head', passed: false, command: 'secret', cwd: '/private' },
+      }, {
+        id: 'artifact-2', kind: 'workspace-diff', relativeStoragePath: 'private/diff',
+        metadata: {
+          workspaceHead: 'head', baseHead: 'base', truncated: false,
+          uiTouched: true, uiFiles: ['/worktree/src/button.tsx'], uiFileCount: 1,
+        },
       }] } as never,
       { items: () => [] } as never, { readRange } as never,
     );
@@ -25,6 +31,9 @@ describe('CrewRunQueryService', () => {
     expect(JSON.stringify(detail.artifacts)).not.toContain('command');
     expect(JSON.stringify(detail.run)).not.toContain(verifyCommand);
     expect(detail.run.profileSnapshot.policy.verifyCommand).toBeNull();
+    const diffArtifact = detail.artifacts.find((artifact) => artifact.kind === 'workspace-diff');
+    expect(diffArtifact?.metadata).toMatchObject({ uiTouched: true, uiFileCount: 1 });
+    expect(JSON.stringify(diffArtifact)).not.toContain('uiFiles');
     expect(service.readArtifactRange('run-1', 'artifact-1', 2, 4)).toMatchObject({ text: '[REDACTED]' });
     expect(readRange).toHaveBeenCalledWith('run-1', 'artifact-1', 2, 4);
   });

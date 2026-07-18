@@ -6,6 +6,7 @@ export interface CrewContextEnvelope {
   constraints: string[]; decisions: Array<{ id: string; summary: string }>;
   doneCriteria: string[]; clarifications: string[]; workspace: { fullHead: string | null };
   priorFailure?: { source: 'verify' | 'review'; summary: string };
+  uiImpact?: { touched: true; files: string[]; fileCount: number };
   builderEvidence?: { summary: string; changedFiles: string[]; workspaceHead: string };
   plan?: { summary: string; steps: string[]; openQuestions: string[] };
   latestBuild?: { summary: string; changedFiles: string[] };

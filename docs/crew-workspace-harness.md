@@ -101,6 +101,15 @@ Build.
 Before Reviewer execution, Nuncio captures a deterministic diff from the run base head to the
 current head. A truncated diff fails closed and cannot be treated as reviewable evidence.
 
+Nuncio classifies that diff's UI impact deterministically at capture time (pure path/extension
+rules in `crew-ui-impact.ts` — no model judgment): the workspace-diff artifact metadata records
+`uiTouched`, a bounded `uiFiles` list, and the true `uiFileCount`. When the current diff is
+UI-touching, the Reviewer and Foreman envelopes carry a `uiImpact` signal so visual/UX fidelity is
+scrutinized explicitly; public run detail exposes only `uiTouched` and `uiFileCount` (never the
+file list), and the web run detail badges a UI-touching diff with its file count. This is the
+foundation of the visual gate: later slices attach before/after screenshot evidence to the same
+signal.
+
 The read-only Reviewer returns typed findings tied to the current head. `warning` findings stay
 visible but do not block. A `blocker` returns to the same Builder while the independent review
 retry budget remains; the fixed sequence then passes through Verify again.

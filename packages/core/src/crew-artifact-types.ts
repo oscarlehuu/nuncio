@@ -26,6 +26,9 @@ export interface CrewWorkspaceDiffArtifactDto extends CrewArtifactBase {
     workspaceHead: string;
     baseHead: string;
     truncated: boolean;
+    /** Deterministic UI-impact classification; absent on pre-classification servers. */
+    uiTouched?: boolean;
+    uiFileCount?: number;
   };
 }
 

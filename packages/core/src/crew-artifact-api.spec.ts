@@ -22,6 +22,7 @@ const diffArtifact = {
   retentionState: 'retained', createdAt: 11, relativeStoragePath: 'private/diff.log',
   metadata: {
     workspaceHead: 'head-2', baseHead: 'base-1', truncated: false,
+    uiTouched: true, uiFileCount: 3, uiFiles: ['/private/should-not-leak.tsx'],
     cwd: '/private/repo',
   },
 };
@@ -48,9 +49,13 @@ describe('Crew artifact transport', () => {
       artifacts: [
         verifyArtifact,
         diffArtifact,
+        { ...diffArtifact, id: 'legacy-diff', createdAt: 12,
+          metadata: { workspaceHead: 'head-2', baseHead: 'base-1', truncated: false } },
         { ...verifyArtifact, id: 'wrong-run', runId: 'elsewhere' },
         { ...verifyArtifact, id: 'future-kind', kind: 'future-kind' },
         { ...verifyArtifact, id: 'bad-metadata', metadata: { ...verifyArtifact.metadata, passed: 'yes' } },
+        { ...diffArtifact, id: 'bad-ui-metadata',
+          metadata: { ...diffArtifact.metadata, uiTouched: 'yes' } },
       ],
     }));
 
@@ -68,10 +73,18 @@ describe('Crew artifact transport', () => {
       {
         id: 'diff-1', runId: run.id, kind: 'workspace-diff', sha256: 'b'.repeat(64),
         byteCount: 21, retentionState: 'retained', createdAt: 11,
+        metadata: {
+          workspaceHead: 'head-2', baseHead: 'base-1', truncated: false,
+          uiTouched: true, uiFileCount: 3,
+        },
+      },
+      {
+        id: 'legacy-diff', runId: run.id, kind: 'workspace-diff', sha256: 'b'.repeat(64),
+        byteCount: 21, retentionState: 'retained', createdAt: 12,
         metadata: { workspaceHead: 'head-2', baseHead: 'base-1', truncated: false },
       },
     ]);
-    expect(JSON.stringify(detail.artifacts)).not.toMatch(/relativeStoragePath|command|cwd|private/);
+    expect(JSON.stringify(detail.artifacts)).not.toMatch(/relativeStoragePath|command|cwd|private|uiFiles/);
   });
 
   it('parses a bounded range without deriving byte progress from JavaScript text length', async () => {

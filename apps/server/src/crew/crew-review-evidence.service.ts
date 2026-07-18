@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { CrewArtifactStore } from './crew-artifact.store';
 import { CREW_WORKSPACE_PORT, type CrewWorkspacePort } from './crew-execution.ports';
+import { classifyUiImpact } from './domain/crew-ui-impact';
 import type { CrewRunDto } from './domain/crew.types';
 import { CrewArtifactsRepository } from './persistence/crew-artifacts.repository';
 
@@ -30,7 +31,7 @@ export class CrewReviewEvidenceService {
       runId: run.id, kind: 'workspace-diff', content: result.diff,
       metadata: {
         workspaceHead: run.workspaceHead, baseHead: run.baseHead,
-        truncated: result.truncated,
+        truncated: result.truncated, ...classifyUiImpact(result.diff),
       },
     });
     if (result.truncated) throw new Error('Crew workspace diff exceeded the safe review artifact bound');
