@@ -17,6 +17,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findFreePort, startServer } from './lib/hermetic-stack.mjs';
+import { buildRepoWorkspace, isRecordedFixture, promptWithSteers } from './lib/eval-extract.mjs';
 import {
   baselinesDir,
   buildReport as buildReportBase,
@@ -94,8 +95,10 @@ async function seedFacts(baseUrl, projectPath, facts) {
 }
 
 async function enqueueTask(baseUrl, { task, provider, model, projectPath }) {
+  // Recorded tasks may carry the human's mid-session follow-up steers; they
+  // fold into the prompt (mid-run replay would be timing-dependent).
   const body = {
-    prompt: task.prompt,
+    prompt: promptWithSteers(task),
     projectPath,
     provider,
     ...(model ? { model } : {}),
@@ -151,11 +154,17 @@ function countRounds(events) {
 
 async function runOneTask(baseUrl, { task, provider, model }) {
   const started = Date.now();
-  const fixtureDir = await mkdtemp(join(tmpdir(), `nuncio-eval-${task.fixture}-`));
+  const fixtureLabel = isRecordedFixture(task.fixture) ? 'recorded' : task.fixture;
+  const fixtureDir = await mkdtemp(join(tmpdir(), `nuncio-eval-${fixtureLabel}-`));
   activeFixtureDir = fixtureDir; // so a signal mid-task removes it
   try {
-    const setup = await loadFixtureSetup(task.fixture);
-    await setup(fixtureDir);
+    if (isRecordedFixture(task.fixture)) {
+      // Recorded-session task: clone the real repo hard-pinned at its baseSha.
+      await buildRepoWorkspace(task.fixture, fixtureDir);
+    } else {
+      const setup = await loadFixtureSetup(task.fixture);
+      await setup(fixtureDir);
+    }
 
     if (Array.isArray(task.setup?.facts) && task.setup.facts.length) {
       await seedFacts(baseUrl, fixtureDir, task.setup.facts);
