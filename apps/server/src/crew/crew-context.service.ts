@@ -8,7 +8,7 @@ import type { CrewContextEnvelope } from './crew-context.types';
 import { fitContextBudget, fitGenericBudget } from './crew-context-budget';
 import {
   asBuildEvidence, asDecisions, asNullableString, asOutcome, asPlan, asPriorFailure,
-  asPriorPlan, asRecords, asReviewEvidence, asString, asStrings, asVerifyEvidence,
+  asPriorPlan, asRecords, asReviewEvidence, asString, asStrings, asUiImpact, asVerifyEvidence,
 } from './crew-context-projection';
 
 @Injectable()
@@ -36,6 +36,9 @@ export class CrewContextService {
       return artifact.metadata.workspaceHead === run.workspaceHead;
     });
     const requiredArtifactIds = requiredEvidenceIds(role, priorFailure?.source, evidence);
+    const uiImpact = role === 'reviewer' || role === 'foreman'
+      ? asUiImpact(evidence.filter((artifact) => artifact.kind === 'workspace-diff').at(-1)?.metadata)
+      : undefined;
     const envelope: CrewContextEnvelope = {
       kind: 'full', runId, role, contextRevision: run.contextRevision,
       objective: asString(context.objective), goal: goal.trim(),
@@ -47,6 +50,7 @@ export class CrewContextService {
       doneCriteria: asStrings(context.doneCriteria), clarifications: asStrings(context.clarifications),
       workspace: { fullHead: run.workspaceHead },
       ...(priorFailure ? { priorFailure } : {}),
+      ...(uiImpact ? { uiImpact } : {}),
       ...(builderEvidence ? { builderEvidence } : {}),
       ...(plan ? { plan } : {}),
       ...((role === 'reviewer' || role === 'foreman') && latestBuild ? { latestBuild } : {}),
@@ -73,6 +77,7 @@ export class CrewContextService {
       contextRevision: full.contextRevision, goal: full.goal, workspace: full.workspace,
       ...(full.changeRequest ? { changeRequest: full.changeRequest } : {}),
       ...(full.priorFailure ? { priorFailure: full.priorFailure } : {}),
+      ...(full.uiImpact ? { uiImpact: full.uiImpact } : {}),
       clarifications: full.clarifications.slice(-3),
       artifactRefs: full.artifactRefs,
       ...(full.builderEvidence ? { builderEvidence: full.builderEvidence } : {}),

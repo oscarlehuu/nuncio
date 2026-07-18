@@ -91,6 +91,9 @@ describe('Crew forced-Mock workflow (e2e)', () => {
     expect(detail.artifacts.every((artifact: Record<string, unknown>) => !('relativeStoragePath' in artifact))).toBe(true);
     expect(JSON.stringify(detail.artifacts)).not.toContain('"cwd"');
     expect(JSON.stringify(detail.artifacts)).not.toContain('"command"');
+    const diffArtifact = detail.artifacts.find((artifact: { kind: string }) => artifact.kind === 'workspace-diff');
+    expect(diffArtifact.metadata).toMatchObject({ uiTouched: false, uiFileCount: 0 });
+    expect(JSON.stringify(diffArtifact)).not.toContain('uiFiles');
     const verifyArtifact = detail.artifacts.find((artifact: { kind: string }) => artifact.kind === 'verify-log');
     const range = await request(app.getHttpServer())
       .get(`/api/crew-runs/${runId}/artifacts/${verifyArtifact.id}?offset=0&limit=32`);

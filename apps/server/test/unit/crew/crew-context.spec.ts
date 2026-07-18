@@ -183,6 +183,46 @@ describe('CrewContextService', () => {
       .toThrow('authority fields exceed');
   });
 
+  it('projects deterministic UI impact from the current diff artifact to Reviewer and Foreman', () => {
+    const currentHead = run.workspaceHead;
+    const evidence = [
+      { ...artifacts[0]!, id: 'stale-diff', kind: 'workspace-diff',
+        metadata: { workspaceHead: 'b'.repeat(40), uiTouched: true, uiFiles: ['old.tsx'], uiFileCount: 1 } },
+      { ...artifacts[0]!, id: 'current-diff', kind: 'workspace-diff',
+        metadata: { workspaceHead: currentHead, uiTouched: true,
+          uiFiles: ['src/components/button.tsx'], uiFileCount: 1 } },
+      { ...artifacts[0]!, id: 'current-verify', kind: 'verify-log', metadata: { workspaceHead: currentHead } },
+    ];
+    const service = new CrewContextService(
+      { findById: () => run } as never, { listByRun: () => evidence } as never,
+    );
+    expect(service.buildEnvelope('run-1', 'reviewer', 'Review')).toMatchObject({
+      uiImpact: { touched: true, files: ['src/components/button.tsx'], fileCount: 1 },
+    });
+    expect(service.buildEnvelope('run-1', 'foreman', 'Synthesize')).toMatchObject({
+      uiImpact: { touched: true, files: ['src/components/button.tsx'], fileCount: 1 },
+    });
+    expect(service.buildEnvelope('run-1', 'builder', 'Build').uiImpact).toBeUndefined();
+    expect(service.buildDelta('run-1', 'reviewer', 'Review', 3)).toMatchObject({
+      uiImpact: { touched: true, files: ['src/components/button.tsx'], fileCount: 1 },
+    });
+  });
+
+  it('omits uiImpact when the current diff is not UI-touching or is unclassified', () => {
+    const currentHead = run.workspaceHead;
+    const verify = { ...artifacts[0]!, id: 'current-verify', kind: 'verify-log',
+      metadata: { workspaceHead: currentHead } };
+    const untouched = [verify, { ...artifacts[0]!, id: 'current-diff', kind: 'workspace-diff',
+      metadata: { workspaceHead: currentHead, uiTouched: false, uiFiles: [], uiFileCount: 0 } }];
+    const unclassified = [verify, { ...artifacts[0]!, id: 'legacy-diff', kind: 'workspace-diff',
+      metadata: { workspaceHead: currentHead } }];
+    const service = (evidence: unknown[]) => new CrewContextService(
+      { findById: () => run } as never, { listByRun: () => evidence } as never,
+    );
+    expect(service(untouched).buildEnvelope('run-1', 'reviewer', 'Review').uiImpact).toBeUndefined();
+    expect(service(unclassified).buildEnvelope('run-1', 'reviewer', 'Review').uiImpact).toBeUndefined();
+  });
+
   it('projects bounded successor change, prior head, plan, gates, and outcome for a fresh member', () => {
     const successor = structuredClone(run) as typeof run & { priorRunId: string };
     successor.priorRunId = 'prior-1';

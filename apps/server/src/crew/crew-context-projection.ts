@@ -20,6 +20,11 @@ export function asPriorFailure(value: unknown): CrewContextEnvelope['priorFailur
   if (!row || (row.source !== 'verify' && row.source !== 'review') || typeof row.summary !== 'string') return undefined;
   return { source: row.source, summary: row.summary };
 }
+export function asUiImpact(metadata: Record<string, unknown> | undefined): CrewContextEnvelope['uiImpact'] {
+  if (metadata?.uiTouched !== true) return undefined;
+  const fileCount = typeof metadata.uiFileCount === 'number' ? metadata.uiFileCount : 0;
+  return { touched: true, files: asStrings(metadata.uiFiles), fileCount };
+}
 export function asPlan(context: Record<string, unknown>): CrewContextEnvelope['plan'] {
   const summary = asString(context.planSummary);
   return summary ? { summary, steps: asStrings(context.planSteps), openQuestions: asStrings(context.openQuestions) }

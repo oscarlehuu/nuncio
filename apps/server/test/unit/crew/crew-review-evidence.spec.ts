@@ -33,6 +33,42 @@ describe('CrewReviewEvidenceService', () => {
     expect(diff).toHaveBeenCalledTimes(1);
   });
 
+  it('classifies deterministic UI impact into the stored diff artifact metadata', async () => {
+    const uiDiff = [
+      'diff --git a/src/components/button.tsx b/src/components/button.tsx',
+      'diff --git a/src/index.css b/src/index.css',
+      'diff --git a/apps/server/src/main.ts b/apps/server/src/main.ts',
+    ].join('\n');
+    const writeLog = jest.fn(() => ({ artifact: { id: 'diff-ui', kind: 'workspace-diff', metadata: {} } }));
+    const service = new CrewReviewEvidenceService(
+      { diff: async () => ({ diff: uiDiff, truncated: false }), inspectBoundary: async () => boundary } as never,
+      { writeLog } as never, { listByRun: () => [] } as never,
+    );
+    await service.ensureCurrentDiff(run as never);
+    expect(writeLog).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({
+        uiTouched: true,
+        uiFiles: ['src/components/button.tsx', 'src/index.css'],
+        uiFileCount: 2,
+      }),
+    }));
+  });
+
+  it('marks backend-only diffs as not UI-touching', async () => {
+    const writeLog = jest.fn(() => ({ artifact: { id: 'diff-be', kind: 'workspace-diff', metadata: {} } }));
+    const service = new CrewReviewEvidenceService(
+      {
+        diff: async () => ({ diff: 'diff --git a/apps/server/src/main.ts b/apps/server/src/main.ts', truncated: false }),
+        inspectBoundary: async () => boundary,
+      } as never,
+      { writeLog } as never, { listByRun: () => [] } as never,
+    );
+    await service.ensureCurrentDiff(run as never);
+    expect(writeLog).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({ uiTouched: false, uiFiles: [], uiFileCount: 0 }),
+    }));
+  });
+
   it('persists overflow evidence but fails closed instead of sending a partial diff to Reviewer', async () => {
     const stored = {
       id: 'overflow', kind: 'workspace-diff', metadata: { workspaceHead: head, baseHead, truncated: true },
