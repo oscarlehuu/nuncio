@@ -584,6 +584,20 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     ],
   },
   {
+    key: 'NUNCIO_WORKSPACE_CONTEXT_INJECT',
+    category: 'agents',
+    type: 'string',
+    label: 'Inject workspace context',
+    description:
+      'When on, a new session on a git workspace starts already knowing its branch, HEAD, dirty files, recent commits, and tracked top-level entries (a compact block, ~1 KB cap) instead of spending its first tool calls re-deriving them. Set to off as a global kill-switch.',
+    envVar: 'NUNCIO_WORKSPACE_CONTEXT_INJECT',
+    default: 'on',
+    options: [
+      { value: 'on', label: 'On', description: 'Inject the workspace block into new git-bound sessions.' },
+      { value: 'off', label: 'Off', description: 'Never inject the workspace block.' },
+    ],
+  },
+  {
     key: 'NUNCIO_CONTEXT_FACTS_MAX_BYTES',
     category: 'agents',
     type: 'string',

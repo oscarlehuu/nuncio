@@ -47,6 +47,15 @@ export interface AgentCapabilities {
   reproduceGate?: boolean;
   /** Session modes this engine implements (debug/multitask). Absent = no mode support. */
   modes?: readonly SessionMode[];
+  /**
+   * Whether the engine injects the managed Nuncio project context (facts +
+   * latest handoff brief) into its own system prompt for non-policy sessions
+   * (the Pi engine's `nuncio-context` append). When set, the session layer
+   * skips the duplicate facts block in the user preamble for solo sessions;
+   * runtime-policy sessions keep the preamble facts because the hermetic
+   * policy loader never receives the managed context.
+   */
+  systemContextInjection?: boolean;
   /** Explicit per-session policies this adapter enforces without relying on prompt instructions. */
   runtimePolicies?: readonly AgentRuntimePolicySupport[];
 }

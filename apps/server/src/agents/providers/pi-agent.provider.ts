@@ -169,6 +169,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     spawnTask: true,
     reproduceGate: true,
     modes: ['debug', 'multitask'],
+    systemContextInjection: true,
     runtimePolicies: [
       { filesystem: 'read-only', network: 'disabled' },
       { filesystem: 'workspace-write', network: 'disabled' },

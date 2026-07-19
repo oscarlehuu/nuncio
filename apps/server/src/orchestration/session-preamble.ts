@@ -6,6 +6,8 @@ export interface SessionPreambleParts {
   brief?: string;
   /** Rendered project facts (B2), after the brief. */
   facts?: string;
+  /** Rendered workspace context (branch/HEAD/status/recent/top-level), after the facts. */
+  workspace?: string;
   /** The user's original prompt — always last, always verbatim. */
   prompt: string;
   /** Engine profile (D2): its brief-wrapper/facts-wrapper shape the two blocks. */
@@ -19,7 +21,7 @@ const DEFAULT_WARN = (m: string) => console.warn(`[session-preamble] ${m}`);
 
 /**
  * The single choke point that composes a session's first prompt: handoff brief →
- * project facts → original prompt, joined by a markdown rule. Empty sections are
+ * project facts → workspace context → original prompt, joined by a markdown rule. Empty sections are
  * omitted. When a prompt profile is supplied (D2), its `brief-wrapper` /
  * `facts-wrapper` sections wrap the respective canonical blocks — the only place
  * per-engine prompt shape exists (adapters receive the finished string). With no
@@ -35,6 +37,9 @@ export function composeSessionPreamble(parts: SessionPreambleParts): string {
 
   const facts = parts.facts?.trim();
   if (facts) sections.push(applyWrapper(parts.profile?.sections.factsWrapper, facts, warn));
+
+  const workspace = parts.workspace?.trim();
+  if (workspace) sections.push(workspace);
 
   if (sections.length === 0) return parts.prompt;
   return [...sections, parts.prompt].join(SEPARATOR);
