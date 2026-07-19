@@ -31,6 +31,7 @@ import { SubagentModelsSettingsSection } from './subagent-models-settings-sectio
 import { UsageSettingsSection } from './usage-settings-section';
 import { SettingsSectionNav, type SettingsSectionNavItem } from './settings-section-nav';
 import { CrewProfilesSettingsSection } from './crew/crew-profiles-settings-section';
+import { McpServersSettingsSection } from './mcp-servers-settings-section';
 import { HeartbeatHealthSection } from './heartbeat-health-section';
 
 interface SettingsViewProps {
@@ -441,7 +442,12 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
           </div>
         );
       case 'mcp-tools':
-        return renderSettingGroup('MCP & Tools', tools, 'No MCP or tool settings are available.');
+        return (
+          <div className="space-y-6">
+            <McpServersSettingsSection />
+            {renderSettingGroup('Tools', tools, 'No tool settings are available.')}
+          </div>
+        );
       case 'agents':
         return renderAgentsSection(agents, 'No agent defaults are available.');
       case 'crew-profiles':

@@ -62,6 +62,7 @@ export class SessionsController {
       projectPath: body.projectPath,
       baseBranch: body.baseBranch,
       useWorktree: body.useWorktree,
+      ...(body.mcpServerIds !== undefined ? { mcpServerIds: body.mcpServerIds } : {}),
       ...(contextBrief ? { contextBrief } : {}),
     });
   }

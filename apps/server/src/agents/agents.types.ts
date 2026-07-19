@@ -150,6 +150,8 @@ export interface AgentRunContext {
   runtimeEnvironment?: AgentRuntimeEnvironment;
   /** Explicit policy; absence deliberately preserves the provider's current Solo defaults. */
   runtimePolicy?: AgentRuntimePolicy | null;
+  /** Codex-only: disable inherited MCP servers not owned by Nuncio for this session. */
+  codexMcpConfig?: { mcp_servers: Record<string, { enabled: false }> };
 }
 
 /** Input for `AgentProvider.completeOneShot` — one bounded, tool-less completion. */

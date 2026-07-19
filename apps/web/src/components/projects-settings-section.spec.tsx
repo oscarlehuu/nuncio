@@ -20,6 +20,7 @@ function config(partial: Partial<ProjectConfigDto>): ProjectConfigDto {
     verifyCommand: partial.verifyCommand ?? null,
     verifyAutoSteer: partial.verifyAutoSteer ?? 'inherit',
     verifyMaxRounds: partial.verifyMaxRounds ?? null,
+    mcpServerIds: partial.mcpServerIds ?? null,
     createdAt: 0,
     updatedAt: 0,
   };

@@ -137,7 +137,12 @@ export function assertPathWithinRuntimeWorkspace(
   return existsSync(candidate) ? realpathSync(candidate) : canonicalCandidate;
 }
 
-/** Workspace writes never include Git control metadata, including pointer files. */
+/**
+ * Workspace writes never include Git control metadata (including pointer
+ * files) or the `.nuncio` verify gate — the harness-owned gate an agent could
+ * otherwise rewrite to force its own verification green. Reads stay allowed;
+ * this guard is shared by every policy write tool (Pi and Claude).
+ */
 export function assertWritablePathWithinRuntimeWorkspace(
   workspaceRoot: string,
   requestedPath: string,
@@ -147,6 +152,9 @@ export function assertWritablePathWithinRuntimeWorkspace(
   const fromRoot = relative(root, candidate);
   if (fromRoot === '.git' || fromRoot.startsWith(`.git${sep}`)) {
     throw new Error('Git metadata is read-only under the runtime policy.');
+  }
+  if (fromRoot === '.nuncio' || fromRoot.startsWith(`.nuncio${sep}`)) {
+    throw new Error('The .nuncio verify gate is read-only under the runtime policy.');
   }
   return candidate;
 }

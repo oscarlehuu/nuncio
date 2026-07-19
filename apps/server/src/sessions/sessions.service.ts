@@ -93,6 +93,11 @@ import {
 import { captureWorkspaceDiffSnapshot } from './diff/turn-diff-classifier';
 import { SettingsService } from '../settings/settings.service';
 import { ProjectDefaultsResolver } from '../projects/project-defaults-resolver';
+import { McpService } from '../mcp/mcp.service';
+import {
+  buildCodexMcpSuppressionConfig,
+  listInheritedCodexMcpServerNames,
+} from '../mcp/import/codex-inherited-mcp';
 
 type StreamListener = (event: SessionEvent) => void;
 
@@ -220,6 +225,7 @@ export class SessionsService implements OnModuleDestroy {
     // Optional: when present, a green ui-touching verify auto-captures
     // after-evidence (fail-open — capture never affects the loop).
     @Optional() private readonly evidence?: EvidenceCaptureService,
+    @Optional() private readonly mcp?: McpService,
   ) {
     // A crash mid-fan-out can leave steer rows leased forever; a claim must
     // never outlive the process that took it. Release before restore so the
@@ -388,6 +394,8 @@ export class SessionsService implements OnModuleDestroy {
       worktreePath ?? workspace,
     );
 
+    const mcpServerIds = this.validateMcpServerIds(input.mcpServerIds);
+
     // The single choke point for the first prompt: handoff brief → project
     // facts → workspace context → the user's prompt. Both this path and
     // TasksService.execute() (via input.contextBrief) compose here, so the
@@ -421,6 +429,7 @@ export class SessionsService implements OnModuleDestroy {
         projectPath,
         baseBranch,
         worktreePath,
+        mcpServerIds,
         branch,
         runtimePolicy,
         cursorBackend: 'sdk',
@@ -2283,6 +2292,8 @@ export class SessionsService implements OnModuleDestroy {
       projectPath: session.projectPath,
       provider: session.provider,
       model: session.model,
+      workspace: session.worktreePath ?? workspace ?? null,
+      mcpServerIds: session.mcpServerIds,
     });
     let runtimeEnvironment!: ReturnType<typeof buildAgentRuntimeEnvironment>;
     const runtimeInfoTool = createNuncioRuntimeInfoTool(() => runtimeEnvironment, runtimePolicy);
@@ -2323,7 +2334,38 @@ export class SessionsService implements OnModuleDestroy {
       tools,
       runtimeEnvironment,
       runtimePolicy,
+      ...(session.provider === 'codex' ? { codexMcpConfig: this.buildCodexMcpConfig(session) } : {}),
     };
+  }
+
+  private buildCodexMcpConfig(session: SessionDto): { mcp_servers: Record<string, { enabled: false }> } | undefined {
+    if (!this.mcp) return undefined;
+    const resolved = this.mcp.resolveForSession({
+      provider: session.provider,
+      projectPath: session.projectPath,
+      mcpServerIds: session.mcpServerIds,
+    });
+    const inherited = listInheritedCodexMcpServerNames(
+      homedir(),
+      session.worktreePath ?? session.projectPath ?? session.workspace,
+    );
+    if (inherited.length === 0) return undefined;
+    const bridgeOwned = new Set(resolved.map((server) => server.name));
+    const config = buildCodexMcpSuppressionConfig(inherited, bridgeOwned);
+    return Object.keys(config.mcp_servers).length > 0 ? config : undefined;
+  }
+
+  private validateMcpServerIds(ids: string[] | null | undefined): string[] | null | undefined {
+    if (ids === undefined || ids === null) return ids;
+    if (!this.mcp) {
+      throw new BadRequestException('MCP store is not available');
+    }
+    const known = new Set(this.mcp.list().map((server) => server.id));
+    const invalid = ids.filter((id) => !known.has(id));
+    if (invalid.length > 0) {
+      throw new BadRequestException(`unknown MCP server id(s): ${invalid.join(', ')}`);
+    }
+    return [...new Set(ids)];
   }
 
   private validateRuntimePolicy(

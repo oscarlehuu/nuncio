@@ -47,6 +47,7 @@ import {
   type ModelProvider,
 } from '../lib/model-providers';
 import { CrewMachinePicker } from './crew/crew-machine-picker';
+import { McpServerChipPicker } from './mcp-server-chip-picker';
 import { CrewProfilePicker } from './crew/crew-profile-picker';
 import { ExecutionModePicker, type ExecutionMode } from './crew/execution-mode-picker';
 import { ResolvedCrewPreview } from './crew/resolved-crew-preview';
@@ -85,6 +86,7 @@ interface HomeViewProps {
     useWorktree?: boolean,
     attachments?: MessageAttachment[],
     mode?: SessionMode,
+    mcpServerIds?: string[],
   ) => Promise<void>;
   onContinueOnMobile?: () => void;
   loading?: boolean;
@@ -119,6 +121,7 @@ export function HomeView({
   const [baseBranch, setBaseBranch] = useState<string | undefined>(initialWorkspace.baseBranch);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('local');
   const [mode, setMode] = useState<SessionMode | null>(null);
+  const [mcpServerIds, setMcpServerIds] = useState<string[]>([]);
   const [dragActive, setDragActive] = useState(false);
   // Hub mode: a Crew run can be routed to any tailnet peer, which then owns it
   // end to end. null = local (the machine this page talks to). Only Crew create
@@ -215,6 +218,7 @@ export function HomeView({
         useWorktree,
         attachments.length > 0 ? attachments : undefined,
         mode ?? undefined,
+        mcpServerIds.length > 0 ? mcpServerIds : undefined,
       );
     } catch (error) {
       imageAttachments.restore(stagedItems);
@@ -344,6 +348,13 @@ export function HomeView({
           ) : null}
         </div>
 
+        <McpServerChipPicker
+          projectPath={projectPath}
+          selectedIds={mcpServerIds}
+          onChange={setMcpServerIds}
+          className="mb-3 justify-center"
+        />
+
         <div
           className={cn(
             'home-composer flex flex-col rounded-2xl border bg-card shadow-e2 surface-lit transition-shadow focus-within:ring-2 focus-within:ring-ring/40',
@@ -397,8 +408,14 @@ export function HomeView({
                 needsProject={!projectPath}
               />
             ) : null}
-          </div>
-          <div className="home-composer-bar flex items-center gap-2 px-4 pb-3.5 pt-1.5">
+        </div>
+        <McpServerChipPicker
+          projectPath={projectPath}
+          selectedIds={mcpServerIds}
+          onChange={setMcpServerIds}
+          className="mb-3 justify-center"
+        />
+        <div className="home-composer-bar flex items-center gap-2 px-4 pb-3.5 pt-1.5">
             {canAttachImages && (
               <AttachButton
                 onFiles={(files) => void imageAttachments.addFiles(files)}

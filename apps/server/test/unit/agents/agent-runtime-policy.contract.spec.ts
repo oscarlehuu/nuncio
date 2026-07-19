@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   assertPathWithinRuntimeWorkspace,
   assertRuntimePolicySupported,
+  assertWritablePathWithinRuntimeWorkspace,
   runtimeToolsForPolicy,
 } from '../../../src/agents/agent-runtime-policy';
 import { defineCrewRuntimeTool } from '../../../src/agents/tools/agent-runtime-tools-policy';
@@ -137,6 +138,35 @@ describe('Agent runtime policy contract', () => {
           workspaceRoot,
         ),
       ).toThrow('does not support runtime policy');
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the .nuncio verify gate read-only for every policy write tool', () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'nuncio-policy-gate-'));
+    mkdirSync(join(workspaceRoot, '.nuncio'));
+    try {
+      // Reads of the gate stay allowed (Reviewer/Foreman must read it).
+      expect(assertPathWithinRuntimeWorkspace(workspaceRoot, '.nuncio/verify')).toBe(
+        join(realpathSync(workspaceRoot), '.nuncio', 'verify'),
+      );
+      // Writes into the gate are refused: direct, nested, traversal-normalized,
+      // and the directory itself.
+      for (const target of ['.nuncio', '.nuncio/verify', '.nuncio/deep/nested.sh', 'src/../.nuncio/verify']) {
+        expect(() => assertWritablePathWithinRuntimeWorkspace(workspaceRoot, target)).toThrow(
+          'verify gate is read-only',
+        );
+      }
+      // A .nuncio-adjacent name is NOT the gate — segment match only.
+      expect(assertWritablePathWithinRuntimeWorkspace(workspaceRoot, 'foo.nuncio.ts')).toBe(
+        join(realpathSync(workspaceRoot), 'foo.nuncio.ts'),
+      );
+      // A symlink pointing into the gate is caught after canonicalization.
+      symlinkSync(join(workspaceRoot, '.nuncio'), join(workspaceRoot, 'gate-link'), 'dir');
+      expect(() => assertWritablePathWithinRuntimeWorkspace(workspaceRoot, 'gate-link/verify')).toThrow(
+        'verify gate is read-only',
+      );
     } finally {
       rmSync(workspaceRoot, { recursive: true, force: true });
     }

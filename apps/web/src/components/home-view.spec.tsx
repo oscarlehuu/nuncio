@@ -294,6 +294,7 @@ describe('HomeView', () => {
       false,
       undefined,
       undefined,
+      undefined,
     );
   });
 
@@ -313,6 +314,7 @@ describe('HomeView', () => {
       'main',
       undefined,
       true,
+      undefined,
       undefined,
       undefined,
     );
@@ -367,6 +369,7 @@ describe('HomeView', () => {
       undefined,
       undefined,
       false,
+      undefined,
       undefined,
       undefined,
     );
@@ -563,6 +566,7 @@ describe('HomeView', () => {
       false,
       undefined,
       'debug',
+      undefined,
     );
   });
 });

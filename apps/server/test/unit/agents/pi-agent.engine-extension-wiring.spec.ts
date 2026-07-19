@@ -71,6 +71,17 @@ function inlineExtensionNames(options: LoaderOptions): string[] {
   return factories.map((factory) => factory.name ?? '<anonymous>');
 }
 
+/** Run every recorded inline-extension factory against a recording API. */
+async function registeredHookEvents(options: LoaderOptions): Promise<string[]> {
+  const events: string[] = [];
+  const api = { on: (event: string) => events.push(event) };
+  const factories = (options.extensionFactories ?? []) as Array<{
+    factory: (api: unknown) => void | Promise<void>;
+  }>;
+  for (const factory of factories) await factory.factory(api);
+  return events;
+}
+
 describe('PiAgentProvider engine extension wiring', () => {
   let module: TestingModule;
   let provider: PiAgentProvider;
@@ -96,12 +107,14 @@ describe('PiAgentProvider engine extension wiring', () => {
     delete process.env.NUNCIO_DATA_DIR;
     delete process.env.PI_AGENT_DIR;
     delete process.env.NUNCIO_ENGINE_GATE_GUARD;
+    delete process.env.NUNCIO_ENGINE_COMPACTION;
   });
 
   beforeEach(() => {
     loaderOptions = [];
     process.env.PI_AGENT_DIR = '/tmp/custom-pi-agent';
     delete process.env.NUNCIO_ENGINE_GATE_GUARD;
+    delete process.env.NUNCIO_ENGINE_COMPACTION;
     injectPiSdkStub(provider);
   });
 
@@ -144,5 +157,101 @@ describe('PiAgentProvider engine extension wiring', () => {
     expect(inlineExtensionNames(engineLoaderOptions())).not.toContain(
       NUNCIO_ENGINE_EXTENSION_NAME,
     );
+  });
+
+  it('loads the gate-guard rail into policy sessions while keeping them hermetic', async () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'nuncio-policy-rail-'));
+    try {
+      const created = sessions.create({ prompt: 'crew builder', provider: 'pi' });
+
+      await provider.run(created.id, created.prompt, {
+        cwd: workspaceRoot,
+        runtimePolicy: {
+          filesystem: 'workspace-write',
+          workspaceRoot,
+          network: 'disabled',
+        },
+        emit: () => {},
+      });
+
+      const options = engineLoaderOptions();
+      expect(inlineExtensionNames(options)).toContain(NUNCIO_ENGINE_EXTENSION_NAME);
+      // Hermetic posture is untouched: only the in-repo rail loads — no
+      // allowlisted personal extension paths, no skills/context files.
+      expect(options).toMatchObject({
+        noExtensions: true,
+        noSkills: true,
+        noContextFiles: true,
+      });
+      expect('additionalExtensionPaths' in options).toBe(false);
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps policy sessions rail-free when the gate guard is off', async () => {
+    process.env.NUNCIO_ENGINE_GATE_GUARD = 'off';
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'nuncio-policy-rail-off-'));
+    try {
+      const created = sessions.create({ prompt: 'guard off builder', provider: 'pi' });
+
+      await provider.run(created.id, created.prompt, {
+        cwd: workspaceRoot,
+        runtimePolicy: {
+          filesystem: 'workspace-write',
+          workspaceRoot,
+          network: 'disabled',
+        },
+        emit: () => {},
+      });
+
+      expect(inlineExtensionNames(engineLoaderOptions())).not.toContain(
+        NUNCIO_ENGINE_EXTENSION_NAME,
+      );
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('registers no compaction hook by default (the layer ships opt-in)', async () => {
+    const created = sessions.create({ prompt: 'default compaction', provider: 'pi' });
+
+    await provider.run(created.id, created.prompt, {
+      cwd: '/tmp/workspaces/compaction-default',
+      emit: () => {},
+    });
+
+    const events = await registeredHookEvents(engineLoaderOptions());
+    expect(events).toContain('tool_call');
+    expect(events).not.toContain('session_before_compact');
+  });
+
+  it('registers the session_before_compact hook when the compaction layer is on', async () => {
+    process.env.NUNCIO_ENGINE_COMPACTION = 'on';
+    const created = sessions.create({ prompt: 'compaction on', provider: 'pi' });
+
+    await provider.run(created.id, created.prompt, {
+      cwd: '/tmp/workspaces/compaction-on',
+      emit: () => {},
+    });
+
+    expect(await registeredHookEvents(engineLoaderOptions())).toContain('session_before_compact');
+  });
+
+  it('keeps the rail for the compaction hook even with the gate guard off', async () => {
+    process.env.NUNCIO_ENGINE_GATE_GUARD = 'off';
+    process.env.NUNCIO_ENGINE_COMPACTION = 'on';
+    const created = sessions.create({ prompt: 'compaction only', provider: 'pi' });
+
+    await provider.run(created.id, created.prompt, {
+      cwd: '/tmp/workspaces/compaction-only',
+      emit: () => {},
+    });
+
+    const options = engineLoaderOptions();
+    expect(inlineExtensionNames(options)).toContain(NUNCIO_ENGINE_EXTENSION_NAME);
+    const events = await registeredHookEvents(options);
+    expect(events).toContain('session_before_compact');
+    expect(events).not.toContain('tool_call');
   });
 });

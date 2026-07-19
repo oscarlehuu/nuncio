@@ -1,4 +1,8 @@
 import { evaluateGateIntegrity } from './gate-integrity';
+import type {
+  CompactionHandlerResult,
+  SessionBeforeCompactEventLike,
+} from './compaction-extension';
 
 /**
  * The in-repo Nuncio Engine inline extension — the rail every Engine hook
@@ -15,11 +19,19 @@ export interface NuncioEngineExtensionOptions {
   cwd: string;
   /** Register the gate-integrity tool_call guard. */
   gateGuard: boolean;
+  /** Register the compaction policy hook (session_before_compact). */
+  compaction?: {
+    handler(event: SessionBeforeCompactEventLike): Promise<CompactionHandlerResult | undefined>;
+  };
 }
 
 /** Structural subset of Pi's ExtensionAPI that the engine extension uses. */
 interface EngineExtensionApi {
-  on: (event: 'tool_call', handler: (event: ToolCallEventLike) => ToolCallResultLike) => void;
+  on(event: 'tool_call', handler: (event: ToolCallEventLike) => ToolCallResultLike): void;
+  on(
+    event: 'session_before_compact',
+    handler: (event: SessionBeforeCompactEventLike) => Promise<CompactionHandlerResult | undefined>,
+  ): void;
 }
 
 interface ToolCallEventLike {
@@ -39,6 +51,10 @@ export function buildNuncioEngineExtension(options: NuncioEngineExtensionOptions
   const factory = (pi: EngineExtensionApi): void => {
     if (options.gateGuard) {
       pi.on('tool_call', (event) => evaluateGateIntegrity(options.cwd, event));
+    }
+    if (options.compaction) {
+      const { handler } = options.compaction;
+      pi.on('session_before_compact', (event) => handler(event));
     }
   };
   return { name: NUNCIO_ENGINE_EXTENSION_NAME, factory };

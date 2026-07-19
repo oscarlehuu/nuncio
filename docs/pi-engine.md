@@ -139,6 +139,19 @@ this recipe; use `noContextFiles`/`agentsFilesOverride` if the personal file sho
   edit/write into any `.nuncio/` directory is blocked pre-execution (lexical + symlink-realpath
   check), bash gets a best-effort advisory block, and the shared turn-diff classifier's
   `gate-protected` class is the durable backstop. This claims the "blocked from" quadrant.
+  Since 2026-07-19 the rail also loads into **runtime-policy sessions** (Crew members), which stay
+  otherwise hermetic; the shared policy write guard additionally refuses `.nuncio` targets for
+  every engine's confined edit/write tools.
+- **Sandboxed policy shell. DONE (2026-07-19).** Workspace-write policy sessions (Crew Builder)
+  get a `bash` tool that runs every command through the shared OS sandbox
+  (`agents/runtime-command-sandbox.ts` — the same Seatbelt/bubblewrap core the Crew verifier
+  wraps): network denied, writes confined to the workspace, `.git` and `.nuncio` read-only. The
+  Builder can finally run builds/tests before submitting instead of coding blind.
+  `NUNCIO_ENGINE_POLICY_SHELL` = `auto` (default; without a sandbox backend the shell stays
+  available but its description announces confinement is advisory — never silently) /
+  `sandboxed-only` / `off`. Read-only policies never get a shell. Live-enforced by
+  `policy-shell-tool.spec.ts` (real Seatbelt: outside-write denied, gate-write denied, network
+  denied).
 - **Verify gate + evidence layers 2–3. DONE (2026-07-18), provider-neutral where possible.**
   The done-gate is the session-layer post-turn verify loop (auto-steer, max rounds, futility stop),
   now diff-aware: `sessions/diff/turn-diff-classifier.ts` fingerprints the workspace so a no-change
@@ -146,6 +159,18 @@ this recipe; use `noContextFiles`/`agentsFilesOverride` if the personal file sho
   A green verify on a `ui`-classified turn auto-captures after-evidence (known target →
   `NUNCIO_EVIDENCE_URL` fallback; fail-open). Solo Engine sessions also get the `capture_evidence`
   tool over the layer-1 service.
+- **Compaction layer (Remember quadrant). DONE (2026-07-19), opt-in.** Solo Engine sessions can
+  own what survives context compaction via `session_before_compact` on the engine rail
+  (`pi-engine/compaction-extension.ts`): the plan, latest verify result, open chips/gates
+  (`sessions/domain/session-state-snapshot.ts`, provider-neutral) and recent user instructions are
+  re-injected **verbatim** (never trusted to the summarizer — the Grok Build principle), a cheap
+  model (`NUNCIO_ENGINE_COMPACTION_MODEL`, default `cliproxyapi:claude-sonnet-4-6`) narrates the
+  remainder incrementally, and the summary ends with a pointer to the durable event log backed by
+  the new solo `read_session_history` tool (seq-cursor range reads). Degenerate summaries retry
+  once; EVERY failure path falls back to Pi's default compaction — the layer can degrade, never
+  brick a session. `NUNCIO_ENGINE_COMPACTION` defaults **off** until the eval harness shows a win
+  (principle 4); the SDK hook surface is pinned by `pi-engine.compaction-contract.spec.ts` so a Pi
+  bump that moves it fails the gate loudly.
 - **Eval mechanism (principle 4). DONE (2026-07-18).** `bun run eval:extract -- --session <id>`
   folds a recorded real session (durable event log) into a replayable `eval/tasks/*.json` with a
   `{ repo, baseSha }` pin; `eval:engines` clones the pinned SHA into a throwaway workspace and

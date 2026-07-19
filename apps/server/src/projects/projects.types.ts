@@ -25,6 +25,8 @@ export interface ProjectDto {
    * home. Positive integer; default 1 (equal importance) when unset.
    */
   weight: number;
+  /** Default MCP servers for sessions in this project; null = inherit all scoped. */
+  mcpServerIds: string[] | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -45,6 +47,8 @@ export interface UpsertProjectDto {
   verifyMaxRounds?: number | null;
   /** Importance weight (rung 3). Positive integer; null/omitted keeps/uses default 1. */
   weight?: number | null;
+  /** Default MCP server ids; null clears override; omit to leave unchanged. */
+  mcpServerIds?: string[] | null;
 }
 
 export const WORKTREE_POLICIES: readonly WorktreePolicy[] = ['always', 'never', 'optional'];
@@ -59,6 +63,7 @@ export interface ProjectRow {
   verify_auto_steer: string;
   verify_max_rounds: number | null;
   weight: number | null;
+  mcp_server_ids_json: string | null;
   created_at: number;
   updated_at: number;
 }

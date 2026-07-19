@@ -343,6 +343,7 @@ export async function createSession(
   base = '',
   attachments?: MessageAttachment[],
   mode?: SessionMode,
+  mcpServerIds?: string[],
 ): Promise<Session> {
   const body: {
     prompt: string;
@@ -355,6 +356,7 @@ export async function createSession(
     useWorktree?: boolean;
     attachments?: MessageAttachment[];
     mode?: SessionMode;
+    mcpServerIds?: string[];
   } = { prompt };
   if (model) body.model = model;
   if (provider) body.provider = provider;
@@ -370,6 +372,7 @@ export async function createSession(
   }
   if (modelOptions && Object.keys(modelOptions).length > 0) body.modelOptions = modelOptions;
   if (attachments && attachments.length > 0) body.attachments = attachments;
+  if (mcpServerIds && mcpServerIds.length > 0) body.mcpServerIds = mcpServerIds;
 
   const res = await apiFetch(`${base}/api/sessions`, {
     method: 'POST',
@@ -997,6 +1000,7 @@ export interface ProjectConfigDto {
   verifyCommand: string | null;
   verifyAutoSteer: VerifyAutoSteer;
   verifyMaxRounds: number | null;
+  mcpServerIds: string[] | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -1009,6 +1013,7 @@ export interface UpsertProjectConfigInput {
   verifyCommand?: string | null;
   verifyAutoSteer?: VerifyAutoSteer;
   verifyMaxRounds?: number | null;
+  mcpServerIds?: string[] | null;
 }
 
 export async function fetchProjectConfigs(): Promise<ProjectConfigDto[]> {
