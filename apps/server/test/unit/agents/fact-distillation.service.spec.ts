@@ -146,4 +146,43 @@ describe('FactDistillationService', () => {
     await service.handleEvent('s1', statusIdle());
     expect(upserts).toHaveLength(0);
   });
+
+  it('concurrent IDLE events distill once (in-flight claim is atomic across awaits)', async () => {
+    let resolveCompletion: (text: string) => void = () => {};
+    const { service, completions } = makeHarness({
+      completeOneShot: async () => {
+        completions.push({});
+        return new Promise((resolve) => {
+          resolveCompletion = resolve;
+        });
+      },
+    });
+    const first = service.handleEvent('s1', statusIdle());
+    const second = service.handleEvent('s1', statusIdle());
+    // Wait until the single completion is actually in flight before releasing it.
+    while (completions.length === 0) await new Promise((r) => setTimeout(r, 1));
+    resolveCompletion('[]');
+    await Promise.all([first, second]);
+    expect(completions).toHaveLength(1);
+  });
+
+  it('a failed completion backs off briefly instead of consuming the full cooldown', async () => {
+    let fail = true;
+    const { service, upserts } = makeHarness({
+      completeOneShot: async () => {
+        if (fail) throw new Error('provider blew up');
+        return '[{"key":"retry-fact","value":"v"}]';
+      },
+    });
+    await expect(service.handleEvent('s1', statusIdle())).rejects.toThrow('provider blew up');
+    // Still throttled immediately after the failure…
+    fail = false;
+    await service.handleEvent('s1', statusIdle());
+    expect(upserts).toHaveLength(0);
+    // …but eligible again after the short failure backoff, long before the
+    // 10-minute success cooldown.
+    service.rewindThrottleForTest('s1', 3 * 60 * 1000);
+    await service.handleEvent('s1', statusIdle());
+    expect(upserts).toHaveLength(1);
+  });
 });

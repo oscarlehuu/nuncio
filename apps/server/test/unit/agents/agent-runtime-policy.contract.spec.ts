@@ -21,6 +21,25 @@ describe('Agent runtime policy contract', () => {
     expect(runtimeToolsForPolicy(undefined, tools)).toBe(tools);
   });
 
+  it('drops the default-on record-fact tool for explicit-policy sessions (hermetic stays hermetic)', () => {
+    const tools = {
+      tools: [
+        {
+          name: 'nuncio_record_project_fact',
+          inputSchema: { type: 'object', properties: {} },
+          security: {
+            network: 'disabled' as const,
+            workspaceMutation: 'none' as const,
+            runtimePolicies: [],
+            scope: 'session' as const,
+          },
+          execute: async () => 'ok',
+        },
+      ],
+    };
+    expect(runtimeToolsForPolicy(readOnly('/tmp/workspace'), tools)).toBeUndefined();
+  });
+
   it('drops unrestricted runtime tools for explicit network-disabled policy', () => {
     const tools = { tools: [{ name: 'browser_open', inputSchema: {}, execute: async () => 'ok' }] };
     expect(runtimeToolsForPolicy(readOnly('/tmp/workspace'), tools)).toBeUndefined();

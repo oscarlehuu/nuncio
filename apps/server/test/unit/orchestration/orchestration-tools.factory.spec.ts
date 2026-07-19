@@ -108,6 +108,13 @@ describe('standalone fact recording (P2)', () => {
     expect(names).not.toContain('nuncio_enqueue_task');
   });
 
+  it('read + factRecording → the record-fact tool executes (fact writes ride their own gate)', async () => {
+    const deps = makeDeps({ currentMode: () => 'read', factRecordingEnabled: () => true });
+    const tool = buildOrchestrationTools(deps, scope, 'read').tools
+      .find((t) => t.name === 'nuncio_record_project_fact')!;
+    expect(((await tool.execute({ key: 'k', value: 'v' })) as { isError?: boolean }).isError).toBeUndefined();
+  });
+
   it('read-write + factRecording → the record-fact tool appears exactly once', () => {
     const deps = makeDeps({ factRecordingEnabled: () => true });
     const rt = buildOrchestrationTools(deps, scope, 'read-write');
