@@ -38,17 +38,38 @@ export type RenderTranscriptBlock =
   | { kind: 'tool-group'; key: string; blocks: ToolBlock[] };
 
 export function groupTranscriptBlocks(blocks: TranscriptBlock[]): RenderTranscriptBlock[] {
-  const grouped: RenderTranscriptBlock[] = [];
+  const latestByKey = new Map<string, TranscriptBlock>();
+  for (const block of blocks) latestByKey.set(block.key, block);
+
+  const deduped: TranscriptBlock[] = [];
+  const seenBlockKeys = new Set<string>();
   for (const block of blocks) {
+    if (seenBlockKeys.has(block.key)) continue;
+    seenBlockKeys.add(block.key);
+    deduped.push(latestByKey.get(block.key) ?? block);
+  }
+
+  const grouped: RenderTranscriptBlock[] = [];
+  const usedRenderKeys = new Set<string>();
+  const uniqueKey = (base: string) => {
+    let key = base;
+    let suffix = 2;
+    while (usedRenderKeys.has(key)) key = `${base}-${suffix++}`;
+    usedRenderKeys.add(key);
+    return key;
+  };
+
+  for (const block of deduped) {
     if (block.kind !== 'tool') {
-      grouped.push(block);
+      const key = uniqueKey(block.key);
+      grouped.push(key === block.key ? block : { ...block, key });
       continue;
     }
     const previous = grouped[grouped.length - 1];
     if (previous?.kind === 'tool-group') {
       previous.blocks.push(block);
     } else {
-      grouped.push({ kind: 'tool-group', key: `tool-group-${block.key}`, blocks: [block] });
+      grouped.push({ kind: 'tool-group', key: uniqueKey(`tool-group-${block.key}`), blocks: [block] });
     }
   }
   return grouped;

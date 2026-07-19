@@ -52,4 +52,40 @@ describe('groupTranscriptBlocks', () => {
     expect(grouped[1]).toBe(user);
     expect(grouped[2]).toMatchObject({ kind: 'tool-group', blocks: [tool('c')] });
   });
+
+  it('deduplicates repeated block keys, keeping the latest block in transcript order', () => {
+    const first = {
+      kind: 'tool',
+      key: 'tool-call_same',
+      callId: 'same',
+      tool: 'Read',
+      status: 'running',
+      summary: { verb: 'Read', subject: 'old.ts' },
+    } as const;
+    const latest = {
+      ...first,
+      status: 'done',
+      summary: { verb: 'Read', subject: 'latest.ts' },
+    } as const;
+    const user = (text: string) => ({ kind: 'user', key: 'user_same', text }) as const;
+    const other = {
+      kind: 'tool',
+      key: 'tool-call_other',
+      callId: 'other',
+      tool: 'Read',
+      status: 'done',
+      summary: { verb: 'Read', subject: 'other.ts' },
+    } as const;
+
+    const grouped = groupTranscriptBlocks([first, user('old'), latest, user('latest'), other]);
+    expect(grouped).toHaveLength(3);
+    expect(grouped[0]).toMatchObject({ kind: 'tool-group', blocks: [latest] });
+    expect(grouped[1]).toMatchObject({ kind: 'user', text: 'latest' });
+    expect(grouped[2]).toMatchObject({ kind: 'tool-group', blocks: [other] });
+    expect(grouped.map((block) => block.key)).toEqual([
+      'tool-group-tool-call_same',
+      'user_same',
+      'tool-group-tool-call_other',
+    ]);
+  });
 });
