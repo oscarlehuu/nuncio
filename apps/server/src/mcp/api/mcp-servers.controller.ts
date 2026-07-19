@@ -8,8 +8,10 @@ import {
   Param,
   Post,
   Put,
+  Req,
 } from '@nestjs/common';
 import { McpImportService } from '../import/mcp-import.service';
+import { redirectOriginFromRequest } from '../oauth/mcp-oauth-redirect-origin';
 import { McpOAuthService } from '../oauth/mcp-oauth.service';
 import { maskTransportSecrets, McpService } from '../mcp.service';
 import type { CreateMcpServerInput, UpdateMcpServerInput } from '../domain/mcp.types';
@@ -67,11 +69,11 @@ export class McpServersController {
   }
 
   @Post(':id/oauth/start')
-  async startOAuth(@Param('id') id: string, @Body() body: { redirectOrigin?: string }) {
-    if (!body?.redirectOrigin?.trim()) {
-      throw new BadRequestException('redirectOrigin (string) is required');
-    }
-    return this.oauth.start(id, body.redirectOrigin.trim());
+  async startOAuth(
+    @Param('id') id: string,
+    @Req() req: { protocol?: string; headers: Record<string, string | string[] | undefined> },
+  ) {
+    return this.oauth.start(id, redirectOriginFromRequest(req));
   }
 
   @Post('import')

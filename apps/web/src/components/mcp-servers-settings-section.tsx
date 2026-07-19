@@ -218,7 +218,7 @@ function McpServerRow({
   const handleConnect = async () => {
     setConnecting(true);
     try {
-      const result = await startMcpOAuth(server.id, window.location.origin);
+      const result = await startMcpOAuth(server.id);
       if (result.alreadyAuthorized) {
         toast.success(`${server.name} is already connected`);
         await onRefresh();

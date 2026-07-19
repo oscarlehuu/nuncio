@@ -109,12 +109,11 @@ export async function applyMcpImport(source: McpImportSource): Promise<McpImport
 
 export async function startMcpOAuth(
   id: string,
-  redirectOrigin: string,
 ): Promise<{ authorizationUrl?: string; alreadyAuthorized?: boolean }> {
   const res = await fetch(`/api/mcp-servers/${encodeURIComponent(id)}/oauth/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ redirectOrigin }),
+    body: '{}',
   });
   await ensureOk(res);
   return res.json();

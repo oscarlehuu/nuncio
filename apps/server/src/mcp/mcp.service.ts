@@ -116,7 +116,9 @@ export class McpService {
   }
 
   delete(id: string): boolean {
-    return this.repo.delete(id);
+    const deleted = this.repo.delete(id);
+    if (deleted) this.oauth?.clear(id);
+    return deleted;
   }
 
   private toDto(server: McpServerDefinition): McpServerDto {

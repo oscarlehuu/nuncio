@@ -40,6 +40,11 @@ export class McpOAuthService {
     return this.oauth.hasTokens(serverId);
   }
 
+  /** Drop stored OAuth credentials when the server row is removed. */
+  clear(serverId: string): void {
+    this.oauth.delete(serverId);
+  }
+
   providerFor(serverId: string, redirectUri?: string): OAuthClientProvider {
     const uri = redirectUri ?? this.oauth.get(serverId)?.redirectUri;
     if (!uri) {

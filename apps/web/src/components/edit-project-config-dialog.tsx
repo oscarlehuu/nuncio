@@ -58,6 +58,8 @@ export function EditProjectConfigDialog({
   const [autoSteer, setAutoSteer] = useState<VerifyAutoSteer>('inherit');
   const [maxRounds, setMaxRounds] = useState('');
   const [mcpServerIds, setMcpServerIds] = useState<string[]>([]);
+  /** Only persist MCP ids when the user edits the picker — null means inherit. */
+  const [mcpTouched, setMcpTouched] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -67,6 +69,7 @@ export function EditProjectConfigDialog({
     setAutoSteer(config.verifyAutoSteer);
     setMaxRounds(config.verifyMaxRounds != null ? String(config.verifyMaxRounds) : '');
     setMcpServerIds(config.mcpServerIds ?? []);
+    setMcpTouched(false);
   }, [config]);
 
   const handleSave = async () => {
@@ -79,7 +82,7 @@ export function EditProjectConfigDialog({
       worktreePolicy: worktreePolicy === 'inherit' ? null : worktreePolicy,
       verifyAutoSteer: autoSteer,
       verifyMaxRounds: rounds ? Math.max(1, Number(rounds) || 1) : null,
-      mcpServerIds,
+      ...(mcpTouched ? { mcpServerIds } : {}),
     };
     try {
       await onSave(input);
@@ -118,8 +121,15 @@ export function EditProjectConfigDialog({
             <McpServerChipPicker
               projectPath={config?.path}
               selectedIds={mcpServerIds}
-              onChange={setMcpServerIds}
+              onChange={(ids) => {
+                setMcpServerIds(ids);
+                setMcpTouched(true);
+              }}
             />
+            <p className="text-ui-sm text-muted-foreground">
+              Leave untouched to inherit all scoped servers. Selecting chips sets an explicit
+              default for new sessions.
+            </p>
           </Field>
 
           <Field label="Worktree policy">
