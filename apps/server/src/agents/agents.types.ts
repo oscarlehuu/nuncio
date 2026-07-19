@@ -152,6 +152,18 @@ export interface AgentRunContext {
   runtimePolicy?: AgentRuntimePolicy | null;
 }
 
+/** Input for `AgentProvider.completeOneShot` — one bounded, tool-less completion. */
+export interface OneShotCompletionInput {
+  /** The user-role prompt for the completion. */
+  prompt: string;
+  /** Optional system framing appended to the throwaway session's system prompt. */
+  systemPrompt?: string;
+  /** `provider:modelId` (or bare id) to run on; engine default when unresolvable. */
+  model?: string | null;
+  /** Working directory for SDK bookkeeping only — no tool can touch it. */
+  cwd?: string | null;
+}
+
 export interface AgentProvider {
   readonly id: string;
   readonly name: string;
@@ -210,4 +222,11 @@ export interface AgentProvider {
    * back to a normal run with the multitask prompt overlay.
    */
   decompose?(input: MultitaskDecomposeInput): Promise<MultitaskDecomposition>;
+  /**
+   * Optional one-shot, tool-less completion on a throwaway session — pure
+   * reasoning for harness infrastructure (fact distillation, decompose-style
+   * planning). Never persists anything and can never touch a workspace.
+   * Absent = the engine cannot serve background completions.
+   */
+  completeOneShot?(input: OneShotCompletionInput): Promise<string>;
 }

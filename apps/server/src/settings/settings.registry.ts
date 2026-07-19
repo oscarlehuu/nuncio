@@ -584,6 +584,44 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     ],
   },
   {
+    key: 'NUNCIO_FACT_RECORDING',
+    category: 'agents',
+    type: 'string',
+    label: 'Agent fact recording',
+    description:
+      'When on, every session with a project gets the nuncio_record_project_fact tool (plus a prompt nudge) so agents persist durable discoveries — build commands, conventions, gotchas — as project facts for future sessions. Independent of the fleet orchestration tools. Founder-owned facts are never overwritten; conflicting agent writes become pending proposals.',
+    envVar: 'NUNCIO_FACT_RECORDING',
+    default: 'on',
+    options: [
+      { value: 'on', label: 'On', description: 'Agents can record project facts in any session.' },
+      { value: 'off', label: 'Off', description: 'Fact writes require the read-write orchestration tier.' },
+    ],
+  },
+  {
+    key: 'NUNCIO_FACT_DISTILLATION',
+    category: 'agents',
+    type: 'string',
+    label: 'Fact distillation',
+    description:
+      'When on, a substantive solo run that settles to idle triggers one cheap background completion that distills up to 3 durable project facts (agent provenance, reviewable in the facts UI; founder conflicts become proposals). Hermetic policy/Crew sessions are never distilled. Set to off to disable the background model call.',
+    envVar: 'NUNCIO_FACT_DISTILLATION',
+    default: 'on',
+    options: [
+      { value: 'on', label: 'On', description: 'Distill durable facts after substantive runs.' },
+      { value: 'off', label: 'Off', description: 'Never run background distillation.' },
+    ],
+  },
+  {
+    key: 'NUNCIO_FACT_DISTILLATION_MODEL',
+    category: 'agents',
+    type: 'string',
+    label: 'Fact distillation model',
+    description:
+      'Model for the background fact-distillation completion (provider:modelId, e.g. cliproxyapi:claude-sonnet-5). Prefer a cheap model — the call is bounded (~8 KB transcript slice) and runs after idle, never in the user\'s path. Falls back to the engine default when unresolvable.',
+    envVar: 'NUNCIO_FACT_DISTILLATION_MODEL',
+    default: 'cliproxyapi:claude-sonnet-5',
+  },
+  {
     key: 'NUNCIO_WORKSPACE_CONTEXT_INJECT',
     category: 'agents',
     type: 'string',

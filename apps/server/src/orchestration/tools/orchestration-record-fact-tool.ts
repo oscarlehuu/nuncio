@@ -28,7 +28,11 @@ export function buildRecordFactTool(
       required: ['key', 'value'],
     },
     execute: (raw) => {
-      if (deps.currentMode() !== 'read-write') return errorResult('orchestration tools are disabled');
+      // Live gate, re-read per call: standalone fact recording OR the
+      // read-write orchestration tier — either grants the write.
+      if (deps.currentMode() !== 'read-write' && !deps.factRecordingEnabled()) {
+        return errorResult('fact recording is disabled');
+      }
       if (!scope.projectPath) return errorResult('this session has no project to record facts for');
       const input = asToolInput(raw);
       const key = typeof input.key === 'string' ? input.key : '';
