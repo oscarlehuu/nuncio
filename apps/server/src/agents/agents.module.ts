@@ -15,6 +15,7 @@ import { CursorAgentProvider } from './providers/cursor-agent.provider';
 import { CursorCliProvider } from './providers/cursor-cli.provider';
 import { CodexAgentProvider } from './providers/codex-agent.provider';
 import { ClaudeAgentProvider } from './providers/claude-agent.provider';
+import { DevinAgentProvider } from './providers/devin-agent.provider';
 import { PiAgentProvider } from './providers/pi-agent.provider';
 import { MockAgentProvider } from './providers/mock-agent.provider';
 import { MOCK_AGENT_PROVIDER } from './mock-agent.token';
@@ -58,6 +59,7 @@ const mockProviderBinding: Provider = {
     CursorAgentProvider,
     CodexAgentProvider,
     ClaudeAgentProvider,
+    DevinAgentProvider,
     CursorCliProvider,
     MockAgentProvider,
     NuncioContextRepository,

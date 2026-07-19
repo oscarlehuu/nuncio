@@ -7,8 +7,8 @@ const provider = (id: string): ModelProvider => ({ id, name: id, groups: [] });
 describe('crewProfileProviderCatalog', () => {
   it('excludes generic providers outside Crew MVP from the profile editor', () => {
     expect(crewProfileProviderCatalog([
-      provider('pi'), provider('cursor'), provider('codex'), provider('claude'),
-    ]).map(({ id }) => id)).toEqual(['pi', 'codex', 'claude']);
+      provider('pi'), provider('cursor'), provider('codex'), provider('claude'), provider('devin'),
+    ]).map(({ id }) => id)).toEqual(['pi', 'codex', 'claude', 'devin']);
   });
 
   it('retains mock only when the supplied forced catalog explicitly exposes it', () => {

@@ -7,6 +7,7 @@ import { AgentRegistry } from '../../../src/agents/agents.registry';
 import { AgentsModule } from '../../../src/agents/agents.module';
 import { CodexAgentProvider } from '../../../src/agents/providers/codex-agent.provider';
 import { ClaudeAgentProvider } from '../../../src/agents/providers/claude-agent.provider';
+import { DevinAgentProvider } from '../../../src/agents/providers/devin-agent.provider';
 import { CursorAgentProvider } from '../../../src/agents/providers/cursor-agent.provider';
 import { CursorCliProvider } from '../../../src/agents/providers/cursor-cli.provider';
 import { PiAgentProvider } from '../../../src/agents/providers/pi-agent.provider';
@@ -53,7 +54,9 @@ describe('AgentRegistry', () => {
         .overrideProvider(CodexAgentProvider)
         .useValue(stubAgentProvider('codex', 'Codex', false))
         .overrideProvider(ClaudeAgentProvider)
-        .useValue(stubAgentProvider('claude', 'Claude', false)),
+        .useValue(stubAgentProvider('claude', 'Claude', false))
+        .overrideProvider(DevinAgentProvider)
+        .useValue(stubAgentProvider('devin', 'Devin', false)),
     );
 
     await expect(registry.defaultId()).rejects.toThrow(ServiceUnavailableException);
@@ -80,6 +83,7 @@ describe('AgentRegistry', () => {
     expect(registry.get('pi').id).toBe('pi');
     expect(registry.get('cursor').id).toBe('cursor');
     expect(registry.get('codex').id).toBe('codex');
+    expect(registry.get('devin').id).toBe('devin');
   });
 
   it('exposes every registered provider via all()', async () => {
@@ -89,6 +93,7 @@ describe('AgentRegistry', () => {
       'claude',
       'codex',
       'cursor',
+      'devin',
       'pi',
     ]);
   });
@@ -142,13 +147,14 @@ describe('AgentRegistry.supportsInteraction', () => {
   const pi = { id: 'pi', supportsInteraction: undefined } as unknown as PiAgentProvider;
   const cursor = { id: 'cursor', supportsInteraction: undefined } as unknown as CursorAgentProvider;
   const codex = { id: 'codex', supportsInteraction: undefined } as unknown as CodexAgentProvider;
-  const claude = { id: 'claude', supportsInteraction: undefined } as unknown as ClaudeAgentProvider;
+    const claude = { id: 'claude', supportsInteraction: undefined } as unknown as ClaudeAgentProvider;
+    const devin = { id: 'devin', supportsInteraction: undefined } as unknown as DevinAgentProvider;
   const cli = {
     id: 'cursor-cli',
     supportsInteraction: () => true,
   } as unknown as CursorCliProvider;
 
-  const registry = new AgentRegistry(pi, cursor, codex, claude, cli, settings);
+  const registry = new AgentRegistry(pi, cursor, codex, claude, cli, settings, devin);
 
   it('returns false for known providers without submitInteraction', () => {
     expect(registry.supportsInteraction('cursor')).toBe(false);

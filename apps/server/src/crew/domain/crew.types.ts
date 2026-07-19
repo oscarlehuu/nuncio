@@ -12,7 +12,7 @@ export type CrewBlockedReason =
   | 'provider_unavailable'
   | 'unrecoverable_failure'
   | null;
-export type CrewProviderId = 'pi' | 'codex' | 'claude' | 'mock';
+export type CrewProviderId = 'pi' | 'codex' | 'claude' | 'devin' | 'mock';
 export type CrewRuntimePolicy = 'read-only' | 'workspace-write';
 export type CrewRole = 'foreman' | 'builder' | 'reviewer';
 
