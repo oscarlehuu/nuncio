@@ -202,6 +202,18 @@ describe('HomeView', () => {
     expect(onSubmit).toHaveBeenCalledTimes(1);
   });
 
+  it('offers a Generate AGENTS.md quick action once a project is selected', async () => {
+    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
+    // Hidden until a project is picked — the prompt needs a repo to analyze.
+    expect(screen.queryByRole('button', { name: /agents\.md/i })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: /no repo/i }));
+    const action = await screen.findByRole('button', { name: /agents\.md/i });
+    await userEvent.click(action);
+    const textarea = screen.getByPlaceholderText(/ask nuncio/i) as HTMLTextAreaElement;
+    expect(textarea.value).toContain('AGENTS.md');
+    expect(textarea.value.length).toBeGreaterThan(200);
+  });
+
   it('removes the hero heading — the composer is the centerpiece', () => {
     render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
     expect(screen.queryByText(/what should i work on/i)).toBeNull();

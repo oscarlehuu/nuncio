@@ -29,6 +29,7 @@ import { useComposerAttachments } from '../lib/use-composer-attachments';
 import { AttachButton, AttachmentTray } from './attachment-tray';
 import { QuotaChip } from './quota-chip';
 import { takeComposerDraft } from '../lib/composer-draft';
+import { AGENTS_MD_GENERATION_PROMPT } from '../lib/agents-md-prompt';
 import { useProviderUsage } from '../lib/use-provider-usage';
 import { resolveUsageProvider } from '../lib/usage-display';
 import {
@@ -319,6 +320,26 @@ export function HomeView({
                 disabled={!projectPath}
                 variant="text"
               />
+            </>
+          ) : null}
+          {crew.mode === 'solo' && projectPath ? (
+            <>
+              <span aria-hidden className="text-muted-foreground/40 select-none">
+                ·
+              </span>
+              {/* Nuncio's /init: pre-fill the composer with the AGENTS.md
+                  generation prompt so the user can review/edit before sending. */}
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                onClick={() => {
+                  setPrompt(AGENTS_MD_GENERATION_PROMPT);
+                  promptRef.current?.focus();
+                }}
+              >
+                <Sparkles aria-hidden className="size-3" />
+                Generate AGENTS.md
+              </button>
             </>
           ) : null}
         </div>
