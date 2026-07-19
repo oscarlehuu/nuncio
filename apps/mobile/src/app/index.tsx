@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FlatList, Linking, Pressable, RefreshControl, Text, View } from 'react-native';
+import { FlatList, Linking, Pressable, RefreshControl, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Redirect, useFocusEffect, useRouter } from 'expo-router';
+import { ChevronRight, Plus, Server, X } from 'lucide-react-native';
 import { fetchArchivedSessions, fetchSessions, type Session } from '@nuncio/core/api';
 import { fetchCrewRuns } from '@nuncio/core/crew-api';
 import { applyConnection, updateActiveSecret } from '../lib/api-setup';
@@ -18,6 +19,10 @@ import { useSessionPlans } from '../lib/use-session-plans';
 import { planStepsLabel } from '../lib/session-plan-progress';
 import { CrewRunRow } from '../components/crew-run-row';
 import { SessionRow } from '../components/session-row';
+import { Button } from '../components/ui/button';
+import { Card } from '../components/ui/card';
+import { Skeleton } from '../components/ui/skeleton';
+import { Text } from '../components/ui/text';
 
 type Tab = 'active' | 'archived';
 type HomeItem =
@@ -101,6 +106,7 @@ export default function SessionList() {
   }, [crewRows, sessions]);
 
   const sessionPlans = useSessionPlans(sessions);
+  const initialLoading = refreshing && items.length === 0;
 
   const unpair = useCallback(async () => {
     await clearConnection(secureStore);
@@ -112,24 +118,32 @@ export default function SessionList() {
 
   return (
     <SafeAreaView className="flex-1 bg-background">
-      <View className="flex-row items-start justify-between px-4 pb-2">
+      <View className="flex-row items-center justify-between px-4 pb-3">
         <View className="min-w-0 flex-1">
-          <Text className="text-2xl font-semibold text-foreground">Work</Text>
-          <Pressable onPress={unpair} className="min-h-11 justify-center">
-            <Text className="text-xs text-muted-foreground" numberOfLines={1}>{connection.serverUrl} · change</Text>
+          <Text className="text-3xl font-semibold tracking-tight text-foreground">Sessions</Text>
+          <Pressable
+            onPress={unpair}
+            accessibilityLabel="Change connection"
+            className="mt-2 flex-row items-center gap-1 self-start rounded-full border border-border/70 bg-card px-3 py-1.5 active:opacity-80"
+          >
+            <Server color="#83868b" size={13} />
+            <Text className="max-w-52 text-[11px] text-muted-foreground" numberOfLines={1}>
+              {connection.serverUrl}
+            </Text>
+            <ChevronRight color="#83868b" size={13} />
           </Pressable>
         </View>
         <Pressable
           accessibilityLabel="New task"
           onPress={() => router.push('/new')}
-          className="h-11 w-11 items-center justify-center rounded-full bg-primary"
+          className="h-11 w-11 items-center justify-center rounded-full bg-primary shadow-sm shadow-black/20 active:opacity-80"
         >
-          <Text className="text-xl text-primary-foreground">＋</Text>
+          <Plus color="#161719" size={21} strokeWidth={2.5} />
         </Pressable>
       </View>
 
       {pushDenied ? (
-        <View className="mx-4 mb-2 flex-row items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-2">
+        <Card className="mx-4 mb-3 flex-row items-center gap-2 rounded-xl border-border/60 bg-secondary px-3 py-2 shadow-none">
           <Text className="flex-1 text-xs text-muted-foreground">
             Notifications are off — approvals and questions won’t reach this phone.
           </Text>
@@ -145,19 +159,19 @@ export default function SessionList() {
             onPress={() => setPushDenied(false)}
             className="min-h-11 w-8 items-center justify-center active:opacity-60"
           >
-            <Text className="text-base text-muted-foreground">×</Text>
+            <X color="#83868b" size={16} />
           </Pressable>
-        </View>
+        </Card>
       ) : null}
 
-      <View className="flex-row gap-2 px-4 pb-2">
+      <View className="mx-4 mb-3 flex-row rounded-xl border border-border/60 bg-card p-1">
         {(['active', 'archived'] as const).map((item) => (
           <Pressable
             key={item}
             accessibilityRole="tab"
             accessibilityState={{ selected: tab === item }}
             onPress={() => setTab(item)}
-            className={`min-h-11 justify-center rounded-full px-4 ${tab === item ? 'bg-secondary' : ''}`}
+            className={`min-h-10 flex-1 items-center justify-center rounded-lg ${tab === item ? 'bg-secondary' : ''}`}
           >
             <Text className={tab === item ? 'text-foreground' : 'text-muted-foreground'}>
               {item === 'active' ? 'Active' : 'Archived'}
@@ -166,7 +180,9 @@ export default function SessionList() {
         ))}
       </View>
 
-      {error ? <Text className="px-4 py-2 text-sm text-destructive">{error}</Text> : null}
+      {error ? (
+        <Text className="mx-4 mb-2 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</Text>
+      ) : null}
       <FlatList
         data={items}
         keyExtractor={(item) => item.key}
@@ -179,12 +195,57 @@ export default function SessionList() {
             />
           : <CrewRunRow row={item.row} onPress={() => router.push(crewTaskPath(item.row.taskId))} />}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor="#9ca3af" />}
-        ListEmptyComponent={refreshing ? null : (
-          <Text className="px-4 py-8 text-center text-muted-foreground">
-            {tab === 'active' ? 'No sessions or active Crew runs yet — create one with ＋' : 'Nothing archived.'}
-          </Text>
-        )}
+        contentContainerClassName="pb-6 pt-1"
+        ListEmptyComponent={
+          initialLoading ? (
+            <HomeSkeleton />
+          ) : (
+            <EmptyState archived={tab === 'archived'} onCreate={() => router.push('/new')} />
+          )
+        }
       />
     </SafeAreaView>
+  );
+}
+
+function HomeSkeleton() {
+  return (
+    <View className="gap-3 px-4 pt-1">
+      {[0, 1, 2].map((item) => (
+        <Card key={item} className="gap-0 rounded-2xl border-border/60 px-4 py-4 shadow-none">
+          <View className="flex-row items-center justify-between">
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="h-5 w-16 rounded-full" />
+          </View>
+          <Skeleton className="mt-4 h-5 w-4/5" />
+          <Skeleton className="mt-2 h-3 w-2/5" />
+          <View className="mt-4 flex-row justify-between">
+            <Skeleton className="h-3 w-14" />
+            <Skeleton className="h-4 w-4 rounded-full" />
+          </View>
+        </Card>
+      ))}
+    </View>
+  );
+}
+
+function EmptyState({ archived, onCreate }: { archived: boolean; onCreate: () => void }) {
+  return (
+    <View className="items-center px-8 py-16">
+      <View className="h-12 w-12 items-center justify-center rounded-2xl bg-secondary">
+        <Plus color="#eff0f1" size={22} />
+      </View>
+      <Text className="mt-4 text-center text-lg font-semibold text-foreground">
+        {archived ? 'Nothing archived' : 'No sessions yet'}
+      </Text>
+      <Text className="mt-2 text-center text-sm leading-5 text-muted-foreground">
+        {archived ? 'Completed sessions will appear here.' : 'Delegate a task and follow the agent from your phone.'}
+      </Text>
+      {!archived ? (
+        <Button className="mt-6" onPress={onCreate}>
+          <Text>Start a task</Text>
+        </Button>
+      ) : null}
+    </View>
   );
 }

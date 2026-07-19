@@ -1,7 +1,10 @@
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, View } from 'react-native';
 import type { CrewProfileDto, ResolvedCrewProfileDto } from '@nuncio/core/crew-api';
 import { resolvedCrewTeam } from '../lib/crew-composer';
 import type { CrewBranch, CrewProject } from '../lib/crew-projects';
+import { Check, ChevronRight, CircleAlert, Settings2 } from 'lucide-react-native';
+import { Card } from './ui/card';
+import { Text } from './ui/text';
 
 interface Props {
   profiles: CrewProfileDto[];
@@ -80,11 +83,12 @@ function ChoiceRow({
               accessibilityRole="radio"
               accessibilityState={{ checked: item.key === value }}
               onPress={() => onChange(item.key)}
-              className={`min-h-11 justify-center rounded-lg border px-4 ${
-                item.key === value ? 'border-primary bg-secondary' : 'border-border bg-card'
+              className={`min-h-11 flex-row items-center justify-center gap-2 rounded-xl border px-4 ${
+                item.key === value ? 'border-primary bg-secondary' : 'border-border/70 bg-card'
               }`}
             >
               <Text className="max-w-56 text-foreground" numberOfLines={1}>{item.label}</Text>
+              {item.key === value ? <Check color="#eff0f1" size={15} /> : <ChevronRight color="#83868b" size={14} />}
             </Pressable>
           ))}
         </ScrollView>
@@ -105,12 +109,15 @@ function ResolutionCard(props: Props) {
   }
   if (props.resolution?.state === 'ready') {
     return (
-      <View className="rounded-lg border border-primary/40 bg-card px-4 py-3">
-        <Text className="font-semibold text-foreground">Ready</Text>
+      <Card className="gap-0 rounded-2xl border-primary/40 px-4 py-3 shadow-none">
+        <View className="flex-row items-center gap-2">
+          <Check color="#4ade80" size={16} />
+          <Text className="font-semibold text-foreground">Ready</Text>
+        </View>
         {resolvedCrewTeam(props.resolution).map((member) => (
           <Text key={member} className="mt-1 text-sm text-muted-foreground">{member}</Text>
         ))}
-      </View>
+      </Card>
     );
   }
   return <Notice title="Choose a Crew" body="Select a project and saved profile." />;
@@ -118,14 +125,21 @@ function ResolutionCard(props: Props) {
 
 function Notice({ title, body, action, onPress }: { title: string; body: string; action?: string; onPress?: () => void }) {
   return (
-    <View className="rounded-lg border border-border bg-card px-4 py-3">
-      <Text className="font-semibold text-foreground">{title}</Text>
+    <Card className="gap-0 rounded-2xl border-border/70 px-4 py-3 shadow-none">
+      <View className="flex-row items-center gap-2">
+        {title === 'Crew unavailable' || title === 'Needs setup' ? (
+          <CircleAlert color="#f5605b" size={16} />
+        ) : (
+          <Settings2 color="#9ca3af" size={16} />
+        )}
+        <Text className="font-semibold text-foreground">{title}</Text>
+      </View>
       <Text className="mt-1 text-sm text-muted-foreground">{body}</Text>
       {action && onPress ? (
         <Pressable onPress={onPress} className="mt-2 min-h-11 justify-center self-start">
           <Text className="font-semibold text-primary">{action}</Text>
         </Pressable>
       ) : null}
-    </View>
+    </Card>
   );
 }
