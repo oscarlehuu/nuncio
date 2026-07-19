@@ -62,7 +62,7 @@ describe('DevinAgentProvider', () => {
     client.emit({ method: 'session/update', params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'answer' } } } });
     client.emit({ method: '_cognition.ai/agent_stopped', params: {} });
     await run;
-    expect(client.calls.map((call) => call.method)).toEqual(['session/new', 'session/set_mode', 'session/prompt']);
+    expect(client.calls.map((call) => call.method)).toEqual(['session/new', 'session/set_config_option', 'session/prompt']);
     expect((client.calls[1]?.params as { value: string }).value).toBe('swe-1-7-medium');
     expect(state.providerThreadId).toBe('new-session');
     expect(events.map((event) => event.type)).toEqual(['thinking_delta', 'assistant_delta', 'assistant_message']);

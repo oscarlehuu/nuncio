@@ -67,7 +67,7 @@ export class DevinAgentProvider extends BaseAgentProvider implements OnModuleDes
   readonly name = 'Devin';
   readonly capabilities = {
     interrupt: true,
-    modelSwitch: 'restart',
+    modelSwitch: 'in-session',
     effortSwitch: 'none',
     images: true,
     steerWhileRunning: false,
@@ -195,18 +195,21 @@ export class DevinAgentProvider extends BaseAgentProvider implements OnModuleDes
         });
     active.threadId = response.sessionId ?? persisted ?? '';
     if (!active.threadId) throw new Error('Devin ACP session response did not include a session id.');
+    const model = this.model(context.model);
     this.sessions.updateProviderRuntimeState(sessionId, {
       providerThreadId: active.threadId,
       providerState: {
         ...(this.sessions.findById(sessionId)?.providerState ?? {}),
-        model: this.model(context.model),
+        model,
       },
     });
-    await client.request('session/set_mode', {
-      sessionId: active.threadId,
-      configId: 'model',
-      value: this.model(context.model),
-    });
+    if (model !== 'swe-1-7') {
+      await client.request('session/set_config_option', {
+        sessionId: active.threadId,
+        configId: 'model',
+        value: model,
+      });
+    }
     this.active.set(sessionId, active);
     return active;
   }

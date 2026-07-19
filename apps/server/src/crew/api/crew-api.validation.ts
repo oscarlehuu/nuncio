@@ -3,7 +3,7 @@ import type {
   CrewProfileDefinition, CrewProfileOverride, CrewProfilePolicy, CrewRole, CrewRoleBinding,
 } from '../domain/crew.types';
 
-const PROVIDERS = ['pi', 'codex', 'claude', 'mock'] as const;
+const PROVIDERS = ['pi', 'codex', 'claude', 'devin', 'mock'] as const;
 const ROLES: CrewRole[] = ['foreman', 'builder', 'reviewer'];
 const DEFAULT_POLICY: CrewProfilePolicy = {
   maxVerifyRetries: 2, maxReviewRetries: 2, strictFreshFinalReviewer: true, verifyCommand: null,
@@ -62,7 +62,7 @@ function binding(value: unknown, role: CrewRole): CrewRoleBinding {
   const input = record(value, `${role} binding`);
   const provider = requiredString(input.provider, `${role}.provider`, 64);
   if (!PROVIDERS.includes(provider as (typeof PROVIDERS)[number])) {
-    throw new BadRequestException(`${role}.provider must be pi, codex, claude, or an enabled test-only mock`);
+    throw new BadRequestException(`${role}.provider must be pi, codex, claude, devin, or an enabled test-only mock`);
   }
   return {
     provider: provider as CrewRoleBinding['provider'],
