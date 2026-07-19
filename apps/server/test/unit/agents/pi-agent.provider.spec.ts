@@ -724,6 +724,93 @@ describe('PiAgentProvider', () => {
     expect(sessions.findById(created.id)?.status).toBe('IDLE');
   });
 
+  it('seals interrupted Pi activity once and ignores callbacks outside an active turn', async () => {
+    let rejectPrompt: (error: Error) => void = () => undefined;
+    let turnHandler: NonNullable<typeof subscribedHandler> = () => undefined;
+    const promptStarted = new Promise<void>((resolve) => {
+      promptBehavior = async () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectPrompt = reject;
+          turnHandler = subscribedHandler ?? turnHandler;
+          turnHandler({
+            type: 'message_update',
+            assistantMessageEvent: { type: 'thinking_start' },
+          });
+          turnHandler({
+            type: 'message_update',
+            assistantMessageEvent: { type: 'thinking_delta', delta: 'Inspect the failure.' },
+          });
+          turnHandler({
+            type: 'message_update',
+            assistantMessageEvent: { type: 'text_delta', delta: 'partial answer' },
+          });
+          turnHandler({
+            type: 'tool_execution_start',
+            toolCallId: 'interrupted-tool',
+            toolName: 'bash',
+            args: { command: 'bun test' },
+          });
+          resolve();
+        });
+    });
+    isStreaming = true;
+    const created = sessions.create({ prompt: 'interrupt active work', provider: 'pi' });
+
+    const running = provider.run(created.id, created.prompt, { emit: () => {} });
+    await promptStarted;
+    await provider.interrupt(created.id);
+    rejectPrompt(new Error('aborted by user'));
+    await running;
+
+    const settledEvents = events.list(created.id);
+    expect(settledEvents.filter((event) => event.type === 'thinking_message')).toContainEqual(
+      expect.objectContaining({
+        payload: expect.objectContaining({ text: 'Inspect the failure.' }),
+      }),
+    );
+    expect(settledEvents.filter((event) => (
+      (event.type === 'tool_start' || event.type === 'tool_end') &&
+      (event.payload as { callId?: string }).callId === 'interrupted-tool'
+    )).map((event) => event.type)).toEqual(['tool_start', 'tool_end']);
+    expect(sessions.findById(created.id)?.status).toBe('IDLE');
+
+    const settledCount = settledEvents.length;
+    turnHandler({
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_delta', delta: ' stale callback' },
+    });
+    turnHandler({
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        stopReason: 'stop',
+        content: [{ type: 'text', text: 'stale callback' }],
+      },
+    });
+    expect(events.list(created.id)).toHaveLength(settledCount);
+
+    isStreaming = false;
+    promptBehavior = async () => {
+      subscribedHandler?.({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'clean next turn' },
+      });
+      subscribedHandler?.({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          stopReason: 'stop',
+          content: [{ type: 'text', text: 'clean next turn' }],
+        },
+      });
+    };
+    await provider.steer(created.id, 'continue cleanly', { emit: () => {} });
+
+    const transcript = JSON.stringify(events.list(created.id).map((event) => event.payload));
+    expect(transcript).toContain('clean next turn');
+    expect(transcript).not.toContain('stale callback');
+  });
+
   it('setModel resolves the model and applies thinking level on an active session', async () => {
     const created = sessions.create({ prompt: 'switch model', provider: 'pi' });
     await provider.run(created.id, created.prompt, { emit: () => {} });
@@ -1060,6 +1147,80 @@ describe('PiAgentProvider', () => {
       .filter((e) => e.type === 'assistant_message')
       .map((e) => e.payload.text);
     expect(messages).toEqual(['first turn', 'second turn']);
+  });
+
+  it('does not fabricate an assistant message for a successful tool-only turn', async () => {
+    promptBehavior = async () => {
+      subscribedHandler?.({
+        type: 'tool_execution_start',
+        toolCallId: 'tool-only-call',
+        toolName: 'bash',
+        args: { command: 'bun test' },
+      });
+      subscribedHandler?.({
+        type: 'tool_execution_end',
+        toolCallId: 'tool-only-call',
+        toolName: 'bash',
+        result: 'ok',
+        isError: false,
+      });
+      subscribedHandler?.({
+        type: 'message_end',
+        message: { role: 'assistant', stopReason: 'stop', content: [] },
+      });
+    };
+    const created = sessions.create({ prompt: 'perform the tool only', provider: 'pi' });
+
+    await provider.run(created.id, created.prompt, { emit: () => {} });
+
+    const all = events.list(created.id);
+    expect(all.filter((event) => event.type === 'tool_start')).toHaveLength(1);
+    expect(all.filter((event) => event.type === 'tool_end')).toHaveLength(1);
+    expect(all.filter((event) => event.type === 'assistant_message')).toHaveLength(0);
+    expect(sessions.findById(created.id)?.status).toBe('IDLE');
+  });
+
+  it('persists and emits the first Pi delta before a burst completes', async () => {
+    let releasePrompt: () => void = () => undefined;
+    const promptStarted = new Promise<void>((resolveStarted) => {
+      promptBehavior = async () =>
+        new Promise<void>((resolve) => {
+          releasePrompt = resolve;
+          resolveStarted();
+        });
+    });
+    const emitted: Array<{ seq?: number; type: string; payload: Record<string, unknown> }> = [];
+    const created = sessions.create({ prompt: 'stream a burst', provider: 'pi' });
+    const running = provider.run(created.id, created.prompt, {
+      emit: (event) => emitted.push(event as never),
+    });
+    await promptStarted;
+
+    subscribedHandler?.({
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_delta', delta: '0' },
+    });
+    const firstPersisted = events.list(created.id).find((event) => event.type === 'assistant_delta');
+    const firstEmitted = emitted.find((event) => event.type === 'assistant_delta');
+    expect(firstPersisted?.seq).toBeGreaterThan(0);
+    expect(firstEmitted?.seq).toBe(firstPersisted?.seq);
+
+    for (let index = 1; index < 100; index += 1) {
+      subscribedHandler?.({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: `|${index}` },
+      });
+    }
+    releasePrompt();
+    await running;
+
+    const reconstructed = events.list(created.id)
+      .filter((event) => event.type === 'assistant_delta')
+      .map((event) => (event.payload as { delta: string }).delta)
+      .join('');
+    expect(reconstructed).toBe(Array.from({ length: 100 }, (_, index) => (
+      index === 0 ? '0' : `|${index}`
+    )).join(''));
   });
 
   it('surfaces a turn error as an error event and ERROR status instead of "(no response)"', async () => {

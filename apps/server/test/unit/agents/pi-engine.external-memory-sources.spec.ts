@@ -25,6 +25,76 @@ describe('external memory source paths', () => {
     ]);
   });
 
+  it('reuses a successful Git-root probe across stores while rereading memory files', () => {
+    const root = mkdtempSync(join(tmpdir(), 'nuncio-memory-root-cache-'));
+    const projectPath = join(root, 'worktree');
+    const repositoryRoot = join(root, 'repo');
+    const otherProject = join(root, 'other-worktree');
+    const otherRepositoryRoot = join(root, 'other-repo');
+    const claudeRoot = join(root, 'claude');
+    const claudeMemoryDir = join(
+      claudeRoot,
+      'projects',
+      claudeProjectSlug(repositoryRoot),
+      'memory',
+    );
+    const codexRoot = join(root, 'codex');
+    const codexMemoryDir = join(codexRoot, 'memories');
+    mkdirSync(claudeMemoryDir, { recursive: true });
+    mkdirSync(codexMemoryDir, { recursive: true });
+    writeFileSync(join(claudeMemoryDir, 'MEMORY.md'), '- [First](first.md) — initial');
+    writeFileSync(join(claudeMemoryDir, 'first.md'), 'first body');
+    writeFileSync(join(codexMemoryDir, 'MEMORY.md'), [
+      '# Task Group: Shared root',
+      'scope: cached repository identity',
+      `applies_to: cwd=${repositoryRoot}; reuse_rule=safe`,
+    ].join('\n'));
+
+    let probes = 0;
+    const sources = new ExternalMemorySources() as ExternalMemorySources & {
+      repositoryRootResolver: (path: string) => string | null;
+    };
+    sources.repositoryRootResolver = (path) => {
+      probes += 1;
+      if (path === projectPath) return repositoryRoot;
+      if (path === otherProject) return otherRepositoryRoot;
+      return null;
+    };
+
+    try {
+      expect(sources.loadClaude(projectPath, claudeRoot).ids).toEqual(['first']);
+      expect(sources.loadCodex(projectPath, codexRoot).groups).toHaveLength(1);
+      expect(probes).toBe(1);
+
+      writeFileSync(join(claudeMemoryDir, 'MEMORY.md'), '- [Second](second.md) — refreshed');
+      writeFileSync(join(claudeMemoryDir, 'second.md'), 'second body');
+      expect(sources.loadClaude(projectPath, claudeRoot).ids).toEqual(['second']);
+      expect(probes).toBe(1);
+
+      sources.loadCodex(otherProject, codexRoot);
+      expect(probes).toBe(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('retries a failed Git-root probe and caches only after it succeeds', () => {
+    const sources = new ExternalMemorySources() as ExternalMemorySources & {
+      repositoryRootResolver: (path: string) => string | null;
+    };
+    let probes = 0;
+    sources.repositoryRootResolver = () => {
+      probes += 1;
+      return probes === 1 ? null : '/repo';
+    };
+
+    sources.loadCodex('/project', '/missing-codex-home');
+    sources.loadCodex('/project', '/missing-codex-home');
+    sources.loadCodex('/project', '/missing-codex-home');
+
+    expect(probes).toBe(2);
+  });
+
   it('records actual Claude filenames from the repository-root fallback and blocks symlink escapes', () => {
     const root = mkdtempSync(join(tmpdir(), 'nuncio-claude-memory-'));
     const projectPath = '/repo/.claude/worktrees/feature-a';

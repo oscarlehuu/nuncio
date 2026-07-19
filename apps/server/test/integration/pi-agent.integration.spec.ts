@@ -1,7 +1,15 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
 import { AgentsModule } from '../../src/agents/agents.module';
 import { PiAgentProvider } from '../../src/agents/providers/pi-agent.provider';
 import { CursorLocalModule } from '../../src/cursor-local/cursor-local.module';
@@ -13,15 +21,20 @@ import { SessionsPersistenceModule } from '../../src/sessions/sessions.persisten
 import { SessionsRepository } from '../../src/sessions/persistence/sessions.repository';
 import { SessionsService } from '../../src/sessions/sessions.service';
 import { SettingsModule } from '../../src/settings/settings.module';
+import { settleRealProviderRun } from '../helpers/real-provider-run-cleanup';
 
 // Gate the suite on the same agent dir the Pi SDK resolves (PI_CODING_AGENT_DIR
 // or ~/.pi/agent). Skips entirely in CI / machines without real Pi auth, so the
 // Pi SDK native module is never loaded there.
 const TEST_MODEL_CANDIDATES = [
-  'cliproxyapi:claude-opus-4-8',
-  'cliproxy:claude-opus-4-8',
+  'anthropic:claude-haiku-4-5',
+  'cliproxyapi:claude-haiku-4-5',
+  'cliproxy:claude-haiku-4-5',
+  'anthropic:claude-sonnet-4-6',
   'cliproxyapi:claude-sonnet-4-6',
   'cliproxy:claude-sonnet-4-6',
+  'cliproxyapi:claude-opus-4-8',
+  'cliproxy:claude-opus-4-8',
 ];
 const piAgentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent');
 const piSettingsPath = join(piAgentDir, 'settings.json');
@@ -53,13 +66,16 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
     provider = module.get(PiAgentProvider);
     sessions = module.get(SessionsRepository);
     events = module.get(EventsRepository);
-    testModel = await resolveToolCapableTestModel(provider);
-  });
+    testModel = await resolveUsableToolCapableTestModel(provider, sessions, events);
+  }, 180_000);
 
   afterAll(async () => {
     try {
       for (const sessionId of (provider as unknown as { activeSessions?: Map<string, unknown> }).activeSessions?.keys() ?? []) {
         provider.dispose(sessionId);
+      }
+      for (const session of sessions.list(true)) {
+        removeGeneratedPiSessionFile(session.providerThreadId);
       }
       await module.close();
     } finally {
@@ -137,9 +153,15 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
         }).activeSessions.get(created.id);
         expect(liveHandle?.session.model?.id).toBe(secondModel.split(':').at(-1));
 
+        // Switching is the adapter seam under test. Return to the already
+        // proven usable model before spending the second real turn, so an
+        // exhausted unrelated credential cannot make this lifecycle check flaky.
+        await provider.setModel(created.id, firstModel, null);
+        expect(liveHandle?.session.model?.id).toBe(firstModel.split(':').at(-1));
+
         await provider.run(created.id, 'Reply with the single word: two', {
           emit: () => {},
-          model: secondModel,
+          model: firstModel,
         });
         expect(sessions.findById(created.id)?.status).toBe('IDLE');
       } finally {
@@ -299,15 +321,32 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
     'interrupts a live prompt and keeps the session resumable',
     async () => {
       const created = sessions.create({
-        prompt: 'Count from 1 to 30, one number per line.',
+        prompt: 'Count from 1 to 200, one number per line.',
         provider: 'pi',
       });
+      const liveEvent = firstLivePiEvent();
+      let runSettled = false;
+      let runPromise: Promise<void> | undefined;
 
       try {
-        const runPromise = provider.run(created.id, created.prompt, { emit: () => {}, model: testModel });
-        await sleep(1_500);
+        runPromise = provider.run(created.id, created.prompt, {
+          emit: liveEvent.observe,
+          model: testModel,
+        });
+        void runPromise.then(
+          () => { runSettled = true; },
+          () => { runSettled = true; },
+        );
+        await Promise.race([
+          liveEvent.promise,
+          runPromise.then(() => {
+            throw new Error('Pi run settled before emitting a live event.');
+          }),
+        ]);
+        expect(runSettled).toBe(false);
         await expect(provider.interrupt(created.id)).resolves.toBeUndefined();
         await expect(runPromise).resolves.toBeUndefined();
+        runSettled = true;
         expect(sessions.findById(created.id)?.status).not.toBe('ERROR');
 
         await provider.run(created.id, 'Reply with the single word: pong', { emit: () => {}, model: testModel });
@@ -315,24 +354,120 @@ suite('PiAgentProvider with real Pi auth (integration)', () => {
         const blob = JSON.stringify(events.list(created.id).map((e) => e.payload));
         expect(blob.toLowerCase()).toContain('pong');
       } finally {
-        provider.dispose(created.id);
+        try {
+          if (runPromise && !runSettled) {
+            await settleRealProviderRun(
+              runPromise,
+              () => provider.interrupt(created.id),
+            );
+          }
+        } finally {
+          provider.dispose(created.id);
+        }
       }
     },
     120_000,
   );
 });
 
-async function resolveToolCapableTestModel(provider: PiAgentProvider): Promise<string> {
+async function resolveUsableToolCapableTestModel(
+  provider: PiAgentProvider,
+  sessions: SessionsRepository,
+  events: EventsRepository,
+): Promise<string> {
   const providerDtos = await provider.listModels();
   const modelIds = providerDtos.flatMap((p) =>
     (p.groups ?? []).flatMap((g) => (g.models ?? []).map((m) => m.id)),
   );
-  const preferred = TEST_MODEL_CANDIDATES.find((candidate) => modelIds.includes(candidate));
-  return preferred ?? modelIds[0] ?? TEST_MODEL_CANDIDATES[0]!;
+  const configured = process.env.NUNCIO_PI_INTEGRATION_MODEL?.trim();
+  const candidates = configured
+    ? [configured]
+    : TEST_MODEL_CANDIDATES.filter((candidate) => modelIds.includes(candidate));
+  if (candidates.length === 0 && modelIds[0]) candidates.push(modelIds[0]);
+  const failures: string[] = [];
+
+  for (const candidate of candidates) {
+    if (!modelIds.includes(candidate)) {
+      failures.push(`${candidate}: not present in the authenticated registry`);
+      continue;
+    }
+    const prompt = 'Reply with the single word: ready';
+    const created = sessions.create({ prompt, provider: 'pi', model: candidate });
+    const running = provider.run(created.id, prompt, { emit: () => {}, model: candidate });
+    try {
+      await settleProbe(provider, created.id, running);
+      const row = sessions.findById(created.id);
+      const assistant = events.list(created.id).some((event) => event.type === 'assistant_message');
+      if (row?.status === 'IDLE' && assistant) return candidate;
+      const failure = events.list(created.id).findLast((event) => event.type === 'error');
+      const message = String((failure?.payload as { message?: unknown } | undefined)?.message ?? row?.status);
+      failures.push(`${candidate}: ${message.slice(0, 180)}`);
+    } catch (error) {
+      failures.push(`${candidate}: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      const threadId = sessions.findById(created.id)?.providerThreadId;
+      provider.dispose(created.id);
+      removeGeneratedPiSessionFile(threadId);
+    }
+  }
+
+  throw new Error(`No usable Pi integration model. ${failures.join(' | ')}`);
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+async function settleProbe(
+  provider: PiAgentProvider,
+  sessionId: string,
+  running: Promise<void>,
+  timeoutMs = 30_000,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const outcome = await Promise.race([
+    running.then(() => 'settled' as const),
+    new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), timeoutMs);
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
+  if (outcome === 'settled') return;
+  await provider.interrupt(sessionId).catch(() => undefined);
+  await running.catch(() => undefined);
+  throw new Error(`probe timed out after ${timeoutMs}ms`);
+}
+
+function removeGeneratedPiSessionFile(path: string | null | undefined): void {
+  if (!path || !existsSync(path)) return;
+  const root = realpathSync(piAgentDir);
+  const target = realpathSync(path);
+  const fromRoot = relative(root, target);
+  if (!fromRoot || fromRoot.startsWith('..') || isAbsolute(fromRoot) || !target.endsWith('.jsonl')) {
+    return;
+  }
+  rmSync(target, { force: true });
+}
+
+function firstLivePiEvent(timeoutMs = 30_000): {
+  promise: Promise<void>;
+  observe: (event: { type: string }) => void;
+} {
+  let finish: () => void = () => undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const promise = new Promise<void>((resolve, reject) => {
+    finish = () => {
+      if (timer) clearTimeout(timer);
+      resolve();
+    };
+    timer = setTimeout(
+      () => reject(new Error(`Pi emitted no live event within ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+  });
+  const liveTypes = new Set(['assistant_delta', 'thinking_delta', 'tool_start']);
+  return {
+    promise,
+    observe: (event) => {
+      if (liveTypes.has(event.type)) finish();
+    },
+  };
 }
 
 async function runGitAsync(cwd: string, args: string[]): Promise<void> {

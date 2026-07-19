@@ -130,7 +130,9 @@ this recipe; use `noContextFiles`/`agentsFilesOverride` if the personal file sho
   informational index is appended after `nuncio-context`; `read_external_memory` opens an
   indexed item with a separate result cap. `PI_EXTERNAL_MEMORIES` gates each source and
   `PI_EXTERNAL_MEMORIES_MAX_BYTES` controls the index budget. Worktrees also match their owning
-  repository path, and every filesystem read fails soft.
+  repository path, and every filesystem read fails soft. Successful repository-root resolution
+  is cached across both stores and later sessions; the memory indexes themselves remain fresh
+  per session.
 - **Step 2 — replace allowlisted paths with in-repo factories** once foreman/subagent are ported
   from `~/.pi/agent/extensions/` into the repo; deny-by-default remains unchanged.
 
@@ -144,6 +146,17 @@ Extension roadmap after that, in order:
 
 Code layout: `apps/server/src/agents/pi-engine/` — one kebab-case file per extension, under ~200
 lines, independently disableable. `pi-agent.provider.ts` upgrades in place to build the loader.
+
+## Performance evidence
+
+Run `bun run perf:pi -- --run --trials 5` for an opt-in, real-auth comparison of fresh vanilla Pi
+and the production `PiAgentProvider`; add `--write` to refresh
+`docs/pi-provider-performance-baseline.md`. The harness selects the cheapest available
+Haiku-first model, alternates arm order, records setup plus time-to-first-delta and completion, and
+reports raw samples, median, and coefficient of variation. It has no latency threshold: provider
+unit tests gate deterministic behavior, while model/network timing remains evidence until the same
+runner has multiple stable baselines. Use `--model provider:model-id` only when the cheapest
+credential is quota-exhausted; the override is recorded in the output.
 
 ## Evidence capture (before/after proof)
 

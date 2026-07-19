@@ -200,7 +200,10 @@ Settings under the `pi` provider control the feature: `PI_EXTERNAL_MEMORIES`
 (`off|claude|codex|all`, default `all`) and `PI_EXTERNAL_MEMORIES_MAX_BYTES` (default 12288, hard
 cap 16384). `NUNCIO_CLAUDE_CONFIG_DIR` / `CLAUDE_CONFIG_DIR` selects Claude's config root;
 `NUNCIO_CODEX_HOME` selects Codex's home. A project under `/.claude/worktrees/` also tries the
-owning repository root for both source matchers.
+owning repository root for both source matchers. A successful project-to-repository lookup is
+cached inside the singleton source service, eliminating duplicate synchronous Git probes across
+the two stores and later Pi sessions. Index and memory contents are never cached, so each new
+session still sees filesystem edits.
 
 ## Model wiring
 
@@ -1807,13 +1810,12 @@ core; the hook only wires the `prevMap` ref + bridge call.
 | E2E | `bun run --filter @nuncio/server test:e2e` (`test/e2e/`) | HTTP lifecycle via supertest with simulated providers |
 | Integration | `bun run --filter @nuncio/server test:integration` (`test/integration/`) | Real provider auth checks and prompts; gated so CI stays safe |
 
-The Pi integration suite (`test/integration/pi-agent.integration.spec.ts`) exercises the real capabilities: in-session model switch, interrupt-and-resume, cwd tool-use with an available tool-capable model, and persist/resume. **Invariant:** it snapshots `~/.pi/agent/settings.json` in `beforeAll` and restores it in `afterAll`, so a run leaves that file byte-identical even though Pi's `setModel` intentionally writes to it.
+The Pi integration suite (`test/integration/pi-agent.integration.spec.ts`) exercises the real capabilities: in-session model switch, interrupt-and-resume, cwd tool-use with an available tool-capable model, and persist/resume. It selects Haiku before larger available models and drives interruption from the first live stream event rather than a fixed sleep. **Invariant:** it snapshots `~/.pi/agent/settings.json` in `beforeAll` and restores it in `afterAll`, so a run leaves that file byte-identical even though Pi's `setModel` intentionally writes to it.
 
 Server tests run on `bun test`. Unit tests use fakes for provider subprocess/SDK boundaries, so they do not require Codex, Cursor, or Pi credentials. Pi handoff is covered by `test/unit/pi-local/` (`pi-local-sessions.service.spec.ts`, `pi-transcript-hydrate.spec.ts`) plus `sessions.handoff.spec.ts` and `sessions.repository.spec.ts` (`findByProviderThreadId`, discriminated `createHandoff`); the `PiLocalSessionsService` SDK boundary is faked via its `loadSdk`/`openSession` overrides.
 
 ## Known gaps (follow-up)
 
-- **Pi session revival:** `SessionManager.inMemory()` means Pi conversation history is lost on server restart. File-backed `SessionManager.create(cwd)` + lazy revive is planned to make the "resumable sessions" principle true for Pi. (Note: **imported** Pi handoff sessions are already file-backed — they resume the on-disk jsonl via `providerThreadId` — so they survive restart.)
 - **Approval continuity:** approval request state is durable, but a request waiting inside the Codex app-server cannot continue across a server/app-server restart; stale pending requests are auto-denied on boot with `server_restarted`.
 - **Tool configuration:** Pi tools are hardcoded (`read, bash, grep, find, ls`); env/per-session config is planned.
 - **Additional providers:** future SDKs can be added by implementing `AgentProvider` and registering them in `AgentRegistry`.

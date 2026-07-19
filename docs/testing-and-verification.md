@@ -246,5 +246,19 @@ Set it per session/loop via the model picker (or the loop's engine·model overri
 smoke setup. A smoke that burns a flagship-model turn to check a chip renders is a bug in the
 smoke, not a cost of doing business.
 
+### Pi performance evidence
+
+`bun run perf:pi -- --run --trials 5` is an explicit, real-auth, billable comparison between a
+fresh vanilla Pi SDK session and the production-wired `PiAgentProvider`. It uses the same cwd,
+prompt, SDK, and cheapest available Haiku-first model, alternates arm order, excludes one warm-up
+per arm, and reports raw setup/time-to-first-delta/completion samples with median and coefficient
+of variation. Add `--write` to refresh `docs/pi-provider-performance-baseline.md`. If the
+cheapest credential is present but quota-exhausted, pass `--model provider:model-id` (or set
+`NUNCIO_PI_PERF_MODEL`) to benchmark another authenticated model and keep the choice in the report.
+
+This command is report-only: noisy network/model timing never fails CI. The deterministic adapter
+tests remain the merge gate; adopt a timing threshold only after at least two stable baselines on
+the same runner.
+
 Never: snapshot tests of whole components, tests that assert implementation details, or sleeps —
 use fake timers or event hooks.

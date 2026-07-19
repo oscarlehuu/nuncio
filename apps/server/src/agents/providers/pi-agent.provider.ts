@@ -107,13 +107,16 @@ type PiSessionHandle = {
   prompt: (text: string, options?: PiPromptOptions) => Promise<void>;
   unsubscribe: () => void;
   setEmit: (emit?: AgentRunContext['emit']) => void;
+  deactivateTurn: () => void;
   resetAssistantText: () => void;
   getAssistantText: () => string;
   /** Turn-final assistant messages already emitted during the current prompt. */
   getAssistantTurnsEmitted: () => number;
+  /** Successful terminal assistant events, including valid textless/tool-only turns. */
+  getAssistantCompletionsObserved: () => number;
   /** Error message of a turn that failed (stopReason 'error'), if any. */
   getTurnError: () => string | null;
-  sealOpenTools: (emit?: AgentRunContext['emit']) => void;
+  sealOpenActivity: (emit?: AgentRunContext['emit']) => void;
   runtimePolicyKey: string;
   runtimeInstructionsKey: string;
   runtimeToolSnapshot: PiRuntimeToolSnapshot;
@@ -220,6 +223,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     const handle = this.activeSessions.get(sessionId);
     if (!handle) return;
     void handle.session.abort().catch(() => undefined);
+    handle.deactivateTurn();
     handle.unsubscribe();
     handle.session.dispose?.();
     this.activeSessions.delete(sessionId);
@@ -229,7 +233,7 @@ export class PiAgentProvider extends BaseAgentProvider {
   protected prepareRuntimeDispose(sessionId: string): boolean {
     const handle = this.activeSessions.get(sessionId);
     if (!handle) return false;
-    handle.sealOpenTools();
+    handle.sealOpenActivity();
     return true;
   }
 
@@ -499,22 +503,22 @@ export class PiAgentProvider extends BaseAgentProvider {
         Object.keys(promptOptions).length ? promptOptions : undefined,
       );
     } catch (error) {
-      if (this.interruptedSessions.delete(sessionId)) {
-        interrupted = true;
-      } else {
-        throw error;
-      }
+      if (!this.interruptedSessions.has(sessionId)) throw error;
     } finally {
-      handle.sealOpenTools(context.emit);
+      interrupted = this.interruptedSessions.delete(sessionId);
+      handle.sealOpenActivity(context.emit);
+      handle.deactivateTurn();
     }
     if (interrupted) return;
-    this.interruptedSessions.delete(sessionId);
     const turnError = handle.getTurnError();
     if (turnError) {
       // Route through the shared error path: ERROR status + error event.
       throw new Error(turnError);
     }
-    if (handle.getAssistantTurnsEmitted() === 0) {
+    if (
+      handle.getAssistantTurnsEmitted() === 0 &&
+      handle.getAssistantCompletionsObserved() === 0
+    ) {
       // Fallback for runs where no message_end fired (older SDK shapes).
       this.pushEvent(
         sessionId,
@@ -756,8 +760,10 @@ export class PiAgentProvider extends BaseAgentProvider {
     }
 
     let currentEmit = context.emit;
+    let turnActive = false;
     let assistantText = '';
     let assistantTurnsEmitted = 0;
+    let assistantCompletionsObserved = 0;
     let lastTurnError: string | null = null;
     let accumulatedThinking = '';
     let thinkingOpen = false;
@@ -785,6 +791,16 @@ export class PiAgentProvider extends BaseAgentProvider {
       accumulatedThinking = '';
       this.pushEvent(sessionId, 'thinking_start', { thinkingId }, currentEmit);
     };
+    const sealThinking = (text?: string, emit: AgentRunContext['emit'] = currentEmit) => {
+      if (!thinkingOpen && !accumulatedThinking) return;
+      this.pushEvent(
+        sessionId,
+        'thinking_message',
+        { thinkingId, text: text ?? accumulatedThinking },
+        emit,
+      );
+      resetThinking();
+    };
     const sealOpenTools = (emit: AgentRunContext['emit'] = currentEmit) => {
       for (const [callId, tool] of openTools) {
         this.pushEvent(sessionId, 'tool_end', { callId, tool, isError: false }, emit);
@@ -794,8 +810,13 @@ export class PiAgentProvider extends BaseAgentProvider {
       planToolCalls.clear();
       spawnTaskCalls.clear();
     };
+    const sealOpenActivity = (emit: AgentRunContext['emit'] = currentEmit) => {
+      sealThinking(undefined, emit);
+      sealOpenTools(emit);
+    };
 
     const unsubscribe = session.subscribe((event: { type: string; [key: string]: unknown }) => {
+      if (!turnActive) return;
       if (event.type === 'message_update') {
         const inner = event.assistantMessageEvent as {
           type?: string;
@@ -821,13 +842,11 @@ export class PiAgentProvider extends BaseAgentProvider {
           );
         }
         if (inner?.type === 'thinking_end') {
-          ensureThinkingStarted();
-          const text = typeof inner.content === 'string' ? inner.content : accumulatedThinking;
-          this.pushEvent(sessionId, 'thinking_message', { thinkingId, text }, currentEmit);
-          resetThinking();
+          sealThinking(typeof inner.content === 'string' ? inner.content : undefined);
         }
       }
       if (event.type === 'tool_execution_start') {
+        sealThinking();
         const callId = typeof event.toolCallId === 'string' ? event.toolCallId : crypto.randomUUID();
         const tool = typeof event.toolName === 'string' ? event.toolName : 'unknown';
         const userInputPayload = buildUserInputRequestedPayload(tool, event.args, callId);
@@ -920,6 +939,7 @@ export class PiAgentProvider extends BaseAgentProvider {
         );
       }
       if (event.type === 'message_end') {
+        sealThinking();
         const message = event.message as
           | {
               role?: string;
@@ -937,6 +957,7 @@ export class PiAgentProvider extends BaseAgentProvider {
             // Pi may emit a failed attempt before an automatic retry succeeds.
             // Settlement follows the latest non-aborted assistant completion.
             lastTurnError = null;
+            assistantCompletionsObserved += 1;
             const text = (message.content ?? [])
               .filter((block) => block?.type === 'text' && typeof block.text === 'string')
               .map((block) => block.text)
@@ -951,7 +972,7 @@ export class PiAgentProvider extends BaseAgentProvider {
         }
       }
       if (event.type === 'agent_end') {
-        sealOpenTools(currentEmit);
+        sealOpenActivity(currentEmit);
       }
     });
 
@@ -962,17 +983,24 @@ export class PiAgentProvider extends BaseAgentProvider {
       unsubscribe,
       setEmit: (emit) => {
         currentEmit = emit;
+        turnActive = true;
+      },
+      deactivateTurn: () => {
+        turnActive = false;
+        currentEmit = undefined;
       },
       resetAssistantText: () => {
         assistantText = '';
         assistantTurnsEmitted = 0;
+        assistantCompletionsObserved = 0;
         lastTurnError = null;
         resetThinking();
       },
       getAssistantText: () => assistantText,
       getAssistantTurnsEmitted: () => assistantTurnsEmitted,
+      getAssistantCompletionsObserved: () => assistantCompletionsObserved,
       getTurnError: () => lastTurnError,
-      sealOpenTools,
+      sealOpenActivity,
       runtimePolicyKey: runtimePolicyKey(context.runtimePolicy),
       runtimeInstructionsKey: piRuntimeInstructionsKey(context, runtimeTools),
       runtimeToolSnapshot: snapshotPiRuntimeTools(runtimeTools),

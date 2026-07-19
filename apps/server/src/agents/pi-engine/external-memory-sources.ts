@@ -66,13 +66,6 @@ function gitRepositoryRoot(projectPath: string): string | null {
   }
 }
 
-/** Path-shape candidates plus the git-truthful repository root, most specific first. */
-function resolveProjectCandidates(projectPath: string): string[] {
-  const candidates = projectPathCandidates(projectPath);
-  const gitRoot = gitRepositoryRoot(candidates[0]!);
-  return gitRoot && !candidates.includes(gitRoot) ? [...candidates, gitRoot] : candidates;
-}
-
 /**
  * Claude Code's documented `autoMemoryDirectory` setting relocates the auto
  * memory store: the configured directory then holds MEMORY.md and topic files
@@ -191,9 +184,32 @@ function safeContainedRead(directory: string, filename: string): string | null {
 
 @Injectable()
 export class ExternalMemorySources {
+  /** Process boundary is overrideable so the positive-cache invariant is deterministic in tests. */
+  repositoryRootResolver: (projectPath: string) => string | null = gitRepositoryRoot;
+  private readonly projectCandidatesCache = new Map<string, string[]>();
+
+  /**
+   * Git identity does not change for a live worktree, while memory files do.
+   * Cache only successful probes: this removes duplicate synchronous `git`
+   * processes without preventing a non-repository folder from becoming one.
+   */
+  private resolveProjectCandidates(projectPath: string): string[] {
+    const key = resolve(projectPath);
+    const cached = this.projectCandidatesCache.get(key);
+    if (cached) return cached;
+
+    const candidates = projectPathCandidates(key);
+    const gitRoot = this.repositoryRootResolver(candidates[0]!);
+    if (!gitRoot) return candidates;
+
+    const resolved = candidates.includes(gitRoot) ? candidates : [...candidates, gitRoot];
+    this.projectCandidatesCache.set(key, resolved);
+    return resolved;
+  }
+
   loadClaude(projectPath: string, claudeDir: string): ClaudeMemorySource {
     try {
-      const candidates = resolveProjectCandidates(projectPath);
+      const candidates = this.resolveProjectCandidates(projectPath);
       const override = claudeAutoMemoryDirectory(candidates, claudeDir);
       const locations = override
         ? [override]
@@ -221,7 +237,7 @@ export class ExternalMemorySources {
     try {
       const memoryDir = join(codexHome, 'memories');
       const index = safeRead(join(memoryDir, 'MEMORY.md'));
-      const candidates = resolveProjectCandidates(projectPath);
+      const candidates = this.resolveProjectCandidates(projectPath);
       return {
         groups: index ? parseCodexMemoryIndex(index)
           .filter((group) => codexGroupMatchesProject(group, projectPath, candidates)) : [],

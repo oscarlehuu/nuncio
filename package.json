@@ -36,6 +36,7 @@
     "sync-versions": "bun run scripts/sync-versions.mjs",
     "release": "bun run scripts/release.mjs",
     "test:scripts": "bun test scripts/",
+    "perf:pi": "cd apps/server && bun run ../../scripts/pi-provider-perf-harness.mjs",
     "perf:relay": "cd apps/server && bun run ../../scripts/relay-perf-harness.mjs",
     "perf:ui": "bun scripts/perf-ui-harness.mjs",
     "test:smoke-ui": "bun scripts/smoke-ui.mjs",

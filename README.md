@@ -172,6 +172,7 @@ Nuncio drives the [Pi SDK](https://github.com/earendil-works/pi) in-process. Sta
 Nuncio Engine shares Pi's `auth.json` and SDK session plumbing, but it does **not** load the Pi CLI's personal `models.json`. It loads Pi's built-ins plus an optional, user-owned Pi-format file at `<PI_AGENT_DIR>/nuncio-models.json` (normally `~/.pi/agent/nuncio-models.json`). The file may define any private proxy/provider; when it is absent, no custom provider appears. Override its location with `NUNCIO_PI_MODELS_PATH`. Nuncio never creates or edits this file, and no custom provider is hardcoded into the product. Nuncio Engine sessions deny extension discovery by default and load only Nuncio's explicit allowlist from the Pi agent directory. Set `PI_EXTENSION_DISCOVERY=full` only when you intentionally want Pi's normal global and project extension discovery for Solo sessions; explicit Crew runtime-policy sessions remain hermetic. Nuncio Engine injects bounded project facts and HandoffBrief context via `nuncio-context` (`appendSystemPrompt`) on every session unless disabled.
 
 Nuncio Engine can also reuse project-relevant memories already curated by Claude Code and Codex CLI without copying or modifying either store. It injects only a compact, byte-bounded index and exposes `read_external_memory` for full read-only access to an indexed item. `PI_EXTERNAL_MEMORIES` selects `off`, `claude`, `codex`, or `all` (default); `PI_EXTERNAL_MEMORIES_MAX_BYTES` controls the index budget (default 12288, hard cap 16384). Claude memories resolve from `NUNCIO_CLAUDE_CONFIG_DIR`, then `CLAUDE_CONFIG_DIR`, then `~/.claude`; Codex memories resolve from `NUNCIO_CODEX_HOME`, then `~/.codex`. Worktree sessions also match the owning repository path.
+Successful worktree-to-repository resolution is cached for the daemon lifetime so both memory stores and later Pi sessions avoid repeated synchronous Git probes; the memory files themselves are still read afresh for every new session.
 
 Nuncio uses Pi SDK `0.80.6` metadata directly for built-in models, so authenticated Gemini, Grok, GPT, Claude, and other built-ins appear without a Nuncio allowlist; optional user providers declare their own metadata in `nuncio-models.json`. Standard thinking levels through **High** are available unless a model marks one unsupported; **Extra High** and **Max** appear only when that exact model advertises them. Image upload is enabled only when the selected registry model advertises image input. Pi **Max** remains a single-agent thinking level and is not renamed to Codex **Ultra**, which activates multi-agent delegation. If Pi automatically retries a failed attempt and later completes successfully, Nuncio now settles the session from that successful completion instead of surfacing the earlier transient error.
 
@@ -243,9 +244,10 @@ bun run --filter @nuncio/server test:integration:claude # real Claude Agent SDK 
 bun run --filter @nuncio/web test                  # web component tests (vitest)
 bun run test:daily-driver                          # server unit + e2e, core, web
 bun run test:daily-driver:codex                    # daily-driver + real Codex smoke
+bun run perf:pi -- --run --trials 5                # real, billable, report-only Pi comparison
 ```
 
-All server tests run on `bun test` (no jest). The Pi integration suite is gated on `~/.pi/agent/auth.json` and self-skips when absent, so it is CI-safe. The Codex integration suite is explicitly opt-in via `NUNCIO_CODEX_INTEGRATION=1` (the script sets it), requires `codex login status`, and makes a real app-server model discovery call plus a short run/resume check. The Claude integration suite is opt-in via `NUNCIO_CLAUDE_INTEGRATION=1`, self-skips unless the Agent SDK reports a logged-in Claude Code (or `ANTHROPIC_API_KEY`), and exercises a real run, steer, interrupt, and resume-from-a-fresh-provider against the cheapest model in an isolated tmp workspace.
+All server tests run on `bun test` (no jest). The Pi integration suite is gated on `~/.pi/agent/auth.json` and self-skips when absent, so it is CI-safe; it prefers Haiku and interrupts from the first observed live event instead of sleeping for a guessed duration. The Codex integration suite is explicitly opt-in via `NUNCIO_CODEX_INTEGRATION=1` (the script sets it), requires `codex login status`, and makes a real app-server model discovery call plus a short run/resume check. The Claude integration suite is opt-in via `NUNCIO_CLAUDE_INTEGRATION=1`, self-skips unless the Agent SDK reports a logged-in Claude Code (or `ANTHROPIC_API_KEY`), and exercises a real run, steer, interrupt, and resume-from-a-fresh-provider against the cheapest model in an isolated tmp workspace.
 
 ## Production deploy (Tailscale)
 
@@ -450,7 +452,7 @@ assets/     Screenshots for the README (un-ignored only here — see .gitignore)
 - **Provider-neutral agent layer:** every agent SDK implements `AgentProvider`; `AgentRegistry` resolves per session so Pi/Codex/Cursor/any future SDK plug in uniformly
 - **Workspace harness above provider loops:** Crew shares durable context and Git evidence, not hidden reasoning or provider caches; each provider retains its own conversation runtime while Nuncio owns the outer workflow and authority boundary
 - **Per-session provider + model selection** — `provider` + `model` stored on the session, wired through to the SDK
-- **Long-running, resumable sessions** — FSM + event log persist in SQLite; Pi conversation history is in-memory pending session revival (planned)
+- **Long-running, resumable sessions** — FSM + event log persist in SQLite; native Pi sessions persist their JSONL path and reopen it lazily after provider disposal or daemon restart
 
 ## Roadmap
 
