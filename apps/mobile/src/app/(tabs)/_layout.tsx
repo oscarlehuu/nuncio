@@ -1,5 +1,5 @@
 import { Tabs } from 'expo-router';
-import { List, Plus, Settings } from 'lucide-react-native';
+import { List, Settings } from 'lucide-react-native';
 
 const ACTIVE = '#208AEF';
 const INACTIVE = '#83868b';
@@ -29,13 +29,6 @@ export default function TabLayout() {
         options={{
           title: 'Sessions',
           tabBarIcon: ({ color, size }) => <List color={color} size={size} />,
-        }}
-      />
-      <Tabs.Screen
-        name="new"
-        options={{
-          title: 'New',
-          tabBarIcon: ({ color, size }) => <Plus color={color} size={size} />,
         }}
       />
       <Tabs.Screen

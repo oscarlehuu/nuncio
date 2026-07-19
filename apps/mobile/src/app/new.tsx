@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { Bot, Send, Sparkles } from 'lucide-react-native';
+import { ArrowLeft, Bot, Send, Sparkles } from 'lucide-react-native';
 import { createSession, fetchModels } from '@nuncio/core/api';
 import { createCrewTask } from '@nuncio/core/crew-api';
 import {
@@ -18,20 +18,20 @@ import {
   type FlatModel,
   type ModelProvider,
 } from '@nuncio/core/model-providers';
-import { CrewComposerOptions } from '../../components/crew-composer-options';
-import { CrewModePicker } from '../../components/crew-mode-picker';
+import { CrewComposerOptions } from '../components/crew-composer-options';
+import { CrewModePicker } from '../components/crew-mode-picker';
 import {
   buildCrewTaskInput,
   buildSoloCreateArgs,
   createCrewSubmitLock,
   initialExecutionMode,
-} from '../../lib/crew-composer';
-import { useCrewComposerState } from '../../lib/crew-composer-state';
-import { crewTaskPath } from '../../lib/crew-navigation';
-import { Button } from '../../components/ui/button';
-import { Card } from '../../components/ui/card';
-import { Text } from '../../components/ui/text';
-import { Textarea } from '../../components/ui/textarea';
+} from '../lib/crew-composer';
+import { useCrewComposerState } from '../lib/crew-composer-state';
+import { crewTaskPath } from '../lib/crew-navigation';
+import { Button } from '../components/ui/button';
+import { Card } from '../components/ui/card';
+import { Text } from '../components/ui/text';
+import { Textarea } from '../components/ui/textarea';
 
 export default function NewSession() {
   const router = useRouter();
@@ -101,11 +101,20 @@ export default function NewSession() {
         className="flex-1"
         style={{ flex: 1 }}
       >
-        <View className="px-4 pb-3">
-          <Text className="text-3xl font-semibold tracking-tight text-foreground">New task</Text>
-          <Text className="mt-2 text-sm text-muted-foreground">
-            Delegate work to a Solo agent or a Crew workflow.
-          </Text>
+        <View className="flex-row items-center gap-3 px-4 pb-3">
+          <Pressable
+            accessibilityLabel="Close new task"
+            onPress={() => router.back()}
+            className="h-9 w-9 items-center justify-center rounded-full active:bg-card"
+          >
+            <ArrowLeft color="#eff0f1" size={21} />
+          </Pressable>
+          <View>
+            <Text className="text-2xl font-semibold tracking-tight text-foreground">New task</Text>
+            <Text className="mt-1 text-sm text-muted-foreground">
+              Delegate work to a Solo agent or a Crew workflow.
+            </Text>
+          </View>
         </View>
 
         <ScrollView
