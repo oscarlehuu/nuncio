@@ -46,7 +46,6 @@ suite('context injection with real Pi (integration)', () => {
   let facts: ContextFactsService;
   let events: EventsRepository;
   let sessionsRepo: SessionsRepository;
-  let distill: FactDistillationService;
   let settings: SettingsService;
   let dataDir: string;
   let workspace: string;
@@ -78,8 +77,6 @@ suite('context injection with real Pi (integration)', () => {
     events = module.get(EventsRepository);
     sessionsRepo = module.get(SessionsRepository);
     settings = module.get(SettingsService);
-    // Not exported from AgentsModule — select the declaring module.
-    distill = module.select(AgentsModule).get(FactDistillationService);
     cheapModel = await resolveCheapModel(provider);
   });
 
