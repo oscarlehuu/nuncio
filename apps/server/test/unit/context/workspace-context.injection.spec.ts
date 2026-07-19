@@ -103,6 +103,26 @@ describe('workspace context injection into new sessions', () => {
     }
   });
 
+  it('a worktree session reports its generated branch with the picked base', async () => {
+    const workspacesDir = mkdtempSync(join(tmpdir(), 'nuncio-ws-inject-worktrees-'));
+    process.env.NUNCIO_WORKSPACES_DIR = workspacesDir;
+    try {
+      const session = await sessions.create({
+        prompt: 'worktree task',
+        provider: 'cursor',
+        projectPath: workspace,
+        useWorktree: true,
+        baseBranch: 'main',
+      });
+      const text = await firstUserMessage(session.id);
+      expect(text).toContain('## Workspace');
+      expect(text).toContain(`branch: nuncio/${session.id}-worktree-task (base: main)`);
+    } finally {
+      delete process.env.NUNCIO_WORKSPACES_DIR;
+      rmSync(workspacesDir, { recursive: true, force: true });
+    }
+  });
+
   it('the kill-switch (inject=off) disables the workspace block', async () => {
     settings.set('NUNCIO_WORKSPACE_CONTEXT_INJECT', 'off');
     try {

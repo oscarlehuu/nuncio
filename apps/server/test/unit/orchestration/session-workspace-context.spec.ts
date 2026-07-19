@@ -52,6 +52,11 @@ describe('buildSessionWorkspaceContext', () => {
     expect(await buildSessionWorkspaceContext(dir)).toBeNull();
   });
 
+  it('returns null for a fresh repo with no commits (documented degrade)', async () => {
+    await git(dir, 'init', '-q', '-b', 'main');
+    expect(await buildSessionWorkspaceContext(dir)).toBeNull();
+  });
+
   it('captures snapshot, recent commit subjects, and top-level entries', async () => {
     await initRepo();
     const ctx = await buildSessionWorkspaceContext(dir);

@@ -1,4 +1,5 @@
 import { FactDistillationService } from '../../../src/agents/fact-distillation.service';
+import { notifySessionEventHooks } from '../../../src/sessions/domain/session-event-hooks';
 import type { SessionEvent } from '../../../src/sessions/domain/sessions.types';
 
 function statusIdle(): SessionEvent {
@@ -164,6 +165,38 @@ describe('FactDistillationService', () => {
     resolveCompletion('[]');
     await Promise.all([first, second]);
     expect(completions).toHaveLength(1);
+  });
+
+  it('registers on the session event hook outside test env (production wiring)', async () => {
+    const { service, upserts } = makeHarness();
+    const priorEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      service.onModuleInit();
+      // The hook is fire-and-forget off the append path — poll for the write.
+      notifySessionEventHooks('s1', statusIdle());
+      const start = Date.now();
+      while (upserts.length === 0 && Date.now() - start < 2000) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(upserts).toHaveLength(1);
+    } finally {
+      service.onModuleDestroy();
+      process.env.NODE_ENV = priorEnv;
+    }
+  });
+
+  it('does not register the hook under bun test (NODE_ENV=test)', async () => {
+    const { service, upserts } = makeHarness();
+    expect(process.env.NODE_ENV).toBe('test');
+    service.onModuleInit();
+    try {
+      notifySessionEventHooks('s1', statusIdle());
+      await new Promise((r) => setTimeout(r, 20));
+      expect(upserts).toHaveLength(0);
+    } finally {
+      service.onModuleDestroy();
+    }
   });
 
   it('a failed completion backs off briefly instead of consuming the full cooldown', async () => {
