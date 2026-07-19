@@ -397,9 +397,11 @@ export class SessionsService implements OnModuleDestroy {
     // hermetic policy loader never receives the managed context.
     const factsInPreamble =
       Boolean(projectPath) && !(provider.capabilities.systemContextInjection && !runtimePolicy);
+    // Same hermetic rationale as Crew envelopes: a runtime-policy session gets
+    // exactly its bounded prompt, so the workspace block stays out of it.
     const workspaceContext = runtimePolicy
       ? ''
-      : await this.renderWorkspaceContext(worktreePath ?? workspace, baseBranch);
+      : await this.renderWorkspaceContextBlock(worktreePath ?? workspace, baseBranch);
     const prompt = composeSessionPreamble({
       ...(input.contextBrief ? { brief: renderHandoffBrief(input.contextBrief) } : {}),
       ...(factsInPreamble ? { facts: this.renderProjectFacts(projectPath!, id) } : {}),
@@ -471,7 +473,7 @@ export class SessionsService implements OnModuleDestroy {
    * Render the session-start workspace context block for a git cwd, or '' when
    * disabled / not a git repo. Best-effort: git failures never block creation.
    */
-  private async renderWorkspaceContext(
+  private async renderWorkspaceContextBlock(
     cwd: string | undefined,
     baseBranch: string | undefined,
   ): Promise<string> {

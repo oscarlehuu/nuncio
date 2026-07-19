@@ -100,6 +100,15 @@ describe('renderWorkspaceContext', () => {
     expect(out).toContain('src/');
   });
 
+  it('labels a detached HEAD instead of presenting it as a branch', () => {
+    const out = renderWorkspaceContext({
+      ...base,
+      snapshot: { ...base.snapshot, branch: 'HEAD' },
+    });
+    expect(out).toContain('branch: (detached) (base: main)');
+    expect(out).not.toContain('branch: HEAD');
+  });
+
   it('lists dirty files when present', () => {
     const out = renderWorkspaceContext({
       ...base,

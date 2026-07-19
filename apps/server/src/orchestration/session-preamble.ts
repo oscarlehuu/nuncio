@@ -38,6 +38,8 @@ export function composeSessionPreamble(parts: SessionPreambleParts): string {
   const facts = parts.facts?.trim();
   if (facts) sections.push(applyWrapper(parts.profile?.sections.factsWrapper, facts, warn));
 
+  // The workspace block is Nuncio-owned mechanical state (branch/HEAD/status),
+  // so it deliberately takes no per-engine profile wrapper.
   const workspace = parts.workspace?.trim();
   if (workspace) sections.push(workspace);
 

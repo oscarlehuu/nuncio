@@ -12,9 +12,10 @@ import {
  * calls (`git status`, `git log`, `ls`) on every fresh session. Deliberately
  * NOT a repo map: one level deep, hard caps, deterministic.
  *
- * This type is injected into the session preamble only and is never persisted,
- * unlike `WorkspaceSnapshot` which is part of the durable handoff-brief
- * contract — extending that contract would touch persisted task rows.
+ * The rendered block is persisted only inside `sessions.prompt` like the other
+ * preamble sections; this struct itself is not part of the durable
+ * handoff-brief contract — extending `WorkspaceSnapshot` would touch persisted
+ * task rows.
  */
 export interface SessionWorkspaceContext {
   snapshot: WorkspaceSnapshot;
@@ -32,11 +33,9 @@ const ENTRY_MAX_BYTES = 120;
 export const WORKSPACE_CONTEXT_MAX_BYTES = 1536;
 
 function capLines(lines: string[], cap: number, maxBytes: number): string[] {
-  const kept = lines
-    .filter((line) => line.length > 0)
-    .slice(0, cap)
-    .map((line) => truncateHeadBytes(line, maxBytes));
-  const overflow = lines.length - kept.length;
+  const nonEmpty = lines.filter((line) => line.length > 0);
+  const kept = nonEmpty.slice(0, cap).map((line) => truncateHeadBytes(line, maxBytes));
+  const overflow = nonEmpty.length - kept.length;
   return overflow > 0 ? [...kept, `…and ${overflow} more`] : kept;
 }
 
@@ -95,7 +94,15 @@ export function renderWorkspaceContext(context: SessionWorkspaceContext): string
   const lines: string[] = ['## Workspace'];
 
   const head: string[] = [];
-  if (snapshot.branch) {
+  // `rev-parse --abbrev-ref HEAD` reports the literal `HEAD` on a detached
+  // checkout — say so instead of presenting it as a branch name.
+  if (snapshot.branch === 'HEAD') {
+    head.push(
+      snapshot.baseBranch
+        ? `branch: (detached) (base: ${snapshot.baseBranch})`
+        : 'branch: (detached)',
+    );
+  } else if (snapshot.branch) {
     head.push(
       snapshot.baseBranch && snapshot.baseBranch !== snapshot.branch
         ? `branch: ${snapshot.branch} (base: ${snapshot.baseBranch})`

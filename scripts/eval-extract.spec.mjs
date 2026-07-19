@@ -130,6 +130,15 @@ describe('extractOriginalPrompt', () => {
     );
     expect(extractOriginalPrompt(stored)).toEqual({ prompt: 'Fix the bug', stripped: true });
   });
+
+  test('strips a composed preamble that also carries the workspace block', () => {
+    const stored = [
+      '## Project facts\n- key: value',
+      '## Workspace\nbranch: main  head: abc1234\nstatus: clean',
+      'Fix the bug',
+    ].join('\n\n---\n\n');
+    expect(extractOriginalPrompt(stored)).toEqual({ prompt: 'Fix the bug', stripped: true });
+  });
 });
 
 describe('buildTaskFromSession preamble stripping', () => {
