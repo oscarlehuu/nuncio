@@ -177,8 +177,13 @@ Parallel writers and merge coordination are outside this baseline.
 Explicit Crew policy is stored on the ordinary Session and applied on every run and resume:
 
 - **Pi:** exposes only path-confined read/grep/list tools for read-only members and adds confined
-  edit/write tools for Builder; shell is omitted because Pi cannot honestly provide a
-  network-disabled arbitrary shell.
+  edit/write tools for Builder. Workspace-write members also get a `bash` tool whose every command
+  runs inside the shared OS sandbox (Seatbelt/bubblewrap: network denied, writes confined to the
+  workspace, `.git` and `.nuncio` read-only) whenever a backend is available — so a Builder can run
+  tests before submitting. `NUNCIO_ENGINE_POLICY_SHELL` selects `auto` (default; falls back to a
+  plain shell that announces its confinement is advisory), `sandboxed-only`, or `off`. Read-only
+  members never get a shell. Policy sessions also carry the in-repo `nuncio-engine` gate-guard rail
+  (pre-execution `.nuncio` write blocking) while staying hermetic.
 - **Codex:** maps to app-server read-only or workspace-write sandbox policy with network disabled,
   approval policy `never`, exact cwd, and one runtime workspace root.
 - **Claude:** exposes only allowlisted read or read/write file tools, enforces canonical paths in a
