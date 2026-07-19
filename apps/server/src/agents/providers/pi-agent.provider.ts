@@ -69,7 +69,16 @@ import {
   type ExternalMemoriesSnapshot,
 } from '../pi-engine/external-memories';
 import { buildExternalMemoryTool, EXTERNAL_MEMORY_TOOL_NAME } from '../pi-engine/external-memory-tool';
+import { buildReadSessionHistoryTool } from '../pi-engine/read-session-history-tool';
 import { buildNuncioEngineExtension } from '../pi-engine/engine-extension';
+import {
+  buildCompactionHandler,
+  COMPACTION_TRANSCRIPT_POINTER,
+  type CompactionHandlerResult,
+  type CompactionSummarizeInput,
+  type SessionBeforeCompactEventLike,
+} from '../pi-engine/compaction-extension';
+import { buildSessionStateSnapshot } from '../../sessions/domain/session-state-snapshot';
 import {
   buildCaptureEvidenceTool,
   type CaptureEvidenceInput,
@@ -155,6 +164,14 @@ type PiModelRegistry = {
   }>;
   find: (provider: string, id: string) => PiRegistryModel | undefined;
   getProviderDisplayName: (provider: string) => string;
+  /** API key + headers resolution for a model (absent on older stubs). */
+  getApiKeyAndHeaders?: (model: unknown) => Promise<{
+    ok: boolean;
+    apiKey?: string;
+    headers?: Record<string, string>;
+    env?: Record<string, string>;
+    error?: string;
+  }>;
 };
 
 @Injectable()
@@ -589,6 +606,9 @@ export class PiAgentProvider extends BaseAgentProvider {
     sessionId: string,
     cwd: string | undefined,
     runtimeInstructions: string,
+    compactionHandler?: (
+      event: SessionBeforeCompactEventLike,
+    ) => Promise<CompactionHandlerResult | undefined>,
   ) {
     const resolvedCwd = cwd ?? process.cwd();
     const settingsManager = pi.SettingsManager.create(resolvedCwd, agentDir);
@@ -619,11 +639,19 @@ export class PiAgentProvider extends BaseAgentProvider {
     const systemAppend = [context, externalMemorySnapshot.block, runtimeInstructions]
       .filter(Boolean).join('\n\n');
     // The in-repo engine rail loads through extensionFactories, so it holds in
-    // BOTH allowlist and full-discovery modes. With the single gate-guard hook
-    // toggled off there is nothing left to register, so the rail is omitted.
+    // BOTH allowlist and full-discovery modes. With every hook toggled off
+    // there is nothing left to register, so the rail is omitted.
     const gateGuard = this.settings.resolve('NUNCIO_ENGINE_GATE_GUARD') !== 'off';
-    const extensionFactories = gateGuard
-      ? [buildNuncioEngineExtension({ cwd: resolvedCwd, gateGuard })]
+    const compaction = this.settings.resolve('NUNCIO_ENGINE_COMPACTION') === 'on'
+      && compactionHandler
+      ? { handler: compactionHandler }
+      : undefined;
+    const extensionFactories = gateGuard || compaction
+      ? [buildNuncioEngineExtension({
+          cwd: resolvedCwd,
+          gateGuard,
+          ...(compaction ? { compaction } : {}),
+        })]
       : [];
     const resourceLoader = new pi.DefaultResourceLoader({
       cwd: resolvedCwd,
@@ -718,6 +746,7 @@ export class PiAgentProvider extends BaseAgentProvider {
           sessionId,
           cwd,
           runtimeInstructions,
+          this.buildCompactionHook(pi, sessionId, modelRegistry),
         );
     const externalMemorySnapshot = engineResources?.externalMemorySnapshot;
     const exposedExternalIds = {
@@ -776,11 +805,19 @@ export class PiAgentProvider extends BaseAgentProvider {
       }, pi.defineTool as (tool: unknown) => unknown),
     ];
     // capture_evidence hits the local dev server over HTTP, so it stays out of
-    // hermetic runtime-policy (disabled-network) sessions.
+    // hermetic runtime-policy (disabled-network) sessions. read_session_history
+    // is solo-only for now too — Crew members get it with Crew compaction.
     const soloEngineTools = [
       ...engineTools,
       buildCaptureEvidenceTool(
         { capture: captureEvidence },
+        pi.defineTool as (tool: unknown) => unknown,
+      ),
+      buildReadSessionHistoryTool(
+        {
+          sessionId,
+          listEvents: (sinceSeq, limit) => this.events.list(sessionId, sinceSeq, limit),
+        },
         pi.defineTool as (tool: unknown) => unknown,
       ),
     ];
@@ -1046,6 +1083,74 @@ export class PiAgentProvider extends BaseAgentProvider {
       runtimeInstructionsKey: piRuntimeInstructionsKey(context, runtimeTools),
       runtimeToolSnapshot: snapshotPiRuntimeTools(runtimeTools),
     };
+  }
+
+  /**
+   * The compaction policy hook for solo Engine sessions (phase 05,
+   * plans/260719-engine-shell-and-compaction). Survivors come from the durable
+   * event log; the narrative summarizer prefers the configured cheap model and
+   * falls back to the session's live model. Any failure in here surfaces as
+   * `undefined` from the handler → Pi's default compaction runs.
+   */
+  private buildCompactionHook(
+    pi: PiSdk,
+    sessionId: string,
+    modelRegistry: PiModelRegistry,
+  ): (event: SessionBeforeCompactEventLike) => Promise<CompactionHandlerResult | undefined> {
+    return buildCompactionHandler({
+      enabled: () => this.settings.resolve('NUNCIO_ENGINE_COMPACTION') === 'on',
+      buildSurvivors: () => buildSessionStateSnapshot(this.events.list(sessionId)),
+      summarize: (input) => this.summarizeForCompaction(pi, sessionId, modelRegistry, input),
+      transcriptPointer: COMPACTION_TRANSCRIPT_POINTER,
+    });
+  }
+
+  private async summarizeForCompaction(
+    pi: PiSdk,
+    sessionId: string,
+    modelRegistry: PiModelRegistry,
+    input: CompactionSummarizeInput,
+  ): Promise<string> {
+    const configured = this.settings.resolve('NUNCIO_ENGINE_COMPACTION_MODEL')?.trim() ?? '';
+    const model = (configured
+      ? resolveModelId(configured, (provider, id) => modelRegistry.find(provider, id))
+      : undefined)
+      ?? this.activeSessions.get(sessionId)?.session.model;
+    if (!model) throw new Error('No summarization model available for compaction.');
+    if (!modelRegistry.getApiKeyAndHeaders) {
+      throw new Error('Model registry cannot resolve compaction model credentials.');
+    }
+    const auth = await modelRegistry.getApiKeyAndHeaders(model);
+    if (!auth.ok) throw new Error(auth.error ?? 'No credentials for the compaction model.');
+    const generate = (pi as unknown as {
+      generateSummary: (
+        messages: unknown[],
+        model: unknown,
+        reserveTokens: number,
+        apiKey: string | undefined,
+        headers?: Record<string, string>,
+        signal?: AbortSignal,
+        customInstructions?: string,
+        previousSummary?: string,
+        thinkingLevel?: string,
+        streamFn?: unknown,
+        env?: Record<string, string>,
+      ) => Promise<string>;
+      DEFAULT_COMPACTION_SETTINGS: { reserveTokens: number };
+    });
+    return generate.generateSummary(
+      input.messages,
+      model,
+      input.reserveTokens ?? generate.DEFAULT_COMPACTION_SETTINGS.reserveTokens,
+      auth.apiKey,
+      auth.headers,
+      input.signal,
+      input.customInstructions,
+      input.previousSummary,
+      undefined,
+      undefined,
+      auth.env,
+    );
   }
 
   private assertRuntimePolicyUnchanged(

@@ -49,6 +49,46 @@ describe('buildNuncioEngineExtension', () => {
     expect(handlers.size).toBe(0);
   });
 
+  it('registers the session_before_compact hook only when a compaction handler is provided', async () => {
+    const withCompaction = fakeExtensionApi();
+    await runFactory(
+      buildNuncioEngineExtension({
+        cwd: workspace,
+        gateGuard: true,
+        compaction: { handler: async () => undefined },
+      }),
+      withCompaction.api,
+    );
+    expect(withCompaction.handlers.get('session_before_compact')?.length).toBe(1);
+
+    const without = fakeExtensionApi();
+    await runFactory(buildNuncioEngineExtension({ cwd: workspace, gateGuard: true }), without.api);
+    expect(without.handlers.has('session_before_compact')).toBe(false);
+  });
+
+  it('delegates the compact event to the handler and returns its result', async () => {
+    const { api, handlers } = fakeExtensionApi();
+    const seen: unknown[] = [];
+    const result = { compaction: { summary: 's', firstKeptEntryId: 'e1', tokensBefore: 10 } };
+    await runFactory(
+      buildNuncioEngineExtension({
+        cwd: workspace,
+        gateGuard: false,
+        compaction: {
+          handler: async (event) => {
+            seen.push(event);
+            return result;
+          },
+        },
+      }),
+      api,
+    );
+    const [hook] = handlers.get('session_before_compact')!;
+    const event = { type: 'session_before_compact', reason: 'threshold' };
+    expect(await hook!(event)).toBe(result);
+    expect(seen).toEqual([event]);
+  });
+
   it('blocks a write into the gate directory and passes everything else through', async () => {
     const { api, handlers } = fakeExtensionApi();
     await runFactory(buildNuncioEngineExtension({ cwd: workspace, gateGuard: true }), api);

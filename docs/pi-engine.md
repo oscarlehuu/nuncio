@@ -159,6 +159,18 @@ this recipe; use `noContextFiles`/`agentsFilesOverride` if the personal file sho
   A green verify on a `ui`-classified turn auto-captures after-evidence (known target →
   `NUNCIO_EVIDENCE_URL` fallback; fail-open). Solo Engine sessions also get the `capture_evidence`
   tool over the layer-1 service.
+- **Compaction layer (Remember quadrant). DONE (2026-07-19), opt-in.** Solo Engine sessions can
+  own what survives context compaction via `session_before_compact` on the engine rail
+  (`pi-engine/compaction-extension.ts`): the plan, latest verify result, open chips/gates
+  (`sessions/domain/session-state-snapshot.ts`, provider-neutral) and recent user instructions are
+  re-injected **verbatim** (never trusted to the summarizer — the Grok Build principle), a cheap
+  model (`NUNCIO_ENGINE_COMPACTION_MODEL`, default `cliproxyapi:claude-sonnet-4-6`) narrates the
+  remainder incrementally, and the summary ends with a pointer to the durable event log backed by
+  the new solo `read_session_history` tool (seq-cursor range reads). Degenerate summaries retry
+  once; EVERY failure path falls back to Pi's default compaction — the layer can degrade, never
+  brick a session. `NUNCIO_ENGINE_COMPACTION` defaults **off** until the eval harness shows a win
+  (principle 4); the SDK hook surface is pinned by `pi-engine.compaction-contract.spec.ts` so a Pi
+  bump that moves it fails the gate loudly.
 - **Eval mechanism (principle 4). DONE (2026-07-18).** `bun run eval:extract -- --session <id>`
   folds a recorded real session (durable event log) into a replayable `eval/tasks/*.json` with a
   `{ repo, baseSha }` pin; `eval:engines` clones the pinned SHA into a throwaway workspace and

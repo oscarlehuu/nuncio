@@ -40,12 +40,12 @@ and the 2026-07-19 compaction comparison (Pi 0.80.10 vs `openai/codex` vs `xai-o
 
 | # | Phase | Track | Status |
 |---|---|---|---|
-| 1 | [Pi sandboxed shell tool](phase-01-pi-sandboxed-shell-tool.md) | A | planned |
-| 2 | [Engine rail + gate guard into policy sessions](phase-02-engine-rail-into-policy-sessions.md) | A (same PR as 1) | planned |
-| 3 | [Shell eval acceptance](phase-03-shell-eval-acceptance.md) | A | planned |
-| 4 | [Compaction contract spec + survivors builder](phase-04-compaction-contract-and-survivors.md) | B | planned |
-| 5 | [Compaction extension + Engine settings group](phase-05-compaction-extension.md) | B | planned |
-| 6 | [Transcript pointer tool + integration/eval](phase-06-transcript-pointer-and-eval.md) | B | planned |
+| 1 | [Pi sandboxed shell tool](phase-01-pi-sandboxed-shell-tool.md) | A | **shipped** — PR #124 |
+| 2 | [Engine rail + gate guard into policy sessions](phase-02-engine-rail-into-policy-sessions.md) | A (same PR as 1) | **shipped** — PR #124 |
+| 3 | [Shell eval acceptance](phase-03-shell-eval-acceptance.md) | A | **smoke A/B done** (n=1: pi-shell SUCCEEDED, first-verify green, visible self-test; codex SUCCEEDED) — see [eval report](../reports/eval-260719-engine-shell-and-compaction.md); full task set still with user |
+| 4 | [Compaction contract spec + survivors builder](phase-04-compaction-contract-and-survivors.md) | B | **shipped** — compaction PR |
+| 5 | [Compaction extension + Engine settings group](phase-05-compaction-extension.md) | B | **shipped** — compaction PR (opt-in) |
+| 6 | [Transcript pointer tool + integration/eval](phase-06-transcript-pointer-and-eval.md) | B | **shipped + real round-trip proven** (`pi-compaction.integration.spec.ts`: ON probe 3/3 vs OFF 1/3) — default stays off until the multi-session eval |
 
 Ordering: 1→2→3 and 4→5→6 are internally sequential; the two tracks touch disjoint files
 (A: `agents/providers/pi-runtime-policy.ts`, sandbox module, crew loader wiring; B: `pi-engine/`,
