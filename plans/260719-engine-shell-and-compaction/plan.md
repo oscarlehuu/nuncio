@@ -40,12 +40,12 @@ and the 2026-07-19 compaction comparison (Pi 0.80.10 vs `openai/codex` vs `xai-o
 
 | # | Phase | Track | Status |
 |---|---|---|---|
-| 1 | [Pi sandboxed shell tool](phase-01-pi-sandboxed-shell-tool.md) | A | planned |
-| 2 | [Engine rail + gate guard into policy sessions](phase-02-engine-rail-into-policy-sessions.md) | A (same PR as 1) | planned |
-| 3 | [Shell eval acceptance](phase-03-shell-eval-acceptance.md) | A | planned |
-| 4 | [Compaction contract spec + survivors builder](phase-04-compaction-contract-and-survivors.md) | B | planned |
-| 5 | [Compaction extension + Engine settings group](phase-05-compaction-extension.md) | B | planned |
-| 6 | [Transcript pointer tool + integration/eval](phase-06-transcript-pointer-and-eval.md) | B | planned |
+| 1 | [Pi sandboxed shell tool](phase-01-pi-sandboxed-shell-tool.md) | A | **shipped** — PR #124 |
+| 2 | [Engine rail + gate guard into policy sessions](phase-02-engine-rail-into-policy-sessions.md) | A (same PR as 1) | **shipped** — PR #124 |
+| 3 | [Shell eval acceptance](phase-03-shell-eval-acceptance.md) | A | pending (needs user-curated task set) |
+| 4 | [Compaction contract spec + survivors builder](phase-04-compaction-contract-and-survivors.md) | B | **shipped** — compaction PR |
+| 5 | [Compaction extension + Engine settings group](phase-05-compaction-extension.md) | B | **shipped** — compaction PR (opt-in) |
+| 6 | [Transcript pointer tool + integration/eval](phase-06-transcript-pointer-and-eval.md) | B | tool **shipped**; real-model integration + eval pending (user-curated tasks; default stays off until the win) |
 
 Ordering: 1→2→3 and 4→5→6 are internally sequential; the two tracks touch disjoint files
 (A: `agents/providers/pi-runtime-policy.ts`, sandbox module, crew loader wiring; B: `pi-engine/`,
