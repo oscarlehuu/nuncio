@@ -491,6 +491,7 @@ describe('App create flow', () => {
       '',
       undefined,
       undefined,
+      undefined,
     );
       expect(fetchSessions).toHaveBeenCalled();
   });

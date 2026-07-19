@@ -1,6 +1,8 @@
-import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Optional } from '@nestjs/common';
 import { resolve as resolvePath } from 'node:path';
 import { maskSecret } from '../settings/settings.crypto';
+import { ProjectsRepository } from '../projects/projects.repository';
+import { McpOAuthService } from './oauth/mcp-oauth.service';
 import { McpServersRepository } from './persistence/mcp-servers.repository';
 import { transportIdentity } from './domain/mcp-transport';
 import { isMcpEngineId } from './domain/mcp.types';
@@ -15,6 +17,8 @@ import type {
 export interface McpSessionScope {
   provider: string;
   projectPath: string | null;
+  /** Explicit session selection; null = inherit project/default; [] = none. */
+  mcpServerIds?: string[] | null;
 }
 
 /**
@@ -23,10 +27,24 @@ export interface McpSessionScope {
  */
 @Injectable()
 export class McpService {
-  constructor(private readonly repo: McpServersRepository) {}
+  constructor(
+    private readonly repo: McpServersRepository,
+    @Optional() private readonly projects?: ProjectsRepository,
+    @Optional() private readonly oauth?: McpOAuthService,
+  ) {}
 
   /** Enabled servers a session may use: global rows + rows scoped to its project. */
   resolveForSession(scope: McpSessionScope): McpServerDefinition[] {
+    const scoped = this.scopedServers(scope);
+    const selectedIds = this.resolveSelectedIds(scope, scoped);
+    if (selectedIds !== null) {
+      const allowed = new Set(selectedIds);
+      return scoped.filter((server) => allowed.has(server.id));
+    }
+    return scoped;
+  }
+
+  private scopedServers(scope: McpSessionScope): McpServerDefinition[] {
     const projectPath = scope.projectPath ? normalizePath(scope.projectPath) : null;
     return this.repo.list().filter((server) => {
       if (!server.enabled) return false;
@@ -34,6 +52,27 @@ export class McpService {
       if (server.projectPath === null) return true;
       return projectPath !== null && normalizePath(server.projectPath) === projectPath;
     });
+  }
+
+  private resolveSelectedIds(
+    scope: McpSessionScope,
+    scoped: McpServerDefinition[],
+  ): string[] | null {
+    if (scope.mcpServerIds !== undefined && scope.mcpServerIds !== null) {
+      return this.filterKnownIds(scope.mcpServerIds, scoped);
+    }
+    if (scope.projectPath && this.projects) {
+      const project = this.projects.findByPath(scope.projectPath);
+      if (project?.mcpServerIds !== undefined && project.mcpServerIds !== null) {
+        return this.filterKnownIds(project.mcpServerIds, scoped);
+      }
+    }
+    return null;
+  }
+
+  private filterKnownIds(ids: string[], scoped: McpServerDefinition[]): string[] {
+    const known = new Set(scoped.map((server) => server.id));
+    return ids.filter((id) => known.has(id));
   }
 
   list(): McpServerDto[] {
@@ -85,6 +124,7 @@ export class McpService {
       ...server,
       transport: maskTransportSecrets(server.transport, server.secretKeys),
       scope: server.projectPath === null ? 'global' : 'project',
+      oauthStatus: this.oauth?.oauthStatus(server.id, server.auth) ?? (server.auth === 'oauth' ? 'required' : 'none'),
     };
   }
 

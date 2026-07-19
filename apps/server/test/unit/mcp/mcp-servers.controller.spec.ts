@@ -13,6 +13,7 @@ function makeDto(over: Partial<McpServerDto> = {}): McpServerDto {
     projectPath: null,
     engines: null,
     auth: 'none',
+    oauthStatus: 'none',
     sources: ['import:cursor'],
     secretKeys: [],
     scope: 'global',
@@ -27,6 +28,7 @@ describe('McpServersController', () => {
     const controller = new McpServersController(
       { list: () => [makeDto()] } as never,
       {} as never,
+      {} as never,
     );
     expect(controller.list()).toHaveLength(1);
   });
@@ -36,6 +38,7 @@ describe('McpServersController', () => {
     const controller = new McpServersController(
       { get: (id: string) => (id === dto.id ? dto : null) } as never,
       {} as never,
+      {} as never,
     );
     expect(controller.get('bridgememory')).toBe(dto);
     expect(() => controller.get('ghost')).toThrow(NotFoundException);
@@ -43,7 +46,7 @@ describe('McpServersController', () => {
 
   it('create validates required fields', () => {
     const create = jest.fn(() => makeDto());
-    const controller = new McpServersController({ create } as never, {} as never);
+    const controller = new McpServersController({ create } as never, {} as never, {} as never);
     expect(() => controller.create({} as never)).toThrow(BadRequestException);
     expect(() => controller.create({ name: 'x' } as never)).toThrow(BadRequestException);
     controller.create({ name: 'x', transport: { type: 'stdio', command: 'x', args: [] } });
@@ -55,6 +58,7 @@ describe('McpServersController', () => {
     const controller = new McpServersController(
       { update: (id: string) => (id === dto.id ? dto : null) } as never,
       {} as never,
+      {} as never,
     );
     expect(controller.update('bridgememory', { enabled: false })).toBe(dto);
     expect(() => controller.update('ghost', { enabled: false })).toThrow(NotFoundException);
@@ -64,6 +68,7 @@ describe('McpServersController', () => {
     const controller = new McpServersController(
       { delete: (id: string) => id === 'bridgememory' } as never,
       {} as never,
+      {} as never,
     );
     expect(controller.remove('bridgememory')).toEqual({ deleted: true });
     expect(() => controller.remove('ghost')).toThrow(NotFoundException);
@@ -72,7 +77,7 @@ describe('McpServersController', () => {
   it('import validates the source and routes dryRun to preview', async () => {
     const preview = jest.fn(async () => ({ source: 'cursor', entries: [] }));
     const apply = jest.fn(async () => ({ source: 'cursor', createdIds: [], mergedIds: [] }));
-    const controller = new McpServersController({} as never, { preview, apply } as never);
+    const controller = new McpServersController({} as never, { preview, apply } as never, {} as never);
 
     await expect(controller.import({ source: 'notastore' as never })).rejects.toThrow(
       BadRequestException,
@@ -107,7 +112,7 @@ describe('McpServersController', () => {
         },
       ],
     }));
-    const controller = new McpServersController({} as never, { preview } as never);
+    const controller = new McpServersController({} as never, { preview } as never, {} as never);
     const result = (await controller.import({ source: 'cursor', dryRun: true })) as {
       entries: Array<{ candidate: { transport: { env?: Record<string, string> } } }>;
     };

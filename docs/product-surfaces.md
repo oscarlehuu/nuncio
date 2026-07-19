@@ -84,7 +84,7 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 
 | | |
 |---|---|
-| **Web** | Home: `home-view.tsx` (scope `home:new-agent`). Workbench empty slot: `grid-slot-composer.tsx` (scope `workbench-slot:N`, default `workbench:new-agent`). Shared leaves: `model-picker.tsx`, `project-picker.tsx`, `branch-picker.tsx`, `workspace-mode-picker.tsx`, `session-mode-picker.tsx` (Home only; capability-gated on `capabilities.modes`), `attachment-tray.tsx`, `use-composer-attachments.ts`. |
+| **Web** | Home: `home-view.tsx` (scope `home:new-agent`) + optional `mcp-server-chip-picker.tsx` per-session MCP override. Workbench empty slot: `grid-slot-composer.tsx` (scope `workbench-slot:N`, default `workbench:new-agent`). Shared leaves: `model-picker.tsx`, `project-picker.tsx`, `branch-picker.tsx`, `workspace-mode-picker.tsx`, `session-mode-picker.tsx` (Home only; capability-gated on `capabilities.modes`), `attachment-tray.tsx`, `use-composer-attachments.ts`. |
 | **Mobile** | `apps/mobile/src/app/new.tsx` |
 | **Settings** | Providers / Projects defaults affect create; not the composer UI itself |
 | **Server** | `POST /api/sessions` (`mode?`), `sessions/`, `models/`, `git/`, `projects/`; per-mode prompt overlay in `sessions/domain/session-modes.ts` |
@@ -234,11 +234,11 @@ Read-only Claude Code / Codex CLI memories indexed into Pi sessions; stores stay
 | `providers` | Engine credentials + updates |
 | `usage` | Quotas / history charts |
 | `source-control` | GitHub / GitLab |
-| `mcp-tools` | MCP & tools — MCP Store server rows (import from Cursor/Claude Code/Codex, enable/disable, lazy/full advertise, remove) + tool defaults |
+| `mcp-tools` | MCP & tools — MCP Store rows (import, enable/disable, lazy/full advertise, OAuth Connect/Reconnect for remote servers, remove) + tool defaults |
 | `agents` | Agent / subagent model prefs |
 | `crew-profiles` | Crew profiles |
 | `workspaces` | Workspace roots / worktree dirs |
-| `projects` | Per-project defaults (verify, loops, …) |
+| `projects` | Per-project defaults (verify, default MCP servers, loops, …) |
 | `remote-access` | Tailscale / pairing / remote |
 | `advanced` | Advanced |
 

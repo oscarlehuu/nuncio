@@ -268,6 +268,7 @@ export default function App() {
     useWorktree = false,
     attachments?: MessageAttachment[],
     mode?: SessionMode,
+    mcpServerIds?: string[],
   ) => {
     setCreating(true);
     try {
@@ -282,6 +283,7 @@ export default function App() {
         '',
         attachments,
         mode,
+        mcpServerIds,
       );
       const list = await refresh();
       navigate(`/session/${session.id}`);

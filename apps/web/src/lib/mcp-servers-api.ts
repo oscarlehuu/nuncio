@@ -4,6 +4,8 @@ export type McpTransport =
   | { type: 'stdio'; command: string; args: string[]; env?: Record<string, string>; cwd?: string }
   | { type: 'http' | 'sse'; url: string; headers?: Record<string, string> };
 
+export type McpOAuthStatus = 'none' | 'required' | 'connected';
+
 export interface McpServerDto {
   id: string;
   name: string;
@@ -14,6 +16,7 @@ export interface McpServerDto {
   projectPath: string | null;
   engines: string[] | null;
   auth: 'none' | 'oauth';
+  oauthStatus: McpOAuthStatus;
   sources: string[];
   secretKeys: string[];
   scope: 'global' | 'project';
@@ -99,6 +102,19 @@ export async function applyMcpImport(source: McpImportSource): Promise<McpImport
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ source }),
+  });
+  await ensureOk(res);
+  return res.json();
+}
+
+export async function startMcpOAuth(
+  id: string,
+  redirectOrigin: string,
+): Promise<{ authorizationUrl?: string; alreadyAuthorized?: boolean }> {
+  const res = await fetch(`/api/mcp-servers/${encodeURIComponent(id)}/oauth/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ redirectOrigin }),
   });
   await ensureOk(res);
   return res.json();

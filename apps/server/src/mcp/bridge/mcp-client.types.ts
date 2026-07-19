@@ -1,3 +1,4 @@
+import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 import type { McpTransport } from '../domain/mcp.types';
 
 /** A tool advertised by a connected MCP server. */
@@ -25,8 +26,13 @@ export interface McpBridgeClient {
 }
 
 /** Injectable so unit tests never spawn processes or open sockets. */
+export interface McpClientConnectOptions {
+  authProvider?: OAuthClientProvider;
+}
+
+/** Injectable so unit tests never spawn processes or open sockets. */
 export interface McpClientFactory {
-  connect(transport: McpTransport): Promise<McpBridgeClient>;
+  connect(transport: McpTransport, options?: McpClientConnectOptions): Promise<McpBridgeClient>;
 }
 
 export const MCP_CLIENT_FACTORY = Symbol('MCP_CLIENT_FACTORY');

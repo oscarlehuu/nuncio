@@ -103,6 +103,27 @@ describe('McpService', () => {
         service.resolveForSession({ provider: 'codex', projectPath: null }).map((s) => s.name),
       ).toEqual(['all-engines']);
     });
+
+    it('prefers explicit session mcpServerIds over scoped defaults', () => {
+      const alpha = repo.create({ name: 'alpha', transport: { type: 'stdio', command: 'a', args: [] } });
+      repo.create({ name: 'beta', transport: { type: 'stdio', command: 'b', args: [] } });
+      const resolved = service.resolveForSession({
+        provider: 'pi',
+        projectPath: null,
+        mcpServerIds: [alpha.id],
+      });
+      expect(resolved.map((s) => s.id)).toEqual([alpha.id]);
+    });
+
+    it('empty session mcpServerIds yields no servers', () => {
+      repo.create({ name: 'solo', transport: { type: 'stdio', command: 's', args: [] } });
+      const resolved = service.resolveForSession({
+        provider: 'pi',
+        projectPath: null,
+        mcpServerIds: [],
+      });
+      expect(resolved).toEqual([]);
+    });
   });
 
   describe('DTO mapping', () => {

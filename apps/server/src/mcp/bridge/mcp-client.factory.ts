@@ -7,6 +7,7 @@ import type { McpTransport } from '../domain/mcp.types';
 import type {
   McpBridgeClient,
   McpCallContent,
+  McpClientConnectOptions,
   McpClientFactory,
   McpToolDescriptor,
 } from './mcp-client.types';
@@ -20,9 +21,9 @@ import type {
  */
 @Injectable()
 export class SdkMcpClientFactory implements McpClientFactory {
-  async connect(transport: McpTransport): Promise<McpBridgeClient> {
+  async connect(transport: McpTransport, options?: McpClientConnectOptions): Promise<McpBridgeClient> {
     const client = new Client({ name: 'nuncio-mcp-store', version: '1.0.0' });
-    await client.connect(buildSdkTransport(transport));
+    await client.connect(buildSdkTransport(transport, options));
     return {
       async listTools(): Promise<McpToolDescriptor[]> {
         const result = await client.listTools();
@@ -57,7 +58,7 @@ export class SdkMcpClientFactory implements McpClientFactory {
   }
 }
 
-function buildSdkTransport(transport: McpTransport) {
+function buildSdkTransport(transport: McpTransport, options?: McpClientConnectOptions) {
   if (transport.type === 'stdio') {
     return new StdioClientTransport({
       command: transport.command,
@@ -69,8 +70,15 @@ function buildSdkTransport(transport: McpTransport) {
   }
   const url = new URL(transport.url);
   const requestInit = transport.headers ? { headers: transport.headers } : undefined;
+  const authProvider = options?.authProvider;
   if (transport.type === 'sse') {
-    return new SSEClientTransport(url, requestInit ? { requestInit } : undefined);
+    return new SSEClientTransport(url, {
+      ...(requestInit ? { requestInit } : {}),
+      ...(authProvider ? { authProvider } : {}),
+    });
   }
-  return new StreamableHTTPClientTransport(url, requestInit ? { requestInit } : undefined);
+  return new StreamableHTTPClientTransport(url, {
+    ...(requestInit ? { requestInit } : {}),
+    ...(authProvider ? { authProvider } : {}),
+  });
 }

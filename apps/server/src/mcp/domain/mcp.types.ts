@@ -31,6 +31,8 @@ type McpAdvertiseMode = 'lazy' | 'full';
 
 export type McpAuthMode = 'none' | 'oauth';
 
+export type McpOAuthStatus = 'none' | 'required' | 'connected';
+
 /**
  * Canonical server definition. `projectPath` null means global scope; a set
  * path scopes the server to sessions of that project (worktree sessions match
@@ -86,6 +88,7 @@ export interface UpdateMcpServerInput {
 export interface McpServerDto extends Omit<McpServerDefinition, 'transport'> {
   transport: McpTransport;
   scope: 'global' | 'project';
+  oauthStatus: McpOAuthStatus;
 }
 
 const MCP_ENGINE_IDS: readonly McpEngineId[] = ['pi', 'claude', 'cursor', 'codex'];

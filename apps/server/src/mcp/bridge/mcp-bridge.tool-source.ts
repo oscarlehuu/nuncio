@@ -10,9 +10,10 @@ import type {
 import { resolveTransport } from '../domain/mcp-transport';
 import type { McpServerDefinition } from '../domain/mcp.types';
 import { McpService } from '../mcp.service';
+import { McpOAuthService } from '../oauth/mcp-oauth.service';
 import { McpClientPool } from './mcp-client-pool';
 import { MCP_CLIENT_FACTORY } from './mcp-client.types';
-import type { McpCallOutcome, McpClientFactory, McpToolDescriptor } from './mcp-client.types';
+import type { McpCallOutcome, McpClientConnectOptions, McpClientFactory, McpToolDescriptor } from './mcp-client.types';
 
 const FIND_TOOLS_NAME = 'nuncio_mcp_find_tools';
 const CALL_TOOL_NAME = 'nuncio_mcp_call';
@@ -44,12 +45,14 @@ export class McpBridgeToolSource implements AgentRuntimeToolSource, OnModuleInit
   constructor(
     private readonly mcp: McpService,
     @Inject(MCP_CLIENT_FACTORY) factory: McpClientFactory,
+    @Optional() private readonly oauth?: McpOAuthService,
     @Optional() private readonly registry?: AgentToolRegistry,
   ) {
     this.pool = new McpClientPool(factory, { idleMs: DEFAULT_IDLE_MS });
   }
 
   onModuleInit(): void {
+    this.oauth?.registerPoolInvalidator((transport) => this.pool.invalidate(transport));
     this.unregister = this.registry?.registerSource(this);
     this.sweepTimer = setInterval(() => void this.pool.sweepIdle(), DEFAULT_IDLE_MS);
   }
@@ -74,6 +77,7 @@ export class McpBridgeToolSource implements AgentRuntimeToolSource, OnModuleInit
     const servers = this.mcp.resolveForSession({
       provider: scope.provider ?? '',
       projectPath: scope.projectPath,
+      mcpServerIds: scope.mcpServerIds,
     });
     if (servers.length === 0) return undefined;
     const workspace = scope.workspace ?? null;
@@ -112,9 +116,12 @@ export class McpBridgeToolSource implements AgentRuntimeToolSource, OnModuleInit
     if (!definition) return;
     const promise = (async () => {
       try {
+        const connectOptions = this.connectOptions(definition);
+        if (definition.auth === 'oauth' && !connectOptions) return;
         const tools = await this.pool.call(
           resolveTransport(definition.transport, workspace),
           (client) => client.listTools(),
+          connectOptions ?? undefined,
         );
         this.schemaCache.set(serverId, { updatedAt: definition.updatedAt, tools });
       } catch {
@@ -131,11 +138,15 @@ export class McpBridgeToolSource implements AgentRuntimeToolSource, OnModuleInit
   private buildInventory(servers: McpServerDefinition[]): string {
     const lines = servers.map((server) => {
       const description = server.description?.trim() || 'no description';
+      const authNote =
+        server.auth === 'oauth' && this.oauth && !this.oauth.hasTokens(server.id)
+          ? ' (auth required)'
+          : '';
       const fullNote =
         server.advertise === 'full' && this.schemaCache.has(server.id)
           ? ' (tools advertised directly)'
           : '';
-      return `- ${server.id} — ${description}${fullNote}`;
+      return `- ${server.id} — ${description}${authNote}${fullNote}`;
     });
     return [
       '## External MCP servers',
@@ -178,10 +189,15 @@ export class McpBridgeToolSource implements AgentRuntimeToolSource, OnModuleInit
         }
         const entries = await Promise.all(
           targets.map(async (server) => {
+            const connectOptions = this.connectOptions(server);
+            if (server.auth === 'oauth' && !connectOptions) {
+              return { server: server.id, error: 'OAuth authorization required' };
+            }
             try {
               const tools = await this.pool.call(
                 resolveTransport(server.transport, workspace),
                 (client) => client.listTools(),
+                connectOptions ?? undefined,
               );
               this.schemaCache.set(server.id, { updatedAt: server.updatedAt, tools });
               const matching = query
@@ -265,15 +281,30 @@ export class McpBridgeToolSource implements AgentRuntimeToolSource, OnModuleInit
     args: Record<string, unknown>,
     workspace: string | null,
   ): Promise<AgentRuntimeToolResult> {
+    const connectOptions = this.connectOptions(server);
+    if (server.auth === 'oauth' && !connectOptions) {
+      return errorResult(`MCP server ${server.id} requires OAuth authorization`);
+    }
     try {
       const outcome = await this.pool.call(
         resolveTransport(server.transport, workspace),
         (client) => client.callTool(toolName, args),
+        connectOptions ?? undefined,
       );
       return outcomeToResult(outcome);
     } catch (error) {
       // The pool has already retired the failed client; the next call reconnects.
       return errorResult(`MCP call to ${server.id}.${toolName} failed: ${message(error)}`);
+    }
+  }
+
+  private connectOptions(server: McpServerDefinition): McpClientConnectOptions | null {
+    if (server.auth !== 'oauth') return {};
+    if (!this.oauth?.hasTokens(server.id)) return null;
+    try {
+      return { authProvider: this.oauth.providerFor(server.id) };
+    } catch {
+      return null;
     }
   }
 }

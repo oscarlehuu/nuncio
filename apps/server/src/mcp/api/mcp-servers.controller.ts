@@ -10,6 +10,7 @@ import {
   Put,
 } from '@nestjs/common';
 import { McpImportService } from '../import/mcp-import.service';
+import { McpOAuthService } from '../oauth/mcp-oauth.service';
 import { maskTransportSecrets, McpService } from '../mcp.service';
 import type { CreateMcpServerInput, UpdateMcpServerInput } from '../domain/mcp.types';
 import type { McpImportPreview, McpImportSourceId } from '../import/mcp-import.types';
@@ -26,6 +27,7 @@ export class McpServersController {
   constructor(
     private readonly mcp: McpService,
     private readonly importer: McpImportService,
+    private readonly oauth: McpOAuthService,
   ) {}
 
   @Get()
@@ -62,6 +64,14 @@ export class McpServersController {
   remove(@Param('id') id: string) {
     if (!this.mcp.delete(id)) throw new NotFoundException(`unknown MCP server: ${id}`);
     return { deleted: true };
+  }
+
+  @Post(':id/oauth/start')
+  async startOAuth(@Param('id') id: string, @Body() body: { redirectOrigin?: string }) {
+    if (!body?.redirectOrigin?.trim()) {
+      throw new BadRequestException('redirectOrigin (string) is required');
+    }
+    return this.oauth.start(id, body.redirectOrigin.trim());
   }
 
   @Post('import')

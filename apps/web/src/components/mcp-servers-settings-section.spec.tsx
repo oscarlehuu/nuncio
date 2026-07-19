@@ -41,6 +41,7 @@ function makeServer(over: Partial<McpServerDto> = {}): McpServerDto {
     projectPath: null,
     engines: null,
     auth: 'none',
+    oauthStatus: 'none',
     sources: ['import:cursor', 'import:claude'],
     secretKeys: [],
     scope: 'global',

@@ -192,6 +192,10 @@ export class DatabaseService implements OnModuleDestroy {
       this.db.exec('ALTER TABLE sessions ADD COLUMN runtime_policy_json TEXT');
     }
 
+    if (!sessionColumns.some((column) => column.name === 'mcp_server_ids_json')) {
+      this.db.exec('ALTER TABLE sessions ADD COLUMN mcp_server_ids_json TEXT');
+    }
+
     if (!sessionColumns.some((column) => column.name === 'verify_owner')) {
       this.db.exec("ALTER TABLE sessions ADD COLUMN verify_owner TEXT NOT NULL DEFAULT 'session'");
     }
@@ -484,6 +488,9 @@ export class DatabaseService implements OnModuleDestroy {
     if (projectColumns.length > 0 && !projectColumns.some((c) => c.name === 'weight')) {
       this.db.exec('ALTER TABLE projects ADD COLUMN weight INTEGER');
     }
+    if (projectColumns.length > 0 && !projectColumns.some((c) => c.name === 'mcp_server_ids_json')) {
+      this.db.exec('ALTER TABLE projects ADD COLUMN mcp_server_ids_json TEXT');
+    }
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS tasks (
@@ -678,6 +685,22 @@ export class DatabaseService implements OnModuleDestroy {
     this.db.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_servers_identity_scope
       ON mcp_servers(identity, ifnull(project_path, ''))
+    `);
+
+    // OAuth tokens for remote MCP servers (encrypted with the settings AES key).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS mcp_oauth (
+        server_id TEXT PRIMARY KEY,
+        tokens_json TEXT,
+        client_info_json TEXT,
+        code_verifier TEXT,
+        state TEXT,
+        redirect_uri TEXT,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_mcp_oauth_state ON mcp_oauth(state)
     `);
 
     // Agent-proposed changes to a founder fact land here for founder review.

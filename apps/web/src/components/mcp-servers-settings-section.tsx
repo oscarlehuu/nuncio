@@ -6,9 +6,11 @@ import {
   deleteMcpServer,
   fetchMcpServers,
   previewMcpImport,
+  startMcpOAuth,
   updateMcpServer,
   type McpImportPreview,
   type McpImportSource,
+  type McpOAuthStatus,
   type McpServerDto,
   type McpTransport,
 } from '../lib/mcp-servers-api';
@@ -56,6 +58,14 @@ export function McpServersSettingsSection() {
 
   useEffect(() => {
     void refresh();
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('mcp_oauth') === 'ok') {
+      toast.success('MCP server connected');
+      params.delete('mcp_oauth');
+      const next = `${window.location.pathname}${params.toString() ? `?${params}` : ''}`;
+      window.history.replaceState({}, '', next);
+      void refresh();
+    }
   }, [refresh]);
 
   const handlePreview = async (source: McpImportSource) => {
@@ -151,6 +161,7 @@ export function McpServersSettingsSection() {
               onToggleExpand={() => setExpanded(expanded === server.id ? null : server.id)}
               onPatch={(patch) => void handlePatch(server, patch)}
               onDelete={() => setConfirmDelete(server)}
+              onRefresh={refresh}
             />
           ))}
         </div>
@@ -192,14 +203,48 @@ function McpServerRow({
   onToggleExpand,
   onPatch,
   onDelete,
+  onRefresh,
 }: {
   server: McpServerDto;
   expanded: boolean;
   onToggleExpand: () => void;
   onPatch: (patch: Parameters<typeof updateMcpServer>[1]) => void;
   onDelete: () => void;
+  onRefresh: () => Promise<void>;
 }) {
+  const [connecting, setConnecting] = useState(false);
   const Icon = server.transport.type === 'stdio' ? SquareTerminal : Globe;
+
+  const handleConnect = async () => {
+    setConnecting(true);
+    try {
+      const result = await startMcpOAuth(server.id, window.location.origin);
+      if (result.alreadyAuthorized) {
+        toast.success(`${server.name} is already connected`);
+        await onRefresh();
+        return;
+      }
+      if (result.authorizationUrl) {
+        window.open(result.authorizationUrl, '_blank', 'noopener,noreferrer');
+        toast.message('Complete authorization in the new tab, then return here.');
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'OAuth start failed');
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const oauthLabel = (status: McpOAuthStatus): string => {
+    switch (status) {
+      case 'connected':
+        return 'Reconnect';
+      case 'required':
+        return 'Connect';
+      default:
+        return 'Connect';
+    }
+  };
   return (
     <div>
       <div className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-muted/40 transition-colors">
@@ -223,6 +268,17 @@ function McpServerRow({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {server.auth === 'oauth' && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={connecting}
+              onClick={() => void handleConnect()}
+              aria-label={`${oauthLabel(server.oauthStatus)} ${server.name}`}
+            >
+              {connecting ? 'Opening…' : oauthLabel(server.oauthStatus)}
+            </Button>
+          )}
           <Switch
             checked={server.enabled}
             onCheckedChange={(checked) => onPatch({ enabled: checked })}

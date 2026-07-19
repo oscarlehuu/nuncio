@@ -431,6 +431,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
             cwd,
             ...runtime,
             ...(developerInstructions ? { developerInstructions } : {}),
+            ...(context.codexMcpConfig ? { config: context.codexMcpConfig } : {}),
           })
         : await client.request<CodexThreadOpenResponse>('thread/start', {
             ...(model ? { model } : {}),
@@ -440,6 +441,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
             experimentalRawEvents: false,
             ...(developerInstructions ? { developerInstructions } : {}),
             ...(dynamicTools ? { dynamicTools } : {}),
+            ...(context.codexMcpConfig ? { config: context.codexMcpConfig } : {}),
           });
 
       const codexThreadId = this.readThreadId(response) ?? persistedThreadId;

@@ -31,9 +31,27 @@ function rowToDto(row: ProjectRow): ProjectDto {
     verifyMaxRounds: row.verify_max_rounds,
     // Default 1 (equal importance) when the column is NULL (unset / legacy row).
     weight: row.weight ?? 1,
+    mcpServerIds: parseMcpServerIdsJson(row.mcp_server_ids_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function parseMcpServerIdsJson(raw: string | null): string[] | null {
+  if (raw == null) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    return parsed.filter((entry): entry is string => typeof entry === 'string');
+  } catch {
+    return null;
+  }
+}
+
+function stringifyMcpServerIdsJson(ids: string[] | null | undefined): string | null {
+  if (ids === undefined) return null;
+  if (ids === null) return null;
+  return JSON.stringify(ids);
 }
 
 /** Durable per-project config, keyed by normalized path (rung 2 sub-phase A). */
@@ -59,14 +77,15 @@ export class ProjectsRepository {
     const verifyAutoSteer = this.patchAutoSteer(input, existing?.verifyAutoSteer ?? 'inherit');
     const verifyMaxRounds = this.patchMaxRounds(input, existing?.verifyMaxRounds ?? null);
     const weight = this.patchWeight(input, existing?.weight ?? 1);
+    const mcpServerIds = this.patchMcpServerIds(input, existing?.mcpServerIds ?? null);
     const createdAt = existing?.createdAt ?? now;
 
     this.database.db
       .prepare(
         `INSERT INTO projects
            (path, name, default_engine, worktree_policy, verify_command,
-            verify_auto_steer, verify_max_rounds, weight, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            verify_auto_steer, verify_max_rounds, weight, mcp_server_ids_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(path) DO UPDATE SET
            name = excluded.name,
            default_engine = excluded.default_engine,
@@ -75,6 +94,7 @@ export class ProjectsRepository {
            verify_auto_steer = excluded.verify_auto_steer,
            verify_max_rounds = excluded.verify_max_rounds,
            weight = excluded.weight,
+           mcp_server_ids_json = excluded.mcp_server_ids_json,
            updated_at = excluded.updated_at`,
       )
       .run(
@@ -86,6 +106,7 @@ export class ProjectsRepository {
         verifyAutoSteer,
         verifyMaxRounds,
         weight,
+        stringifyMcpServerIdsJson(mcpServerIds),
         createdAt,
         now,
       );
@@ -182,5 +203,14 @@ export class ProjectsRepository {
       throw new BadRequestException('project weight must be a positive integer');
     }
     return n;
+  }
+
+  private patchMcpServerIds(
+    input: UpsertProjectDto,
+    current: string[] | null,
+  ): string[] | null {
+    if (input.mcpServerIds === undefined) return current;
+    if (input.mcpServerIds === null) return null;
+    return [...new Set(input.mcpServerIds.filter((id) => typeof id === 'string' && id.trim()))];
   }
 }

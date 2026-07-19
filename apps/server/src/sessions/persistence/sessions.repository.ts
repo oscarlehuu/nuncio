@@ -43,6 +43,22 @@ function parseVerifyOwner(raw: string): 'session' | 'crew' {
   throw new Error(`Stored session verify owner is invalid: ${raw}`);
 }
 
+function parseMcpServerIdsJson(raw: string | null | undefined): string[] | null {
+  if (raw == null) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    return parsed.filter((entry): entry is string => typeof entry === 'string');
+  } catch {
+    return null;
+  }
+}
+
+function stringifyMcpServerIdsJson(ids: string[] | null | undefined): string | null {
+  if (ids === undefined || ids === null) return null;
+  return JSON.stringify(ids);
+}
+
 function toDto(row: SessionRow): SessionDto {
   return {
     id: row.id,
@@ -79,6 +95,7 @@ function toDto(row: SessionRow): SessionDto {
     parentSessionId: row.parent_session_id ?? null,
     originTaskId: row.origin_task_id ?? null,
     priorSessionId: row.prior_session_id ?? null,
+    mcpServerIds: parseMcpServerIdsJson(row.mcp_server_ids_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -357,6 +374,7 @@ export class SessionsRepository {
       parent_session_id: input.parentSessionId ?? null,
       origin_task_id: input.originTaskId ?? null,
       prior_session_id: null,
+      mcp_server_ids_json: stringifyMcpServerIdsJson(input.mcpServerIds),
       created_at: now,
       updated_at: now,
     };
@@ -424,6 +442,7 @@ export class SessionsRepository {
       parent_session_id: null,
       origin_task_id: null,
       prior_session_id: input.priorSessionId ?? null,
+      mcp_server_ids_json: null,
       created_at: now,
       updated_at: now,
     };
@@ -622,9 +641,9 @@ export class SessionsRepository {
           runtime_policy_json, verify_owner,
           cursor_backend, cursor_chat_id,
           forge_provider, pull_request_url, pull_request_number, pull_request_state, forge_status,
-          parent_session_id, origin_task_id, prior_session_id,
+          parent_session_id, origin_task_id, prior_session_id, mcp_server_ids_json,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -656,6 +675,7 @@ export class SessionsRepository {
         row.parent_session_id,
         row.origin_task_id,
         row.prior_session_id,
+        row.mcp_server_ids_json,
         row.created_at,
         row.updated_at,
       );

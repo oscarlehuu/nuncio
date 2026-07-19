@@ -10,6 +10,8 @@ import {
 } from '../../../src/mcp/persistence/mcp-servers.repository';
 import { McpService } from '../../../src/mcp/mcp.service';
 import { McpBridgeToolSource } from '../../../src/mcp/bridge/mcp-bridge.tool-source';
+import { McpOAuthRepository } from '../../../src/mcp/persistence/mcp-oauth.repository';
+import { McpOAuthService } from '../../../src/mcp/oauth/mcp-oauth.service';
 import type {
   McpBridgeClient,
   McpClientFactory,
@@ -86,6 +88,7 @@ describe('McpBridgeToolSource', () => {
       imports: [DatabaseModule],
       providers: [
         McpServersRepository,
+        McpOAuthRepository,
         McpService,
         { provide: MCP_SETTINGS_KEY, useValue: randomBytes(32) },
       ],
@@ -242,6 +245,21 @@ describe('McpBridgeToolSource', () => {
       command: 'scoped',
       args: ['--root', '/tmp/wt-42'],
     });
+  });
+
+  it('marks oauth servers without tokens as auth required in the inventory', () => {
+    repo.create({
+      name: 'oauth-remote',
+      description: 'needs login',
+      transport: { type: 'http', url: 'https://oauth.example/mcp' },
+      auth: 'oauth',
+    });
+    const oauthRepo = module.get(McpOAuthRepository);
+    const oauthService = new McpOAuthService(repo, oauthRepo);
+    const { factory } = makeFactory({});
+    const source = new McpBridgeToolSource(service, factory, oauthService);
+    const tools = source.forSession(scope);
+    expect(tools?.systemPromptAppend).toContain('(auth required)');
   });
 
   it('full-advertise servers expose direct tools once schemas are warmed', async () => {

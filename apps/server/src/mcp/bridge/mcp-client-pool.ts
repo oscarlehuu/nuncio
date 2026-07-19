@@ -1,5 +1,5 @@
 import type { McpTransport } from '../domain/mcp.types';
-import type { McpBridgeClient, McpClientFactory } from './mcp-client.types';
+import type { McpBridgeClient, McpClientConnectOptions, McpClientFactory } from './mcp-client.types';
 
 interface PoolEntry {
   clientPromise: Promise<McpBridgeClient>;
@@ -41,12 +41,13 @@ export class McpClientPool {
   async call<T>(
     transport: McpTransport,
     fn: (client: McpBridgeClient) => Promise<T>,
+    options?: McpClientConnectOptions,
   ): Promise<T> {
-    const key = poolKey(transport);
+    const key = poolKey(transport, options);
     let entry = this.entries.get(key);
     if (!entry || entry.retired) {
       entry = {
-        clientPromise: this.factory.connect(transport),
+        clientPromise: this.factory.connect(transport, options),
         lastUsedAt: this.now(),
         inFlight: 0,
         retired: false,
@@ -65,6 +66,18 @@ export class McpClientPool {
       entry.inFlight -= 1;
       entry.lastUsedAt = this.now();
       if (entry.retired && entry.inFlight === 0) {
+        void closeQuietly(entry.clientPromise);
+      }
+    }
+  }
+
+  /** Drop cached clients for a transport (e.g. after OAuth token refresh). */
+  invalidate(transport: McpTransport): void {
+    const base = poolKey(transport);
+    for (const [key, entry] of [...this.entries.entries()]) {
+      if (!key.startsWith(base)) continue;
+      this.retire(key, entry);
+      if (entry.inFlight === 0) {
         void closeQuietly(entry.clientPromise);
       }
     }
@@ -96,7 +109,8 @@ export class McpClientPool {
   }
 }
 
-function poolKey(transport: McpTransport): string {
+function poolKey(transport: McpTransport, options?: McpClientConnectOptions): string {
+  const authSuffix = options?.authProvider ? ':oauth' : '';
   if (transport.type === 'stdio') {
     return JSON.stringify([
       'stdio',
@@ -104,9 +118,9 @@ function poolKey(transport: McpTransport): string {
       transport.args,
       transport.env ?? {},
       transport.cwd ?? null,
-    ]);
+    ]) + authSuffix;
   }
-  return JSON.stringify([transport.type, transport.url, transport.headers ?? {}]);
+  return JSON.stringify([transport.type, transport.url, transport.headers ?? {}]) + authSuffix;
 }
 
 async function closeQuietly(clientPromise: Promise<McpBridgeClient>): Promise<void> {
