@@ -2320,8 +2320,8 @@ export class SessionsService implements OnModuleDestroy {
       session.worktreePath ?? session.projectPath ?? session.workspace,
     );
     if (inherited.length === 0) return undefined;
-    const keep = new Set(resolved.map((server) => server.name));
-    const config = buildCodexMcpSuppressionConfig(inherited, keep);
+    const bridgeOwned = new Set(resolved.map((server) => server.name));
+    const config = buildCodexMcpSuppressionConfig(inherited, bridgeOwned);
     return Object.keys(config.mcp_servers).length > 0 ? config : undefined;
   }
 

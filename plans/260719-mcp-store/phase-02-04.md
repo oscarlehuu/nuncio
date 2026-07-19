@@ -24,6 +24,6 @@ Phase 1 shipped (PR #126). **Phases 2–4 implemented** on `cursor/mcp-store-dcb
 ## Phase 4 — Codex inherited-server suppression ✅
 
 - Scan `~/.codex/config.toml` (+ project) for mcp_servers names
-- On `thread/start` + `thread/resume`, pass `config.mcp_servers: { [name]: { enabled: false } }` for every inherited name **not** in the session's resolved Nuncio MCP set (so bridge-owned servers aren't double-loaded via native inherit)
+- On `thread/start` + `thread/resume`, pass `config.mcp_servers: { [name]: { enabled: false } }` for every inherited name that **is** in the session's resolved Nuncio MCP set (bridge owns those; native inherit would double-load). Inherited-only servers stay enabled in Codex.
 - Inject via `AgentRunContext` optional `codexMcpConfig?` or a small helper the Codex provider calls
 - TDD: suppress list construction + thread/start params include config

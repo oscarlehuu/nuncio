@@ -93,11 +93,7 @@ export class McpOAuthService {
     }
     const authProvider = new NuncioMcpOAuthProvider(row.serverId, row.redirectUri!, this.oauth);
     const sdkTransport = buildRemoteTransport(server.transport, authProvider);
-    if (sdkTransport instanceof StreamableHTTPClientTransport) {
-      await sdkTransport.finishAuth(code);
-    } else {
-      await sdkTransport.finishAuth(code);
-    }
+    await sdkTransport.finishAuth(code);
     this.poolInvalidate?.(server.transport);
     return row.serverId;
   }

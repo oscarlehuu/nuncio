@@ -17,15 +17,19 @@ url = "https://mcp.figma.com/mcp"
 `;
 
 describe('codex inherited MCP helpers', () => {
-  it('buildCodexMcpSuppressionConfig disables inherited names not in the keep set', () => {
+  it('buildCodexMcpSuppressionConfig disables inherited names that Nuncio bridges', () => {
     const config = buildCodexMcpSuppressionConfig(
       ['bridgememory', 'figma', 'playwright'],
       new Set(['bridgememory']),
     );
     expect(config.mcp_servers).toEqual({
-      figma: { enabled: false },
-      playwright: { enabled: false },
+      bridgememory: { enabled: false },
     });
+  });
+
+  it('leaves inherited-only servers enabled when Nuncio does not resolve them', () => {
+    const config = buildCodexMcpSuppressionConfig(['figma', 'playwright'], new Set());
+    expect(config.mcp_servers).toEqual({});
   });
 
   it('parses names from Codex config content via listInheritedCodexMcpServerNames reader', () => {

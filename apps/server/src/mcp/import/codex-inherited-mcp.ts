@@ -33,14 +33,18 @@ export interface CodexMcpSuppressionConfig {
   mcp_servers: Record<string, { enabled: false }>;
 }
 
-/** Disable inherited Codex MCP servers that Nuncio does not own for this session. */
+/**
+ * Disable inherited Codex MCP servers that Nuncio will serve through the bridge
+ * for this session — prevents bridge + native double-load. Names only in
+ * `~/.codex/config.toml` (not resolved in Nuncio) stay enabled natively.
+ */
 export function buildCodexMcpSuppressionConfig(
   inheritedNames: readonly string[],
-  keepNames: ReadonlySet<string>,
+  bridgeOwnedNames: ReadonlySet<string>,
 ): CodexMcpSuppressionConfig {
   const mcp_servers: Record<string, { enabled: false }> = {};
   for (const name of inheritedNames) {
-    if (!keepNames.has(name)) {
+    if (bridgeOwnedNames.has(name)) {
       mcp_servers[name] = { enabled: false };
     }
   }
