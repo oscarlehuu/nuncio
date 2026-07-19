@@ -19,6 +19,7 @@ import { GitModule } from './git/git.module';
 import { HealthModule } from './health/health.module';
 import { HubModule } from './hub/hub.module';
 import { LoopsModule } from './loops/loops.module';
+import { McpModule } from './mcp/mcp.module';
 import { ModelsModule } from './models/models.module';
 import { ObservabilityModule } from './observability/observability.module';
 import { PairingModule } from './pairing/pairing.module';
@@ -64,6 +65,7 @@ import { UsageModule } from './usage/usage.module';
     HealthModule,
     HubModule,
     LoopsModule,
+    McpModule,
     ModelsModule,
     PiLocalModule,
     PromptsModule,

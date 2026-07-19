@@ -47,6 +47,8 @@ export interface AgentRuntimeToolScope {
   projectPath: string | null;
   provider?: string;
   model?: string | null;
+  /** Effective session working dir (worktree-aware); sources may resolve `${workspace}` against it. */
+  workspace?: string | null;
 }
 
 export interface AgentRuntimeToolSource {

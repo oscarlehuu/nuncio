@@ -161,7 +161,7 @@ describe('McpServersRepository', () => {
   });
 
   it('findByIdentity distinguishes global from project scope', () => {
-    const transport = { type: 'stdio', command: 'scoped', args: [] } as const;
+    const transport: McpStdioTransport = { type: 'stdio', command: 'scoped', args: [] };
     const globalRow = repo.create({ name: 'scoped-global', transport });
     const projectRow = repo.create({
       name: 'scoped-project',

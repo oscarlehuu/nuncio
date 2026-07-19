@@ -2253,6 +2253,7 @@ export class SessionsService implements OnModuleDestroy {
       projectPath: session.projectPath,
       provider: session.provider,
       model: session.model,
+      workspace: session.worktreePath ?? workspace ?? null,
     });
     let runtimeEnvironment!: ReturnType<typeof buildAgentRuntimeEnvironment>;
     const runtimeInfoTool = createNuncioRuntimeInfoTool(() => runtimeEnvironment, runtimePolicy);

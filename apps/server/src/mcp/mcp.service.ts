@@ -44,6 +44,11 @@ export class McpService {
     return server ? this.toDto(server) : null;
   }
 
+  /** Unmasked definition for runtime consumers (the bridge needs real secrets to connect). */
+  getDefinition(id: string): McpServerDefinition | null {
+    return this.repo.get(id);
+  }
+
   create(input: CreateMcpServerInput): McpServerDto {
     this.validateTransport(input.transport);
     this.validateEngines(input.engines);
