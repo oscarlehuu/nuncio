@@ -165,16 +165,29 @@ export class McpServersRepository {
     };
   }
 
+  /**
+   * Secret values are encrypted UNCONDITIONALLY — every caller passes
+   * plaintext, and skipping "already encrypted looking" values would store a
+   * legitimate `v1:`-prefixed plaintext secret raw (and poison the read path).
+   */
   private sealTransport(transport: McpTransport, secretKeys: string[]): McpTransport {
-    return this.mapSecretValues(transport, secretKeys, (value) =>
-      isEncrypted(value) ? value : encryptValue(value, this.key),
-    );
+    return this.mapSecretValues(transport, secretKeys, (value) => encryptValue(value, this.key));
   }
 
+  /**
+   * A value that cannot be decrypted (rotated/lost settings key, hand-edited
+   * row) degrades to '' instead of throwing: one bad row must never take down
+   * `list()` — and with it session tool resolution — for the whole store.
+   */
   private unsealTransport(transport: McpTransport, secretKeys: string[]): McpTransport {
-    return this.mapSecretValues(transport, secretKeys, (value) =>
-      isEncrypted(value) ? decryptValue(value, this.key) : value,
-    );
+    return this.mapSecretValues(transport, secretKeys, (value) => {
+      if (!isEncrypted(value)) return value;
+      try {
+        return decryptValue(value, this.key);
+      } catch {
+        return '';
+      }
+    });
   }
 
   private mapSecretValues(

@@ -69,16 +69,30 @@ export class McpImportService {
         }
         continue;
       }
-      const created = this.repo.create({
-        name: entry.candidate.name,
-        transport: entry.candidate.transport,
-        enabled: entry.candidate.enabled,
-        projectPath: entry.candidate.projectPath,
-        auth: entry.candidate.auth,
-        sources: [entry.candidate.source],
-        secretKeys: entry.candidate.secretKeys,
-      });
-      createdIds.push(created.id);
+      try {
+        const created = this.repo.create({
+          name: entry.candidate.name,
+          transport: entry.candidate.transport,
+          enabled: entry.candidate.enabled,
+          projectPath: entry.candidate.projectPath,
+          auth: entry.candidate.auth,
+          sources: [entry.candidate.source],
+          secretKeys: entry.candidate.secretKeys,
+        });
+        createdIds.push(created.id);
+      } catch (error) {
+        // A concurrent apply can win the UNIQUE(identity, scope) race between
+        // our preview and this insert — fold it into a provenance merge.
+        const existing = this.repo.findByIdentity(
+          transportIdentity(entry.candidate.transport),
+          entry.candidate.projectPath,
+        );
+        if (!existing) throw error;
+        if (!existing.sources.includes(entry.candidate.source)) {
+          this.repo.addSource(existing.id, entry.candidate.source);
+          mergedIds.push(existing.id);
+        }
+      }
     }
     return { source, createdIds, mergedIds };
   }

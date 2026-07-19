@@ -1,7 +1,8 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
 import { resolve as resolvePath } from 'node:path';
 import { maskSecret } from '../settings/settings.crypto';
 import { McpServersRepository } from './persistence/mcp-servers.repository';
+import { transportIdentity } from './domain/mcp-transport';
 import { isMcpEngineId } from './domain/mcp.types';
 import type {
   CreateMcpServerInput,
@@ -50,20 +51,28 @@ export class McpService {
   }
 
   create(input: CreateMcpServerInput): McpServerDto {
-    this.validateTransport(input.transport);
+    const transport = this.normalizeAndValidate(input.transport);
     this.validateEngines(input.engines);
-    return this.toDto(this.repo.create(input));
+    this.assertNoIdentityConflict(transport, input.projectPath ?? null, null);
+    return this.toDto(this.repo.create({ ...input, transport }));
   }
 
   update(id: string, patch: UpdateMcpServerInput): McpServerDto | null {
-    if (patch.transport) this.validateTransport(patch.transport);
     this.validateEngines(patch.engines);
     const existing = this.repo.get(id);
     if (!existing) return null;
-    const effective = patch.transport
-      ? { ...patch, transport: this.restoreMaskedSecrets(patch.transport, existing) }
-      : patch;
-    const updated = this.repo.update(id, effective);
+    const transport = patch.transport
+      ? this.restoreMaskedSecrets(this.normalizeAndValidate(patch.transport), existing)
+      : existing.transport;
+    const projectPath =
+      patch.projectPath !== undefined ? patch.projectPath : existing.projectPath;
+    this.assertNoIdentityConflict(transport, projectPath, id);
+    const secretKeys = this.guardDeclassification(patch, existing);
+    const updated = this.repo.update(id, {
+      ...patch,
+      ...(patch.transport ? { transport } : {}),
+      ...(secretKeys ? { secretKeys } : {}),
+    });
     return updated ? this.toDto(updated) : null;
   }
 
@@ -95,18 +104,55 @@ export class McpService {
     });
   }
 
-  private validateTransport(transport: McpTransport): void {
+  /**
+   * Shrinking `secretKeys` must never declassify a stored secret: a key may
+   * leave the set only when the same request supplies a fresh value for it
+   * (i.e. not the masked placeholder), which the caller by definition knows.
+   * Otherwise the key is silently retained as secret.
+   */
+  private guardDeclassification(
+    patch: UpdateMcpServerInput,
+    existing: McpServerDefinition,
+  ): string[] | undefined {
+    if (!patch.secretKeys) return undefined;
+    const requested = patch.secretKeys;
+    const retained = existing.secretKeys.filter((key) => {
+      if (requested.includes(key)) return false; // already requested — not "retained"
+      const stored = collectSecretValues(existing.transport, existing.secretKeys).get(key);
+      const incoming = patch.transport ? secretValueFor(patch.transport, key) : undefined;
+      const suppliedFresh =
+        incoming !== undefined && stored !== undefined && incoming !== maskSecret(stored);
+      return !suppliedFresh;
+    });
+    return [...new Set([...requested, ...retained])];
+  }
+
+  private assertNoIdentityConflict(
+    transport: McpTransport,
+    projectPath: string | null,
+    selfId: string | null,
+  ): void {
+    const conflict = this.repo.findByIdentity(transportIdentity(transport), projectPath ?? null);
+    if (conflict && conflict.id !== selfId) {
+      throw new ConflictException(
+        `this transport is already registered as "${conflict.id}" in the same scope`,
+      );
+    }
+  }
+
+  private normalizeAndValidate(transport: McpTransport): McpTransport {
     if (transport.type === 'stdio') {
-      if (!transport.command?.trim()) {
+      if (typeof transport.command !== 'string' || !transport.command.trim()) {
         throw new BadRequestException('stdio transport requires a command');
       }
-      return;
+      return { ...transport, args: Array.isArray(transport.args) ? transport.args : [] };
     }
     try {
       new URL(transport.url);
     } catch {
       throw new BadRequestException(`invalid transport url: ${transport.url}`);
     }
+    return transport;
   }
 
   private validateEngines(engines: CreateMcpServerInput['engines']): void {
@@ -156,4 +202,9 @@ function collectSecretValues(transport: McpTransport, secretKeys: string[]): Map
   return new Map(
     Object.entries(record ?? {}).filter(([key]) => secretSet.has(key)),
   );
+}
+
+function secretValueFor(transport: McpTransport, key: string): string | undefined {
+  const record = transport.type === 'stdio' ? transport.env : transport.headers;
+  return record?.[key];
 }

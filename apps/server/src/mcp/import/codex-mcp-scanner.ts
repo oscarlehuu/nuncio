@@ -39,48 +39,67 @@ function entryToCandidate(
 ): McpImportCandidate | null {
   if (!entry || typeof entry !== 'object') return null;
   const record = entry as Record<string, unknown>;
-  const transport = entryToTransport(record);
-  if (!transport) return null;
+  const parsed = entryToTransport(record);
+  if (!parsed) return null;
   return {
     name,
-    transport,
+    transport: parsed.transport,
     source: 'import:codex',
     projectPath,
     enabled: record.enabled !== false,
     auth: record.oauth_resource || record.scopes ? 'oauth' : 'none',
-    secretKeys: detectSecretKeys(transport),
+    secretKeys: [
+      ...new Set([...detectSecretKeys(parsed.transport), ...parsed.forcedSecretKeys]),
+    ],
   };
 }
 
-function entryToTransport(record: Record<string, unknown>): McpTransport | null {
+function entryToTransport(
+  record: Record<string, unknown>,
+): { transport: McpTransport; forcedSecretKeys: string[] } | null {
   if (typeof record.command === 'string' && record.command.trim()) {
     const args = Array.isArray(record.args)
       ? record.args.filter((item): item is string => typeof item === 'string')
       : [];
     return {
-      type: 'stdio',
-      command: record.command,
-      args,
-      ...(isStringRecord(record.env) ? { env: record.env } : {}),
+      transport: {
+        type: 'stdio',
+        command: record.command,
+        args,
+        ...(isStringRecord(record.env) ? { env: record.env } : {}),
+      },
+      forcedSecretKeys: [],
     };
   }
   if (typeof record.url === 'string' && record.url.trim()) {
     const headers: Record<string, string> = {};
+    // Values resolved from the daemon's own env are always treated as secrets,
+    // whatever the header is called — they never leave the API unmasked.
+    const forcedSecretKeys: string[] = [];
     if (isStringRecord(record.http_headers)) Object.assign(headers, record.http_headers);
     if (isStringRecord(record.env_http_headers)) {
       for (const [header, envVar] of Object.entries(record.env_http_headers)) {
         const value = process.env[envVar];
-        if (value) headers[header] = value;
+        if (value) {
+          headers[header] = value;
+          forcedSecretKeys.push(header);
+        }
       }
     }
     if (typeof record.bearer_token_env_var === 'string') {
       const token = process.env[record.bearer_token_env_var];
-      if (token) headers.Authorization = `Bearer ${token}`;
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+        forcedSecretKeys.push('Authorization');
+      }
     }
     return {
-      type: 'http',
-      url: record.url,
-      ...(Object.keys(headers).length > 0 ? { headers } : {}),
+      transport: {
+        type: 'http',
+        url: record.url,
+        ...(Object.keys(headers).length > 0 ? { headers } : {}),
+      },
+      forcedSecretKeys,
     };
   }
   return null;

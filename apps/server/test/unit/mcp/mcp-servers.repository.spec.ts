@@ -186,6 +186,49 @@ describe('McpServersRepository', () => {
     expect(repo.get(created.id)?.sources).toEqual(['import:cursor', 'import:claude']);
   });
 
+  it('round-trips a plaintext secret that itself looks like ciphertext (v1: prefix)', () => {
+    const created = repo.create({
+      name: 'v1-lookalike',
+      transport: {
+        type: 'stdio',
+        command: 'x',
+        args: [],
+        env: { API_TOKEN: 'v1:not:really-ciphertext' },
+      },
+      secretKeys: ['API_TOKEN'],
+    });
+    expect((repo.get(created.id)?.transport as McpStdioTransport).env?.API_TOKEN).toBe(
+      'v1:not:really-ciphertext',
+    );
+    const raw = database.db
+      .prepare<{ transport_json: string }, [string]>(
+        'SELECT transport_json FROM mcp_servers WHERE id = ?',
+      )
+      .get(created.id);
+    expect(raw?.transport_json).not.toContain('not:really-ciphertext');
+  });
+
+  it('degrades an undecryptable stored secret to an empty value instead of throwing', () => {
+    const created = repo.create({
+      name: 'poison',
+      transport: { type: 'stdio', command: 'p', args: [], env: { API_TOKEN: 'fine' } },
+      secretKeys: ['API_TOKEN'],
+    });
+    database.db
+      .prepare('UPDATE mcp_servers SET transport_json = ? WHERE id = ?')
+      .run(
+        JSON.stringify({
+          type: 'stdio',
+          command: 'p',
+          args: [],
+          env: { API_TOKEN: 'v1:00:11' },
+        }),
+        created.id,
+      );
+    expect(() => repo.list()).not.toThrow();
+    expect((repo.get(created.id)?.transport as McpStdioTransport).env?.API_TOKEN).toBe('');
+  });
+
   it('deletes a server', () => {
     const created = repo.create({
       name: 'doomed',

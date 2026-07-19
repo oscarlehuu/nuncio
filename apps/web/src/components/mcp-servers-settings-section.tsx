@@ -300,9 +300,9 @@ function ImportPreviewDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="divide-y divide-border/60 rounded-lg border border-border">
-          {preview?.entries.map((entry) => (
+          {preview?.entries.map((entry, index) => (
             <div
-              key={`${entry.candidate.name}:${entry.candidate.projectPath ?? 'global'}`}
+              key={`${index}:${entry.candidate.name}`}
               className="flex items-center justify-between gap-3 px-3 py-2"
             >
               <div className="min-w-0">

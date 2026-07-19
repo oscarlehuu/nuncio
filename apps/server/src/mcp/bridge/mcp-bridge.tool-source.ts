@@ -36,7 +36,7 @@ const DEFAULT_IDLE_MS = 5 * 60_000;
 @Injectable()
 export class McpBridgeToolSource implements AgentRuntimeToolSource, OnModuleInit, OnModuleDestroy {
   private readonly pool: McpClientPool;
-  private readonly schemaCache = new Map<string, McpToolDescriptor[]>();
+  private readonly schemaCache = new Map<string, { updatedAt: number; tools: McpToolDescriptor[] }>();
   private readonly warming = new Map<string, Promise<void>>();
   private unregister?: () => void;
   private sweepTimer?: ReturnType<typeof setInterval>;
@@ -54,13 +54,23 @@ export class McpBridgeToolSource implements AgentRuntimeToolSource, OnModuleInit
     this.sweepTimer = setInterval(() => void this.pool.sweepIdle(), DEFAULT_IDLE_MS);
   }
 
-  onModuleDestroy(): void {
+  async onModuleDestroy(): Promise<void> {
     this.unregister?.();
     if (this.sweepTimer) clearInterval(this.sweepTimer);
-    void this.pool.disposeAll();
+    await this.pool.disposeAll();
   }
 
   forSession(scope: AgentRuntimeToolScope): AgentRuntimeTools | undefined {
+    // Defensive: a broken MCP store degrades to "no MCP tools" — it must never
+    // take run-context construction (and with it every session) down.
+    try {
+      return this.buildForSession(scope);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private buildForSession(scope: AgentRuntimeToolScope): AgentRuntimeTools | undefined {
     const servers = this.mcp.resolveForSession({
       provider: scope.provider ?? '',
       projectPath: scope.projectPath,
@@ -68,26 +78,29 @@ export class McpBridgeToolSource implements AgentRuntimeToolSource, OnModuleInit
     if (servers.length === 0) return undefined;
     const workspace = scope.workspace ?? null;
 
+    const gatewayTools = [this.buildFindTool(servers, workspace), this.buildCallTool(servers, workspace)];
+    const takenNames = new Set(gatewayTools.map((tool) => tool.name));
     const directTools: AgentRuntimeTool[] = [];
     for (const server of servers) {
       if (server.advertise !== 'full') continue;
       const cached = this.schemaCache.get(server.id);
-      if (!cached) {
+      if (!cached || cached.updatedAt !== server.updatedAt) {
         void this.ensureSchemas(server.id, workspace);
         continue;
       }
-      for (const descriptor of cached) {
-        directTools.push(this.buildDirectTool(server, descriptor, workspace));
+      for (const descriptor of cached.tools) {
+        const tool = this.buildDirectTool(server, descriptor, workspace);
+        // A sanitized name colliding with the gateway (or another server's
+        // tool) is skipped — it stays reachable via nuncio_mcp_call.
+        if (takenNames.has(tool.name)) continue;
+        takenNames.add(tool.name);
+        directTools.push(tool);
       }
     }
 
     return {
       systemPromptAppend: this.buildInventory(servers),
-      tools: [
-        this.buildFindTool(servers, workspace),
-        this.buildCallTool(servers, workspace),
-        ...directTools,
-      ],
+      tools: [...gatewayTools, ...directTools],
     };
   }
 
@@ -99,8 +112,11 @@ export class McpBridgeToolSource implements AgentRuntimeToolSource, OnModuleInit
     if (!definition) return;
     const promise = (async () => {
       try {
-        const client = await this.pool.acquire(resolveTransport(definition.transport, workspace));
-        this.schemaCache.set(serverId, await client.listTools());
+        const tools = await this.pool.call(
+          resolveTransport(definition.transport, workspace),
+          (client) => client.listTools(),
+        );
+        this.schemaCache.set(serverId, { updatedAt: definition.updatedAt, tools });
       } catch {
         // Cache stays cold; the lazy gateway still reaches the server and
         // surfaces the connect error to the model per-call.
@@ -163,9 +179,11 @@ export class McpBridgeToolSource implements AgentRuntimeToolSource, OnModuleInit
         const entries = await Promise.all(
           targets.map(async (server) => {
             try {
-              const client = await this.pool.acquire(resolveTransport(server.transport, workspace));
-              const tools = await client.listTools();
-              this.schemaCache.set(server.id, tools);
+              const tools = await this.pool.call(
+                resolveTransport(server.transport, workspace),
+                (client) => client.listTools(),
+              );
+              this.schemaCache.set(server.id, { updatedAt: server.updatedAt, tools });
               const matching = query
                 ? tools.filter(
                     (tool) =>
@@ -247,13 +265,14 @@ export class McpBridgeToolSource implements AgentRuntimeToolSource, OnModuleInit
     args: Record<string, unknown>,
     workspace: string | null,
   ): Promise<AgentRuntimeToolResult> {
-    const transport = resolveTransport(server.transport, workspace);
     try {
-      const client = await this.pool.acquire(transport);
-      return outcomeToResult(await client.callTool(toolName, args));
+      const outcome = await this.pool.call(
+        resolveTransport(server.transport, workspace),
+        (client) => client.callTool(toolName, args),
+      );
+      return outcomeToResult(outcome);
     } catch (error) {
-      // Drop the pooled client so the next call reconnects from scratch.
-      await this.pool.invalidate(transport);
+      // The pool has already retired the failed client; the next call reconnects.
       return errorResult(`MCP call to ${server.id}.${toolName} failed: ${message(error)}`);
     }
   }

@@ -166,6 +166,73 @@ describe('McpService', () => {
     });
   });
 
+  describe('secret declassification guard', () => {
+    it('never returns or stores a raw secret when secretKeys is shrunk via the API', () => {
+      const created = service.create({
+        name: 'declassify',
+        transport: {
+          type: 'http',
+          url: 'https://declassify.example/mcp',
+          headers: { Authorization: 'Bearer topsecret9' },
+        },
+        secretKeys: ['Authorization'],
+      });
+      const updated = service.update(created.id, { secretKeys: [] });
+      const headers = (updated?.transport as { headers?: Record<string, string> }).headers;
+      expect(headers?.Authorization).not.toContain('topsecret9');
+      const stored = repo.get(created.id);
+      expect(stored?.secretKeys).toEqual(['Authorization']);
+      expect((stored?.transport as { headers?: Record<string, string> }).headers).toEqual({
+        Authorization: 'Bearer topsecret9',
+      });
+    });
+  });
+
+  describe('identity conflicts', () => {
+    it('rejects a create whose transport identity already exists in the same scope', () => {
+      service.create({ name: 'dupe-a', transport: { type: 'stdio', command: 'dupe', args: [] } });
+      expect(() =>
+        service.create({ name: 'dupe-b', transport: { type: 'stdio', command: 'dupe', args: [] } }),
+      ).toThrow(/already registered/i);
+    });
+
+    it('allows the same transport in a different project scope', () => {
+      service.create({ name: 'scoped-a', transport: { type: 'stdio', command: 'scpd', args: [] } });
+      expect(() =>
+        service.create({
+          name: 'scoped-b',
+          transport: { type: 'stdio', command: 'scpd', args: [] },
+          projectPath: '/Users/me/proj',
+        }),
+      ).not.toThrow();
+    });
+
+    it('rejects an update that moves a transport onto another row identity', () => {
+      service.create({ name: 'move-a', transport: { type: 'http', url: 'https://move-a.example' } });
+      const b = service.create({
+        name: 'move-b',
+        transport: { type: 'http', url: 'https://move-b.example' },
+      });
+      expect(() =>
+        service.update(b.id, { transport: { type: 'http', url: 'https://move-a.example' } }),
+      ).toThrow(/already registered/i);
+      // moving onto its own identity stays allowed
+      expect(() =>
+        service.update(b.id, { transport: { type: 'http', url: 'https://move-b.example' } }),
+      ).not.toThrow();
+    });
+  });
+
+  describe('transport normalization', () => {
+    it('defaults a missing stdio args array instead of crashing', () => {
+      const dto = service.create({
+        name: 'no-args',
+        transport: { type: 'stdio', command: 'x' } as never,
+      });
+      expect((dto.transport as McpStdioTransport).args).toEqual([]);
+    });
+  });
+
   describe('update', () => {
     it('preserves stored secrets when the caller sends back the masked value', () => {
       const created = service.create({
