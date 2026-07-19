@@ -249,3 +249,77 @@ describe('PiAgentProvider.decompose', () => {
     expect(createSessionOptions[0]!.model).toBeUndefined();
   });
 });
+
+describe('PiAgentProvider.completeOneShot', () => {
+  let module: TestingModule;
+  let provider: PiAgentProvider;
+  let dataDir: string;
+
+  beforeAll(async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-pi-oneshot-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
+    module = await Test.createTestingModule({
+      imports: [DatabaseModule, SessionsPersistenceModule, SettingsModule],
+      providers: [PiAgentProvider],
+    }).compile();
+    provider = module.get(PiAgentProvider);
+  });
+
+  afterAll(async () => {
+    await module.close();
+    rmSync(dataDir, { recursive: true, force: true });
+    delete process.env.NUNCIO_DATA_DIR;
+  });
+
+  beforeEach(() => {
+    attemptTexts = [];
+    attemptPromptErrors = [];
+    promptCalls = [];
+    createSessionOptions = [];
+    lastLoaderOptions = null;
+    inMemoryCalls = [];
+    disposeCalls = 0;
+    provider.bustCache();
+  });
+
+  it('runs one tool-less in-memory completion and returns the assistant text', async () => {
+    attemptTexts = ['[{"key":"k","value":"v"}]'];
+
+    const text = await provider.completeOneShot({
+      prompt: 'Distill the facts now.',
+      systemPrompt: 'You distill durable project knowledge.',
+      model: 'anthropic:claude-sonnet-5',
+      cwd: '/tmp/repo',
+    });
+
+    expect(text).toBe('[{"key":"k","value":"v"}]');
+    expect(promptCalls[0]?.text).toBe('Distill the facts now.');
+    const options = createSessionOptions[0]!;
+    expect(options.noTools).toBe('all');
+    expect(options.customTools).toBeUndefined();
+    expect((options.sessionManager as { kind: string }).kind).toBe('in-memory');
+    expect(options.model).toMatchObject({ provider: 'anthropic', id: 'claude-sonnet-5' });
+    expect(inMemoryCalls[0]?.cwd).toBe('/tmp/repo');
+    expect(lastLoaderOptions?.noExtensions).toBe(true);
+    expect(lastLoaderOptions?.noContextFiles).toBe(true);
+    expect((lastLoaderOptions?.appendSystemPrompt as string[])[0]).toBe(
+      'You distill durable project knowledge.',
+    );
+    expect(disposeCalls).toBe(1);
+  });
+
+  it('omits the system-prompt append when none is supplied', async () => {
+    attemptTexts = ['ok'];
+
+    await provider.completeOneShot({ prompt: 'plain' });
+
+    expect(lastLoaderOptions?.appendSystemPrompt).toBeUndefined();
+  });
+
+  it('disposes the throwaway session even when the completion throws', async () => {
+    attemptPromptErrors = [new Error('provider down')];
+
+    await expect(provider.completeOneShot({ prompt: 'boom' })).rejects.toThrow('provider down');
+    expect(disposeCalls).toBe(1);
+  });
+});

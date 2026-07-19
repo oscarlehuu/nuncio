@@ -27,8 +27,10 @@ function capRef(value: string | null, maxBytes: number): string | null {
  * Run a git subcommand with a hard timeout. Returns trimmed stdout on success,
  * or null on any failure (not a repo, non-zero exit, timeout, spawn error).
  * Never throws — a snapshot is best-effort context, never a blocker.
+ * Exported for the session workspace-context builder, which extends the
+ * snapshot with the same degrade-gracefully semantics.
  */
-async function git(cwd: string, args: string[]): Promise<string | null> {
+export async function runSnapshotGit(cwd: string, args: string[]): Promise<string | null> {
   try {
     const proc = Bun.spawn(['git', ...args], {
       cwd,
@@ -88,19 +90,19 @@ export async function buildWorkspaceSnapshot(
   cwd: string,
   baseBranch?: string | null,
 ): Promise<WorkspaceSnapshot | null> {
-  const branchRaw = await git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  const branchRaw = await runSnapshotGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']);
   if (branchRaw === null) return null; // Not a git repo (or git unavailable).
 
   const branch = capRef(branchRaw.trim() || null, REF_NAME_MAX_BYTES);
-  const headShaRaw = await git(cwd, ['rev-parse', '--short', 'HEAD']);
+  const headShaRaw = await runSnapshotGit(cwd, ['rev-parse', '--short', 'HEAD']);
   const headSha = capRef(headShaRaw?.trim() || null, SHA_MAX_BYTES);
-  const porcelain = await git(cwd, ['status', '--porcelain']);
+  const porcelain = await runSnapshotGit(cwd, ['status', '--porcelain']);
   const dirtyFiles = porcelain ? capDirtyFiles(porcelain) : [];
 
   let diffStat: string | null = null;
   const base = capRef(baseBranch?.trim() || null, REF_NAME_MAX_BYTES);
   if (base) {
-    const raw = await git(cwd, ['diff', '--stat', `${base}...HEAD`]);
+    const raw = await runSnapshotGit(cwd, ['diff', '--stat', `${base}...HEAD`]);
     diffStat = raw ? capDiffStat(raw) : null;
   }
 

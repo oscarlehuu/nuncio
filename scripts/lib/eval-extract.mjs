@@ -37,10 +37,10 @@ const PREAMBLE_SEPARATOR = '\n\n---\n\n';
 
 /**
  * The stored session prompt is the COMPOSED preamble (handoff brief → project
- * facts → the user's prompt, joined by a markdown rule, per
- * composeSessionPreamble). Replaying it verbatim would double-compose stale
- * context into the eval, so extraction keeps only the final section — the
- * user's original prompt, which the composer guarantees comes last.
+ * facts → workspace context → the user's prompt, joined by a markdown rule,
+ * per composeSessionPreamble). Replaying it verbatim would double-compose
+ * stale context into the eval, so extraction keeps only the final section —
+ * the user's original prompt, which the composer guarantees comes last.
  */
 export function extractOriginalPrompt(storedPrompt) {
   const sections = String(storedPrompt ?? '').split(PREAMBLE_SEPARATOR);

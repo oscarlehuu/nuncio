@@ -7,10 +7,12 @@ function errorResult(reason: string): AgentRuntimeToolResult {
 }
 
 /**
- * nuncio_record_project_fact (read-write tier). Provenance is forced to `agent`
- * and the source session is the caller. The B3 rules decide the outcome: a
- * direct write, a pending proposal (when it would overwrite a founder fact), or
- * a validation error. The result text distinguishes the three.
+ * nuncio_record_project_fact — granted by standalone fact recording
+ * (NUNCIO_FACT_RECORDING, default on) or the read-write orchestration tier.
+ * Provenance is forced to `agent` and the source session is the caller. The B3
+ * rules decide the outcome: a direct write, a pending proposal (when it would
+ * overwrite a founder fact), or a validation error. The result text
+ * distinguishes the three.
  */
 export function buildRecordFactTool(
   deps: OrchestrationToolDeps,
@@ -28,7 +30,11 @@ export function buildRecordFactTool(
       required: ['key', 'value'],
     },
     execute: (raw) => {
-      if (deps.currentMode() !== 'read-write') return errorResult('orchestration tools are disabled');
+      // Live gate, re-read per call: standalone fact recording OR the
+      // read-write orchestration tier — either grants the write.
+      if (deps.currentMode() !== 'read-write' && !deps.factRecordingEnabled()) {
+        return errorResult('fact recording is disabled');
+      }
       if (!scope.projectPath) return errorResult('this session has no project to record facts for');
       const input = asToolInput(raw);
       const key = typeof input.key === 'string' ? input.key : '';

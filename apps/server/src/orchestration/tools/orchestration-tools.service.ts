@@ -45,6 +45,11 @@ export class OrchestrationToolsService {
     return MODES.includes(raw as OrchestrationMode) ? (raw as OrchestrationMode) : 'off';
   }
 
+  /** Standalone fact recording (P2) — default on, independent of the fleet-tool mode. */
+  private factRecording(): boolean {
+    return this.settings?.resolve('NUNCIO_FACT_RECORDING') !== 'off';
+  }
+
   /** Build the orchestration tools for a scope; empty when the setting is off. */
   forScope(scope: OrchestrationScope): AgentRuntimeTools {
     // D2: the profile's tools-preamble overrides the default systemPromptAppend.
@@ -57,6 +62,7 @@ export class OrchestrationToolsService {
   private buildDeps(): OrchestrationToolDeps {
     return {
       currentMode: () => this.mode(),
+      factRecordingEnabled: () => this.factRecording(),
       listSessions: () => this.sessionsRepo.list(),
       findSession: (id) => this.sessionsRepo.findById(id),
       childrenOf: (parentSessionId) => this.sessionsRepo.childrenOf(parentSessionId),

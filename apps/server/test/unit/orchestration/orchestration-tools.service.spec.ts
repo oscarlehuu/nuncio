@@ -38,7 +38,7 @@ function makeSession(over: Partial<SessionDto> = {}): SessionDto {
 }
 
 describe('OrchestrationToolsService', () => {
-  function serviceFor(mode = 'read-write') {
+  function serviceFor(mode = 'read-write', factRecording: 'on' | 'off' = 'off') {
     const enqueueCalls: unknown[] = [];
     const upsertCalls: unknown[] = [];
     const sessionsRepo = {
@@ -55,6 +55,7 @@ describe('OrchestrationToolsService', () => {
     const settings = {
       resolve: (key: string) => {
         if (key === 'NUNCIO_ORCHESTRATION_TOOLS') return mode;
+        if (key === 'NUNCIO_FACT_RECORDING') return factRecording;
         if (key === 'NUNCIO_SUBAGENT_PROVIDER') return 'pi';
         if (key === 'NUNCIO_SUBAGENT_MODEL') return 'pi:child';
         if (key === 'NUNCIO_VERIFY_COMMAND') return 'bun test';
@@ -93,9 +94,16 @@ describe('OrchestrationToolsService', () => {
     return { service, enqueueCalls, upsertCalls };
   }
 
-  it('returns no tools when orchestration mode is off', () => {
-    const { service } = serviceFor('off');
+  it('returns no tools when orchestration mode is off and fact recording is off', () => {
+    const { service } = serviceFor('off', 'off');
     expect(service.forScope({ sessionId: 'parent', projectPath: '/repo' })).toEqual({ tools: [] });
+  });
+
+  it('mode off + fact recording on → only the record-fact tool', () => {
+    const { service } = serviceFor('off', 'on');
+    const runtime = service.forScope({ sessionId: 'parent', projectPath: '/repo' });
+    expect(runtime.tools.map((tool) => tool.name)).toEqual(['nuncio_record_project_fact']);
+    expect(runtime.systemPromptAppend).toContain('nuncio_record_project_fact');
   });
 
   it('builds orchestration tools when mode is read-write', () => {
@@ -108,7 +116,10 @@ describe('OrchestrationToolsService', () => {
     });
     expect(runtime.tools.length).toBeGreaterThan(0);
     expect(runtime.tools.map((tool) => tool.name)).toContain('nuncio_list_sessions');
-    expect(runtime.systemPromptAppend).toBe('Use orchestration tools carefully.');
+    // The profile preamble replaces the fleet-tools default; the fact-recording
+    // nudge (read-write always carries the record tool) is appended after it.
+    expect(runtime.systemPromptAppend).toStartWith('Use orchestration tools carefully.');
+    expect(runtime.systemPromptAppend).toContain('nuncio_record_project_fact');
   });
 
   it('wires enqueueTask through the injected enqueuer', async () => {

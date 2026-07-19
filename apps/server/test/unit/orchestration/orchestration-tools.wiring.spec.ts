@@ -40,10 +40,24 @@ describe('orchestration tools wiring', () => {
     return registry.forSession({ sessionId, projectPath }).tools.map((t) => t.name);
   }
 
-  it('off (default) → no nuncio_* orchestration tools present', () => {
+  it('off (default) → only the default-on record-fact tool is present', () => {
     settings.delete('NUNCIO_ORCHESTRATION_TOOLS');
+    settings.delete('NUNCIO_FACT_RECORDING');
     const s = sessions.create({ prompt: 'p', projectPath: '/repo' });
-    expect(toolNames(s.id, '/repo').filter((n) => n.startsWith('nuncio_'))).toEqual([]);
+    expect(toolNames(s.id, '/repo').filter((n) => n.startsWith('nuncio_'))).toEqual([
+      'nuncio_record_project_fact',
+    ]);
+  });
+
+  it('off + NUNCIO_FACT_RECORDING=off → no nuncio_* tools at all', () => {
+    settings.delete('NUNCIO_ORCHESTRATION_TOOLS');
+    settings.set('NUNCIO_FACT_RECORDING', 'off');
+    try {
+      const s = sessions.create({ prompt: 'p', projectPath: '/repo' });
+      expect(toolNames(s.id, '/repo').filter((n) => n.startsWith('nuncio_'))).toEqual([]);
+    } finally {
+      settings.delete('NUNCIO_FACT_RECORDING');
+    }
   });
 
   it('read → the four read tools arrive alongside browser tools', () => {

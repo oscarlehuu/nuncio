@@ -134,6 +134,10 @@ export async function startServer({
       // Keep the daemon off any real project roots / workspaces.
       NUNCIO_PROJECT_ROOTS: dataDir,
       NUNCIO_WORKSPACES_DIR: join(dataDir, 'workspaces'),
+      // Background fact distillation would fire real Pi completions on authed
+      // dev machines after every substantive eval run — hermetic runs stay
+      // cost-free by default (a task's env override can still opt in).
+      NUNCIO_FACT_DISTILLATION: 'off',
       // Caller overrides win (verify command, routing, etc.).
       ...env,
     },

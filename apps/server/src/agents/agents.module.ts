@@ -10,6 +10,7 @@ import {
 import { ExternalMemorySources } from './pi-engine/external-memory-sources';
 import { ExternalMemoriesService } from './pi-engine/external-memories';
 import { AgentRegistry } from './agents.registry';
+import { FactDistillationService } from './fact-distillation.service';
 import { CursorAgentProvider } from './providers/cursor-agent.provider';
 import { CursorCliProvider } from './providers/cursor-cli.provider';
 import { CodexAgentProvider } from './providers/codex-agent.provider';
@@ -65,6 +66,7 @@ const mockProviderBinding: Provider = {
     ExternalMemoriesService,
     mockProviderBinding,
     AgentRegistry,
+    FactDistillationService,
   ],
   exports: [AgentRegistry],
 })

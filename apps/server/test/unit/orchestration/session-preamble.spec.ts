@@ -28,4 +28,27 @@ describe('composeSessionPreamble', () => {
   it('ignores empty-string sections', () => {
     expect(composeSessionPreamble({ brief: '', facts: '', prompt: 'PROMPT' })).toBe('PROMPT');
   });
+
+  it('composes brief → facts → workspace → prompt in order', () => {
+    const out = composeSessionPreamble({
+      brief: 'BRIEF',
+      facts: 'FACTS',
+      workspace: 'WORKSPACE',
+      prompt: 'PROMPT',
+    });
+    expect(out.indexOf('BRIEF')).toBeLessThan(out.indexOf('FACTS'));
+    expect(out.indexOf('FACTS')).toBeLessThan(out.indexOf('WORKSPACE'));
+    expect(out.indexOf('WORKSPACE')).toBeLessThan(out.indexOf('PROMPT'));
+    expect(out.endsWith('PROMPT')).toBe(true);
+  });
+
+  it('workspace only → workspace then prompt', () => {
+    const out = composeSessionPreamble({ workspace: 'WORKSPACE', prompt: 'PROMPT' });
+    expect(out).toContain('WORKSPACE');
+    expect(out.endsWith('PROMPT')).toBe(true);
+  });
+
+  it('ignores an empty workspace section', () => {
+    expect(composeSessionPreamble({ workspace: '', prompt: 'PROMPT' })).toBe('PROMPT');
+  });
 });

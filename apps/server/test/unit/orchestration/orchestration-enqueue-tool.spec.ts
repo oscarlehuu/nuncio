@@ -38,6 +38,7 @@ function makeDeps(over: Partial<OrchestrationToolDeps> = {}): {
   const sessions = [session({ id: 's1' })];
   const deps: OrchestrationToolDeps = {
     currentMode: () => 'read-write',
+    factRecordingEnabled: () => false,
     listSessions: () => sessions,
     findSession: (id) => sessions.find((s) => s.id === id) ?? null,
     childrenOf: () => [],

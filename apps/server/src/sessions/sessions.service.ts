@@ -44,6 +44,10 @@ import { GitService } from '../git/git.service';
 import type { ModelOptionsMap } from '../models/model-options.types';
 import { renderHandoffBrief } from '../orchestration/handoff-brief.renderer';
 import { composeSessionPreamble } from '../orchestration/session-preamble';
+import {
+  buildSessionWorkspaceContext,
+  renderWorkspaceContext,
+} from '../orchestration/session-workspace-context';
 import { PromptProfileService } from '../prompts/prompt-profile.service';
 import { PiLocalSessionsService } from '../pi-local/pi-local-sessions.service';
 import { canTransition } from './domain/sessions.fsm';
@@ -393,11 +397,23 @@ export class SessionsService implements OnModuleDestroy {
     const mcpServerIds = this.validateMcpServerIds(input.mcpServerIds);
 
     // The single choke point for the first prompt: handoff brief → project
-    // facts → the user's prompt. Both this path and TasksService.execute() (via
-    // input.contextBrief) compose here, so the order is guaranteed in one place.
+    // facts → workspace context → the user's prompt. Both this path and
+    // TasksService.execute() (via input.contextBrief) compose here, so the
+    // order is guaranteed in one place. Engines that inject the managed Nuncio
+    // context into their own system prompt (capability flag) skip the duplicate
+    // preamble facts on solo sessions; policy sessions keep them because the
+    // hermetic policy loader never receives the managed context.
+    const factsInPreamble =
+      Boolean(projectPath) && !(provider.capabilities.systemContextInjection && !runtimePolicy);
+    // Same hermetic rationale as Crew envelopes: a runtime-policy session gets
+    // exactly its bounded prompt, so the workspace block stays out of it.
+    const workspaceContext = runtimePolicy
+      ? ''
+      : await this.renderWorkspaceContextBlock(worktreePath ?? workspace, baseBranch);
     const prompt = composeSessionPreamble({
       ...(input.contextBrief ? { brief: renderHandoffBrief(input.contextBrief) } : {}),
-      ...(projectPath ? { facts: this.renderProjectFacts(projectPath, id) } : {}),
+      ...(factsInPreamble ? { facts: this.renderProjectFacts(projectPath!, id) } : {}),
+      ...(workspaceContext ? { workspace: workspaceContext } : {}),
       prompt: input.prompt,
       ...(profile ? { profile } : {}),
     });
@@ -460,6 +476,20 @@ export class SessionsService implements OnModuleDestroy {
     const facts = this.contextFacts.listPinnedFirst(projectPath, 200);
     const toolsEnabled = this.orchestrationToolsEnabled();
     return renderContextFacts(facts, budget, { toolsEnabled });
+  }
+
+  /**
+   * Render the session-start workspace context block for a git cwd, or '' when
+   * disabled / not a git repo. Best-effort: git failures never block creation.
+   */
+  private async renderWorkspaceContextBlock(
+    cwd: string | undefined,
+    baseBranch: string | undefined,
+  ): Promise<string> {
+    if (!cwd) return '';
+    if (this.settings?.resolve('NUNCIO_WORKSPACE_CONTEXT_INJECT') === 'off') return '';
+    const context = await buildSessionWorkspaceContext(cwd, baseBranch ?? null);
+    return context ? renderWorkspaceContext(context) : '';
   }
 
   /** True when orchestration read/read-write tools are enabled for sessions. */

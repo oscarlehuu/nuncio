@@ -45,6 +45,7 @@ function makeDeps(over: Partial<OrchestrationToolDeps> = {}): OrchestrationToolD
     resolveVerifyCommand: () => null,
     listProjectFacts: () => [],
     recordProjectFact: () => ({ status: 'written', message: 'ok' }),
+    factRecordingEnabled: () => false,
     ...over,
   };
 }
@@ -87,6 +88,48 @@ describe('buildOrchestrationTools gating', () => {
       expect(tool.inputSchema.type).toBe('object');
       expect(typeof tool.inputSchema.properties).toBe('object');
     }
+  });
+});
+
+describe('standalone fact recording (P2)', () => {
+  it('off + factRecording → only the record-fact tool, with a fact nudge append', () => {
+    const deps = makeDeps({ factRecordingEnabled: () => true });
+    const rt = buildOrchestrationTools(deps, scope, 'off');
+    expect(rt.tools.map((t) => t.name)).toEqual(['nuncio_record_project_fact']);
+    expect(rt.systemPromptAppend).toContain('nuncio_record_project_fact');
+  });
+
+  it('read + factRecording → read tools plus the record-fact tool', () => {
+    const deps = makeDeps({ factRecordingEnabled: () => true });
+    const rt = buildOrchestrationTools(deps, scope, 'read');
+    const names = rt.tools.map((t) => t.name);
+    expect(names).toContain('nuncio_list_sessions');
+    expect(names).toContain('nuncio_record_project_fact');
+    expect(names).not.toContain('nuncio_enqueue_task');
+  });
+
+  it('read + factRecording → the record-fact tool executes (fact writes ride their own gate)', async () => {
+    const deps = makeDeps({ currentMode: () => 'read', factRecordingEnabled: () => true });
+    const tool = buildOrchestrationTools(deps, scope, 'read').tools
+      .find((t) => t.name === 'nuncio_record_project_fact')!;
+    expect(((await tool.execute({ key: 'k', value: 'v' })) as { isError?: boolean }).isError).toBeUndefined();
+  });
+
+  it('read-write + factRecording → the record-fact tool appears exactly once', () => {
+    const deps = makeDeps({ factRecordingEnabled: () => true });
+    const rt = buildOrchestrationTools(deps, scope, 'read-write');
+    expect(rt.tools.filter((t) => t.name === 'nuncio_record_project_fact')).toHaveLength(1);
+  });
+
+  it('execute gate honors factRecordingEnabled even when orchestration mode is off', async () => {
+    let enabled = true;
+    const deps = makeDeps({ currentMode: () => 'off', factRecordingEnabled: () => enabled });
+    const tool = buildOrchestrationTools(deps, scope, 'off').tools
+      .find((t) => t.name === 'nuncio_record_project_fact')!;
+    expect(((await tool.execute({ key: 'k', value: 'v' })) as { isError?: boolean }).isError).toBeUndefined();
+    // A mid-session settings flip is enforced at execute time.
+    enabled = false;
+    expect(((await tool.execute({ key: 'k', value: 'v' })) as { isError?: boolean }).isError).toBe(true);
   });
 });
 

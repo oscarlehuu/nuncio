@@ -27,6 +27,12 @@ export interface OrchestrationToolDeps {
    * execute time — not only at registration.
    */
   currentMode(): OrchestrationMode;
+  /**
+   * Whether standalone fact recording (NUNCIO_FACT_RECORDING) is on — re-read
+   * on every tool call, same live-flip semantics as `currentMode`. The
+   * record-fact tool executes when EITHER this is on or the mode is read-write.
+   */
+  factRecordingEnabled(): boolean;
   listSessions(): SessionDto[];
   findSession(id: string): SessionDto | null;
   childrenOf(parentSessionId: string): SessionDto[];

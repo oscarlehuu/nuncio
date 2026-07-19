@@ -19,7 +19,7 @@ import {
 import { EventsRepository } from '../../sessions/persistence/events.repository';
 import { SessionsRepository } from '../../sessions/persistence/sessions.repository';
 import { SettingsService } from '../../settings/settings.service';
-import type { AgentRunContext, InteractionResponse } from '../agents.types';
+import type { AgentRunContext, InteractionResponse, OneShotCompletionInput } from '../agents.types';
 import { runtimePolicyKey, runtimeToolsForPolicy } from '../agent-runtime-policy';
 import { AgentRunCancelledError, BaseAgentProvider } from '../agents.base-provider';
 import { eventImagesFromAttachments } from '../agents.attachments';
@@ -187,6 +187,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     spawnTask: true,
     reproduceGate: true,
     modes: ['debug', 'multitask'],
+    systemContextInjection: true,
     runtimePolicies: [
       { filesystem: 'read-only', network: 'disabled' },
       { filesystem: 'workspace-write', network: 'disabled' },
@@ -434,20 +435,17 @@ export class PiAgentProvider extends BaseAgentProvider {
   }
 
   /**
-   * Run one tool-less completion for decompose and return the assistant's final
-   * text. Builds a throwaway in-memory session on the inherited model so nothing
-   * is persisted and no workspace tool can run. Always disposes the session.
+   * One tool-less completion on a throwaway in-memory session — pure reasoning
+   * for harness infrastructure (decompose, fact distillation). Nothing is
+   * persisted and no workspace tool can run. Always disposes the session.
    */
-  private async runDecomposeCompletion(
-    input: MultitaskDecomposeInput,
-    userPrompt: string,
-  ): Promise<string> {
+  async completeOneShot(input: OneShotCompletionInput): Promise<string> {
     const pi = await this.loadSdk();
     const agentDir = this.resolveAgentDir(pi);
     const { authStorage, modelRegistry } = createPiEngineModelRegistry(pi, agentDir, this.settings);
-    // Honor the parent's inherited model; never a hardcoded one. When it cannot be
+    // Honor the caller's model; never a hardcoded one. When it cannot be
     // resolved the SDK falls back to its default, same as the normal run path.
-    const model = resolveModelId(input.model, (provider, id) => modelRegistry.find(provider, id));
+    const model = resolveModelId(input.model ?? undefined, (provider, id) => modelRegistry.find(provider, id));
     const cwd = input.cwd ?? process.cwd();
     const resourceLoader = new pi.DefaultResourceLoader({
       cwd,
@@ -457,7 +455,7 @@ export class PiAgentProvider extends BaseAgentProvider {
       noPromptTemplates: true,
       noThemes: true,
       noContextFiles: true,
-      appendSystemPrompt: [DECOMPOSE_SYSTEM_PROMPT],
+      ...(input.systemPrompt ? { appendSystemPrompt: [input.systemPrompt] } : {}),
     });
     await resourceLoader.reload();
     const sessionManager = pi.SessionManager.inMemory(cwd);
@@ -468,17 +466,29 @@ export class PiAgentProvider extends BaseAgentProvider {
       modelRegistry,
       resourceLoader,
       sessionManager,
-      // No built-in or custom tools: decompose is pure reasoning and must not be
-      // able to read/write the workspace or start a shell.
+      // No built-in or custom tools: a one-shot completion is pure reasoning and
+      // must not be able to read/write the workspace or start a shell.
       noTools: 'all',
       ...(model ? { model } : {}),
     });
     try {
-      await session.prompt(userPrompt);
+      await session.prompt(input.prompt);
       return session.getLastAssistantText?.() ?? '';
     } finally {
       session.dispose?.();
     }
+  }
+
+  private async runDecomposeCompletion(
+    input: MultitaskDecomposeInput,
+    userPrompt: string,
+  ): Promise<string> {
+    return this.completeOneShot({
+      prompt: userPrompt,
+      systemPrompt: DECOMPOSE_SYSTEM_PROMPT,
+      model: input.model,
+      cwd: input.cwd ?? null,
+    });
   }
 
   protected async executePrompt(
