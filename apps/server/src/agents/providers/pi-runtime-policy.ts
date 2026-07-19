@@ -6,6 +6,12 @@ import {
   canonicalRuntimePolicy,
 } from '../agent-runtime-policy';
 import type { AgentRuntimePolicy } from '../agents.types';
+import {
+  buildPolicyShellTool,
+  POLICY_SHELL_TOOL_NAME,
+  type PolicyShellMode,
+  type PolicyShellSpawn,
+} from '../tools/policy-shell-tool';
 
 interface PiPolicyFactories {
   createReadTool(cwd: string, options?: unknown): unknown;
@@ -13,6 +19,15 @@ interface PiPolicyFactories {
   createWriteTool(cwd: string, options?: unknown): unknown;
   createGrepTool(cwd: string, options?: unknown): unknown;
   createLsTool(cwd: string, options?: unknown): unknown;
+  defineTool?(tool: unknown): unknown;
+}
+
+export interface PiPolicyShellConfig {
+  mode: PolicyShellMode;
+  /** Test seams forwarded to the shell tool builder. */
+  platform?: NodeJS.Platform;
+  sandboxExecutable?: string;
+  spawn?: PolicyShellSpawn;
 }
 
 export interface PiRuntimePolicyOptions {
@@ -22,13 +37,16 @@ export interface PiRuntimePolicyOptions {
 }
 
 /**
- * Pi exposes operation-injected file tools, but its shell runs arbitrary host
- * commands. Explicit policies therefore omit bash entirely: filesystem tools
- * remain useful, while network-disabled and workspace confinement stay honest.
+ * Pi exposes operation-injected file tools. Its own shell would run arbitrary
+ * host commands, so explicit policies replace it: workspace-write policies get
+ * the Nuncio `bash` tool (OS-sandboxed when a backend is available, advisory
+ * fallback under `auto` — see policy-shell-tool.ts), read-only policies get no
+ * shell at all. Network-disabled and workspace confinement stay honest.
  */
 export function buildPiRuntimePolicyOptions(
   policy: AgentRuntimePolicy,
   factories: PiPolicyFactories,
+  shell?: PiPolicyShellConfig,
 ): PiRuntimePolicyOptions {
   const canonical = canonicalRuntimePolicy(policy);
   const root = canonical.workspaceRoot;
@@ -80,9 +98,18 @@ export function buildPiRuntimePolicyOptions(
       mkdir: async (path: string) => mkdir(writeGuard(path), { recursive: true }),
     },
   });
+  const shellTool = shell
+    ? buildPolicyShellTool({ workspaceRoot: root, ...shell }, factories.defineTool)
+    : null;
   return {
     workspaceRoot: root,
-    toolNames: ['read', 'edit', 'write', 'grep', 'ls'],
-    customTools: [readTool, editTool, writeTool, grepTool, lsTool],
+    toolNames: [
+      'read', 'edit', 'write', 'grep', 'ls',
+      ...(shellTool ? [POLICY_SHELL_TOOL_NAME] : []),
+    ],
+    customTools: [
+      readTool, editTool, writeTool, grepTool, lsTool,
+      ...(shellTool ? [shellTool.tool] : []),
+    ],
   };
 }

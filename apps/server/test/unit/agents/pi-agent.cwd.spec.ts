@@ -302,12 +302,15 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
       });
 
       const options = latestCreateOptions();
+      // workspace-write gains the Nuncio policy shell (sandboxed when available,
+      // announced advisory fallback otherwise — locked decision 3).
       expect(options.tools).toEqual([
         'read',
         'edit',
         'write',
         'grep',
         'ls',
+        'bash',
         'todo_write',
         'AskUserQuestion',
         'spawn_task',
@@ -351,7 +354,8 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
       {
         filesystem: 'workspace-write' as const,
         toolName: 'submit_build',
-        builtins: ['read', 'edit', 'write', 'grep', 'ls'],
+        // Writers get the Nuncio policy shell; read-only members never do.
+        builtins: ['read', 'edit', 'write', 'grep', 'ls', 'bash'],
       },
     ]) {
       const workspaceRoot = mkdtempSync(join(tmpdir(), `nuncio-pi-${testCase.toolName}-`));
@@ -426,7 +430,9 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
           'request_reproduction',
           'read_external_memory',
         ]);
-        expect(customTools.map((tool) => tool.name)).not.toContain('bash');
+        if (testCase.filesystem === 'read-only') {
+          expect(customTools.map((tool) => tool.name)).not.toContain('bash');
+        }
         expect(customTools.map((tool) => tool.name)).not.toContain('forged_submit');
         expect(customTools.map((tool) => tool.name)).not.toContain('browser_open');
 
