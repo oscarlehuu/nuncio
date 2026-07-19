@@ -3,6 +3,9 @@ import { useEffect, useRef } from 'react';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as Notifications from 'expo-notifications';
+import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
+import { PortalHost } from '@rn-primitives/portal';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { notificationPath } from '../lib/crew-navigation';
 import {
   notificationTargetFromNotification,
@@ -68,14 +71,17 @@ export default function RootLayout() {
   }, [router]);
 
   return (
-    <>
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          contentStyle: { backgroundColor: '#0d0f12' },
-        }}
-      />
-      <StatusBar style="light" />
-    </>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <BottomSheetModalProvider>
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            contentStyle: { backgroundColor: '#121314' },
+          }}
+        />
+        <PortalHost />
+        <StatusBar style="light" />
+      </BottomSheetModalProvider>
+    </GestureHandlerRootView>
   );
 }

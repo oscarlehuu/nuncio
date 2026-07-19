@@ -1,16 +1,32 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   KeyboardAvoidingView,
   Platform,
   Pressable,
   Text,
-  TextInput,
   View,
 } from 'react-native';
+import { Text as UItext } from '../../components/ui/text';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  BottomSheetBackdrop,
+  BottomSheetModal,
+  BottomSheetView,
+} from '@gorhom/bottom-sheet';
+import {
+  Archive,
+  ArchiveRestore,
+  ArrowLeft,
+  MoreHorizontal,
+  Paperclip,
+  Pause,
+  Play,
+  Send,
+  Trash2,
+} from 'lucide-react-native';
 import {
   archiveSession,
   deleteSession,
@@ -28,19 +44,28 @@ import { QuotaSheetTrigger } from '../../components/quota-sheet';
 import { ATTENTION_COLOR, SessionStatusDot } from '../../components/session-status-dot';
 import { crewMemberSessionAccess } from '../../lib/crew-member-session';
 import { deriveNeedsInput, latestSessionStatus } from '../../lib/session-pending-input';
+import { Badge } from '../../components/ui/badge';
+import { Button } from '../../components/ui/button';
+import { Textarea } from '../../components/ui/textarea';
+import { groupTranscriptBlocks, statusBadgeVariant } from '../../lib/session-ui';
 
 export default function SessionDetail() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
   const sessionId = typeof id === 'string' ? id : null;
   const [session, setSession] = useState<Session | null>(null);
   const [message, setMessage] = useState('');
+  const [composerHeight, setComposerHeight] = useState(64);
   const [sending, setSending] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<FlatList>(null);
+  const actionsRef = useRef<BottomSheetModal>(null);
+  const snapPoints = useMemo(() => (confirmDelete ? ['38%'] : ['42%']), [confirmDelete]);
 
   const { events, steer, connectionState } = useSessionTranscript(sessionId);
-  const blocks = useTranscriptBlocks(events);
+  const blocks = groupTranscriptBlocks(useTranscriptBlocks(events));
   const access = crewMemberSessionAccess(session);
   const sessionLoaded = session !== null;
   const canRespond = access.canMutate && session?.supportsInteraction === true;
@@ -94,48 +119,38 @@ export default function SessionDetail() {
     [sessionId, reloadSession],
   );
 
-  const showActions = useCallback(() => {
-    if (!session || !sessionId || !access.canMutate) return;
-    const archived = session.status === 'ARCHIVED';
-    const buttons = archived
-      ? [
-          { text: 'Restore', onPress: () => void runAction(restoreSession, 'Restore') },
-          {
-            text: 'Delete permanently',
-            style: 'destructive' as const,
-            onPress: () =>
-              Alert.alert('Delete session?', 'The transcript is gone for good.', [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Delete',
-                  style: 'destructive',
-                  onPress: () => {
-                    void deleteSession(sessionId).then(() => router.back());
-                  },
-                },
-              ]),
-          },
-        ]
-      : [
-          ...(session.status === 'RUNNING'
-            ? [{ text: 'Pause', onPress: () => void runAction(pauseSession, 'Pause') }]
-            : []),
-          { text: 'Archive', onPress: () => void runAction(archiveSession, 'Archive') },
-        ];
-    Alert.alert(session.title || 'Session', statusLabel(session.status), [
-      ...buttons,
-      { text: 'Close', style: 'cancel' },
-    ]);
-  }, [access.canMutate, session, sessionId, runAction, router]);
+  const deleteCurrentSession = useCallback(async () => {
+    if (!sessionId) return;
+    try {
+      await deleteSession(sessionId);
+      actionsRef.current?.dismiss();
+      router.back();
+    } catch {
+      setError('Delete failed.');
+    }
+  }, [router, sessionId]);
+
+  const openActions = useCallback(() => {
+    if (!session || !access.canMutate) return;
+    setConfirmDelete(false);
+    actionsRef.current?.present();
+  }, [access.canMutate, session]);
 
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      className="flex-1 bg-background pt-16"
+      className="flex-1 bg-background"
     >
-      <View className="flex-row items-center gap-3 border-b border-border px-4 pb-3">
-        <Pressable onPress={() => router.back()}>
-          <Text className="text-2xl text-muted-foreground">‹</Text>
+      <View
+        className="flex-row items-center gap-3 border-b border-border/60 px-4 pb-3"
+        style={{ paddingTop: Math.max(insets.top, 16) }}
+      >
+        <Pressable
+          accessibilityLabel="Back"
+          onPress={() => router.back()}
+          className="h-9 w-9 items-center justify-center rounded-full active:bg-card"
+        >
+          <ArrowLeft color="#eff0f1" size={21} />
         </Pressable>
         <View className="flex-1 flex-row items-start gap-2">
           {session ? (
@@ -159,9 +174,18 @@ export default function SessionDetail() {
         </View>
         <QuotaSheetTrigger activeProvider={session?.provider} model={session?.model} />
         <ConnectionPill state={connectionState} />
+        {session ? (
+          <Badge variant={statusBadgeVariant(session.status)}>
+            <UItext>{statusLabel(session.status)}</UItext>
+          </Badge>
+        ) : null}
         {access.canMutate ? (
-          <Pressable onPress={showActions} className="px-2 py-1">
-            <Text className="text-xl text-muted-foreground">⋯</Text>
+          <Pressable
+            accessibilityLabel="Session actions"
+            onPress={openActions}
+            className="h-9 w-9 items-center justify-center rounded-full active:bg-card"
+          >
+            <MoreHorizontal color="#9ca3af" size={21} />
           </Pressable>
         ) : null}
       </View>
@@ -182,31 +206,64 @@ export default function SessionDetail() {
           />
         )}
         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
+        ListEmptyComponent={
+          <View className="items-center px-6 py-16">
+            <Text className="text-sm text-muted-foreground">Waiting for the agent transcript…</Text>
+          </View>
+        }
       />
 
-      {error ? <Text className="px-4 py-1 text-sm text-destructive">{error}</Text> : null}
+      {error ? (
+        <View className="mx-4 mb-2 flex-row items-center gap-2 rounded-lg bg-destructive/10 px-3 py-2">
+          <Text className="flex-1 text-xs text-destructive">{error}</Text>
+          <Pressable onPress={() => setError(null)}>
+            <Text className="text-xs font-medium text-destructive">Dismiss</Text>
+          </Pressable>
+        </View>
+      ) : null}
 
       {access.canMutate ? (
-        <View className="flex-row items-end gap-2 border-t border-border px-3 py-2 pb-8">
-          <TextInput
-            className="max-h-28 flex-1 rounded-lg border border-border px-3 py-2 text-foreground"
-            placeholder="Steer the agent…"
-            placeholderTextColor="#6b7280"
-            multiline
-            value={message}
-            onChangeText={setMessage}
-          />
-          <Pressable
-            onPress={send}
-            disabled={sending || !message.trim()}
-            className={`rounded-lg px-4 py-2.5 ${sending || !message.trim() ? 'bg-muted' : 'bg-primary'}`}
-          >
-            {sending ? (
-              <ActivityIndicator size="small" />
-            ) : (
-              <Text className="font-semibold text-primary-foreground">Send</Text>
-            )}
-          </Pressable>
+        <View
+          className="border-t border-border/60 bg-background px-3 pt-2"
+          style={{ paddingBottom: Math.max(insets.bottom, 10) }}
+        >
+          <View className="flex-row items-end gap-2 rounded-2xl border border-border bg-card px-2 py-2">
+            <Button
+              accessibilityLabel="Attach image"
+              disabled
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9 rounded-full"
+              // TODO: Wire this button to image attachments.
+            >
+              <Paperclip color="#83868b" size={18} />
+            </Button>
+            <Textarea
+              value={message}
+              onChangeText={setMessage}
+              placeholder="Steer the agent…"
+              placeholderTextColor="#83868b"
+              className="min-h-10 flex-1 border-0 bg-transparent px-1 py-2 text-sm shadow-none"
+              style={{ height: composerHeight }}
+              onContentSizeChange={(event) => {
+                const next = Math.min(Math.max(event.nativeEvent.contentSize.height, 40), 128);
+                setComposerHeight(next);
+              }}
+            />
+            <Button
+              accessibilityLabel={sending ? 'Sending steer' : 'Send steer'}
+              disabled={sending || !message.trim()}
+              onPress={() => void send()}
+              size="icon"
+              className="h-9 w-9 rounded-full"
+            >
+              {sending ? (
+                <ActivityIndicator size="small" color="#161719" />
+              ) : (
+                <Send color="#161719" size={16} strokeWidth={2.2} />
+              )}
+            </Button>
+          </View>
         </View>
       ) : (
         <View className="border-t border-border px-4 py-3 pb-8">
@@ -214,6 +271,102 @@ export default function SessionDetail() {
           <Text className="mt-1 text-xs text-muted-foreground">Inspect-only member session</Text>
         </View>
       )}
+
+      <BottomSheetModal
+        ref={actionsRef}
+        index={0}
+        snapPoints={snapPoints}
+        enablePanDownToClose
+        backdropComponent={(props) => (
+          <BottomSheetBackdrop {...props} appearsOnIndex={0} disappearsOnIndex={-1} />
+        )}
+        backgroundStyle={{ backgroundColor: '#18191c' }}
+        handleIndicatorStyle={{ backgroundColor: '#606369' }}
+        onDismiss={() => setConfirmDelete(false)}
+      >
+        <BottomSheetView className="flex-1 px-5 pb-8">
+          {confirmDelete ? (
+            <>
+              <Text className="text-lg font-semibold text-foreground">Delete this session?</Text>
+              <Text className="mt-2 text-sm leading-5 text-muted-foreground">
+                The transcript is gone for good. This cannot be undone.
+              </Text>
+              <View className="mt-6 flex-row gap-3">
+                <Button variant="outline" className="flex-1" onPress={() => setConfirmDelete(false)}>
+                  <UItext>Cancel</UItext>
+                </Button>
+                <Button variant="destructive" className="flex-1" onPress={() => void deleteCurrentSession()}>
+                  <Trash2 color="#fff" size={16} />
+                  <UItext>Delete</UItext>
+                </Button>
+              </View>
+            </>
+          ) : (
+            <>
+              <Text className="text-lg font-semibold text-foreground">Session actions</Text>
+              <Text className="mt-1 text-xs text-muted-foreground" numberOfLines={1}>
+                {session?.title || session?.prompt || 'Session'}
+              </Text>
+              <View className="mt-5 gap-1">
+                {session?.status === 'RUNNING' ? (
+                  <ActionButton
+                    icon={<Pause color="#eff0f1" size={18} />}
+                    label="Pause agent"
+                    onPress={() => void runAction(pauseSession, 'Pause')}
+                  />
+                ) : session?.status === 'PAUSED' ? (
+                  <ActionButton icon={<Play color="#83868b" size={18} />} label="Resume via steer" disabled />
+                ) : null}
+                {session?.status === 'ARCHIVED' ? (
+                  <ActionButton
+                    icon={<ArchiveRestore color="#eff0f1" size={18} />}
+                    label="Restore session"
+                    onPress={() => void runAction(restoreSession, 'Restore')}
+                  />
+                ) : (
+                  <ActionButton
+                    icon={<Archive color="#eff0f1" size={18} />}
+                    label="Archive session"
+                    onPress={() => void runAction(archiveSession, 'Archive')}
+                  />
+                )}
+                <ActionButton
+                  icon={<Trash2 color="#f5605b" size={18} />}
+                  label="Delete permanently"
+                  destructive
+                  onPress={() => setConfirmDelete(true)}
+                />
+              </View>
+            </>
+          )}
+        </BottomSheetView>
+      </BottomSheetModal>
     </KeyboardAvoidingView>
+  );
+}
+
+function ActionButton({
+  icon,
+  label,
+  onPress,
+  disabled = false,
+  destructive = false,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onPress?: () => void;
+  disabled?: boolean;
+  destructive?: boolean;
+}) {
+  return (
+    <Pressable
+      disabled={disabled}
+      onPress={onPress}
+      className={`flex-row items-center gap-3 rounded-xl px-3 py-3.5 active:bg-accent ${disabled ? 'opacity-50' : ''}`}
+    >
+      {icon}
+      <Text className={`text-sm font-medium ${destructive ? 'text-destructive' : 'text-foreground'}`}>{label}</Text>
+      {disabled ? <Text className="ml-auto text-xs text-muted-foreground">Not available</Text> : null}
+    </Pressable>
   );
 }
