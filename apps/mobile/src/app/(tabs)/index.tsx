@@ -1,28 +1,28 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FlatList, Linking, Pressable, RefreshControl, View } from 'react-native';
+import { FlatList, Pressable, RefreshControl, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Redirect, useFocusEffect, useRouter } from 'expo-router';
 import { ChevronRight, Plus, Server, X } from 'lucide-react-native';
 import { fetchArchivedSessions, fetchSessions, type Session } from '@nuncio/core/api';
 import { fetchCrewRuns } from '@nuncio/core/crew-api';
-import { applyConnection, updateActiveSecret } from '../lib/api-setup';
-import { clearConnection, loadConnection, type ConnectionConfig } from '../lib/connection-store';
-import { crewTaskPath } from '../lib/crew-navigation';
+import { applyConnection, updateActiveSecret } from '../../lib/api-setup';
+import { clearConnection, loadConnection, type ConnectionConfig } from '../../lib/connection-store';
+import { crewTaskPath } from '../../lib/crew-navigation';
 import {
   buildCrewRunRows,
   type CrewRunRowModel,
-} from '../lib/crew-run-list';
-import { secureStore } from '../lib/secure-store-adapter';
-import { registerForPush } from '../lib/push-registration';
-import { rotateDeviceSecret } from '../lib/rotate-secret';
-import { useSessionPlans } from '../lib/use-session-plans';
-import { planStepsLabel } from '../lib/session-plan-progress';
-import { CrewRunRow } from '../components/crew-run-row';
-import { SessionRow } from '../components/session-row';
-import { Button } from '../components/ui/button';
-import { Card } from '../components/ui/card';
-import { Skeleton } from '../components/ui/skeleton';
-import { Text } from '../components/ui/text';
+} from '../../lib/crew-run-list';
+import { secureStore } from '../../lib/secure-store-adapter';
+import { registerForPush } from '../../lib/push-registration';
+import { rotateDeviceSecret } from '../../lib/rotate-secret';
+import { useSessionPlans } from '../../lib/use-session-plans';
+import { planStepsLabel } from '../../lib/session-plan-progress';
+import { CrewRunRow } from '../../components/crew-run-row';
+import { SessionRow } from '../../components/session-row';
+import { Button } from '../../components/ui/button';
+import { Card } from '../../components/ui/card';
+import { Skeleton } from '../../components/ui/skeleton';
+import { Text } from '../../components/ui/text';
 
 type Tab = 'active' | 'archived';
 type HomeItem =
@@ -108,11 +108,6 @@ export default function SessionList() {
   const sessionPlans = useSessionPlans(sessions);
   const initialLoading = refreshing && items.length === 0;
 
-  const unpair = useCallback(async () => {
-    await clearConnection(secureStore);
-    router.replace('/pairing');
-  }, [router]);
-
   if (connection === undefined) return null;
   if (connection === null) return <Redirect href="/pairing" />;
 
@@ -122,7 +117,7 @@ export default function SessionList() {
         <View className="min-w-0 flex-1">
           <Text className="text-3xl font-semibold tracking-tight text-foreground">Sessions</Text>
           <Pressable
-            onPress={unpair}
+            onPress={() => router.push('/settings')}
             accessibilityLabel="Change connection"
             className="mt-2 flex-row items-center gap-1 self-start rounded-full border border-border/70 bg-card px-3 py-1.5 active:opacity-80"
           >
@@ -149,7 +144,7 @@ export default function SessionList() {
           </Text>
           <Pressable
             accessibilityRole="button"
-            onPress={() => void Linking.openSettings()}
+            onPress={() => router.push('/settings')}
             className="min-h-11 justify-center px-1 active:opacity-70"
           >
             <Text className="text-xs font-semibold text-primary">Open Settings</Text>

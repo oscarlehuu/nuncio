@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Linking,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -10,7 +9,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Bot, Send, Sparkles } from 'lucide-react-native';
+import { Bot, Send, Sparkles } from 'lucide-react-native';
 import { createSession, fetchModels } from '@nuncio/core/api';
 import { createCrewTask } from '@nuncio/core/crew-api';
 import {
@@ -19,22 +18,20 @@ import {
   type FlatModel,
   type ModelProvider,
 } from '@nuncio/core/model-providers';
-import { CrewComposerOptions } from '../components/crew-composer-options';
-import { CrewModePicker } from '../components/crew-mode-picker';
-import { activeConnection } from '../lib/api-setup';
+import { CrewComposerOptions } from '../../components/crew-composer-options';
+import { CrewModePicker } from '../../components/crew-mode-picker';
 import {
   buildCrewTaskInput,
   buildSoloCreateArgs,
   createCrewSubmitLock,
-  crewProfileSettingsUrl,
   initialExecutionMode,
-} from '../lib/crew-composer';
-import { useCrewComposerState } from '../lib/crew-composer-state';
-import { crewTaskPath } from '../lib/crew-navigation';
-import { Button } from '../components/ui/button';
-import { Card } from '../components/ui/card';
-import { Text } from '../components/ui/text';
-import { Textarea } from '../components/ui/textarea';
+} from '../../lib/crew-composer';
+import { useCrewComposerState } from '../../lib/crew-composer-state';
+import { crewTaskPath } from '../../lib/crew-navigation';
+import { Button } from '../../components/ui/button';
+import { Card } from '../../components/ui/card';
+import { Text } from '../../components/ui/text';
+import { Textarea } from '../../components/ui/textarea';
 
 export default function NewSession() {
   const router = useRouter();
@@ -92,31 +89,17 @@ export default function NewSession() {
   };
 
   const openCrewSettings = () => {
-    const baseUrl = activeConnection()?.serverUrl;
-    if (!baseUrl) {
-      setError('Pair with your Nuncio machine before opening web settings.');
-      return;
-    }
-    void Linking.openURL(crewProfileSettingsUrl(baseUrl)).catch(() => {
-      setError('Could not open Crew profile settings.');
-    });
+    router.push('/settings');
   };
 
   return (
     <SafeAreaView className="flex-1 bg-background">
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} className="flex-1">
-        <View className="flex-row items-center justify-between px-4 pb-3">
-          <Pressable
-            accessibilityLabel="Back"
-            onPress={() => router.back()}
-            className="h-10 w-10 items-center justify-center rounded-full bg-card active:opacity-70"
-          >
-            <ArrowLeft color="#eff0f1" size={19} />
-          </Pressable>
-          <Text className="text-xl font-semibold text-foreground">New task</Text>
-          <Pressable onPress={() => router.back()} className="min-h-10 justify-center px-1">
-            <Text className="text-sm text-muted-foreground">Cancel</Text>
-          </Pressable>
+        <View className="px-4 pb-3">
+          <Text className="text-3xl font-semibold tracking-tight text-foreground">New task</Text>
+          <Text className="mt-2 text-sm text-muted-foreground">
+            Delegate work to a Solo agent or a Crew workflow.
+          </Text>
         </View>
 
         <ScrollView className="flex-1 px-4" contentContainerClassName="pb-6" keyboardShouldPersistTaps="handled">
