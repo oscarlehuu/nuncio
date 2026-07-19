@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HomeView } from './home-view';
+import { AGENTS_MD_GENERATION_PROMPT } from '../lib/agents-md-prompt';
 import {
   loadModelPreference,
   loadScopedModelPreference,
@@ -210,8 +211,17 @@ describe('HomeView', () => {
     const action = await screen.findByRole('button', { name: /agents\.md/i });
     await userEvent.click(action);
     const textarea = screen.getByPlaceholderText(/ask nuncio/i) as HTMLTextAreaElement;
-    expect(textarea.value).toContain('AGENTS.md');
-    expect(textarea.value.length).toBeGreaterThan(200);
+    expect(textarea.value).toBe(AGENTS_MD_GENERATION_PROMPT);
+    expect(textarea.value).toContain('operating manual');
+
+    // Crew mode hides the solo-only quick action; toggling back must keep the draft.
+    await userEvent.click(screen.getByRole('switch', { name: /crew/i }));
+    expect(screen.queryByRole('button', { name: /agents\.md/i })).toBeNull();
+    await userEvent.click(screen.getByRole('switch', { name: /crew/i }));
+    expect(screen.getByRole('button', { name: /agents\.md/i })).toBeInTheDocument();
+    expect((screen.getByPlaceholderText(/ask nuncio/i) as HTMLTextAreaElement).value).toBe(
+      AGENTS_MD_GENERATION_PROMPT,
+    );
   });
 
   it('removes the hero heading — the composer is the centerpiece', () => {
