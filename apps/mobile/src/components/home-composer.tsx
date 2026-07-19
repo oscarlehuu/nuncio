@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { BottomSheetBackdrop, BottomSheetModal, BottomSheetView } from '@gorhom/bottom-sheet';
+import {
+  BottomSheetBackdrop,
+  BottomSheetModal,
+  BottomSheetScrollView,
+  BottomSheetView,
+} from '@gorhom/bottom-sheet';
 import { ChevronRight, Folder, Send, Settings2 } from 'lucide-react-native';
 import { createSession, fetchModels, type Session } from '@nuncio/core/api';
 import {
@@ -182,7 +187,7 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
         handleIndicatorStyle={{ backgroundColor: '#606369' }}
         onDismiss={() => setSheetMode(null)}
       >
-        <BottomSheetView style={{ paddingBottom: insets.bottom + 16 }} className="flex-1 px-5">
+        <BottomSheetView className="flex-1 px-5">
           <Text className="text-lg font-semibold text-foreground">
             {sheetMode === 'project' ? 'Choose a project' : 'Choose a model'}
           </Text>
@@ -191,7 +196,13 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
               ? 'The project determines the workspace and base branch.'
               : 'Choose which provider should handle this task.'}
           </Text>
-          <View className="mt-4 gap-2">
+          <BottomSheetScrollView
+            contentContainerStyle={{
+              gap: 8,
+              paddingBottom: insets.bottom + 16,
+              paddingTop: 16,
+            }}
+          >
             {sheetMode === 'project' ? (
               <>
                 <PickerRow
@@ -229,7 +240,7 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
                 />
               ))
             )}
-          </View>
+          </BottomSheetScrollView>
         </BottomSheetView>
       </BottomSheetModal>
     </>
