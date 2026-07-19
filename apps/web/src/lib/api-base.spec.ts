@@ -1,5 +1,11 @@
-import { describe, it, expect } from 'vitest';
-import { resolveBasePath, withBase, toWsUrl, rewriteFetchInput } from './api-base';
+import { describe, it, expect, vi } from 'vitest';
+import {
+  installApiBaseFetch,
+  resolveBasePath,
+  rewriteFetchInput,
+  toWsUrl,
+  withBase,
+} from './api-base';
 
 describe('resolveBasePath', () => {
   it('extracts the /m/<machine> prefix from a hub path', () => {
@@ -76,5 +82,21 @@ describe('toWsUrl', () => {
     expect(toWsUrl('http://localhost:3000', '/api/terminal', '')).toBe(
       'ws://localhost:3000/api/terminal',
     );
+  });
+});
+
+describe('installApiBaseFetch', () => {
+  it('routes API requests through the machine base path', async () => {
+    const nativeFetch = vi.fn().mockResolvedValue(new Response('ok'));
+    const previousFetch = window.fetch;
+    window.fetch = nativeFetch;
+
+    try {
+      installApiBaseFetch('/m/foo');
+      await window.fetch('/api/sessions');
+      expect(nativeFetch).toHaveBeenCalledWith('/m/foo/api/sessions', undefined);
+    } finally {
+      window.fetch = previousFetch;
+    }
   });
 });
