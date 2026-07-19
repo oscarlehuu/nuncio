@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { AgentsModule } from '../../../src/agents/agents.module';
 import { ClaudeAgentProvider } from '../../../src/agents/providers/claude-agent.provider';
 import { CodexAgentProvider } from '../../../src/agents/providers/codex-agent.provider';
+import { DevinAgentProvider } from '../../../src/agents/providers/devin-agent.provider';
 import { PiAgentProvider } from '../../../src/agents/providers/pi-agent.provider';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { ModelsService } from '../../../src/models/models.service';
@@ -49,6 +50,14 @@ describe('ModelsService', () => {
       .useValue({
         id: 'claude',
         name: 'Claude',
+        isAvailable: async () => false,
+        listModels: async () => [],
+        dispose: () => undefined,
+      })
+      .overrideProvider(DevinAgentProvider)
+      .useValue({
+        id: 'devin',
+        name: 'Devin',
         isAvailable: async () => false,
         listModels: async () => [],
         dispose: () => undefined,
