@@ -42,6 +42,7 @@ export default function NewSession() {
   const [mode, setMode] = useState(initialExecutionMode);
   const [providers, setProviders] = useState<ModelProvider[]>([]);
   const [modelId, setModelId] = useState<string | null>(null);
+  const [promptHeight, setPromptHeight] = useState(144);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submitLock = useRef(createCrewSubmitLock());
@@ -128,11 +129,16 @@ export default function NewSession() {
             </View>
             <Textarea
             className="min-h-36 border-0 bg-transparent px-0 py-0 text-base leading-6 shadow-none"
+            style={{ height: promptHeight }}
             placeholder={mode === 'solo' ? 'What should the agent work on?' : 'What should the Crew deliver?'}
             placeholderTextColor="#6b7280"
             multiline
+            numberOfLines={8}
             value={prompt}
             onChangeText={setPrompt}
+            onContentSizeChange={(event) => {
+              setPromptHeight(Math.min(260, Math.max(144, event.nativeEvent.contentSize.height)));
+            }}
             />
             <Text className="mt-3 text-xs text-muted-foreground">
               Describe the outcome, constraints, and anything the agent should inspect.
