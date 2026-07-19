@@ -15,6 +15,7 @@ import { SessionsService } from './sessions.service';
 import { SettingsModule } from '../settings/settings.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { EvidenceModule } from '../evidence/evidence.module';
+import { McpModule } from '../mcp/mcp.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { EvidenceModule } from '../evidence/evidence.module';
     SettingsModule,
     ProjectsModule,
     EvidenceModule,
+    McpModule,
   ],
   controllers: [SessionsController, GitSessionController, SessionDiffController],
   providers: [SessionsService, SessionDiffService],

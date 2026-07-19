@@ -47,6 +47,10 @@ export interface AgentRuntimeToolScope {
   projectPath: string | null;
   provider?: string;
   model?: string | null;
+  /** Effective session working dir (worktree-aware); sources may resolve `${workspace}` against it. */
+  workspace?: string | null;
+  /** Explicit MCP server ids for this session; null = inherit project defaults. */
+  mcpServerIds?: string[] | null;
 }
 
 export interface AgentRuntimeToolSource {

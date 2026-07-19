@@ -41,6 +41,7 @@ export interface SessionRow {
   parent_session_id: string | null;
   origin_task_id: string | null;
   prior_session_id: string | null;
+  mcp_server_ids_json: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -141,6 +142,8 @@ export interface SessionDto {
   parentSessionId?: string | null;
   originTaskId?: string | null;
   priorSessionId?: string | null;
+  /** Explicit MCP server selection; null = inherit project defaults. */
+  mcpServerIds?: string[] | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -212,6 +215,8 @@ export interface CreateSessionDto {
   originTaskId?: string;
   /** Handoff brief to prepend to the first prompt (subagent spawn); composed with project facts. */
   contextBrief?: HandoffBrief;
+  /** Explicit MCP server ids for this session; omit to inherit project defaults. */
+  mcpServerIds?: string[] | null;
 }
 
 export type SessionVerifyOwner = 'session' | 'crew';

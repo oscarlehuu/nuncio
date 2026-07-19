@@ -1408,6 +1408,35 @@ describe('CodexAgentProvider', () => {
     });
   });
 
+  it('forwards codexMcpConfig on thread/start to suppress inherited MCP servers', async () => {
+    const created = sessions.create({
+      prompt: 'Suppress inherited MCP',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+    });
+
+    await provider.run(created.id, created.prompt, {
+      model: created.model,
+      cwd: '/tmp/project',
+      codexMcpConfig: {
+        mcp_servers: {
+          playwright: { enabled: false },
+        },
+      },
+    });
+
+    expect(fakeClient.requests).toContainEqual({
+      method: 'thread/start',
+      params: expect.objectContaining({
+        config: {
+          mcp_servers: {
+            playwright: { enabled: false },
+          },
+        },
+      }),
+    });
+  });
+
   it('reports availability from codex login status', async () => {
     const settings = module.get(SettingsService);
     settings.resolve = ((key: string) => {

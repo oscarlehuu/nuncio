@@ -301,6 +301,12 @@ apps/
       models/            model catalog (thin: aggregates listModels() across available providers)
         models.types.ts        ModelProviderDto/ModelGroupDto/ModelItemDto
         models.service.ts      aggregates from AgentRegistry
+      mcp/               MCP Store (INBOUND: external MCP servers for engine sessions; mcp-stdio/ is the outbound direction)
+        domain/            McpServerDefinition types + transport identity/${workspace} resolution
+        persistence/mcp-servers.repository.ts  mcp_servers CRUD; secret env/header values encrypted in transport_json
+        import/            read-only scanners (cursor mcp.json, claude .claude.json/.mcp.json, codex config.toml) + copy-into-DB import
+        bridge/            lazy gateway: McpBridgeToolSource (nuncio_mcp_find_tools/nuncio_mcp_call via AgentToolRegistry) + shared McpClientPool + @modelcontextprotocol/sdk factory
+        api/mcp-servers.controller.ts  REST + import preview/apply (masked secrets)
       provider-updates/  optional Pi/Codex CLI version advisories + user-triggered updates
       usage/             first-party Claude/Codex/Cursor subscription quota probes (local CLI creds)
       settings/          DB-backed env config (settings store)

@@ -233,7 +233,8 @@ describe('SettingsView', () => {
 
     await goToSection('MCP & Tools');
 
-    expect(screen.getByRole('heading', { name: 'MCP & Tools' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'MCP servers' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Tools' })).toBeInTheDocument();
     expect(screen.getByText('Default browser')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Auto' })).toHaveAttribute('aria-pressed', 'true');
 

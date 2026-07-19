@@ -6,6 +6,7 @@ import {
   type VerifyAutoSteer,
   type WorktreePolicy,
 } from '../lib/api';
+import { McpServerChipPicker } from './mcp-server-chip-picker';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -56,6 +57,9 @@ export function EditProjectConfigDialog({
   const [worktreePolicy, setWorktreePolicy] = useState<WorktreePolicy | 'inherit'>('inherit');
   const [autoSteer, setAutoSteer] = useState<VerifyAutoSteer>('inherit');
   const [maxRounds, setMaxRounds] = useState('');
+  const [mcpServerIds, setMcpServerIds] = useState<string[]>([]);
+  /** Only persist MCP ids when the user edits the picker — null means inherit. */
+  const [mcpTouched, setMcpTouched] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -64,6 +68,8 @@ export function EditProjectConfigDialog({
     setWorktreePolicy(config.worktreePolicy ?? 'inherit');
     setAutoSteer(config.verifyAutoSteer);
     setMaxRounds(config.verifyMaxRounds != null ? String(config.verifyMaxRounds) : '');
+    setMcpServerIds(config.mcpServerIds ?? []);
+    setMcpTouched(false);
   }, [config]);
 
   const handleSave = async () => {
@@ -76,6 +82,7 @@ export function EditProjectConfigDialog({
       worktreePolicy: worktreePolicy === 'inherit' ? null : worktreePolicy,
       verifyAutoSteer: autoSteer,
       verifyMaxRounds: rounds ? Math.max(1, Number(rounds) || 1) : null,
+      ...(mcpTouched ? { mcpServerIds } : {}),
     };
     try {
       await onSave(input);
@@ -108,6 +115,21 @@ export function EditProjectConfigDialog({
               placeholder="Inherit (.nuncio/verify → global)"
               className="font-mono text-ui"
             />
+          </Field>
+
+          <Field label="Default MCP servers">
+            <McpServerChipPicker
+              projectPath={config?.path}
+              selectedIds={mcpServerIds}
+              onChange={(ids) => {
+                setMcpServerIds(ids);
+                setMcpTouched(true);
+              }}
+            />
+            <p className="text-ui-sm text-muted-foreground">
+              Leave untouched to inherit all scoped servers. Selecting chips sets an explicit
+              default for new sessions.
+            </p>
           </Field>
 
           <Field label="Worktree policy">
