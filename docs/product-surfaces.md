@@ -234,7 +234,7 @@ Read-only Claude Code / Codex CLI memories indexed into Pi sessions; stores stay
 | `providers` | Engine credentials + updates |
 | `usage` | Quotas / history charts |
 | `source-control` | GitHub / GitLab |
-| `mcp-tools` | MCP & tools |
+| `mcp-tools` | MCP & tools — MCP Store server rows (import from Cursor/Claude Code/Codex, enable/disable, lazy/full advertise, remove) + tool defaults |
 | `agents` | Agent / subagent model prefs |
 | `crew-profiles` | Crew profiles |
 | `workspaces` | Workspace roots / worktree dirs |

@@ -58,6 +58,7 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 - **Diff review + hunk steering** — the session **Changes** panel shows structured worktree diffs with honest caps for binary, lockfile, too-large, and omitted files; tap a hunk, leave a comment, and Nuncio sends it back through the existing steer path, queued if the session is still running.
 - **Screenshot evidence capture** — capture a session preview route with real headless Chrome or a booted iOS Simulator with `xcrun simctl`, bind the PNG to the workspace's exact Git HEAD, and keep only opaque media references in the durable transcript event. Simulator capture capability is explicit and degrades with a clear reason off macOS or without `xcrun`.
 - **Nuncio MCP server** — expose read-mostly Nuncio context plus constrained task enqueue / loop pause tools to local agent hosts over stdio with `bun run mcp`; the server is a thin proxy over the running daemon and never calls model APIs.
+- **MCP Store** — a provider-neutral registry of external MCP servers (stdio or http/sse) that every engine can use, including Nuncio Engine: import your existing Cursor / Claude Code / Codex MCP configs in one click (read-only, deduped, secrets encrypted at rest), scope servers globally or per project, and sessions reach them through a lazy two-tool gateway (`nuncio_mcp_find_tools` + `nuncio_mcp_call`) so enabled servers cost almost no context until actually used. Manage under **Settings → MCP & Tools**.
 
 ## Screenshots
 
@@ -379,6 +380,12 @@ The service worker precaches the UI shell; `/api/*` uses network-first so sessio
 | GET | `/api/settings` | List all settings with section categories (secrets masked, never raw) |
 | PUT | `/api/settings/:key` | Update a setting `{ "value": "..." }` (encrypts secrets, busts provider caches) |
 | DELETE | `/api/settings/:key` | Clear a setting (falls back to env/default) |
+| GET | `/api/mcp-servers` | List MCP Store servers (secret env/header values masked) |
+| POST | `/api/mcp-servers` | Register an MCP server `{ "name", "transport", "projectPath?", "engines?", "advertise?", "secretKeys?" }` |
+| GET | `/api/mcp-servers/:id` | Read one MCP server (masked) |
+| PUT | `/api/mcp-servers/:id` | Patch an MCP server (enable/disable, advertise mode, transport, scope; masked secrets sent back mean "keep stored") |
+| DELETE | `/api/mcp-servers/:id` | Remove an MCP server from the store (source configs untouched) |
+| POST | `/api/mcp-servers/import` | Import from an external store `{ "source": "cursor\|claude\|codex", "dryRun?": true }` — dryRun returns a masked preview; apply is idempotent and dedupes by transport identity |
 | GET | `/api/fs/dirs?path=` | Server-side directory browser (defaults to `$HOME`); used by the folder picker |
 | POST | `/api/sessions/:id/browser/open` | Open the session browser `{ "url?": "https://example.com", "target?": "auto\|in_app\|external" }`; `auto` prefers the desktop in-app browser when connected and falls back to the Nuncio-owned CDP browser |
 | GET | `/api/sessions/:id/browser/state?target=auto\|in_app\|external` | Return current browser URL/title/loading state plus the resolved target |
