@@ -652,6 +652,34 @@ export class DatabaseService implements OnModuleDestroy {
       ON context_facts(project_path, updated_at)
     `);
 
+    // MCP Store (inbound): external MCP servers registered with Nuncio and
+    // bridged to engine sessions. transport_json holds the canonical transport
+    // with secret env/header values encrypted in place (settings AES key).
+    // identity is the transport dedupe key; the unique index treats a NULL
+    // project_path (global scope) as the '' bucket.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS mcp_servers (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        transport_json TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        advertise TEXT NOT NULL DEFAULT 'lazy',
+        project_path TEXT,
+        engines_json TEXT,
+        auth TEXT NOT NULL DEFAULT 'none',
+        sources_json TEXT NOT NULL DEFAULT '[]',
+        secret_keys_json TEXT NOT NULL DEFAULT '[]',
+        identity TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+    this.db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_servers_identity_scope
+      ON mcp_servers(identity, ifnull(project_path, ''))
+    `);
+
     // Agent-proposed changes to a founder fact land here for founder review.
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS context_fact_proposals (
