@@ -172,6 +172,32 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     ],
   },
   {
+    key: 'NUNCIO_ENGINE_COMPACTION',
+    category: 'provider',
+    providerId: 'pi',
+    type: 'string',
+    label: 'Nuncio Engine compaction',
+    description:
+      'Harness-owned context compaction for Nuncio Engine sessions: the plan, latest verify result, open chips/gates, and recent user instructions survive compaction verbatim, with a model-written narrative of the rest and a pointer back to the durable history. Off keeps Pi\'s default compaction. Any failure in the Nuncio layer automatically falls back to Pi\'s default.',
+    envVar: 'NUNCIO_ENGINE_COMPACTION',
+    default: 'off',
+    options: [
+      { value: 'on', label: 'On', description: 'Assemble compaction summaries with harness-preserved state.' },
+      { value: 'off', label: 'Off', description: 'Use Pi\'s built-in compaction summarizer.' },
+    ],
+  },
+  {
+    key: 'NUNCIO_ENGINE_COMPACTION_MODEL',
+    category: 'provider',
+    providerId: 'pi',
+    type: 'string',
+    label: 'Nuncio Engine compaction model',
+    description:
+      'Model used to write the narrative part of a compaction summary (provider:model form, e.g. cliproxyapi:claude-sonnet-4-6). A cheap model keeps compaction fast and inexpensive — everything critical is preserved verbatim by the harness, not by this model. When unavailable, the session\'s own model is used instead.',
+    envVar: 'NUNCIO_ENGINE_COMPACTION_MODEL',
+    default: 'cliproxyapi:claude-sonnet-4-6',
+  },
+  {
     key: 'PI_EXTERNAL_MEMORIES',
     category: 'provider',
     providerId: 'pi',
