@@ -7,7 +7,7 @@ import {
   ScrollView,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Bot, Send, Sparkles } from 'lucide-react-native';
 import { createSession, fetchModels } from '@nuncio/core/api';
@@ -35,6 +35,7 @@ import { Textarea } from '../../components/ui/textarea';
 
 export default function NewSession() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [prompt, setPrompt] = useState('');
   const [mode, setMode] = useState(initialExecutionMode);
   const [providers, setProviders] = useState<ModelProvider[]>([]);
@@ -93,8 +94,13 @@ export default function NewSession() {
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-background">
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} className="flex-1">
+    <SafeAreaView className="flex-1 bg-background" style={{ flex: 1 }}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
+        className="flex-1"
+        style={{ flex: 1 }}
+      >
         <View className="px-4 pb-3">
           <Text className="text-3xl font-semibold tracking-tight text-foreground">New task</Text>
           <Text className="mt-2 text-sm text-muted-foreground">
@@ -102,7 +108,12 @@ export default function NewSession() {
           </Text>
         </View>
 
-        <ScrollView className="flex-1 px-4" contentContainerClassName="pb-6" keyboardShouldPersistTaps="handled">
+        <ScrollView
+          className="flex-1 px-4"
+          style={{ flex: 1, minHeight: 0 }}
+          contentContainerStyle={{ flexGrow: 1, paddingBottom: 24 }}
+          keyboardShouldPersistTaps="handled"
+        >
           <Card className="gap-0 rounded-2xl border-border/70 p-4 shadow-none">
             <View className="mb-3 flex-row items-center gap-2">
               {mode === 'solo' ? <Bot color="#208aef" size={17} /> : <Sparkles color="#208aef" size={17} />}
@@ -180,7 +191,10 @@ export default function NewSession() {
 
           {error ? <Text className="mt-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</Text> : null}
         </ScrollView>
-        <View className="border-t border-border/60 bg-background px-4 pb-2 pt-3">
+        <View
+          className="border-t border-border/60 bg-background px-4 pt-3"
+          style={{ flexShrink: 0, paddingBottom: Math.max(insets.bottom + 8, 8) }}
+        >
           <Button
             onPress={() => void submit()}
             disabled={!canDelegate}

@@ -138,8 +138,10 @@ export default function SessionDetail() {
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
       className="flex-1 bg-background"
+      style={{ flex: 1 }}
     >
       <View
         className="flex-row items-center gap-3 border-b border-border/60 px-4 pb-3"
@@ -193,6 +195,7 @@ export default function SessionDetail() {
       <FlatList
         ref={listRef}
         className="flex-1 px-3"
+        style={{ flex: 1, minHeight: 0 }}
         data={blocks}
         extraData={`${canRespond}:${sessionLoaded}:${sessionRunning}`}
         keyExtractor={(item) => item.key}
@@ -211,6 +214,7 @@ export default function SessionDetail() {
             <Text className="text-sm text-muted-foreground">Waiting for the agent transcript…</Text>
           </View>
         }
+        contentContainerStyle={{ paddingBottom: 12 }}
       />
 
       {error ? (
@@ -225,7 +229,7 @@ export default function SessionDetail() {
       {access.canMutate ? (
         <View
           className="border-t border-border/60 bg-background px-3 pt-2"
-          style={{ paddingBottom: Math.max(insets.bottom, 10) }}
+          style={{ flexShrink: 0, paddingBottom: Math.max(insets.bottom + 10, 10) }}
         >
           <View className="flex-row items-end gap-2 rounded-2xl border border-border bg-card px-2 py-2">
             <Button

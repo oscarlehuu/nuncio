@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Redirect, useFocusEffect, useRouter } from 'expo-router';
 import { ChevronRight, Plus, Server, X } from 'lucide-react-native';
 import { fetchArchivedSessions, fetchSessions, type Session } from '@nuncio/core/api';
@@ -31,6 +31,7 @@ type HomeItem =
 
 export default function SessionList() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [connection, setConnection] = useState<ConnectionConfig | null | undefined>(undefined);
   const [tab, setTab] = useState<Tab>('active');
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -179,6 +180,7 @@ export default function SessionList() {
         <Text className="mx-4 mb-2 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</Text>
       ) : null}
       <FlatList
+        style={{ flex: 1, minHeight: 0 }}
         data={items}
         keyExtractor={(item) => item.key}
         extraData={sessionPlans}
@@ -190,7 +192,7 @@ export default function SessionList() {
             />
           : <CrewRunRow row={item.row} onPress={() => router.push(crewTaskPath(item.row.taskId))} />}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor="#9ca3af" />}
-        contentContainerClassName="pb-6 pt-1"
+        contentContainerStyle={{ paddingBottom: insets.bottom + 24, paddingTop: 4 }}
         ListEmptyComponent={
           initialLoading ? (
             <HomeSkeleton />

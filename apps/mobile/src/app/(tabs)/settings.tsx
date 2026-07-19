@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Linking, Pressable, ScrollView, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
@@ -29,6 +29,7 @@ import { Text } from '../../components/ui/text';
 
 export default function SettingsScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [connection, setConnection] = useState<ConnectionConfig | null | undefined>(undefined);
   const [notificationStatus, setNotificationStatus] = useState<NotificationStatus>('checking');
   const [error, setError] = useState<string | null>(null);
@@ -82,7 +83,14 @@ export default function SettingsScreen() {
     <SafeAreaView className="flex-1 bg-background">
       <ScrollView
         className="flex-1"
-        contentContainerClassName="gap-5 px-4 pb-8 pt-2"
+        style={{ flex: 1, minHeight: 0 }}
+        contentContainerStyle={{
+          flexGrow: 1,
+          gap: 20,
+          paddingBottom: insets.bottom + 24,
+          paddingHorizontal: 16,
+          paddingTop: 8,
+        }}
       >
         <View>
           <Text className="text-3xl font-semibold tracking-tight text-foreground">Settings</Text>

@@ -3,9 +3,10 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  ScrollView,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { QrCode, ShieldCheck, Wifi } from 'lucide-react-native';
 import {
@@ -28,6 +29,7 @@ import { Text } from '../components/ui/text';
 
 export default function Pairing() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [serverInput, setServerInput] = useState('');
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
@@ -129,10 +131,22 @@ export default function Pairing() {
   return (
     <SafeAreaView className="flex-1 bg-background">
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
         className="flex-1"
+        style={{ flex: 1 }}
       >
-        <View className="flex-1 px-6 pt-8">
+        <ScrollView
+          className="flex-1"
+          style={{ flex: 1, minHeight: 0 }}
+          contentContainerStyle={{
+            flexGrow: 1,
+            paddingBottom: insets.bottom + 24,
+            paddingHorizontal: 24,
+            paddingTop: 32,
+          }}
+          keyboardShouldPersistTaps="handled"
+        >
           <View className="items-center">
             <View className="h-16 w-16 items-center justify-center rounded-3xl bg-primary shadow-sm shadow-black/20">
               <Text className="text-3xl font-bold text-primary-foreground">N</Text>
@@ -209,7 +223,7 @@ export default function Pairing() {
           >
             <Text>Connect</Text>
           </Button>
-        </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
