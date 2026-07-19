@@ -10,7 +10,17 @@ export async function runGenerateAgentsMd(ctx) {
 
   const step = record('generate-agents-md: solo project pre-fills /init prompt; hidden in Crew');
   await page.setViewportSize({ width: 1280, height: 800 });
+  // Earlier journeys may have persisted a project pick into localStorage — clear
+  // so this case starts from a true "No repo" composer.
   await page.goto(`${baseUrl}/new`, { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    try {
+      localStorage.removeItem('nuncio-project-preference');
+    } catch {
+      // ignore
+    }
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
 
   // Hidden until a project is selected — the prompt needs a repo to analyze.
   if ((await page.getByRole('button', { name: /Generate AGENTS\.md/i }).count()) !== 0) {

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentsModule } from '../../src/agents/agents.module';
+import { AgentRegistry } from '../../src/agents/agents.registry';
 import { FactDistillationService } from '../../src/agents/fact-distillation.service';
 import { PiAgentProvider } from '../../src/agents/providers/pi-agent.provider';
 import { ContextFactsService } from '../../src/context/context-facts.service';
@@ -180,56 +181,73 @@ suite('context injection with real Pi (integration)', () => {
   it(
     'FactDistillationService writes agent facts via real completeOneShot',
     async () => {
+      // Fresh service instance so earlier suite cases cannot leave cooldown /
+      // in-flight state on the Nest singleton (create() in this file starts a
+      // real run that may settle to IDLE after the case returns).
+      const isolated = new FactDistillationService(
+        sessionsRepo,
+        events,
+        facts,
+        module.get(AgentRegistry),
+        settings,
+      );
       const session = sessionsRepo.create({
         prompt: 'distill me',
         provider: 'pi',
         workspace,
         projectPath: workspace,
       });
-      // Seed a substantive transcript so the substantive-event gate opens.
+      // Substantive gate counts tool_start + assistant_message (≥4 required).
       const seed: SessionEvent[] = [
         { seq: 1, type: 'user_message', payload: { text: 'how do we test?' }, createdAt: 1 },
         { seq: 2, type: 'tool_start', payload: { tool: 'bash', input: { command: 'bun test' } }, createdAt: 2 },
         { seq: 3, type: 'tool_end', payload: { tool: 'bash', output: 'pass' }, createdAt: 3 },
         { seq: 4, type: 'tool_start', payload: { tool: 'read' }, createdAt: 4 },
         { seq: 5, type: 'tool_end', payload: { tool: 'read' }, createdAt: 5 },
+        { seq: 6, type: 'tool_start', payload: { tool: 'grep' }, createdAt: 6 },
+        { seq: 7, type: 'tool_end', payload: { tool: 'grep' }, createdAt: 7 },
         {
-          seq: 6,
+          seq: 8,
           type: 'assistant_message',
           payload: {
             text: 'This project always runs tests with `bun test` from the repo root. Remember that.',
           },
-          createdAt: 6,
+          createdAt: 8,
         },
-        { seq: 7, type: 'status', payload: { status: 'IDLE' }, createdAt: 7 },
+        { seq: 9, type: 'status', payload: { status: 'IDLE' }, createdAt: 9 },
       ];
       for (const event of seed) {
-        events.append(session.id, event.type, event.payload);
+        events.append(session.id, event.type, event.payload, false);
       }
 
       settings.set('NUNCIO_FACT_DISTILLATION', 'on');
       settings.set('NUNCIO_FACT_DISTILLATION_MODEL', cheapModel);
 
-      await distill.handleEvent(session.id, {
-        seq: 99,
-        type: 'status',
-        payload: { status: 'IDLE' },
-        createdAt: Date.now(),
-      });
+      // Prove the completion path ran — don't rely on private throttle maps.
+      let oneShotCalls = 0;
+      const original = provider.completeOneShot.bind(provider);
+      provider.completeOneShot = async (input) => {
+        oneShotCalls += 1;
+        return original(input);
+      };
+      try {
+        await isolated.handleEvent(session.id, {
+          seq: 99,
+          type: 'status',
+          payload: { status: 'IDLE' },
+          createdAt: Date.now(),
+        });
+      } finally {
+        provider.completeOneShot = original;
+      }
 
+      expect(oneShotCalls).toBe(1);
       const recorded = facts.listPinnedFirst(workspace, 20);
       const agentFacts = recorded.filter((fact) => fact.provenance === 'agent');
       for (const fact of agentFacts) {
         expect(fact.key).toMatch(/^[a-z0-9][a-z0-9-]{1,63}$/);
         expect(fact.value.trim().length).toBeGreaterThan(0);
       }
-      // Throttle map entry proves the completion path was attempted (set before
-      // the provider call). A real model may still return [] — that is OK.
-      expect(
-        (distill as unknown as { lastDistilledAt: Map<string, number> }).lastDistilledAt.has(
-          session.id,
-        ),
-      ).toBe(true);
     },
     120_000,
   );
