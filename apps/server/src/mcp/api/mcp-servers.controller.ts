@@ -10,9 +10,9 @@ import {
   Put,
 } from '@nestjs/common';
 import { McpImportService } from '../import/mcp-import.service';
-import { McpService } from '../mcp.service';
+import { maskTransportSecrets, McpService } from '../mcp.service';
 import type { CreateMcpServerInput, UpdateMcpServerInput } from '../domain/mcp.types';
-import type { McpImportSourceId } from '../import/mcp-import.types';
+import type { McpImportPreview, McpImportSourceId } from '../import/mcp-import.types';
 
 const IMPORT_SOURCES: readonly McpImportSourceId[] = ['cursor', 'claude', 'codex'];
 
@@ -69,6 +69,21 @@ export class McpServersController {
     if (!body || !IMPORT_SOURCES.includes(body.source)) {
       throw new BadRequestException(`source must be one of: ${IMPORT_SOURCES.join(', ')}`);
     }
-    return body.dryRun ? this.importer.preview(body.source) : this.importer.apply(body.source);
+    if (!body.dryRun) return this.importer.apply(body.source);
+    return maskPreview(await this.importer.preview(body.source));
   }
+}
+
+/** Candidate transports come straight from the source configs — never leak their raw secrets. */
+function maskPreview(preview: McpImportPreview): McpImportPreview {
+  return {
+    ...preview,
+    entries: preview.entries.map((entry) => ({
+      ...entry,
+      candidate: {
+        ...entry.candidate,
+        transport: maskTransportSecrets(entry.candidate.transport, entry.candidate.secretKeys),
+      },
+    })),
+  };
 }

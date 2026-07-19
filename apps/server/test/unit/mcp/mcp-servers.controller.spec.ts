@@ -83,4 +83,37 @@ describe('McpServersController', () => {
     await controller.import({ source: 'cursor' });
     expect(apply).toHaveBeenCalledWith('cursor');
   });
+
+  it('import preview masks secret values in candidate transports', async () => {
+    const preview = jest.fn(async () => ({
+      source: 'cursor' as const,
+      entries: [
+        {
+          status: 'new' as const,
+          candidate: {
+            name: 'bridge',
+            transport: {
+              type: 'stdio' as const,
+              command: 'node',
+              args: [],
+              env: { RUNTIME_TOKEN: 'caed4429deadbeef', PLAIN: 'ok' },
+            },
+            source: 'import:cursor' as const,
+            projectPath: null,
+            enabled: true,
+            auth: 'none' as const,
+            secretKeys: ['RUNTIME_TOKEN'],
+          },
+        },
+      ],
+    }));
+    const controller = new McpServersController({} as never, { preview } as never);
+    const result = (await controller.import({ source: 'cursor', dryRun: true })) as {
+      entries: Array<{ candidate: { transport: { env?: Record<string, string> } } }>;
+    };
+    const env = result.entries[0].candidate.transport.env;
+    expect(env?.RUNTIME_TOKEN).not.toContain('caed4429deadbeef');
+    expect(env?.RUNTIME_TOKEN).toContain('beef');
+    expect(env?.PLAIN).toBe('ok');
+  });
 });

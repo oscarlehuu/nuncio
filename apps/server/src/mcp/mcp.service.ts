@@ -74,9 +74,7 @@ export class McpService {
   private toDto(server: McpServerDefinition): McpServerDto {
     return {
       ...server,
-      transport: mapSecretValues(server.transport, server.secretKeys, (value) =>
-        maskSecret(value) ?? '',
-      ),
+      transport: maskTransportSecrets(server.transport, server.secretKeys),
       scope: server.projectPath === null ? 'global' : 'project',
     };
   }
@@ -122,6 +120,11 @@ export class McpService {
 
 function normalizePath(path: string): string {
   return resolvePath(path).replace(/\/+$/, '');
+}
+
+/** Replace the values of `secretKeys` env/header entries with masked previews. */
+export function maskTransportSecrets(transport: McpTransport, secretKeys: string[]): McpTransport {
+  return mapSecretValues(transport, secretKeys, (value) => maskSecret(value) ?? '');
 }
 
 function mapSecretValues(
