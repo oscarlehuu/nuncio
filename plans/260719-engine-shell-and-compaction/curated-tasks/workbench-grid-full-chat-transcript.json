@@ -1,0 +1,23 @@
+{
+  "id": "workbench-grid-full-chat-transcript",
+  "title": "giúp mình fix lỗi mà không chat trong grid hiện không đầy đủ, để xem hết mình ph",
+  "fixture": {
+    "repo": "/Users/a1241968/Desktop/Oscar/nuncio",
+    "baseSha": "dd263bd0d61399510026b1d49866c7fee8bd4f61"
+  },
+  "prompt": "giúp mình fix lỗi mà không chat trong grid hiện không đầy đủ, để xem hết mình phải vào từng thread, trong khi đó mình muốn workbench là 1 nơi để có thể làm viẹc lâu dài, xem được chat của session và chỉ vào specific từng thread khi cần, tức là về mặt cơ bản, mình muốn workbench phải hiển thị được chat để thay thế cả phần chat cho từng session riêngb",
+  "setup": {},
+  "verifyCommand": "bun run --filter @nuncio/web test",
+  "timeoutMs": 300000,
+  "tags": [
+    "recorded",
+    "seed",
+    "control"
+  ],
+  "expect": {
+    "verifyPassed": true
+  },
+  "informational": true,
+  "sourceSession": "f0605d4d",
+  "curationNotes": "Seed extract from real session. No verify_* in the original log — verifyCommand is curator-supplied and the full-repo pin is archival. Prefer the distilled fixture task for graded Builder runs."
+}

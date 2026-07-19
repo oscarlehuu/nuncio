@@ -1,0 +1,28 @@
+{
+  "id": "agents-self-aware-nuncio-runtime",
+  "title": "giúp mình tìm hiểu về cách để chính các agents trong nuncio, có thể hiểu tự dùng",
+  "fixture": {
+    "repo": "/Users/a1241968/Desktop/Oscar/nuncio",
+    "baseSha": "374ea90b441ec8a66fb3eb38f48b3569818cb555"
+  },
+  "prompt": "giúp mình tìm hiểu về cách để chính các agents trong nuncio, có thể hiểu tự dùng được nuncio, hiểu là họ đang ở trong nuncio, với bất kì engine nào",
+  "followUpSteers": [
+    "tốt, bạn có muốn thử verify tất cả mọi thứ trước để verify mọi thứ, và chắc chắn có thể implement không",
+    "được vậy giúp mình implement đi",
+    "Option 1 — Implement trực tiếp"
+  ],
+  "setup": {},
+  "verifyCommand": "bun test test/unit/agents/",
+  "timeoutMs": 300000,
+  "tags": [
+    "recorded",
+    "seed",
+    "control"
+  ],
+  "expect": {
+    "verifyPassed": true
+  },
+  "informational": true,
+  "sourceSession": "ba1eb035",
+  "curationNotes": "Seed extract from real session. No verify_* in the original log — verifyCommand is curator-supplied and the full-repo pin is archival. Prefer the distilled fixture task for graded Builder runs."
+}

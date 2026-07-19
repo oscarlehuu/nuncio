@@ -1,0 +1,26 @@
+{
+  "id": "resolve-codex-cli-when-multiple-installed",
+  "title": "giờ làm sao để app luôn lấy codex cli đúng đã install trong machine, và chúng ta",
+  "fixture": {
+    "repo": "/Users/a1241968/Desktop/Oscar/nuncio",
+    "baseSha": "dd263bd0d61399510026b1d49866c7fee8bd4f61"
+  },
+  "prompt": "giờ làm sao để app luôn lấy codex cli đúng đã install trong machine, và chúng ta sẽ xử lí vấn đề đó như thế nào khi có nhiều hơn 2 codex cli",
+  "followUpSteers": [
+    "tốt, hãy giúp mình implement đi"
+  ],
+  "setup": {},
+  "verifyCommand": "bun test test/unit/agents/",
+  "timeoutMs": 300000,
+  "tags": [
+    "recorded",
+    "seed",
+    "control"
+  ],
+  "expect": {
+    "verifyPassed": true
+  },
+  "informational": true,
+  "sourceSession": "900850e2",
+  "curationNotes": "Seed extract from real session. No verify_* in the original log — verifyCommand is curator-supplied and the full-repo pin is archival. Prefer the distilled fixture task for graded Builder runs."
+}
