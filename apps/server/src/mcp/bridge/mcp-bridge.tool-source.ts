@@ -14,8 +14,8 @@ import { McpClientPool } from './mcp-client-pool';
 import { MCP_CLIENT_FACTORY } from './mcp-client.types';
 import type { McpCallOutcome, McpClientFactory, McpToolDescriptor } from './mcp-client.types';
 
-export const FIND_TOOLS_NAME = 'nuncio_mcp_find_tools';
-export const CALL_TOOL_NAME = 'nuncio_mcp_call';
+const FIND_TOOLS_NAME = 'nuncio_mcp_find_tools';
+const CALL_TOOL_NAME = 'nuncio_mcp_call';
 
 const DEFAULT_IDLE_MS = 5 * 60_000;
 

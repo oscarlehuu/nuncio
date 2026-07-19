@@ -17,7 +17,7 @@ export type McpStdioTransport = {
   cwd?: string;
 };
 
-export type McpRemoteTransport = {
+type McpRemoteTransport = {
   type: 'http' | 'sse';
   url: string;
   headers?: Record<string, string>;
@@ -27,7 +27,7 @@ export type McpTransport = McpStdioTransport | McpRemoteTransport;
 
 export type McpServerSource = 'nuncio' | 'import:cursor' | 'import:claude' | 'import:codex';
 
-export type McpAdvertiseMode = 'lazy' | 'full';
+type McpAdvertiseMode = 'lazy' | 'full';
 
 export type McpAuthMode = 'none' | 'oauth';
 
@@ -88,7 +88,7 @@ export interface McpServerDto extends Omit<McpServerDefinition, 'transport'> {
   scope: 'global' | 'project';
 }
 
-export const MCP_ENGINE_IDS: readonly McpEngineId[] = ['pi', 'claude', 'cursor', 'codex'];
+const MCP_ENGINE_IDS: readonly McpEngineId[] = ['pi', 'claude', 'cursor', 'codex'];
 
 export function isMcpEngineId(value: string): value is McpEngineId {
   return (MCP_ENGINE_IDS as readonly string[]).includes(value);

@@ -23,7 +23,7 @@ export interface McpServerDto {
 
 export type McpImportSource = 'cursor' | 'claude' | 'codex';
 
-export interface McpImportPreviewEntry {
+interface McpImportPreviewEntry {
   candidate: {
     name: string;
     transport: McpTransport;
