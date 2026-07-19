@@ -54,6 +54,7 @@ import {
 } from '../pi-engine/request-reproduction-tool';
 import { normalizePlanItems } from '../../sessions/domain/plan.types';
 import { buildPiRuntimePolicyOptions } from './pi-runtime-policy';
+import { resolvePolicyShellMode } from '../tools/policy-shell-tool';
 import {
   NUNCIO_CONTEXT_MAX_BYTES,
   NuncioContextService,
@@ -655,7 +656,9 @@ export class PiAgentProvider extends BaseAgentProvider {
     }
     const thinkingLevel = resolvePiThinkingLevel(context.modelOptions, model);
     const policyOptions = context.runtimePolicy
-      ? buildPiRuntimePolicyOptions(context.runtimePolicy, pi)
+      ? buildPiRuntimePolicyOptions(context.runtimePolicy, pi, {
+          mode: resolvePolicyShellMode(this.settings.resolve('NUNCIO_ENGINE_POLICY_SHELL')),
+        })
       : undefined;
     // Fall back to the session workspace like the Codex/Claude adapters do, so a
     // "Work locally" session (no worktree, no runtime policy) still runs the
@@ -670,6 +673,13 @@ export class PiAgentProvider extends BaseAgentProvider {
     const runtimeInstructions = [baseRuntimeInstructions, modeOverlay(context.mode)]
       .filter(Boolean)
       .join('\n\n');
+    // Policy sessions stay hermetic (no personal extensions, skills, or context
+    // files) but still carry the in-repo gate-guard rail: with a shell in the
+    // Builder's belt, nothing may let it rewrite its own .nuncio verify gate.
+    const policyGateGuard = this.settings.resolve('NUNCIO_ENGINE_GATE_GUARD') !== 'off';
+    const policyExtensionFactories = policyOptions && policyGateGuard
+      ? [buildNuncioEngineExtension({ cwd: policyOptions.workspaceRoot, gateGuard: true })]
+      : [];
     const policyResourceLoader = policyOptions
       ? new pi.DefaultResourceLoader({
           cwd: policyOptions.workspaceRoot,
@@ -679,6 +689,9 @@ export class PiAgentProvider extends BaseAgentProvider {
           noPromptTemplates: true,
           noThemes: true,
           noContextFiles: true,
+          ...(policyExtensionFactories.length > 0
+            ? { extensionFactories: policyExtensionFactories as never[] }
+            : {}),
           ...(runtimeInstructions ? { appendSystemPrompt: [runtimeInstructions] } : {}),
         })
       : undefined;

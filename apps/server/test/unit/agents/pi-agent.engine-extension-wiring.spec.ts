@@ -145,4 +145,58 @@ describe('PiAgentProvider engine extension wiring', () => {
       NUNCIO_ENGINE_EXTENSION_NAME,
     );
   });
+
+  it('loads the gate-guard rail into policy sessions while keeping them hermetic', async () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'nuncio-policy-rail-'));
+    try {
+      const created = sessions.create({ prompt: 'crew builder', provider: 'pi' });
+
+      await provider.run(created.id, created.prompt, {
+        cwd: workspaceRoot,
+        runtimePolicy: {
+          filesystem: 'workspace-write',
+          workspaceRoot,
+          network: 'disabled',
+        },
+        emit: () => {},
+      });
+
+      const options = engineLoaderOptions();
+      expect(inlineExtensionNames(options)).toContain(NUNCIO_ENGINE_EXTENSION_NAME);
+      // Hermetic posture is untouched: only the in-repo rail loads — no
+      // allowlisted personal extension paths, no skills/context files.
+      expect(options).toMatchObject({
+        noExtensions: true,
+        noSkills: true,
+        noContextFiles: true,
+      });
+      expect('additionalExtensionPaths' in options).toBe(false);
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps policy sessions rail-free when the gate guard is off', async () => {
+    process.env.NUNCIO_ENGINE_GATE_GUARD = 'off';
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'nuncio-policy-rail-off-'));
+    try {
+      const created = sessions.create({ prompt: 'guard off builder', provider: 'pi' });
+
+      await provider.run(created.id, created.prompt, {
+        cwd: workspaceRoot,
+        runtimePolicy: {
+          filesystem: 'workspace-write',
+          workspaceRoot,
+          network: 'disabled',
+        },
+        emit: () => {},
+      });
+
+      expect(inlineExtensionNames(engineLoaderOptions())).not.toContain(
+        NUNCIO_ENGINE_EXTENSION_NAME,
+      );
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
 });

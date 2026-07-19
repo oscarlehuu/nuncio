@@ -148,6 +148,30 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     ],
   },
   {
+    key: 'NUNCIO_ENGINE_POLICY_SHELL',
+    category: 'provider',
+    providerId: 'pi',
+    type: 'string',
+    label: 'Nuncio Engine policy shell',
+    description:
+      'Shell (bash) for Nuncio Engine sessions running under an explicit runtime policy — e.g. a Crew Builder. Commands run inside a Nuncio-enforced OS sandbox (Seatbelt/bubblewrap: network denied, writes confined to the workspace, .git and .nuncio read-only) whenever a sandbox backend is available.',
+    envVar: 'NUNCIO_ENGINE_POLICY_SHELL',
+    default: 'auto',
+    options: [
+      {
+        value: 'auto',
+        label: 'Auto',
+        description: 'Sandboxed when a backend is available; otherwise a plain shell that announces its confinement is advisory.',
+      },
+      {
+        value: 'sandboxed-only',
+        label: 'Sandboxed only',
+        description: 'Provide the shell only when the OS sandbox is available; otherwise policy sessions get no shell.',
+      },
+      { value: 'off', label: 'Off', description: 'Policy sessions never get a shell tool.' },
+    ],
+  },
+  {
     key: 'PI_EXTERNAL_MEMORIES',
     category: 'provider',
     providerId: 'pi',
