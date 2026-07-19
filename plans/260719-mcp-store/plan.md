@@ -5,19 +5,23 @@ import + bridge with the lazy meta-tool gateway, reaching all four engines throu
 `AgentToolRegistry` tool-source lane. OAuth is phase 2; per-session picker phase 3; Codex
 inherited-server suppression phase 4 (deferred by decision).
 
-## Status
+## Status — phase 1 SHIPPED (PR #126)
 
 - [x] Worktree `cursor/mcp-store-dcb0` from `origin/dev`
-- [ ] Backend: schema + repository
-- [ ] Backend: registry service (scope resolution, masking)
-- [ ] Backend: import scanners (cursor/claude/codex, global + project)
-- [ ] Backend: client pool (lazy connect, idle shutdown)
-- [ ] Backend: bridge tool source (inventory + `nuncio_mcp_find_tools` / `nuncio_mcp_call`, full-mode cache)
-- [ ] Backend: `/api/mcp-servers` controller + module wiring
-- [ ] Frontend: Settings → MCP & Tools rows (list / import / toggle / delete)
-- [ ] e2e: real SDK client ↔ fixture stdio server
-- [ ] Docs (README, AGENTS.md layout, product-surfaces, system-architecture) + changeset (minor)
-- [ ] `bun run gate` green, review pass, PR → dev
+- [x] Backend: schema + repository (secret values encrypted unconditionally; decrypt failures degrade to '' instead of poisoning `list()`)
+- [x] Backend: registry service (scope resolution, masking, declassification guard, identity conflicts → 409)
+- [x] Backend: import scanners (cursor/claude/codex, global + project, dedupe, env-derived headers force-flagged secret)
+- [x] Backend: client pool (lazy connect via `call()`, in-flight-safe idle sweep, failing call retires only its own entry)
+- [x] Backend: bridge tool source (inventory + `nuncio_mcp_find_tools` / `nuncio_mcp_call`, full-mode cache keyed on `updatedAt`, forSession failure containment)
+- [x] Backend: `/api/mcp-servers` controller + module wiring (import preview masked)
+- [x] Frontend: Settings → MCP & Tools rows (list / import preview→apply / toggle / advertise / delete)
+- [x] e2e: real SDK client ↔ fixture stdio server (`test:e2e`)
+- [x] Docs (README, AGENTS.md layout, product-surfaces, system-architecture) + changeset (minor)
+- [x] `bun run gate` + `gate:full` green, independent review pass (1 blocker + 5 warnings found → fixed with regression specs), PR #126 → dev
+
+Known deferrals from review (accepted): cross-store env-config differences are silently dropped on
+provenance merge (identity ignores env by design); import resolves Codex `env_http_headers` at scan
+time rather than connect time.
 
 ## Architecture recap
 
