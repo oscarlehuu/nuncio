@@ -26,6 +26,8 @@
  */
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   decideDevPublish,
   devReleaseShas,
@@ -93,6 +95,12 @@ export async function waitForRequiredRuns(repo, sha, opts = {}) {
     console.log(`[dev-gate] waiting ${intervalMs}ms for required checks…`);
     await sleepFn(intervalMs);
     requiredRuns = await collect(repo, sha);
+  }
+  if (!allRequiredSettled(requiredRuns)) {
+    // Fail the job (retryable) instead of silently writing publish=false and dropping the commit.
+    throw new Error(
+      `Timed out after ${timeoutMs}ms waiting for required checks on ${sha}`,
+    );
   }
   return requiredRuns;
 }
@@ -180,7 +188,18 @@ async function main() {
   }
 }
 
-if (import.meta.main) {
+/** True when this file is the process entrypoint (Node + Bun; not `import.meta.main`). */
+function isExecutedDirectly() {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return import.meta.url === pathToFileURL(resolve(entry)).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isExecutedDirectly()) {
   main().catch((err) => {
     console.error(`[dev-gate] lookup failed after retries: ${err.message}`);
     process.exit(1);

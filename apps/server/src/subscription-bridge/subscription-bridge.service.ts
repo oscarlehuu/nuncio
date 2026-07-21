@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseService } from '../db/database.service';
 import { SettingsService } from '../settings/settings.service';
@@ -209,7 +210,7 @@ export class SubscriptionBridgeService implements OnModuleInit, OnModuleDestroy 
       `  - "${apiKey}"`,
       '',
     ].join('\n');
-    writeFileSync(configPath, yaml, 'utf8');
+    writeFileSync(configPath, yaml, { encoding: 'utf8', mode: 0o600 });
 
     this.settings.set('NUNCIO_CLIPROXY_MODE', 'managed');
     this.settings.set('NUNCIO_CLIPROXY_ENABLED', '1');
@@ -217,7 +218,7 @@ export class SubscriptionBridgeService implements OnModuleInit, OnModuleDestroy 
     this.settings.set('NUNCIO_CLIPROXY_BASE_URL', `http://127.0.0.1:${port}`);
     this.settings.set('NUNCIO_CLIPROXY_API_KEY', apiKey);
 
-    await this.ensureManagedRunning();
+    await this.ensureManagedRunning({ forceRestart: true });
     this.bustCache();
     return this.status({ forceRefresh: true });
   }
@@ -252,7 +253,7 @@ export class SubscriptionBridgeService implements OnModuleInit, OnModuleDestroy 
     }
 
     const managedPath = this.managedConfigPath();
-    writeFileSync(managedPath, yaml, 'utf8');
+    writeFileSync(managedPath, yaml, { encoding: 'utf8', mode: 0o600 });
 
     const installs = discoverCliproxyInstalls({
       homeDir: dto.homeDir,
@@ -267,7 +268,7 @@ export class SubscriptionBridgeService implements OnModuleInit, OnModuleDestroy 
     this.settings.set('NUNCIO_CLIPROXY_API_KEY', key.raw);
     if (binaryPath) this.settings.set('NUNCIO_CLIPROXY_BIN', binaryPath);
 
-    await this.ensureManagedRunning();
+    await this.ensureManagedRunning({ forceRestart: true });
     this.bustCache();
     return this.status({ forceRefresh: true });
   }
@@ -445,9 +446,18 @@ export class SubscriptionBridgeService implements OnModuleInit, OnModuleDestroy 
     };
   }
 
+  private expandHomePath(path: string): string {
+    if (path === '~') return homedir();
+    if (path.startsWith('~/')) return join(homedir(), path.slice(2));
+    return path;
+  }
+
   private resolveBinaryOrThrow(): string {
     const configured = this.binaryPath();
-    if (configured && existsSync(configured)) return configured;
+    if (configured) {
+      const expanded = this.expandHomePath(configured);
+      if (existsSync(expanded)) return expanded;
+    }
     const found = discoverCliproxyInstalls().find((d) => d.binaryPath)?.binaryPath;
     if (found) return found;
     throw new BadRequestException(
@@ -455,7 +465,7 @@ export class SubscriptionBridgeService implements OnModuleInit, OnModuleDestroy 
     );
   }
 
-  private async ensureManagedRunning(): Promise<void> {
+  private async ensureManagedRunning(opts?: { forceRestart?: boolean }): Promise<void> {
     const bin = this.resolveBinaryOrThrow();
     const configPath = this.managedConfigPath();
     if (!existsSync(configPath)) {
@@ -463,7 +473,7 @@ export class SubscriptionBridgeService implements OnModuleInit, OnModuleDestroy 
         'Managed CLIProxyAPI config missing. Use Initialize managed or Migrate from existing.',
       );
     }
-    await this.managedHost.start(bin, configPath);
+    await this.managedHost.start(bin, configPath, opts);
   }
 
   private enqueueReconcile(): void {

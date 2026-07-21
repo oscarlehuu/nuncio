@@ -226,4 +226,18 @@ describe('waitForRequiredRuns (push-path poll)', () => {
     });
     expect(result.find((r) => r.workflow === CI)?.conclusion).toBe('failure');
   });
+
+  it('throws when the wait budget expires with checks still pending', async () => {
+    await expect(
+      waitForRequiredRuns('owner/repo', SHA, {
+        intervalMs: 1,
+        timeoutMs: 5,
+        sleep: async () => undefined,
+        collect: async () => [
+          { workflow: CI, conclusion: null },
+          { workflow: SMOKE, conclusion: null },
+        ],
+      }),
+    ).rejects.toThrow(/Timed out/);
+  });
 });

@@ -40,9 +40,9 @@ export class CliproxyManagedHost implements OnModuleDestroy {
     return this.isRunning() ? this.configPath : null;
   }
 
-  async start(bin: string, configPath: string): Promise<void> {
+  async start(bin: string, configPath: string, opts?: { forceRestart?: boolean }): Promise<void> {
     if (this.isRunning()) {
-      if (this.configPath === configPath) return;
+      if (this.configPath === configPath && !opts?.forceRestart) return;
       await this.stop();
     }
     if (!existsSync(bin)) {
@@ -58,10 +58,12 @@ export class CliproxyManagedHost implements OnModuleDestroy {
       cwd: dirname(configPath),
     });
     this.configPath = configPath;
-    this.logger.log(`Started managed CLIProxyAPI pid=${this.child.pid} config=${configPath}`);
+    const startedPid = this.child.pid;
+    this.logger.log(`Started managed CLIProxyAPI pid=${startedPid} config=${configPath}`);
 
     void this.child.exited.then((code) => {
-      if (this.child?.pid === undefined) return;
+      // Ignore stale exit handlers after stop()/restart replaced the child.
+      if (this.child?.pid !== startedPid) return;
       this.logger.warn(`Managed CLIProxyAPI exited code=${code}`);
       this.child = null;
       this.configPath = null;
@@ -71,6 +73,9 @@ export class CliproxyManagedHost implements OnModuleDestroy {
   async stop(): Promise<void> {
     const child = this.child;
     if (!child) return;
+    // Detach first so a late `exited` from a timed-out kill cannot clear a newer child.
+    this.child = null;
+    this.configPath = null;
     try {
       if (!child.killed) child.kill('SIGTERM');
     } catch {
@@ -85,8 +90,6 @@ export class CliproxyManagedHost implements OnModuleDestroy {
         // ignore
       }
     }
-    this.child = null;
-    this.configPath = null;
   }
 
   async onModuleDestroy(): Promise<void> {
