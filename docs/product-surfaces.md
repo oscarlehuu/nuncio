@@ -116,9 +116,9 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 |---|---|
 | **Web** | `model-picker.tsx` on Home composer, Workbench slot composer, Autopilot `create-loop-dialog` / loop settings, Crew profile dialogs, `subagent-row`, Settings Agents / subagent models |
 | **Mobile** | `/new` only |
-| **Settings** | Providers (Cursor / Nuncio Engine / Claude / Codex / Devin), **Subscription bridge** (own nav section — external discover / migrate→managed / fresh managed), **Tool updates** (own nav section), Agents (subagent models), Usage. Default solo permission/runtime modes: Claude `NUNCIO_CLAUDE_PERMISSION_MODE`, Codex `NUNCIO_CODEX_RUNTIME_MODE`, Devin `NUNCIO_DEVIN_PERMISSION_MODE` (Pi has no permission mode). Subscription bridge keys: `NUNCIO_CLIPROXY_ENABLED`, `NUNCIO_CLIPROXY_MODE`, `NUNCIO_CLIPROXY_BASE_URL`, `NUNCIO_CLIPROXY_PORT`, `NUNCIO_CLIPROXY_API_KEY`, `NUNCIO_CLIPROXY_BIN`. |
+| **Settings** | Providers page sections: engines (Cursor / Nuncio Engine / Claude / Codex / Devin), **Subscription bridge** (existing CLIProxyAPI discover→external/migrate + fresh managed), **Tool updates**. Agents (subagent models), Usage. Default solo permission/runtime modes: Claude `NUNCIO_CLAUDE_PERMISSION_MODE`, Codex `NUNCIO_CODEX_RUNTIME_MODE`, Devin `NUNCIO_DEVIN_PERMISSION_MODE` (Pi has no permission mode). Subscription bridge keys: `NUNCIO_CLIPROXY_ENABLED`, `NUNCIO_CLIPROXY_MODE`, `NUNCIO_CLIPROXY_BASE_URL`, `NUNCIO_CLIPROXY_PORT`, `NUNCIO_CLIPROXY_API_KEY`, `NUNCIO_CLIPROXY_BIN`. |
 | **Server** | `models/`, provider `listModels()` (Claude merges CLIProxyAPI Codex-sub models when bridge is healthy), `subscription-bridge/` (`GET …/status`, `GET …/discover`, `POST …/refresh`, `POST …/adopt-external`, `POST …/migrate-managed`, `POST …/init-managed`, `POST …/managed/start|stop`, `POST …/claude-code-env`), `usage/`, settings registry keys above |
-| **Also check** | Every picker host that should inherit catalog/effort/fast UX — not only Home; Providers pane must list Claude + Devin (not search-only); Subscription bridge is its own Settings section; Codex-sub models show a `Codex sub` badge under Claude |
+| **Also check** | Every picker host that should inherit catalog/effort/fast UX — not only Home; Providers pane must list Claude + Devin (not search-only); Subscription bridge + Tool updates are sections on the Providers page (not separate nav); Codex-sub models show a `Codex sub` badge under Claude |
 
 ### Crew
 
@@ -231,9 +231,7 @@ Read-only Claude Code / Codex CLI memories indexed into Pi sessions; stores stay
 |---|---|
 | `general` | General |
 | `appearance` | Theme / chat font / density (client) |
-| `providers` | Engine credentials (Cursor / Nuncio Engine / Claude / Codex / Devin) |
-| `subscription-bridge` | CLIProxyAPI Subscription bridge (external / migrate / managed) |
-| `tool-updates` | Optional Pi/Codex CLI update advisories |
+| `providers` | Engine credentials (Cursor / Nuncio Engine / Claude / Codex / Devin) + Subscription bridge + Tool updates (legacy `?section=subscription-bridge` / `tool-updates` deep-link here) |
 | `usage` | Quotas / history charts |
 | `source-control` | GitHub / GitLab |
 | `mcp-tools` | MCP & tools — MCP Store rows (import, enable/disable, lazy/full advertise, OAuth Connect/Reconnect for remote servers, remove) + tool defaults |

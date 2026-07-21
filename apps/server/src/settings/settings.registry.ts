@@ -324,20 +324,20 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     providerId: 'subscription-bridge',
     type: 'string',
     label: 'CLIProxyAPI mode',
-    description:
-      'external = connect to a CLIProxyAPI you already run; managed = Nuncio owns cliproxyapi-nuncio (port + config under the data dir).',
+    description: 'How Nuncio reaches CLIProxyAPI.',
     envVar: 'NUNCIO_CLIPROXY_MODE',
     default: 'external',
     options: [
       {
         value: 'external',
         label: 'External (existing service)',
-        description: 'Discover and point at a CLIProxyAPI you start yourself.',
+        description: 'Connect to a CLIProxyAPI you already run (discover + adopt).',
       },
       {
         value: 'managed',
         label: 'Managed by Nuncio',
-        description: 'Nuncio writes config under `$NUNCIO_DATA_DIR/cliproxyapi/` and supervises the process.',
+        description:
+          'Nuncio owns cliproxyapi-nuncio under `$NUNCIO_DATA_DIR/cliproxyapi/` (migrate an existing config or initialize fresh).',
       },
     ],
   },

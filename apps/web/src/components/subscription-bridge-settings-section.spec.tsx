@@ -63,7 +63,9 @@ describe('SubscriptionBridgeSettingsSection', () => {
 
     expect(screen.getByText(/cli-proxy-api --claude-login/)).toBeInTheDocument();
     expect(screen.getByText(/cli-proxy-api --codex-login/)).toBeInTheDocument();
-    expect(screen.getByText(/1\. External CLIProxyAPI/)).toBeInTheDocument();
+    expect(screen.getByText(/1\. Existing CLIProxyAPI/)).toBeInTheDocument();
+    expect(screen.queryByText(/Migrate → managed/)).not.toBeInTheDocument();
+    expect(screen.getByText(/2\. Fresh managed/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: /Check Subscription bridge health/i }));
     await waitFor(() => expect(onStatus).toHaveBeenCalledWith(next));

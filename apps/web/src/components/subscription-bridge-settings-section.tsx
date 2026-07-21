@@ -109,9 +109,9 @@ export function SubscriptionBridgeSettingsSection({
 
       <div className="grid gap-3">
         <ModeCard
-          title="1. External CLIProxyAPI"
-          body="You already run CLIProxyAPI on its own port. Discover its config, show it here, and let Nuncio connect without taking over the process."
-          active={mode === 'external'}
+          title="1. Existing CLIProxyAPI"
+          body="Discover a CLIProxyAPI you already run. Connect in place (external), or migrate the config into Nuncio’s data dir (managed, default port 18317)."
+          active={mode === 'external' || (mode === 'managed' && installs.length > 0)}
         >
           <Button
             type="button"
@@ -181,13 +181,7 @@ export function SubscriptionBridgeSettingsSection({
         </ModeCard>
 
         <ModeCard
-          title="2. Migrate → managed (cliproxyapi-nuncio)"
-          body="Copy an existing config into Nuncio’s data dir. Nuncio picks a dedicated port (default 18317) and supervises the process."
-          active={mode === 'managed'}
-        />
-
-        <ModeCard
-          title="3. Fresh managed"
+          title="2. Fresh managed"
           body="Happy path — generate a new Nuncio-owned config, then run Claude/Codex login from the hints below."
           active={mode === 'managed' && !installs.length}
         >

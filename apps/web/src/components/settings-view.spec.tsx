@@ -123,8 +123,8 @@ describe('SettingsView', () => {
     const nav = screen.getByRole('navigation', { name: /settings sections/i });
     expect(within(nav).getByRole('button', { name: 'Appearance' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'Providers' })).toBeInTheDocument();
-    expect(within(nav).getByRole('button', { name: 'Subscription bridge' })).toBeInTheDocument();
-    expect(within(nav).getByRole('button', { name: 'Tool updates' })).toBeInTheDocument();
+    expect(within(nav).queryByRole('button', { name: 'Subscription bridge' })).not.toBeInTheDocument();
+    expect(within(nav).queryByRole('button', { name: 'Tool updates' })).not.toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'Usage' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'Source control' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'MCP & Tools' })).toBeInTheDocument();
@@ -279,7 +279,7 @@ describe('SettingsView', () => {
     expect(screen.getByText('Cursor')).toBeInTheDocument();
   });
 
-  it('shows Subscription bridge as its own Settings section (not under Providers)', async () => {
+  it('shows Subscription bridge and Tool updates as sections under Providers', async () => {
     const settings = [
       makeSetting({
         key: 'NUNCIO_CLIPROXY_ENABLED',
@@ -307,21 +307,22 @@ describe('SettingsView', () => {
       <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
     );
     await goToSection('Providers');
-    expect(screen.queryByRole('button', { name: /Manage Subscription bridge/i })).not.toBeInTheDocument();
-    await goToSection('Subscription bridge');
+    expect(screen.getByText('Cursor')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Subscription bridge' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Tool updates' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Check Subscription bridge health/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Copy Claude Code env/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Initialize managed/i })).toBeInTheDocument();
+    expect(screen.getByText(/Pi and Codex CLI updates/i)).toBeInTheDocument();
   });
 
-  it('shows Tool updates as its own Settings section', async () => {
+  it('deep-links legacy subscription-bridge and tool-updates section ids to Providers', () => {
+    window.history.replaceState(null, '', '/settings?section=subscription-bridge');
     renderWithTheme(
       <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
     );
-    await goToSection('Tool updates');
+    expect(screen.getByRole('heading', { name: 'Subscription bridge' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Tool updates' })).toBeInTheDocument();
-    expect(screen.getByText(/Pi and Codex CLI updates/i)).toBeInTheDocument();
   });
 
   it('shows Claude and Devin rows with permission mode selects', async () => {
