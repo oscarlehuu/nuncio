@@ -3,6 +3,7 @@ import { SettingsService } from '../../settings/settings.service';
 import type {
   CreateIssueOptions,
   ForgeCapabilities,
+  ForgeComment,
   ForgeFileDiff,
   ForgeIssueDetail,
   ForgeIssueSummary,
@@ -158,6 +159,14 @@ export class GithubForgeProvider extends GithubForgeActions {
     const data = await this.threadsQuery(repo, number);
     const nodes = data.repository?.pullRequest?.reviewThreads?.nodes ?? [];
     return nodes.map(mapGithubThread);
+  }
+
+  async listPullRequestComments(repo: ForgeRepoRef, number: number): Promise<ForgeComment[]> {
+    const data = await this.request<GithubCommentResponse[]>(
+      `${this.repoUrl(repo)}/issues/${number}/comments?per_page=100`,
+      { headers: await this.authHeaders() },
+    );
+    return (data ?? []).map(mapGithubComment);
   }
 
   async replyToThread(

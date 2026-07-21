@@ -8,6 +8,7 @@ import {
 import type { AgentProvider } from './agents.types';
 import { CodexAgentProvider } from './providers/codex-agent.provider';
 import { ClaudeAgentProvider } from './providers/claude-agent.provider';
+import { DevinAgentProvider } from './providers/devin-agent.provider';
 import { CursorAgentProvider } from './providers/cursor-agent.provider';
 import { CursorCliProvider } from './providers/cursor-cli.provider';
 import { PiAgentProvider } from './providers/pi-agent.provider';
@@ -27,6 +28,7 @@ export class AgentRegistry {
     private readonly claude: ClaudeAgentProvider,
     cli: CursorCliProvider,
     settings: SettingsService,
+    @Optional() private readonly devin?: DevinAgentProvider,
     // Bound only when `NUNCIO_FORCE_MOCK=1` opts the zero-credential engine in
     // (see AgentsModule). Resolves to undefined — and is thus never selectable —
     // on a normal boot.
@@ -34,6 +36,7 @@ export class AgentRegistry {
   ) {
     this.cliProvider = cli;
     this.providers = [this.pi, this.cursor, this.codex, this.claude];
+    if (this.devin) this.providers.push(this.devin);
     if (mock) this.providers.push(mock);
     settings.onChange(() => this.bustCaches());
   }

@@ -4,18 +4,21 @@ import { Loader2 } from 'lucide-react';
 import {
   addForgePullComment,
   type ForgeCapabilitiesDto,
+  type ForgeComment,
   type ForgePullRequestDetail,
   type ForgeReviewThread,
 } from '../../lib/forge-api';
 import { Button } from '../ui/button';
 import { Textarea } from '../ui/textarea';
 import { MarkdownView } from '../markdown-view';
+import { ForgeCommentCard } from './forge-ui';
 import { PrThread } from './pr-thread';
 
 interface PrConversationProps {
   path: string;
   number: number;
   detail: ForgePullRequestDetail;
+  comments: ForgeComment[] | null;
   threads: ForgeReviewThread[] | null;
   capabilities: ForgeCapabilitiesDto | null;
   onChanged: () => void;
@@ -25,6 +28,7 @@ export function PrConversation({
   path,
   number,
   detail,
+  comments,
   threads,
   capabilities,
   onChanged,
@@ -54,7 +58,23 @@ export function PrConversation({
     <div className="flex flex-col gap-3">
       {detail.body.trim() && (
         <div className="rounded-md border border-border/60 bg-card/60 px-3 py-2">
+          <div className="mb-1.5 flex items-center gap-2 text-xs">
+            <span className="font-semibold">{detail.author}</span>
+            <span className="text-muted-foreground">description</span>
+          </div>
           <MarkdownView text={detail.body} className="text-sm" />
+        </div>
+      )}
+
+      {comments === null ? (
+        <div className="text-xs text-muted-foreground">Loading comments…</div>
+      ) : comments.length === 0 ? (
+        <div className="text-xs text-muted-foreground">No conversation comments yet.</div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {comments.map((c) => (
+            <ForgeCommentCard key={c.id} comment={c} />
+          ))}
         </div>
       )}
 

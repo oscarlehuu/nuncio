@@ -349,6 +349,49 @@ describe('GithubForgeProvider — review/merge/issues surface', () => {
     ]);
   });
 
+  it('listPullRequestComments reads the issue comments feed for a pull', async () => {
+    const { fetchOverride, calls } = makeRoutedFetch([
+      {
+        match: (url) => url.endsWith('/issues/5/comments?per_page=100'),
+        body: [
+          {
+            id: 101,
+            user: { login: 'devin-ai-integration[bot]' },
+            body: 'first note\n\n![shot](https://example.com/a.png)',
+            created_at: '2026-07-19T12:00:00Z',
+          },
+          {
+            id: 102,
+            user: { login: 'oscar' },
+            body: 'second note',
+            created_at: '2026-07-19T13:00:00Z',
+          },
+        ],
+      },
+    ]);
+    provider.fetchOverride = fetchOverride;
+
+    const comments = await provider.listPullRequestComments(repo, 5);
+
+    expect(calls[0].url).toBe(
+      'https://api.github.com/repos/octo/repo/issues/5/comments?per_page=100',
+    );
+    expect(comments).toEqual([
+      {
+        id: '101',
+        author: 'devin-ai-integration[bot]',
+        body: 'first note\n\n![shot](https://example.com/a.png)',
+        createdAt: '2026-07-19T12:00:00Z',
+      },
+      {
+        id: '102',
+        author: 'oscar',
+        body: 'second note',
+        createdAt: '2026-07-19T13:00:00Z',
+      },
+    ]);
+  });
+
   it('updateIssueState PATCHes the issue state and createIssue POSTs the payload', async () => {
     const { fetchOverride, calls } = makeRoutedFetch([
       {

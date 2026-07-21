@@ -131,6 +131,37 @@ describe('CrewProfileResolver', () => {
     expect(enabled.state).toBe('ready');
   });
 
+  it('accepts Devin bindings when Devin is present in the provider catalog', () => {
+    const devinDefinition = structuredClone(definition);
+    devinDefinition.bindings.builder = {
+      provider: 'devin' as never,
+      model: 'swe-1-7',
+    };
+    const result = new CrewProfileResolver().resolve({
+      savedProfile: {
+        id: 'devin',
+        revision: 1,
+        presetId: 'quality',
+        definition: devinDefinition,
+      },
+      catalog: [
+        ...catalog,
+        {
+          provider: 'devin',
+          models: ['swe-1-7'],
+          runtimePolicies: ['read-only', 'workspace-write'],
+        },
+      ],
+      resolvedVerifyCommand: 'true',
+      verifierSandboxAvailable: true,
+    });
+    expect(result.state).toBe('ready');
+    expect(result.snapshot.bindings.builder).toMatchObject({
+      provider: 'devin',
+      model: 'swe-1-7',
+    });
+  });
+
   it('fails closed when no deterministic verifier can be frozen into the snapshot', () => {
     const result = new CrewProfileResolver().resolve({
       savedProfile: { id: 'p1', revision: 1, presetId: 'quality', definition }, catalog,

@@ -165,7 +165,7 @@ export class CrewProfileResolver {
     }
     const catalogProvider = catalog.find((entry) => entry.provider === binding.provider);
     const allowedMock = binding.provider === 'mock' && catalogProvider?.testOnly === true;
-    if (!['pi', 'codex', 'claude'].includes(binding.provider) && !allowedMock) {
+    if (!['pi', 'codex', 'claude', 'devin'].includes(binding.provider) && !allowedMock) {
       issues.push({ code: 'unsupported_provider', role, message: `${binding.provider} is outside Crew MVP` });
       return;
     }

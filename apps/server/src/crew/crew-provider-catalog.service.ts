@@ -8,7 +8,7 @@ export class CrewProviderCatalogService {
   async list(): Promise<CrewProviderCapability[]> {
     const available = await this.agents.available();
     const crewProviders = available.filter((provider) =>
-      ['pi', 'codex', 'claude', 'mock'].includes(provider.id),
+      ['pi', 'codex', 'claude', 'devin', 'mock'].includes(provider.id),
     );
     return Promise.all(crewProviders.map(async (provider) => {
       const catalogs = await provider.listModels().catch(() => []);

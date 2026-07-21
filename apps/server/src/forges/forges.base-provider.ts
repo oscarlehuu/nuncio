@@ -5,6 +5,7 @@ import type {
   ForgeAuth,
   ForgeCapabilities,
   ForgeCheck,
+  ForgeComment,
   ForgeFileDiff,
   ForgeIssueDetail,
   ForgeIssueSummary,
@@ -55,6 +56,7 @@ export abstract class BaseForgeProvider implements ForgeProvider {
   abstract getPullRequestDetail(repo: ForgeRepoRef, number: number): Promise<ForgePullRequestDetail>;
   abstract listPullRequestFiles(repo: ForgeRepoRef, number: number): Promise<ForgeFileDiff[]>;
   abstract listReviewThreads(repo: ForgeRepoRef, number: number): Promise<ForgeReviewThread[]>;
+  abstract listPullRequestComments(repo: ForgeRepoRef, number: number): Promise<ForgeComment[]>;
   abstract replyToThread(
     repo: ForgeRepoRef,
     number: number,

@@ -67,11 +67,19 @@ describe('projects api', () => {
     const branches = [{ name: 'main', isDefault: true, isCurrent: true }];
     fetchMock.mockResolvedValue(jsonRes(branches));
     await expect(fetchBranches('/my repo')).resolves.toEqual(branches);
-    expect(fetchMock).toHaveBeenCalledWith('/api/projects/branches?path=%2Fmy%20repo');
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/branches?path=%2Fmy+repo');
 
     fetchMock.mockResolvedValue(jsonRes(null, false, 500));
     await expect(fetchBranches('/repo')).rejects.toThrow('Failed to load branches');
     fetchMock.mockResolvedValue(jsonRes({ not: 'array' }));
     await expect(fetchBranches('/repo')).resolves.toEqual([]);
+  });
+
+  it('fetchBranches appends refresh=1 when requested', async () => {
+    fetchMock.mockResolvedValue(jsonRes([{ name: 'main', isDefault: true, isCurrent: true }]));
+    await fetchBranches('/repo', 'https://mac.test', { refresh: true });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://mac.test/api/projects/branches?path=%2Frepo&refresh=1',
+    );
   });
 });

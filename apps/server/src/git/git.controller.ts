@@ -17,12 +17,16 @@ export class GitController {
   }
 
   @Get('branches')
-  listBranches(@Query('path') path?: string) {
+  listBranches(
+    @Query('path') path?: string,
+    @Query('refresh') refresh?: string,
+  ) {
     const trimmed = path?.trim();
     if (!trimmed) {
       throw new BadRequestException('path query parameter is required');
     }
-    return this.git.listBranches(trimmed);
+    const shouldRefresh = refresh === '1' || refresh === 'true';
+    return this.git.listBranches(trimmed, { refresh: shouldRefresh });
   }
 
   @Get('recent')

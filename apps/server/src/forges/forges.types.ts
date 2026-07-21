@@ -313,6 +313,8 @@ export interface ForgeProvider {
   getPullRequestDetail(repo: ForgeRepoRef, number: number): Promise<ForgePullRequestDetail>;
   listPullRequestFiles(repo: ForgeRepoRef, number: number): Promise<ForgeFileDiff[]>;
   listReviewThreads(repo: ForgeRepoRef, number: number): Promise<ForgeReviewThread[]>;
+  /** Top-level conversation comments (issue comments / MR notes), not review threads. */
+  listPullRequestComments(repo: ForgeRepoRef, number: number): Promise<ForgeComment[]>;
   replyToThread(
     repo: ForgeRepoRef,
     number: number,

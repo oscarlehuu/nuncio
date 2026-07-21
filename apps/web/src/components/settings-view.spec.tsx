@@ -33,6 +33,36 @@ vi.mock('../lib/devices-api', () => ({
   revokeDevice: vi.fn(),
 }));
 
+vi.mock('../lib/subscription-bridge-api', () => ({
+  fetchSubscriptionBridgeStatus: vi.fn().mockResolvedValue({
+    enabled: false,
+    online: false,
+    baseUrl: 'http://127.0.0.1:8317',
+    hasApiKey: false,
+    accounts: { claude: false, codex: false },
+    modelCount: 0,
+    error: null,
+    loginHints: { claude: 'cli --claude-login', codex: 'cli --codex-login' },
+  }),
+  refreshSubscriptionBridgeStatus: vi.fn().mockResolvedValue({
+    enabled: true,
+    online: true,
+    baseUrl: 'http://127.0.0.1:8317',
+    hasApiKey: true,
+    accounts: { claude: true, codex: true },
+    modelCount: 2,
+    error: null,
+    loginHints: { claude: 'cli --claude-login', codex: 'cli --codex-login' },
+  }),
+  fetchSubscriptionBridgeClaudeCodeEnv: vi.fn(),
+  subscriptionBridgeSubtitle: vi.fn(
+    (status: { enabled?: boolean; online?: boolean } | null) =>
+      status?.online
+        ? 'Online · Claude + Codex'
+        : 'Disabled · enable to route Claude ↔ Codex subscriptions',
+  ),
+}));
+
 function renderWithTheme(ui: ReactElement) {
   return render(
     <ThemeProvider defaultTheme="light">
@@ -235,6 +265,93 @@ describe('SettingsView', () => {
     );
     await goToSection('Providers');
     expect(screen.getByText('Cursor')).toBeInTheDocument();
+  });
+
+  it('shows Subscription bridge row with Manage health actions', async () => {
+    const settings = [
+      makeSetting({
+        key: 'NUNCIO_CLIPROXY_ENABLED',
+        label: 'Enable Subscription bridge',
+        category: 'provider',
+        providerId: 'subscription-bridge',
+        type: 'boolean',
+        hasValue: true,
+        source: 'default',
+        value: '0',
+      }),
+      makeSetting({
+        key: 'NUNCIO_CLIPROXY_BASE_URL',
+        label: 'CLIProxy base URL',
+        category: 'provider',
+        providerId: 'subscription-bridge',
+        type: 'string',
+        hasValue: true,
+        source: 'default',
+        value: 'http://127.0.0.1:8317',
+      }),
+    ];
+    renderWithTheme(
+      <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    await goToSection('Providers');
+    expect(screen.getByText('Subscription bridge')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Manage Subscription bridge' }));
+    expect(screen.getByRole('button', { name: /Check Subscription bridge health/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Copy Claude Code env/i })).toBeInTheDocument();
+  });
+
+  it('shows Claude and Devin rows with permission mode selects', async () => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const settings = [
+      makeSetting({
+        key: 'NUNCIO_CLAUDE_PERMISSION_MODE',
+        label: 'Claude permission mode',
+        category: 'provider',
+        providerId: 'claude',
+        type: 'string',
+        hasValue: true,
+        source: 'default',
+        value: 'bypassPermissions',
+        options: [
+          { value: 'bypassPermissions', label: 'Bypass' },
+          { value: 'acceptEdits', label: 'Accept edits' },
+          { value: 'default', label: 'Ask every time' },
+          { value: 'plan', label: 'Plan only' },
+        ],
+      }),
+      makeSetting({
+        key: 'NUNCIO_DEVIN_PERMISSION_MODE',
+        label: 'Devin permission mode',
+        category: 'provider',
+        providerId: 'devin',
+        type: 'string',
+        hasValue: true,
+        source: 'default',
+        value: 'bypass',
+        options: [
+          { value: 'bypass', label: 'Bypass Permissions' },
+          { value: 'accept-edits', label: 'Code' },
+          { value: 'ask', label: 'Ask' },
+          { value: 'plan', label: 'Plan' },
+        ],
+      }),
+    ];
+    renderWithTheme(
+      <SettingsView settings={settings} onUpdate={onUpdate} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    await goToSection('Providers');
+    expect(screen.getByText('Claude')).toBeInTheDocument();
+    expect(screen.getByText('Devin')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Manage Claude' }));
+    expect(screen.getByText('Claude permission mode')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Accept edits' }));
+    expect(onUpdate).toHaveBeenCalledWith('NUNCIO_CLAUDE_PERMISSION_MODE', 'acceptEdits');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Manage Devin' }));
+    expect(screen.getByText('Devin permission mode')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Code' }));
+    expect(onUpdate).toHaveBeenCalledWith('NUNCIO_DEVIN_PERMISSION_MODE', 'accept-edits');
   });
 
   it('renders MCP & Tools settings and updates the default browser option', async () => {

@@ -35,6 +35,20 @@ import { SettingsSectionNav, type SettingsSectionNavItem } from './settings-sect
 import { CrewProfilesSettingsSection } from './crew/crew-profiles-settings-section';
 import { McpServersSettingsSection } from './mcp-servers-settings-section';
 import { HeartbeatHealthSection } from './heartbeat-health-section';
+import { SubscriptionBridgeSettingsSection } from './subscription-bridge-settings-section';
+import {
+  fetchSubscriptionBridgeStatus,
+  refreshSubscriptionBridgeStatus,
+  subscriptionBridgeSubtitle,
+  type SubscriptionBridgeStatus,
+} from '../lib/subscription-bridge-api';
+
+const BRIDGE_SETTING_KEYS = new Set([
+  'NUNCIO_CLIPROXY_ENABLED',
+  'NUNCIO_CLIPROXY_BASE_URL',
+  'NUNCIO_CLIPROXY_API_KEY',
+  'NUNCIO_CLIPROXY_BIN',
+]);
 
 interface SettingsViewProps {
   settings: Setting[];
@@ -109,11 +123,29 @@ const PROVIDER_METAS: Record<string, ProviderMetaInfo> = {
     description: 'Install or manage the Pi CLI and Nuncio Engine agent directory',
     primaryKey: 'PI_AGENT_DIR',
   },
+  claude: {
+    id: 'claude',
+    name: 'Claude',
+    description: 'Claude Agent SDK auth and default permission mode',
+    primaryKey: 'ANTHROPIC_API_KEY',
+  },
   codex: {
     id: 'codex',
     name: 'Codex',
-    description: 'Codex CLI binary paths and options',
+    description: 'Codex CLI binary paths and runtime mode',
     primaryKey: 'NUNCIO_CODEX_BIN',
+  },
+  devin: {
+    id: 'devin',
+    name: 'Devin',
+    description: 'Devin CLI (ACP) binary and default permission mode',
+    primaryKey: 'NUNCIO_DEVIN_PERMISSION_MODE',
+  },
+  'subscription-bridge': {
+    id: 'subscription-bridge',
+    name: 'Subscription bridge',
+    description: 'Local CLIProxy for cross-subscription models (Claude harness ↔ Codex sub)',
+    primaryKey: 'NUNCIO_CLIPROXY_ENABLED',
   },
   github: {
     id: 'github',
@@ -128,6 +160,16 @@ const PROVIDER_METAS: Record<string, ProviderMetaInfo> = {
     primaryKey: 'GITLAB_TOKEN',
   },
 };
+
+/** AI engines + infra rows shown in Settings → Providers (Pi has no permission mode). */
+const AI_PROVIDER_IDS = [
+  'cursor',
+  'pi',
+  'claude',
+  'codex',
+  'devin',
+  'subscription-bridge',
+] as const;
 
 // Forge automation flags live in the 'advanced' registry category but read most
 // naturally beside the GitHub/GitLab connections, so they are surfaced there.
@@ -146,6 +188,7 @@ function matchesQuery(text: string | null | undefined, query: string): boolean {
 
 export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsViewProps) {
   const [forgeStatus, setForgeStatus] = useState<ForgeStatusDto[]>([]);
+  const [bridgeStatus, setBridgeStatus] = useState<SubscriptionBridgeStatus | null>(null);
   const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({});
   const [activeSection, setActiveSection] = useState<SettingsSectionId>(initialSection);
   const [searchQuery, setSearchQuery] = useState('');
@@ -156,7 +199,32 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
       .catch(() => {
         // Gracefully swallow errors so tests/unreachable server still render the view
       });
+    fetchSubscriptionBridgeStatus()
+      .then(setBridgeStatus)
+      .catch(() => {
+        // Same soft-fail as forge status — Settings still renders without live health.
+      });
   }, []);
+
+  const handleUpdate = async (key: string, value: string) => {
+    await onUpdate(key, value);
+    if (!BRIDGE_SETTING_KEYS.has(key)) return;
+    try {
+      setBridgeStatus(await refreshSubscriptionBridgeStatus());
+    } catch {
+      // Keep the last known subtitle; Check health remains available.
+    }
+  };
+
+  const handleClear = async (key: string) => {
+    await onClear(key);
+    if (!BRIDGE_SETTING_KEYS.has(key)) return;
+    try {
+      setBridgeStatus(await refreshSubscriptionBridgeStatus());
+    } catch {
+      // Keep the last known subtitle; Check health remains available.
+    }
+  };
 
   // The Tailscale auto-trust toggle is owned by the Remote access section below.
   const general = settings.filter(
@@ -222,13 +290,23 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
       } else {
         subtitle = meta.description;
       }
+    } else if (providerId === 'subscription-bridge') {
+      isConnected = bridgeStatus?.online ?? false;
+      subtitle = subscriptionBridgeSubtitle(bridgeStatus);
     } else {
       // AI Agents
       const primarySetting = pSettings.find((s) => s.key === meta.primaryKey);
       isConnected = primarySetting?.hasValue ?? false;
     }
 
-    const actionLabel = providerId === 'pi' ? 'Manage' : isConnected ? 'Manage' : 'Connect';
+    // CLI-login engines always expose Manage (auth is outside the secret field).
+    const alwaysManage =
+      providerId === 'pi' ||
+      providerId === 'claude' ||
+      providerId === 'devin' ||
+      providerId === 'codex' ||
+      providerId === 'subscription-bridge';
+    const actionLabel = alwaysManage ? 'Manage' : isConnected ? 'Manage' : 'Connect';
     const isExpanded = !!expandedProviders[providerId];
 
     return (
@@ -256,8 +334,11 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
         {isExpanded && (
           <div className="bg-muted/20 px-4 pb-4 border-t border-border/40">
             {pSettings.map((s) => (
-              <SettingRow key={s.key} setting={s} onUpdate={onUpdate} onClear={onClear} />
+              <SettingRow key={s.key} setting={s} onUpdate={handleUpdate} onClear={handleClear} />
             ))}
+            {providerId === 'subscription-bridge' && (
+              <SubscriptionBridgeSettingsSection status={bridgeStatus} onStatus={setBridgeStatus} />
+            )}
           </div>
         )}
       </div>
@@ -352,7 +433,7 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
       'connect',
     ].some((term) => term.includes(query));
 
-    const providerResult = renderProviderGroup('Providers', ['cursor', 'pi', 'codex'], false, query);
+    const providerResult = renderProviderGroup('Providers', [...AI_PROVIDER_IDS], false, query);
     const sourceResult = renderProviderGroup('Source control', ['github', 'gitlab'], false, query);
     const matchingAgents = filterSettings(agents, query);
     const matchingTools = filterSettings(tools, query);
@@ -363,7 +444,7 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
     const crewProfilesMatch = ['crew profiles', 'crew', 'foreman', 'builder', 'reviewer']
       .some((term) => term.includes(query) || query.includes(term));
 
-    if (['cursor', 'pi', 'codex'].some((id) => renderProviderRow(id, query))) {
+    if (AI_PROVIDER_IDS.some((id) => renderProviderRow(id, query))) {
       resultSections.push(<div key="providers">{providerResult}</div>);
     }
     const matchingForgeAutomation = filterSettings(forgeAutomation, query);
@@ -442,7 +523,7 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
       case 'appearance':
         return <AppearanceSettingsSection />;
       case 'providers':
-        return renderProviderGroup('Providers', ['cursor', 'pi', 'codex'], true);
+        return renderProviderGroup('Providers', [...AI_PROVIDER_IDS], true);
       case 'usage':
         return <UsageSettingsSection />;
       case 'source-control':

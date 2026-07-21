@@ -308,6 +308,7 @@ apps/
         bridge/            lazy gateway: McpBridgeToolSource (nuncio_mcp_find_tools/nuncio_mcp_call via AgentToolRegistry) + shared McpClientPool + @modelcontextprotocol/sdk factory
         api/mcp-servers.controller.ts  REST + import preview/apply (masked secrets)
       provider-updates/  optional Pi/Codex CLI version advisories + user-triggered updates
+      subscription-bridge/ local CLIProxyAPI health + Codex-sub catalog merge for Claude sessions
       usage/             first-party Claude/Codex/Cursor subscription quota probes (local CLI creds)
       settings/          DB-backed env config (settings store)
         settings.types.ts        SettingDefinition, SettingDto, UpdateSettingDto
@@ -458,7 +459,7 @@ The event contract is **shared** across providers (emitted via `BaseAgentProvide
 |---|---|---|
 | GET | `/api/health` | health check |
 | GET | `/api/projects` | list git repos from `NUNCIO_PROJECT_ROOTS` (one level deep) |
-| GET | `/api/projects/branches?path=` | list branches for a repo path (also accepts custom absolute paths) |
+| GET | `/api/projects/branches?path=&refresh=1` | list branches for a repo path (also accepts custom absolute paths); `refresh=1\|true` best-effort `git fetch --prune` first (TTL ~60s, fail-soft) so GitHub-only branches appear as `origin/<name>` |
 | GET | `/api/sessions` | list (excludes `ARCHIVED` unless `?includeArchived=1\|true`) |
 | POST | `/api/sessions` | `{ prompt, model?, provider?, workspace?, projectPath?, useWorktree?, baseBranch? }` — `projectPath` without `useWorktree` runs the provider in that selected repo and stores `baseBranch` as the selected branch; `useWorktree: true` creates a git worktree on branch `nuncio/<id>-<slug>` branched from `baseBranch` (default repo branch); `workspace` is the cwd fallback; starts run in background; `provider` defaults to `registry.defaultId()` (cursor if `CURSOR_API_KEY` set, else codex if logged in, else pi if authed; `503` when none configured) |
 | POST | `/api/sessions/handoff` | `{ cursorChatId, workspace, title? }` imports a Cursor IDE/CLI chat; `{ piSessionPath, workspace, title? }` imports a Pi CLI session. Cursor creates `provider: cursor`, `cursor_backend: cli` and is idempotent per `cursor_chat_id`; Pi creates `provider: pi`, `provider_thread_id: piSessionPath`, `cursor_backend: null` and is idempotent per `provider_thread_id`. Both hydrate transcript into the event log, status `IDLE` (no auto-run). |
@@ -484,6 +485,9 @@ The event contract is **shared** across providers (emitted via `BaseAgentProvide
 | GET | `/api/usage/:provider` | single-provider quota snapshot (`claude` \| `codex` \| `cursor`); 404 for unknown ids |
 | GET | `/api/provider-updates` | best-effort Pi/Codex CLI version advisory; disabled by `NUNCIO_PROVIDER_UPDATE_CHECKS=0` |
 | POST | `/api/provider-updates/:provider/update` | user-triggered allowlisted update for `pi` or `codex` only; never runs arbitrary command strings |
+| GET | `/api/subscription-bridge/status` | CLIProxy Subscription bridge health (enabled/online/accounts/modelCount; never returns the API key) |
+| POST | `/api/subscription-bridge/refresh` | bust catalog cache and re-probe CLIProxy |
+| POST | `/api/subscription-bridge/claude-code-env` | explicit Copy action — shell exports for an external Claude Code session (includes API key; same sensitivity as copying the access token) |
 | GET | `/api/settings` | list all settings (catalog metadata + `hasValue` + `source` + masked/raw `value`; secrets masked, never raw) |
 | GET | `/api/settings/:key` | single setting DTO (404 for unknown key) |
 | PUT | `/api/settings/:key` | `{ value }` — persists (encrypts secrets), busts provider caches, returns the masked DTO |
@@ -531,7 +535,14 @@ Env vars are the **fallback** for the settings store. Every var below (except th
 | `NUNCIO_CODEX_BIN` | `codex` | Codex CLI used to launch `codex app-server`; `codex` auto-discovers one logged-in install, absolute path is required when multiple installs exist. | ✅ |
 | `NUNCIO_CODEX_HOME` | (Codex default) | Optional Codex home directory passed as `CODEX_HOME`. | ✅ |
 | `NUNCIO_CODEX_CWD` | `process.cwd()` | Default cwd for Codex app-server sessions when no session workspace/worktree is set. | ✅ |
-| `NUNCIO_CODEX_RUNTIME_MODE` | `full-access` | `full-access` runs local self-hosted Codex with no approval prompts; `approval-required` uses read-only/untrusted mode and surfaces provider approval requests in the transcript. | ✅ |
+| `NUNCIO_CODEX_RUNTIME_MODE` | `full-access` | `full-access` runs local self-hosted Codex with no approval prompts; `approval-required` uses read-only/untrusted mode and surfaces provider approval requests in the transcript. Settings → Providers → Codex. | ✅ |
+| `NUNCIO_CLAUDE_PERMISSION_MODE` | `bypassPermissions` | Solo Claude tool gating: `bypassPermissions` / `acceptEdits` / `default` / `plan`. Settings → Providers → Claude. | ✅ |
+| `NUNCIO_CLIPROXY_ENABLED` | `0` | Enable Subscription bridge (local CLIProxyAPI). When on, Claude-engine GPT models route via the bridge. Settings → Providers → Subscription bridge. | ✅ |
+| `NUNCIO_CLIPROXY_BASE_URL` | `http://127.0.0.1:8317` | CLIProxyAPI origin (no trailing path). | ✅ |
+| `NUNCIO_CLIPROXY_API_KEY` | — | CLIProxy `api-keys` entry. Stored encrypted at rest. | ✅ (secret) |
+| `NUNCIO_CLIPROXY_BIN` | — | Optional `cli-proxy-api` path for login hints only (MVP does not auto-start the proxy). | ✅ |
+| `NUNCIO_DEVIN_BIN` | (auto) | Path to `devin` CLI for `devin acp`; unset → `~/.local/bin/devin` then `PATH`. | ✅ |
+| `NUNCIO_DEVIN_PERMISSION_MODE` | `bypass` | Default ACP session mode for Devin: `bypass` / `accept-edits` / `ask` / `plan`. Settings → Providers → Devin. | ✅ |
 | `PI_AGENT_DIR` / `PI_CODING_AGENT_DIR` | `~/.pi/agent` | Pi auth/config root (`auth.json`, models). The directory path is configurable; the `auth.json` *contents* are read-only (managed by the `pi` CLI). | ✅ |
 | `NUNCIO_PI_BIN` | `pi` | Pi CLI used for update/version checks; set an absolute path when not on `PATH`. | ✅ |
 | `NUNCIO_PROVIDER_UPDATE_CHECKS` | `1` | Enables best-effort Pi/Codex CLI version advisories and optional user-triggered update actions. | ✅ |
@@ -754,7 +765,7 @@ Minimal web GUI for coding agents (Codex, Claude, Cursor, OpenCode). Synara fork
 - PWA icons and static assets in `apps/web/public/` must remain git-tracked — watch `.gitignore` for accidental excludes.
 - This `github-gitlab-integration` worktree uses non-conflicting ports API 3002 / web 5175 via a gitignored root `.env` (shared `NUNCIO_DATA_DIR=~/.nuncio/data`); start with `bun --env-file=./.env run dev` so Vite picks up the port/proxy. Main checkout owns 3000/5173, cline-sdk 3001/5174.
 - `gh` and `glab` CLIs are installed and authenticated on this machine (gh as `oscarlehuu`, glab as `oscar.lehuu`); forge providers fall back to CLI tokens (`gh auth token`, `glab auth status -t`) when no PAT is set.
-- Forge integration shipped: `apps/server/src/forges/` module (ForgeProvider/BaseForgeProvider/ForgeRegistry mirroring the agent triad), `GITHUB_*`/`GITLAB_*` settings keys, `GET /api/forges` status, session-scoped git + PR routes, and signature-verified `POST /api/webhooks/forge/:provider`.
+- Forge integration shipped: `apps/server/src/forges/` module (ForgeProvider/BaseForgeProvider/ForgeRegistry mirroring the agent triad), `GITHUB_*`/`GITLAB_*` settings keys, `GET /api/forges` status, session-scoped git + PR routes (`GET /api/forge/pulls/:number/comments` for conversation comments), and signature-verified `POST /api/webhooks/forge/:provider`.
 - Pi SDK is `@earendil-works/pi-coding-agent@^0.80.6`; v0.80.6 exposes `session.sessionFile` getter, `SessionManager.open/create/inMemory`, `abort()`, `setModel()`, `setThinkingLevel()`, and `PromptOptions.images`/`steer(text, images?)`. `getDefaultSessionDir` is NOT a public export — omit `sessionManager` in `createAgentSession` for new sessions so the SDK builds the dir under the configured `agentDir`.
 - Synara reference repo is cloned at sibling `Oscar/synara` (not in-repo).
 - Pi provider `cliproxyapi` (`anthropic-messages`, `forceAdaptiveThinking: true`) routes Claude (`claude-opus-4-8`, `claude-sonnet-4-6`) via CLIProxyAPI, configured in `~/.pi/agent/models.json`; user's default is `cliproxyapi/claude-opus-4-8`.

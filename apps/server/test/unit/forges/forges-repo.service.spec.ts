@@ -174,6 +174,9 @@ describe('ForgeRepoService', () => {
         { path: 'a.ts', oldPath: null, status: 'modified', additions: 1, deletions: 0, patch: null },
       ],
       listReviewThreads: async () => [reviewThread],
+      listPullRequestComments: async () => [
+        { id: 'c1', author: 'bot', body: 'hello', createdAt: '2026-07-01T00:00:00Z' },
+      ],
       replyToThread: async () => { calls.push('reply'); },
       resolveThread: async () => { calls.push('resolve'); },
       submitReview: async () => { calls.push('review'); },
@@ -223,6 +226,9 @@ describe('ForgeRepoService', () => {
     await expect(service.listPullRequests('/some/repo', 'all')).resolves.toHaveLength(1);
     await expect(service.listPullRequestFiles('/some/repo', 1)).resolves.toHaveLength(1);
     await expect(service.listReviewThreads('/some/repo', 1)).resolves.toHaveLength(1);
+    await expect(service.listPullRequestComments('/some/repo', 1)).resolves.toEqual([
+      { id: 'c1', author: 'bot', body: 'hello', createdAt: '2026-07-01T00:00:00Z' },
+    ]);
     await service.replyToThread('/some/repo', 1, 'thread', 'hello');
     await service.resolveThread('/some/repo', 1, 'thread', true);
     await service.submitReview('/some/repo', 1, { event: 'comment', body: 'note' });

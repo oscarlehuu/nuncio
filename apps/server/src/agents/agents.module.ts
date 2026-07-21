@@ -3,6 +3,7 @@ import { SessionsPersistenceModule } from '../sessions/sessions.persistence.modu
 import { SettingsModule } from '../settings/settings.module';
 import { ContextModule } from '../context/context.module';
 import { EvidenceModule } from '../evidence/evidence.module';
+import { SubscriptionBridgeModule } from '../subscription-bridge/subscription-bridge.module';
 import {
   NuncioContextRepository,
   NuncioContextService,
@@ -15,6 +16,7 @@ import { CursorAgentProvider } from './providers/cursor-agent.provider';
 import { CursorCliProvider } from './providers/cursor-cli.provider';
 import { CodexAgentProvider } from './providers/codex-agent.provider';
 import { ClaudeAgentProvider } from './providers/claude-agent.provider';
+import { DevinAgentProvider } from './providers/devin-agent.provider';
 import { PiAgentProvider } from './providers/pi-agent.provider';
 import { MockAgentProvider } from './providers/mock-agent.provider';
 import { MOCK_AGENT_PROVIDER } from './mock-agent.token';
@@ -52,12 +54,19 @@ const mockProviderBinding: Provider = {
 };
 
 @Module({
-  imports: [SessionsPersistenceModule, SettingsModule, ContextModule, EvidenceModule],
+  imports: [
+    SessionsPersistenceModule,
+    SettingsModule,
+    ContextModule,
+    EvidenceModule,
+    SubscriptionBridgeModule,
+  ],
   providers: [
     PiAgentProvider,
     CursorAgentProvider,
     CodexAgentProvider,
     ClaudeAgentProvider,
+    DevinAgentProvider,
     CursorCliProvider,
     MockAgentProvider,
     NuncioContextRepository,

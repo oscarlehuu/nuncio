@@ -82,6 +82,7 @@ function makeSpy() {
     getPullRequestDetail: record('getPullRequestDetail'),
     listPullRequestFiles: record('listPullRequestFiles'),
     listReviewThreads: record('listReviewThreads'),
+    listPullRequestComments: record('listPullRequestComments'),
     replyToThread: record('replyToThread'),
     resolveThread: record('resolveThread'),
     submitReview: record('submitReview'),
@@ -135,6 +136,9 @@ describe('ForgeRepoController', () => {
 
     await expect(controller.listThreads(path, '4')).resolves.toEqual([]);
     expect(calls.listReviewThreads).toEqual([[path, 4]]);
+
+    await expect(controller.listPullComments(path, '4')).resolves.toEqual([]);
+    expect(calls.listPullRequestComments).toEqual([[path, 4]]);
 
     await expect(controller.replyToThread(path, '5', 'thread-1', { body: ' hi ' })).resolves.toEqual({
       ok: true,
