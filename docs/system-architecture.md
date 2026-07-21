@@ -1183,6 +1183,17 @@ engine, failure, timeout (30 s), or empty output leave the first-line title. Nev
 source title). Settings (agents): `NUNCIO_AUTO_TITLE` (boolean, default on) +
 `NUNCIO_SESSION_TITLE_MODEL` (provider:modelId, engine default when unset).
 
+**Automatic branch names** (Synara's recipe, `NUNCIO_AUTO_BRANCH_NAME` default on): the
+create-time `nuncio/<id>-<slug>` acts as the temporary name; the same fire-and-forget flow runs
+`generateBranchSlug` (2-6 plain words, sanitized by a port of Synara's fragment cleaner —
+lowercase, `[a-z0-9/_-]` only, 64-char cap, echoed prefixes/quotes stripped) and
+`SessionsService.applyAutoBranch` renames via `GitService.renameWorktreeBranch` (refuses when
+the worktree moved off the expected branch or the target exists) then `sessions.updateBranch`.
+Guards: branch unchanged since create, no PR/forge state, not an adopted branch
+(`pushBranch`/`upstreamBranch` skip it — remote-owned names are never rewritten); a collision
+retries once with the session-id suffix; any failure keeps the old name. Rename runs before any
+push exists, so no remote branch is ever orphaned.
+
 ## Hand off to another engine (cross-engine handoff)
 
 `POST /api/sessions/:id/handoff-to` (`sessions.controller.ts` `handoffTo`) →

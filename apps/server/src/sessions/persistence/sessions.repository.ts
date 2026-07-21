@@ -474,6 +474,14 @@ export class SessionsRepository {
     return this.findById(id);
   }
 
+  updateBranch(id: string, branch: string): SessionDto | null {
+    const now = Date.now();
+    this.database.db
+      .prepare('UPDATE sessions SET branch = ?, updated_at = ? WHERE id = ?')
+      .run(branch, now, id);
+    return this.findById(id);
+  }
+
   updateModel(id: string, model: string, modelOptions?: ModelOptionsMap | null): SessionDto | null {
     const now = Date.now();
     this.database.db

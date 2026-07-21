@@ -111,6 +111,37 @@ describe('SessionTitleService.generateTitle', () => {
   });
 });
 
+describe('SessionTitleService.generateBranchSlug', () => {
+  it('turns the completion into a clean branch fragment', async () => {
+    const { service } = makeTitleService({ completion: 'Fix auth refresh race' });
+    await expect(service.generateBranchSlug('anything')).resolves.toBe('fix-auth-refresh-race');
+  });
+
+  it('strips quotes, refs/heads and an echoed nuncio/ prefix', async () => {
+    const { service } = makeTitleService({ completion: '"refs/heads/nuncio/fix-login-flow"' });
+    await expect(service.generateBranchSlug('anything')).resolves.toBe('fix-login-flow');
+  });
+
+  it('caps runaway fragments at 64 characters', async () => {
+    const { service } = makeTitleService({ completion: 'word '.repeat(40) });
+    const slug = await service.generateBranchSlug('anything');
+    expect(slug!.length).toBeLessThanOrEqual(64);
+    expect(slug).not.toMatch(/-$/);
+  });
+
+  it('returns null when nothing usable remains after sanitizing', async () => {
+    const { service } = makeTitleService({ completion: '!!! ???' });
+    await expect(service.generateBranchSlug('anything')).resolves.toBeNull();
+  });
+
+  it('returns null when no capable engine exists or the engine fails', async () => {
+    const none = makeTitleService({ provider: null });
+    await expect(none.service.generateBranchSlug('anything')).resolves.toBeNull();
+    const failing = makeTitleService({ completion: new Error('down') });
+    await expect(failing.service.generateBranchSlug('anything')).resolves.toBeNull();
+  });
+});
+
 describe('SessionsService.applyAutoTitle', () => {
   let module: TestingModule;
   let service: SessionsService;

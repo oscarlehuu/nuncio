@@ -806,6 +806,18 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     default: '1',
   },
   {
+    key: 'NUNCIO_AUTO_BRANCH_NAME',
+    category: 'agents',
+    type: 'boolean',
+    label: 'Auto-name worktree branches',
+    description:
+      'Rename a new worktree branch from the temporary nuncio/<id>-<slug> to a generated ' +
+      'nuncio/<description> shortly after create (skipped once the branch changed, was adopted ' +
+      'from a remote, or a pull request exists).',
+    envVar: 'NUNCIO_AUTO_BRANCH_NAME',
+    default: '1',
+  },
+  {
     key: 'NUNCIO_SESSION_TITLE_MODEL',
     category: 'agents',
     type: 'string',

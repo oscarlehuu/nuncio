@@ -4,6 +4,7 @@ import { truncateHeadBytes } from '../orchestration/byte-truncate';
 import { SettingsService } from '../settings/settings.service';
 
 export const AUTO_TITLE_SETTING = 'NUNCIO_AUTO_TITLE';
+export const AUTO_BRANCH_NAME_SETTING = 'NUNCIO_AUTO_BRANCH_NAME';
 export const SESSION_TITLE_MODEL_SETTING = 'NUNCIO_SESSION_TITLE_MODEL';
 
 const REQUEST_PROMPT_MAX_BYTES = 2 * 1024;
@@ -38,6 +39,36 @@ export class SessionTitleService {
     return this.settings?.resolve(AUTO_TITLE_SETTING) !== '0';
   }
 
+  /** True unless the user switched the branch-naming toggle off. */
+  branchNamingEnabled(): boolean {
+    return this.settings?.resolve(AUTO_BRANCH_NAME_SETTING) !== '0';
+  }
+
+  /**
+   * A 2-6 word branch fragment describing the requested work (Synara's
+   * branch-name recipe: plain words, no prefixes, sanitized to a git-safe
+   * slug). Null on any failure — the create-time branch name simply stays.
+   */
+  async generateBranchSlug(request: string, preferredProviderId?: string): Promise<string | null> {
+    try {
+      const capable = (await this.agents.available()).filter((p) => p.completeOneShot);
+      const provider = capable.find((p) => p.id === preferredProviderId) ?? capable[0];
+      if (!provider?.completeOneShot) return null;
+
+      const raw = await withTimeout(
+        provider.completeOneShot({
+          prompt: truncateHeadBytes(request.trim(), REQUEST_PROMPT_MAX_BYTES),
+          systemPrompt: BRANCH_SYSTEM_PROMPT,
+          model: this.settings?.resolve(SESSION_TITLE_MODEL_SETTING)?.trim() || null,
+        }),
+        COMPLETION_TIMEOUT_MS,
+      );
+      return sanitizeBranchFragment(raw);
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * `preferredProviderId` (the session's own engine) wins when it implements
    * one-shot completions — Synara's resolution order — so the title bills to
@@ -62,6 +93,37 @@ export class SessionTitleService {
       return null;
     }
   }
+}
+
+// Synara's branch-name rules verbatim (their open-source recipe): describe the
+// requested work, short and specific, plain words only.
+const BRANCH_SYSTEM_PROMPT =
+  'You generate concise git branch names. Return ONLY the branch name — it should describe ' +
+  'the requested work from the user message in 2-6 short plain lowercase words joined by ' +
+  'hyphens. No issue prefixes, no punctuation-heavy text, no quotes, no code fence.';
+
+/**
+ * Port of Synara's buildGeneratedWorktreeBranchName sanitizer: lowercase,
+ * strip refs/heads/ + quotes + an echoed nuncio/ prefix, collapse everything
+ * outside [a-z0-9/_-] to hyphens, trim separator runs at the edges, cap at 64.
+ * Null (not a default) when nothing usable remains — the caller keeps the
+ * create-time branch name instead.
+ */
+function sanitizeBranchFragment(raw: string): string | null {
+  const normalized = (raw.split('\n')[0] ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/['"`]/g, '')
+    .replace(/^refs\/heads\//, '');
+  const withoutPrefix = normalized.replace(/^nuncio\//, '');
+  const fragment = withoutPrefix
+    .replace(/[^a-z0-9/_-]+/g, '-')
+    .replace(/\/+/g, '/')
+    .replace(/-+/g, '-')
+    .replace(/^[./_-]+|[./_-]+$/g, '')
+    .slice(0, 64)
+    .replace(/[./_-]+$/g, '');
+  return fragment.length > 0 ? fragment : null;
 }
 
 /** First line only, fences/quotes/trailing period stripped, length-capped. */

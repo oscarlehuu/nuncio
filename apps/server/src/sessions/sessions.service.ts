@@ -490,6 +490,26 @@ export class SessionsService implements OnModuleDestroy {
         })
         .catch(() => {});
     }
+    // Same flow for the worktree branch (Synara's recipe): the create-time
+    // `nuncio/<id>-<slug>` acts as the temporary name; skip adopted branches
+    // (push/upstream configured) — their names belong to the remote.
+    if (
+      process.env.NODE_ENV !== 'test' &&
+      this.titles?.branchNamingEnabled() &&
+      !input.priorSessionId &&
+      worktreePath &&
+      branch &&
+      !input.pushBranch?.trim() &&
+      !input.upstreamBranch?.trim()
+    ) {
+      const createBranch = branch;
+      void this.titles
+        .generateBranchSlug(input.prompt, providerId)
+        .then((slug) => {
+          if (slug) return this.applyAutoBranch(session.id, createBranch, slug);
+        })
+        .catch(() => {});
+    }
     return this.enrichSession(session);
   }
 
@@ -504,6 +524,31 @@ export class SessionsService implements OnModuleDestroy {
       this.rename(id, title);
     } catch {
       // Renaming an archived/deleted session is a no-op, never an error path.
+    }
+  }
+
+  /**
+   * Rename the session's temporary worktree branch (`nuncio/<id>-<slug>`) to
+   * the generated `nuncio/<fragment>` — only while the branch is untouched
+   * since create and no pull request exists yet. A name collision retries once
+   * with the session id as suffix; any git refusal keeps the old name.
+   */
+  async applyAutoBranch(id: string, expectedBranch: string, slug: string): Promise<void> {
+    const current = this.sessions.findById(id);
+    if (!current?.worktreePath || current.branch !== expectedBranch) return;
+    if (current.pullRequestUrl || (current.forgeStatus && current.forgeStatus !== 'none')) return;
+
+    const candidates = [`nuncio/${slug}`, `nuncio/${slug}-${id.slice(0, 4)}`].filter(
+      (name) => name !== expectedBranch,
+    );
+    for (const target of candidates) {
+      try {
+        await this.git.renameWorktreeBranch(current.worktreePath, expectedBranch, target);
+        this.sessions.updateBranch(id, target);
+        return;
+      } catch {
+        // Collision or a moved branch — try the suffixed candidate, else keep the old name.
+      }
     }
   }
 
