@@ -1579,6 +1579,13 @@ The SCM inspector in the session detail aside is `<ScmPanel>` (`apps/web/src/com
 
 `review-changes.tsx` is **not mounted anywhere** — it is retained (with its spec) as a reference implementation for a possible dedicated review screen. Do not delete `pr-panel.tsx` or `review-changes.tsx` without checking with the user.
 
+**Header git actions** (`git-actions-button.tsx`, mounted in the session-detail header when the
+session has git context): a dropdown of stacked actions — Commit… / Commit & push / Push /
+Open PR / Commit, push & PR — client-orchestrated over the existing endpoints
+(`commitSession` → `pushSession` → `openPullRequest`) with one staged `toast.loading` updated
+per stage; the chain stops at the first failure. Commit stages collect the message in a dialog;
+Push/PR stages require a branch, PR stages additionally an IDLE session.
+
 ## Forge session metadata + outbound PR/MR flow
 
 Session rows carry forge provenance (snake_case `SessionRow`, camelCase `SessionDto` in `apps/server/src/sessions/domain/sessions.types.ts`): `forge_provider`/`forgeProvider`, `pull_request_url`/`pullRequestUrl`, `pull_request_number`/`pullRequestNumber`, `pull_request_state`/`pullRequestState`, `forge_status`/`forgeStatus` (`none|opening|open|merged|closed|error`).

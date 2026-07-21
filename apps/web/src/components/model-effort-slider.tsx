@@ -139,7 +139,7 @@ export function ModelEffortSlider({
           })}
 
           <div
-            className="pointer-events-none absolute top-1/2 z-[2] h-5 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary shadow-md ring-1 ring-black/15"
+            className="pointer-events-none absolute top-1/2 z-[2] h-5 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary shadow-e1 ring-1 ring-border"
             style={{ left: `${thumbPercent}%` }}
             aria-hidden
           />

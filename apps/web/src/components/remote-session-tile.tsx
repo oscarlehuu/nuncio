@@ -102,7 +102,7 @@ export function RemoteSessionTile({
           className={cn('size-5', unreachable ? 'text-destructive/70' : 'text-muted-foreground animate-pulse')}
         />
         <div>
-          <p className="text-[13px] font-medium">{machineId}</p>
+          <p className="text-ui-lg font-medium">{machineId}</p>
           <p className="text-[11.5px] text-muted-foreground">
             {unreachable ? 'Machine unreachable — retrying…' : 'Connecting…'}
           </p>

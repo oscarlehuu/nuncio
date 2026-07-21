@@ -20,6 +20,7 @@ import {
   Archive,
   ArchiveRestore,
   ArrowLeft,
+  ArrowRightLeft,
   MoreHorizontal,
   Paperclip,
   Pause,
@@ -30,12 +31,15 @@ import {
 import {
   archiveSession,
   deleteSession,
+  fetchModels,
   fetchSession,
+  handoffSessionTo,
   pauseSession,
   restoreSession,
   statusLabel,
   type Session,
 } from '@nuncio/core/api';
+import { providerMeta, type ModelProvider } from '@nuncio/core/model-providers';
 import { useSessionTranscript } from '../../lib/use-session-transcript';
 import { useTranscriptBlocks } from '../../lib/use-transcript-blocks';
 import { TranscriptBlockView } from '../../components/transcript-block-view';
@@ -48,6 +52,8 @@ import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Textarea } from '../../components/ui/textarea';
 import { groupTranscriptBlocks, statusBadgeVariant } from '../../lib/session-ui';
+import { canHandoffSession, handoffTargets } from '../../lib/session-handoff';
+import { HandoffSheet } from '../../components/handoff-sheet';
 
 export default function SessionDetail() {
   const router = useRouter();
@@ -60,8 +66,12 @@ export default function SessionDetail() {
   const [sending, setSending] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [providers, setProviders] = useState<ModelProvider[]>([]);
+  const [handingOffId, setHandingOffId] = useState<string | null>(null);
+  const [pendingHandoff, setPendingHandoff] = useState(false);
   const listRef = useRef<FlatList>(null);
   const actionsRef = useRef<BottomSheetModal>(null);
+  const handoffRef = useRef<BottomSheetModal>(null);
   const snapPoints = useMemo(() => (confirmDelete ? ['38%'] : ['42%']), [confirmDelete]);
 
   const { events, steer, connectionState } = useSessionTranscript(sessionId);
@@ -89,6 +99,22 @@ export default function SessionDetail() {
     const last = events[events.length - 1];
     if (last?.type === 'status') reloadSession();
   }, [events, reloadSession]);
+
+  // The engine catalog powers cross-engine handoff targets. fetchModels already
+  // swallows transport errors (returns []), so a missing catalog simply hides
+  // the handoff action rather than surfacing an error.
+  useEffect(() => {
+    void fetchModels().then(setProviders).catch(() => {});
+  }, []);
+
+  const canHandoff = canHandoffSession(session?.status, access.managedByCrew);
+  const handoffTargetList = useMemo(
+    () => (canHandoff ? handoffTargets(providers, session?.provider) : []),
+    [canHandoff, providers, session?.provider],
+  );
+  const currentProviderName = session?.provider
+    ? providerMeta(session.provider, providers.length ? providers : undefined).name
+    : undefined;
 
   const send = useCallback(async () => {
     const text = message.trim();
@@ -135,6 +161,34 @@ export default function SessionDetail() {
     setConfirmDelete(false);
     actionsRef.current?.present();
   }, [access.canMutate, session]);
+
+  // Present the handoff sheet only once the actions sheet has fully dismissed —
+  // presenting a second modal mid-dismiss races gorhom's modal stack. The
+  // pendingHandoff flag is consumed in the actions sheet onDismiss below.
+  const openHandoff = useCallback(() => {
+    setPendingHandoff(true);
+    actionsRef.current?.dismiss();
+  }, []);
+
+  const doHandoff = useCallback(
+    async (provider: string) => {
+      if (!sessionId || handingOffId) return;
+      setHandingOffId(provider);
+      setError(null);
+      try {
+        const next = await handoffSessionTo(sessionId, { provider });
+        handoffRef.current?.dismiss();
+        router.replace(`/session/${next.id}`);
+      } catch (err) {
+        handoffRef.current?.dismiss();
+        const detail = (err as { message?: string })?.message;
+        setError(detail || 'Hand off failed.');
+      } finally {
+        setHandingOffId(null);
+      }
+    },
+    [sessionId, handingOffId, router],
+  );
 
   return (
     <KeyboardAvoidingView
@@ -286,7 +340,13 @@ export default function SessionDetail() {
         )}
         backgroundStyle={{ backgroundColor: '#18191c' }}
         handleIndicatorStyle={{ backgroundColor: '#606369' }}
-        onDismiss={() => setConfirmDelete(false)}
+        onDismiss={() => {
+          setConfirmDelete(false);
+          if (pendingHandoff) {
+            setPendingHandoff(false);
+            handoffRef.current?.present();
+          }
+        }}
       >
         <BottomSheetView className="flex-1 px-5 pb-8">
           {confirmDelete ? (
@@ -312,6 +372,13 @@ export default function SessionDetail() {
                 {session?.title || session?.prompt || 'Session'}
               </Text>
               <View className="mt-5 gap-1">
+                {canHandoff && handoffTargetList.length > 0 ? (
+                  <ActionButton
+                    icon={<ArrowRightLeft color="#eff0f1" size={18} />}
+                    label="Hand off to another engine"
+                    onPress={openHandoff}
+                  />
+                ) : null}
                 {session?.status === 'RUNNING' ? (
                   <ActionButton
                     icon={<Pause color="#eff0f1" size={18} />}
@@ -345,6 +412,14 @@ export default function SessionDetail() {
           )}
         </BottomSheetView>
       </BottomSheetModal>
+
+      <HandoffSheet
+        sheetRef={handoffRef}
+        targets={handoffTargetList}
+        currentProviderName={currentProviderName}
+        handingOffId={handingOffId}
+        onSelect={(provider) => void doHandoff(provider)}
+      />
     </KeyboardAvoidingView>
   );
 }

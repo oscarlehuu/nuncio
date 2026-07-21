@@ -225,14 +225,14 @@ export function SessionChangesPanel({
               </span>
             </div>
             {diff?.truncated && (
-              <div className="border-t border-border/50 bg-amber-500/10 px-3 py-2 text-xs text-muted-foreground">
+              <div className="border-t border-border/50 bg-warning/10 px-3 py-2 text-xs text-muted-foreground">
                 Diff truncated. {diff.omittedFiles} file{diff.omittedFiles === 1 ? '' : 's'} omitted.
               </div>
             )}
             {sentinels.count > 0 && (
               <div
                 data-testid="debug-sentinel-warning"
-                className="flex items-start gap-2 border-t border-border/50 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400"
+                className="flex items-start gap-2 border-t border-border/50 bg-warning/10 px-3 py-2 text-xs text-warning"
               >
                 <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
                 <span>

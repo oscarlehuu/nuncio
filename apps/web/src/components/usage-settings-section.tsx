@@ -237,7 +237,7 @@ export function UsageSettingsSection() {
                       </span>
                     ) : null}
                     {needsAuth ? (
-                      <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-ui-sm text-amber-700 dark:text-amber-400">
+                      <span className="rounded-full bg-warning/15 px-2 py-0.5 text-ui-sm text-warning">
                         Not signed in
                       </span>
                     ) : null}

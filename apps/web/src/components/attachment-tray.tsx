@@ -78,7 +78,7 @@ export function AttachmentTray({
                 <X className="size-3" />
               </button>
             </div>
-            <span className="text-[10px] leading-none text-muted-foreground">{item.label}</span>
+            <span className="text-ui-xs leading-none text-muted-foreground">{item.label}</span>
           </div>
         ) : null,
       )}

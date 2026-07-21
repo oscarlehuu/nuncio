@@ -8,8 +8,8 @@ export function SessionScmConflicts({ conflicts }: SessionScmConflictsProps) {
   if (conflicts.length === 0) return null;
 
   return (
-    <div className="border-b border-border/50 bg-amber-500/10 px-3 py-2">
-      <div className="flex items-center gap-1.5 text-ui-sm font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+    <div className="border-b border-border/50 bg-warning/10 px-3 py-2">
+      <div className="flex items-center gap-1.5 text-ui-sm font-semibold uppercase tracking-wide text-warning">
         <AlertTriangle className="size-3.5 shrink-0" aria-hidden />
         <span>
           {conflicts.length} merge conflict{conflicts.length === 1 ? '' : 's'}

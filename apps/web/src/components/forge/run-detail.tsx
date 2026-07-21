@@ -158,8 +158,8 @@ export function RunDetail({ path, run, onBack }: RunDetailProps) {
                 >
                   {open ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
                   {runStatusIcon(job)}
-                  <span className="min-w-0 flex-1 truncate text-[13px]">{job.name}</span>
-                  <span className="shrink-0 text-[10px] uppercase text-muted-foreground">
+                  <span className="min-w-0 flex-1 truncate text-ui-lg">{job.name}</span>
+                  <span className="shrink-0 text-ui-xs uppercase text-muted-foreground">
                     {job.conclusion ?? job.status}
                   </span>
                 </button>
@@ -185,11 +185,11 @@ export function RunDetail({ path, run, onBack }: RunDetailProps) {
                     {log ? (
                       <div className="flex flex-col gap-1">
                         {log.truncated && (
-                          <span className="text-[10px] uppercase text-muted-foreground">
+                          <span className="text-ui-xs uppercase text-muted-foreground">
                             log tail (truncated)
                           </span>
                         )}
-                        <pre className="max-h-80 overflow-auto rounded-md border bg-muted/40 p-2 font-mono text-[11px] leading-4 whitespace-pre-wrap break-all">
+                        <pre className="max-h-80 overflow-auto rounded-md border bg-muted/40 p-2 font-mono text-ui-sm leading-4 whitespace-pre-wrap break-all">
                           {log.log || 'Log is empty.'}
                         </pre>
                       </div>

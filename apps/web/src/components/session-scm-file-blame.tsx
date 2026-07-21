@@ -54,11 +54,11 @@ export function SessionScmFileBlame({ sessionId, path, open, onToggle }: Session
           {!loading && blame && blame.lines.length > 0 && (
             <>
               {blame.truncated && (
-                <div className="border-b border-border/40 px-2 py-1 text-[10px] text-muted-foreground">
+                <div className="border-b border-border/40 px-2 py-1 text-ui-xs text-muted-foreground">
                   Blame truncated.
                 </div>
               )}
-              <pre className="p-2 font-mono text-[10px] leading-4">
+              <pre className="p-2 font-mono text-ui-xs leading-4">
                 {blame.lines.map((line) => (
                   <div
                     key={`${line.line}-${line.sha}`}

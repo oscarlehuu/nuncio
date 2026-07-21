@@ -218,11 +218,11 @@ export function SessionTile({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <span className="truncate text-[13px] font-medium leading-tight">{session.title}</span>
+            <span className="truncate text-ui-lg font-medium leading-tight">{session.title}</span>
             <VerifyChip status={verifyStatus} />
             {session.mode && <SessionModeChip mode={session.mode} className="shrink-0" />}
           </div>
-          <div className="truncate text-[11px] text-muted-foreground leading-tight">
+          <div className="truncate text-ui-sm text-muted-foreground leading-tight">
             {pending ? (
               <span className="text-warning">Waiting for you</span>
             ) : (
@@ -281,7 +281,7 @@ export function SessionTile({
                   type="button"
                   variant="outline"
                   size="xs"
-                  className="h-6 text-[11px] text-muted-foreground"
+                  className="h-6 text-ui-sm text-muted-foreground"
                   disabled={loadingEarlier}
                   onClick={async (e) => {
                     e.stopPropagation();
@@ -322,7 +322,7 @@ export function SessionTile({
             }}
             placeholder="Steer this agent…"
             aria-label={`Steer ${session.title}`}
-            className="h-8 text-[12px]"
+            className="h-8 text-ui"
             disabled={steering}
           />
           <Button

@@ -780,7 +780,7 @@ export function ModelPicker(props: ModelPickerProps) {
         )}
         {recentModels.length > 0 && (
           <>
-            <DropdownMenuLabel className="px-2 pt-2 text-[11px] uppercase tracking-wide">
+            <DropdownMenuLabel className="px-2 pt-2 text-ui-sm uppercase tracking-wide">
               Recent
             </DropdownMenuLabel>
             <ModelRows models={recentModels} {...rowPropsShared} />
@@ -827,7 +827,7 @@ export function ModelPicker(props: ModelPickerProps) {
           return (
             <div key={p.id}>
               {(idx > 0 || recentModels.length > 0) && <DropdownMenuSeparator />}
-              <DropdownMenuLabel className="flex items-center gap-1.5 px-2 pt-2 text-[11px] uppercase tracking-wide">
+              <DropdownMenuLabel className="flex items-center gap-1.5 px-2 pt-2 text-ui-sm uppercase tracking-wide">
                 <ProviderIcon providerId={p.id} className="size-3.5 shrink-0 text-muted-foreground" />
                 <span className="truncate">{p.name}</span>
               </DropdownMenuLabel>

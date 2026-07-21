@@ -45,7 +45,7 @@ export function IssueList({ path, onOpen }: IssueListProps) {
             type="button"
             onClick={() => setChip(value)}
             className={cn(
-              'rounded-full border px-2.5 py-0.5 text-[11px] font-medium',
+              'rounded-full border px-2.5 py-0.5 text-ui-sm font-medium',
               chip === value
                 ? 'border-primary bg-primary/10 text-foreground'
                 : 'border-border text-muted-foreground hover:text-foreground',
@@ -57,7 +57,7 @@ export function IssueList({ path, onOpen }: IssueListProps) {
         <button
           type="button"
           onClick={() => setCreating(true)}
-          className="ml-auto flex items-center gap-1 rounded-full border border-border px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+          className="ml-auto flex items-center gap-1 rounded-full border border-border px-2.5 py-0.5 text-ui-sm font-medium text-muted-foreground hover:text-foreground"
         >
           <Plus className="size-3" />
           New issue
@@ -84,12 +84,12 @@ export function IssueList({ path, onOpen }: IssueListProps) {
                       issue.state === 'open' ? 'text-success' : 'text-muted-foreground',
                     )}
                   />
-                  <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{issue.title}</span>
+                  <span className="min-w-0 flex-1 truncate text-ui-lg font-medium">{issue.title}</span>
                 </span>
                 <span className="flex items-center gap-2 pl-5.5 text-xs text-muted-foreground">
                   <span>#{issue.number}</span>
                   {issue.labels.slice(0, 3).map((label) => (
-                    <span key={label} className="rounded-full border border-border px-1.5 text-[10px]">
+                    <span key={label} className="rounded-full border border-border px-1.5 text-ui-xs">
                       {label}
                     </span>
                   ))}

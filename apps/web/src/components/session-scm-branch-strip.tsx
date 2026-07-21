@@ -114,7 +114,7 @@ export function SessionScmBranchStrip({
       )}
       {ciIcon && ciLabel && (
         <span
-          className="flex shrink-0 items-center gap-1 rounded-full border border-border/60 px-2 py-0.5 text-[10px] font-medium uppercase text-muted-foreground"
+          className="flex shrink-0 items-center gap-1 rounded-full border border-border/60 px-2 py-0.5 text-ui-xs font-medium uppercase text-muted-foreground"
           title={`CI: ${ciLabel}`}
         >
           {ciIcon}
