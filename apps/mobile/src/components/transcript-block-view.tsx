@@ -30,7 +30,7 @@ import {
 type ToolBlock = Extract<TranscriptBlock, { kind: 'tool' }>;
 
 function ToolIcon({ name, color }: { name: ToolIconName; color: string }) {
-  const props = { color, size: 15, strokeWidth: 1.8 };
+  const props = { color, size: 13, strokeWidth: 1.8 };
   switch (name) {
     case 'file':
       return <FileText {...props} />;
@@ -53,28 +53,28 @@ function ToolIcon({ name, color }: { name: ToolIconName; color: string }) {
 
 function ToolStatus({ status }: Pick<ToolBlock, 'status'>) {
   if (status === 'running') return <ActivityIndicator size="small" color="#60a5fa" />;
-  if (status === 'error') return <X color="#f5605b" size={15} strokeWidth={2.5} />;
-  return <Check color="#4ade80" size={15} strokeWidth={2.5} />;
+  if (status === 'error') return <X color="#f5605b" size={13} strokeWidth={2.5} />;
+  return <Check color="#4ade80" size={13} strokeWidth={2.5} />;
 }
 
 function ToolRow({ block }: { block: ToolBlock }) {
   const iconColor = block.status === 'error' ? '#f5605b' : block.status === 'running' ? '#60a5fa' : '#9ca3af';
   return (
-    <View className="flex-row items-center gap-2.5 py-2">
-      <View className="h-7 w-7 items-center justify-center rounded-md bg-background">
+    <View className="flex-row items-center gap-2 py-1.5">
+      <View className="h-5 w-5 items-center justify-center rounded-md bg-background">
         <ToolIcon name={toolIconForVerb(block.summary.verb)} color={iconColor} />
       </View>
-      <View className="min-w-0 flex-1">
-        <Text className="text-xs font-medium text-foreground" numberOfLines={1}>
-          {block.summary.verb}
+      <Text className="text-[11px] font-medium text-foreground">
+        {block.summary.verb}
+      </Text>
+      {block.summary.subject ? (
+        <Text className="min-w-0 flex-1 font-mono text-[11px] text-muted-foreground" numberOfLines={1}>
+          {block.summary.subject}
+          {block.summary.context ?? ''}
         </Text>
-        {block.summary.subject ? (
-          <Text className="mt-0.5 font-mono text-[11px] text-muted-foreground" numberOfLines={1}>
-            {block.summary.subject}
-            {block.summary.context ?? ''}
-          </Text>
-        ) : null}
-      </View>
+      ) : (
+        <View className="flex-1" />
+      )}
       <ToolStatus status={block.status} />
     </View>
   );
@@ -82,9 +82,9 @@ function ToolRow({ block }: { block: ToolBlock }) {
 
 function ToolCluster({ blocks }: { blocks: ToolBlock[] }) {
   return (
-    <View className="my-2 rounded-xl border border-border bg-card px-3">
+    <View className="my-1.5 rounded-lg border border-border/70 bg-card px-2.5">
       {blocks.map((block, index) => (
-        <View key={block.key} className={index > 0 ? 'border-t border-border' : undefined}>
+        <View key={block.key} className={index > 0 ? 'border-t border-border/60' : undefined}>
           <ToolRow block={block} />
         </View>
       ))}
@@ -95,19 +95,22 @@ function ToolCluster({ blocks }: { blocks: ToolBlock[] }) {
 function ThinkingRow({ block }: { block: Extract<TranscriptBlock, { kind: 'thinking' }> }) {
   const [open, setOpen] = useState(false);
   return (
-    <Pressable onPress={() => setOpen((value) => !value)} className="my-1 flex-row gap-2 rounded-lg px-1 py-2">
-      {open ? <ChevronDown color="#83868b" size={15} /> : <ChevronRight color="#83868b" size={15} />}
+    <Pressable onPress={() => setOpen((value) => !value)} className="my-0.5 flex-row items-center gap-1.5 rounded-lg px-1 py-1.5">
+      {open ? <ChevronDown color="#83868b" size={13} /> : <ChevronRight color="#83868b" size={13} />}
       <View className="flex-1">
-        <Text className="text-xs font-medium text-muted-foreground">
-          {block.streaming ? 'Thinking…' : 'Thinking'}
-        </Text>
+        <View className="flex-row items-center gap-2">
+          <Text className="text-[11px] font-medium text-muted-foreground">
+            {block.streaming ? 'Thinking…' : 'Thinking'}
+          </Text>
+          {!open ? (
+            <Text className="flex-1 text-[11px] text-muted-foreground/60" numberOfLines={1}>
+              {block.text || 'Tap to expand'}
+            </Text>
+          ) : null}
+        </View>
         {open ? (
           <Text className="mt-1 text-xs leading-5 text-muted-foreground">{block.text}</Text>
-        ) : (
-          <Text className="mt-0.5 text-[11px] text-muted-foreground/70" numberOfLines={1}>
-            {block.text || 'Tap to expand internal reasoning'}
-          </Text>
-        )}
+        ) : null}
       </View>
     </Pressable>
   );
