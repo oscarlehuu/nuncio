@@ -458,7 +458,7 @@ The event contract is **shared** across providers (emitted via `BaseAgentProvide
 |---|---|---|
 | GET | `/api/health` | health check |
 | GET | `/api/projects` | list git repos from `NUNCIO_PROJECT_ROOTS` (one level deep) |
-| GET | `/api/projects/branches?path=` | list branches for a repo path (also accepts custom absolute paths) |
+| GET | `/api/projects/branches?path=&refresh=1` | list branches for a repo path (also accepts custom absolute paths); `refresh=1\|true` best-effort `git fetch --prune` first (TTL ~60s, fail-soft) so GitHub-only branches appear as `origin/<name>` |
 | GET | `/api/sessions` | list (excludes `ARCHIVED` unless `?includeArchived=1\|true`) |
 | POST | `/api/sessions` | `{ prompt, model?, provider?, workspace?, projectPath?, useWorktree?, baseBranch? }` — `projectPath` without `useWorktree` runs the provider in that selected repo and stores `baseBranch` as the selected branch; `useWorktree: true` creates a git worktree on branch `nuncio/<id>-<slug>` branched from `baseBranch` (default repo branch); `workspace` is the cwd fallback; starts run in background; `provider` defaults to `registry.defaultId()` (cursor if `CURSOR_API_KEY` set, else codex if logged in, else pi if authed; `503` when none configured) |
 | POST | `/api/sessions/handoff` | `{ cursorChatId, workspace, title? }` imports a Cursor IDE/CLI chat; `{ piSessionPath, workspace, title? }` imports a Pi CLI session. Cursor creates `provider: cursor`, `cursor_backend: cli` and is idempotent per `cursor_chat_id`; Pi creates `provider: pi`, `provider_thread_id: piSessionPath`, `cursor_backend: null` and is idempotent per `provider_thread_id`. Both hydrate transcript into the event log, status `IDLE` (no auto-run). |

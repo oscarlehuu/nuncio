@@ -43,20 +43,25 @@ export function BranchPicker({
   const disabled = !projectPath;
   const valueRef = useRef(value);
   valueRef.current = value;
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const apiBaseRef = useRef(apiBase);
+  apiBaseRef.current = apiBase;
+  const loadGenRef = useRef(0);
 
-  useEffect(() => {
+  function loadBranches(refresh: boolean) {
     if (!projectPath) {
       setBranches([]);
       setLoadError(false);
       return;
     }
 
-    let cancelled = false;
+    const gen = ++loadGenRef.current;
     setLoading(true);
     setLoadError(false);
-    void fetchBranches(projectPath, apiBase)
+    void fetchBranches(projectPath, apiBaseRef.current, { refresh })
       .then((items) => {
-        if (cancelled) return;
+        if (gen !== loadGenRef.current) return;
         const baseBranches = items.filter((branch) => !isNuncioSessionBranch(branch.name));
         setBranches(baseBranches);
         if (
@@ -68,23 +73,36 @@ export function BranchPicker({
             baseBranches.find((branch) => branch.isCurrent) ??
             baseBranches.find((branch) => branch.isDefault) ??
             baseBranches[0];
-          if (preferred) onChange(preferred.name);
+          if (preferred) onChangeRef.current(preferred.name);
         }
       })
       .catch(() => {
-        if (!cancelled) {
-          setBranches([]);
-          setLoadError(true);
-        }
+        if (gen !== loadGenRef.current) return;
+        setBranches((prev) => {
+          if (prev.length === 0) setLoadError(true);
+          return prev;
+        });
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (gen === loadGenRef.current) setLoading(false);
       });
+  }
 
-    return () => {
-      cancelled = true;
-    };
-  }, [apiBase, projectPath, onChange]);
+  useEffect(() => {
+    if (!projectPath) {
+      setBranches([]);
+      setLoadError(false);
+      return;
+    }
+    loadBranches(true);
+  }, [projectPath, apiBase]);
+
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (next && projectPath) {
+      loadBranches(true);
+    }
+  };
 
   const safeValue = isNuncioSessionBranch(value) ? undefined : value;
   const selected = branches.find((branch) => branch.name === safeValue);
@@ -95,7 +113,7 @@ export function BranchPicker({
       : selected?.name ?? safeValue ?? 'Base branch';
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
@@ -119,7 +137,7 @@ export function BranchPicker({
         <Command>
           <CommandInput placeholder="Search base branches…" />
           <CommandList>
-            {loading ? (
+            {loading && branches.length === 0 ? (
               <div className="py-6 text-center text-sm text-muted-foreground">Loading branches…</div>
             ) : (
               <>
