@@ -40,12 +40,17 @@ import type {
   GitStatusDto,
   GitStashEntryDto,
   GitUnpushedCommitsDto,
+  ListBranchesOptions,
   ProjectDto,
   PullResultDto,
   PushResultDto,
   RemoteInfoDto,
   WorktreeResult,
 } from './git.types';
+
+/** Per-repo debounce for best-effort `git fetch` before listing branches. */
+export const BRANCH_REFRESH_TTL_MS = 60_000;
+const BRANCH_REFRESH_TIMEOUT_MS = 15_000;
 
 function expandHome(path: string): string {
   return path.startsWith('~/') ? join(homedir(), path.slice(2)) : path;
@@ -78,6 +83,40 @@ async function git(
     throw new Error(stderr || stdout || `git ${args.join(' ')} failed`);
   }
   return stdout;
+}
+
+async function gitWithTimeout(args: string[], cwd: string, timeoutMs: number): Promise<string> {
+  const proc = Bun.spawn(['git', ...args], {
+    cwd,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      (async () => {
+        const code = await proc.exited;
+        const stdout = (await new Response(proc.stdout).text()).trim();
+        const stderr = (await new Response(proc.stderr).text()).trim();
+        if (code !== 0) {
+          throw new Error(stderr || stdout || `git ${args.join(' ')} failed`);
+        }
+        return stdout;
+      })(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          try {
+            proc.kill();
+          } catch {
+            // Process may have already exited.
+          }
+          reject(new Error(`git ${args.join(' ')} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 async function gitWithIndex(args: string[], cwd: string, indexPath: string): Promise<string> {
@@ -228,6 +267,8 @@ function parseRemoteUrl(url: string): RemoteInfoDto | null {
 
 @Injectable()
 export class GitService {
+  private readonly branchRefreshAt = new Map<string, number>();
+
   constructor(private readonly settings: SettingsService) {}
 
   private get projectRoots(): string[] {
@@ -336,8 +377,15 @@ export class GitService {
     });
   }
 
-  async listBranches(projectPath: string): Promise<BranchDto[]> {
+  async listBranches(
+    projectPath: string,
+    options?: ListBranchesOptions,
+  ): Promise<BranchDto[]> {
     const repoRoot = await this.resolveRepoRoot(projectPath);
+
+    if (options?.refresh) {
+      await this.maybeFetchOriginBranches(repoRoot, options.now);
+    }
 
     let current: string | null = null;
     try {
@@ -427,6 +475,29 @@ export class GitService {
         isDefault: name === defaultBranch,
         isCurrent: current !== null && name === current,
       }));
+  }
+
+  /**
+   * Best-effort `git fetch --prune --no-tags origin` so BranchPicker can list
+   * GitHub-only branches. Failures (offline, bad remote, timeout) are swallowed;
+   * callers still get whatever refs are already on disk. Per-repo TTL avoids
+   * spamming fetch when the picker reloads.
+   */
+  private async maybeFetchOriginBranches(repoRoot: string, now = Date.now()): Promise<void> {
+    const last = this.branchRefreshAt.get(repoRoot) ?? 0;
+    if (now - last < BRANCH_REFRESH_TTL_MS) return;
+
+    try {
+      await gitWithTimeout(
+        ['fetch', '--prune', '--no-tags', 'origin'],
+        repoRoot,
+        BRANCH_REFRESH_TIMEOUT_MS,
+      );
+    } catch {
+      // Fail soft — stale local/remote-tracking refs remain usable offline.
+    } finally {
+      this.branchRefreshAt.set(repoRoot, now);
+    }
   }
 
   async createWorktree(

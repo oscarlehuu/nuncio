@@ -38,7 +38,7 @@ describe('BranchPicker', () => {
     render(<ControlledPicker />);
 
     await waitFor(() => {
-      expect(mockFetchBranches).toHaveBeenCalledWith('/code/nuncio', '');
+      expect(mockFetchBranches).toHaveBeenCalledWith('/code/nuncio', '', { refresh: true });
     });
 
     await waitFor(async () => {
@@ -74,8 +74,31 @@ describe('BranchPicker', () => {
     render(<ControlledPicker />);
 
     await waitFor(() => {
-      expect(mockFetchBranches).toHaveBeenCalledWith('/code/nuncio', '/m/studio');
+      expect(mockFetchBranches).toHaveBeenCalledWith('/code/nuncio', '/m/studio', { refresh: true });
       expect(screen.getByRole('button', { name: /origin\/feature\/remote/i })).toBeInTheDocument();
+    });
+  });
+
+  it('refreshes remote branches again when the picker opens', async () => {
+    function ControlledPicker() {
+      const [branch, setBranch] = useState<string | undefined>();
+      return (
+        <BranchPicker projectPath="/code/nuncio" value={branch} onChange={setBranch} />
+      );
+    }
+
+    render(<ControlledPicker />);
+
+    await waitFor(() => {
+      expect(mockFetchBranches).toHaveBeenCalledWith('/code/nuncio', '', { refresh: true });
+    });
+    const callsBeforeOpen = mockFetchBranches.mock.calls.length;
+
+    await userEvent.click(await screen.findByRole('button', { name: /main/i }));
+
+    await waitFor(() => {
+      expect(mockFetchBranches.mock.calls.length).toBeGreaterThan(callsBeforeOpen);
+      expect(mockFetchBranches).toHaveBeenLastCalledWith('/code/nuncio', '', { refresh: true });
     });
   });
 

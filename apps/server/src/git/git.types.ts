@@ -11,6 +11,12 @@ export interface BranchDto {
   isCurrent: boolean;
 }
 
+/** Options for {@link GitService.listBranches}. `now` is a test seam for TTL. */
+export interface ListBranchesOptions {
+  refresh?: boolean;
+  now?: number;
+}
+
 export interface WorktreeResult {
   worktreePath: string;
   branch: string;

@@ -56,8 +56,14 @@ export function recordRecentProject(path: string): void {
   });
 }
 
-export async function fetchBranches(projectPath: string, base = ''): Promise<Branch[]> {
-  const res = await fetch(`${base}/api/projects/branches?path=${encodeURIComponent(projectPath)}`);
+export async function fetchBranches(
+  projectPath: string,
+  base = '',
+  options?: { refresh?: boolean },
+): Promise<Branch[]> {
+  const params = new URLSearchParams({ path: projectPath });
+  if (options?.refresh) params.set('refresh', '1');
+  const res = await fetch(`${base}/api/projects/branches?${params}`);
   if (!res.ok) throw new Error('Failed to load branches');
   const data = await res.json();
   return Array.isArray(data) ? (data as Branch[]) : [];
