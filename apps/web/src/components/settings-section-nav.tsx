@@ -2,7 +2,7 @@ import type { ComponentType, SVGProps } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export interface SettingsSectionNavItem {
+interface SettingsSectionNavItem {
   id: string;
   label: string;
   /** Lucide icon or a custom SVG component (e.g. Subscription bridge). */

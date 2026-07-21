@@ -70,7 +70,3 @@ export function parseSettingsSection(search = ''): SettingsSectionId {
     ? (requested as SettingsSectionId)
     : DEFAULT_SETTINGS_SECTION;
 }
-
-export function isSettingsSectionId(value: string): value is SettingsSectionId {
-  return VALID_SECTION_IDS.has(value as SettingsSectionId);
-}

@@ -1,6 +1,6 @@
 /** Normalize session forge/PR fields into sidebar badge presentation. */
 
-export type SessionPrBadgeState = 'open' | 'merged' | 'closed';
+type SessionPrBadgeState = 'open' | 'merged' | 'closed';
 
 export interface SessionPrBadge {
   state: SessionPrBadgeState;
