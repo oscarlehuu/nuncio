@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -7,7 +7,7 @@ import {
   BottomSheetModal,
   BottomSheetScrollView,
 } from '@gorhom/bottom-sheet';
-import { ChevronRight, Folder, GitBranch, Laptop, Send, Settings2 } from 'lucide-react-native';
+import { ArrowUp, ChevronRight, Folder, FolderSearch, GitBranch, Laptop, Send, Settings2 } from 'lucide-react-native';
 import { createSession, fetchModels, type Session } from '@nuncio/core/api';
 import {
   flattenProviders,
@@ -26,26 +26,29 @@ import {
   type CrewProject,
 } from '../lib/crew-projects';
 import { createCrewSubmitLock } from '../lib/crew-composer';
+import { fetchDirectories, type DirListing } from '../lib/fs-api';
 import { basename } from '../lib/home-sections';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { Text } from './ui/text';
 import { Textarea } from './ui/textarea';
 
-type SheetMode = 'model' | 'project' | 'workspace' | 'branch' | null;
+type SheetMode = 'model' | 'project' | 'browse' | 'workspace' | 'branch' | null;
 type WorkspaceMode = 'local' | 'worktree';
 type Engine = {
   key: string;
-  providerId: string;
-  groupId: string;
   label: string;
   brand: Brand;
   models: ModelInfo[];
 };
+type ModelListItem =
+  | { type: 'header'; key: string; label: string }
+  | { type: 'model'; key: string; model: ModelInfo; groupId: string };
 
 const SHEET_COPY: Record<Exclude<SheetMode, null>, { title: string; subtitle: string }> = {
-  model: { title: 'Choose a model', subtitle: 'Grouped by engine — pick which model handles this task.' },
+  model: { title: 'Choose a model', subtitle: 'Pick an engine, then a model.' },
   project: { title: 'Choose a project', subtitle: 'The project determines the workspace and base branch.' },
+  browse: { title: 'Browse folders', subtitle: 'Navigate the machine and pick a project folder.' },
   workspace: { title: 'Workspace mode', subtitle: 'Run in the repo checkout, or fork an isolated worktree.' },
   branch: { title: 'Base branch', subtitle: 'The worktree forks from this branch.' },
 };
@@ -70,6 +73,9 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('local');
   const [sheetMode, setSheetMode] = useState<SheetMode>(null);
   const [modelEngineKey, setModelEngineKey] = useState<string | null>(null);
+  const [browseListing, setBrowseListing] = useState<DirListing | null>(null);
+  const [browseLoading, setBrowseLoading] = useState(false);
+  const [browseError, setBrowseError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -115,38 +121,64 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
   const catalog = useMemo(() => normalizeModelCatalog(providers), [providers]);
   const models = useMemo(() => flattenProviders(catalog), [catalog]);
   const selectedModel = models.find((model) => model.id === modelId);
-  const selectedProject = projects.find((project) => project.path === projectPath);
   const selectableBranches = useMemo(() => selectableCrewBranches(branches), [branches]);
   const sheetCopy = sheetMode ? SHEET_COPY[sheetMode] : null;
   const canSend = Boolean(prompt.trim() && selectedModel && !busy);
 
+  // Engines = providers (Claude / Cursor / Codex / Nuncio Engine …); each
+  // provider's groups (cliproxy, xai, oauth …) become sub-headers inside it.
   const engines = useMemo<Engine[]>(
     () =>
       catalog
         .filter((provider) => !provider.unavailable && provider.groups?.length)
-        .flatMap((provider) =>
-          (provider.groups ?? []).map((group) => ({
-            key: `${provider.id}:${group.id}`,
-            providerId: provider.id,
-            groupId: group.id,
-            label: group.name,
-            brand: brandForModel({ providerId: provider.id, groupId: group.id, id: group.id, name: group.name }),
-            models: group.models,
-          })),
-        ),
+        .map((provider) => ({
+          key: provider.id,
+          label: provider.name,
+          brand: brandForModel({ providerId: provider.id, groupId: '', id: provider.id, name: provider.name }),
+          models: flattenProviders([provider]),
+        })),
     [catalog],
   );
-  const selectedEngineKey = useMemo(
-    () => engines.find((engine) => engine.models.some((model) => model.id === modelId))?.key ?? null,
-    [engines, modelId],
-  );
-  const activeEngineKey = modelEngineKey ?? selectedEngineKey ?? engines[0]?.key ?? null;
-  const activeEngine = engines.find((engine) => engine.key === activeEngineKey) ?? null;
+  const selectedProviderId = selectedModel?.providerId ?? null;
+  const activeEngineKey = modelEngineKey ?? selectedProviderId ?? engines[0]?.key ?? null;
+  const activeProvider = catalog.find((provider) => provider.id === activeEngineKey) ?? null;
+  const modelItems = useMemo<ModelListItem[]>(() => {
+    if (!activeProvider) return [];
+    const groups = (activeProvider.groups ?? []).filter((group) => group.models.length > 0);
+    const showHeaders = groups.length > 1;
+    const items: ModelListItem[] = [];
+    for (const group of groups) {
+      if (showHeaders) {
+        items.push({ type: 'header', key: `h:${activeProvider.id}:${group.id}`, label: group.name });
+      }
+      for (const model of group.models) {
+        items.push({ type: 'model', key: `${activeProvider.id}:${group.id}:${model.id}`, model, groupId: group.id });
+      }
+    }
+    return items;
+  }, [activeProvider]);
 
   const openSheet = (mode: Exclude<SheetMode, null>) => {
     if (mode === 'model') setModelEngineKey(null);
     setSheetMode(mode);
     sheetRef.current?.present();
+  };
+
+  const loadDirs = useCallback(async (path?: string) => {
+    setBrowseLoading(true);
+    setBrowseError(null);
+    try {
+      setBrowseListing(await fetchDirectories(path));
+    } catch {
+      setBrowseError('Could not load folders. Is the machine reachable?');
+    } finally {
+      setBrowseLoading(false);
+    }
+  }, []);
+
+  const openBrowse = () => {
+    setSheetMode('browse');
+    void loadDirs(projectPath || undefined);
   };
 
   const closeSheet = () => {
@@ -200,7 +232,7 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
           >
             <Folder color="#83868b" size={15} />
             <Text className="flex-1 text-xs font-medium text-foreground" numberOfLines={1}>
-              {selectedProject ? basename(selectedProject.path) : 'Default workspace'}
+              {projectPath ? basename(projectPath) : 'Default workspace'}
             </Text>
           </Pressable>
           <Pressable
@@ -218,7 +250,7 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
             </Text>
           </Pressable>
         </View>
-        {selectedProject ? (
+        {projectPath ? (
           <View className="mt-2 flex-row items-center gap-2">
             <Pressable
               accessibilityLabel="Choose workspace mode"
@@ -286,8 +318,8 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
       >
         {sheetMode === 'model' ? (
           <BottomSheetFlatList
-            data={activeEngine?.models ?? []}
-            keyExtractor={(item) => item.id}
+            data={modelItems}
+            keyExtractor={(item) => item.key}
             style={{ flex: 1 }}
             contentContainerStyle={{
               paddingHorizontal: 20,
@@ -333,22 +365,28 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
             ListEmptyComponent={
               <Text className="px-1 py-8 text-center text-xs text-muted-foreground">Loading models…</Text>
             }
-            renderItem={({ item }) => (
-              <ModelRow
-                model={item}
-                brand={brandForModel({
-                  providerId: activeEngine?.providerId ?? '',
-                  groupId: activeEngine?.groupId ?? '',
-                  id: item.id,
-                  name: item.name,
-                })}
-                selected={item.id === modelId}
-                onPress={() => {
-                  setModelId(item.id);
-                  closeSheet();
-                }}
-              />
-            )}
+            renderItem={({ item }) =>
+              item.type === 'header' ? (
+                <Text className="px-1 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  {item.label}
+                </Text>
+              ) : (
+                <ModelRow
+                  model={item.model}
+                  brand={brandForModel({
+                    providerId: activeProvider?.id ?? '',
+                    groupId: item.groupId,
+                    id: item.model.id,
+                    name: item.model.name,
+                  })}
+                  selected={item.model.id === modelId}
+                  onPress={() => {
+                    setModelId(item.model.id);
+                    closeSheet();
+                  }}
+                />
+              )
+            }
           />
         ) : (
           <BottomSheetScrollView
@@ -364,6 +402,18 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
             <Text className="mb-3 mt-1 text-xs text-muted-foreground">{sheetCopy?.subtitle}</Text>
             {sheetMode === 'project' ? (
               <View className="gap-2">
+                <Pressable
+                  accessibilityLabel="Browse folders"
+                  onPress={openBrowse}
+                  className="min-h-14 flex-row items-center gap-3 rounded-xl border border-dashed border-input px-3 active:opacity-70"
+                >
+                  <FolderSearch color="#83868b" size={18} />
+                  <View className="min-w-0 flex-1">
+                    <Text className="font-medium text-foreground">Browse folders…</Text>
+                    <Text className="mt-1 text-xs text-muted-foreground">Pick any git repo on the machine</Text>
+                  </View>
+                  <ChevronRight color="#83868b" size={16} />
+                </Pressable>
                 <PickerRow
                   label="Default workspace"
                   detail="Agent runs in its own scratch space"
@@ -387,9 +437,68 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
                 ))}
                 {projects.length === 0 ? (
                   <Text className="mt-1 px-1 text-xs leading-5 text-muted-foreground">
-                    No projects found. In Nuncio desktop → Settings → Workspaces, set “Project roots” to a folder that holds your git repos — they’ll be scanned one level deep and appear here.
+                    No projects registered under “Project roots”. Use “Browse folders” above to pick any git repo on the machine.
                   </Text>
                 ) : null}
+              </View>
+            ) : sheetMode === 'browse' ? (
+              <View className="gap-2">
+                <View className="flex-row items-center gap-2">
+                  {browseListing?.parent != null ? (
+                    <Pressable
+                      accessibilityLabel="Parent folder"
+                      onPress={() => {
+                        const parent = browseListing?.parent;
+                        if (parent) void loadDirs(parent);
+                      }}
+                      className="min-h-9 flex-row items-center gap-1 rounded-lg border border-border bg-card px-2.5 active:opacity-70"
+                    >
+                      <ArrowUp color="#83868b" size={14} />
+                      <Text className="text-xs text-muted-foreground">Up</Text>
+                    </Pressable>
+                  ) : null}
+                  <Text className="min-w-0 flex-1 font-mono text-[11px] text-muted-foreground" numberOfLines={1}>
+                    {browseListing?.current ?? '…'}
+                  </Text>
+                </View>
+                <Pressable
+                  accessibilityLabel="Use this folder"
+                  disabled={!browseListing || browseLoading}
+                  onPress={() => {
+                    if (browseListing) {
+                      setProjectPath(browseListing.current);
+                      closeSheet();
+                    }
+                  }}
+                  className={`min-h-11 flex-row items-center justify-center rounded-xl bg-primary px-3 active:opacity-90 ${!browseListing || browseLoading ? 'opacity-50' : ''}`}
+                >
+                  <Text className="text-sm font-semibold text-primary-foreground">Use this folder</Text>
+                </Pressable>
+                {browseLoading ? (
+                  <ActivityIndicator className="mt-4" />
+                ) : browseError ? (
+                  <Text className="mt-2 px-1 text-xs text-destructive">{browseError}</Text>
+                ) : browseListing && browseListing.entries.length === 0 ? (
+                  <Text className="mt-2 px-1 text-xs text-muted-foreground">No subfolders here.</Text>
+                ) : (
+                  (browseListing?.entries ?? []).map((entry) => (
+                    <Pressable
+                      key={entry.path}
+                      onPress={() => void loadDirs(entry.path)}
+                      className="min-h-12 flex-row items-center gap-3 rounded-xl border border-border bg-card px-3 py-2 active:opacity-70"
+                    >
+                      <Folder color="#83868b" size={16} />
+                      <Text className="min-w-0 flex-1 text-sm text-foreground" numberOfLines={1}>{entry.name}</Text>
+                      {entry.isGit ? (
+                        <View className="flex-row items-center gap-1 rounded-md bg-muted px-1.5 py-0.5">
+                          <GitBranch color="#83868b" size={11} />
+                          <Text className="text-[10px] text-muted-foreground">git</Text>
+                        </View>
+                      ) : null}
+                      <ChevronRight color="#606369" size={15} />
+                    </Pressable>
+                  ))
+                )}
               </View>
             ) : sheetMode === 'workspace' ? (
               <View className="gap-2">
