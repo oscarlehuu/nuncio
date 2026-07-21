@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { SessionChangesPanel } from './session-changes-panel';
 import {
+  commitSession,
   fetchCommitDiff,
   fetchGitBranchSync,
   fetchGitHistory,
@@ -31,6 +32,7 @@ vi.mock('../lib/api', async () => {
     fetchGitHistory: vi.fn(),
     fetchCommitDiff: vi.fn(),
     postDiffComment: vi.fn(),
+    commitSession: vi.fn(),
   };
 });
 
@@ -99,8 +101,60 @@ describe('SessionChangesPanel', () => {
     vi.mocked(fetchGitHistory).mockReset().mockResolvedValue({ branch: 'main', commits: [] });
     vi.mocked(fetchCommitDiff).mockReset().mockResolvedValue({ diff: '@@ -1 +1 @@\n-old\n+new', truncated: false });
     vi.mocked(postDiffComment).mockReset().mockResolvedValue({ ok: true });
+    vi.mocked(commitSession)
+      .mockReset()
+      .mockResolvedValue({ sha: 'abc1234', committed: true });
     vi.mocked(toast.success).mockReset();
     vi.mocked(toast.error).mockReset();
+  });
+
+  describe('commit section', () => {
+    it('renders a commit box when there are changed files, disabled until a message is typed', async () => {
+      render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+      expect(await screen.findByText('apps/web/src/app.tsx')).toBeInTheDocument();
+      const commitButton = screen.getByRole('button', { name: /^commit$/i });
+      expect(commitButton).toBeDisabled();
+
+      await userEvent.type(screen.getByPlaceholderText(/commit message/i), 'fix: app tweak');
+      expect(commitButton).toBeEnabled();
+    });
+
+    it('does not render the commit box when the working tree is clean', async () => {
+      vi.mocked(fetchSessionDiff).mockResolvedValue({ files: [], truncated: false, omittedFiles: 0 });
+      render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+      expect(await screen.findByText(/working tree clean|no local changes/i)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^commit$/i })).not.toBeInTheDocument();
+    });
+
+    it('commits with the typed message, clears it, and reloads changes', async () => {
+      render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+      await screen.findByText('apps/web/src/app.tsx');
+      const input = screen.getByPlaceholderText(/commit message/i);
+      await userEvent.type(input, 'fix: app tweak');
+      await userEvent.click(screen.getByRole('button', { name: /^commit$/i }));
+
+      await waitFor(() => expect(commitSession).toHaveBeenCalledWith('s1', 'fix: app tweak'));
+      await waitFor(() => expect(toast.success).toHaveBeenCalled());
+      expect(input).toHaveValue('');
+      // one load on mount + one reload after commit
+      await waitFor(() => expect(fetchSessionDiff).toHaveBeenCalledTimes(2));
+    });
+
+    it('surfaces a commit failure as an error toast and keeps the message', async () => {
+      vi.mocked(commitSession).mockRejectedValue(new Error('nothing to commit'));
+      render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+      await screen.findByText('apps/web/src/app.tsx');
+      const input = screen.getByPlaceholderText(/commit message/i);
+      await userEvent.type(input, 'fix: app tweak');
+      await userEvent.click(screen.getByRole('button', { name: /^commit$/i }));
+
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith('nothing to commit'));
+      expect(input).toHaveValue('fix: app tweak');
+    });
   });
 
   it('fetches on open, renders files, and refreshes manually', async () => {

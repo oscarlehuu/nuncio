@@ -47,7 +47,7 @@ export function HomeSurface({
     <section className="flex-1 flex flex-col min-h-0 overflow-hidden bg-background">
       <header
         className={cn(
-          'flex items-center gap-2 px-4 py-3 pl-16 border-b border-border sticky top-0 bg-background z-10 md:pl-4',
+          'app-region-drag flex items-center gap-2 px-4 py-3 pl-16 border-b border-border sticky top-0 bg-background z-10 md:pl-4',
           railOverlay && 'md:pl-16',
         )}
       >

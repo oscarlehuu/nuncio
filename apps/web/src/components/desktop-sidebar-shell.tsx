@@ -15,7 +15,9 @@ export type DesktopSidebarShellProps = SidebarProps & {
   onTogglePin: () => void;
 };
 
-const safeTop = 'calc(12px + env(safe-area-inset-top, 0px))';
+// Falls back to 12px + safe-area; the mac desktop shell raises it via
+// --shell-safe-top so the toggle clears the traffic lights (see index.css).
+const safeTop = 'var(--shell-safe-top, calc(12px + env(safe-area-inset-top, 0px)))';
 
 export function DesktopSidebarPinned({
   open,
@@ -28,7 +30,7 @@ export function DesktopSidebarPinned({
       className="hidden md:flex w-[260px] shrink-0 border-r border-sidebar-border flex-col"
     >
       <div
-        className="shrink-0 border-b border-sidebar-border p-3"
+        className="app-region-drag shrink-0 border-b border-sidebar-border p-3"
         style={{ paddingTop: safeTop }}
       >
         <Button
@@ -38,6 +40,7 @@ export function DesktopSidebarPinned({
           aria-label="Unpin sidebar"
           aria-expanded={open}
           onClick={onTogglePin}
+          className="app-region-no-drag"
         >
           <Menu />
         </Button>
@@ -73,7 +76,7 @@ export function DesktopSidebarHoverRail({
       )}
       onMouseLeave={onScheduleCloseHover}
     >
-      <div className="shrink-0 p-3" style={{ paddingTop: safeTop }}>
+      <div className="app-region-drag shrink-0 p-3" style={{ paddingTop: safeTop }}>
         <Button
           data-testid="desktop-nav-toggle"
           variant="outline"
@@ -83,6 +86,7 @@ export function DesktopSidebarHoverRail({
           onMouseEnter={onOpenHover}
           onFocus={onOpenHover}
           onClick={onTogglePin}
+          className="app-region-no-drag"
         >
           <Menu />
         </Button>

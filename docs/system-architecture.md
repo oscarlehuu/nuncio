@@ -937,6 +937,20 @@ explicit unavailable result without launching Chrome or writing media; Simulator
 independent. Desktop server bundling keeps `playwright-core` external so Bun does not follow its
 runtime-only Chromium/BiDi modules into the packaged daemon bundle.
 
+## Desktop window chrome (macOS integrated title bar)
+
+On macOS the shell creates the window with `titleBarStyle: 'hiddenInset'` and a repositioned
+`trafficLightPosition`; Windows/Linux keep the native frame. Geometry lives in
+`apps/desktop/src/desktop-chrome.js` (`getWindowChromeOptions(platform)`,
+`HEADER_HEIGHT_PX = 52` — must match the web headers' `min-h-[52px]`). The preload exposes
+`platform: process.platform`; `apps/web/src/lib/desktop-chrome.ts`
+`applyDesktopChromeAttribute()` (called from `main.tsx`) stamps
+`data-desktop-chrome="mac"` on the root, which activates in `index.css`: `.app-region-drag` /
+`.app-region-no-drag` utilities (inert outside the mac shell) and a raised `--shell-safe-top`
+(2.5rem) so the sidebar/rail toggle strip clears the traffic lights. Draggable surfaces:
+session-detail/home/grid headers + the sidebar toggle strips, each with `no-drag` on their
+interactive clusters.
+
 ## Desktop window state
 
 The Electron shell persists window geometry through `apps/desktop/src/window-state.js` at
@@ -1155,6 +1169,37 @@ Strictly additive, following the exact SCM/Browser side-panel + right-rail patte
 
 - **Server** (`apps/server/test/unit/fs/file-explorer.service.spec.ts`, bun test, real `mkdtemp` temp dirs). Confinement suite asserts `..` traversal, absolute paths, and **symlink-escape** (a symlink inside root pointing outside) all 400 for **entries / read / write / mkdir / rename / delete**, plus **rename-of-root** and **delete-of-root** are refused, and `root` must be an existing directory. Happy paths: dirs-first listing with `.git`/`node_modules` hidden + other dotfiles shown, nested-dir parent paths, utf8 read, binary + oversized return the flag (not raw content), write create/overwrite, mkdir, rename move, recursive delete, and write requires an existing parent. The pre-existing `fs.service.spec.ts` (dir picker) stays green — `listDirectories` is unchanged.
 - **Web:** `apps/web/src/components/file-explorer-panel.spec.tsx` (mocks `../lib/fs-api`) — tree from mocked `listEntries`, lazy-load on expand, select→content in editor, edit enables Save and `writeFile` called with `(root, path, newContent)`, binary/too-large placeholder (no editor), delete calls `deleteEntry` after confirm + refresh. `session-detail.spec.tsx` extended: Files toggle appears when a working dir exists and toggling opens the panel while closing SCM+Browser (mutual exclusion).
+
+## Hand off to another engine (cross-engine handoff)
+
+`POST /api/sessions/:id/handoff-to` (`sessions.controller.ts` `handoffTo`) →
+`SessionsService.handoffToProvider(id, { provider, model?, prompt? })`. Creates a **fresh
+session on the target provider** — never a native resume — seeded through the normal
+`create()` choke point:
+
+- **Guards:** source must be `IDLE`/`PAUSED`/`ERROR`; target resolved via
+  `AgentRegistry.getAvailable` (400 when unknown/unavailable); a session that is itself a
+  fresh handoff (`priorSessionId` set) must have ≥1 native `assistant_message` before it can
+  hand off again.
+- **Context pack:** `renderEventsSince(events.listTail(id, 2000), 32 KB, { sessionId, sinceSeq: 0 })`
+  rides a new `history` slot in `composeSessionPreamble` (order: brief → **history** → facts →
+  workspace → prompt; history takes no per-engine profile wrapper — it is Nuncio-owned
+  mechanical text). The brief carries goal (`Continue "<title>" — handed off from <provider>`)
+  + `buildWorkspaceSnapshot` + `sourceSessionId`. The transcript never replays verbatim —
+  `renderEventsSince` is the sanctioned lossy carrier.
+- **Workspace adoption:** the new session reuses the source's working dir. In `create()`'s
+  non-worktree branch, an explicit `input.worktreePath`/`input.branch` adopts the source's
+  existing worktree instead of creating a new one (no `useWorktree`); a local session passes
+  its `workspace` through. NOTE: source and successor rows then share one `worktree_path` —
+  the successor is the active owner; resuming the source while the successor runs is
+  currently unguarded (documented risk, revisit if it bites).
+- **Model:** explicit `model` wins; same-engine handoff keeps the source model; a different
+  engine falls back to its own default.
+- **Lineage:** `priorSessionId` (now settable through `CreateSessionDto` → repository
+  `create`) links the chain; lineage chips/API pick it up unchanged.
+- **Web:** session header ⋯ menu renders one `Hand off to {engine}` item per available
+  provider ≠ current (`session-detail.tsx` `handoffTargets`/`handleHandoff` →
+  `handoffSessionTo` in `@nuncio/core/api`), then navigates via `onOpenSession`.
 
 ## Continue on mobile (session handoff)
 
@@ -1525,14 +1570,14 @@ Session-scoped HTTP routes live in `GitSessionController` (`apps/server/src/sess
 
 The web client calls these via `fetchGitStatus`/`fetchGitDiff`/`commitSession`/`pushSession` (`apps/web/src/lib/api.ts`). `GitFileChange` mirrors `insertions`/`deletions`; `fetchGitDiff(id, { staged?, base?, path? })` appends `path=<encoded>` when provided (`api.ts` `fetchGitDiff`).
 
-### Source Control dock UI (`review-changes.tsx`)
+### Source Control dock UI (`forge/scm-panel.tsx`)
 
-`<ReviewChanges sessionId=… defaultMessage=… />` (`apps/web/src/components/review-changes.tsx`) is the **only** panel in the Source Control dock — `session-detail.tsx:500` renders it alone (the aside/toggle at `session-detail.tsx:486` is unchanged). **`<PrPanel>` is no longer rendered in the dock**; `pr-panel.tsx` / `pr-panel.spec.tsx` are intentionally kept intact for a future dedicated PR screen. NEVER delete `pr-panel.tsx`.
+The SCM inspector in the session detail aside is `<ScmPanel>` (`apps/web/src/components/forge/scm-panel.tsx`, mounted from `session-detail.tsx`), segmented **Changes / PR / Issues / Actions** (non-Changes segments disabled without a repo path). The **Changes** segment renders `<SessionChangesPanel>` (lazy) followed by `<PrPanel>`:
 
-- **Branch header row** holds the branch name, ahead/behind, and the **Push** button (stays here).
-- **Uncommitted-changes header** (`N Uncommitted Change(s)`) keeps its chevron collapse and appends aggregate `+{totalInsertions}` / `-{totalDeletions}` (summed across files) when files exist.
-- **Inline accordion diffs.** Each file row is a `<button>` (keeps `title={file.path}`) showing name/dir, per-file `+{insertions}`/`-{deletions}` (a `0` count is hidden), and a `New` tag for untracked (`code === 'U'`). Clicking toggles a single `expandedPath`; on expand it lazily `fetchGitDiff(sessionId, { path })`, caches the result in `diffsByPath` (re-open does not refetch), shows `Loading diff…` while pending, and renders the diff in a `<pre>` under the row. Collapsed by default; the old whole-repo `Show diff/Hide diff` toggle and its mount-time diff fetch are **removed** (only `fetchGitStatus` runs on mount).
-- **Commit section** is its own bordered block (`border-t`) below the file list, headed `Commit Message`, containing the `Textarea` (placeholder `Commit message`) + full-width **Commit** button (disabled when `!message.trim() || isClean || committing || pushing`).
+- **`SessionChangesPanel`** (`session-changes-panel.tsx`): `SessionScmBranchStrip` (branch name, ahead/behind, **Pull**/**Push** buttons, latest CI run), conflicts list, outgoing/incoming commit lists, stash, the changed-files list (structured hunks from `GET /api/sessions/:id/diff`, per-hunk comment→steer, blame), then the **Commit section** — its own bordered block headed `Commit Message` with a `Textarea` (placeholder `Commit message`) + full-width **Commit** button (disabled when `!message.trim() || committing`; rendered only when the diff has files). Commit calls `commitSession(id, message)` (`POST /api/sessions/:id/git/commit`, server auto-stages unless `stageAll:false`), toasts the short sha, clears the box, and reloads the panel.
+- **`PrPanel`** (`pr-panel.tsx`): Open Pull Request button / PR state + checks / full `forge/pr-detail` when a PR exists.
+
+`review-changes.tsx` is **not mounted anywhere** — it is retained (with its spec) as a reference implementation for a possible dedicated review screen. Do not delete `pr-panel.tsx` or `review-changes.tsx` without checking with the user.
 
 ## Forge session metadata + outbound PR/MR flow
 

@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('nuncioDesktop', {
   marker: 'desktop',
   electron: process.versions.electron,
+  platform: process.platform,
   notify: (payload) => ipcRenderer.invoke('nuncio:notify', payload),
   external: {
     open: (url) => ipcRenderer.invoke('external:open', url),

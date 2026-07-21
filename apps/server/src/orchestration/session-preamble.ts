@@ -4,6 +4,12 @@ import type { PromptProfile } from '../prompts/prompt-profile.types';
 export interface SessionPreambleParts {
   /** Rendered handoff brief (A1), prepended first. */
   brief?: string;
+  /**
+   * Compacted source-session timeline (renderEventsSince output) for a
+   * cross-engine handoff, after the brief. Nuncio-owned mechanical text —
+   * takes no per-engine profile wrapper.
+   */
+  history?: string;
   /** Rendered project facts (B2), after the brief. */
   facts?: string;
   /** Rendered workspace context (branch/HEAD/status/recent/top-level), after the facts. */
@@ -34,6 +40,11 @@ export function composeSessionPreamble(parts: SessionPreambleParts): string {
 
   const brief = parts.brief?.trim();
   if (brief) sections.push(applyWrapper(parts.profile?.sections.briefWrapper, brief, warn));
+
+  // Handoff history is Nuncio-owned mechanical text (compacted timeline), so
+  // like the workspace block it takes no per-engine profile wrapper.
+  const history = parts.history?.trim();
+  if (history) sections.push(history);
 
   const facts = parts.facts?.trim();
   if (facts) sections.push(applyWrapper(parts.profile?.sections.factsWrapper, facts, warn));

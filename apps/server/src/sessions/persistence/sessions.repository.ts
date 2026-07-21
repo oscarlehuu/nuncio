@@ -373,7 +373,7 @@ export class SessionsRepository {
       forge_status: input.forgeStatus ?? 'none',
       parent_session_id: input.parentSessionId ?? null,
       origin_task_id: input.originTaskId ?? null,
-      prior_session_id: null,
+      prior_session_id: input.priorSessionId ?? null,
       mcp_server_ids_json: stringifyMcpServerIdsJson(input.mcpServerIds),
       created_at: now,
       updated_at: now,

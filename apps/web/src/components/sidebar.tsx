@@ -143,7 +143,7 @@ export function Sidebar({
   return (
     <div className="flex flex-col h-full bg-sidebar text-sidebar-foreground">
       <div className="p-4 pb-3 shrink-0">
-        <div className="flex items-center px-1.5 pt-0.5">
+        <div className="app-region-drag flex items-center px-1.5 pt-0.5">
           <span className="text-ui-lg font-semibold tracking-tight text-muted-foreground">Nuncio</span>
         </div>
         <MachineSwitcher />

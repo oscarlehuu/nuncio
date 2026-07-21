@@ -213,8 +213,15 @@ export interface CreateSessionDto {
   /** Lineage: the parent session and originating task (set by the task runner, not the public API). */
   parentSessionId?: string;
   originTaskId?: string;
+  /** Lineage: the session this one continues (cross-engine handoff / CLI adoption chain). */
+  priorSessionId?: string;
   /** Handoff brief to prepend to the first prompt (subagent spawn); composed with project facts. */
   contextBrief?: HandoffBrief;
+  /**
+   * Compacted source-session timeline for a cross-engine handoff, composed
+   * into the preamble after the brief. Internal — never set via the public API.
+   */
+  historyContext?: string;
   /** Explicit MCP server ids for this session; omit to inherit project defaults. */
   mcpServerIds?: string[] | null;
 }
@@ -225,6 +232,18 @@ export interface SteerSessionDto {
   message: string;
   forceResume?: boolean;
   attachments?: AgentAttachment[];
+}
+
+/**
+ * Hand a finished/paused session to another engine: a new session on the
+ * target provider seeded with the source's compacted timeline, workspace
+ * snapshot, and working directory, linked via priorSessionId.
+ */
+export interface HandoffToProviderDto {
+  provider: string;
+  model?: string;
+  /** Optional continue instruction; defaults to a generic "pick up where the previous engine left off". */
+  prompt?: string;
 }
 
 /** Internal generic turn API for durable runners continuing one exact session. */

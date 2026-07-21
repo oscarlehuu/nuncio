@@ -42,8 +42,11 @@ import { renderContextFacts } from '../context/context-facts.renderer';
 import { materializeContextFile } from '../context/context-file.materializer';
 import { GitService } from '../git/git.service';
 import type { ModelOptionsMap } from '../models/model-options.types';
+import { renderEventsSince } from '../context/events-compactor';
 import { renderHandoffBrief } from '../orchestration/handoff-brief.renderer';
+import type { HandoffBrief } from '../orchestration/handoff-brief.types';
 import { composeSessionPreamble } from '../orchestration/session-preamble';
+import { buildWorkspaceSnapshot } from '../orchestration/workspace-snapshot';
 import {
   buildSessionWorkspaceContext,
   renderWorkspaceContext,
@@ -61,6 +64,7 @@ import type {
   CreateSessionDto,
   ContinueExistingSessionDto,
   HandoffSessionDto,
+  HandoffToProviderDto,
   ProviderRequestDecision,
   ProviderRequestInput,
   ProviderRequestResult,
@@ -117,6 +121,13 @@ const DEFAULT_DELETE_RETRY_WAIT_MS = 5_000;
 
 /** Ancestor walk depth cap — bounds cost and survives a manufactured cycle. */
 const ANCESTOR_WALK_CAP = 10;
+// Cross-engine handoff: the compacted source timeline rides the new session's
+// preamble under a 32 KB byte budget (renderEventsSince evicts oldest-first),
+// reading at most this many trailing events.
+const HANDOFF_HISTORY_EVENT_LIMIT = 2000;
+const HANDOFF_HISTORY_BUDGET_BYTES = 32 * 1024;
+const HANDOFF_CONTINUE_PROMPT =
+  'Continue this task from where the previous engine left off. The handoff context above has the goal, workspace state, and a compacted timeline of the work so far — verify the current state of the working tree before making changes, then proceed.';
 
 function toSessionRef(session: SessionDto): SessionRefDto {
   return { id: session.id, title: session.title, status: session.status, provider: session.provider };
@@ -384,7 +395,12 @@ export class SessionsService implements OnModuleDestroy {
           }
         }
       } else {
-        workspace = workspace ?? projectPath;
+        // Adopt an existing working dir (cross-engine handoff): an explicit
+        // worktreePath/branch reuses the source session's isolated worktree
+        // instead of creating a new one; otherwise run in the project itself.
+        worktreePath = input.worktreePath?.trim() || undefined;
+        branch = input.branch?.trim() || undefined;
+        if (!worktreePath) workspace = workspace ?? projectPath;
       }
     }
 
@@ -412,6 +428,7 @@ export class SessionsService implements OnModuleDestroy {
       : await this.renderWorkspaceContextBlock(worktreePath ?? workspace, baseBranch);
     const prompt = composeSessionPreamble({
       ...(input.contextBrief ? { brief: renderHandoffBrief(input.contextBrief) } : {}),
+      ...(input.historyContext ? { history: input.historyContext } : {}),
       ...(factsInPreamble ? { facts: this.renderProjectFacts(projectPath!, id) } : {}),
       ...(workspaceContext ? { workspace: workspaceContext } : {}),
       prompt: input.prompt,
@@ -612,6 +629,67 @@ export class SessionsService implements OnModuleDestroy {
     this.hydrateIfNeeded(session);
     const refreshed = this.sessions.findById(session.id)!;
     return this.enrichSession(refreshed);
+  }
+
+  /**
+   * Hand a settled session to another engine: a fresh session on the target
+   * provider, seeded with a handoff brief (goal + workspace snapshot) and the
+   * source's compacted timeline, reusing the source's working directory and
+   * linked via priorSessionId. The transcript never replays verbatim —
+   * renderEventsSince is the sanctioned lossy carrier.
+   */
+  async handoffToProvider(id: string, input: HandoffToProviderDto): Promise<SessionDto> {
+    const source = this.requireSession(id);
+    if (source.status !== 'IDLE' && source.status !== 'PAUSED' && source.status !== 'ERROR') {
+      throw new BadRequestException(`Cannot hand off session in status ${source.status}`);
+    }
+    const targetId = input.provider?.trim();
+    if (!targetId) throw new BadRequestException('provider is required');
+    await this.agents.getAvailable(targetId);
+
+    const events = this.events.listTail(id, HANDOFF_HISTORY_EVENT_LIMIT);
+    // A session that is itself a fresh handoff has nothing native to carry —
+    // require one real assistant turn before chaining another handoff.
+    if (source.priorSessionId && !events.some((event) => event.type === 'assistant_message')) {
+      throw new BadRequestException(
+        'This session is a fresh handoff with no turns of its own yet — run it before handing off again.',
+      );
+    }
+
+    const history = renderEventsSince(events, HANDOFF_HISTORY_BUDGET_BYTES, {
+      sessionId: id,
+      sinceSeq: 0,
+    });
+    const workingDir = source.worktreePath ?? source.workspace ?? source.projectPath ?? undefined;
+    const snapshot = workingDir ? await buildWorkspaceSnapshot(workingDir, source.baseBranch) : null;
+    const brief: HandoffBrief = {
+      goal: `Continue "${source.title}" — handed off from ${source.provider}.`,
+      ...(snapshot ? { workspace: snapshot } : {}),
+      sourceSessionId: id,
+    };
+
+    const created = await this.create({
+      prompt: input.prompt?.trim() || HANDOFF_CONTINUE_PROMPT,
+      provider: targetId,
+      // Same engine keeps the source model unless overridden; a different
+      // engine falls back to its own default when no model is given.
+      ...(input.model
+        ? { model: input.model }
+        : targetId === source.provider && source.model
+          ? { model: source.model }
+          : {}),
+      ...(source.workspace ? { workspace: source.workspace } : {}),
+      ...(source.projectPath ? { projectPath: source.projectPath } : {}),
+      ...(source.baseBranch ? { baseBranch: source.baseBranch } : {}),
+      ...(source.worktreePath ? { worktreePath: source.worktreePath } : {}),
+      ...(source.branch ? { branch: source.branch } : {}),
+      contextBrief: brief,
+      historyContext: history,
+      priorSessionId: id,
+    });
+    // The handoff continues the same task — carry the source title instead of
+    // the first line of the composed preamble.
+    return this.rename(created.id, source.title);
   }
 
   /**

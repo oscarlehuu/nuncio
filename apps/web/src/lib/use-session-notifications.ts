@@ -171,6 +171,7 @@ declare global {
     nuncioDesktop?: {
       marker?: string;
       electron?: string;
+      platform?: string;
       notify?: (payload: { title: string; body: string; sessionId: string }) => Promise<unknown> | void;
       browser?: NuncioDesktopBrowserApi;
       external?: {

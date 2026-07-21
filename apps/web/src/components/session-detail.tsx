@@ -8,6 +8,7 @@ import {
   respondInteraction,
   fetchChildTasks,
   fetchSessionLineage,
+  handoffSessionTo,
   startMultitask,
   startMultitaskFromQueue,
   markTaskReviewed,
@@ -22,6 +23,7 @@ import { DEFAULT_HOLD_SECONDS, holdSecondsRemaining } from '../lib/subagent-hold
 import { derivePendingQueuedSteers } from '../lib/transcript-build-blocks';
 import { useComposerAttachments } from '../lib/use-composer-attachments';
 import { AttachButton, AttachmentTray } from './attachment-tray';
+import { ProviderIcon } from './provider-icon';
 import { derivePendingUserInput } from '../lib/derive-pending-user-input';
 import { deriveComposerEnabled } from '../lib/derive-composer-enabled';
 import { isComposingEvent } from '../lib/keyboard';
@@ -330,6 +332,28 @@ export function SessionDetail({
   const canArchive = !managedByCrew && !isArchived;
   const canRestore = !managedByCrew && isArchived && !!onRestore;
   const canDelete = !managedByCrew && isArchived && !!onDelete;
+  // Cross-engine handoff: only a settled session can hand off, and only to a
+  // different, available engine (mirrors the server-side guard).
+  const canHandoff =
+    !managedByCrew &&
+    (session.status === 'IDLE' || session.status === 'PAUSED' || session.status === 'ERROR');
+  const handoffTargets = canHandoff
+    ? catalog.filter((provider) => !provider.unavailable && provider.id !== session.provider)
+    : [];
+  const [handingOff, setHandingOff] = useState(false);
+  const handleHandoff = async (providerId: string) => {
+    if (handingOff) return;
+    try {
+      setHandingOff(true);
+      const next = await handoffSessionTo(session.id, { provider: providerId });
+      toast.success(`Handed off to ${providerMeta(providerId, catalog).name}`);
+      onOpenSession?.(next.id);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to hand off session');
+    } finally {
+      setHandingOff(false);
+    }
+  };
 
   const entry = useMemo(
     () => (session.model ? modelById(catalog)[session.model] : undefined),
@@ -646,8 +670,8 @@ export function SessionDetail({
     >
       <TooltipProvider>
       <div className="flex-1 min-w-0 flex flex-col min-h-0">
-      <header className="shrink-0 relative flex items-center gap-3 px-4 md:px-5 py-3 border-b border-border bg-card min-h-[52px]">
-        <div className="flex-1 min-w-0 flex justify-center items-center">
+      <header className="app-region-drag shrink-0 relative flex items-center gap-3 px-4 md:px-5 py-3 border-b border-border bg-card min-h-[52px]">
+        <div className="app-region-no-drag flex-1 min-w-0 flex justify-center items-center">
           {editingTitle && !managedByCrew ? (
             <div className="flex items-center gap-1.5 max-w-[60%]">
               <Input
@@ -724,7 +748,7 @@ export function SessionDetail({
           />
         </div>
 
-        <div className="absolute right-4 md:right-5 top-1/2 -translate-y-1/2 flex items-center gap-1">
+        <div className="app-region-no-drag absolute right-4 md:right-5 top-1/2 -translate-y-1/2 flex items-center gap-1">
           {headerActions}
           {!managedByCrew && <Tooltip>
             <TooltipTrigger asChild>
@@ -746,7 +770,7 @@ export function SessionDetail({
             <TooltipContent side="bottom">Panel</TooltipContent>
           </Tooltip>}
 
-          {(showContinueOnMobile || showHeaderPause || canArchive || canRestore || canDelete) && (
+          {(showContinueOnMobile || showHeaderPause || canArchive || canRestore || canDelete || handoffTargets.length > 0) && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon" aria-label="Session actions">
@@ -764,6 +788,17 @@ export function SessionDetail({
                     Continue on mobile
                   </DropdownMenuItem>
                 )}
+                {handoffTargets.map((target) => (
+                  <DropdownMenuItem
+                    key={target.id}
+                    onClick={() => void handleHandoff(target.id)}
+                    disabled={lifecycleBusy || handingOff}
+                    aria-label={`Hand off to ${target.name}`}
+                  >
+                    <ProviderIcon providerId={target.id} className="size-4" />
+                    Hand off to {target.name}
+                  </DropdownMenuItem>
+                ))}
                 {showHeaderPause && (
                   <DropdownMenuItem
                     onClick={() => void onPause()}

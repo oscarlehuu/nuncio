@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import {
+  commitSession,
   countDebugSentinelLines,
   fetchGitBranchSync,
   fetchGitHistory,
@@ -24,6 +25,8 @@ import { SessionScmHistory } from './session-scm-history';
 import { SessionScmIssues } from './session-scm-issues';
 import { SessionScmStash } from './session-scm-stash';
 import { hunkRange, hunkText, type ComposerKey } from './session-changes-panel-format';
+import { Button } from './ui/button';
+import { Textarea } from './ui/textarea';
 
 interface SessionChangesPanelProps {
   sessionId: string;
@@ -59,6 +62,8 @@ export function SessionChangesPanel({
   const [comment, setComment] = useState('');
   const [sending, setSending] = useState(false);
   const [sentKey, setSentKey] = useState<ComposerKey | null>(null);
+  const [commitMessage, setCommitMessage] = useState('');
+  const [committing, setCommitting] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -134,6 +139,22 @@ export function SessionChangesPanel({
       toast.error(error instanceof Error ? error.message : 'Failed to send diff comment');
     } finally {
       setSending(false);
+    }
+  };
+
+  const submitCommit = async () => {
+    const message = commitMessage.trim();
+    if (!message || committing) return;
+    try {
+      setCommitting(true);
+      const result = await commitSession(sessionId, message);
+      toast.success(result.sha ? `Committed ${result.sha.slice(0, 7)}` : 'Committed');
+      setCommitMessage('');
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to commit');
+    } finally {
+      setCommitting(false);
     }
   };
 
@@ -244,6 +265,28 @@ export function SessionChangesPanel({
                 />
               ))}
             </ul>
+          </div>
+        )}
+
+        {hasFiles && (
+          <div className="border-b border-border/50 px-3 py-3">
+            <div className="mb-2 text-sm font-medium">Commit Message</div>
+            <Textarea
+              value={commitMessage}
+              onChange={(event) => setCommitMessage(event.target.value)}
+              placeholder="Commit message"
+              rows={2}
+              className="mb-2 resize-none text-sm"
+              disabled={committing}
+            />
+            <Button
+              size="sm"
+              className="w-full"
+              disabled={!commitMessage.trim() || committing}
+              onClick={() => void submitCommit()}
+            >
+              {committing ? 'Committing…' : 'Commit'}
+            </Button>
           </div>
         )}
 

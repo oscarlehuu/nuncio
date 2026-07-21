@@ -441,6 +441,25 @@ body {
   scroll-behavior: auto !important;
 }
 
+/* macOS desktop shell (hiddenInset title bar). main.tsx stamps
+   data-desktop-chrome="mac" when running inside the Electron shell on macOS;
+   the app-region utilities are inert everywhere else. Traffic-light geometry
+   lives in apps/desktop/src/desktop-chrome.js (52px header) — keep in sync. */
+:root {
+  /* Top inset for the sidebar/rail toggle strip; grows under the mac shell so
+     the hamburger clears the traffic lights. */
+  --shell-safe-top: calc(12px + env(safe-area-inset-top, 0px));
+}
+:root[data-desktop-chrome='mac'] {
+  --shell-safe-top: 2.5rem;
+}
+:root[data-desktop-chrome='mac'] .app-region-drag {
+  -webkit-app-region: drag;
+}
+:root[data-desktop-chrome='mac'] .app-region-no-drag {
+  -webkit-app-region: no-drag;
+}
+
 /* Opt-in pointer cursors on interactive chrome (default off, macOS convention). */
 :root[data-pointer-cursors] button:not(:disabled),
 :root[data-pointer-cursors] a[href],

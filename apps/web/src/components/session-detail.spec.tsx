@@ -9,6 +9,7 @@ import {
   fetchSessionDiff,
   fetchChildTasks,
   fetchSessionLineage,
+  handoffSessionTo,
   startMultitask,
   startMultitaskFromQueue,
   markTaskReviewed,
@@ -46,6 +47,7 @@ vi.mock('./browser-panel', () => ({
 
 vi.mock('sonner', () => ({
   toast: {
+    success: vi.fn(),
     error: vi.fn(),
   },
 }));
@@ -91,6 +93,7 @@ vi.mock('../lib/api', async () => {
     commitSession: vi.fn(),
     pushSession: vi.fn(),
     openPullRequest: vi.fn(),
+    handoffSessionTo: vi.fn(),
     fetchChildTasks: vi.fn(async () => []),
     fetchSessionLineage: vi.fn(async () => ({ ancestors: [], children: [] })),
     startMultitask: vi.fn(async () => ({ parentSessionId: 's1', tasks: [] })),
@@ -413,6 +416,59 @@ describe('SessionDetail', () => {
     expect(screen.getByRole('menuitem', { name: /archive session/i })).toBeInTheDocument();
   });
 
+  describe('hand off to another engine', () => {
+    const HANDOFF_PROVIDERS: ModelProvider[] = [
+      { id: 'pi', name: 'Pi' },
+      { id: 'codex', name: 'Codex' },
+      { id: 'claude', name: 'Claude', unavailable: true },
+    ];
+
+    it('hands off to a chosen engine and opens the new session', async () => {
+      vi.mocked(handoffSessionTo).mockResolvedValue(
+        makeSession({ id: 's2', provider: 'codex' }),
+      );
+      const onOpenSession = vi.fn();
+      await renderDetail({ status: 'IDLE' }, NO_EVENTS, HANDOFF_PROVIDERS, { onOpenSession });
+
+      await userEvent.click(screen.getByRole('button', { name: /session actions/i }));
+      await userEvent.click(screen.getByRole('menuitem', { name: /hand off to codex/i }));
+
+      await waitFor(() =>
+        expect(handoffSessionTo).toHaveBeenCalledWith('s1', { provider: 'codex' }),
+      );
+      await waitFor(() => expect(onOpenSession).toHaveBeenCalledWith('s2'));
+    });
+
+    it('offers only available engines other than the current one', async () => {
+      await renderDetail({ status: 'IDLE', provider: 'pi' }, NO_EVENTS, HANDOFF_PROVIDERS);
+
+      await userEvent.click(screen.getByRole('button', { name: /session actions/i }));
+      expect(screen.getByRole('menuitem', { name: /hand off to codex/i })).toBeInTheDocument();
+      // Current engine and unavailable engines are not offered.
+      expect(screen.queryByRole('menuitem', { name: /hand off to pi/i })).toBeNull();
+      expect(screen.queryByRole('menuitem', { name: /hand off to claude/i })).toBeNull();
+    });
+
+    it('hides handoff targets while the session is RUNNING', async () => {
+      await renderDetail({ status: 'RUNNING' }, NO_EVENTS, HANDOFF_PROVIDERS);
+
+      await userEvent.click(screen.getByRole('button', { name: /session actions/i }));
+      expect(screen.queryByRole('menuitem', { name: /hand off to/i })).toBeNull();
+    });
+
+    it('surfaces a handoff failure as an error toast', async () => {
+      vi.mocked(handoffSessionTo).mockRejectedValue(new Error('provider codex is not available'));
+      await renderDetail({ status: 'IDLE' }, NO_EVENTS, HANDOFF_PROVIDERS);
+
+      await userEvent.click(screen.getByRole('button', { name: /session actions/i }));
+      await userEvent.click(screen.getByRole('menuitem', { name: /hand off to codex/i }));
+
+      await waitFor(() =>
+        expect(toast.error).toHaveBeenCalledWith('provider codex is not available'),
+      );
+    });
+  });
+
   it('does not show a pause button when ARCHIVED', async () => {
     await renderDetail({ status: 'ARCHIVED' });
     const actions = screen.queryByRole('button', { name: /session actions/i });
@@ -633,7 +689,10 @@ describe('SessionDetail', () => {
     expect(await screen.findByText('src/app.ts')).toBeInTheDocument();
 
     expect(fetchSessionDiff).toHaveBeenCalledWith('s1');
-    expect(screen.queryByPlaceholderText(/commit message/i)).toBeNull();
+    // Exactly one commit composer: the SessionChangesPanel commit box (the
+    // legacy ReviewChanges composer must not render alongside it).
+    expect(screen.getAllByPlaceholderText(/commit message/i)).toHaveLength(1);
+    expect(screen.getByRole('button', { name: /^commit$/i })).toBeDisabled();
   });
 
   it('does not show the source control toggle when there is no git context', async () => {
