@@ -222,6 +222,12 @@ export interface CreateSessionDto {
    * into the preamble after the brief. Internal — never set via the public API.
    */
   historyContext?: string;
+  /**
+   * The user's original request, for title derivation only. The persisted
+   * `prompt` is the composed preamble (brief/history/facts/workspace + prompt),
+   * whose first line would otherwise become the title. Internal.
+   */
+  rawPrompt?: string;
   /** Explicit MCP server ids for this session; omit to inherit project defaults. */
   mcpServerIds?: string[] | null;
 }

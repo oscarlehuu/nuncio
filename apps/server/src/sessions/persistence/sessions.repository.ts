@@ -346,7 +346,9 @@ export class SessionsRepository {
     const id = input.id ?? uuidv4().slice(0, 8);
     const row: SessionRow = {
       id,
-      title: titleFromPrompt(input.prompt),
+      // The stored prompt may be a composed preamble; the title must reflect
+      // the user's actual request when the caller supplies it.
+      title: titleFromPrompt(input.rawPrompt ?? input.prompt),
       status: 'CREATED',
       provider: input.provider ?? 'pi',
       model: input.model ?? null,

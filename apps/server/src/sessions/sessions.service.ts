@@ -441,6 +441,7 @@ export class SessionsService implements OnModuleDestroy {
         ...input,
         id,
         prompt,
+        rawPrompt: input.prompt,
         provider: providerId,
         workspace,
         projectPath,
