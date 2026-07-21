@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   BottomSheetBackdrop,
+  BottomSheetFlatList,
   BottomSheetModal,
   BottomSheetScrollView,
-  BottomSheetView,
 } from '@gorhom/bottom-sheet';
 import { ChevronRight, Folder, GitBranch, Laptop, Send, Settings2 } from 'lucide-react-native';
 import { createSession, fetchModels, type Session } from '@nuncio/core/api';
@@ -34,6 +34,14 @@ import { Textarea } from './ui/textarea';
 
 type SheetMode = 'model' | 'project' | 'workspace' | 'branch' | null;
 type WorkspaceMode = 'local' | 'worktree';
+type Engine = {
+  key: string;
+  providerId: string;
+  groupId: string;
+  label: string;
+  brand: Brand;
+  models: ModelInfo[];
+};
 
 const SHEET_COPY: Record<Exclude<SheetMode, null>, { title: string; subtitle: string }> = {
   model: { title: 'Choose a model', subtitle: 'Grouped by engine — pick which model handles this task.' },
@@ -61,6 +69,7 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
   const [branches, setBranches] = useState<CrewBranch[]>([]);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('local');
   const [sheetMode, setSheetMode] = useState<SheetMode>(null);
+  const [modelEngineKey, setModelEngineKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -111,7 +120,31 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
   const sheetCopy = sheetMode ? SHEET_COPY[sheetMode] : null;
   const canSend = Boolean(prompt.trim() && selectedModel && !busy);
 
+  const engines = useMemo<Engine[]>(
+    () =>
+      catalog
+        .filter((provider) => !provider.unavailable && provider.groups?.length)
+        .flatMap((provider) =>
+          (provider.groups ?? []).map((group) => ({
+            key: `${provider.id}:${group.id}`,
+            providerId: provider.id,
+            groupId: group.id,
+            label: group.name,
+            brand: brandForModel({ providerId: provider.id, groupId: group.id, id: group.id, name: group.name }),
+            models: group.models,
+          })),
+        ),
+    [catalog],
+  );
+  const selectedEngineKey = useMemo(
+    () => engines.find((engine) => engine.models.some((model) => model.id === modelId))?.key ?? null,
+    [engines, modelId],
+  );
+  const activeEngineKey = modelEngineKey ?? selectedEngineKey ?? engines[0]?.key ?? null;
+  const activeEngine = engines.find((engine) => engine.key === activeEngineKey) ?? null;
+
   const openSheet = (mode: Exclude<SheetMode, null>) => {
+    if (mode === 'model') setModelEngineKey(null);
     setSheetMode(mode);
     sheetRef.current?.present();
   };
@@ -251,21 +284,84 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
         handleIndicatorStyle={{ backgroundColor: '#606369' }}
         onDismiss={() => setSheetMode(null)}
       >
-        <BottomSheetView className="flex-1 px-5 pt-1">
-          <Text className="text-lg font-semibold text-foreground">
-            {sheetCopy?.title}
-          </Text>
-          <Text className="mt-1 text-xs text-muted-foreground">
-            {sheetCopy?.subtitle}
-          </Text>
+        {sheetMode === 'model' ? (
+          <BottomSheetFlatList
+            data={activeEngine?.models ?? []}
+            keyExtractor={(item) => item.id}
+            style={{ flex: 1 }}
+            contentContainerStyle={{
+              paddingHorizontal: 20,
+              paddingBottom: insets.bottom + 16,
+              gap: 6,
+            }}
+            showsVerticalScrollIndicator={false}
+            ListHeaderComponent={
+              <View className="pb-3 pt-1">
+                <Text className="text-lg font-semibold text-foreground">Choose a model</Text>
+                <Text className="mt-1 text-xs text-muted-foreground">Pick an engine, then a model.</Text>
+                {engines.length > 1 ? (
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    className="-mx-5 mt-3"
+                    contentContainerClassName="gap-2 px-5"
+                  >
+                    {engines.map((engine) => {
+                      const active = engine.key === activeEngineKey;
+                      return (
+                        <Pressable
+                          key={engine.key}
+                          accessibilityRole="tab"
+                          accessibilityState={{ selected: active }}
+                          onPress={() => setModelEngineKey(engine.key)}
+                          className={`min-h-9 flex-row items-center gap-1.5 rounded-full border px-3 ${active ? 'border-primary/50 bg-secondary' : 'border-border bg-card'}`}
+                        >
+                          <ProviderIcon brand={engine.brand} size={13} color={active ? '#eff0f1' : '#83868b'} />
+                          <Text
+                            className={`text-xs font-medium ${active ? 'text-foreground' : 'text-muted-foreground'}`}
+                            numberOfLines={1}
+                          >
+                            {engine.label}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </ScrollView>
+                ) : null}
+              </View>
+            }
+            ListEmptyComponent={
+              <Text className="px-1 py-8 text-center text-xs text-muted-foreground">Loading models…</Text>
+            }
+            renderItem={({ item }) => (
+              <ModelRow
+                model={item}
+                brand={brandForModel({
+                  providerId: activeEngine?.providerId ?? '',
+                  groupId: activeEngine?.groupId ?? '',
+                  id: item.id,
+                  name: item.name,
+                })}
+                selected={item.id === modelId}
+                onPress={() => {
+                  setModelId(item.id);
+                  closeSheet();
+                }}
+              />
+            )}
+          />
+        ) : (
           <BottomSheetScrollView
             style={{ flex: 1 }}
             contentContainerStyle={{
+              paddingHorizontal: 20,
               paddingBottom: insets.bottom + 16,
-              paddingTop: 14,
+              paddingTop: 4,
             }}
             showsVerticalScrollIndicator={false}
           >
+            <Text className="text-lg font-semibold text-foreground">{sheetCopy?.title}</Text>
+            <Text className="mb-3 mt-1 text-xs text-muted-foreground">{sheetCopy?.subtitle}</Text>
             {sheetMode === 'project' ? (
               <View className="gap-2">
                 <PickerRow
@@ -291,7 +387,7 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
                 ))}
                 {projects.length === 0 ? (
                   <Text className="mt-1 px-1 text-xs leading-5 text-muted-foreground">
-                    No Git projects registered yet. Add a project root in the Nuncio desktop app to pick a repo and base branch here.
+                    No projects found. In Nuncio desktop → Settings → Workspaces, set “Project roots” to a folder that holds your git repos — they’ll be scanned one level deep and appear here.
                   </Text>
                 ) : null}
               </View>
@@ -337,44 +433,9 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
                   </Text>
                 )}
               </View>
-            ) : (
-              <View className="gap-5">
-                {catalog
-                  .filter((provider) => !provider.unavailable && provider.groups?.length)
-                  .flatMap((provider) =>
-                    (provider.groups ?? []).map((group) => (
-                      <View key={`${provider.id}:${group.id}`} className="gap-1.5">
-                        <View className="flex-row items-center gap-2 px-1">
-                          <ProviderIcon
-                            brand={brandForModel({ providerId: provider.id, groupId: group.id, id: group.id, name: group.name })}
-                            size={13}
-                            color="#83868b"
-                          />
-                          <Text className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground" numberOfLines={1}>
-                            {group.name}
-                          </Text>
-                        </View>
-                        <View className="gap-1.5">
-                          {group.models.map((model) => (
-                            <ModelRow
-                              key={`${provider.id}:${group.id}:${model.id}`}
-                              model={model}
-                              brand={brandForModel({ providerId: provider.id, groupId: group.id, id: model.id, name: model.name })}
-                              selected={model.id === modelId}
-                              onPress={() => {
-                                setModelId(model.id);
-                                closeSheet();
-                              }}
-                            />
-                          ))}
-                        </View>
-                      </View>
-                    )),
-                  )}
-              </View>
-            )}
+            ) : null}
           </BottomSheetScrollView>
-        </BottomSheetView>
+        )}
       </BottomSheetModal>
     </>
   );
