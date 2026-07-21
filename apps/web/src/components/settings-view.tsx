@@ -11,6 +11,7 @@ import {
   Search,
   Settings2,
   SlidersHorizontal,
+  Smartphone,
   Gauge,
   UsersRound,
   Wrench,
@@ -26,6 +27,7 @@ import { AppearanceSettingsSection } from './appearance-settings-section';
 import { ProjectsSettingsSection } from './projects-settings-section';
 import { GeneralSettingsSection } from './general-settings-section';
 import { RemoteAccessSettingsSection } from './remote-access-settings-section';
+import { MobileSettingsSection } from './mobile-settings-section';
 import { ProviderUpdateSettingsSection } from './provider-update-settings-section';
 import { SubagentModelsSettingsSection } from './subagent-models-settings-section';
 import { UsageSettingsSection } from './usage-settings-section';
@@ -59,6 +61,7 @@ type SettingsSectionId =
   | 'crew-profiles'
   | 'workspaces'
   | 'projects'
+  | 'mobile'
   | 'remote-access'
   | 'advanced';
 
@@ -73,6 +76,7 @@ const SECTION_NAV_ITEMS: ReadonlyArray<SettingsSectionNavItem & { id: SettingsSe
   { id: 'crew-profiles', label: 'Crew profiles', icon: UsersRound },
   { id: 'workspaces', label: 'Workspaces', icon: FolderGit2 },
   { id: 'projects', label: 'Projects', icon: FolderGit2 },
+  { id: 'mobile', label: 'Mobile', icon: Smartphone },
   { id: 'remote-access', label: 'Remote access', icon: Network },
   { id: 'advanced', label: 'Advanced', icon: Wrench },
 ];
@@ -81,7 +85,7 @@ const VALID_SECTION_IDS = new Set<SettingsSectionId>(SECTION_NAV_ITEMS.map((item
 
 /**
  * Initial pane, honoring a `?section=<id>` deep-link so an external entry point
- * (the desktop tray's "Pair mobile device") can land straight on Remote access.
+ * (the desktop tray's "Pair mobile device") can land straight on the Mobile section.
  * An absent or unknown value falls back to Appearance — the default landing.
  */
 function initialSection(): SettingsSectionId {
@@ -336,11 +340,16 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
       'tailscale',
       'tailnet',
       'trust',
-      'pair',
-      'device',
-      'qr',
+    ].some((term) => term.includes(query));
+    const mobileMatches = [
       'mobile',
       'phone',
+      'tablet',
+      'pair',
+      'pairing',
+      'device',
+      'qr',
+      'connect',
     ].some((term) => term.includes(query));
 
     const providerResult = renderProviderGroup('Providers', ['cursor', 'pi', 'codex'], false, query);
@@ -387,6 +396,9 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
     }
     if (matchingWorkspaces.length > 0) {
       resultSections.push(<div key="workspaces">{renderSettingGroup('Workspaces', matchingWorkspaces, '')}</div>);
+    }
+    if (mobileMatches) {
+      resultSections.push(<div key="mobile"><MobileSettingsSection /></div>);
     }
     if (remoteAccessMatches || matchingNetwork.length > 0) {
       resultSections.push(
@@ -456,6 +468,8 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
         return renderSettingGroup('Workspaces', workspaces, 'No workspace settings are available.');
       case 'projects':
         return <ProjectsSettingsSection />;
+      case 'mobile':
+        return <MobileSettingsSection />;
       case 'remote-access':
         return (
           <div className="space-y-6">

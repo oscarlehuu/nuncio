@@ -243,16 +243,16 @@ function showMainWindow() {
   createWindow(currentAppUrl()).catch((error) => console.error(error));
 }
 
-// Open the window on the Remote access settings pane. The web app reads
-// `?section=` on the settings route to pick the initial pane, so a deep-link
-// URL lands the user straight on the pairing controls.
+// Open the window on the Mobile settings pane. The web app reads `?section=`
+// on the settings route to pick the initial pane, so a deep-link URL lands the
+// user straight on the phone-pairing controls.
 function openPairingSettings() {
   const base = currentAppUrl();
   let target = base;
   try {
     const url = new URL(base);
     url.pathname = url.pathname.replace(/\/+$/, '') + '/settings';
-    url.searchParams.set('section', 'remote-access');
+    url.searchParams.set('section', 'mobile');
     target = url.toString();
   } catch {
     // A data: URL error page or malformed base — just show the window as-is.
