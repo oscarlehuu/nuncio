@@ -858,7 +858,7 @@ describe('desktop tray + close-to-tray + single instance', () => {
     expect(state.quitCalls).toBe(before);
   });
 
-  test('tray menu: Open reopens/focuses the window; Pair deep-links to remote-access', async () => {
+  test('tray menu: Open reopens/focuses the window; Pair deep-links to mobile', async () => {
     const state = await runMain({ fetchImpl: async () => ({ ok: false }) });
     const tray = state.trays[0];
     const items = tray.contextMenu.template;
@@ -879,10 +879,10 @@ describe('desktop tray + close-to-tray + single instance', () => {
     expect(window.focused).toBe(true);
 
     byLabel('Pair mobile device…').click();
-    // Deep-links the settings route straight to the remote-access pane.
+    // Deep-links the settings route straight to the Mobile pane.
     const lastLoad = state.loadedUrls[state.loadedUrls.length - 1];
     expect(lastLoad).toContain('/settings');
-    expect(lastLoad).toContain('section=remote-access');
+    expect(lastLoad).toContain('section=mobile');
 
     let quitBefore = state.quitCalls;
     byLabel('Quit Nuncio').click();

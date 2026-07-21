@@ -3,12 +3,12 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  Pressable,
-  Text,
-  TextInput,
+  ScrollView,
   View,
 } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { QrCode, ShieldCheck, Wifi } from 'lucide-react-native';
 import {
   claimPairing,
   parsePairingQr,
@@ -22,9 +22,14 @@ import { persistThenApply } from '../lib/persist-then-apply';
 import { secureStore } from '../lib/secure-store-adapter';
 import { registerForPush } from '../lib/push-registration';
 import { QrScanner } from '../components/qr-scanner';
+import { Button } from '../components/ui/button';
+import { Card } from '../components/ui/card';
+import { Input } from '../components/ui/input';
+import { Text } from '../components/ui/text';
 
 export default function Pairing() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [serverInput, setServerInput] = useState('');
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
@@ -124,71 +129,102 @@ export default function Pairing() {
   }
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      className="flex-1 bg-background"
-    >
-      <View className="flex-1 justify-center px-8">
-        <Text className="text-3xl font-semibold text-foreground">Pair with your machine</Text>
-        <Text className="mt-2 text-muted-foreground">
-          Scan the QR code in Nuncio → Settings → Remote access, or enter the address by hand.
-        </Text>
-
-        <Pressable
-          onPress={() => {
-            setError(null);
-            setScanning(true);
+    <SafeAreaView className="flex-1 bg-background">
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
+        className="flex-1"
+        style={{ flex: 1 }}
+      >
+        <ScrollView
+          className="flex-1"
+          style={{ flex: 1, minHeight: 0 }}
+          contentContainerStyle={{
+            flexGrow: 1,
+            paddingBottom: insets.bottom + 24,
+            paddingHorizontal: 24,
+            paddingTop: 32,
           }}
-          disabled={busy}
-          className="mt-8 items-center rounded-lg bg-primary px-4 py-3"
+          keyboardShouldPersistTaps="handled"
         >
-          {busy ? (
-            <ActivityIndicator />
-          ) : (
-            <Text className="font-semibold text-primary-foreground">Scan QR code</Text>
-          )}
-        </Pressable>
+          <View className="items-center">
+            <View className="h-16 w-16 items-center justify-center rounded-3xl bg-primary shadow-sm shadow-black/20">
+              <Text className="text-3xl font-bold text-primary-foreground">N</Text>
+            </View>
+            <Text className="mt-5 text-center text-3xl font-semibold tracking-tight text-foreground">
+              Pair with your machine
+            </Text>
+            <Text className="mt-2 text-center text-sm leading-5 text-muted-foreground">
+              Connect this phone to your Nuncio server to delegate and review agent work.
+            </Text>
+          </View>
 
-        {error ? <Text className="mt-4 text-sm text-destructive">{error}</Text> : null}
+          <Card className="mt-7 gap-0 rounded-xl border-border p-4 shadow-none">
+            <View className="flex-row items-center gap-3">
+              <View className={`h-9 w-9 items-center justify-center rounded-full ${error ? 'bg-destructive/15' : 'bg-secondary'}`}>
+                {error ? <Wifi color="#f5605b" size={17} /> : <ShieldCheck color="#4ade80" size={17} />}
+              </View>
+              <View className="flex-1">
+                <Text className="font-semibold text-foreground">
+                  {busy ? 'Checking connection…' : error ? 'Connection needs attention' : serverInput.trim() ? 'Ready to connect' : 'Awaiting pairing'}
+                </Text>
+                <Text className="mt-1 text-xs text-muted-foreground">
+                  {error ?? 'Use a QR code for the fastest secure setup.'}
+                </Text>
+              </View>
+            </View>
+          </Card>
 
-        <View className="mt-10 flex-row items-center gap-3">
-          <View className="h-px flex-1 bg-border" />
-          <Text className="text-xs text-muted-foreground">or enter manually</Text>
-          <View className="h-px flex-1 bg-border" />
-        </View>
+          <Button
+            onPress={() => {
+              setError(null);
+              setScanning(true);
+            }}
+            disabled={busy}
+            size="lg"
+            className="mt-4 rounded-xl"
+          >
+            {busy ? <ActivityIndicator color="#161719" /> : <QrCode color="#161719" size={18} />}
+            <Text>Scan pairing QR code</Text>
+          </Button>
 
-        <Text className="mt-6 text-sm text-muted-foreground">Server</Text>
-        <TextInput
-          className="mt-2 rounded-lg border border-border px-4 py-3 text-foreground"
-          placeholder="mac.tailnet.ts.net"
-          placeholderTextColor="#6b7280"
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="url"
-          value={serverInput}
-          onChangeText={setServerInput}
-        />
+          <View className="my-6 flex-row items-center gap-3">
+            <View className="h-px flex-1 bg-border" />
+            <Text className="text-xs text-muted-foreground">or connect manually</Text>
+            <View className="h-px flex-1 bg-border" />
+          </View>
 
-        <Text className="mt-4 text-sm text-muted-foreground">Access token (optional on your own tailnet)</Text>
-        <TextInput
-          className="mt-2 rounded-lg border border-border px-4 py-3 text-foreground"
-          placeholder="paste token"
-          placeholderTextColor="#6b7280"
-          autoCapitalize="none"
-          autoCorrect={false}
-          secureTextEntry
-          value={token}
-          onChangeText={setToken}
-        />
+          <Text className="mb-2 text-sm font-medium text-foreground">Server address</Text>
+          <Input
+            placeholder="mac.tailnet.ts.net"
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            value={serverInput}
+            onChangeText={setServerInput}
+          />
 
-        <Pressable
-          onPress={connectManually}
-          disabled={busy}
-          className="mt-6 items-center rounded-lg border border-border px-4 py-3"
-        >
-          <Text className="font-semibold text-foreground">Connect</Text>
-        </Pressable>
-      </View>
-    </KeyboardAvoidingView>
+          <Text className="mb-2 mt-4 text-sm font-medium text-foreground">Access token <Text className="font-normal text-muted-foreground">(optional)</Text></Text>
+          <Input
+            placeholder="Paste token"
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry
+            value={token}
+            onChangeText={setToken}
+          />
+
+          <Button
+            onPress={connectManually}
+            disabled={busy}
+            variant="outline"
+            size="lg"
+            className="mt-5 rounded-xl"
+          >
+            <Text>Connect</Text>
+          </Button>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
