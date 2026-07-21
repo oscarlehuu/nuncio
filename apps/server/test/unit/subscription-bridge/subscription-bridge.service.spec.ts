@@ -28,6 +28,7 @@ describe('SubscriptionBridgeService', () => {
     module.get(CliproxyManagedHost).spawnImpl = async () => ({
       pid: 1,
       killed: false,
+      hasExited: false,
       kill: () => {},
       exited: new Promise<number | null>(() => undefined),
     });

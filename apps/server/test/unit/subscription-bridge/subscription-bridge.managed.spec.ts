@@ -33,18 +33,25 @@ describe('SubscriptionBridge managed / external modes', () => {
     host = module.get(CliproxyManagedHost);
     // Avoid actually spawning binaries in unit tests.
     host.spawnImpl = async () => {
-      let killed = false;
+      let signalSent = false;
+      let settled = false;
       let resolveExit!: (code: number | null) => void;
       const exited = new Promise<number | null>((resolve) => {
-        resolveExit = resolve;
+        resolveExit = (code) => {
+          settled = true;
+          resolve(code);
+        };
       });
       return {
         pid: 4242,
         get killed() {
-          return killed;
+          return signalSent || settled;
+        },
+        get hasExited() {
+          return settled;
         },
         kill() {
-          killed = true;
+          signalSent = true;
           resolveExit(0);
         },
         exited,

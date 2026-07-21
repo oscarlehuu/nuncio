@@ -4,7 +4,13 @@ import { dirname } from 'node:path';
 
 export interface CliproxyChildHandle {
   pid: number;
+  /**
+   * True after a kill signal was sent (Bun/Node set this immediately).
+   * Do not use this to decide whether to SIGKILL — use `hasExited`.
+   */
   killed: boolean;
+  /** True only after the process has actually exited. */
+  hasExited: boolean;
   kill: (signal?: NodeJS.Signals | number) => void;
   exited: Promise<number | null>;
 }
@@ -27,9 +33,11 @@ export class CliproxyManagedHost implements OnModuleDestroy {
 
   /** Overridable for unit tests. */
   spawnImpl: CliproxySpawnImpl = defaultSpawn;
+  /** Grace period before SIGKILL after SIGTERM. Overridable for unit tests. */
+  stopGraceMs = 2_000;
 
   isRunning(): boolean {
-    return Boolean(this.child && !this.child.killed);
+    return Boolean(this.child && !this.child.hasExited);
   }
 
   pid(): number | null {
@@ -77,18 +85,21 @@ export class CliproxyManagedHost implements OnModuleDestroy {
     this.child = null;
     this.configPath = null;
     try {
-      if (!child.killed) child.kill('SIGTERM');
+      if (!child.hasExited) child.kill('SIGTERM');
     } catch {
       // already gone
     }
-    const timeout = new Promise<void>((resolve) => setTimeout(resolve, 2_000));
+    const timeout = new Promise<void>((resolve) => setTimeout(resolve, this.stopGraceMs));
     await Promise.race([child.exited.then(() => undefined), timeout]);
-    if (!child.killed) {
+    // `child.killed` is true as soon as SIGTERM was sent — only `hasExited` means the
+    // process actually left. Guard SIGKILL on exit, not on the signal-sent flag.
+    if (!child.hasExited) {
       try {
         child.kill('SIGKILL');
       } catch {
         // ignore
       }
+      await child.exited.catch(() => undefined);
     }
   }
 
@@ -123,6 +134,9 @@ async function defaultSpawn(opts: {
     },
     get killed() {
       return proc.killed || settled;
+    },
+    get hasExited() {
+      return settled;
     },
     kill(signal?: NodeJS.Signals | number) {
       try {
