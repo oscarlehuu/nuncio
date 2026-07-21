@@ -1170,6 +1170,19 @@ Strictly additive, following the exact SCM/Browser side-panel + right-rail patte
 - **Server** (`apps/server/test/unit/fs/file-explorer.service.spec.ts`, bun test, real `mkdtemp` temp dirs). Confinement suite asserts `..` traversal, absolute paths, and **symlink-escape** (a symlink inside root pointing outside) all 400 for **entries / read / write / mkdir / rename / delete**, plus **rename-of-root** and **delete-of-root** are refused, and `root` must be an existing directory. Happy paths: dirs-first listing with `.git`/`node_modules` hidden + other dotfiles shown, nested-dir parent paths, utf8 read, binary + oversized return the flag (not raw content), write create/overwrite, mkdir, rename move, recursive delete, and write requires an existing parent. The pre-existing `fs.service.spec.ts` (dir picker) stays green — `listDirectories` is unchanged.
 - **Web:** `apps/web/src/components/file-explorer-panel.spec.tsx` (mocks `../lib/fs-api`) — tree from mocked `listEntries`, lazy-load on expand, select→content in editor, edit enables Save and `writeFile` called with `(root, path, newContent)`, binary/too-large placeholder (no editor), delete calls `deleteEntry` after confirm + refresh. `session-detail.spec.tsx` extended: Files toggle appears when a working dir exists and toggling opens the panel while closing SCM+Browser (mutual exclusion).
 
+## Automatic session titles
+
+`SessionTitleService` (`apps/server/src/sessions/session-title.service.ts`) gives Nuncio the
+auto-naming the vendor apps have natively, engine-neutrally: after `SessionsService.create`
+inserts the row, a fire-and-forget one-shot (`AgentProvider.completeOneShot`, first available
+implementer — Pi today) turns the user's request (2 KB head) into a 3-8 word title, then
+`applyAutoTitle(id, expectedTitle, title)` renames **only while the create-time derived title
+is still in place** — a manual rename in the meantime always wins. Best-effort: no capable
+engine, failure, timeout (30 s), or empty output leave the first-line title. Never runs under
+`NODE_ENV=test` (fact-distillation rationale) and skips handoff sessions (they inherit the
+source title). Settings (agents): `NUNCIO_AUTO_TITLE` (boolean, default on) +
+`NUNCIO_SESSION_TITLE_MODEL` (provider:modelId, engine default when unset).
+
 ## Hand off to another engine (cross-engine handoff)
 
 `POST /api/sessions/:id/handoff-to` (`sessions.controller.ts` `handoffTo`) →

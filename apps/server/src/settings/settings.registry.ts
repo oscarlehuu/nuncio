@@ -794,6 +794,29 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     ],
   },
   {
+    key: 'NUNCIO_AUTO_TITLE',
+    category: 'agents',
+    type: 'boolean',
+    label: 'Auto-name sessions',
+    description:
+      "Generate a concise session title from your first request via a cheap engine one-shot " +
+      '(what Claude Code / Codex / Cursor do natively). Off = titles stay the first line of ' +
+      'the request. A manual rename always wins.',
+    envVar: 'NUNCIO_AUTO_TITLE',
+    default: '1',
+  },
+  {
+    key: 'NUNCIO_SESSION_TITLE_MODEL',
+    category: 'agents',
+    type: 'string',
+    label: 'Session title model',
+    description:
+      'Model for session auto-naming (provider:modelId, e.g. cliproxyapi:claude-haiku-4-5). ' +
+      'Prefer a cheap model — the call is one tiny completion per created session. Falls back ' +
+      'to the engine default when unset.',
+    envVar: 'NUNCIO_SESSION_TITLE_MODEL',
+  },
+  {
     key: 'NUNCIO_COMMIT_MESSAGE_MODEL',
     category: 'agents',
     type: 'string',

@@ -53,6 +53,7 @@ import {
 } from '../orchestration/session-workspace-context';
 import { PromptProfileService } from '../prompts/prompt-profile.service';
 import { PiLocalSessionsService } from '../pi-local/pi-local-sessions.service';
+import { SessionTitleService } from './session-title.service';
 import { canTransition } from './domain/sessions.fsm';
 import { assertModeSupported } from './domain/session-modes';
 import type { MultitaskCoordinator } from './domain/multitask-coordinator.types';
@@ -237,6 +238,7 @@ export class SessionsService implements OnModuleDestroy {
     // after-evidence (fail-open — capture never affects the loop).
     @Optional() private readonly evidence?: EvidenceCaptureService,
     @Optional() private readonly mcp?: McpService,
+    @Optional() private readonly titles?: SessionTitleService,
   ) {
     // A crash mid-fan-out can leave steer rows leased forever; a claim must
     // never outlive the process that took it. Release before restore so the
@@ -477,7 +479,32 @@ export class SessionsService implements OnModuleDestroy {
     } else {
       void this.startRun(session, input.attachments);
     }
+    // Best-effort auto-naming from the user's request (engine-neutral one-shot),
+    // never under bun test (same rationale as fact distillation). Handoffs skip
+    // — they inherit the source session's title via rename.
+    if (process.env.NODE_ENV !== 'test' && this.titles?.enabled() && !input.priorSessionId) {
+      void this.titles
+        .generateTitle(input.prompt)
+        .then((title) => {
+          if (title) this.applyAutoTitle(session.id, session.title, title);
+        })
+        .catch(() => {});
+    }
     return this.enrichSession(session);
+  }
+
+  /**
+   * Apply a generated title only while the create-time derived title is still
+   * in place — a manual rename in the meantime always wins.
+   */
+  applyAutoTitle(id: string, expectedTitle: string, title: string): void {
+    try {
+      const current = this.sessions.findById(id);
+      if (!current || current.title !== expectedTitle) return;
+      this.rename(id, title);
+    } catch {
+      // Renaming an archived/deleted session is a no-op, never an error path.
+    }
   }
 
   /**
