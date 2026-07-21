@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "oxlint src",
     "test": "vitest run",
-    "check": "bun run typecheck && bun run lint && bun run test"
+    "check": "bun run typecheck && bun run lint && bun run test",
+    "ota": "expo export --platform ios --no-bytecode --output-dir dist && eas update --branch preview --skip-bundler --input-dir dist --platform ios --environment preview"
   },
   "dependencies": {
     "@gorhom/bottom-sheet": "^5.2.14",

@@ -33,6 +33,12 @@ import { Text } from '../../components/ui/text';
 type Tab = 'active' | 'archived';
 type HomeSection = { key: string; title: string; data: HomeItem[] };
 
+// The pill only needs the host — the https:// prefix and trailing slash are
+// noise that push the meaningful machine name out of the truncated label.
+function serverLabel(serverUrl: string): string {
+  return serverUrl.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+}
+
 export default function SessionList() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -226,7 +232,7 @@ function HomeHeader({
           >
             <Server color="#83868b" size={13} />
             <Text className="max-w-48 text-[11px] text-muted-foreground" numberOfLines={1}>
-              {connection.serverUrl}
+              {serverLabel(connection.serverUrl)}
             </Text>
             <ChevronRight color="#83868b" size={13} />
           </Pressable>
