@@ -37,29 +37,39 @@ vi.mock('../lib/subscription-bridge-api', () => ({
   fetchSubscriptionBridgeStatus: vi.fn().mockResolvedValue({
     enabled: false,
     online: false,
+    mode: 'external',
     baseUrl: 'http://127.0.0.1:8317',
     hasApiKey: false,
     accounts: { claude: false, codex: false },
     modelCount: 0,
     error: null,
+    managed: { running: false, pid: null, configPath: null, port: null },
     loginHints: { claude: 'cli --claude-login', codex: 'cli --codex-login' },
   }),
   refreshSubscriptionBridgeStatus: vi.fn().mockResolvedValue({
     enabled: true,
     online: true,
+    mode: 'external',
     baseUrl: 'http://127.0.0.1:8317',
     hasApiKey: true,
     accounts: { claude: true, codex: true },
     modelCount: 2,
     error: null,
+    managed: { running: false, pid: null, configPath: null, port: null },
     loginHints: { claude: 'cli --claude-login', codex: 'cli --codex-login' },
   }),
+  discoverSubscriptionBridgeInstalls: vi.fn().mockResolvedValue([]),
+  adoptExternalSubscriptionBridge: vi.fn(),
+  migrateManagedSubscriptionBridge: vi.fn(),
+  initManagedSubscriptionBridge: vi.fn(),
+  startManagedSubscriptionBridge: vi.fn(),
+  stopManagedSubscriptionBridge: vi.fn(),
   fetchSubscriptionBridgeClaudeCodeEnv: vi.fn(),
   subscriptionBridgeSubtitle: vi.fn(
     (status: { enabled?: boolean; online?: boolean } | null) =>
       status?.online
-        ? 'Online · Claude + Codex'
-        : 'Disabled · enable to route Claude ↔ Codex subscriptions',
+        ? 'Online · External · Claude + Codex'
+        : 'Disabled · External · enable to route Claude ↔ Codex subscriptions',
   ),
 }));
 
@@ -113,6 +123,8 @@ describe('SettingsView', () => {
     const nav = screen.getByRole('navigation', { name: /settings sections/i });
     expect(within(nav).getByRole('button', { name: 'Appearance' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'Providers' })).toBeInTheDocument();
+    expect(within(nav).getByRole('button', { name: 'Subscription bridge' })).toBeInTheDocument();
+    expect(within(nav).getByRole('button', { name: 'Tool updates' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'Usage' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'Source control' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'MCP & Tools' })).toBeInTheDocument();
@@ -267,7 +279,7 @@ describe('SettingsView', () => {
     expect(screen.getByText('Cursor')).toBeInTheDocument();
   });
 
-  it('shows Subscription bridge row with Manage health actions', async () => {
+  it('shows Subscription bridge as its own Settings section (not under Providers)', async () => {
     const settings = [
       makeSetting({
         key: 'NUNCIO_CLIPROXY_ENABLED',
@@ -281,7 +293,7 @@ describe('SettingsView', () => {
       }),
       makeSetting({
         key: 'NUNCIO_CLIPROXY_BASE_URL',
-        label: 'CLIProxy base URL',
+        label: 'CLIProxyAPI base URL',
         category: 'provider',
         providerId: 'subscription-bridge',
         type: 'string',
@@ -289,15 +301,27 @@ describe('SettingsView', () => {
         source: 'default',
         value: 'http://127.0.0.1:8317',
       }),
+      makeSetting({ key: 'A', label: 'Cursor API Key', category: 'provider', providerId: 'cursor' }),
     ];
     renderWithTheme(
       <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
     );
     await goToSection('Providers');
-    expect(screen.getByText('Subscription bridge')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Manage Subscription bridge' }));
+    expect(screen.queryByRole('button', { name: /Manage Subscription bridge/i })).not.toBeInTheDocument();
+    await goToSection('Subscription bridge');
+    expect(screen.getByRole('heading', { name: 'Subscription bridge' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Check Subscription bridge health/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Copy Claude Code env/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Initialize managed/i })).toBeInTheDocument();
+  });
+
+  it('shows Tool updates as its own Settings section', async () => {
+    renderWithTheme(
+      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    await goToSection('Tool updates');
+    expect(screen.getByRole('heading', { name: 'Tool updates' })).toBeInTheDocument();
+    expect(screen.getByText(/Pi and Codex CLI updates/i)).toBeInTheDocument();
   });
 
   it('shows Claude and Devin rows with permission mode selects', async () => {

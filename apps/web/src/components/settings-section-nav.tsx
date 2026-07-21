@@ -1,10 +1,12 @@
+import type { ComponentType, SVGProps } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface SettingsSectionNavItem {
   id: string;
   label: string;
-  icon: LucideIcon;
+  /** Lucide icon or a custom SVG component (e.g. Subscription bridge). */
+  icon: LucideIcon | ComponentType<SVGProps<SVGSVGElement>>;
 }
 
 interface SettingsSectionNavProps {

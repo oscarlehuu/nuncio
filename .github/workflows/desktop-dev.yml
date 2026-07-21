@@ -9,29 +9,28 @@ name: Desktop Dev
 # The publish never fires on a red or still-running commit, and each commit ships at
 # most once.
 #
-# Mechanism: this workflow is chained off the required workflows with `workflow_run`.
-# Each time a required workflow finishes on dev, the gate (a unit-tested script,
-# scripts/desktop-dev-gate.mjs, not inline bash) re-checks every required workflow's
-# conclusion at that commit and publishes when all are green, subject to three guards:
-#   - never drop the last green commit: publish on any all-green, unshipped commit —
-#     whichever check finishes last is the first to see all-green, so there is no
-#     "who finished last" timestamp compare that a tie could deadlock.
-#   - exactly once: skip a commit that already has a dev release (draft = building, or
-#     published). The build re-checks this AGAIN after taking the publish slot, so two
-#     gates that both green-lit a commit before either published don't both build.
-#   - never go backward: refuse a commit that is behind the last shipped dev commit, so
-#     a late green on an old commit can't auto-update dev apps to older code.
-# Re-running a failed CI to green re-fires the chain and publishes. A GitHub API lookup
-# that keeps failing fails the gate job (retryable) instead of silently holding.
+# Triggers:
+#   - `push` to `dev` — primary path. The gate job polls until CI + Desktop Smoke
+#     conclude (or fail), then publishes. This works from the workflow file on `dev`
+#     itself (push events use the workflow at the pushed commit).
+#   - `workflow_run` after CI / Desktop Smoke — secondary path once this file also
+#     lives on the repository default branch (`main`). GitHub only registers
+#     `workflow_run` triggers from the default branch; until the next promotion
+#     syncs this file to `main`, rely on the `push` path above.
+#   - `workflow_dispatch` — manual force publish of the selected ref.
+#
+# Guards (scripts/desktop-dev-gate.mjs):
+#   - never drop the last green commit: publish on any all-green, unshipped commit
+#   - exactly once: skip a commit that already has a dev release (draft or published)
+#   - never go backward: refuse a commit behind the last shipped dev commit
 #
 # Signing secrets stay isolated in the reusable build workflow — the gate only reads
 # check conclusions and releases with the default token, and only the build job touches
 # the certs.
-#
-# Note: `workflow_run` triggers are registered from the repository default branch, so
-# this file must live on that branch for the chain to fire.
 
 on:
+  push:
+    branches: [dev]
   workflow_run:
     workflows: [CI, Desktop Smoke]
     types: [completed]
@@ -46,10 +45,13 @@ jobs:
   gate:
     name: gate
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    # Only dev-branch push runs gate a publish; skip PR runs. Manual dispatch forces one.
+    # Push path waits for CI (~7m) + Desktop Smoke (~1m); keep headroom for queueing.
+    timeout-minutes: 25
+    # Only dev-branch push / chained runs gate a publish; skip PR-triggered smoke.
+    # Manual dispatch forces one.
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
       (github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_branch == 'dev')
     outputs:
@@ -66,6 +68,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           TRIGGER_SHA: ${{ github.event.workflow_run.head_sha }}
           DISPATCH_SHA: ${{ github.sha }}
+          PUSH_SHA: ${{ github.sha }}
         run: node scripts/desktop-dev-gate.mjs
 
   publish:

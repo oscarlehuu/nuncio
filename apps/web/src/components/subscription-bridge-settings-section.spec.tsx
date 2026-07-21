@@ -6,11 +6,20 @@ import type { SubscriptionBridgeStatus } from '../lib/subscription-bridge-api';
 
 const refreshSubscriptionBridgeStatus = vi.fn();
 const fetchSubscriptionBridgeClaudeCodeEnv = vi.fn();
+const discoverSubscriptionBridgeInstalls = vi.fn();
+const initManagedSubscriptionBridge = vi.fn();
 
 vi.mock('../lib/subscription-bridge-api', () => ({
   refreshSubscriptionBridgeStatus: (...args: unknown[]) => refreshSubscriptionBridgeStatus(...args),
   fetchSubscriptionBridgeClaudeCodeEnv: (...args: unknown[]) =>
     fetchSubscriptionBridgeClaudeCodeEnv(...args),
+  discoverSubscriptionBridgeInstalls: (...args: unknown[]) =>
+    discoverSubscriptionBridgeInstalls(...args),
+  adoptExternalSubscriptionBridge: vi.fn(),
+  migrateManagedSubscriptionBridge: vi.fn(),
+  initManagedSubscriptionBridge: (...args: unknown[]) => initManagedSubscriptionBridge(...args),
+  startManagedSubscriptionBridge: vi.fn(),
+  stopManagedSubscriptionBridge: vi.fn(),
 }));
 
 vi.mock('sonner', () => ({
@@ -21,11 +30,13 @@ function status(over: Partial<SubscriptionBridgeStatus> = {}): SubscriptionBridg
   return {
     enabled: true,
     online: true,
+    mode: 'external',
     baseUrl: 'http://127.0.0.1:8317',
     hasApiKey: true,
     accounts: { claude: true, codex: true },
     modelCount: 4,
     error: null,
+    managed: { running: false, pid: null, configPath: null, port: null },
     loginHints: {
       claude: 'cli-proxy-api --claude-login',
       codex: 'cli-proxy-api --codex-login',
@@ -37,6 +48,7 @@ function status(over: Partial<SubscriptionBridgeStatus> = {}): SubscriptionBridg
 describe('SubscriptionBridgeSettingsSection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    discoverSubscriptionBridgeInstalls.mockResolvedValue([]);
     Object.assign(navigator, {
       clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
     });
@@ -51,10 +63,30 @@ describe('SubscriptionBridgeSettingsSection', () => {
 
     expect(screen.getByText(/cli-proxy-api --claude-login/)).toBeInTheDocument();
     expect(screen.getByText(/cli-proxy-api --codex-login/)).toBeInTheDocument();
+    expect(screen.getByText(/1\. External CLIProxyAPI/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: /Check Subscription bridge health/i }));
     await waitFor(() => expect(onStatus).toHaveBeenCalledWith(next));
     expect(refreshSubscriptionBridgeStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('initializes a fresh managed CLIProxyAPI', async () => {
+    const onStatus = vi.fn();
+    const next = status({
+      mode: 'managed',
+      managed: {
+        running: true,
+        pid: 42,
+        configPath: '/tmp/cliproxyapi/config.yaml',
+        port: 18317,
+      },
+    });
+    initManagedSubscriptionBridge.mockResolvedValue(next);
+
+    render(<SubscriptionBridgeSettingsSection status={status()} onStatus={onStatus} />);
+    await userEvent.click(screen.getByRole('button', { name: /Initialize managed/i }));
+    await waitFor(() => expect(onStatus).toHaveBeenCalledWith(next));
+    expect(initManagedSubscriptionBridge).toHaveBeenCalledTimes(1);
   });
 
   it('copies Claude Code env exports to the clipboard', async () => {
@@ -95,7 +127,7 @@ describe('SubscriptionBridgeSettingsSection', () => {
     render(<SubscriptionBridgeSettingsSection status={status({ hasApiKey: false })} onStatus={vi.fn()} />);
     await userEvent.click(screen.getByRole('button', { name: /Copy Claude Code env/i }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith('Set the CLIProxy API key before copying env'),
+      expect(toast.error).toHaveBeenCalledWith('Set the CLIProxyAPI API key before copying env'),
     );
   });
 });
