@@ -5,7 +5,7 @@ import { apiFetch } from '@nuncio/core/http';
  * backend lists directories on its behalf (mirrors the web `fs-api`/FolderBrowser
  * against `GET /api/fs/dirs`).
  */
-export interface DirEntry {
+interface DirEntry {
   name: string;
   path: string;
   isGit: boolean;

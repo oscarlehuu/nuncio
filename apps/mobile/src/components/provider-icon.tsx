@@ -12,7 +12,7 @@ interface IconProps {
   color?: string;
 }
 
-export function ClaudeIcon({ size = 16, color = '#eff0f1' }: IconProps) {
+function ClaudeIcon({ size = 16, color = '#eff0f1' }: IconProps) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24">
       <Path
@@ -23,7 +23,7 @@ export function ClaudeIcon({ size = 16, color = '#eff0f1' }: IconProps) {
   );
 }
 
-export function CodexIcon({ size = 16, color = '#eff0f1' }: IconProps) {
+function CodexIcon({ size = 16, color = '#eff0f1' }: IconProps) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24">
       <Path
@@ -35,7 +35,7 @@ export function CodexIcon({ size = 16, color = '#eff0f1' }: IconProps) {
   );
 }
 
-export function CursorIcon({ size = 16, color = '#eff0f1' }: IconProps) {
+function CursorIcon({ size = 16, color = '#eff0f1' }: IconProps) {
   return (
     <Svg width={size} height={size} viewBox="0 0 466.73 532.09">
       <Path
@@ -46,7 +46,7 @@ export function CursorIcon({ size = 16, color = '#eff0f1' }: IconProps) {
   );
 }
 
-export function PiIcon({ size = 16, color = '#eff0f1' }: IconProps) {
+function PiIcon({ size = 16, color = '#eff0f1' }: IconProps) {
   return (
     <Svg width={size} height={size} viewBox="0 0 800 800">
       <Path
@@ -60,7 +60,7 @@ export function PiIcon({ size = 16, color = '#eff0f1' }: IconProps) {
 }
 
 /** Four-point spark — stands in for Gemini / Google models (no dedicated mark). */
-export function SparkIcon({ size = 16, color = '#eff0f1' }: IconProps) {
+function SparkIcon({ size = 16, color = '#eff0f1' }: IconProps) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24">
       <Path fill={color} d="M12 1.5l2.35 7.15L21.5 11l-7.15 2.35L12 20.5l-2.35-7.15L2.5 11l7.15-2.35L12 1.5z" />
