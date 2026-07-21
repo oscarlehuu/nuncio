@@ -10,7 +10,11 @@ export class SubscriptionBridgeController {
     return this.bridge.status({ forceRefresh: true });
   }
 
-  @Get('claude-code-env')
+  /**
+   * Explicit user action (Copy Claude Code env). POST so a casual GET cannot
+   * scrape the CLIProxy API key the way Settings never returns raw secrets.
+   */
+  @Post('claude-code-env')
   claudeCodeEnv() {
     return this.bridge.claudeCodeEnv();
   }

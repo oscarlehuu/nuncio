@@ -41,7 +41,8 @@ export async function refreshSubscriptionBridgeStatus(): Promise<SubscriptionBri
 }
 
 export async function fetchSubscriptionBridgeClaudeCodeEnv(): Promise<SubscriptionBridgeClaudeCodeEnv> {
-  const res = await fetch(withBase('/api/subscription-bridge/claude-code-env'));
+  // POST: explicit copy action — response includes the CLIProxy API key for paste into a local shell.
+  const res = await fetch(withBase('/api/subscription-bridge/claude-code-env'), { method: 'POST' });
   if (!res.ok) throw new Error(await responseMessage(res, 'Failed to load Claude Code env'));
   return res.json();
 }

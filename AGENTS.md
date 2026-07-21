@@ -485,9 +485,9 @@ The event contract is **shared** across providers (emitted via `BaseAgentProvide
 | GET | `/api/usage/:provider` | single-provider quota snapshot (`claude` \| `codex` \| `cursor`); 404 for unknown ids |
 | GET | `/api/provider-updates` | best-effort Pi/Codex CLI version advisory; disabled by `NUNCIO_PROVIDER_UPDATE_CHECKS=0` |
 | POST | `/api/provider-updates/:provider/update` | user-triggered allowlisted update for `pi` or `codex` only; never runs arbitrary command strings |
-| GET | `/api/subscription-bridge/status` | CLIProxy Subscription bridge health (enabled/online/accounts/modelCount) |
+| GET | `/api/subscription-bridge/status` | CLIProxy Subscription bridge health (enabled/online/accounts/modelCount; never returns the API key) |
 | POST | `/api/subscription-bridge/refresh` | bust catalog cache and re-probe CLIProxy |
-| GET | `/api/subscription-bridge/claude-code-env` | shell exports for an external Claude Code session via the same bridge |
+| POST | `/api/subscription-bridge/claude-code-env` | explicit Copy action — shell exports for an external Claude Code session (includes API key; same sensitivity as copying the access token) |
 | GET | `/api/settings` | list all settings (catalog metadata + `hasValue` + `source` + masked/raw `value`; secrets masked, never raw) |
 | GET | `/api/settings/:key` | single setting DTO (404 for unknown key) |
 | PUT | `/api/settings/:key` | `{ value }` — persists (encrypts secrets), busts provider caches, returns the masked DTO |
