@@ -484,7 +484,7 @@ export class SessionsService implements OnModuleDestroy {
     // — they inherit the source session's title via rename.
     if (process.env.NODE_ENV !== 'test' && this.titles?.enabled() && !input.priorSessionId) {
       void this.titles
-        .generateTitle(input.prompt)
+        .generateTitle(input.prompt, providerId)
         .then((title) => {
           if (title) this.applyAutoTitle(session.id, session.title, title);
         })

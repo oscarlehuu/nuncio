@@ -10,9 +10,15 @@ const REQUEST_PROMPT_MAX_BYTES = 2 * 1024;
 const TITLE_MAX_CHARS = 80;
 const COMPLETION_TIMEOUT_MS = 30_000;
 
+// Rules adapted from Synara's thread-title prompt (open source), which is the
+// strongest naming prompt we found in the field: identifiers keep two similar
+// tasks distinguishable, and the phrase constraint keeps titles scannable.
 const TITLE_SYSTEM_PROMPT =
   'You name coding-agent sessions. Given the task request, return ONLY a concise 3-8 word ' +
-  "title in the request's language — no quotes, no code fence, no trailing period.";
+  "title in the request's language — a short noun or verb phrase, not a full sentence. " +
+  'Be specific: keep distinguishing identifiers from the request (PR/issue numbers, branch ' +
+  'names, file or feature names, error codes). Two different requests should never produce ' +
+  'the same title. No quotes, no code fence, no markdown, no emoji, no trailing punctuation.';
 
 /**
  * Engine-neutral automatic session naming (what Claude Code / Codex / Cursor /
@@ -32,9 +38,15 @@ export class SessionTitleService {
     return this.settings?.resolve(AUTO_TITLE_SETTING) !== '0';
   }
 
-  async generateTitle(request: string): Promise<string | null> {
+  /**
+   * `preferredProviderId` (the session's own engine) wins when it implements
+   * one-shot completions — Synara's resolution order — so the title bills to
+   * and matches the engine the user picked; any capable engine is the fallback.
+   */
+  async generateTitle(request: string, preferredProviderId?: string): Promise<string | null> {
     try {
-      const provider = (await this.agents.available()).find((p) => p.completeOneShot);
+      const capable = (await this.agents.available()).filter((p) => p.completeOneShot);
+      const provider = capable.find((p) => p.id === preferredProviderId) ?? capable[0];
       if (!provider?.completeOneShot) return null;
 
       const raw = await withTimeout(

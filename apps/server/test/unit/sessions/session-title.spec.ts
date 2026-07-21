@@ -83,6 +83,32 @@ describe('SessionTitleService.generateTitle', () => {
     const input = (completeOneShot.mock.calls[0] as unknown as [{ model?: string | null }])[0];
     expect(input.model).toBe('cliproxyapi:claude-haiku-4-5');
   });
+
+  it("prefers the session's own engine when it supports one-shot completions", async () => {
+    const piShot = jest.fn(async () => 'From pi');
+    const claudeShot = jest.fn(async () => 'From claude');
+    const agents = {
+      available: jest.fn(async () => [
+        { id: 'pi', name: 'Pi', completeOneShot: piShot },
+        { id: 'claude', name: 'Claude', completeOneShot: claudeShot },
+      ]),
+    } as unknown as AgentRegistry;
+    const service = new SessionTitleService(agents);
+
+    const title = await service.generateTitle('anything', 'claude');
+
+    expect(title).toBe('From claude');
+    expect(claudeShot).toHaveBeenCalledTimes(1);
+    expect(piShot).not.toHaveBeenCalled();
+  });
+
+  it('asks for distinguishing identifiers in the title instruction', async () => {
+    const { service, completeOneShot } = makeTitleService({});
+    await service.generateTitle('Fix PR #141 review feedback');
+    const input = (completeOneShot.mock.calls[0] as unknown as [{ systemPrompt?: string }])[0];
+    expect(input.systemPrompt).toMatch(/identifiers/i);
+    expect(input.systemPrompt).toMatch(/noun or verb phrase/i);
+  });
 });
 
 describe('SessionsService.applyAutoTitle', () => {
