@@ -90,6 +90,22 @@ function SelectionCheck({ active }: { active: boolean }) {
   return <Check className="size-4 shrink-0 text-primary" />;
 }
 
+function catalogSourceBadges(model: FlatModel | undefined): ModelOptionBadge[] {
+  const label = model?.badge?.trim();
+  if (!label) return [];
+  return [{ id: `catalog:${label}`, label }];
+}
+
+function modelRowBadges(
+  model: FlatModel | undefined,
+  modelOptions: ModelOptionsMap | undefined,
+  includeOptionBadges: boolean,
+): ModelOptionBadge[] {
+  const source = catalogSourceBadges(model);
+  if (!includeOptionBadges) return source;
+  return [...source, ...activeModelOptionBadges(model, modelOptions)];
+}
+
 function ModelNameWithBadges({
   name,
   badges,
@@ -170,7 +186,10 @@ function ModelPlainRow({
     <DropdownMenuItem onSelect={onSelect} className="gap-2">
       <SelectionCheck active={active} />
       <FastSlot model={model} />
-      <span className="truncate">{prettyModelName(model.name)}</span>
+      <ModelNameWithBadges
+        name={prettyModelName(model.name)}
+        badges={catalogSourceBadges(model)}
+      />
     </DropdownMenuItem>
   );
 }
@@ -473,7 +492,7 @@ function ModelRows({
               <FastSlot model={model} active={fastOn} />
               <ModelNameWithBadges
                 name={prettyModelName(model.name)}
-                badges={active ? activeModelOptionBadges(model, current) : []}
+                badges={modelRowBadges(model, current, active)}
               />
             </DropdownMenuItem>
           );
@@ -600,7 +619,7 @@ export function ModelPicker(props: ModelPickerProps) {
               !!model && model.providerId === recents[index]?.providerId,
           );
 
-  const triggerBadges = activeModelOptionBadges(selected, modelOptions);
+  const triggerBadges = modelRowBadges(selected, modelOptions, true);
   const triggerName = selected ? prettyModelName(selected.name) : 'Select model';
   const triggerLabel = formatModelPickerLabel(selected, modelOptions);
   const showFastOnTrigger = selected ? modelSupportsFast(selected) : false;

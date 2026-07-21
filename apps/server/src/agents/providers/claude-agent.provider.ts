@@ -1,8 +1,10 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import { Inject, Injectable, OnModuleDestroy, Optional } from '@nestjs/common';
 import { spawn } from 'node:child_process';
 import { EventsRepository } from '../../sessions/persistence/events.repository';
 import { SessionsRepository } from '../../sessions/persistence/sessions.repository';
 import { SettingsService } from '../../settings/settings.service';
+import { isCodexBridgeModelId } from '../../subscription-bridge/subscription-bridge.catalog';
+import { SubscriptionBridgeService } from '../../subscription-bridge/subscription-bridge.service';
 import type { ModelOptionsMap } from '../../models/model-options.types';
 import type { ModelProviderDto } from '../../models/models.types';
 import { AgentRunCancelledError, BaseAgentProvider } from '../agents.base-provider';
@@ -178,6 +180,9 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     sessions: SessionsRepository,
     events: EventsRepository,
     private readonly settings: SettingsService,
+    @Optional()
+    @Inject(SubscriptionBridgeService)
+    private readonly subscriptionBridge: SubscriptionBridgeService | null = null,
   ) {
     super(sessions, events);
   }
@@ -205,7 +210,9 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
 
   async listModels(): Promise<ModelProviderDto[]> {
     if (!(await this.isAvailable())) return [];
-    return CLAUDE_STATIC_MODELS;
+    const base = CLAUDE_STATIC_MODELS;
+    if (!this.subscriptionBridge) return base;
+    return this.subscriptionBridge.mergeIntoClaudeCatalog(base);
   }
 
   onModuleDestroy(): void {
@@ -474,6 +481,14 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     const resume = session?.providerThreadId?.trim() || undefined;
     const model = this.stripPrefix(context.model);
     const apiKey = this.resolveApiKey();
+    if (model && isCodexBridgeModelId(model) && !this.subscriptionBridge) {
+      throw new Error(
+        'Subscription bridge is required for this model but is not configured in this process.',
+      );
+    }
+    const bridgeEnv = this.subscriptionBridge
+      ? await this.subscriptionBridge.resolveClaudeSdkEnv(model)
+      : null;
     const effort = this.resolveEffort(context.modelOptions);
     const appendSystemPrompt = this.runtimeSystemInstructions(context);
     const trustedMcpToolNames = (context.tools?.tools ?? []).map(
@@ -504,6 +519,12 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
 
     input.push(this.buildUserMessage(text, context, false));
 
+    const sdkEnv = bridgeEnv
+      ? { ...process.env, ...bridgeEnv }
+      : apiKey
+        ? { ...process.env, ANTHROPIC_API_KEY: apiKey }
+        : undefined;
+
     active.query = this.queryFactory({
       prompt: input,
       options: {
@@ -524,9 +545,9 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
         ...(effort ? { effort } : {}),
         ...(mcpServers ? { mcpServers } : {}),
         ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
-        // The subscription keychain ride needs no env; only pass the API key
-        // when one is explicitly configured (the distribution path).
-        ...(apiKey ? { env: { ...process.env, ANTHROPIC_API_KEY: apiKey } } : {}),
+        // Bridge-routed GPT models force ANTHROPIC_BASE_URL at the local CLIProxy.
+        // Native Claude rides the keychain (no env) or an explicit ANTHROPIC_API_KEY.
+        ...(sdkEnv ? { env: sdkEnv } : {}),
         ...(this.claudeBinaryPath() ? { pathToClaudeCodeExecutable: this.claudeBinaryPath() } : {}),
       },
     });

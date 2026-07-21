@@ -308,6 +308,7 @@ apps/
         bridge/            lazy gateway: McpBridgeToolSource (nuncio_mcp_find_tools/nuncio_mcp_call via AgentToolRegistry) + shared McpClientPool + @modelcontextprotocol/sdk factory
         api/mcp-servers.controller.ts  REST + import preview/apply (masked secrets)
       provider-updates/  optional Pi/Codex CLI version advisories + user-triggered updates
+      subscription-bridge/ local CLIProxyAPI health + Codex-sub catalog merge for Claude sessions
       usage/             first-party Claude/Codex/Cursor subscription quota probes (local CLI creds)
       settings/          DB-backed env config (settings store)
         settings.types.ts        SettingDefinition, SettingDto, UpdateSettingDto
@@ -484,6 +485,9 @@ The event contract is **shared** across providers (emitted via `BaseAgentProvide
 | GET | `/api/usage/:provider` | single-provider quota snapshot (`claude` \| `codex` \| `cursor`); 404 for unknown ids |
 | GET | `/api/provider-updates` | best-effort Pi/Codex CLI version advisory; disabled by `NUNCIO_PROVIDER_UPDATE_CHECKS=0` |
 | POST | `/api/provider-updates/:provider/update` | user-triggered allowlisted update for `pi` or `codex` only; never runs arbitrary command strings |
+| GET | `/api/subscription-bridge/status` | CLIProxy Subscription bridge health (enabled/online/accounts/modelCount) |
+| POST | `/api/subscription-bridge/refresh` | bust catalog cache and re-probe CLIProxy |
+| GET | `/api/subscription-bridge/claude-code-env` | shell exports for an external Claude Code session via the same bridge |
 | GET | `/api/settings` | list all settings (catalog metadata + `hasValue` + `source` + masked/raw `value`; secrets masked, never raw) |
 | GET | `/api/settings/:key` | single setting DTO (404 for unknown key) |
 | PUT | `/api/settings/:key` | `{ value }` — persists (encrypts secrets), busts provider caches, returns the masked DTO |
@@ -533,6 +537,10 @@ Env vars are the **fallback** for the settings store. Every var below (except th
 | `NUNCIO_CODEX_CWD` | `process.cwd()` | Default cwd for Codex app-server sessions when no session workspace/worktree is set. | ✅ |
 | `NUNCIO_CODEX_RUNTIME_MODE` | `full-access` | `full-access` runs local self-hosted Codex with no approval prompts; `approval-required` uses read-only/untrusted mode and surfaces provider approval requests in the transcript. Settings → Providers → Codex. | ✅ |
 | `NUNCIO_CLAUDE_PERMISSION_MODE` | `bypassPermissions` | Solo Claude tool gating: `bypassPermissions` / `acceptEdits` / `default` / `plan`. Settings → Providers → Claude. | ✅ |
+| `NUNCIO_CLIPROXY_ENABLED` | `0` | Enable Subscription bridge (local CLIProxyAPI). When on, Claude-engine GPT models route via the bridge. Settings → Providers → Subscription bridge. | ✅ |
+| `NUNCIO_CLIPROXY_BASE_URL` | `http://127.0.0.1:8317` | CLIProxyAPI origin (no trailing path). | ✅ |
+| `NUNCIO_CLIPROXY_API_KEY` | — | CLIProxy `api-keys` entry. Stored encrypted at rest. | ✅ (secret) |
+| `NUNCIO_CLIPROXY_BIN` | — | Optional `cli-proxy-api` path for login hints only (MVP does not auto-start the proxy). | ✅ |
 | `NUNCIO_DEVIN_BIN` | (auto) | Path to `devin` CLI for `devin acp`; unset → `~/.local/bin/devin` then `PATH`. | ✅ |
 | `NUNCIO_DEVIN_PERMISSION_MODE` | `bypass` | Default ACP session mode for Devin: `bypass` / `accept-edits` / `ask` / `plan`. Settings → Providers → Devin. | ✅ |
 | `PI_AGENT_DIR` / `PI_CODING_AGENT_DIR` | `~/.pi/agent` | Pi auth/config root (`auth.json`, models). The directory path is configurable; the `auth.json` *contents* are read-only (managed by the `pi` CLI). | ✅ |

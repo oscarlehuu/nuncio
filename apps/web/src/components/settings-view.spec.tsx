@@ -24,6 +24,22 @@ vi.mock('../lib/provider-updates-api', () => ({
   updateProviderTool: vi.fn(),
 }));
 
+vi.mock('../lib/subscription-bridge-api', () => ({
+  fetchSubscriptionBridgeStatus: vi.fn().mockResolvedValue({
+    enabled: false,
+    online: false,
+    baseUrl: 'http://127.0.0.1:8317',
+    hasApiKey: false,
+    accounts: { claude: false, codex: false },
+    modelCount: 0,
+    error: null,
+    loginHints: { claude: 'cli --claude-login', codex: 'cli --codex-login' },
+  }),
+  refreshSubscriptionBridgeStatus: vi.fn(),
+  fetchSubscriptionBridgeClaudeCodeEnv: vi.fn(),
+  subscriptionBridgeSubtitle: () => 'Disabled · enable to route Claude ↔ Codex subscriptions',
+}));
+
 function renderWithTheme(ui: ReactElement) {
   return render(
     <ThemeProvider defaultTheme="light">
@@ -205,6 +221,39 @@ describe('SettingsView', () => {
     );
     await goToSection('Providers');
     expect(screen.getByText('Cursor')).toBeInTheDocument();
+  });
+
+  it('shows Subscription bridge row with Manage health actions', async () => {
+    const settings = [
+      makeSetting({
+        key: 'NUNCIO_CLIPROXY_ENABLED',
+        label: 'Enable Subscription bridge',
+        category: 'provider',
+        providerId: 'subscription-bridge',
+        type: 'boolean',
+        hasValue: true,
+        source: 'default',
+        value: '0',
+      }),
+      makeSetting({
+        key: 'NUNCIO_CLIPROXY_BASE_URL',
+        label: 'CLIProxy base URL',
+        category: 'provider',
+        providerId: 'subscription-bridge',
+        type: 'string',
+        hasValue: true,
+        source: 'default',
+        value: 'http://127.0.0.1:8317',
+      }),
+    ];
+    renderWithTheme(
+      <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    await goToSection('Providers');
+    expect(screen.getByText('Subscription bridge')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Manage Subscription bridge' }));
+    expect(screen.getByRole('button', { name: /Check Subscription bridge health/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Copy Claude Code env/i })).toBeInTheDocument();
   });
 
   it('shows Claude and Devin rows with permission mode selects', async () => {

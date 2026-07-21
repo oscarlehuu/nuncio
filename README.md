@@ -203,6 +203,10 @@ Nuncio runs **Claude Code** in-process through the [Claude Agent SDK](https://ww
 
 Sessions are fully isolated from your `~/.claude` config: no plugins, hooks, or `CLAUDE.md` leak in (`settingSources` is empty by default). Trusted workspaces default to `bypassPermissions`, so Claude can edit files and run tools without pausing for approval. Override this advanced provider setting with `NUNCIO_CLAUDE_PERMISSION_MODE` (`default`, `acceptEdits`, `plan`, or `bypassPermissions`); approval-bearing modes continue to surface pending actions in the transcript. Images are supported (paste into the composer). The session runs in the per-session `workspace` (project picker / worktree); resume is cwd-scoped, so the stored session survives a daemon restart and continues in the same directory. Point at a specific CLI build with `NUNCIO_CLAUDE_BIN` when the bundled binary is unavailable.
 
+### Subscription bridge (CLIProxyAPI)
+
+To run **Codex-subscription GPT models inside a Claude session** (Claude harness, Codex bill), enable **Settings → Providers → Subscription bridge**, point it at a local [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) (`http://127.0.0.1:8317` by default), and set the proxy API key. When the bridge is healthy, the Claude model picker lists GPT models with a **Codex sub** badge — pick one and Nuncio injects `ANTHROPIC_BASE_URL` for that session. This is not a separate engine. Native **Codex** sessions still use `codex app-server` directly. Use **Copy Claude Code env** in Manage if you also want shell exports for an external `claude` CLI.
+
 ### Provider CLI updates
 
 Nuncio checks the installed Pi and Codex CLI versions against their public npm package versions and notifies when a newer version is available. It never auto-updates a CLI: users choose **Settings -> Providers -> Tool updates -> Update**.

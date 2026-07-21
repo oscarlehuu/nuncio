@@ -36,6 +36,7 @@ import { TailscaleModule } from './tailscale/tailscale.module';
 import { TasksModule } from './tasks/tasks.module';
 import { TerminalModule } from './terminal/terminal.module';
 import { PushModule } from './push/push.module';
+import { SubscriptionBridgeModule } from './subscription-bridge/subscription-bridge.module';
 import { UsageModule } from './usage/usage.module';
 
 @Module({
@@ -77,6 +78,7 @@ import { UsageModule } from './usage/usage.module';
     TasksModule,
     TerminalModule,
     ObservabilityModule,
+    SubscriptionBridgeModule,
     UsageModule,
   ],
 })
