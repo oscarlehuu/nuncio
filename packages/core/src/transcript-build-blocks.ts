@@ -17,6 +17,7 @@ import {
   isInteractiveToolName,
   parseInteractiveToolInput,
 } from './interactive-tool-input';
+import { stripSessionPreambleForDisplay } from './session-preamble-display';
 import { decodeNuncioTransportUserText } from './transcript-user-prompt';
 
 export type TranscriptBlock =
@@ -405,10 +406,12 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
     ) return;
     const rawText = String(payload.text ?? '');
     const decodedText = decodeNuncioTransportUserText(rawText);
+    // Hide injected Workspace/brief/facts preamble in the bubble; agent still saw rawText.
+    const displayText = stripSessionPreambleForDisplay(decodedText);
     if (
-      decodedText !== rawText
+      displayText !== rawText
       && state.out.some(
-        (block) => block.kind === 'user' && !block.queued && block.text === decodedText,
+        (block) => block.kind === 'user' && !block.queued && block.text === displayText,
       )
     ) return;
 
@@ -432,6 +435,8 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
           if (block.reserved) {
             delete block.queued;
             delete block.reserved;
+            // Promote to the display form once the reserved/queued placeholder delivers.
+            block.text = displayText;
             state.currentTurnHasThinking = false;
             state.assistantBufFromDelta = false;
             return;
@@ -445,7 +450,7 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
       // would otherwise render as a duplicate bubble. An intentional resend of the
       // same text collapses to one — an acceptable trade for killing the duplicate.
       const alreadyShown = state.out.find(
-        (block) => block.kind === 'user' && !block.queued && block.text === rawText,
+        (block) => block.kind === 'user' && !block.queued && block.text === displayText,
       );
       if (alreadyShown?.kind === 'user') {
         delete alreadyShown.reserved;
@@ -453,7 +458,7 @@ export function stepEvent(state: ParserState, event: SessionEvent): void {
         state.out.push({
           kind: 'user',
           key: `user-${event.seq}`,
-          text: rawText,
+          text: displayText,
           ...(event.type === 'steer_reserved' ? { reserved: true } : {}),
           ...(images ? { images } : {}),
         });

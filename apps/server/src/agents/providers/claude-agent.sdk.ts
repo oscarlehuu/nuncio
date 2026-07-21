@@ -96,14 +96,21 @@ export type ClaudeSdkMessage =
   | ClaudeUserResultMessage
   | ClaudeOtherMessage;
 
+/** Subset of Claude Agent SDK `Settings` that Nuncio pushes via applyFlagSettings / Options.settings. */
+export type ClaudeFlagSettings = {
+  effortLevel?: string | null;
+  ultracode?: boolean | null;
+  enableWorkflows?: boolean | null;
+};
+
 export interface ClaudeQuery extends AsyncIterable<ClaudeSdkMessage> {
   interrupt(): Promise<void>;
   setModel(model?: string): Promise<void>;
   /**
-   * Mid-session flag change (streaming-input mode). Effort is the only flag we
-   * push through today; optional because a fake/older query may not implement it.
+   * Mid-session flag change (streaming-input mode). Effort + ultracode ride this
+   * path; optional because a fake/older query may not implement it.
    */
-  applyFlagSettings?(settings: { effortLevel?: string }): Promise<void>;
+  applyFlagSettings?(settings: ClaudeFlagSettings): Promise<void>;
   /**
    * Replace the live query's MCP servers mid-session so a follow-up turn whose
    * runtime toolset changed sees the new tools. Optional because a fake/older
@@ -132,6 +139,8 @@ export interface ClaudeQueryOptions {
   model?: string;
   resume?: string;
   effort?: string;
+  /** Session-scoped Claude Code settings (ultracode, workflows, …). */
+  settings?: ClaudeFlagSettings;
   env?: Record<string, string | undefined>;
   pathToClaudeCodeExecutable?: string;
   mcpServers?: Record<string, ClaudeMcpServer>;
@@ -206,9 +215,9 @@ export function buildClaudeQueryFactory(): ClaudeQueryFactory {
       async setModel(model?: string): Promise<void> {
         return (await load()).setModel(model);
       },
-      async applyFlagSettings(settings: { effortLevel?: string }): Promise<void> {
+      async applyFlagSettings(settings: ClaudeFlagSettings): Promise<void> {
         const query = (await load()) as ClaudeQuery & {
-          applyFlagSettings?: (s: { effortLevel?: string }) => Promise<void>;
+          applyFlagSettings?: (s: ClaudeFlagSettings) => Promise<void>;
         };
         await query.applyFlagSettings?.(settings);
       },

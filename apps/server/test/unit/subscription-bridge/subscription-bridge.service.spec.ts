@@ -85,14 +85,14 @@ describe('SubscriptionBridgeService', () => {
 
     const merged = await bridge.mergeIntoClaudeCatalog(CLAUDE_STATIC_MODELS);
     const group = merged[0]?.groups?.find((g) => g.id === 'codex-sub');
-    expect(group?.models).toEqual([
-      {
-        id: 'claude:gpt-5.6-sol',
-        name: 'GPT 5.6 Sol',
-        sub: 'via Subscription bridge',
-        badge: 'Codex sub',
-      },
-    ]);
+    expect(group?.models).toHaveLength(1);
+    expect(group?.models[0]).toMatchObject({
+      id: 'claude:gpt-5.6-sol',
+      name: 'GPT 5.6 Sol',
+      sub: 'via Subscription bridge',
+      badge: 'Codex sub',
+    });
+    expect(group?.models[0]?.options?.map((o) => o.id)).toEqual(['reasoningEffort', 'ultracode']);
   });
 
   it('fail-closes resolveClaudeSdkEnv when bridge is offline', async () => {

@@ -122,6 +122,27 @@ describe('ClaudeAgentProvider', () => {
     expect(capturedOptions?.effort).toBeUndefined();
   });
 
+  it('passes ultracode settings when the ultracode option is on', async () => {
+    const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:sonnet' });
+    await provider.run(created.id, 'hi', {
+      cwd: '/tmp/ws',
+      model: 'claude:sonnet',
+      modelOptions: { effort: 'high', ultracode: true },
+    });
+    expect(capturedOptions?.settings).toEqual({ ultracode: true, enableWorkflows: true });
+    expect(capturedOptions?.effort).toBe('high');
+  });
+
+  it('omits ultracode settings when the option is off', async () => {
+    const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:sonnet' });
+    await provider.run(created.id, 'hi', {
+      cwd: '/tmp/ws',
+      model: 'claude:sonnet',
+      modelOptions: { ultracode: false },
+    });
+    expect(capturedOptions?.settings).toBeUndefined();
+  });
+
   it('injects ANTHROPIC_API_KEY into env only when set', async () => {
     const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
     await provider.run(created.id, 'hi', { cwd: '/tmp/ws', model: 'claude:haiku' });
@@ -1384,6 +1405,47 @@ describe('ClaudeAgentProvider', () => {
       await expect(
         provider.setModel(created.id, 'claude:sonnet', { effort: 'high' }),
       ).resolves.toBeUndefined();
+    });
+
+    it('enables ultracode via applyFlagSettings on setModel', async () => {
+      const applied: Array<Record<string, unknown>> = [];
+      provider.queryFactory = () => ({
+        async interrupt() {},
+        async setModel() {},
+        async applyFlagSettings(settings: Record<string, unknown>) {
+          applied.push(settings);
+        },
+        async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+          yield { type: 'system', subtype: 'init', session_id: 't1' };
+          yield { type: 'result', subtype: 'success', result: 'ok' };
+        },
+      });
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:sonnet' });
+      await provider.run(created.id, 'hi', { cwd: '/tmp/ws', model: 'claude:sonnet' });
+      await provider.setModel(created.id, 'claude:sonnet', { ultracode: true, effort: 'high' });
+      expect(applied).toEqual([
+        { ultracode: true, enableWorkflows: true },
+        { effortLevel: 'high' },
+      ]);
+    });
+
+    it('clears ultracode when the option is explicitly false', async () => {
+      const applied: Array<Record<string, unknown>> = [];
+      provider.queryFactory = () => ({
+        async interrupt() {},
+        async setModel() {},
+        async applyFlagSettings(settings: Record<string, unknown>) {
+          applied.push(settings);
+        },
+        async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+          yield { type: 'system', subtype: 'init', session_id: 't1' };
+          yield { type: 'result', subtype: 'success', result: 'ok' };
+        },
+      });
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:sonnet' });
+      await provider.run(created.id, 'hi', { cwd: '/tmp/ws', model: 'claude:sonnet' });
+      await provider.setModel(created.id, 'claude:sonnet', { ultracode: false });
+      expect(applied).toEqual([{ ultracode: false }]);
     });
   });
 

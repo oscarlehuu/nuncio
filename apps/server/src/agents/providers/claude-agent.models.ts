@@ -29,6 +29,20 @@ function effortOption(): ModelOptionDescriptorDto {
   };
 }
 
+/** Claude Code session flag: xhigh + standing dynamic-workflow orchestration (SDK Settings.ultracode). */
+export function ultracodeOption(): ModelOptionDescriptorDto {
+  return {
+    id: 'ultracode',
+    label: 'Ultracode',
+    type: 'boolean',
+    defaultValue: false,
+  };
+}
+
+function effortfulModelOptions(): ModelOptionDescriptorDto[] {
+  return [effortOption(), ultracodeOption()];
+}
+
 export const CLAUDE_STATIC_MODELS: ModelProviderDto[] = [
   {
     id: 'claude',
@@ -45,19 +59,19 @@ export const CLAUDE_STATIC_MODELS: ModelProviderDto[] = [
             id: 'claude:claude-fable-5[1m]',
             name: 'Fable',
             sub: 'Most capable',
-            options: [effortOption()],
+            options: effortfulModelOptions(),
           },
           {
             id: 'claude:opus[1m]',
             name: 'Opus',
             sub: 'High capability',
-            options: [effortOption()],
+            options: effortfulModelOptions(),
           },
           {
             id: 'claude:sonnet',
             name: 'Sonnet',
             sub: 'Balanced',
-            options: [effortOption()],
+            options: effortfulModelOptions(),
           },
           {
             id: 'claude:haiku',

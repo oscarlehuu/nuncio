@@ -34,6 +34,24 @@ describe('parseInteractiveToolInput', () => {
   });
 });
 
+describe('buildTranscriptBlocks user preamble display', () => {
+  it('hides ## Workspace preamble in the user bubble', () => {
+    const composed = [
+      '## Workspace',
+      'branch: `main`',
+      'base: `origin/dev`',
+      '',
+      '---',
+      '',
+      'what is your model',
+    ].join('\n');
+    const blocks = buildTranscriptBlocks([ev(1, 'user_message', { text: composed })]);
+    const user = blocks.find((b) => b.kind === 'user');
+    expect(user?.kind === 'user' && user.text).toBe('what is your model');
+    expect(JSON.stringify(blocks)).not.toContain('## Workspace');
+  });
+});
+
 describe('derivePendingQueuedSteers', () => {
   it('lists queued steers, drops delivered ones, and empties on clear', () => {
     expect(

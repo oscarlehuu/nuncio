@@ -130,4 +130,22 @@ describe('ClaudeAgentProvider × Subscription bridge', () => {
     expect(group?.models.some((m) => m.id === 'claude:gpt-5.6-sol')).toBe(true);
     expect(group?.models[0]?.badge).toBe('Codex sub');
   });
+
+  it('attaches reasoningEffort (incl. ultra) and ultracode options on Codex-sub models', async () => {
+    settings.set('NUNCIO_CLIPROXY_ENABLED', '1');
+    settings.set('NUNCIO_CLIPROXY_API_KEY', 'bridge-secret');
+    bridge.fetchImpl = stubFetch({
+      data: [{ id: 'gpt-5.6-sol', display_name: 'GPT 5.6 Sol', owned_by: 'openai' }],
+    });
+
+    const catalog = await provider.listModels();
+    const model = catalog[0]?.groups?.find((g) => g.id === 'codex-sub')?.models.find(
+      (m) => m.id === 'claude:gpt-5.6-sol',
+    );
+    const reasoning = model?.options?.find((o) => o.id === 'reasoningEffort');
+    expect(reasoning?.type).toBe('select');
+    expect(reasoning?.options?.some((o) => o.id === 'ultra')).toBe(true);
+    const ultracode = model?.options?.find((o) => o.id === 'ultracode');
+    expect(ultracode).toMatchObject({ type: 'boolean', defaultValue: false });
+  });
 });
