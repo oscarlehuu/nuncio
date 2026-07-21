@@ -7,7 +7,7 @@ import {
   BottomSheetModal,
   BottomSheetScrollView,
 } from '@gorhom/bottom-sheet';
-import { ArrowUp, ChevronRight, Folder, FolderSearch, GitBranch, Laptop, Send, Settings2 } from 'lucide-react-native';
+import { ArrowUp, Check, ChevronRight, Folder, FolderSearch, GitBranch, Laptop, Send, Settings2, SlidersHorizontal } from 'lucide-react-native';
 import { createSession, fetchModels, type Session } from '@nuncio/core/api';
 import {
   flattenProviders,
@@ -16,6 +16,11 @@ import {
   type ModelInfo,
   type ModelProvider,
 } from '@nuncio/core/model-providers';
+import {
+  defaultSelectionsFromDescriptors,
+  optionSummaryLabel,
+  type ModelOptionsMap,
+} from '@nuncio/core/model-options';
 import { ProviderIcon, brandForModel, type Brand } from './provider-icon';
 import {
   fetchCrewBranches,
@@ -33,7 +38,7 @@ import { Card } from './ui/card';
 import { Text } from './ui/text';
 import { Textarea } from './ui/textarea';
 
-type SheetMode = 'model' | 'project' | 'browse' | 'workspace' | 'branch' | null;
+type SheetMode = 'model' | 'options' | 'project' | 'browse' | 'workspace' | 'branch' | null;
 type WorkspaceMode = 'local' | 'worktree';
 type Engine = {
   key: string;
@@ -47,6 +52,7 @@ type ModelListItem =
 
 const SHEET_COPY: Record<Exclude<SheetMode, null>, { title: string; subtitle: string }> = {
   model: { title: 'Choose a model', subtitle: 'Pick an engine, then a model.' },
+  options: { title: 'Model options', subtitle: 'Tune reasoning effort and priority for this model.' },
   project: { title: 'Choose a project', subtitle: 'The project determines the workspace and base branch.' },
   browse: { title: 'Browse folders', subtitle: 'Navigate the machine and pick a project folder.' },
   workspace: { title: 'Workspace mode', subtitle: 'Run in the repo checkout, or fork an isolated worktree.' },
@@ -76,6 +82,7 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
   const [browseListing, setBrowseListing] = useState<DirListing | null>(null);
   const [browseLoading, setBrowseLoading] = useState(false);
   const [browseError, setBrowseError] = useState<string | null>(null);
+  const [modelOptions, setModelOptions] = useState<ModelOptionsMap>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -121,8 +128,17 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
   const catalog = useMemo(() => normalizeModelCatalog(providers), [providers]);
   const models = useMemo(() => flattenProviders(catalog), [catalog]);
   const selectedModel = models.find((model) => model.id === modelId);
+
+  // Reset the per-model option selections (reasoning effort, priority, …) to
+  // their defaults whenever the chosen model changes.
+  useEffect(() => {
+    const model = models.find((entry) => entry.id === modelId);
+    setModelOptions(defaultSelectionsFromDescriptors(model?.options));
+  }, [modelId, models]);
   const selectableBranches = useMemo(() => selectableCrewBranches(branches), [branches]);
   const sheetCopy = sheetMode ? SHEET_COPY[sheetMode] : null;
+  const modelOptionDescriptors = selectedModel?.options ?? [];
+  const optionsSummary = optionSummaryLabel(modelOptionDescriptors, modelOptions);
   const canSend = Boolean(prompt.trim() && selectedModel && !busy);
 
   // Engines = providers (Claude / Cursor / Codex / Nuncio Engine …); each
@@ -197,7 +213,7 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
         selectedModel.providerId,
         projectPath || undefined,
         baseBranch || undefined,
-        undefined,
+        Object.keys(modelOptions).length > 0 ? modelOptions : undefined,
         Boolean(projectPath) && workspaceMode === 'worktree',
       );
       setPrompt('');
@@ -250,6 +266,19 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
             </Text>
           </Pressable>
         </View>
+        {modelOptionDescriptors.length > 0 ? (
+          <Pressable
+            accessibilityLabel="Model options"
+            onPress={() => openSheet('options')}
+            className="mt-2 min-h-10 flex-row items-center gap-2 rounded-xl border border-border bg-secondary px-3 active:opacity-70"
+          >
+            <SlidersHorizontal color="#83868b" size={15} />
+            <Text className="flex-1 text-xs font-medium text-foreground" numberOfLines={1}>
+              {optionsSummary ?? 'Model options'}
+            </Text>
+            <ChevronRight color="#83868b" size={15} />
+          </Pressable>
+        ) : null}
         {projectPath ? (
           <View className="mt-2 flex-row items-center gap-2">
             <Pressable
@@ -400,7 +429,54 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
           >
             <Text className="text-lg font-semibold text-foreground">{sheetCopy?.title}</Text>
             <Text className="mb-3 mt-1 text-xs text-muted-foreground">{sheetCopy?.subtitle}</Text>
-            {sheetMode === 'project' ? (
+            {sheetMode === 'options' ? (
+              <View className="gap-5">
+                {modelOptionDescriptors.map((descriptor) => (
+                  <View key={descriptor.id} className="gap-2">
+                    <Text className="text-sm font-medium text-foreground">{descriptor.label}</Text>
+                    {descriptor.type === 'boolean' ? (
+                      <View className="flex-row gap-2">
+                        {[{ value: false, label: 'Off' }, { value: true, label: 'On' }].map((choice) => {
+                          const active = (modelOptions[descriptor.id] ?? descriptor.defaultValue ?? false) === choice.value;
+                          return (
+                            <Pressable
+                              key={choice.label}
+                              onPress={() => setModelOptions((prev) => ({ ...prev, [descriptor.id]: choice.value }))}
+                              className={`min-h-11 flex-1 items-center justify-center rounded-xl border ${active ? 'border-primary/50 bg-secondary' : 'border-border bg-card'}`}
+                            >
+                              <Text className={active ? 'text-sm font-medium text-foreground' : 'text-sm text-muted-foreground'}>
+                                {choice.label}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                    ) : (
+                      <View className="flex-row flex-wrap gap-2">
+                        {(descriptor.options ?? []).map((choice) => {
+                          const active = modelOptions[descriptor.id] === choice.id;
+                          return (
+                            <Pressable
+                              key={choice.id}
+                              onPress={() => setModelOptions((prev) => ({ ...prev, [descriptor.id]: choice.id }))}
+                              className={`min-h-11 flex-row items-center gap-1.5 rounded-xl border px-3 ${active ? 'border-primary/50 bg-secondary' : 'border-border bg-card'}`}
+                            >
+                              {active ? <Check color="#eff0f1" size={14} /> : null}
+                              <Text className={active ? 'text-sm font-medium text-foreground' : 'text-sm text-muted-foreground'}>
+                                {choice.label}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                    )}
+                  </View>
+                ))}
+                {modelOptionDescriptors.length === 0 ? (
+                  <Text className="px-1 text-xs text-muted-foreground">This model has no adjustable options.</Text>
+                ) : null}
+              </View>
+            ) : sheetMode === 'project' ? (
               <View className="gap-2">
                 <Pressable
                   accessibilityLabel="Browse folders"
