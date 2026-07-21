@@ -10,6 +10,7 @@ import {
   fetchGitHistory,
   fetchGitStash,
   fetchSessionDiff,
+  generateCommitMessage,
   openPullRequest,
   postDiffComment,
   pushSession,
@@ -38,6 +39,7 @@ vi.mock('../lib/api', async () => {
     commitSession: vi.fn(),
     pushSession: vi.fn(),
     openPullRequest: vi.fn(),
+    generateCommitMessage: vi.fn(),
   };
 });
 
@@ -119,9 +121,44 @@ describe('SessionChangesPanel', () => {
         number: 7,
         state: 'open',
       } as never);
+    vi.mocked(generateCommitMessage)
+      .mockReset()
+      .mockResolvedValue({ message: 'feat: add greeting helper' });
     vi.mocked(toast.loading).mockReset().mockReturnValue('toast-1' as never);
     vi.mocked(toast.success).mockReset();
     vi.mocked(toast.error).mockReset();
+  });
+
+  describe('generated commit message', () => {
+    it('fills the message box from the generate icon inside it', async () => {
+      render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+      await screen.findByText('apps/web/src/app.tsx');
+      await userEvent.click(screen.getByRole('button', { name: /generate commit message/i }));
+
+      await waitFor(() => expect(generateCommitMessage).toHaveBeenCalledWith('s1'));
+      await waitFor(() =>
+        expect(screen.getByPlaceholderText(/commit message/i)).toHaveValue(
+          'feat: add greeting helper',
+        ),
+      );
+      // Generation only prefills — nothing commits without an explicit click.
+      expect(commitSession).not.toHaveBeenCalled();
+    });
+
+    it('surfaces a generation failure as an error toast', async () => {
+      vi.mocked(generateCommitMessage).mockRejectedValue(
+        new Error('No available engine supports text generation'),
+      );
+      render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+      await screen.findByText('apps/web/src/app.tsx');
+      await userEvent.click(screen.getByRole('button', { name: /generate commit message/i }));
+
+      await waitFor(() =>
+        expect(toast.error).toHaveBeenCalledWith('No available engine supports text generation'),
+      );
+    });
   });
 
   describe('commit section', () => {

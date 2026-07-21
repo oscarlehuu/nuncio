@@ -7,6 +7,7 @@ import {
   fetchGitHistory,
   fetchGitStash,
   fetchSessionDiff,
+  generateCommitMessage,
   openPullRequest,
   postDiffComment,
   pushSession,
@@ -18,7 +19,7 @@ import {
   type SessionDiff,
   type SessionStatus,
 } from '../lib/api';
-import { AlertTriangle, ChevronDown } from 'lucide-react';
+import { AlertTriangle, ChevronDown, Loader2, Sparkles } from 'lucide-react';
 import { SessionChangeFileRow } from './session-change-file-row';
 import { SessionScmBranchStrip } from './session-scm-branch-strip';
 import { SessionScmCommitList } from './session-scm-commit-list';
@@ -72,6 +73,20 @@ export function SessionChangesPanel({
   const [sentKey, setSentKey] = useState<ComposerKey | null>(null);
   const [commitMessage, setCommitMessage] = useState('');
   const [committing, setCommitting] = useState(false);
+  const [generating, setGenerating] = useState(false);
+
+  const generateMessage = async () => {
+    if (generating || committing) return;
+    try {
+      setGenerating(true);
+      const result = await generateCommitMessage(sessionId);
+      setCommitMessage(result.message);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to generate a commit message');
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   const load = useCallback(async () => {
     try {
@@ -299,14 +314,30 @@ export function SessionChangesPanel({
         {hasFiles && (
           <div className="border-b border-border/50 px-3 py-3">
             <div className="mb-2 text-sm font-medium">Commit Message</div>
-            <Textarea
-              value={commitMessage}
-              onChange={(event) => setCommitMessage(event.target.value)}
-              placeholder="Commit message"
-              rows={2}
-              className="mb-2 resize-none text-sm"
-              disabled={committing}
-            />
+            <div className="relative mb-2">
+              <Textarea
+                value={commitMessage}
+                onChange={(event) => setCommitMessage(event.target.value)}
+                placeholder="Commit message"
+                rows={2}
+                className="resize-none pr-9 text-sm"
+                disabled={committing}
+              />
+              <button
+                type="button"
+                aria-label="Generate commit message"
+                title="Generate commit message"
+                onClick={() => void generateMessage()}
+                disabled={generating || committing}
+                className="absolute right-1.5 top-1.5 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+              >
+                {generating ? (
+                  <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                ) : (
+                  <Sparkles className="size-3.5" aria-hidden />
+                )}
+              </button>
+            </div>
             <div className="flex gap-px">
               <Button
                 size="sm"

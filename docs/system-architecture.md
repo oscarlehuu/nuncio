@@ -1579,6 +1579,14 @@ The SCM inspector in the session detail aside is `<ScmPanel>` (`apps/web/src/com
 
 `review-changes.tsx` is **not mounted anywhere** — it is retained (with its spec) as a reference implementation for a possible dedicated review screen. Do not delete `pr-panel.tsx` or `review-changes.tsx` without checking with the user.
 
+**Generated commit messages:** a small sparkles icon inside the Commit Message box (not a
+standalone button, per founder direction) calls `POST /api/sessions/:id/git/commit-message` →
+`GitCommitMessageService` (`apps/server/src/sessions/git-commit-message.service.ts`), which
+feeds the working-tree status + diff (24 KB cap) to the first available engine implementing
+`AgentProvider.completeOneShot` — the same tool-less one-shot seam fact distillation uses;
+Nuncio never calls a model API directly. The result only prefills the box (never auto-commits);
+clean tree / no capable engine / empty output are 400s surfaced as toasts.
+
 **Stacked commit actions** live inside the Commit section (no separate header button — each git
 action has exactly one home in the dock): the Commit button is a split-button whose menu adds
 **Commit & push** and **Commit, push & PR**, client-orchestrated over the existing endpoints

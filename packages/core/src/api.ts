@@ -671,6 +671,20 @@ export async function handoffSessionTo(
   return res.json();
 }
 
+/**
+ * Ask the server to draft a commit message for the session's working tree.
+ * Generation goes through an engine's one-shot completion; the result only
+ * prefills the message box — nothing is committed.
+ */
+export async function generateCommitMessage(id: string): Promise<{ message: string }> {
+  const res = await apiFetch(`/api/sessions/${id}/git/commit-message`, { method: 'POST' });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(body?.message ?? 'Failed to generate a commit message');
+  }
+  return res.json();
+}
+
 export async function pushSession(
   id: string,
   opts?: { force?: boolean },

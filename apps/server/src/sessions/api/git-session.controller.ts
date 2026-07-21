@@ -9,6 +9,7 @@ import {
   Query,
 } from '@nestjs/common';
 import { GitService } from '../../git/git.service';
+import { GitCommitMessageService } from '../git-commit-message.service';
 import { SessionsService } from '../sessions.service';
 
 interface CommitBody {
@@ -25,7 +26,13 @@ export class GitSessionController {
   constructor(
     private readonly sessions: SessionsService,
     private readonly git: GitService,
+    private readonly commitMessages: GitCommitMessageService,
   ) {}
+
+  @Post('commit-message')
+  generateCommitMessage(@Param('id') id: string) {
+    return this.commitMessages.generate(this.requireSessionGitDir(id));
+  }
 
   @Get('status')
   status(@Param('id') id: string) {
