@@ -3,7 +3,7 @@
  * Keeps tool/permission translation unit-testable without spawning `devin acp`.
  */
 
-export interface AcpPermissionOption {
+interface AcpPermissionOption {
   optionId: string;
   name: string;
   kind: string;

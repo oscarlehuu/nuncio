@@ -97,7 +97,7 @@ function methodLabel(method: string): string {
 }
 
 /** Prefer a short human summary over dumping ACP option lists as JSON. */
-export function requestDetail(params: unknown): string {
+function requestDetail(params: unknown): string {
   if (params === undefined || params === null) return '';
   if (typeof params !== 'object' || Array.isArray(params)) return String(params);
 

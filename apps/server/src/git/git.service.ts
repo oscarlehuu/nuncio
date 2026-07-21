@@ -49,7 +49,7 @@ import type {
 } from './git.types';
 
 /** Per-repo debounce for best-effort `git fetch` before listing branches. */
-export const BRANCH_REFRESH_TTL_MS = 60_000;
+const BRANCH_REFRESH_TTL_MS = 60_000;
 const BRANCH_REFRESH_TIMEOUT_MS = 15_000;
 
 function expandHome(path: string): string {
