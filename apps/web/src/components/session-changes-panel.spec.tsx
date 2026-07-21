@@ -13,6 +13,7 @@ import {
   type GitBranchSyncDto,
   type SessionDiff,
 } from '../lib/api';
+import { fetchBranches } from '../lib/projects';
 
 vi.mock('sonner', () => ({
   toast: {
@@ -33,6 +34,10 @@ vi.mock('../lib/api', async () => {
     postDiffComment: vi.fn(),
   };
 });
+
+vi.mock('../lib/projects', () => ({
+  fetchBranches: vi.fn(),
+}));
 
 const SYNC_CLEAN: GitBranchSyncDto = {
   branch: 'main',
@@ -99,6 +104,10 @@ describe('SessionChangesPanel', () => {
     vi.mocked(fetchGitHistory).mockReset().mockResolvedValue({ branch: 'main', commits: [] });
     vi.mocked(fetchCommitDiff).mockReset().mockResolvedValue({ diff: '@@ -1 +1 @@\n-old\n+new', truncated: false });
     vi.mocked(postDiffComment).mockReset().mockResolvedValue({ ok: true });
+    vi.mocked(fetchBranches).mockReset().mockResolvedValue([
+      { name: 'main', isDefault: true, isCurrent: true },
+      { name: 'feat/other', isDefault: false, isCurrent: false },
+    ]);
     vi.mocked(toast.success).mockReset();
     vi.mocked(toast.error).mockReset();
   });
@@ -297,5 +306,55 @@ describe('SessionChangesPanel', () => {
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('No workspace'));
     expect(screen.getByPlaceholderText(/tell the agent/i)).toBeInTheDocument();
+  });
+
+  it('reloads history when a different branch is selected', async () => {
+    vi.mocked(fetchSessionDiff).mockResolvedValue({ files: [], truncated: false, omittedFiles: 0 });
+    vi.mocked(fetchGitHistory).mockImplementation(async (_id, opts) => {
+      const branch =
+        typeof opts === 'object' && opts?.branch ? opts.branch : 'main';
+      if (branch === 'feat/other') {
+        return {
+          branch: 'feat/other',
+          commits: [
+            {
+              sha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+              shortSha: 'bbbbbbb',
+              subject: 'work on other',
+              authorName: 'Oscar',
+              authoredAt: '2026-07-13T01:00:00+00:00',
+              parents: ['aaaaaaa'],
+            },
+          ],
+        };
+      }
+      return {
+        branch: 'main',
+        commits: [
+          {
+            sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            shortSha: 'aaaaaaa',
+            subject: 'init on main',
+            authorName: 'Oscar',
+            authoredAt: '2026-07-13T00:00:00+00:00',
+            parents: [],
+          },
+        ],
+      };
+    });
+
+    render(
+      <SessionChangesPanel sessionId="s1" sessionStatus="IDLE" repoPath="/repo" branch="main" />,
+    );
+
+    expect(await screen.findByText('init on main')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /history branch/i }));
+    await userEvent.click(await screen.findByRole('option', { name: /feat\/other/i }));
+
+    await waitFor(() =>
+      expect(fetchGitHistory).toHaveBeenCalledWith('s1', { limit: 15, branch: 'feat/other' }),
+    );
+    expect(await screen.findByText('work on other')).toBeInTheDocument();
+    expect(fetchBranches).toHaveBeenCalled();
   });
 });

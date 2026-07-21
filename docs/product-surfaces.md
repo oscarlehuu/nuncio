@@ -45,7 +45,7 @@ does **not** mean the capability is unique to that file.
 | `/session/:sessionId` | **Session detail** — transcript + steer + inspector dock | `session-detail.tsx` |
 | `/crew/:taskId` | **Crew task / run** | `crew/crew-task-detail.tsx` |
 | `/autopilot/*` | **Autopilot / loops** | `autopilot-routes.tsx` |
-| `/settings` | **Settings** (`?section=`) | `settings-view.tsx` |
+| `/settings` | **Settings** (`?section=`) — main sidebar swaps to settings nav + Back; content is `settings-view.tsx` |
 | `/digest` | Digest detail | `digest-view.tsx` |
 | `/timeline` | Global activity | `timeline-view.tsx` |
 | `/forge/pr` | Standalone PR deep link | `forge/standalone-pr-route.tsx` |
@@ -158,7 +158,7 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 | **Mobile** | None; forge automation is backend-only |
 | **Settings** | Source control (GitHub / GitLab) + Advanced automation toggles `forges.autoSteer` and `forges.autoCloseOnMerge` (both default true; env fallbacks `NUNCIO_FORGES_AUTO_STEER` / `NUNCIO_FORGES_AUTO_CLOSE_ON_MERGE`) |
 | **Server** | `forges/` (incl. `GET /api/forge/pulls/:number/comments` via `listPullRequestComments`), `git/` (`sync`, `unpushed`, `commits/:sha/diff`, `stash`, `blame`, `history`, `pull`, status/diff/push), `POST /api/sessions/from-pr`, signed forge webhooks, session git/PR routes. GitHub normalizes reviews, review comments, PR issue comments, failed workflow/check runs, and PR close; GitLab normalizes MR notes, failed associated pipelines, and MR merge/close. Feedback auto-steers only for repository writers and never for the connected forge login; untrusted/unverifiable authors and missing owners raise `pr-feedback` Attention. Feedback and CI are durably queued before the webhook returns `202`; background delivery failures also raise Attention. PR adoption atomically reuses one active owner and configures plain pushes to the PR source. A merged owner is archived and its worktree removed only when IDLE, clean, and without unpushed commits; every failed gate skips cleanup non-destructively and raises Attention. |
-| **Also check** | Settings credentials/automation toggles + live `scm-panel` + standalone PR + `pr-review`/`pr-feedback` attention items |
+| **Also check** | Settings credentials/automation toggles + live `scm-panel` + standalone PR + `pr-review`/`pr-feedback` attention items; sidebar session rows show engine + PR open/merged/closed badges (`session-pr-badge.tsx`) from `pullRequestState`/`forgeStatus` |
 | **Legacy** | `review-changes.tsx` is unwired orphan; prefer `scm-panel` / `session-changes-panel`. Do not “fix PR UI” only in orphans |
 
 ### Verify / auto-fix / diff / evidence
@@ -184,7 +184,7 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 
 | Tool | Web component | Notes |
 |---|---|---|
-| SCM / Changes / PR | `forge/scm-panel.tsx`, `session-changes-panel.tsx` (+ branch sync, outgoing/incoming, stash, blame, history, issues via `GET/POST /sessions/:id/git/*`) | See Forge row |
+| SCM / Changes / PR | `forge/scm-panel.tsx`, `session-changes-panel.tsx` (+ branch sync, outgoing/incoming, stash, blame, history with branch picker via `GET /sessions/:id/git/history?branch=`, issues via `GET/POST /sessions/:id/git/*`) | See Forge row |
 | Files | `file-explorer-panel.tsx` | Server `fs/` |
 | Terminal | `terminal-dock.tsx` / `terminal-panel.tsx` | Server `terminal/`; desktop IPC or WS |
 | Browser | `browser-panel.tsx` + `design-mode-overlay.tsx` | Desktop-only. **Design Mode**: page highlight/click inject + Cursor-style **pill composer** in React under the BrowserView (cannot paint over native view / CSP sites). Steers open session only. Restart Desktop after code pulls. |
@@ -225,7 +225,7 @@ Read-only Claude Code / Codex CLI memories indexed into Pi sessions; stores stay
 
 ### Settings taxonomy
 
-`/settings?section=<id>` — `settings-view.tsx`:
+`/settings?section=<id>` — sidebar = `settings-sidebar-panel.tsx`; content = `settings-view.tsx`:
 
 | Section id | Owns |
 |---|---|

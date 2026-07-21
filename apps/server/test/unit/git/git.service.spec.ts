@@ -817,6 +817,28 @@ describe('GitService', () => {
       expect(result.commits[1]?.parents).toEqual([]);
     });
 
+    it('history can list commits for a non-HEAD branch', async () => {
+      await runGitAsync(repo, ['checkout', '-b', 'feat/history-view']);
+      writeFileSync(join(repo, 'feature.txt'), 'feature work\n');
+      await runGitAsync(repo, ['add', 'feature.txt']);
+      await runGitAsync(repo, ['commit', '-m', 'feat: history on feature']);
+      await runGitAsync(repo, ['checkout', 'main']);
+
+      const onFeature = await service.history(repo, { branch: 'feat/history-view', limit: 5 });
+      expect(onFeature.branch).toBe('feat/history-view');
+      expect(onFeature.commits[0]?.subject).toBe('feat: history on feature');
+
+      const onMain = await service.history(repo, { branch: 'main', limit: 5 });
+      expect(onMain.branch).toBe('main');
+      expect(onMain.commits.map((c) => c.subject)).not.toContain('feat: history on feature');
+    });
+
+    it('history rejects an unknown branch ref', async () => {
+      await expect(service.history(repo, { branch: 'does-not-exist' })).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+
     it('push to a bare local remote reports pushed + remoteBranch and lands the branch', async () => {
       const bare = mkdtempSync(join(tmpdir(), 'nuncio-bare-'));
       try {
