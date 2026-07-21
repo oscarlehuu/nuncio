@@ -378,6 +378,14 @@ describe('Nuncio API', () => {
       expect(res.body.some((branch: { name: string }) => branch.name === 'main')).toBe(true);
     });
 
+    it('GET /api/projects/branches?refresh=1 still returns local branches', async () => {
+      const res = await api(app).get(
+        `/api/projects/branches?path=${encodeURIComponent(repoPath)}&refresh=1`,
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.some((branch: { name: string }) => branch.name === 'main')).toBe(true);
+    });
+
     it('POST /api/sessions with projectPath defaults to the selected workspace', async () => {
       const res = await api(app)
         .post('/api/sessions')

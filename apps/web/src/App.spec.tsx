@@ -93,6 +93,7 @@ vi.mock('./lib/forge-api', () => ({
     checks: [],
   }),
   fetchForgeThreads: vi.fn().mockResolvedValue([]),
+  fetchForgePullComments: vi.fn().mockResolvedValue([]),
   fetchForgePullFiles: vi.fn().mockResolvedValue([]),
   setForgePullState: vi.fn(),
   submitForgeReview: vi.fn(),

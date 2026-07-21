@@ -213,6 +213,81 @@ describe('GitService', () => {
     }
   });
 
+  it('listBranches refresh fetches remote-only branches into the picker list', async () => {
+    const origin = mkdtempSync(join(tmpdir(), 'nuncio-branch-refresh-origin-'));
+    const clone = mkdtempSync(join(tmpdir(), 'nuncio-branch-refresh-clone-'));
+    try {
+      await runGitAsync(origin, ['init', '--bare']);
+      await initRepo(clone);
+      await runGitAsync(clone, ['remote', 'add', 'origin', origin]);
+      await runGitAsync(clone, ['push', '-u', 'origin', 'main']);
+      await runGitAsync(clone, ['checkout', '-b', 'feat/only-on-remote']);
+      await runGitAsync(clone, ['commit', '--allow-empty', '-m', 'remote only']);
+      await runGitAsync(clone, ['push', 'origin', 'feat/only-on-remote']);
+      await runGitAsync(clone, ['checkout', 'main']);
+      await runGitAsync(clone, ['branch', '-D', 'feat/only-on-remote']);
+      // Push updates remote-tracking refs; drop them so refresh must re-fetch.
+      await runGitAsync(clone, ['update-ref', '-d', 'refs/remotes/origin/feat/only-on-remote']);
+
+      const stale = await service.listBranches(clone);
+      expect(stale.some((b) => b.name === 'origin/feat/only-on-remote')).toBe(false);
+
+      const refreshed = await service.listBranches(clone, { refresh: true });
+      expect(refreshed.some((b) => b.name === 'origin/feat/only-on-remote')).toBe(true);
+    } finally {
+      rmSync(origin, { recursive: true, force: true });
+      rmSync(clone, { recursive: true, force: true });
+    }
+  });
+
+  it('listBranches refresh fails soft when origin is unreachable', async () => {
+    const clone = mkdtempSync(join(tmpdir(), 'nuncio-branch-refresh-fail-'));
+    try {
+      await initRepo(clone);
+      await runGitAsync(clone, [
+        'remote', 'add', 'origin', 'file:///tmp/nuncio-missing-origin-does-not-exist',
+      ]);
+
+      const branches = await service.listBranches(clone, { refresh: true });
+      expect(branches.some((b) => b.name === 'main')).toBe(true);
+    } finally {
+      rmSync(clone, { recursive: true, force: true });
+    }
+  });
+
+  it('listBranches refresh respects a per-repo TTL between fetches', async () => {
+    const origin = mkdtempSync(join(tmpdir(), 'nuncio-branch-ttl-origin-'));
+    const clone = mkdtempSync(join(tmpdir(), 'nuncio-branch-ttl-clone-'));
+    try {
+      await runGitAsync(origin, ['init', '--bare']);
+      await initRepo(clone);
+      await runGitAsync(clone, ['remote', 'add', 'origin', origin]);
+      await runGitAsync(clone, ['push', '-u', 'origin', 'main']);
+
+      const t0 = 1_700_000_000_000;
+      await service.listBranches(clone, { refresh: true, now: t0 });
+
+      await runGitAsync(clone, ['checkout', '-b', 'feat/after-ttl']);
+      await runGitAsync(clone, ['commit', '--allow-empty', '-m', 'after first fetch']);
+      await runGitAsync(clone, ['push', 'origin', 'feat/after-ttl']);
+      await runGitAsync(clone, ['checkout', 'main']);
+      await runGitAsync(clone, ['branch', '-D', 'feat/after-ttl']);
+      await runGitAsync(clone, ['update-ref', '-d', 'refs/remotes/origin/feat/after-ttl']);
+
+      const withinTtl = await service.listBranches(clone, { refresh: true, now: t0 + 1_000 });
+      expect(withinTtl.some((b) => b.name === 'origin/feat/after-ttl')).toBe(false);
+
+      const afterTtl = await service.listBranches(clone, {
+        refresh: true,
+        now: t0 + 60_000 + 1,
+      });
+      expect(afterTtl.some((b) => b.name === 'origin/feat/after-ttl')).toBe(true);
+    } finally {
+      rmSync(origin, { recursive: true, force: true });
+      rmSync(clone, { recursive: true, force: true });
+    }
+  });
+
   it('createWorktree creates nuncio branch and worktree directory', async () => {
     const sessionId = 'abc12345';
     const slug = 'fix-bug';

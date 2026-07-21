@@ -148,6 +148,14 @@ export function fetchForgeThreads(path: string, number: number): Promise<ForgeRe
   return forgeFetch(`/api/forge/pulls/${number}/threads?${q(path)}`, undefined, 'Failed to load review threads');
 }
 
+export function fetchForgePullComments(path: string, number: number): Promise<ForgeComment[]> {
+  return forgeFetch(
+    `/api/forge/pulls/${number}/comments?${q(path)}`,
+    undefined,
+    'Failed to load pull request comments',
+  );
+}
+
 export function replyForgeThread(
   path: string,
   number: number,

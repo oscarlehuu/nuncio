@@ -207,6 +207,60 @@ describe('SettingsView', () => {
     expect(screen.getByText('Cursor')).toBeInTheDocument();
   });
 
+  it('shows Claude and Devin rows with permission mode selects', async () => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const settings = [
+      makeSetting({
+        key: 'NUNCIO_CLAUDE_PERMISSION_MODE',
+        label: 'Claude permission mode',
+        category: 'provider',
+        providerId: 'claude',
+        type: 'string',
+        hasValue: true,
+        source: 'default',
+        value: 'bypassPermissions',
+        options: [
+          { value: 'bypassPermissions', label: 'Bypass' },
+          { value: 'acceptEdits', label: 'Accept edits' },
+          { value: 'default', label: 'Ask every time' },
+          { value: 'plan', label: 'Plan only' },
+        ],
+      }),
+      makeSetting({
+        key: 'NUNCIO_DEVIN_PERMISSION_MODE',
+        label: 'Devin permission mode',
+        category: 'provider',
+        providerId: 'devin',
+        type: 'string',
+        hasValue: true,
+        source: 'default',
+        value: 'bypass',
+        options: [
+          { value: 'bypass', label: 'Bypass Permissions' },
+          { value: 'accept-edits', label: 'Code' },
+          { value: 'ask', label: 'Ask' },
+          { value: 'plan', label: 'Plan' },
+        ],
+      }),
+    ];
+    renderWithTheme(
+      <SettingsView settings={settings} onUpdate={onUpdate} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    await goToSection('Providers');
+    expect(screen.getByText('Claude')).toBeInTheDocument();
+    expect(screen.getByText('Devin')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Manage Claude' }));
+    expect(screen.getByText('Claude permission mode')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Accept edits' }));
+    expect(onUpdate).toHaveBeenCalledWith('NUNCIO_CLAUDE_PERMISSION_MODE', 'acceptEdits');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Manage Devin' }));
+    expect(screen.getByText('Devin permission mode')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Code' }));
+    expect(onUpdate).toHaveBeenCalledWith('NUNCIO_DEVIN_PERMISSION_MODE', 'accept-edits');
+  });
+
   it('renders MCP & Tools settings and updates the default browser option', async () => {
     const onUpdate = vi.fn().mockResolvedValue(undefined);
     const settings = [
