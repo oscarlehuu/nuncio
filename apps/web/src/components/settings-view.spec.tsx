@@ -78,6 +78,7 @@ describe('SettingsView', () => {
     expect(within(nav).getByRole('button', { name: 'Source control' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'MCP & Tools' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'Crew profiles' })).toBeInTheDocument();
+    expect(within(nav).getByRole('button', { name: 'Mobile' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'Remote access' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'General' })).toBeInTheDocument();
   });
@@ -180,6 +181,26 @@ describe('SettingsView', () => {
     // The pairing pane is shown immediately, not the default Appearance pane.
     expect(screen.getByRole('heading', { name: 'Remote access' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Appearance' })).not.toBeInTheDocument();
+  });
+
+  it('opens the Mobile pane when deep-linked via ?section=mobile', () => {
+    window.history.replaceState(null, '', '/settings?section=mobile');
+    renderWithTheme(
+      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    // The phone-pairing pane is shown immediately, not the default Appearance pane.
+    expect(screen.getByRole('heading', { name: 'Mobile' })).toBeInTheDocument();
+    expect(screen.getByText('Connect your phone')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Appearance' })).not.toBeInTheDocument();
+  });
+
+  it('finds the Mobile section when searching for phone pairing', async () => {
+    renderWithTheme(
+      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+    );
+    const search = screen.getByRole('searchbox', { name: /search settings/i });
+    await userEvent.type(search, 'phone');
+    expect(screen.getByRole('heading', { name: 'Mobile' })).toBeInTheDocument();
   });
 
   it('opens Crew profiles directly from the composer setup deep-link', async () => {
