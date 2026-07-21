@@ -35,9 +35,23 @@ vi.mock('../lib/subscription-bridge-api', () => ({
     error: null,
     loginHints: { claude: 'cli --claude-login', codex: 'cli --codex-login' },
   }),
-  refreshSubscriptionBridgeStatus: vi.fn(),
+  refreshSubscriptionBridgeStatus: vi.fn().mockResolvedValue({
+    enabled: true,
+    online: true,
+    baseUrl: 'http://127.0.0.1:8317',
+    hasApiKey: true,
+    accounts: { claude: true, codex: true },
+    modelCount: 2,
+    error: null,
+    loginHints: { claude: 'cli --claude-login', codex: 'cli --codex-login' },
+  }),
   fetchSubscriptionBridgeClaudeCodeEnv: vi.fn(),
-  subscriptionBridgeSubtitle: () => 'Disabled · enable to route Claude ↔ Codex subscriptions',
+  subscriptionBridgeSubtitle: vi.fn(
+    (status: { enabled?: boolean; online?: boolean } | null) =>
+      status?.online
+        ? 'Online · Claude + Codex'
+        : 'Disabled · enable to route Claude ↔ Codex subscriptions',
+  ),
 }));
 
 function renderWithTheme(ui: ReactElement) {

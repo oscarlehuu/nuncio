@@ -36,9 +36,17 @@ import { HeartbeatHealthSection } from './heartbeat-health-section';
 import { SubscriptionBridgeSettingsSection } from './subscription-bridge-settings-section';
 import {
   fetchSubscriptionBridgeStatus,
+  refreshSubscriptionBridgeStatus,
   subscriptionBridgeSubtitle,
   type SubscriptionBridgeStatus,
 } from '../lib/subscription-bridge-api';
+
+const BRIDGE_SETTING_KEYS = new Set([
+  'NUNCIO_CLIPROXY_ENABLED',
+  'NUNCIO_CLIPROXY_BASE_URL',
+  'NUNCIO_CLIPROXY_API_KEY',
+  'NUNCIO_CLIPROXY_BIN',
+]);
 
 interface SettingsViewProps {
   settings: Setting[];
@@ -194,6 +202,26 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
       });
   }, []);
 
+  const handleUpdate = async (key: string, value: string) => {
+    await onUpdate(key, value);
+    if (!BRIDGE_SETTING_KEYS.has(key)) return;
+    try {
+      setBridgeStatus(await refreshSubscriptionBridgeStatus());
+    } catch {
+      // Keep the last known subtitle; Check health remains available.
+    }
+  };
+
+  const handleClear = async (key: string) => {
+    await onClear(key);
+    if (!BRIDGE_SETTING_KEYS.has(key)) return;
+    try {
+      setBridgeStatus(await refreshSubscriptionBridgeStatus());
+    } catch {
+      // Keep the last known subtitle; Check health remains available.
+    }
+  };
+
   // The Tailscale auto-trust toggle is owned by the Remote access section below.
   const general = settings.filter(
     (s) => s.category === 'general' && s.key !== 'NUNCIO_TAILSCALE_AUTO_TRUST',
@@ -302,7 +330,7 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
         {isExpanded && (
           <div className="bg-muted/20 px-4 pb-4 border-t border-border/40">
             {pSettings.map((s) => (
-              <SettingRow key={s.key} setting={s} onUpdate={onUpdate} onClear={onClear} />
+              <SettingRow key={s.key} setting={s} onUpdate={handleUpdate} onClear={handleClear} />
             ))}
             {providerId === 'subscription-bridge' && (
               <SubscriptionBridgeSettingsSection status={bridgeStatus} onStatus={setBridgeStatus} />
