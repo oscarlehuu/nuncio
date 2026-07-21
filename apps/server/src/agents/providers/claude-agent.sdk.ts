@@ -97,7 +97,7 @@ export type ClaudeSdkMessage =
   | ClaudeOtherMessage;
 
 /** Subset of Claude Agent SDK `Settings` that Nuncio pushes via applyFlagSettings / Options.settings. */
-export type ClaudeFlagSettings = {
+type ClaudeFlagSettings = {
   effortLevel?: string | null;
   ultracode?: boolean | null;
   enableWorkflows?: boolean | null;

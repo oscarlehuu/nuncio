@@ -1,10 +1,10 @@
 import type { ModelOptionDescriptorDto } from '../../models/model-options.types';
 
 /** Shared Codex reasoning defaults — also used for Claude Codex-sub (Subscription bridge) catalog rows. */
-export const DEFAULT_CODEX_REASONING_EFFORT = 'medium';
+const DEFAULT_CODEX_REASONING_EFFORT = 'medium';
 
 /** Includes `ultra` so GPT-5.6 Sol/Terra show the multi-agent tier without a live model/list probe. */
-export const DEFAULT_CODEX_REASONING_EFFORTS = [
+const DEFAULT_CODEX_REASONING_EFFORTS = [
   'low',
   'medium',
   'high',
