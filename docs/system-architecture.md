@@ -1587,6 +1587,15 @@ feeds the working-tree status + diff (24 KB cap) to the first available engine i
 Nuncio never calls a model API directly. The result only prefills the box (never auto-commits);
 clean tree / no capable engine / empty output are 400s surfaced as toasts.
 
+Two `agents`-category settings drive it: `NUNCIO_COMMIT_MESSAGE_MODEL` (provider:modelId, engine
+default when unset) and `NUNCIO_COMMIT_MESSAGE_INSTRUCTION` (the style instruction, composed
+under a fixed output contract). Instruction resolution: user-set value wins; when empty, the
+service **learns** one — a second one-shot reads up to 50 recent commit subjects
+(`GitService.history`, ≥5 required), derives a ≤600-char style instruction, and persists it into
+the same setting via `SettingsService.set` so it is visible and editable in Settings (clear it
+to re-learn). Learning is best-effort: thin history, engine failure, or empty output fall back
+to the built-in conventional-commit style and persist nothing.
+
 **Stacked commit actions** live inside the Commit section (no separate header button — each git
 action has exactly one home in the dock): the Commit button is a split-button whose menu adds
 **Commit & push** and **Commit, push & PR**, client-orchestrated over the existing endpoints

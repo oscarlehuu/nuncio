@@ -794,6 +794,28 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     ],
   },
   {
+    key: 'NUNCIO_COMMIT_MESSAGE_MODEL',
+    category: 'agents',
+    type: 'string',
+    label: 'Commit message model',
+    description:
+      'Model for the Source Control "generate commit message" one-shot (provider:modelId, e.g. ' +
+      'cliproxyapi:claude-haiku-4-5). Prefer a cheap model — the call is bounded (status + 24 KB ' +
+      'diff) and only prefills the message box. Falls back to the engine default when unset.',
+    envVar: 'NUNCIO_COMMIT_MESSAGE_MODEL',
+  },
+  {
+    key: 'NUNCIO_COMMIT_MESSAGE_INSTRUCTION',
+    category: 'agents',
+    type: 'string',
+    label: 'Commit message instruction',
+    description:
+      'Style instruction for generated commit messages. Leave empty and Nuncio will learn one ' +
+      'from your repository\'s recent commit subjects on first use and save it here — review and ' +
+      'edit it any time; clear it to re-learn.',
+    envVar: 'NUNCIO_COMMIT_MESSAGE_INSTRUCTION',
+  },
+  {
     key: 'NUNCIO_FACT_DISTILLATION_MODEL',
     category: 'agents',
     type: 'string',
