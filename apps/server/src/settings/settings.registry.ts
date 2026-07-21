@@ -306,6 +306,48 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
       { value: 'bypassPermissions', label: 'Bypass', description: 'Run every tool without asking (trusted workspaces only).' },
     ],
   },
+  // ── Subscription bridge (CLIProxyAPI) ────────────────────────────────────
+  {
+    key: 'NUNCIO_CLIPROXY_ENABLED',
+    category: 'provider',
+    providerId: 'subscription-bridge',
+    type: 'boolean',
+    label: 'Enable Subscription bridge',
+    description:
+      'When on, Nuncio can route selected Claude-engine models (e.g. GPT via Codex subscription) through a local CLIProxyAPI. Not a separate engine — pick Claude + a Codex-sub model in the picker.',
+    envVar: 'NUNCIO_CLIPROXY_ENABLED',
+    default: '0',
+  },
+  {
+    key: 'NUNCIO_CLIPROXY_BASE_URL',
+    category: 'provider',
+    providerId: 'subscription-bridge',
+    type: 'string',
+    label: 'CLIProxy base URL',
+    description: 'Local CLIProxyAPI origin (no trailing path). Default http://127.0.0.1:8317.',
+    envVar: 'NUNCIO_CLIPROXY_BASE_URL',
+    default: 'http://127.0.0.1:8317',
+  },
+  {
+    key: 'NUNCIO_CLIPROXY_API_KEY',
+    category: 'provider',
+    providerId: 'subscription-bridge',
+    type: 'secret',
+    label: 'CLIProxy API key',
+    description:
+      'API key from CLIProxy config `api-keys`. Sent as Bearer / x-api-key when Nuncio or Claude Code talks to the bridge.',
+    envVar: 'NUNCIO_CLIPROXY_API_KEY',
+  },
+  {
+    key: 'NUNCIO_CLIPROXY_BIN',
+    category: 'provider',
+    providerId: 'subscription-bridge',
+    type: 'path',
+    label: 'CLIProxy binary',
+    description:
+      'Optional path to `cli-proxy-api` for login hints (e.g. ~/cliproxyapi/cli-proxy-api). Nuncio does not auto-start the proxy in MVP.',
+    envVar: 'NUNCIO_CLIPROXY_BIN',
+  },
   // ── Provider behavioral ──────────────────────────────────────────────────
   {
     key: 'NUNCIO_CURSOR_CWD',

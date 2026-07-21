@@ -698,4 +698,36 @@ describe('ModelPicker', () => {
     expect(trigger).toHaveClass('h-7');
     expect(trigger).not.toHaveClass('h-8');
   });
+
+  it('shows catalog source badges (e.g. Codex sub) on Claude bridge models', async () => {
+    const user = userEvent.setup();
+    const claudeWithBridge: ModelProvider = {
+      id: 'claude',
+      name: 'Claude',
+      groups: [
+        {
+          id: 'codex-sub',
+          name: 'Codex subscription',
+          models: [
+            {
+              id: 'claude:gpt-5.6-sol',
+              name: 'GPT 5.6 Sol',
+              badge: 'Codex sub',
+            },
+          ],
+        },
+      ],
+    };
+    render(
+      <ModelPicker
+        value="claude:gpt-5.6-sol"
+        onChange={vi.fn()}
+        providers={[claudeWithBridge]}
+        variant="boxed"
+      />,
+    );
+    expect(screen.getByText('Codex sub')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /gpt 5\.6 sol/i }));
+    expect(within(screen.getByRole('menu')).getByText('Codex sub')).toBeInTheDocument();
+  });
 });

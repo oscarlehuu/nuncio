@@ -3,6 +3,7 @@ import { SessionsPersistenceModule } from '../sessions/sessions.persistence.modu
 import { SettingsModule } from '../settings/settings.module';
 import { ContextModule } from '../context/context.module';
 import { EvidenceModule } from '../evidence/evidence.module';
+import { SubscriptionBridgeModule } from '../subscription-bridge/subscription-bridge.module';
 import {
   NuncioContextRepository,
   NuncioContextService,
@@ -53,7 +54,13 @@ const mockProviderBinding: Provider = {
 };
 
 @Module({
-  imports: [SessionsPersistenceModule, SettingsModule, ContextModule, EvidenceModule],
+  imports: [
+    SessionsPersistenceModule,
+    SettingsModule,
+    ContextModule,
+    EvidenceModule,
+    SubscriptionBridgeModule,
+  ],
   providers: [
     PiAgentProvider,
     CursorAgentProvider,

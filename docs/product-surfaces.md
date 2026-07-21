@@ -116,9 +116,9 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 |---|---|
 | **Web** | `model-picker.tsx` on Home composer, Workbench slot composer, Autopilot `create-loop-dialog` / loop settings, Crew profile dialogs, `subagent-row`, Settings Agents / subagent models |
 | **Mobile** | `/new` only |
-| **Settings** | Providers (Cursor / Nuncio Engine / Claude / Codex / Devin rows), Agents (subagent models), Usage. Default solo permission/runtime modes: Claude `NUNCIO_CLAUDE_PERMISSION_MODE`, Codex `NUNCIO_CODEX_RUNTIME_MODE`, Devin `NUNCIO_DEVIN_PERMISSION_MODE` (Pi has no permission mode). |
-| **Server** | `models/`, provider `listModels()`, `usage/`, settings registry keys above |
-| **Also check** | Every picker host that should inherit catalog/effort/fast UX — not only Home; Providers pane must list Claude + Devin (not search-only) |
+| **Settings** | Providers (Cursor / Nuncio Engine / Claude / Codex / Devin / **Subscription bridge** rows), Agents (subagent models), Usage. Default solo permission/runtime modes: Claude `NUNCIO_CLAUDE_PERMISSION_MODE`, Codex `NUNCIO_CODEX_RUNTIME_MODE`, Devin `NUNCIO_DEVIN_PERMISSION_MODE` (Pi has no permission mode). Subscription bridge keys: `NUNCIO_CLIPROXY_ENABLED`, `NUNCIO_CLIPROXY_BASE_URL`, `NUNCIO_CLIPROXY_API_KEY`, `NUNCIO_CLIPROXY_BIN`. |
+| **Server** | `models/`, provider `listModels()` (Claude merges CLIProxy Codex-sub models when bridge is healthy), `subscription-bridge/` (`GET /api/subscription-bridge/status`, `POST …/refresh`, `POST …/claude-code-env`), `usage/`, settings registry keys above |
+| **Also check** | Every picker host that should inherit catalog/effort/fast UX — not only Home; Providers pane must list Claude + Devin + Subscription bridge (not search-only); Codex-sub models show a `Codex sub` badge under Claude |
 
 ### Crew
 
@@ -231,7 +231,7 @@ Read-only Claude Code / Codex CLI memories indexed into Pi sessions; stores stay
 |---|---|
 | `general` | General |
 | `appearance` | Theme / chat font / density (client) |
-| `providers` | Engine credentials + updates |
+| `providers` | Engine credentials + updates + Subscription bridge (CLIProxy) |
 | `usage` | Quotas / history charts |
 | `source-control` | GitHub / GitLab |
 | `mcp-tools` | MCP & tools — MCP Store rows (import, enable/disable, lazy/full advertise, OAuth Connect/Reconnect for remote servers, remove) + tool defaults |
