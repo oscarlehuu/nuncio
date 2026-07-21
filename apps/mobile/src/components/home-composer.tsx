@@ -39,7 +39,7 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
   const sheetRef = useRef<BottomSheetModal>(null);
   const submitLock = useRef(createCrewSubmitLock());
   const [prompt, setPrompt] = useState('');
-  const [promptHeight, setPromptHeight] = useState(96);
+  const [promptHeight, setPromptHeight] = useState(64);
   const [providers, setProviders] = useState<ModelProvider[]>([]);
   const [modelId, setModelId] = useState<string | null>(null);
   const [projects, setProjects] = useState<CrewProject[]>([]);
@@ -130,7 +130,7 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
           className="border-0 bg-transparent px-0 py-0 text-base leading-6 shadow-none"
           style={{ height: promptHeight }}
           onContentSizeChange={(event) => {
-            setPromptHeight(Math.min(180, Math.max(72, event.nativeEvent.contentSize.height)));
+            setPromptHeight(Math.min(180, Math.max(64, event.nativeEvent.contentSize.height)));
           }}
         />
         <View className="mt-3 flex-row items-center gap-2">
@@ -143,7 +143,6 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
             <Text className="flex-1 text-xs font-medium text-foreground" numberOfLines={1}>
               {selectedProject ? basename(selectedProject.path) : 'Default workspace'}
             </Text>
-            <ChevronRight color="#83868b" size={15} />
           </Pressable>
           <Pressable
             accessibilityLabel="Choose model"
@@ -154,23 +153,26 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
             <Text className="flex-1 text-xs font-medium text-foreground" numberOfLines={1}>
               {selectedModel?.name ?? 'Choose model'}
             </Text>
-            <ChevronRight color="#83868b" size={15} />
+          </Pressable>
+        </View>
+        <View className="mt-3 flex-row items-center justify-between">
+          <Pressable
+            accessibilityLabel="Switch to Crew or advanced options"
+            onPress={onAdvanced}
+            className="min-h-11 flex-row items-center gap-1 py-1 active:opacity-70"
+          >
+            <Text className="text-xs font-medium text-muted-foreground">Crew / advanced</Text>
+            <ChevronRight color="#83868b" size={13} />
           </Pressable>
           <Button
             accessibilityLabel="Send task"
             onPress={() => void send()}
             disabled={!canSend}
             size="icon"
-            className="h-10 w-10 rounded-full"
+            className="h-11 w-11 rounded-full"
           >
-            {busy ? <ActivityIndicator size="small" color="#161719" /> : <Send color="#161719" size={16} />}
+            {busy ? <ActivityIndicator size="small" color="#161719" /> : <Send color="#161719" size={17} />}
           </Button>
-        </View>
-        <View className="mt-3 flex-row items-center justify-between">
-          <Text className="text-xs text-muted-foreground">Solo quick-create</Text>
-          <Pressable onPress={onAdvanced} className="px-1 py-1">
-            <Text className="text-xs font-semibold text-primary">Crew / advanced</Text>
-          </Pressable>
         </View>
         {error ? <Text className="mt-3 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</Text> : null}
       </Card>
@@ -178,7 +180,9 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
       <BottomSheetModal
         ref={sheetRef}
         index={0}
-        snapPoints={['52%']}
+        snapPoints={['70%']}
+        topInset={insets.top}
+        enableDynamicSizing={false}
         enablePanDownToClose
         backdropComponent={(props) => (
           <BottomSheetBackdrop {...props} appearsOnIndex={0} disappearsOnIndex={-1} />
