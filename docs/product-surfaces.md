@@ -116,9 +116,9 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 |---|---|
 | **Web** | `model-picker.tsx` on Home composer, Workbench slot composer, Autopilot `create-loop-dialog` / loop settings, Crew profile dialogs, `subagent-row`, Settings Agents / subagent models |
 | **Mobile** | `/new` only |
-| **Settings** | Providers, Agents (subagent models), Usage |
-| **Server** | `models/`, provider `listModels()`, `usage/` |
-| **Also check** | Every picker host that should inherit catalog/effort/fast UX — not only Home |
+| **Settings** | Providers (Cursor / Nuncio Engine / Claude / Codex / Devin rows), Agents (subagent models), Usage. Default solo permission/runtime modes: Claude `NUNCIO_CLAUDE_PERMISSION_MODE`, Codex `NUNCIO_CODEX_RUNTIME_MODE`, Devin `NUNCIO_DEVIN_PERMISSION_MODE` (Pi has no permission mode). |
+| **Server** | `models/`, provider `listModels()`, `usage/`, settings registry keys above |
+| **Also check** | Every picker host that should inherit catalog/effort/fast UX — not only Home; Providers pane must list Claude + Devin (not search-only) |
 
 ### Crew
 

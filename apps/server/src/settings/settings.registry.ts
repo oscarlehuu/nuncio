@@ -347,6 +347,61 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
       '`full-access` runs with approval_policy=never and danger-full-access. `approval-required` starts read-only/untrusted and surfaces approval requests in the transcript.',
     envVar: 'NUNCIO_CODEX_RUNTIME_MODE',
     default: 'full-access',
+    options: [
+      {
+        value: 'full-access',
+        label: 'Full access',
+        description: 'No approval prompts; danger-full-access sandbox.',
+      },
+      {
+        value: 'approval-required',
+        label: 'Approval required',
+        description: 'Read-only/untrusted; surface Approve/Deny cards in the transcript.',
+      },
+    ],
+  },
+  {
+    key: 'NUNCIO_DEVIN_BIN',
+    category: 'provider',
+    providerId: 'devin',
+    type: 'path',
+    label: 'Devin CLI binary',
+    description:
+      'Path to the `devin` CLI used to launch `devin acp`. Leave unset to use ~/.local/bin/devin, then PATH.',
+    envVar: 'NUNCIO_DEVIN_BIN',
+  },
+  {
+    key: 'NUNCIO_DEVIN_PERMISSION_MODE',
+    category: 'provider',
+    providerId: 'devin',
+    type: 'string',
+    label: 'Devin permission mode',
+    description:
+      'Default ACP session mode for new and resumed Devin sessions. Bypass auto-approves tool calls; Code/Ask/Plan match the Devin CLI modes.',
+    envVar: 'NUNCIO_DEVIN_PERMISSION_MODE',
+    default: 'bypass',
+    options: [
+      {
+        value: 'bypass',
+        label: 'Bypass Permissions',
+        description: 'Auto-approve all tool calls (trusted local machine).',
+      },
+      {
+        value: 'accept-edits',
+        label: 'Code',
+        description: 'Write and edit code; shell/fetch may still prompt.',
+      },
+      {
+        value: 'ask',
+        label: 'Ask',
+        description: 'Answer questions without code changes.',
+      },
+      {
+        value: 'plan',
+        label: 'Plan',
+        description: 'Plan changes before implementing.',
+      },
+    ],
   },
   // ── General ──────────────────────────────────────────────────────────────
   {

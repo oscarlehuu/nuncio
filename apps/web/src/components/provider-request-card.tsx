@@ -19,6 +19,14 @@ interface ProviderRequestCardProps {
   responding?: boolean;
 }
 
+const PROVIDER_LABELS: Record<string, string> = {
+  codex: 'Codex',
+  claude: 'Claude',
+  cursor: 'Cursor',
+  pi: 'Nuncio Engine',
+  devin: 'Devin',
+};
+
 export function ProviderRequestCard({
   request,
   onRespond,
@@ -26,7 +34,10 @@ export function ProviderRequestCard({
 }: ProviderRequestCardProps) {
   const pending = request.status === 'pending';
   const detail = requestDetail(request.params);
-  const label = request.provider === 'codex' ? 'Codex action' : `${request.provider} action`;
+  const providerLabel =
+    PROVIDER_LABELS[request.provider] ??
+    (request.provider ? request.provider.charAt(0).toUpperCase() + request.provider.slice(1) : 'Provider');
+  const label = `${providerLabel} action`;
 
   return (
     <div className="flex items-start justify-start">
@@ -42,7 +53,7 @@ export function ProviderRequestCard({
             </Badge>
           )}
         </div>
-        <div className="text-xs text-muted-foreground">{request.method}</div>
+        <div className="text-xs text-muted-foreground">{methodLabel(request.method)}</div>
         {detail ? (
           <code className="mt-2 block overflow-x-auto rounded-md bg-muted px-2 py-1.5 text-xs text-foreground">
             {detail}
@@ -80,14 +91,52 @@ export function ProviderRequestCard({
   );
 }
 
-function requestDetail(params: unknown): string {
-  if (!params || typeof params !== 'object' || Array.isArray(params)) {
-    return params === undefined ? '' : String(params);
-  }
+function methodLabel(method: string): string {
+  if (method === 'session/request_permission') return 'Permission request';
+  return method;
+}
+
+/** Prefer a short human summary over dumping ACP option lists as JSON. */
+export function requestDetail(params: unknown): string {
+  if (params === undefined || params === null) return '';
+  if (typeof params !== 'object' || Array.isArray(params)) return String(params);
 
   const record = params as Record<string, unknown>;
-  for (const key of ['command', 'cmd', 'path']) {
+  for (const key of ['command', 'cmd', 'path', 'prompt']) {
     if (typeof record[key] === 'string' && record[key].trim()) return record[key];
+  }
+  if (typeof record.toolName === 'string' && record.toolName.trim()) {
+    return record.toolName;
+  }
+
+  const toolCall = record.toolCall;
+  if (toolCall && typeof toolCall === 'object' && !Array.isArray(toolCall)) {
+    const call = toolCall as Record<string, unknown>;
+    if (typeof call.title === 'string' && call.title.trim()) return call.title.trim();
+    const raw = call.rawInput;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      const input = raw as Record<string, unknown>;
+      for (const key of ['command', 'cmd', 'path', 'summary']) {
+        if (typeof input[key] === 'string' && input[key].trim()) return input[key];
+      }
+    }
+  }
+
+  // ACP permission options: prefer a descriptive allow_* label over bare "Allow".
+  if (Array.isArray(record.options)) {
+    const allowNames = record.options.flatMap((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+      const recordItem = item as { kind?: unknown; name?: unknown };
+      if (typeof recordItem.kind !== 'string' || !recordItem.kind.startsWith('allow')) return [];
+      if (typeof recordItem.name !== 'string' || !recordItem.name.trim()) return [];
+      return [recordItem.name.trim()];
+    });
+    const descriptive = allowNames.find((name) => {
+      const lower = name.toLowerCase();
+      return lower !== 'allow' && lower !== 'allow once';
+    });
+    if (descriptive) return descriptive;
+    if (allowNames[0]) return allowNames[0];
   }
 
   try {

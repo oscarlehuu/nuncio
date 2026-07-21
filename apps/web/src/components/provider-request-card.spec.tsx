@@ -45,4 +45,60 @@ describe('ProviderRequestCard', () => {
     await user.click(screen.getByRole('button', { name: 'Deny request' }));
     expect(onRespond).toHaveBeenCalledWith('req-1', 'deny');
   });
+
+  it('renders ACP permission requests with a readable title instead of raw JSON', () => {
+    render(
+      <ProviderRequestCard
+        request={makeRequest({
+          provider: 'devin',
+          method: 'session/request_permission',
+          params: {
+            sessionId: 'spiced-emmental',
+            toolCall: {
+              toolCallId: 'functions.exec:0',
+              title: 'git branch',
+              kind: 'execute',
+            },
+            options: [
+              { optionId: 'allow_once', name: 'Allow', kind: 'allow_once' },
+              { optionId: 'reject_once', name: 'Reject', kind: 'reject_once' },
+            ],
+          },
+        })}
+      />,
+    );
+    expect(screen.getByText('Devin action')).toBeInTheDocument();
+    expect(screen.getByText('Permission request')).toBeInTheDocument();
+    expect(screen.getByText('git branch')).toBeInTheDocument();
+    expect(screen.queryByText(/"sessionId"/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/"optionId"/)).not.toBeInTheDocument();
+  });
+
+  it('falls back to a descriptive ACP option label when toolCall has no title', () => {
+    render(
+      <ProviderRequestCard
+        request={makeRequest({
+          provider: 'devin',
+          method: 'session/request_permission',
+          params: {
+            sessionId: 'spiced-emmental',
+            toolCall: { toolCallId: 'functions.exec:0' },
+            options: [
+              { optionId: 'allow_once', name: 'Allow', kind: 'allow_once' },
+              {
+                optionId: 'allow_session',
+                name: 'Yes, allow `git branch` commands (this session)',
+                kind: 'allow_always',
+              },
+              { optionId: 'reject_once', name: 'Reject', kind: 'reject_once' },
+            ],
+          },
+        })}
+      />,
+    );
+    expect(
+      screen.getByText('Yes, allow `git branch` commands (this session)'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/"options"/)).not.toBeInTheDocument();
+  });
 });

@@ -16,6 +16,11 @@ import {
   type DevinAcpNotification,
   type DevinAcpRequest,
 } from './devin-acp.client';
+import {
+  isAcpToolTerminal,
+  mapAcpToolCall,
+  mapPermissionDecision,
+} from './devin-acp.mappers';
 
 interface Active {
   client: DevinAcpClientLike;
@@ -203,6 +208,13 @@ export class DevinAgentProvider extends BaseAgentProvider implements OnModuleDes
         model,
       },
     });
+    // Default ACP mode is accept-edits; Nuncio sets the configured permission
+    // mode (bypass by default) so solo sessions do not stall on every shell call.
+    await client.request('session/set_config_option', {
+      sessionId: active.threadId,
+      configId: 'mode',
+      value: this.permissionMode(),
+    });
     if (model !== 'swe-1-7') {
       await client.request('session/set_config_option', {
         sessionId: active.threadId,
@@ -218,11 +230,12 @@ export class DevinAgentProvider extends BaseAgentProvider implements OnModuleDes
       | {
           update?: {
             sessionUpdate?: string;
-            content?: { text?: string };
+            content?: { text?: string } | unknown;
             toolCallId?: string;
             title?: string;
-            toolCall?: Record<string, unknown>;
-            toolCallUpdate?: Record<string, unknown>;
+            kind?: string;
+            status?: string;
+            rawInput?: unknown;
           };
           sessionId?: string;
         }
@@ -243,26 +256,45 @@ export class DevinAgentProvider extends BaseAgentProvider implements OnModuleDes
       return;
     }
     if (!u) return;
-    const text = u.content?.text;
+    const text =
+      u.content && typeof u.content === 'object' && !Array.isArray(u.content)
+        ? (u.content as { text?: string }).text
+        : undefined;
     if (u.sessionUpdate === 'agent_message_chunk' && text) {
       active.text += text;
       this.pushEvent(sessionId, 'assistant_delta', { delta: text }, active.emit);
     } else if (u.sessionUpdate === 'agent_thought_chunk' && text) {
       this.pushEvent(sessionId, 'thinking_delta', { delta: text }, active.emit);
     } else if (u.sessionUpdate === 'tool_call') {
-      this.pushEvent(
-        sessionId,
-        'tool_start',
-        { toolCallId: u.toolCallId, title: u.title },
-        active.emit,
-      );
+      const mapped = mapAcpToolCall(u);
+      if (mapped) {
+        this.pushEvent(
+          sessionId,
+          'tool_start',
+          {
+            callId: mapped.callId,
+            tool: mapped.tool,
+            ...(mapped.input !== undefined ? { input: mapped.input } : {}),
+          },
+          active.emit,
+        );
+      }
     } else if (u.sessionUpdate === 'tool_call_update') {
-      this.pushEvent(
-        sessionId,
-        'tool_end',
-        { toolCallId: u.toolCallId, title: u.title },
-        active.emit,
-      );
+      if (!isAcpToolTerminal(u.status)) return;
+      const mapped = mapAcpToolCall(u);
+      if (mapped) {
+        this.pushEvent(
+          sessionId,
+          'tool_end',
+          {
+            callId: mapped.callId,
+            tool: mapped.tool,
+            ...(mapped.isError ? { isError: true } : {}),
+            ...(mapped.output !== undefined ? { output: mapped.output } : {}),
+          },
+          active.emit,
+        );
+      }
     } else if (u.sessionUpdate === 'plan') {
       this.pushEvent(sessionId, 'plan_updated', { plan: u }, active.emit);
     } else if (u.sessionUpdate === 'session_info_update' && u.title) {
@@ -287,40 +319,44 @@ export class DevinAgentProvider extends BaseAgentProvider implements OnModuleDes
       return;
     }
 
-    this.pushEvent(
-      sessionId,
-      'provider_request',
-      {
-        requestId: String(request.id),
-        provider: this.id,
-        method: request.method,
-        status: 'pending',
-        params: request.params,
-      },
-      active.emit,
-    );
+    // Mirror Codex: the SessionsService approval hook owns the transcript card.
+    // Emitting provider_request here as well duplicates the UI and desyncs requestIds.
     const result = active.approval
       ? await active.approval({
           provider: this.id,
           method: request.method,
-          params: request.params,
+          ...(request.params !== undefined ? { params: request.params } : {}),
         })
       : { requestId: String(request.id), decision: 'deny' as const };
-    active.client.respond(request.id, {
-      decision: result.decision === 'approve' ? 'allow' : 'deny',
-    });
-    this.pushEvent(
-      sessionId,
-      'provider_request_resolved',
-      {
-        requestId: String(request.id),
-        provider: this.id,
-        method: request.method,
-        status: 'resolved',
-        decision: result.decision,
-      },
-      active.emit,
-    );
+
+    active.client.respond(request.id, mapPermissionDecision(result.decision, request.params));
+
+    if (!active.approval) {
+      this.pushEvent(
+        sessionId,
+        'provider_request',
+        {
+          requestId: String(request.id),
+          provider: this.id,
+          method: request.method,
+          status: 'pending',
+          params: request.params,
+        },
+        active.emit,
+      );
+      this.pushEvent(
+        sessionId,
+        'provider_request_resolved',
+        {
+          requestId: String(request.id),
+          provider: this.id,
+          method: request.method,
+          status: 'resolved',
+          decision: result.decision,
+        },
+        active.emit,
+      );
+    }
   }
 
   private close(sessionId: string, active: Active, error?: Error): void {
@@ -339,8 +375,23 @@ export class DevinAgentProvider extends BaseAgentProvider implements OnModuleDes
     return value?.startsWith('devin:') ? value.slice(6) : value || 'swe-1-7';
   }
 
+  /** ACP session modes advertised by `devin acp` (configId `mode`). */
+  private permissionMode(): 'bypass' | 'accept-edits' | 'ask' | 'plan' {
+    const value = this.settings.resolve('NUNCIO_DEVIN_PERMISSION_MODE')?.trim();
+    switch (value) {
+      case 'bypass':
+      case 'accept-edits':
+      case 'ask':
+      case 'plan':
+        return value;
+      default:
+        return 'bypass';
+    }
+  }
+
   private binaryPath(): string | undefined {
-    const configured = process.env.NUNCIO_DEVIN_BIN?.trim();
+    const configured =
+      this.settings.resolve('NUNCIO_DEVIN_BIN')?.trim() || process.env.NUNCIO_DEVIN_BIN?.trim();
     const candidates = [
       configured,
       `${homedir()}/.local/bin/devin`,

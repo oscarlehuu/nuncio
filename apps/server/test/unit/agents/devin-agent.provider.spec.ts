@@ -26,15 +26,29 @@ class FakeClient {
       this.closeHandler = undefined;
     };
   }
-  respond(): void {}
+  readonly responses: Array<{ id: string | number; result: unknown }> = [];
+  respond(id: string | number, result: unknown): void {
+    this.responses.push({ id, result });
+  }
   close(): void {}
   emit(value: { method: string; params?: unknown }): void { this.notification?.(value); }
   emitRequest(value: { id: string | number; method: string; params?: unknown }): void { this.serverRequest?.(value); }
   emitClose(error: Error): void { this.closeHandler?.(error); }
 }
 
+async function waitUntil(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) throw new Error('waitUntil timed out');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
 describe('DevinAgentProvider', () => {
-  function setup(providerThreadId: string | null = null) {
+  function setup(
+    providerThreadId: string | null = null,
+    settingValues: Record<string, string | undefined> = {},
+  ) {
     const events: Array<{ type: string; payload: unknown }> = [];
     const state = { providerThreadId, providerState: null as Record<string, unknown> | null, status: 'IDLE' };
     const sessions = {
@@ -47,7 +61,10 @@ describe('DevinAgentProvider', () => {
       },
     };
     const eventsRepo = { append: (_id: string, type: string, payload: unknown) => ({ seq: 1, type, payload }), appendMany: () => [] };
-    const provider = new TestProvider(sessions as never, eventsRepo as never, { resolve: () => undefined } as never);
+    const settings = {
+      resolve: (key: string) => settingValues[key],
+    };
+    const provider = new TestProvider(sessions as never, eventsRepo as never, settings as never);
     const client = new FakeClient();
     client.requestHandler = (method) => method === 'session/load' ? { sessionId: providerThreadId } : { sessionId: 'new-session' };
     provider.clientFactory = () => client;
@@ -62,32 +79,198 @@ describe('DevinAgentProvider', () => {
     client.emit({ method: 'session/update', params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'answer' } } } });
     client.emit({ method: '_cognition.ai/agent_stopped', params: {} });
     await run;
-    expect(client.calls.map((call) => call.method)).toEqual(['session/new', 'session/set_config_option', 'session/prompt']);
-    expect((client.calls[1]?.params as { value: string }).value).toBe('swe-1-7-medium');
+    expect(client.calls.map((call) => call.method)).toEqual([
+      'session/new',
+      'session/set_config_option',
+      'session/set_config_option',
+      'session/prompt',
+    ]);
+    expect(client.calls.filter((call) => call.method === 'session/set_config_option').map((call) => call.params)).toEqual([
+      { sessionId: 'new-session', configId: 'mode', value: 'bypass' },
+      { sessionId: 'new-session', configId: 'model', value: 'swe-1-7-medium' },
+    ]);
     expect(state.providerThreadId).toBe('new-session');
     expect(events.map((event) => event.type)).toEqual(['thinking_delta', 'assistant_delta', 'assistant_message']);
   });
 
-  it('loads a persisted session instead of creating a new one', async () => {
-    const { provider, client } = setup('existing');
+  it('loads a persisted session and applies the configured permission mode', async () => {
+    const { provider, client } = setup('existing', {
+      NUNCIO_DEVIN_PERMISSION_MODE: 'plan',
+    });
     const run = provider.execute('s1', 'hello', false, { cwd: '/tmp', emit: () => undefined });
     while (!client.calls.some((call) => call.method === 'session/prompt')) await new Promise((resolve) => setTimeout(resolve, 0));
     client.emit({ method: '_cognition.ai/agent_stopped', params: {} });
     await run;
     expect(client.calls.map((call) => call.method)).toContain('session/load');
     expect(client.calls.map((call) => call.method)).not.toContain('session/new');
+    expect(client.calls.filter((call) => call.method === 'session/set_config_option').map((call) => call.params)).toEqual([
+      { sessionId: 'existing', configId: 'mode', value: 'plan' },
+    ]);
   });
 
-  it('maps ACP permission requests through the provider approval hook', async () => {
-    const { provider, client, events } = setup();
-    const approval = async () => ({ requestId: '7', decision: 'approve' as const });
-    const run = provider.execute('s1', 'hello', false, { cwd: '/tmp', emit: (event) => events.push(event), requestProviderApproval: approval });
-    while (!client.calls.some((call) => call.method === 'session/prompt')) await new Promise((resolve) => setTimeout(resolve, 0));
-    client.emitRequest({ id: 7, method: 'session/request_permission', params: { tool: 'write' } });
+  it('defaults Devin permission mode to bypass when unset or unknown', async () => {
+    const { provider, client } = setup(null, { NUNCIO_DEVIN_PERMISSION_MODE: 'garbage' });
+    const run = provider.execute('s1', 'hello', false, {
+      cwd: '/tmp',
+      model: 'devin:swe-1-7',
+      emit: () => undefined,
+    });
+    while (!client.calls.some((call) => call.method === 'session/prompt')) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
     client.emit({ method: '_cognition.ai/agent_stopped', params: {} });
     await run;
-    expect(events.map((event) => event.type)).toContain('provider_request');
-    expect(events.map((event) => event.type)).toContain('provider_request_resolved');
+    expect(client.calls.filter((call) => call.method === 'session/set_config_option')).toEqual([
+      {
+        method: 'session/set_config_option',
+        params: { sessionId: 'new-session', configId: 'mode', value: 'bypass' },
+      },
+    ]);
+  });
+
+  it('routes ACP permission through the approval hook once without double-emitting cards', async () => {
+    const { provider, client, events } = setup();
+    const approvals: unknown[] = [];
+    let resolveApproval!: (result: { requestId: string; decision: 'approve' | 'deny' }) => void;
+    const run = provider.execute('s1', 'hello', false, {
+      cwd: '/tmp',
+      emit: (event) => events.push(event),
+      requestProviderApproval: (request) => {
+        approvals.push(request);
+        return new Promise((resolve) => {
+          resolveApproval = resolve;
+        });
+      },
+    });
+    while (!client.calls.some((call) => call.method === 'session/prompt')) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    const params = {
+      sessionId: 'spiced-emmental',
+      toolCall: { toolCallId: 'functions.exec:0', title: 'git branch', kind: 'execute' },
+      options: [
+        { optionId: 'allow_once', name: 'Allow', kind: 'allow_once' },
+        { optionId: 'reject_once', name: 'Reject', kind: 'reject_once' },
+      ],
+    };
+    client.emitRequest({ id: 7, method: 'session/request_permission', params });
+
+    await waitUntil(() => approvals.length === 1);
+    expect(approvals[0]).toMatchObject({
+      provider: 'devin',
+      method: 'session/request_permission',
+      params,
+    });
+    // SessionsService owns the transcript card — provider must not emit a second one.
+    expect(events.filter((event) => event.type === 'provider_request')).toHaveLength(0);
+    expect(client.responses).toEqual([]);
+
+    resolveApproval({ requestId: 'nuncio-req', decision: 'approve' });
+    await waitUntil(() => client.responses.length === 1);
+    expect(client.responses[0]).toEqual({
+      id: 7,
+      result: { outcome: { outcome: 'selected', optionId: 'allow_once' } },
+    });
+    expect(events.filter((event) => event.type === 'provider_request_resolved')).toHaveLength(0);
+
+    client.emit({ method: '_cognition.ai/agent_stopped', params: {} });
+    await run;
+  });
+
+  it('maps deny onto the ACP reject optionId', async () => {
+    const { provider, client } = setup();
+    const run = provider.execute('s1', 'hello', false, {
+      cwd: '/tmp',
+      emit: () => undefined,
+      requestProviderApproval: async () => ({ requestId: 'n1', decision: 'deny' }),
+    });
+    while (!client.calls.some((call) => call.method === 'session/prompt')) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    client.emitRequest({
+      id: 'perm-deny',
+      method: 'session/request_permission',
+      params: {
+        options: [
+          { optionId: 'allow_once', name: 'Allow', kind: 'allow_once' },
+          { optionId: 'reject_once', name: 'Reject', kind: 'reject_once' },
+        ],
+      },
+    });
+    await waitUntil(() => client.responses.length === 1);
+    expect(client.responses[0]).toEqual({
+      id: 'perm-deny',
+      result: { outcome: { outcome: 'selected', optionId: 'reject_once' } },
+    });
+    client.emit({ method: '_cognition.ai/agent_stopped', params: {} });
+    await run;
+  });
+
+  it('maps ACP tool_call updates onto shared tool_start/tool_end payloads', async () => {
+    const { provider, client, events } = setup();
+    const run = provider.execute('s1', 'hello', false, {
+      cwd: '/tmp',
+      emit: (event) => events.push(event),
+    });
+    while (!client.calls.some((call) => call.method === 'session/prompt')) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    client.emit({
+      method: 'session/update',
+      params: {
+        update: {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'functions.exec:0',
+          title: 'git branch',
+          kind: 'execute',
+          rawInput: { command: 'git branch' },
+        },
+      },
+    });
+    client.emit({
+      method: 'session/update',
+      params: {
+        update: {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'functions.exec:0',
+          status: 'in_progress',
+        },
+      },
+    });
+    client.emit({
+      method: 'session/update',
+      params: {
+        update: {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'functions.exec:0',
+          status: 'completed',
+          content: [{ type: 'content', content: { type: 'text', text: 'main' } }],
+        },
+      },
+    });
+    client.emit({ method: '_cognition.ai/agent_stopped', params: {} });
+    await run;
+
+    expect(events.filter((event) => event.type === 'tool_start')).toEqual([
+      expect.objectContaining({
+        type: 'tool_start',
+        payload: {
+          callId: 'functions.exec:0',
+          tool: 'exec',
+          input: { command: 'git branch' },
+        },
+      }),
+    ]);
+    expect(events.filter((event) => event.type === 'tool_end')).toEqual([
+      expect.objectContaining({
+        type: 'tool_end',
+        payload: expect.objectContaining({
+          callId: 'functions.exec:0',
+        }),
+      }),
+    ]);
   });
 
   it('rejects an in-flight prompt when the ACP client closes', async () => {

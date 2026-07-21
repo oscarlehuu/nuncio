@@ -531,7 +531,10 @@ Env vars are the **fallback** for the settings store. Every var below (except th
 | `NUNCIO_CODEX_BIN` | `codex` | Codex CLI used to launch `codex app-server`; `codex` auto-discovers one logged-in install, absolute path is required when multiple installs exist. | ✅ |
 | `NUNCIO_CODEX_HOME` | (Codex default) | Optional Codex home directory passed as `CODEX_HOME`. | ✅ |
 | `NUNCIO_CODEX_CWD` | `process.cwd()` | Default cwd for Codex app-server sessions when no session workspace/worktree is set. | ✅ |
-| `NUNCIO_CODEX_RUNTIME_MODE` | `full-access` | `full-access` runs local self-hosted Codex with no approval prompts; `approval-required` uses read-only/untrusted mode and surfaces provider approval requests in the transcript. | ✅ |
+| `NUNCIO_CODEX_RUNTIME_MODE` | `full-access` | `full-access` runs local self-hosted Codex with no approval prompts; `approval-required` uses read-only/untrusted mode and surfaces provider approval requests in the transcript. Settings → Providers → Codex. | ✅ |
+| `NUNCIO_CLAUDE_PERMISSION_MODE` | `bypassPermissions` | Solo Claude tool gating: `bypassPermissions` / `acceptEdits` / `default` / `plan`. Settings → Providers → Claude. | ✅ |
+| `NUNCIO_DEVIN_BIN` | (auto) | Path to `devin` CLI for `devin acp`; unset → `~/.local/bin/devin` then `PATH`. | ✅ |
+| `NUNCIO_DEVIN_PERMISSION_MODE` | `bypass` | Default ACP session mode for Devin: `bypass` / `accept-edits` / `ask` / `plan`. Settings → Providers → Devin. | ✅ |
 | `PI_AGENT_DIR` / `PI_CODING_AGENT_DIR` | `~/.pi/agent` | Pi auth/config root (`auth.json`, models). The directory path is configurable; the `auth.json` *contents* are read-only (managed by the `pi` CLI). | ✅ |
 | `NUNCIO_PI_BIN` | `pi` | Pi CLI used for update/version checks; set an absolute path when not on `PATH`. | ✅ |
 | `NUNCIO_PROVIDER_UPDATE_CHECKS` | `1` | Enables best-effort Pi/Codex CLI version advisories and optional user-triggered update actions. | ✅ |

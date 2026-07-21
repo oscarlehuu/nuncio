@@ -105,11 +105,23 @@ const PROVIDER_METAS: Record<string, ProviderMetaInfo> = {
     description: 'Install or manage the Pi CLI and Nuncio Engine agent directory',
     primaryKey: 'PI_AGENT_DIR',
   },
+  claude: {
+    id: 'claude',
+    name: 'Claude',
+    description: 'Claude Agent SDK auth and default permission mode',
+    primaryKey: 'ANTHROPIC_API_KEY',
+  },
   codex: {
     id: 'codex',
     name: 'Codex',
-    description: 'Codex CLI binary paths and options',
+    description: 'Codex CLI binary paths and runtime mode',
     primaryKey: 'NUNCIO_CODEX_BIN',
+  },
+  devin: {
+    id: 'devin',
+    name: 'Devin',
+    description: 'Devin CLI (ACP) binary and default permission mode',
+    primaryKey: 'NUNCIO_DEVIN_PERMISSION_MODE',
   },
   github: {
     id: 'github',
@@ -124,6 +136,9 @@ const PROVIDER_METAS: Record<string, ProviderMetaInfo> = {
     primaryKey: 'GITLAB_TOKEN',
   },
 };
+
+/** AI engines shown in Settings → Providers (Pi has no permission mode). */
+const AI_PROVIDER_IDS = ['cursor', 'pi', 'claude', 'codex', 'devin'] as const;
 
 // Forge automation flags live in the 'advanced' registry category but read most
 // naturally beside the GitHub/GitLab connections, so they are surfaced there.
@@ -224,7 +239,10 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
       isConnected = primarySetting?.hasValue ?? false;
     }
 
-    const actionLabel = providerId === 'pi' ? 'Manage' : isConnected ? 'Manage' : 'Connect';
+    // CLI-login engines always expose Manage (auth is outside the secret field).
+    const alwaysManage =
+      providerId === 'pi' || providerId === 'claude' || providerId === 'devin' || providerId === 'codex';
+    const actionLabel = alwaysManage ? 'Manage' : isConnected ? 'Manage' : 'Connect';
     const isExpanded = !!expandedProviders[providerId];
 
     return (
@@ -343,7 +361,7 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
       'phone',
     ].some((term) => term.includes(query));
 
-    const providerResult = renderProviderGroup('Providers', ['cursor', 'pi', 'codex'], false, query);
+    const providerResult = renderProviderGroup('Providers', [...AI_PROVIDER_IDS], false, query);
     const sourceResult = renderProviderGroup('Source control', ['github', 'gitlab'], false, query);
     const matchingAgents = filterSettings(agents, query);
     const matchingTools = filterSettings(tools, query);
@@ -354,7 +372,7 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
     const crewProfilesMatch = ['crew profiles', 'crew', 'foreman', 'builder', 'reviewer']
       .some((term) => term.includes(query) || query.includes(term));
 
-    if (['cursor', 'pi', 'codex'].some((id) => renderProviderRow(id, query))) {
+    if (AI_PROVIDER_IDS.some((id) => renderProviderRow(id, query))) {
       resultSections.push(<div key="providers">{providerResult}</div>);
     }
     const matchingForgeAutomation = filterSettings(forgeAutomation, query);
@@ -430,7 +448,7 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
       case 'appearance':
         return <AppearanceSettingsSection />;
       case 'providers':
-        return renderProviderGroup('Providers', ['cursor', 'pi', 'codex'], true);
+        return renderProviderGroup('Providers', [...AI_PROVIDER_IDS], true);
       case 'usage':
         return <UsageSettingsSection />;
       case 'source-control':
