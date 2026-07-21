@@ -7,7 +7,9 @@ import {
   fetchGitHistory,
   fetchGitStash,
   fetchSessionDiff,
+  openPullRequest,
   postDiffComment,
+  pushSession,
   type DiffFile,
   type DiffHunk,
   type GitBranchSyncDto,
@@ -16,7 +18,7 @@ import {
   type SessionDiff,
   type SessionStatus,
 } from '../lib/api';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, ChevronDown } from 'lucide-react';
 import { SessionChangeFileRow } from './session-change-file-row';
 import { SessionScmBranchStrip } from './session-scm-branch-strip';
 import { SessionScmCommitList } from './session-scm-commit-list';
@@ -26,6 +28,12 @@ import { SessionScmIssues } from './session-scm-issues';
 import { SessionScmStash } from './session-scm-stash';
 import { hunkRange, hunkText, type ComposerKey } from './session-changes-panel-format';
 import { Button } from './ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu';
 import { Textarea } from './ui/textarea';
 
 interface SessionChangesPanelProps {
@@ -142,17 +150,37 @@ export function SessionChangesPanel({
     }
   };
 
-  const submitCommit = async () => {
+  // Stacked commit actions: commit, then optionally push and open a PR, with
+  // one staged toast per chain. The chain stops at the first failing stage.
+  const submitCommit = async (action: 'commit' | 'commit_push' | 'commit_push_pr' = 'commit') => {
     const message = commitMessage.trim();
     if (!message || committing) return;
+    const toastId = action === 'commit' ? undefined : toast.loading('Committing…');
     try {
       setCommitting(true);
       const result = await commitSession(sessionId, message);
-      toast.success(result.sha ? `Committed ${result.sha.slice(0, 7)}` : 'Committed');
+      const sha = result.sha ? result.sha.slice(0, 7) : '';
+      if (action === 'commit') {
+        toast.success(sha ? `Committed ${sha}` : 'Committed');
+      } else {
+        toast.loading('Pushing…', { id: toastId });
+        await pushSession(sessionId);
+        if (action === 'commit_push_pr') {
+          toast.loading('Opening pull request…', { id: toastId });
+          const pr = await openPullRequest(sessionId);
+          toast.success(pr.number ? `Pull request #${pr.number} opened` : 'Pull request opened', {
+            id: toastId,
+          });
+        } else {
+          toast.success(sha ? `Committed ${sha} & pushed` : 'Committed & pushed', { id: toastId });
+        }
+      }
       setCommitMessage('');
       await load();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to commit');
+      const messageText = error instanceof Error ? error.message : 'Git action failed';
+      if (toastId) toast.error(messageText, { id: toastId });
+      else toast.error(messageText);
     } finally {
       setCommitting(false);
     }
@@ -279,14 +307,43 @@ export function SessionChangesPanel({
               className="mb-2 resize-none text-sm"
               disabled={committing}
             />
-            <Button
-              size="sm"
-              className="w-full"
-              disabled={!commitMessage.trim() || committing}
-              onClick={() => void submitCommit()}
-            >
-              {committing ? 'Committing…' : 'Commit'}
-            </Button>
+            <div className="flex gap-px">
+              <Button
+                size="sm"
+                className="flex-1 rounded-r-none"
+                disabled={!commitMessage.trim() || committing}
+                onClick={() => void submitCommit()}
+              >
+                {committing ? 'Committing…' : 'Commit'}
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    size="sm"
+                    className="rounded-l-none px-1.5"
+                    aria-label="More commit actions"
+                    disabled={!commitMessage.trim() || committing}
+                  >
+                    <ChevronDown className="size-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem
+                    onClick={() => void submitCommit('commit_push')}
+                    aria-label="Commit & push"
+                  >
+                    Commit & push
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => void submitCommit('commit_push_pr')}
+                    disabled={sessionStatus !== 'IDLE'}
+                    aria-label="Commit, push & PR"
+                  >
+                    Commit, push & PR
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           </div>
         )}
 

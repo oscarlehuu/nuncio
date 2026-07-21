@@ -1579,12 +1579,13 @@ The SCM inspector in the session detail aside is `<ScmPanel>` (`apps/web/src/com
 
 `review-changes.tsx` is **not mounted anywhere** — it is retained (with its spec) as a reference implementation for a possible dedicated review screen. Do not delete `pr-panel.tsx` or `review-changes.tsx` without checking with the user.
 
-**Header git actions** (`git-actions-button.tsx`, mounted in the session-detail header when the
-session has git context): a dropdown of stacked actions — Commit… / Commit & push / Push /
-Open PR / Commit, push & PR — client-orchestrated over the existing endpoints
+**Stacked commit actions** live inside the Commit section (no separate header button — each git
+action has exactly one home in the dock): the Commit button is a split-button whose menu adds
+**Commit & push** and **Commit, push & PR**, client-orchestrated over the existing endpoints
 (`commitSession` → `pushSession` → `openPullRequest`) with one staged `toast.loading` updated
-per stage; the chain stops at the first failure. Commit stages collect the message in a dialog;
-Push/PR stages require a branch, PR stages additionally an IDLE session.
+per stage; the chain stops at the first failure and the panel reloads on success. The PR chain
+item is disabled unless the session is IDLE (mirrors `PrPanel` eligibility). Push/Pull alone
+stay in the branch strip; Open PR alone stays in `PrPanel`.
 
 ## Forge session metadata + outbound PR/MR flow
 

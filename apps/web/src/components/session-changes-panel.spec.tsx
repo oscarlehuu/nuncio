@@ -10,13 +10,16 @@ import {
   fetchGitHistory,
   fetchGitStash,
   fetchSessionDiff,
+  openPullRequest,
   postDiffComment,
+  pushSession,
   type GitBranchSyncDto,
   type SessionDiff,
 } from '../lib/api';
 
 vi.mock('sonner', () => ({
   toast: {
+    loading: vi.fn(() => 'toast-1'),
     success: vi.fn(),
     error: vi.fn(),
   },
@@ -33,6 +36,8 @@ vi.mock('../lib/api', async () => {
     fetchCommitDiff: vi.fn(),
     postDiffComment: vi.fn(),
     commitSession: vi.fn(),
+    pushSession: vi.fn(),
+    openPullRequest: vi.fn(),
   };
 });
 
@@ -104,6 +109,17 @@ describe('SessionChangesPanel', () => {
     vi.mocked(commitSession)
       .mockReset()
       .mockResolvedValue({ sha: 'abc1234', committed: true });
+    vi.mocked(pushSession)
+      .mockReset()
+      .mockResolvedValue({ pushed: true, remoteBranch: 'nuncio/s1' });
+    vi.mocked(openPullRequest)
+      .mockReset()
+      .mockResolvedValue({
+        url: 'https://github.com/o/r/pull/7',
+        number: 7,
+        state: 'open',
+      } as never);
+    vi.mocked(toast.loading).mockReset().mockReturnValue('toast-1' as never);
     vi.mocked(toast.success).mockReset();
     vi.mocked(toast.error).mockReset();
   });
@@ -141,6 +157,67 @@ describe('SessionChangesPanel', () => {
       expect(input).toHaveValue('');
       // one load on mount + one reload after commit
       await waitFor(() => expect(fetchSessionDiff).toHaveBeenCalledTimes(2));
+    });
+
+    it('commits and pushes via the commit split menu in order', async () => {
+      render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+      await screen.findByText('apps/web/src/app.tsx');
+      await userEvent.type(screen.getByPlaceholderText(/commit message/i), 'fix: app tweak');
+      await userEvent.click(screen.getByRole('button', { name: /more commit actions/i }));
+      await userEvent.click(await screen.findByRole('menuitem', { name: /commit & push/i }));
+
+      await waitFor(() => expect(pushSession).toHaveBeenCalledWith('s1'));
+      expect(commitSession).toHaveBeenCalledWith('s1', 'fix: app tweak');
+      expect(vi.mocked(commitSession).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(pushSession).mock.invocationCallOrder[0]!,
+      );
+      expect(openPullRequest).not.toHaveBeenCalled();
+      await waitFor(() => expect(toast.success).toHaveBeenCalled());
+      expect(screen.getByPlaceholderText(/commit message/i)).toHaveValue('');
+    });
+
+    it('runs commit, push & PR in order when the session is idle', async () => {
+      render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+      await screen.findByText('apps/web/src/app.tsx');
+      await userEvent.type(screen.getByPlaceholderText(/commit message/i), 'feat: ship');
+      await userEvent.click(screen.getByRole('button', { name: /more commit actions/i }));
+      await userEvent.click(await screen.findByRole('menuitem', { name: /commit, push & pr/i }));
+
+      await waitFor(() => expect(openPullRequest).toHaveBeenCalledWith('s1'));
+      expect(vi.mocked(pushSession).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(openPullRequest).mock.invocationCallOrder[0]!,
+      );
+    });
+
+    it('disables the PR chain while the session is running', async () => {
+      render(<SessionChangesPanel sessionId="s1" sessionStatus="RUNNING" />);
+
+      await screen.findByText('apps/web/src/app.tsx');
+      await userEvent.type(screen.getByPlaceholderText(/commit message/i), 'feat: ship');
+      await userEvent.click(screen.getByRole('button', { name: /more commit actions/i }));
+      expect(await screen.findByRole('menuitem', { name: /commit, push & pr/i })).toHaveAttribute(
+        'aria-disabled',
+        'true',
+      );
+      expect(screen.getByRole('menuitem', { name: /commit & push/i })).not.toHaveAttribute(
+        'aria-disabled',
+        'true',
+      );
+    });
+
+    it('stops the chain and reports the failing stage', async () => {
+      vi.mocked(pushSession).mockRejectedValue(new Error('remote rejected'));
+      render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+      await screen.findByText('apps/web/src/app.tsx');
+      await userEvent.type(screen.getByPlaceholderText(/commit message/i), 'feat: ship');
+      await userEvent.click(screen.getByRole('button', { name: /more commit actions/i }));
+      await userEvent.click(await screen.findByRole('menuitem', { name: /commit, push & pr/i }));
+
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      expect(openPullRequest).not.toHaveBeenCalled();
     });
 
     it('surfaces a commit failure as an error toast and keeps the message', async () => {

@@ -23,7 +23,6 @@ import { DEFAULT_HOLD_SECONDS, holdSecondsRemaining } from '../lib/subagent-hold
 import { derivePendingQueuedSteers } from '../lib/transcript-build-blocks';
 import { useComposerAttachments } from '../lib/use-composer-attachments';
 import { AttachButton, AttachmentTray } from './attachment-tray';
-import { GitActionsButton } from './git-actions-button';
 import { ProviderIcon } from './provider-icon';
 import { derivePendingUserInput } from '../lib/derive-pending-user-input';
 import { deriveComposerEnabled } from '../lib/derive-composer-enabled';
@@ -751,13 +750,6 @@ export function SessionDetail({
 
         <div className="app-region-no-drag absolute right-4 md:right-5 top-1/2 -translate-y-1/2 flex items-center gap-1">
           {headerActions}
-          {!managedByCrew && hasGitContext && (
-            <GitActionsButton
-              sessionId={session.id}
-              sessionStatus={session.status}
-              branch={session.branch}
-            />
-          )}
           {!managedByCrew && <Tooltip>
             <TooltipTrigger asChild>
               <Button
