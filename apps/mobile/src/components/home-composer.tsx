@@ -7,7 +7,7 @@ import {
   BottomSheetScrollView,
   BottomSheetView,
 } from '@gorhom/bottom-sheet';
-import { ChevronRight, Folder, Send, Settings2 } from 'lucide-react-native';
+import { ChevronRight, Folder, GitBranch, Laptop, Send, Settings2 } from 'lucide-react-native';
 import { createSession, fetchModels, type Session } from '@nuncio/core/api';
 import {
   flattenProviders,
@@ -21,6 +21,8 @@ import {
   fetchCrewBranches,
   fetchCrewProjects,
   preferredCrewBaseBranch,
+  selectableCrewBranches,
+  type CrewBranch,
   type CrewProject,
 } from '../lib/crew-projects';
 import { createCrewSubmitLock } from '../lib/crew-composer';
@@ -30,7 +32,15 @@ import { Card } from './ui/card';
 import { Text } from './ui/text';
 import { Textarea } from './ui/textarea';
 
-type SheetMode = 'model' | 'project' | null;
+type SheetMode = 'model' | 'project' | 'workspace' | 'branch' | null;
+type WorkspaceMode = 'local' | 'worktree';
+
+const SHEET_COPY: Record<Exclude<SheetMode, null>, { title: string; subtitle: string }> = {
+  model: { title: 'Choose a model', subtitle: 'Grouped by engine — pick which model handles this task.' },
+  project: { title: 'Choose a project', subtitle: 'The project determines the workspace and base branch.' },
+  workspace: { title: 'Workspace mode', subtitle: 'Run in the repo checkout, or fork an isolated worktree.' },
+  branch: { title: 'Base branch', subtitle: 'The worktree forks from this branch.' },
+};
 
 interface HomeComposerProps {
   onCreated: (session: Session) => void;
@@ -48,6 +58,8 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
   const [projects, setProjects] = useState<CrewProject[]>([]);
   const [projectPath, setProjectPath] = useState('');
   const [baseBranch, setBaseBranch] = useState('');
+  const [branches, setBranches] = useState<CrewBranch[]>([]);
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('local');
   const [sheetMode, setSheetMode] = useState<SheetMode>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,16 +81,22 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
     let cancelled = false;
     if (!projectPath) {
       setBaseBranch('');
+      setBranches([]);
+      setWorkspaceMode('local');
       return () => {
         cancelled = true;
       };
     }
     void fetchCrewBranches(projectPath)
-      .then((branches) => {
-        if (!cancelled) setBaseBranch(preferredCrewBaseBranch(branches));
+      .then((list) => {
+        if (cancelled) return;
+        setBranches(list);
+        setBaseBranch(preferredCrewBaseBranch(list));
       })
       .catch(() => {
-        if (!cancelled) setBaseBranch('');
+        if (cancelled) return;
+        setBranches([]);
+        setBaseBranch('');
       });
     return () => {
       cancelled = true;
@@ -89,6 +107,8 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
   const models = useMemo(() => flattenProviders(catalog), [catalog]);
   const selectedModel = models.find((model) => model.id === modelId);
   const selectedProject = projects.find((project) => project.path === projectPath);
+  const selectableBranches = useMemo(() => selectableCrewBranches(branches), [branches]);
+  const sheetCopy = sheetMode ? SHEET_COPY[sheetMode] : null;
   const canSend = Boolean(prompt.trim() && selectedModel && !busy);
 
   const openSheet = (mode: Exclude<SheetMode, null>) => {
@@ -112,6 +132,8 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
         selectedModel.providerId,
         projectPath || undefined,
         baseBranch || undefined,
+        undefined,
+        Boolean(projectPath) && workspaceMode === 'worktree',
       );
       setPrompt('');
       onCreated(session);
@@ -163,6 +185,36 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
             </Text>
           </Pressable>
         </View>
+        {selectedProject ? (
+          <View className="mt-2 flex-row items-center gap-2">
+            <Pressable
+              accessibilityLabel="Choose workspace mode"
+              onPress={() => openSheet('workspace')}
+              className="min-h-10 flex-1 flex-row items-center gap-2 rounded-xl border border-border bg-secondary px-3 active:opacity-70"
+            >
+              {workspaceMode === 'worktree' ? (
+                <GitBranch color="#83868b" size={15} />
+              ) : (
+                <Laptop color="#83868b" size={15} />
+              )}
+              <Text className="flex-1 text-xs font-medium text-foreground" numberOfLines={1}>
+                {workspaceMode === 'worktree' ? 'New worktree' : 'Work locally'}
+              </Text>
+            </Pressable>
+            {workspaceMode === 'worktree' ? (
+              <Pressable
+                accessibilityLabel="Choose base branch"
+                onPress={() => openSheet('branch')}
+                className="min-h-10 flex-1 flex-row items-center gap-2 rounded-xl border border-border bg-secondary px-3 active:opacity-70"
+              >
+                <GitBranch color="#83868b" size={15} />
+                <Text className="flex-1 text-xs font-medium text-foreground" numberOfLines={1}>
+                  {baseBranch || 'Base branch'}
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
         <View className="mt-3 flex-row items-center justify-between">
           <Pressable
             accessibilityLabel="Switch to Crew or advanced options"
@@ -201,12 +253,10 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
       >
         <BottomSheetView className="flex-1 px-5 pt-1">
           <Text className="text-lg font-semibold text-foreground">
-            {sheetMode === 'project' ? 'Choose a project' : 'Choose a model'}
+            {sheetCopy?.title}
           </Text>
           <Text className="mt-1 text-xs text-muted-foreground">
-            {sheetMode === 'project'
-              ? 'The project determines the workspace and base branch.'
-              : 'Grouped by engine — pick which model handles this task.'}
+            {sheetCopy?.subtitle}
           </Text>
           <BottomSheetScrollView
             style={{ flex: 1 }}
@@ -244,6 +294,48 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
                     No Git projects registered yet. Add a project root in the Nuncio desktop app to pick a repo and base branch here.
                   </Text>
                 ) : null}
+              </View>
+            ) : sheetMode === 'workspace' ? (
+              <View className="gap-2">
+                <PickerRow
+                  label="Work locally"
+                  detail="Run in the selected repo checkout"
+                  selected={workspaceMode === 'local'}
+                  onPress={() => {
+                    setWorkspaceMode('local');
+                    closeSheet();
+                  }}
+                />
+                <PickerRow
+                  label="New worktree"
+                  detail="Fork an isolated worktree from the base branch"
+                  selected={workspaceMode === 'worktree'}
+                  onPress={() => {
+                    setWorkspaceMode('worktree');
+                    closeSheet();
+                  }}
+                />
+              </View>
+            ) : sheetMode === 'branch' ? (
+              <View className="gap-2">
+                {selectableBranches.length ? (
+                  selectableBranches.map((branch) => (
+                    <PickerRow
+                      key={branch.name}
+                      label={branch.name}
+                      detail={branch.isDefault ? 'Default branch' : branch.isCurrent ? 'Current branch' : undefined}
+                      selected={branch.name === baseBranch}
+                      onPress={() => {
+                        setBaseBranch(branch.name);
+                        closeSheet();
+                      }}
+                    />
+                  ))
+                ) : (
+                  <Text className="mt-1 px-1 text-xs leading-5 text-muted-foreground">
+                    No selectable branches on this project.
+                  </Text>
+                )}
               </View>
             ) : (
               <View className="gap-5">
