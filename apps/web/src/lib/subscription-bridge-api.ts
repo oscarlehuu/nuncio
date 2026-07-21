@@ -1,11 +1,9 @@
 import { withBase } from './api-base';
 
-export type SubscriptionBridgeMode = 'external' | 'managed';
-
 export interface SubscriptionBridgeStatus {
   enabled: boolean;
   online: boolean;
-  mode: SubscriptionBridgeMode;
+  mode: 'external' | 'managed';
   baseUrl: string;
   hasApiKey: boolean;
   accounts: {

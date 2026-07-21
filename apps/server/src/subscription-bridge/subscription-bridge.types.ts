@@ -12,13 +12,6 @@ export interface SubscriptionBridgeModel {
   ownedBy?: string;
 }
 
-export interface SubscriptionBridgeManagedDto {
-  running: boolean;
-  pid: number | null;
-  configPath: string | null;
-  port: number | null;
-}
-
 export interface SubscriptionBridgeStatusDto {
   enabled: boolean;
   online: boolean;
@@ -32,7 +25,12 @@ export interface SubscriptionBridgeStatusDto {
   };
   modelCount: number;
   error: string | null;
-  managed: SubscriptionBridgeManagedDto;
+  managed: {
+    running: boolean;
+    pid: number | null;
+    configPath: string | null;
+    port: number | null;
+  };
   /** Shell one-liners for first-time OAuth (desktop/local). */
   loginHints: {
     claude: string;

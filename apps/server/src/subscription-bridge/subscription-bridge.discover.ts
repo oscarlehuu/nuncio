@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-export interface CliproxyParsedApiKey {
+interface CliproxyParsedApiKey {
   index: number;
   preview: string;
   /** Present only while parsing in-process — never returned from discover(). */
@@ -39,7 +39,7 @@ export function defaultManagedCliproxyPort(): number {
   return DEFAULT_MANAGED_PORT;
 }
 
-export function maskApiKeyPreview(raw: string): string {
+function maskApiKeyPreview(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) return '••••';
   if (trimmed.length <= 4) return `••••${trimmed}`;
