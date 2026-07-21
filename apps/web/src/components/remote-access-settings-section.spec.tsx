@@ -175,5 +175,4 @@ describe('RemoteAccessSettingsSection', () => {
     await user.click(reveal);
     expect(await screen.findByText('tok-123')).toBeInTheDocument();
   });
-
 });

@@ -24,6 +24,15 @@ vi.mock('../lib/provider-updates-api', () => ({
   updateProviderTool: vi.fn(),
 }));
 
+// The Mobile section fires listDevices() on mount; stub the device API so rendering
+// it (via nav/deep-link/search tests) doesn't hit a real fetch and leak an async
+// rejection past the synchronous assertions.
+vi.mock('../lib/devices-api', () => ({
+  startPairing: vi.fn().mockResolvedValue({ code: '', expiresAt: 0, urls: [], hints: [] }),
+  listDevices: vi.fn().mockResolvedValue([]),
+  revokeDevice: vi.fn(),
+}));
+
 function renderWithTheme(ui: ReactElement) {
   return render(
     <ThemeProvider defaultTheme="light">
