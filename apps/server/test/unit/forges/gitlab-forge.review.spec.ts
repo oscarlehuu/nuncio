@@ -296,6 +296,40 @@ describe('GitlabForgeProvider — review/merge/issues surface', () => {
     expect(issue.comments).toHaveLength(1);
   });
 
+  it('listPullRequestComments reads MR notes and drops system notes', async () => {
+    const { fetchOverride, calls } = makeRoutedFetch([
+      {
+        match: (url) => url.includes('/merge_requests/3/notes'),
+        body: [
+          { id: 11, body: 'looks good', author: { username: 'reviewer' }, created_at: '2026-07-01T00:00:00Z' },
+          { id: 12, body: 'marked as ready', system: true },
+          { id: 13, body: 'ship it', author: { username: 'oscar' }, created_at: '2026-07-01T01:00:00Z' },
+        ],
+      },
+    ]);
+    provider.fetchOverride = fetchOverride;
+
+    const comments = await provider.listPullRequestComments(repo, 3);
+
+    expect(calls[0].url).toBe(
+      'https://gitlab.com/api/v4/projects/octo%2Frepo/merge_requests/3/notes?sort=asc&per_page=100',
+    );
+    expect(comments).toEqual([
+      {
+        id: '11',
+        author: 'reviewer',
+        body: 'looks good',
+        createdAt: '2026-07-01T00:00:00Z',
+      },
+      {
+        id: '13',
+        author: 'oscar',
+        body: 'ship it',
+        createdAt: '2026-07-01T01:00:00Z',
+      },
+    ]);
+  });
+
   it('createIssue joins labels into GitLab csv form', async () => {
     const { fetchOverride, calls } = makeRoutedFetch([
       { match: () => true, body: { iid: 13, title: 'New', state: 'opened', web_url: 'u' } },

@@ -62,4 +62,26 @@ describe('MarkdownView', () => {
     expect(link).toHaveAttribute('target', '_blank');
     expect(fireEvent.click(link)).toBe(true);
   });
+
+  it('unwraps details/summary so nested markdown images still render', () => {
+    render(
+      <MarkdownView
+        text={
+          '<details><summary>Screenshots</summary>\n\n![Detail screen](https://example.com/a.png)\n\n</details>'
+        }
+      />,
+    );
+    expect(screen.getByRole('button', { name: /view detail screen/i })).toBeInTheDocument();
+    expect(screen.getByAltText('Detail screen')).toHaveAttribute('src', 'https://example.com/a.png');
+  });
+
+  it('embeds video players for markdown links to mp4/webm/mov urls', () => {
+    render(
+      <MarkdownView text={'Recording: [clip](https://cdn.example.com/rec-7e7364bc.mp4)'} />,
+    );
+    const video = document.querySelector('video');
+    expect(video).toBeTruthy();
+    expect(video).toHaveAttribute('src', 'https://cdn.example.com/rec-7e7364bc.mp4');
+    expect(screen.queryByRole('link', { name: 'clip' })).not.toBeInTheDocument();
+  });
 });

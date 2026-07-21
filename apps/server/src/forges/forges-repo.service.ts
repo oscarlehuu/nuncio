@@ -6,6 +6,7 @@ import type {
   ForgeAuthMethod,
   ForgeCapabilities,
   ForgeCheck,
+  ForgeComment,
   ForgeFileDiff,
   ForgeIssueDetail,
   ForgeIssueSummary,
@@ -82,6 +83,11 @@ export class ForgeRepoService {
   async listReviewThreads(path: string, number: number): Promise<ForgeReviewThread[]> {
     const { provider, repo } = await this.resolve(path);
     return provider.listReviewThreads(repo, number);
+  }
+
+  async listPullRequestComments(path: string, number: number): Promise<ForgeComment[]> {
+    const { provider, repo } = await this.resolve(path);
+    return provider.listPullRequestComments(repo, number);
   }
 
   async replyToThread(path: string, number: number, replyTargetId: string, body: string): Promise<void> {

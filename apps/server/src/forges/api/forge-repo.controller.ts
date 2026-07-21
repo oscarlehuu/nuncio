@@ -47,6 +47,11 @@ export class ForgeRepoController {
     return this.forge.listReviewThreads(path, parseNumber(number));
   }
 
+  @Get('pulls/:number/comments')
+  listPullComments(@Query('path') path: string, @Param('number') number: string) {
+    return this.forge.listPullRequestComments(path, parseNumber(number));
+  }
+
   @Post('pulls/:number/threads/:threadId/reply')
   async replyToThread(
     @Query('path') path: string,

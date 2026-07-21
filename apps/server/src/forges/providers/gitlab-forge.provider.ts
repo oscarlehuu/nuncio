@@ -3,6 +3,7 @@ import { SettingsService } from '../../settings/settings.service';
 import type {
   CreateIssueOptions,
   ForgeCapabilities,
+  ForgeComment,
   ForgeFileDiff,
   ForgeIssueDetail,
   ForgeIssueSummary,
@@ -132,6 +133,14 @@ export class GitlabForgeProvider extends GitlabForgeActions {
     return (data ?? [])
       .map(mapGitlabDiscussion)
       .filter((thread): thread is ForgeReviewThread => thread !== null);
+  }
+
+  async listPullRequestComments(repo: ForgeRepoRef, number: number): Promise<ForgeComment[]> {
+    const notes = await this.request<GitlabNoteResponse[]>(
+      `${this.projectUrl(repo)}/merge_requests/${number}/notes?sort=asc&per_page=100`,
+      { headers: await this.authHeaders() },
+    );
+    return (notes ?? []).filter((note) => !note.system).map(mapGitlabNote);
   }
 
   async replyToThread(
