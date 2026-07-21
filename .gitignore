@@ -6,6 +6,7 @@
 !assets/*.png
 !apps/web/public/**/*.png
 !apps/desktop/build/*.png
+!apps/mobile/assets/**/*.png
 
 # Real-browser smoke artifacts (screenshots + failure traces; CI uploads them)
 smoke-artifacts/
