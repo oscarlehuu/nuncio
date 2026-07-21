@@ -3,6 +3,10 @@
     "name": "Nuncio",
     "slug": "nuncio",
     "version": "1.0.0",
+    "runtimeVersion": "1.0.0",
+    "updates": {
+      "url": "https://u.expo.dev/a53ce285-2c10-4ddf-81ab-1a44af287d05"
+    },
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "nuncio",
