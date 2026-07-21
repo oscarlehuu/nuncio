@@ -12,7 +12,7 @@ describe('settings.registry Subscription bridge', () => {
     });
   });
 
-  it('exposes base URL with localhost CLIProxy default', () => {
+  it('exposes base URL with localhost CLIProxyAPI default', () => {
     const def = getSettingDefinition('NUNCIO_CLIPROXY_BASE_URL');
     expect(def).toMatchObject({
       providerId: 'subscription-bridge',
@@ -33,7 +33,7 @@ describe('settings.registry Subscription bridge', () => {
     });
   });
 
-  it('exposes optional CLIProxy binary path', () => {
+  it('exposes optional CLIProxyAPI binary path', () => {
     const def = getSettingDefinition('NUNCIO_CLIPROXY_BIN');
     expect(def).toMatchObject({
       providerId: 'subscription-bridge',

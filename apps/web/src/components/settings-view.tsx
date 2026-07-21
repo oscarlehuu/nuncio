@@ -13,6 +13,7 @@ import {
   SlidersHorizontal,
   Smartphone,
   Gauge,
+  Terminal,
   UsersRound,
   Wrench,
 } from 'lucide-react';
@@ -21,7 +22,7 @@ import { Input } from '@/components/ui/input';
 import { useState, useEffect, type ReactNode } from 'react';
 import type { Setting } from '../lib/settings-api';
 import { SettingRow } from './setting-row';
-import { ProviderIcon } from './provider-icon';
+import { ProviderIcon, SubscriptionBridgeIcon } from './provider-icon';
 import { fetchForgeStatus, type ForgeStatusDto } from '../lib/forge-status-api';
 import { AppearanceSettingsSection } from './appearance-settings-section';
 import { ProjectsSettingsSection } from './projects-settings-section';
@@ -45,7 +46,9 @@ import {
 
 const BRIDGE_SETTING_KEYS = new Set([
   'NUNCIO_CLIPROXY_ENABLED',
+  'NUNCIO_CLIPROXY_MODE',
   'NUNCIO_CLIPROXY_BASE_URL',
+  'NUNCIO_CLIPROXY_PORT',
   'NUNCIO_CLIPROXY_API_KEY',
   'NUNCIO_CLIPROXY_BIN',
 ]);
@@ -68,6 +71,8 @@ type SettingsSectionId =
   | 'general'
   | 'appearance'
   | 'providers'
+  | 'subscription-bridge'
+  | 'tool-updates'
   | 'usage'
   | 'source-control'
   | 'mcp-tools'
@@ -83,6 +88,8 @@ const SECTION_NAV_ITEMS: ReadonlyArray<SettingsSectionNavItem & { id: SettingsSe
   { id: 'general', label: 'General', icon: Settings2 },
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'providers', label: 'Providers', icon: Bot },
+  { id: 'subscription-bridge', label: 'Subscription bridge', icon: SubscriptionBridgeIcon },
+  { id: 'tool-updates', label: 'Tool updates', icon: Terminal },
   { id: 'usage', label: 'Usage', icon: Gauge },
   { id: 'source-control', label: 'Source control', icon: GitPullRequest },
   { id: 'mcp-tools', label: 'MCP & Tools', icon: Puzzle },
@@ -141,12 +148,6 @@ const PROVIDER_METAS: Record<string, ProviderMetaInfo> = {
     description: 'Devin CLI (ACP) binary and default permission mode',
     primaryKey: 'NUNCIO_DEVIN_PERMISSION_MODE',
   },
-  'subscription-bridge': {
-    id: 'subscription-bridge',
-    name: 'Subscription bridge',
-    description: 'Local CLIProxy for cross-subscription models (Claude harness ↔ Codex sub)',
-    primaryKey: 'NUNCIO_CLIPROXY_ENABLED',
-  },
   github: {
     id: 'github',
     name: 'GitHub',
@@ -161,15 +162,8 @@ const PROVIDER_METAS: Record<string, ProviderMetaInfo> = {
   },
 };
 
-/** AI engines + infra rows shown in Settings → Providers (Pi has no permission mode). */
-const AI_PROVIDER_IDS = [
-  'cursor',
-  'pi',
-  'claude',
-  'codex',
-  'devin',
-  'subscription-bridge',
-] as const;
+/** AI engines shown in Settings → Providers (bridge + tool updates are their own sections). */
+const AI_PROVIDER_IDS = ['cursor', 'pi', 'claude', 'codex', 'devin'] as const;
 
 // Forge automation flags live in the 'advanced' registry category but read most
 // naturally beside the GitHub/GitLab connections, so they are surfaced there.
@@ -290,9 +284,6 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
       } else {
         subtitle = meta.description;
       }
-    } else if (providerId === 'subscription-bridge') {
-      isConnected = bridgeStatus?.online ?? false;
-      subtitle = subscriptionBridgeSubtitle(bridgeStatus);
     } else {
       // AI Agents
       const primarySetting = pSettings.find((s) => s.key === meta.primaryKey);
@@ -301,11 +292,7 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
 
     // CLI-login engines always expose Manage (auth is outside the secret field).
     const alwaysManage =
-      providerId === 'pi' ||
-      providerId === 'claude' ||
-      providerId === 'devin' ||
-      providerId === 'codex' ||
-      providerId === 'subscription-bridge';
+      providerId === 'pi' || providerId === 'claude' || providerId === 'devin' || providerId === 'codex';
     const actionLabel = alwaysManage ? 'Manage' : isConnected ? 'Manage' : 'Connect';
     const isExpanded = !!expandedProviders[providerId];
 
@@ -336,14 +323,37 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
             {pSettings.map((s) => (
               <SettingRow key={s.key} setting={s} onUpdate={handleUpdate} onClear={handleClear} />
             ))}
-            {providerId === 'subscription-bridge' && (
-              <SubscriptionBridgeSettingsSection status={bridgeStatus} onStatus={setBridgeStatus} />
-            )}
           </div>
         )}
       </div>
     );
   };
+
+  const bridgeSettings = settings.filter(
+    (s) => s.providerId === 'subscription-bridge' || BRIDGE_SETTING_KEYS.has(s.key),
+  );
+
+  const renderSubscriptionBridgeSection = () => (
+    <section className="space-y-4">
+      <div className="flex items-start gap-3">
+        <SubscriptionBridgeIcon className="size-6 text-foreground/80 flex-shrink-0 mt-0.5" />
+        <div className="min-w-0">
+          <h2 className="text-ui-lg font-medium text-foreground">Subscription bridge</h2>
+          <p className="text-ui text-muted-foreground leading-normal">
+            {subscriptionBridgeSubtitle(bridgeStatus)}
+          </p>
+        </div>
+      </div>
+      <div className="overflow-hidden rounded-lg border border-border bg-card px-4 divide-y divide-border/60">
+        {bridgeSettings.map((s) => (
+          <SettingRow key={s.key} setting={s} onUpdate={handleUpdate} onClear={handleClear} />
+        ))}
+      </div>
+      <div className="rounded-lg border border-border bg-card px-4 py-4">
+        <SubscriptionBridgeSettingsSection status={bridgeStatus} onStatus={setBridgeStatus} />
+      </div>
+    </section>
+  );
 
   const renderSettingGroup = (title: string, rows: Setting[], emptyText: string) => (
     <section>
@@ -382,16 +392,13 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
     </section>
   );
 
-  const renderProviderGroup = (title: string, providerIds: string[], includeUpdates = false, query = '') => {
+  const renderProviderGroup = (title: string, providerIds: string[], query = '') => {
     const rows = providerIds.map((id) => renderProviderRow(id, query)).filter(Boolean);
     return (
       <section>
         <h2 className="mb-2 text-ui-lg font-medium text-muted-foreground">{title}</h2>
-        {rows.length > 0 || includeUpdates ? (
-          <div className="overflow-hidden rounded-lg border border-border bg-card">
-            {rows}
-            {includeUpdates && <ProviderUpdateSettingsSection />}
-          </div>
+        {rows.length > 0 ? (
+          <div className="overflow-hidden rounded-lg border border-border bg-card">{rows}</div>
         ) : (
           <div className="rounded-lg border border-border bg-card px-4 py-3 text-ui text-muted-foreground">
             No settings in this section.
@@ -433,8 +440,18 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
       'connect',
     ].some((term) => term.includes(query));
 
-    const providerResult = renderProviderGroup('Providers', [...AI_PROVIDER_IDS], false, query);
-    const sourceResult = renderProviderGroup('Source control', ['github', 'gitlab'], false, query);
+    const providerResult = renderProviderGroup('Providers', [...AI_PROVIDER_IDS], query);
+    const sourceResult = renderProviderGroup('Source control', ['github', 'gitlab'], query);
+    const bridgeMatch = [
+      'subscription bridge',
+      'cliproxyapi',
+      'cli proxy',
+      'codex sub',
+      ...BRIDGE_SETTING_KEYS,
+    ].some((term) => term.toLowerCase().includes(query) || query.includes(term.toLowerCase()));
+    const toolUpdatesMatch = ['tool updates', 'provider updates', 'cli update', 'pi update', 'codex update'].some(
+      (term) => term.includes(query) || query.includes(term),
+    );
     const matchingAgents = filterSettings(agents, query);
     const matchingTools = filterSettings(tools, query);
     const matchingWorkspaces = filterSettings(workspaces, query);
@@ -446,6 +463,21 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
 
     if (AI_PROVIDER_IDS.some((id) => renderProviderRow(id, query))) {
       resultSections.push(<div key="providers">{providerResult}</div>);
+    }
+    if (bridgeMatch || filterSettings(bridgeSettings, query).length > 0) {
+      resultSections.push(<div key="subscription-bridge">{renderSubscriptionBridgeSection()}</div>);
+    }
+    if (toolUpdatesMatch) {
+      resultSections.push(
+        <div key="tool-updates">
+          <section>
+            <h2 className="mb-2 text-ui-lg font-medium text-muted-foreground">Tool updates</h2>
+            <div className="overflow-hidden rounded-lg border border-border bg-card">
+              <ProviderUpdateSettingsSection />
+            </div>
+          </section>
+        </div>,
+      );
     }
     const matchingForgeAutomation = filterSettings(forgeAutomation, query);
     const hasSourceProviderMatch = ['github', 'gitlab'].some((id) => renderProviderRow(id, query));
@@ -523,7 +555,18 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
       case 'appearance':
         return <AppearanceSettingsSection />;
       case 'providers':
-        return renderProviderGroup('Providers', [...AI_PROVIDER_IDS], true);
+        return renderProviderGroup('Providers', [...AI_PROVIDER_IDS]);
+      case 'subscription-bridge':
+        return renderSubscriptionBridgeSection();
+      case 'tool-updates':
+        return (
+          <section>
+            <h2 className="mb-2 text-ui-lg font-medium text-muted-foreground">Tool updates</h2>
+            <div className="overflow-hidden rounded-lg border border-border bg-card">
+              <ProviderUpdateSettingsSection />
+            </div>
+          </section>
+        );
       case 'usage':
         return <UsageSettingsSection />;
       case 'source-control':

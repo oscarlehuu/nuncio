@@ -10,7 +10,7 @@ interface OpenAiModelsResponse {
   data?: unknown;
 }
 
-/** Classify CLIProxy /v1/models entries by owned_by (and id heuristics as fallback). */
+/** Classify CLIProxyAPI /v1/models entries by owned_by (and id heuristics as fallback). */
 export function classifyBridgeSource(ownedBy: string | undefined, id: string): SubscriptionBridgeSource {
   const owner = (ownedBy ?? '').toLowerCase();
   if (owner === 'openai' || owner.includes('codex')) return 'codex-sub';

@@ -11,11 +11,13 @@ function status(over: Partial<SubscriptionBridgeStatus> = {}): SubscriptionBridg
   return {
     enabled: true,
     online: true,
+    mode: 'external',
     baseUrl: 'http://127.0.0.1:8317',
     hasApiKey: true,
     accounts: { claude: true, codex: true },
     modelCount: 2,
     error: null,
+    managed: { running: false, pid: null, configPath: null, port: null },
     loginHints: { claude: 'cli --claude-login', codex: 'cli --codex-login' },
     ...over,
   };
@@ -29,26 +31,26 @@ describe('subscriptionBridgeSubtitle', () => {
   });
 
   it('describes online Claude + Codex', () => {
-    expect(subscriptionBridgeSubtitle(status())).toBe('Online · Claude + Codex');
+    expect(subscriptionBridgeSubtitle(status())).toBe('Online · External · Claude + Codex');
   });
 
   it('describes Codex-only and Claude-only accounts', () => {
     expect(
       subscriptionBridgeSubtitle(status({ accounts: { claude: false, codex: true } })),
-    ).toBe('Online · Codex only');
+    ).toBe('Online · External · Codex only');
     expect(
       subscriptionBridgeSubtitle(status({ accounts: { claude: true, codex: false } })),
-    ).toBe('Online · Claude only');
+    ).toBe('Online · External · Claude only');
   });
 
-  it('surfaces offline errors', () => {
+  it('surfaces offline errors with mode', () => {
     expect(
       subscriptionBridgeSubtitle(status({ online: false, error: 'ECONNREFUSED' })),
-    ).toBe('Offline · ECONNREFUSED');
+    ).toBe('Offline · External · ECONNREFUSED');
   });
 
   it('falls back when status is null', () => {
-    expect(subscriptionBridgeSubtitle(null)).toMatch(/Local CLIProxy/i);
+    expect(subscriptionBridgeSubtitle(null)).toMatch(/Local CLIProxyAPI/i);
   });
 });
 

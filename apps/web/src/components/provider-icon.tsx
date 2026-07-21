@@ -64,6 +64,32 @@ export const GitLabIcon = (props: IconProps) => (
   </svg>
 );
 
+/** Two sockets linked by a bridge — Subscription bridge (CLIProxyAPI), not an engine. */
+export const SubscriptionBridgeIcon = (props: IconProps) => (
+  <svg {...props} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <path
+      d="M7 8a3 3 0 0 0-3 3v2a3 3 0 0 0 3 3h1"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+    />
+    <path
+      d="M17 8a3 3 0 0 1 3 3v2a3 3 0 0 1-3 3h-1"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+    />
+    <path
+      d="M8 12h8"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+    />
+    <circle cx="8" cy="12" r="1.25" fill="currentColor" />
+    <circle cx="16" cy="12" r="1.25" fill="currentColor" />
+  </svg>
+);
+
 const SVG_BY_PROVIDER: Record<string, (props: IconProps) => ReactElement> = {
   claude: ClaudeIcon,
   codex: CodexIcon,
@@ -72,6 +98,7 @@ const SVG_BY_PROVIDER: Record<string, (props: IconProps) => ReactElement> = {
   pi: PiIcon,
   github: GitHubIcon,
   gitlab: GitLabIcon,
+  'subscription-bridge': SubscriptionBridgeIcon,
 };
 
 interface ProviderIconProps {

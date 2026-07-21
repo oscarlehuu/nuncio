@@ -7,6 +7,7 @@ import { DatabaseModule } from '../../../src/db/database.module';
 import { SettingsModule } from '../../../src/settings/settings.module';
 import { SettingsService } from '../../../src/settings/settings.service';
 import { CLAUDE_STATIC_MODELS } from '../../../src/agents/providers/claude-agent.models';
+import { CliproxyManagedHost } from '../../../src/subscription-bridge/subscription-bridge.managed-host';
 import { SubscriptionBridgeService } from '../../../src/subscription-bridge/subscription-bridge.service';
 
 describe('SubscriptionBridgeService', () => {
@@ -20,10 +21,16 @@ describe('SubscriptionBridgeService', () => {
     process.env.NUNCIO_DATA_DIR = dataDir;
     module = await Test.createTestingModule({
       imports: [DatabaseModule, SettingsModule],
-      providers: [SubscriptionBridgeService],
+      providers: [CliproxyManagedHost, SubscriptionBridgeService],
     }).compile();
     settings = module.get(SettingsService);
     bridge = module.get(SubscriptionBridgeService);
+    module.get(CliproxyManagedHost).spawnImpl = async () => ({
+      pid: 1,
+      killed: false,
+      kill: () => {},
+      exited: new Promise<number | null>(() => undefined),
+    });
   });
 
   afterEach(async () => {
@@ -41,7 +48,7 @@ describe('SubscriptionBridgeService', () => {
     expect(status.online).toBe(false);
   });
 
-  it('health-checks CLIProxy and reports Codex account from catalog', async () => {
+  it('health-checks CLIProxyAPI and reports Codex account from catalog', async () => {
     settings.set('NUNCIO_CLIPROXY_ENABLED', '1');
     settings.set('NUNCIO_CLIPROXY_API_KEY', 'test-key');
     settings.set('NUNCIO_CLIPROXY_BASE_URL', 'http://127.0.0.1:8317');
@@ -97,7 +104,7 @@ describe('SubscriptionBridgeService', () => {
     await expect(bridge.resolveClaudeSdkEnv('gpt-5.6-sol')).rejects.toThrow(/offline/i);
   });
 
-  it('returns SDK env pointing at CLIProxy for Codex models when healthy', async () => {
+  it('returns SDK env pointing at CLIProxyAPI for Codex models when healthy', async () => {
     settings.set('NUNCIO_CLIPROXY_ENABLED', '1');
     settings.set('NUNCIO_CLIPROXY_API_KEY', 'bridge-secret');
     settings.set('NUNCIO_CLIPROXY_BASE_URL', 'http://127.0.0.1:8317');

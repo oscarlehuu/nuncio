@@ -2,22 +2,27 @@
 /**
  * Gate for the dev desktop-release channel. Two modes:
  *
- *   MODE=gate (default) — decide whether the current `workflow_run` / manual dispatch
- *     should publish; writes `publish` + `sha` to $GITHUB_OUTPUT for the publish job.
- *   MODE=idempotency — the post-slot re-check the build runs AFTER acquiring the publish
- *     concurrency slot; writes `shipped` (true if a dev release already exists for SHA)
- *     so a build that lost the two-gates race skips instead of duplicating.
+ *   MODE=gate (default) — decide whether the current `push` / `workflow_run` /
+ *     manual dispatch should publish; writes `publish` + `sha` to $GITHUB_OUTPUT.
+ *   MODE=idempotency — the post-slot re-check the build runs AFTER acquiring the
+ *     publish concurrency slot; writes `shipped` (true if a dev release already
+ *     exists for SHA) so a build that lost the two-gates race skips.
  *
  * Publishes only when every required workflow concluded success on the exact commit,
  * the commit has no dev release yet (draft or published), and the commit is not behind
  * the last shipped dev commit (never auto-update backward). The pure decision lives in
  * desktop-dev-gate-utils.mjs and is unit tested; this file is the I/O shell around `gh`.
  *
+ * On `push` events the gate polls until CI + Desktop Smoke conclude (or the wait
+ * budget expires). That path works from the workflow file on `dev` itself —
+ * `workflow_run` alone would require this file on the repository default branch.
+ *
  * A GitHub API lookup that keeps failing THROWS (non-zero exit) so the job fails and can
  * be re-run — it never writes publish=false, which would silently drop a green commit.
  *
  * Env: EVENT_NAME, REPO, TRIGGER_SHA (workflow_run), DISPATCH_SHA (dispatch),
- *      SHA (idempotency mode), GH_TOKEN, GITHUB_OUTPUT, MODE.
+ *      PUSH_SHA (push), SHA (idempotency mode), GH_TOKEN, GITHUB_OUTPUT, MODE,
+ *      optional WAIT_INTERVAL_MS / WAIT_TIMEOUT_MS for tests.
  */
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
@@ -40,6 +45,10 @@ function writeOutput(pairs) {
   if (out) appendFileSync(out, text);
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function conclusionAt(repo, workflowFile, sha) {
   const query = `repos/${repo}/actions/workflows/${workflowFile}/runs` +
     `?head_sha=${sha}&branch=dev&event=push&per_page=1`;
@@ -47,6 +56,45 @@ async function conclusionAt(repo, workflowFile, sha) {
     gh(['api', query, '--jq', '.workflow_runs[0].conclusion // "pending"']))).trim();
   // A still-running or missing run reads as "pending"; treat only real conclusions.
   return raw === 'pending' || raw === '' ? null : raw;
+}
+
+async function collectRequiredRuns(repo, sha) {
+  const requiredRuns = [];
+  for (const file of REQUIRED_WORKFLOWS) {
+    requiredRuns.push({
+      workflow: `.github/workflows/${file}`,
+      conclusion: await conclusionAt(repo, file, sha),
+    });
+  }
+  return requiredRuns;
+}
+
+/** True when every required run has a terminal conclusion (success or failure). */
+function allRequiredSettled(requiredRuns) {
+  return requiredRuns.every((run) => run.conclusion != null);
+}
+
+/**
+ * Poll until CI + Desktop Smoke settle, or the wait budget expires.
+ * Exported for unit tests via optional sleep/interval overrides in env.
+ */
+export async function waitForRequiredRuns(repo, sha, opts = {}) {
+  const intervalMs = opts.intervalMs ?? Number(process.env.WAIT_INTERVAL_MS || 30_000);
+  const timeoutMs = opts.timeoutMs ?? Number(process.env.WAIT_TIMEOUT_MS || 20 * 60 * 1000);
+  const sleepFn = opts.sleep ?? sleep;
+  const collect = opts.collect ?? collectRequiredRuns;
+  const deadline = Date.now() + timeoutMs;
+
+  let requiredRuns = await collect(repo, sha);
+  while (!allRequiredSettled(requiredRuns) && Date.now() < deadline) {
+    for (const run of requiredRuns) {
+      console.log(`[dev-gate]   ${run.workflow}: ${run.conclusion ?? 'pending'}`);
+    }
+    console.log(`[dev-gate] waiting ${intervalMs}ms for required checks…`);
+    await sleepFn(intervalMs);
+    requiredRuns = await collect(repo, sha);
+  }
+  return requiredRuns;
 }
 
 async function fetchReleases(repo) {
@@ -64,31 +112,35 @@ async function compareStatus(repo, base, sha) {
   return raw;
 }
 
+function resolveSha(eventName) {
+  if (eventName === 'workflow_dispatch') return process.env.DISPATCH_SHA ?? '';
+  if (eventName === 'push') return process.env.PUSH_SHA || process.env.DISPATCH_SHA || '';
+  return process.env.TRIGGER_SHA ?? '';
+}
+
 async function runGate() {
   const repo = process.env.REPO;
-  if (process.env.EVENT_NAME === 'workflow_dispatch') {
+  const eventName = process.env.EVENT_NAME;
+
+  if (eventName === 'workflow_dispatch') {
     writeOutput({ publish: 'true', sha: process.env.DISPATCH_SHA ?? '' });
     console.log('[dev-gate] manual dispatch — force publish');
     return;
   }
 
-  const sha = process.env.TRIGGER_SHA;
+  const sha = resolveSha(eventName);
   if (!repo || !sha) {
     // Not a transient failure — a genuinely absent commit context is a safe hold.
     writeOutput({ publish: 'false', sha: sha ?? '' });
-    console.log('[dev-gate] missing REPO/TRIGGER_SHA context — holding');
+    console.log('[dev-gate] missing REPO/SHA context — holding');
     return;
   }
 
-  // Lookups retry with backoff; a persistent failure throws (job fails, retryable)
-  // rather than silently holding a green commit.
-  const requiredRuns = [];
-  for (const file of REQUIRED_WORKFLOWS) {
-    requiredRuns.push({
-      workflow: `.github/workflows/${file}`,
-      conclusion: await conclusionAt(repo, file, sha),
-    });
-  }
+  // Push: poll until CI + smoke settle. workflow_run: one-shot (already completed).
+  const requiredRuns = eventName === 'push'
+    ? await waitForRequiredRuns(repo, sha)
+    : await collectRequiredRuns(repo, sha);
+
   const releases = await fetchReleases(repo);
   const releasedShas = devReleaseShas(releases);
   const lastShippedSha = latestShippedSha(releases);
@@ -128,7 +180,9 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(`[dev-gate] lookup failed after retries: ${err.message}`);
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((err) => {
+    console.error(`[dev-gate] lookup failed after retries: ${err.message}`);
+    process.exit(1);
+  });
+}

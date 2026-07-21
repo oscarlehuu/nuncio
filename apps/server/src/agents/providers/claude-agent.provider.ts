@@ -545,7 +545,7 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
         ...(effort ? { effort } : {}),
         ...(mcpServers ? { mcpServers } : {}),
         ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
-        // Bridge-routed GPT models force ANTHROPIC_BASE_URL at the local CLIProxy.
+        // Bridge-routed GPT models force ANTHROPIC_BASE_URL at the local CLIProxyAPI.
         // Native Claude rides the keychain (no env) or an explicit ANTHROPIC_API_KEY.
         ...(sdkEnv ? { env: sdkEnv } : {}),
         ...(this.claudeBinaryPath() ? { pathToClaudeCodeExecutable: this.claudeBinaryPath() } : {}),

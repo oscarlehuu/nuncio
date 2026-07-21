@@ -69,7 +69,7 @@ describe('ClaudeAgentProvider × Subscription bridge', () => {
     delete process.env.ANTHROPIC_API_KEY;
   });
 
-  it('injects CLIProxy env when running a Codex-sub model on Claude', async () => {
+  it('injects CLIProxyAPI env when running a Codex-sub model on Claude', async () => {
     settings.set('NUNCIO_CLIPROXY_ENABLED', '1');
     settings.set('NUNCIO_CLIPROXY_API_KEY', 'bridge-secret');
     bridge.fetchImpl = stubFetch({

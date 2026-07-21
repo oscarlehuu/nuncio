@@ -51,6 +51,8 @@ Small reviewed steps may land directly on `dev` when the user says so; for anyth
 
 Two long-lived branches only. **`dev`** is the integration branch — the user's daily test bed, produces **Nuncio Dev** builds. **`main`** is the stable release branch. The old SDK lane branches (`cursor-sdk` / `pi-sdk` / `codex-sdk` and the `cursor/*` / `pi/*` / `codex/*` prefixes) are **retired** — do not create new work on them.
 
+**Nuncio Dev desktop publish** (`.github/workflows/desktop-dev.yml`): gated on CI + Desktop Smoke green for the exact `dev` commit. Triggered by **`push` to `dev`** (gate polls until those checks settle) plus optional `workflow_run` / manual dispatch. Note: GitHub only registers `workflow_run` from the repository default branch (`main`) — keep the `push` path so publishes keep working before a promotion syncs the workflow file to `main`.
+
 ```
 <type>/<slug> (worktree from dev)  →  dev  →  main   (promotion)
 changeset-release/*                →  main           (release bot)
@@ -485,8 +487,14 @@ The event contract is **shared** across providers (emitted via `BaseAgentProvide
 | GET | `/api/usage/:provider` | single-provider quota snapshot (`claude` \| `codex` \| `cursor`); 404 for unknown ids |
 | GET | `/api/provider-updates` | best-effort Pi/Codex CLI version advisory; disabled by `NUNCIO_PROVIDER_UPDATE_CHECKS=0` |
 | POST | `/api/provider-updates/:provider/update` | user-triggered allowlisted update for `pi` or `codex` only; never runs arbitrary command strings |
-| GET | `/api/subscription-bridge/status` | CLIProxy Subscription bridge health (enabled/online/accounts/modelCount; never returns the API key) |
-| POST | `/api/subscription-bridge/refresh` | bust catalog cache and re-probe CLIProxy |
+| GET | `/api/subscription-bridge/status` | CLIProxyAPI Subscription bridge health (`mode` external\|managed, online/accounts/modelCount, managed process; never returns the API key) |
+| GET | `/api/subscription-bridge/discover` | scan host for existing CLIProxyAPI `config.yaml` installs (masked api-key previews only) |
+| POST | `/api/subscription-bridge/refresh` | bust catalog cache and re-probe CLIProxyAPI |
+| POST | `/api/subscription-bridge/adopt-external` | `{ configPath, apiKeyIndex? }` — point Nuncio at an existing self-hosted CLIProxyAPI (case 1) |
+| POST | `/api/subscription-bridge/migrate-managed` | `{ configPath, port? }` — copy config into `$NUNCIO_DATA_DIR/cliproxyapi/` and supervise (case 2) |
+| POST | `/api/subscription-bridge/init-managed` | `{ port? }` — fresh cliproxyapi-nuncio config + start (case 3) |
+| POST | `/api/subscription-bridge/managed/start` | start the Nuncio-supervised CLIProxyAPI process |
+| POST | `/api/subscription-bridge/managed/stop` | stop the Nuncio-supervised CLIProxyAPI process |
 | POST | `/api/subscription-bridge/claude-code-env` | explicit Copy action — shell exports for an external Claude Code session (includes API key; same sensitivity as copying the access token) |
 | GET | `/api/settings` | list all settings (catalog metadata + `hasValue` + `source` + masked/raw `value`; secrets masked, never raw) |
 | GET | `/api/settings/:key` | single setting DTO (404 for unknown key) |
@@ -537,10 +545,12 @@ Env vars are the **fallback** for the settings store. Every var below (except th
 | `NUNCIO_CODEX_CWD` | `process.cwd()` | Default cwd for Codex app-server sessions when no session workspace/worktree is set. | ✅ |
 | `NUNCIO_CODEX_RUNTIME_MODE` | `full-access` | `full-access` runs local self-hosted Codex with no approval prompts; `approval-required` uses read-only/untrusted mode and surfaces provider approval requests in the transcript. Settings → Providers → Codex. | ✅ |
 | `NUNCIO_CLAUDE_PERMISSION_MODE` | `bypassPermissions` | Solo Claude tool gating: `bypassPermissions` / `acceptEdits` / `default` / `plan`. Settings → Providers → Claude. | ✅ |
-| `NUNCIO_CLIPROXY_ENABLED` | `0` | Enable Subscription bridge (local CLIProxyAPI). When on, Claude-engine GPT models route via the bridge. Settings → Providers → Subscription bridge. | ✅ |
-| `NUNCIO_CLIPROXY_BASE_URL` | `http://127.0.0.1:8317` | CLIProxyAPI origin (no trailing path). | ✅ |
-| `NUNCIO_CLIPROXY_API_KEY` | — | CLIProxy `api-keys` entry. Stored encrypted at rest. | ✅ (secret) |
-| `NUNCIO_CLIPROXY_BIN` | — | Optional `cli-proxy-api` path for login hints only (MVP does not auto-start the proxy). | ✅ |
+| `NUNCIO_CLIPROXY_ENABLED` | `0` | Enable Subscription bridge (local CLIProxyAPI). When on, Claude-engine GPT models route via the bridge. Settings → Subscription bridge. | ✅ |
+| `NUNCIO_CLIPROXY_MODE` | `external` | `external` = connect to a CLIProxyAPI you run; `managed` = Nuncio owns cliproxyapi-nuncio under the data dir. | ✅ |
+| `NUNCIO_CLIPROXY_BASE_URL` | `http://127.0.0.1:8317` | CLIProxyAPI origin (no trailing path). Managed mode syncs this to the Nuncio port. | ✅ |
+| `NUNCIO_CLIPROXY_PORT` | `18317` | Listen port when mode is managed (avoids clashing with a personal `:8317`). | ✅ |
+| `NUNCIO_CLIPROXY_API_KEY` | — | CLIProxyAPI `api-keys` entry. Stored encrypted at rest. | ✅ (secret) |
+| `NUNCIO_CLIPROXY_BIN` | — | Path to `cli-proxy-api` for login hints and for starting the managed process. | ✅ |
 | `NUNCIO_DEVIN_BIN` | (auto) | Path to `devin` CLI for `devin acp`; unset → `~/.local/bin/devin` then `PATH`. | ✅ |
 | `NUNCIO_DEVIN_PERMISSION_MODE` | `bypass` | Default ACP session mode for Devin: `bypass` / `accept-edits` / `ask` / `plan`. Settings → Providers → Devin. | ✅ |
 | `PI_AGENT_DIR` / `PI_CODING_AGENT_DIR` | `~/.pi/agent` | Pi auth/config root (`auth.json`, models). The directory path is configurable; the `auth.json` *contents* are read-only (managed by the `pi` CLI). | ✅ |
@@ -781,7 +791,7 @@ Minimal web GUI for coding agents (Codex, Claude, Cursor, OpenCode). Synara fork
 - Phase A desktop shell shipped on `frontend`: `apps/desktop` Electron app with a `DaemonSupervisor` (`src/daemon.js`) that leases an ephemeral loopback port, spawns bun by absolute path running the daemon, health-gates the window on `/api/health`, restarts on unexpected exit, and stops cleanly via SIGTERM→SIGKILL (proven: no orphan). `bun run dev` now launches server + web + Electron together and waits for Vite before loading; `bun run dev:web` is browser-only. Dev mode (Vite on :5173 up, or `NUNCIO_DESKTOP_DEV=1`) attaches to the existing dev servers and spawns no supervised daemon; prod mode supervises its own.
 - "Web version" is a serving mode, not a rewrite: the daemon (`apps/server`) serves the built `apps/web` same-origin — shipped via `apps/server/src/web-static-assets.ts` (`express` promoted from transitive to direct dep for Bun resolution; API precedence, GET/HEAD SPA fallback, inert when `dist` absent). Desktop, remote web, and mobile are all clients of the one daemon.
 - The transcript event contract (persisted event log + `seq` cursor + `since=` replay) delivers resumable streaming, and the WS relay adds server-side backpressure (bounded per-connection buffer, drop-to-cursor + `behind` marker). The web renders durable batches immediately; `BaseAgentProvider` commits the head of each logical delta segment immediately and coalesces only its tail, avoiding both typewriter backlog and per-token SQLite writes.
-- Nuncio Engine (`provider: pi`) is the first-class default engine and presents as **Nuncio Engine** in the model picker and settings UI: `DEFAULT_PROVIDER_ID='pi'`, `DEFAULT_MODEL_ID='claude-fable-5'`, `DEFAULT_PROVIDER_ORDER=['pi','cursor']` (`model-providers.ts`). The model picker (`model-picker.tsx`) groups a provider's models under per-group `DropdownMenuLabel` headers only when it has >1 group (Nuncio Engine: cliproxy / Anthropic / ChatGPT·Codex from the auth-truthful Pi registry); single-group providers stay flat. See [docs/pi-engine.md](docs/pi-engine.md) for the harness roadmap (extension allowlist, `nuncio-context`, evidence capture).
+- Nuncio Engine (`provider: pi`) is the first-class default engine and presents as **Nuncio Engine** in the model picker and settings UI: `DEFAULT_PROVIDER_ID='pi'`, `DEFAULT_MODEL_ID='claude-fable-5'`, `DEFAULT_PROVIDER_ORDER=['pi','cursor']` (`model-providers.ts`). The model picker (`model-picker.tsx`) groups a provider's models under per-group `DropdownMenuLabel` headers only when it has >1 group (Nuncio Engine: cliproxyapi / Anthropic / ChatGPT·Codex from the auth-truthful Pi registry); single-group providers stay flat. See [docs/pi-engine.md](docs/pi-engine.md) for the harness roadmap (extension allowlist, `nuncio-context`, evidence capture).
 - Integrated terminal shipped (`frontend` branch) with a dual backend: desktop uses `node-pty` in Electron main over IPC; browser uses Bun's native PTY (`Bun.spawn({ terminal })`, verified on Bun 1.3.14) over a WebSocket at `/api/terminal` (server code in `apps/server/src/terminal/`; upgrade gated by the shared loopback/token/tailnet rule in `auth/upgrade-auth.ts`, and hub-relayed at `/m/<machine>/api/terminal`); renderer prefers IPC and falls back to the WS. `node-pty` installs but fails at runtime under Bun (`posix_spawnp failed`) — the Bun-native PTY is the only viable server route. Desktop path needs a native rebuild (`bun install` postinstall runs `electron-rebuild -w node-pty`).
 - The server binds `0.0.0.0` with `origin: true`; the auth layer is the global `AuthGuard` (loopback / Bearer / cookie / tailnet whois) applied to every `/api` route and, via `auth/upgrade-auth.ts`, to the `/api/terminal` and `/api/sessions/ws` upgrades — remote WS clients need the token or a whois-trusted tailnet identity, and hub-relayed traffic is authorized at the hub edge.
 - Interactive browser dock is desktop-only: it uses a real Electron `BrowserView` over the React viewport with persistent partition `persist:nuncio-browser`. The web/PWA surface intentionally does not expose a browser dock. Do not use the user's daily Chrome profile and do not open a normal external browser window for the dock.

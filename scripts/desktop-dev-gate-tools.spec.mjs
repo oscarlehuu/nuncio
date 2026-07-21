@@ -7,6 +7,7 @@ import {
   latestShippedSha,
   withRetry,
 } from './desktop-dev-gate-utils.mjs';
+import { waitForRequiredRuns } from './desktop-dev-gate.mjs';
 
 const CI = '.github/workflows/ci.yml';
 const SMOKE = '.github/workflows/desktop-smoke.yml';
@@ -172,5 +173,57 @@ describe('commitFromReleaseBody', () => {
   it('returns null when absent', () => {
     expect(commitFromReleaseBody('Automated dev build of Nuncio.')).toBe(null);
     expect(commitFromReleaseBody(null)).toBe(null);
+  });
+});
+
+describe('waitForRequiredRuns (push-path poll)', () => {
+  it('returns once every required check has a terminal conclusion', async () => {
+    const polls = [
+      [
+        { workflow: CI, conclusion: null },
+        { workflow: SMOKE, conclusion: null },
+      ],
+      [
+        { workflow: CI, conclusion: 'success' },
+        { workflow: SMOKE, conclusion: null },
+      ],
+      [
+        { workflow: CI, conclusion: 'success' },
+        { workflow: SMOKE, conclusion: 'success' },
+      ],
+    ];
+    let i = 0;
+    const sleeps = [];
+    const result = await waitForRequiredRuns('owner/repo', SHA, {
+      intervalMs: 1,
+      timeoutMs: 10_000,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      collect: async () => polls[Math.min(i++, polls.length - 1)],
+    });
+    expect(result.every((r) => r.conclusion === 'success')).toBe(true);
+    expect(sleeps.length).toBe(2);
+  });
+
+  it('stops early when a required check fails', async () => {
+    const polls = [
+      [
+        { workflow: CI, conclusion: null },
+        { workflow: SMOKE, conclusion: null },
+      ],
+      [
+        { workflow: CI, conclusion: 'failure' },
+        { workflow: SMOKE, conclusion: 'success' },
+      ],
+    ];
+    let i = 0;
+    const result = await waitForRequiredRuns('owner/repo', SHA, {
+      intervalMs: 1,
+      timeoutMs: 10_000,
+      sleep: async () => undefined,
+      collect: async () => polls[Math.min(i++, polls.length - 1)],
+    });
+    expect(result.find((r) => r.workflow === CI)?.conclusion).toBe('failure');
   });
 });

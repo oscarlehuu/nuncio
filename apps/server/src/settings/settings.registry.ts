@@ -319,23 +319,58 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     default: '0',
   },
   {
+    key: 'NUNCIO_CLIPROXY_MODE',
+    category: 'provider',
+    providerId: 'subscription-bridge',
+    type: 'string',
+    label: 'CLIProxyAPI mode',
+    description:
+      'external = connect to a CLIProxyAPI you already run; managed = Nuncio owns cliproxyapi-nuncio (port + config under the data dir).',
+    envVar: 'NUNCIO_CLIPROXY_MODE',
+    default: 'external',
+    options: [
+      {
+        value: 'external',
+        label: 'External (existing service)',
+        description: 'Discover and point at a CLIProxyAPI you start yourself.',
+      },
+      {
+        value: 'managed',
+        label: 'Managed by Nuncio',
+        description: 'Nuncio writes config under `$NUNCIO_DATA_DIR/cliproxyapi/` and supervises the process.',
+      },
+    ],
+  },
+  {
     key: 'NUNCIO_CLIPROXY_BASE_URL',
     category: 'provider',
     providerId: 'subscription-bridge',
     type: 'string',
-    label: 'CLIProxy base URL',
-    description: 'Local CLIProxyAPI origin (no trailing path). Default http://127.0.0.1:8317.',
+    label: 'CLIProxyAPI base URL',
+    description:
+      'Local CLIProxyAPI origin (no trailing path). External default http://127.0.0.1:8317; managed mode syncs this to the Nuncio port.',
     envVar: 'NUNCIO_CLIPROXY_BASE_URL',
     default: 'http://127.0.0.1:8317',
+  },
+  {
+    key: 'NUNCIO_CLIPROXY_PORT',
+    category: 'provider',
+    providerId: 'subscription-bridge',
+    type: 'string',
+    label: 'Managed CLIProxyAPI port',
+    description:
+      'Listen port when mode is managed (cliproxyapi-nuncio). Default 18317 so it does not clash with a personal :8317 install.',
+    envVar: 'NUNCIO_CLIPROXY_PORT',
+    default: '18317',
   },
   {
     key: 'NUNCIO_CLIPROXY_API_KEY',
     category: 'provider',
     providerId: 'subscription-bridge',
     type: 'secret',
-    label: 'CLIProxy API key',
+    label: 'CLIProxyAPI API key',
     description:
-      'API key from CLIProxy config `api-keys`. Sent as Bearer / x-api-key when Nuncio or Claude Code talks to the bridge.',
+      'API key from CLIProxyAPI config `api-keys`. Sent as Bearer / x-api-key when Nuncio or Claude Code talks to the bridge.',
     envVar: 'NUNCIO_CLIPROXY_API_KEY',
   },
   {
@@ -343,9 +378,9 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     category: 'provider',
     providerId: 'subscription-bridge',
     type: 'path',
-    label: 'CLIProxy binary',
+    label: 'CLIProxyAPI binary',
     description:
-      'Optional path to `cli-proxy-api` for login hints (e.g. ~/cliproxyapi/cli-proxy-api). Nuncio does not auto-start the proxy in MVP.',
+      'Path to `cli-proxy-api` (e.g. ~/cliproxyapi/cli-proxy-api). Used for login hints and for starting the managed process.',
     envVar: 'NUNCIO_CLIPROXY_BIN',
   },
   // ── Provider behavioral ──────────────────────────────────────────────────

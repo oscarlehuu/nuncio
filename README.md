@@ -205,7 +205,13 @@ Sessions are fully isolated from your `~/.claude` config: no plugins, hooks, or 
 
 ### Subscription bridge (CLIProxyAPI)
 
-To run **Codex-subscription GPT models inside a Claude session** (Claude harness, Codex bill), enable **Settings → Providers → Subscription bridge**, point it at a local [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) (`http://127.0.0.1:8317` by default), and set the proxy API key. When the bridge is healthy, the Claude model picker lists GPT models with a **Codex sub** badge — pick one and Nuncio injects `ANTHROPIC_BASE_URL` for that session. This is not a separate engine. Native **Codex** sessions still use `codex app-server` directly. Use **Copy Claude Code env** in Manage if you also want shell exports for an external `claude` CLI.
+To run **Codex-subscription GPT models inside a Claude session** (Claude harness, Codex bill), open **Settings → Subscription bridge**. Three setups:
+
+1. **External** — Discover an existing CLIProxyAPI on your Mac and connect without taking over the process.
+2. **Migrate → managed** — Copy that config into Nuncio (`cliproxyapi-nuncio` under the data dir; default port `18317`) so Nuncio supervises it.
+3. **Fresh managed** — Initialize a new managed config, then run the Claude/Codex login hints.
+
+When the bridge is healthy, the Claude model picker lists GPT models with a **Codex sub** badge — pick one and Nuncio injects `ANTHROPIC_BASE_URL` for that session. This is not a separate engine. Native **Codex** sessions still use `codex app-server` directly. Use **Copy Claude Code env** if you also want shell exports for an external `claude` CLI.
 
 ### Provider CLI updates
 
