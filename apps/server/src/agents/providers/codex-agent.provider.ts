@@ -40,6 +40,11 @@ import {
   type CodexCliResolution,
 } from './codex-cli-resolver';
 import { mapCodexRuntimePolicy } from './codex-runtime-policy';
+import {
+  codexFastOption,
+  codexReasoningEffortLabel,
+  defaultCodexModelOptions,
+} from './codex-model-options';
 
 type CodexRuntimeMode = 'approval-required' | 'full-access';
 
@@ -110,9 +115,6 @@ interface ActiveCodexSession {
   runtimePolicyKey: string;
   dynamicToolSurface: string | undefined;
 }
-
-const DEFAULT_CODEX_REASONING_EFFORT = 'medium';
-const DEFAULT_CODEX_REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const;
 
 function isDefinitiveCodexResumeError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -942,51 +944,6 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
 
     return true;
   }
-}
-
-function defaultCodexModelOptions(): ModelOptionDescriptorDto[] {
-  return [
-    {
-      id: 'reasoningEffort',
-      label: 'Reasoning',
-      type: 'select',
-      defaultValue: DEFAULT_CODEX_REASONING_EFFORT,
-      options: DEFAULT_CODEX_REASONING_EFFORTS.map((effort) => ({
-        id: effort,
-        label: codexReasoningEffortLabel(effort),
-        isDefault: effort === DEFAULT_CODEX_REASONING_EFFORT,
-      })),
-    },
-    codexFastOption(),
-  ];
-}
-
-function codexReasoningEffortLabel(effort: string): string {
-  switch (effort.toLowerCase()) {
-    case 'low':
-      return 'Low';
-    case 'medium':
-      return 'Medium';
-    case 'high':
-      return 'High';
-    case 'xhigh':
-      return 'Extra High';
-    case 'max':
-      return 'Max';
-    case 'ultra':
-      return 'Ultra · Multi-agent';
-    default:
-      return effort;
-  }
-}
-
-function codexFastOption(): ModelOptionDescriptorDto {
-  return {
-    id: 'fast',
-    label: 'Priority',
-    type: 'boolean',
-    defaultValue: false,
-  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

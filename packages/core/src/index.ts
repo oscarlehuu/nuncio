@@ -27,6 +27,7 @@ export * from './pairing-client';
 export * from './parse-changelog';
 export * from './reconnect-backoff';
 export * from './tool-summary';
+export * from './session-preamble-display';
 export * from './transcript-build-blocks';
 export * from './user-input.types';
 export * from './session-relay-client';
