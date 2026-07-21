@@ -4,8 +4,10 @@ import { ArrowLeft, ExternalLink, RefreshCw } from 'lucide-react';
 import {
   fetchForgeCapabilities,
   fetchForgePull,
+  fetchForgePullComments,
   fetchForgeThreads,
   setForgePullState,
+  type ForgeComment,
   type ForgePullRequestDetail,
   type ForgeReviewThread,
 } from '../../lib/forge-api';
@@ -44,6 +46,11 @@ export function PrDetail({ path, number, onBack, headerVariant = 'compact' }: Pr
     () => fetchForgeThreads(path, number).catch(() => [] as ForgeReviewThread[]),
     { pollMs: POLL_INTERVAL_MS },
   );
+  const { data: comments, refresh: refreshComments } = useForgeQuery(
+    `comments:${path}:${number}`,
+    () => fetchForgePullComments(path, number).catch(() => [] as ForgeComment[]),
+    { pollMs: POLL_INTERVAL_MS },
+  );
   const { data: capabilities } = useForgeQuery(
     `caps:${path}`,
     () => fetchForgeCapabilities(path),
@@ -53,7 +60,7 @@ export function PrDetail({ path, number, onBack, headerVariant = 'compact' }: Pr
   const refresh = async () => {
     try {
       setRefreshing(true);
-      await Promise.all([refreshDetail(), refreshThreads()]);
+      await Promise.all([refreshDetail(), refreshThreads(), refreshComments()]);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to refresh pull request');
     } finally {
@@ -124,6 +131,7 @@ export function PrDetail({ path, number, onBack, headerVariant = 'compact' }: Pr
           path={path}
           number={number}
           detail={detail}
+          comments={comments}
           threads={threads}
           capabilities={capabilities}
           onChanged={() => void refresh()}

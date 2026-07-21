@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   fetchForgeIssues,
+  fetchForgePullComments,
   fetchForgePulls,
   mergeForgePull,
+  type ForgeComment,
   type ForgeIssueSummary,
   type ForgePullRequestSummary,
 } from './forge-api';
@@ -72,6 +74,30 @@ describe('forge-api', () => {
     await expect(fetchForgeIssues(REPO, 'closed')).resolves.toEqual(issues);
     expect(fetchMock).toHaveBeenCalledWith(
       `/api/forge/issues?path=${encodeURIComponent(REPO)}&state=closed`,
+      undefined,
+    );
+  });
+
+  it('fetchForgePullComments GETs conversation comments for a pull', async () => {
+    const comments: ForgeComment[] = [
+      {
+        id: '101',
+        author: 'bot',
+        body: 'first',
+        createdAt: '2026-07-19T12:00:00Z',
+      },
+      {
+        id: '102',
+        author: 'oscar',
+        body: 'second',
+        createdAt: '2026-07-19T13:00:00Z',
+      },
+    ];
+    fetchMock.mockResolvedValue(jsonRes(comments));
+
+    await expect(fetchForgePullComments(REPO, 128)).resolves.toEqual(comments);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/forge/pulls/128/comments?path=${encodeURIComponent(REPO)}`,
       undefined,
     );
   });

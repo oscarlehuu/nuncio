@@ -7,7 +7,9 @@ import { splitMarkdownSegments } from '@/lib/markdown-segments';
 import { remarkCodePathLinks } from '@/lib/remark-code-path-links';
 import { resolveTranscriptLinkTarget } from '@/lib/transcript-link-target';
 import { ChatImage } from '@/components/chat-image';
+import { ChatVideo } from '@/components/chat-video';
 import { ChunkErrorBoundary } from '@/components/chunk-error-boundary';
+import { isVideoUrl, unwrapDetailsHtml } from '@/lib/markdown-media-prep';
 
 // Lazy: mermaid is ~1 MB minified and only needed when a transcript actually
 // contains a mermaid fence — keep it out of the entry chunk.
@@ -114,6 +116,15 @@ function markdownComponents(
     },
     a({ href, children }) {
       const linkHref = typeof href === 'string' ? href : '';
+      if (isVideoUrl(linkHref)) {
+        const title =
+          typeof children === 'string'
+            ? children
+            : Array.isArray(children)
+              ? children.map(String).join('')
+              : undefined;
+        return <ChatVideo src={linkHref} title={title} />;
+      }
       const target = resolveTranscriptLinkTarget(linkHref);
       const isFileLink = target.kind === 'file';
       return (
@@ -184,7 +195,8 @@ const MarkdownSegment = memo(function MarkdownSegment({
  *   segments are memoized and only the tail re-parses per received batch.
  */
 export function MarkdownView({ text, className, streaming, onLinkClick }: MarkdownViewProps) {
-  const segments = useMemo(() => splitMarkdownSegments(text), [text]);
+  const prepared = useMemo(() => unwrapDetailsHtml(text), [text]);
+  const segments = useMemo(() => splitMarkdownSegments(prepared), [prepared]);
   return (
     <div
       className={cn(
