@@ -1,11 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
-import type { ReactElement } from 'react';
+import { useState, type ReactElement } from 'react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from './theme-provider';
 import { AppearanceProvider } from './appearance-provider';
 import { SettingsView } from './settings-view';
+import { SettingsSidebarPanel } from './settings-sidebar-panel';
 import type { Setting } from '../lib/settings-api';
+import {
+  parseSettingsSection,
+  type SettingsSectionId,
+} from '../lib/settings-sections';
 
 // Mock the forge status API
 vi.mock('../lib/forge-status-api', () => ({
@@ -103,6 +108,49 @@ async function goToSection(name: string) {
   await userEvent.click(within(nav).getByRole('button', { name }));
 }
 
+/** Mirrors App: settings sidebar + content pane sharing section/search state. */
+function SettingsHarness({
+  settings,
+  onUpdate = vi.fn(),
+  onClear = vi.fn(),
+  onBack = vi.fn(),
+  initialSection,
+}: {
+  settings: Setting[];
+  onUpdate?: (key: string, value: string) => Promise<void>;
+  onClear?: (key: string) => Promise<void>;
+  onBack?: () => void;
+  initialSection?: SettingsSectionId;
+}) {
+  const [activeSection, setActiveSection] = useState<SettingsSectionId>(
+    () => initialSection ?? parseSettingsSection(window.location.search),
+  );
+  const [searchQuery, setSearchQuery] = useState('');
+  return (
+    <div className="flex h-full">
+      <aside className="w-60 border-r border-border bg-sidebar">
+        <SettingsSidebarPanel
+          activeSection={activeSection}
+          searchQuery={searchQuery}
+          onSectionChange={(section) => {
+            setActiveSection(section);
+            setSearchQuery('');
+          }}
+          onSearchChange={setSearchQuery}
+          onBack={onBack}
+        />
+      </aside>
+      <SettingsView
+        settings={settings}
+        onUpdate={onUpdate}
+        onClear={onClear}
+        activeSection={activeSection}
+        searchQuery={searchQuery}
+      />
+    </div>
+  );
+}
+
 describe('SettingsView', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -118,7 +166,7 @@ describe('SettingsView', () => {
       makeSetting({ key: 'C', label: 'Alpha', category: 'general', providerId: undefined }),
     ];
     renderWithTheme(
-      <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={settings} />,
     );
     const nav = screen.getByRole('navigation', { name: /settings sections/i });
     expect(within(nav).getByRole('button', { name: 'Appearance' })).toBeInTheDocument();
@@ -139,7 +187,7 @@ describe('SettingsView', () => {
       makeSetting({ key: 'A', label: 'Cursor API Key', category: 'provider', providerId: 'cursor' }),
     ];
     renderWithTheme(
-      <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={settings} />,
     );
     expect(screen.getByRole('heading', { name: 'Appearance' })).toBeInTheDocument();
     // Provider content lives in a different section, not shown by default.
@@ -151,7 +199,7 @@ describe('SettingsView', () => {
       makeSetting({ key: 'A', label: 'Cursor API Key', category: 'provider', providerId: 'cursor' }),
     ];
     renderWithTheme(
-      <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={settings} />,
     );
     await goToSection('Providers');
     expect(screen.getByText('Cursor')).toBeInTheDocument();
@@ -161,7 +209,7 @@ describe('SettingsView', () => {
 
   it('marks the active section navigation entry as current', async () => {
     renderWithTheme(
-      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={[]} />,
     );
     const nav = screen.getByRole('navigation', { name: /settings sections/i });
     expect(within(nav).getByRole('button', { name: 'Appearance' })).toHaveAttribute('aria-current', 'page');
@@ -169,9 +217,8 @@ describe('SettingsView', () => {
     const providersButton = within(nav).getByRole('button', { name: 'Providers' });
     const appearanceButton = within(nav).getByRole('button', { name: 'Appearance' });
     expect(providersButton).toHaveAttribute('aria-current', 'page');
-    expect(providersButton.className).toContain('bg-primary/10');
+    expect(providersButton.className).toContain('bg-sidebar-accent');
     expect(appearanceButton).not.toHaveAttribute('aria-current', 'page');
-    expect(appearanceButton).toHaveClass('border-transparent');
   });
 
   it('filters rows across sections with the search field', async () => {
@@ -186,7 +233,7 @@ describe('SettingsView', () => {
       }),
     ];
     renderWithTheme(
-      <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={settings} />,
     );
     const search = screen.getByRole('searchbox', { name: /search settings/i });
     await userEvent.type(search, 'cursor');
@@ -197,7 +244,7 @@ describe('SettingsView', () => {
 
   it('shows an empty state when the search matches nothing', async () => {
     renderWithTheme(
-      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={[]} />,
     );
     const search = screen.getByRole('searchbox', { name: /search settings/i });
     await userEvent.type(search, 'zzzznomatch');
@@ -206,7 +253,7 @@ describe('SettingsView', () => {
 
   it('finds the Remote access section when searching for Tailscale trust settings', async () => {
     renderWithTheme(
-      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={[]} />,
     );
     const search = screen.getByRole('searchbox', { name: /search settings/i });
     await userEvent.type(search, 'tailscale');
@@ -215,7 +262,7 @@ describe('SettingsView', () => {
 
   it('surfaces the default subagent models section via search', async () => {
     renderWithTheme(
-      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={[]} />,
     );
     const search = screen.getByRole('searchbox', { name: /search settings/i });
     // Query by the section's own title — the raw NUNCIO_SUBAGENT_MODELS row is
@@ -227,7 +274,7 @@ describe('SettingsView', () => {
   it('opens the Remote access pane when deep-linked via ?section=remote-access', () => {
     window.history.replaceState(null, '', '/settings?section=remote-access');
     renderWithTheme(
-      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={[]} />,
     );
     // The pairing pane is shown immediately, not the default Appearance pane.
     expect(screen.getByRole('heading', { name: 'Remote access' })).toBeInTheDocument();
@@ -237,7 +284,7 @@ describe('SettingsView', () => {
   it('opens the Mobile pane when deep-linked via ?section=mobile', () => {
     window.history.replaceState(null, '', '/settings?section=mobile');
     renderWithTheme(
-      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={[]} />,
     );
     // The phone-pairing pane is shown immediately, not the default Appearance pane.
     expect(screen.getByRole('heading', { name: 'Mobile' })).toBeInTheDocument();
@@ -247,7 +294,7 @@ describe('SettingsView', () => {
 
   it('finds the Mobile section when searching for phone pairing', async () => {
     renderWithTheme(
-      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={[]} />,
     );
     const search = screen.getByRole('searchbox', { name: /search settings/i });
     await userEvent.type(search, 'phone');
@@ -256,14 +303,14 @@ describe('SettingsView', () => {
 
   it('opens Crew profiles directly from the composer setup deep-link', async () => {
     window.history.replaceState(null, '', '/settings?section=crew-profiles');
-    renderWithTheme(<SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />);
+    renderWithTheme(<SettingsHarness settings={[]} />);
     expect(screen.getByRole('heading', { name: 'Crew profiles' })).toBeInTheDocument();
   });
 
   it('falls back to Appearance when the ?section value is unknown', () => {
     window.history.replaceState(null, '', '/settings?section=not-a-real-section');
     renderWithTheme(
-      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={[]} />,
     );
     expect(screen.getByRole('heading', { name: 'Appearance' })).toBeInTheDocument();
   });
@@ -273,7 +320,7 @@ describe('SettingsView', () => {
       makeSetting({ key: 'A', label: 'Cursor API Key', category: 'provider', providerId: 'cursor' }),
     ];
     renderWithTheme(
-      <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={settings} />,
     );
     await goToSection('Providers');
     expect(screen.getByText('Cursor')).toBeInTheDocument();
@@ -304,7 +351,7 @@ describe('SettingsView', () => {
       makeSetting({ key: 'A', label: 'Cursor API Key', category: 'provider', providerId: 'cursor' }),
     ];
     renderWithTheme(
-      <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={settings} />,
     );
     await goToSection('Providers');
     expect(screen.getByText('Cursor')).toBeInTheDocument();
@@ -319,7 +366,7 @@ describe('SettingsView', () => {
   it('deep-links legacy subscription-bridge and tool-updates section ids to Providers', () => {
     window.history.replaceState(null, '', '/settings?section=subscription-bridge');
     renderWithTheme(
-      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={[]} />,
     );
     expect(screen.getByRole('heading', { name: 'Subscription bridge' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Tool updates' })).toBeInTheDocument();
@@ -362,7 +409,7 @@ describe('SettingsView', () => {
       }),
     ];
     renderWithTheme(
-      <SettingsView settings={settings} onUpdate={onUpdate} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={settings} onUpdate={onUpdate} />,
     );
     await goToSection('Providers');
     expect(screen.getByText('Claude')).toBeInTheDocument();
@@ -400,7 +447,7 @@ describe('SettingsView', () => {
       }),
     ];
     renderWithTheme(
-      <SettingsView settings={settings} onUpdate={onUpdate} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={settings} onUpdate={onUpdate} />,
     );
 
     await goToSection('MCP & Tools');
@@ -421,7 +468,7 @@ describe('SettingsView', () => {
       makeSetting({ key: 'B', label: 'GitLab token', category: 'provider', providerId: 'gitlab' }),
     ];
     renderWithTheme(
-      <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={settings} />,
     );
     await goToSection('Source control');
     await waitFor(() => {
@@ -435,7 +482,7 @@ describe('SettingsView', () => {
       makeSetting({ key: 'CURSOR_API_KEY', label: 'Cursor API Key', category: 'provider', providerId: 'cursor' }),
     ];
     renderWithTheme(
-      <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={settings} />,
     );
     await goToSection('Providers');
 
@@ -459,14 +506,7 @@ describe('SettingsView', () => {
         value: '••••12ab'
       })
     ];
-    renderWithTheme(
-      <SettingsView
-        settings={settings}
-        onUpdate={vi.fn()}
-        onClear={vi.fn()}
-        onBack={vi.fn()}
-      />,
-    );
+    renderWithTheme(<SettingsHarness settings={settings} />);
     await goToSection('Providers');
 
     const manageBtn = screen.getByRole('button', { name: /manage cursor/i });
@@ -487,7 +527,7 @@ describe('SettingsView', () => {
       })
     ];
     renderWithTheme(
-      <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={settings} />,
     );
     await goToSection('Providers');
 
@@ -508,7 +548,7 @@ describe('SettingsView', () => {
       })
     ];
     renderWithTheme(
-      <SettingsView settings={settings} onUpdate={onUpdate} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={settings} onUpdate={onUpdate} />,
     );
     await goToSection('Providers');
 
@@ -534,14 +574,7 @@ describe('SettingsView', () => {
         value: '••••12ab'
       })
     ];
-    renderWithTheme(
-      <SettingsView
-        settings={settings}
-        onUpdate={vi.fn()}
-        onClear={onClear}
-        onBack={vi.fn()}
-      />,
-    );
+    renderWithTheme(<SettingsHarness settings={settings} onClear={onClear} />);
     await goToSection('Providers');
 
     const manageBtn = screen.getByRole('button', { name: /manage cursor/i });
@@ -563,14 +596,7 @@ describe('SettingsView', () => {
         value: 'x'
       })
     ];
-    renderWithTheme(
-      <SettingsView
-        settings={settings}
-        onUpdate={vi.fn()}
-        onClear={vi.fn()}
-        onBack={vi.fn()}
-      />,
-    );
+    renderWithTheme(<SettingsHarness settings={settings} />);
     await goToSection('Providers');
 
     const manageBtn = screen.getByRole('button', { name: /manage cursor/i });
@@ -582,7 +608,7 @@ describe('SettingsView', () => {
   it('calls onBack when the back button is clicked', async () => {
     const onBack = vi.fn();
     renderWithTheme(
-      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={onBack} />,
+      <SettingsHarness settings={[]} onBack={onBack} />,
     );
     await userEvent.click(screen.getByRole('button', { name: /back/i }));
     expect(onBack).toHaveBeenCalledTimes(1);
@@ -590,7 +616,7 @@ describe('SettingsView', () => {
 
   it('renders the Appearance section with theme, font size, and density controls', () => {
     renderWithTheme(
-      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={[]} />,
     );
     expect(screen.getByRole('heading', { name: 'Appearance' })).toBeInTheDocument();
     expect(screen.getByRole('radiogroup', { name: 'Theme' })).toBeInTheDocument();
@@ -602,7 +628,7 @@ describe('SettingsView', () => {
 
   it('"Reduce motion: On" force-stills motion (label contract, not raw axis)', async () => {
     renderWithTheme(
-      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={[]} />,
     );
     const reduce = screen.getByRole('group', { name: 'Reduce motion' });
     // Selecting the option that reduces motion must reach the force-still state.
@@ -618,7 +644,7 @@ describe('SettingsView', () => {
 
   it('moving the font size slider updates the applied --chat-font-scale', async () => {
     renderWithTheme(
-      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={[]} />,
     );
     const slider = screen.getByLabelText('Chat font size');
     fireEvent.change(slider, { target: { value: '1.2' } });
@@ -629,7 +655,7 @@ describe('SettingsView', () => {
 
   it('clicking a density option toggles the pressed state', async () => {
     renderWithTheme(
-      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={[]} />,
     );
     const compactBtn = screen.getByRole('button', { name: 'Compact' });
     await userEvent.click(compactBtn);
@@ -638,7 +664,7 @@ describe('SettingsView', () => {
 
   it('selecting a theme card calls setTheme (reflected as checked)', async () => {
     renderWithTheme(
-      <SettingsView settings={[]} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={[]} />,
     );
     const themeGroup = screen.getByRole('radiogroup', { name: 'Theme' });
     const darkCard = within(themeGroup).getByRole('radio', { name: 'Dark' });
@@ -661,7 +687,7 @@ describe('SettingsView', () => {
       })
     ];
     renderWithTheme(
-      <SettingsView settings={settings} onUpdate={onUpdate} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={settings} onUpdate={onUpdate} />,
     );
     await goToSection('Providers');
 
@@ -689,7 +715,7 @@ describe('SettingsView', () => {
       }),
     ];
     renderWithTheme(
-      <SettingsView settings={settings} onUpdate={onUpdate} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={settings} onUpdate={onUpdate} />,
     );
     await goToSection('General');
 
@@ -713,7 +739,7 @@ describe('SettingsView', () => {
       }),
     ];
     renderWithTheme(
-      <SettingsView settings={settings} onUpdate={vi.fn()} onClear={vi.fn()} onBack={vi.fn()} />,
+      <SettingsHarness settings={settings} />,
     );
     await goToSection('Advanced');
 

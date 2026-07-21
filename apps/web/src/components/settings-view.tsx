@@ -1,25 +1,8 @@
-import {
-  ArrowLeft,
-  Bot,
-  ChevronDown,
-  ChevronUp,
-  FolderGit2,
-  GitPullRequest,
-  Network,
-  Palette,
-  Puzzle,
-  Search,
-  Settings2,
-  SlidersHorizontal,
-  Smartphone,
-  Gauge,
-  UsersRound,
-  Wrench,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useState, useEffect, type ReactNode } from 'react';
+import { Button } from '@/components/ui/button';
 import type { Setting } from '../lib/settings-api';
+import type { SettingsSectionId } from '../lib/settings-sections';
 import { SettingRow } from './setting-row';
 import { ProviderIcon, SubscriptionBridgeIcon } from './provider-icon';
 import { fetchForgeStatus, type ForgeStatusDto } from '../lib/forge-status-api';
@@ -31,7 +14,6 @@ import { MobileSettingsSection } from './mobile-settings-section';
 import { ProviderUpdateSettingsSection } from './provider-update-settings-section';
 import { SubagentModelsSettingsSection } from './subagent-models-settings-section';
 import { UsageSettingsSection } from './usage-settings-section';
-import { SettingsSectionNav, type SettingsSectionNavItem } from './settings-section-nav';
 import { CrewProfilesSettingsSection } from './crew/crew-profiles-settings-section';
 import { McpServersSettingsSection } from './mcp-servers-settings-section';
 import { HeartbeatHealthSection } from './heartbeat-health-section';
@@ -56,7 +38,10 @@ interface SettingsViewProps {
   settings: Setting[];
   onUpdate: (key: string, value: string) => Promise<void>;
   onClear: (key: string) => Promise<void>;
-  onBack: () => void;
+  /** Active section — owned by App / settings sidebar (Cursor-style shell). */
+  activeSection: SettingsSectionId;
+  /** Cross-section search query from the settings sidebar search box. */
+  searchQuery: string;
 }
 
 interface ProviderMetaInfo {
@@ -64,56 +49,6 @@ interface ProviderMetaInfo {
   name: string;
   description: string;
   primaryKey: string;
-}
-
-type SettingsSectionId =
-  | 'general'
-  | 'appearance'
-  | 'providers'
-  | 'usage'
-  | 'source-control'
-  | 'mcp-tools'
-  | 'agents'
-  | 'crew-profiles'
-  | 'workspaces'
-  | 'projects'
-  | 'mobile'
-  | 'remote-access'
-  | 'advanced';
-
-const SECTION_NAV_ITEMS: ReadonlyArray<SettingsSectionNavItem & { id: SettingsSectionId }> = [
-  { id: 'general', label: 'General', icon: Settings2 },
-  { id: 'appearance', label: 'Appearance', icon: Palette },
-  { id: 'providers', label: 'Providers', icon: Bot },
-  { id: 'usage', label: 'Usage', icon: Gauge },
-  { id: 'source-control', label: 'Source control', icon: GitPullRequest },
-  { id: 'mcp-tools', label: 'MCP & Tools', icon: Puzzle },
-  { id: 'agents', label: 'Agents', icon: SlidersHorizontal },
-  { id: 'crew-profiles', label: 'Crew profiles', icon: UsersRound },
-  { id: 'workspaces', label: 'Workspaces', icon: FolderGit2 },
-  { id: 'projects', label: 'Projects', icon: FolderGit2 },
-  { id: 'mobile', label: 'Mobile', icon: Smartphone },
-  { id: 'remote-access', label: 'Remote access', icon: Network },
-  { id: 'advanced', label: 'Advanced', icon: Wrench },
-];
-
-const VALID_SECTION_IDS = new Set<SettingsSectionId>(SECTION_NAV_ITEMS.map((item) => item.id));
-
-/** Legacy nav ids that now live as subsections under Providers. */
-const PROVIDERS_ALIASES = new Set(['subscription-bridge', 'tool-updates']);
-
-/**
- * Initial pane, honoring a `?section=<id>` deep-link so an external entry point
- * (the desktop tray's "Pair mobile device") can land straight on the Mobile section.
- * An absent or unknown value falls back to Appearance — the default landing.
- */
-function initialSection(): SettingsSectionId {
-  if (typeof window === 'undefined') return 'appearance';
-  const requested = new URLSearchParams(window.location.search).get('section');
-  if (requested && PROVIDERS_ALIASES.has(requested)) return 'providers';
-  return requested && VALID_SECTION_IDS.has(requested as SettingsSectionId)
-    ? (requested as SettingsSectionId)
-    : 'appearance';
 }
 
 const PROVIDER_METAS: Record<string, ProviderMetaInfo> = {
@@ -179,12 +114,16 @@ function matchesQuery(text: string | null | undefined, query: string): boolean {
   return (text ?? '').toLowerCase().includes(query);
 }
 
-export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsViewProps) {
+export function SettingsView({
+  settings,
+  onUpdate,
+  onClear,
+  activeSection,
+  searchQuery,
+}: SettingsViewProps) {
   const [forgeStatus, setForgeStatus] = useState<ForgeStatusDto[]>([]);
   const [bridgeStatus, setBridgeStatus] = useState<SubscriptionBridgeStatus | null>(null);
   const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({});
-  const [activeSection, setActiveSection] = useState<SettingsSectionId>(initialSection);
-  const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
     fetchForgeStatus()
@@ -611,48 +550,19 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
     }
   };
 
-  const handleSectionSelect = (sectionId: string) => {
-    setActiveSection(sectionId as SettingsSectionId);
-    setSearchQuery('');
-  };
-
   return (
-    <section className="flex-1 flex flex-col min-h-0 overflow-hidden bg-background">
-      <header className="flex items-center gap-2 px-4 py-3 border-b border-border sticky top-0 bg-background z-10">
-        <Button variant="ghost" size="icon" onClick={onBack} aria-label="Back">
-          <ArrowLeft className="size-4" />
-        </Button>
-        <h1 className="text-lg font-semibold tracking-tight">Settings</h1>
-      </header>
-
-      <div className="flex flex-1 min-h-0 flex-col sm:flex-row">
-        <aside className="shrink-0 border-b border-border bg-sidebar/40 sm:w-60 sm:border-b-0 sm:border-r">
-          <div className="p-2 sm:p-3">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                type="search"
-                role="searchbox"
-                aria-label="Search settings"
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search Settings"
-                className="h-8 pl-8 text-ui"
-              />
-            </div>
-          </div>
-          <SettingsSectionNav items={SECTION_NAV_ITEMS} activeId={activeSection} onSelect={handleSectionSelect} />
-        </aside>
-
-        <div className="flex-1 overflow-y-auto px-4 py-5">
-          <div className="mx-auto w-full max-w-[720px] space-y-6">
-            {renderActiveSection()}
-            <p className="text-ui-sm text-muted-foreground leading-relaxed pt-2">
-              Settings override environment variables at runtime. Secrets are encrypted at rest
-              (AES-256-GCM) and never returned in plain text. Boot-only vars (NUNCIO_DATA_DIR, PORT,
-              NUNCIO_SETTINGS_KEY) remain env-only.
-            </p>
-          </div>
+    <section
+      className="flex flex-1 min-h-0 flex-col overflow-hidden bg-background"
+      aria-label="Settings"
+    >
+      <div className="flex-1 overflow-y-auto px-4 py-5 sm:px-6">
+        <div className="mx-auto w-full max-w-[720px] space-y-6">
+          {renderActiveSection()}
+          <p className="pt-2 text-ui-sm leading-relaxed text-muted-foreground">
+            Settings override environment variables at runtime. Secrets are encrypted at rest
+            (AES-256-GCM) and never returned in plain text. Boot-only vars (NUNCIO_DATA_DIR, PORT,
+            NUNCIO_SETTINGS_KEY) remain env-only.
+          </p>
         </div>
       </div>
     </section>

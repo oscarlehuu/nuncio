@@ -69,11 +69,95 @@ describe('Sidebar', () => {
     renderWithTheme(
       <Sidebar sessions={sessions} activeId={null} onSelect={() => {}} onNew={() => {}} />,
     );
-    // Line one: the title. Line two: the provider indicator + status/preview meta.
+    // Line one: engine icon + title. Line two: preview meta.
     const row = screen.getByRole('button', { name: /open fix auth/i });
     expect(row).toHaveTextContent('Fix auth');
     expect(row).toContainElement(screen.getByLabelText(/nuncio engine provider/i));
     expect(row).toHaveTextContent(/reading middleware/i);
+  });
+
+  it('shows a left PR badge for open and merged sessions', () => {
+    const sessions = [
+      makeSession({
+        id: 's-open',
+        title: 'Open PR work',
+        pullRequestNumber: 42,
+        pullRequestState: 'open',
+        pullRequestUrl: 'https://github.com/o/r/pull/42',
+      }),
+      makeSession({
+        id: 's-merged',
+        title: 'Merged PR work',
+        pullRequestNumber: 7,
+        pullRequestState: 'merged',
+        pullRequestUrl: 'https://github.com/o/r/pull/7',
+      }),
+      makeSession({ id: 's-plain', title: 'No PR yet' }),
+    ];
+    renderWithTheme(
+      <Sidebar sessions={sessions} activeId={null} onSelect={() => {}} onNew={() => {}} />,
+    );
+
+    expect(screen.getByRole('button', { name: '#42 PR open' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '#7 PR merged' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /open no pr yet/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /#\d+ PR/i })).toHaveLength(2);
+  });
+
+  it('in settings mode shows Back and section nav instead of sessions', async () => {
+    const onSettingsBack = vi.fn();
+    const onSettingsSectionChange = vi.fn();
+    renderWithTheme(
+      <Sidebar
+        sessions={[makeSession({ id: 's1', title: 'Hidden in settings mode' })]}
+        activeId={null}
+        onSelect={() => {}}
+        onNew={() => {}}
+        settingsMode
+        settingsSection="appearance"
+        settingsSearch=""
+        onSettingsSectionChange={onSettingsSectionChange}
+        onSettingsSearchChange={() => {}}
+        onSettingsBack={onSettingsBack}
+      />,
+    );
+
+    expect(screen.queryByText('Hidden in settings mode')).not.toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: /settings sections/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /^back$/i }));
+    expect(onSettingsBack).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole('button', { name: 'Providers' }));
+    expect(onSettingsSectionChange).toHaveBeenCalledWith('providers');
+  });
+
+  it('opens the pull request URL when the sidebar PR badge is clicked', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const onSelect = vi.fn();
+    renderWithTheme(
+      <Sidebar
+        sessions={[
+          makeSession({
+            id: 's1',
+            title: 'Ship badge',
+            pullRequestNumber: 99,
+            pullRequestState: 'open',
+            pullRequestUrl: 'https://github.com/o/r/pull/99',
+          }),
+        ]}
+        activeId={null}
+        onSelect={onSelect}
+        onNew={() => {}}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: '#99 PR open' }));
+    expect(openSpy).toHaveBeenCalledWith(
+      'https://github.com/o/r/pull/99',
+      '_blank',
+      'noopener,noreferrer',
+    );
+    expect(onSelect).not.toHaveBeenCalled();
+    openSpy.mockRestore();
   });
 
   it('calls onSelect with the session id when a row is clicked', async () => {

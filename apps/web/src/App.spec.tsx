@@ -266,7 +266,11 @@ describe('App URL routing', () => {
     renderApp('/');
     await pinDesktopSidebar();
     await userEvent.click(screen.getByRole('button', { name: /settings/i }));
-    await waitFor(() => expect(screen.getByRole('heading', { name: /^settings$/i })).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole('navigation', { name: /settings sections/i })).toBeInTheDocument(),
+    );
+    expect(screen.getByRole('button', { name: /^back$/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Appearance' })).toBeInTheDocument();
   });
 
   it('deep-loads a session via fetchSession when it is not in the list', async () => {
