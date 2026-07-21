@@ -22,8 +22,9 @@ export const NAV_THEME = {
     accent: '#252629',
     'accent-foreground': '#eff0f1',
     destructive: '#f5605b',
-    border: '#ffffff',
-    input: '#ffffff',
+    // Hairline edges — foreground at low alpha, not a hard white line.
+    border: 'rgba(240, 240, 240, 0.08)',
+    input: 'rgba(240, 240, 240, 0.14)',
     ring: '#606369',
     radius: '0.625rem',
   },

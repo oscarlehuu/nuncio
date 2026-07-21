@@ -144,7 +144,7 @@ export default function SessionDetail() {
       style={{ flex: 1 }}
     >
       <View
-        className="flex-row items-center gap-3 border-b border-border/60 px-4 pb-3"
+        className="flex-row items-center gap-3 border-b border-border px-4 pb-3"
         style={{ paddingTop: Math.max(insets.top, 16) }}
       >
         <Pressable
@@ -228,10 +228,10 @@ export default function SessionDetail() {
 
       {access.canMutate ? (
         <View
-          className="border-t border-border/60 bg-background px-3 pt-2"
+          className="border-t border-border bg-background px-3 pt-2"
           style={{ flexShrink: 0, paddingBottom: Math.max(insets.bottom + 10, 10) }}
         >
-          <View className="flex-row items-end gap-2 rounded-2xl border border-border bg-card px-2 py-2">
+          <View className="flex-row items-end gap-2 rounded-xl border border-border bg-card px-2 py-2">
             <Button
               accessibilityLabel="Attach image"
               disabled

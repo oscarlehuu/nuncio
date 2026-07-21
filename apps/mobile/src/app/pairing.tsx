@@ -159,7 +159,7 @@ export default function Pairing() {
             </Text>
           </View>
 
-          <Card className="mt-7 gap-0 rounded-2xl border-border/70 p-4 shadow-none">
+          <Card className="mt-7 gap-0 rounded-xl border-border p-4 shadow-none">
             <View className="flex-row items-center gap-3">
               <View className={`h-9 w-9 items-center justify-center rounded-full ${error ? 'bg-destructive/15' : 'bg-secondary'}`}>
                 {error ? <Wifi color="#f5605b" size={17} /> : <ShieldCheck color="#4ade80" size={17} />}

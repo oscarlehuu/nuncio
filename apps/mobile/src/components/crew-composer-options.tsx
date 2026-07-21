@@ -84,7 +84,7 @@ function ChoiceRow({
               accessibilityState={{ checked: item.key === value }}
               onPress={() => onChange(item.key)}
               className={`min-h-11 flex-row items-center justify-center gap-2 rounded-xl border px-4 ${
-                item.key === value ? 'border-primary bg-secondary' : 'border-border/70 bg-card'
+                item.key === value ? 'border-primary bg-secondary' : 'border-border bg-card'
               }`}
             >
               <Text className="max-w-56 text-foreground" numberOfLines={1}>{item.label}</Text>
@@ -109,7 +109,7 @@ function ResolutionCard(props: Props) {
   }
   if (props.resolution?.state === 'ready') {
     return (
-      <Card className="gap-0 rounded-2xl border-primary/40 px-4 py-3 shadow-none">
+      <Card className="gap-0 rounded-xl border-primary/40 px-4 py-3 shadow-none">
         <View className="flex-row items-center gap-2">
           <Check color="#4ade80" size={16} />
           <Text className="font-semibold text-foreground">Ready</Text>
@@ -125,7 +125,7 @@ function ResolutionCard(props: Props) {
 
 function Notice({ title, body, action, onPress }: { title: string; body: string; action?: string; onPress?: () => void }) {
   return (
-    <Card className="gap-0 rounded-2xl border-border/70 px-4 py-3 shadow-none">
+    <Card className="gap-0 rounded-xl border-border px-4 py-3 shadow-none">
       <View className="flex-row items-center gap-2">
         {title === 'Crew unavailable' || title === 'Needs setup' ? (
           <CircleAlert color="#f5605b" size={16} />

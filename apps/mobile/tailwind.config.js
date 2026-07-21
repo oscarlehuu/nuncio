@@ -21,8 +21,13 @@ module.exports = {
         muted: { DEFAULT: dark.muted, foreground: dark['muted-foreground'] },
         accent: { DEFAULT: dark.accent, foreground: dark['accent-foreground'] },
         destructive: dark.destructive,
-        border: dark.border,
-        input: dark.input,
+        // Borders and field edges are foreground at very low alpha — a hairline
+        // that separates surfaces without drawing a hard box. The generated
+        // parity hex (dark.border) is opaque because formatHex() drops the
+        // token's alpha channel, so we keep the translucent value here to match
+        // the desktop web look instead of reading dark.border/dark.input.
+        border: 'rgba(240, 240, 240, 0.08)',
+        input: 'rgba(240, 240, 240, 0.14)',
         ring: dark.ring,
       },
       borderRadius: {

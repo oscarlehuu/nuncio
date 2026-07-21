@@ -72,7 +72,7 @@ export default function SettingsScreen() {
     return (
       <SafeAreaView className="flex-1 bg-background">
         <View className="px-4 pt-4">
-          <Text className="text-3xl font-semibold tracking-tight text-foreground">Settings</Text>
+          <Text className="text-2xl font-semibold tracking-tight text-foreground">Settings</Text>
           <Text className="mt-2 text-sm text-muted-foreground">Loading your connection…</Text>
         </View>
       </SafeAreaView>
@@ -93,13 +93,13 @@ export default function SettingsScreen() {
         }}
       >
         <View>
-          <Text className="text-3xl font-semibold tracking-tight text-foreground">Settings</Text>
+          <Text className="text-2xl font-semibold tracking-tight text-foreground">Settings</Text>
           <Text className="mt-2 text-sm text-muted-foreground">
             Manage this phone’s connection and agent preferences.
           </Text>
         </View>
 
-        <Card className="gap-0 rounded-2xl border-border/70 px-4 py-4 shadow-none">
+        <Card className="gap-0 rounded-xl border-border px-4 py-4 shadow-none">
           <View className="flex-row items-center justify-between">
             <View className="flex-1 flex-row items-center gap-2">
               <Server color="#208AEF" size={17} />
@@ -131,7 +131,7 @@ export default function SettingsScreen() {
           </Pressable>
         </Card>
 
-        <Card className="gap-0 rounded-2xl border-border/70 px-4 py-4 shadow-none">
+        <Card className="gap-0 rounded-xl border-border px-4 py-4 shadow-none">
           <View className="flex-row items-center gap-2">
             <Bell color="#208AEF" size={17} />
             <Text className="font-semibold text-foreground">Notifications</Text>
@@ -148,7 +148,7 @@ export default function SettingsScreen() {
           </Pressable>
         </Card>
 
-        <Card className="gap-0 rounded-2xl border-border/70 px-4 py-4 shadow-none">
+        <Card className="gap-0 rounded-xl border-border px-4 py-4 shadow-none">
           <View className="flex-row items-center gap-2">
             <Link2 color="#208AEF" size={17} />
             <Text className="font-semibold text-foreground">Crew profiles</Text>
@@ -169,7 +169,7 @@ export default function SettingsScreen() {
           <Text className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</Text>
         ) : null}
 
-        <Card className="gap-0 rounded-2xl border-border/70 px-4 py-4 shadow-none">
+        <Card className="gap-0 rounded-xl border-border px-4 py-4 shadow-none">
           <View className="flex-row items-center gap-2">
             <Info color="#83868b" size={17} />
             <Text className="font-semibold text-foreground">About Nuncio</Text>

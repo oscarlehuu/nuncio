@@ -121,7 +121,7 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
 
   return (
     <>
-      <Card className="mx-4 mb-4 gap-0 rounded-2xl border-border/70 p-4 shadow-none">
+      <Card className="mx-4 mb-4 gap-0 rounded-xl border-border p-4 shadow-none">
         <Textarea
           value={prompt}
           onChangeText={setPrompt}
@@ -137,7 +137,7 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
           <Pressable
             accessibilityLabel="Choose project"
             onPress={() => openSheet('project')}
-            className="min-h-10 flex-1 flex-row items-center gap-2 rounded-xl border border-border/70 bg-secondary px-3 active:opacity-70"
+            className="min-h-10 flex-1 flex-row items-center gap-2 rounded-xl border border-border bg-secondary px-3 active:opacity-70"
           >
             <Folder color="#83868b" size={15} />
             <Text className="flex-1 text-xs font-medium text-foreground" numberOfLines={1}>
@@ -148,7 +148,7 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
           <Pressable
             accessibilityLabel="Choose model"
             onPress={() => openSheet('model')}
-            className="min-h-10 flex-1 flex-row items-center gap-2 rounded-xl border border-border/70 bg-secondary px-3 active:opacity-70"
+            className="min-h-10 flex-1 flex-row items-center gap-2 rounded-xl border border-border bg-secondary px-3 active:opacity-70"
           >
             <Settings2 color="#83868b" size={15} />
             <Text className="flex-1 text-xs font-medium text-foreground" numberOfLines={1}>
@@ -261,7 +261,7 @@ function PickerRow({
   return (
     <Pressable
       onPress={onPress}
-      className={`min-h-14 flex-row items-center justify-between rounded-xl border border-border/60 px-3 py-2 ${selected ? 'bg-secondary' : 'bg-card'}`}
+      className={`min-h-14 flex-row items-center justify-between rounded-xl border border-border px-3 py-2 ${selected ? 'bg-secondary' : 'bg-card'}`}
     >
       <View className="min-w-0 flex-1">
         <Text className="font-medium text-foreground" numberOfLines={1}>{label}</Text>

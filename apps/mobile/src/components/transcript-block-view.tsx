@@ -82,9 +82,9 @@ function ToolRow({ block }: { block: ToolBlock }) {
 
 function ToolCluster({ blocks }: { blocks: ToolBlock[] }) {
   return (
-    <View className="my-2 rounded-xl border border-border/60 bg-card px-3">
+    <View className="my-2 rounded-xl border border-border bg-card px-3">
       {blocks.map((block, index) => (
-        <View key={block.key} className={index > 0 ? 'border-t border-border/50' : undefined}>
+        <View key={block.key} className={index > 0 ? 'border-t border-border' : undefined}>
           <ToolRow block={block} />
         </View>
       ))}
@@ -127,7 +127,7 @@ function NoticeCard({
   const color = tone === 'danger' ? '#f5605b' : '#9ca3af';
   const Icon = icon === 'alert' ? AlertCircle : icon === 'question' ? CircleHelp : ShieldAlert;
   return (
-    <View className={`my-2 flex-row gap-3 rounded-xl border px-3 py-3 ${tone === 'danger' ? 'border-destructive/60 bg-destructive/10' : 'border-border/60 bg-card'}`}>
+    <View className={`my-2 flex-row gap-3 rounded-xl border px-3 py-3 ${tone === 'danger' ? 'border-destructive/60 bg-destructive/10' : 'border-border bg-card'}`}>
       <Icon color={color} size={17} />
       <View className="flex-1">
         <Text className={`text-sm font-medium ${tone === 'danger' ? 'text-destructive' : 'text-foreground'}`}>
@@ -157,7 +157,7 @@ export function TranscriptBlockView({
   switch (block.kind) {
     case 'user':
       return (
-        <View className="my-2 max-w-[88%] self-end rounded-2xl rounded-br-md bg-primary px-4 py-3">
+        <View className="my-2 max-w-[88%] self-end rounded-xl rounded-br-md bg-primary px-4 py-3">
           <Text className="text-sm leading-5 text-primary-foreground">{block.text}</Text>
         </View>
       );

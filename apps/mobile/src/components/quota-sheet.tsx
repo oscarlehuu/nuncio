@@ -94,7 +94,7 @@ function PercentModeToggle({
 }) {
   return (
     <View
-      className="mt-3 flex-row rounded-lg border border-border/60 p-0.5"
+      className="mt-3 flex-row rounded-lg border border-border p-0.5"
       accessibilityRole="tablist"
     >
       {(['used', 'left'] as const).map((option) => {
@@ -215,7 +215,7 @@ export function QuotaSheetTrigger({ activeProvider, model }: QuotaSheetProps) {
                 <View
                   key={snapshot.provider}
                   className={`mb-3 rounded-xl border p-3 ${
-                    emphasized ? 'border-border bg-card' : 'border-border/50 bg-background'
+                    emphasized ? 'border-border bg-card' : 'border-border bg-background'
                   }`}
                 >
                   <Text className="mb-2 text-sm font-semibold text-foreground">
@@ -267,7 +267,7 @@ export function QuotaSheetTrigger({ activeProvider, model }: QuotaSheetProps) {
                   )}
 
                   {snapshot.usageLines.length > 0 ? (
-                    <View className="mt-3 border-t border-border/40 pt-2">
+                    <View className="mt-3 border-t border-border pt-2">
                       {snapshot.usageLines.map((line) => (
                         <View key={line.label} className="mb-2 last:mb-0">
                           <View className="flex-row items-baseline justify-between gap-3">

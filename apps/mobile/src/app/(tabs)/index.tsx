@@ -146,6 +146,7 @@ export default function SessionList() {
           sections={sections}
           keyExtractor={(item) => item.key}
           extraData={sessionPlans}
+          ItemSeparatorComponent={() => <View className="mx-4 h-px bg-border" />}
           renderItem={({ item }) => item.kind === 'session'
             ? (
               <SessionRow
@@ -156,7 +157,7 @@ export default function SessionList() {
             )
             : <CrewRunRow row={item.row} onPress={() => router.push(crewTaskPath(item.row.taskId))} />}
           renderSectionHeader={({ section }) => (
-            <Text className="px-4 pb-2 pt-4 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+            <Text className="px-4 pb-2 pt-5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               {section.title}
             </Text>
           )}
@@ -217,11 +218,11 @@ function HomeHeader({
     <>
       <View className="px-4 pb-3">
         <View className="flex-row items-center justify-between">
-          <Text className="text-3xl font-bold tracking-tight text-foreground">Nuncio</Text>
+          <Text className="text-2xl font-semibold tracking-tight text-foreground">Nuncio</Text>
           <Pressable
             onPress={onChangeConnection}
             accessibilityLabel="Change connection"
-            className="max-w-[60%] flex-row items-center gap-1 rounded-full border border-border/70 bg-card px-3 py-1.5 active:opacity-80"
+            className="max-w-[60%] flex-row items-center gap-1 rounded-full border border-border bg-card px-3 py-1.5 active:opacity-80"
           >
             <Server color="#83868b" size={13} />
             <Text className="max-w-48 text-[11px] text-muted-foreground" numberOfLines={1}>
@@ -235,7 +236,7 @@ function HomeHeader({
       <HomeComposer onCreated={onCreated} onAdvanced={onAdvanced} />
 
       {pushDenied ? (
-        <Card className="mx-4 mb-3 flex-row items-center gap-2 rounded-xl border-border/60 bg-secondary px-3 py-2 shadow-none">
+        <Card className="mx-4 mb-3 flex-row items-center gap-2 rounded-xl border-border bg-secondary px-3 py-2 shadow-none">
           <Text className="flex-1 text-xs text-muted-foreground">
             Notifications are off — approvals and questions won’t reach this phone.
           </Text>
@@ -248,7 +249,7 @@ function HomeHeader({
         </Card>
       ) : null}
 
-      <View className="mx-4 mb-1 flex-row rounded-xl border border-border/60 bg-card p-1">
+      <View className="mx-4 mb-1 flex-row rounded-xl border border-border bg-card p-1">
         {(['active', 'archived'] as const).map((item) => (
           <Pressable
             key={item}
@@ -269,20 +270,21 @@ function HomeHeader({
 
 function HomeSkeleton() {
   return (
-    <View className="gap-3 px-4 pt-3">
-      {[0, 1, 2].map((item) => (
-        <Card key={item} className="gap-0 rounded-2xl border-border/60 px-4 py-4 shadow-none">
-          <View className="flex-row items-center justify-between">
-            <Skeleton className="h-4 w-24" />
-            <Skeleton className="h-5 w-16 rounded-full" />
+    <View className="pt-2">
+      {[0, 1, 2, 3].map((item) => (
+        <View key={item} className="flex-row items-start gap-3 px-4 py-3.5">
+          <Skeleton className="mt-1 h-3 w-3 rounded-full" />
+          <View className="flex-1 gap-2">
+            <View className="flex-row items-center justify-between">
+              <Skeleton className="h-4 w-1/2" />
+              <Skeleton className="h-3 w-10" />
+            </View>
+            <View className="flex-row items-center justify-between">
+              <Skeleton className="h-3 w-2/5" />
+              <Skeleton className="h-5 w-16 rounded-full" />
+            </View>
           </View>
-          <Skeleton className="mt-4 h-5 w-4/5" />
-          <Skeleton className="mt-2 h-3 w-2/5" />
-          <View className="mt-4 flex-row justify-between">
-            <Skeleton className="h-3 w-14" />
-            <Skeleton className="h-4 w-4 rounded-full" />
-          </View>
-        </Card>
+        </View>
       ))}
     </View>
   );

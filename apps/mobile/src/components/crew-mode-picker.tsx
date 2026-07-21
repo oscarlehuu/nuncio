@@ -14,7 +14,7 @@ export function CrewModePicker({
   onChange: (value: CrewExecutionMode) => void;
 }) {
   return (
-    <Card className="mt-5 gap-0 rounded-2xl border-border/60 p-1 shadow-none">
+    <Card className="mt-5 gap-0 rounded-xl border-border p-1 shadow-none">
       <View className="flex-row">
       {(['solo', 'crew'] as const).map((mode) => (
         <Pressable

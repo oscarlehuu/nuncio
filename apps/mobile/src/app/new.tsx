@@ -123,7 +123,7 @@ export default function NewSession() {
           contentContainerStyle={{ flexGrow: 1, paddingBottom: 24 }}
           keyboardShouldPersistTaps="handled"
         >
-          <Card className="gap-0 rounded-2xl border-border/70 p-4 shadow-none">
+          <Card className="gap-0 rounded-xl border-border p-4 shadow-none">
             <View className="mb-3 flex-row items-center gap-2">
               {mode === 'solo' ? <Bot color="#208aef" size={17} /> : <Sparkles color="#208aef" size={17} />}
               <Text className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
@@ -156,14 +156,14 @@ export default function NewSession() {
                 <Text className="text-sm font-medium text-foreground">Agent model</Text>
                 <Text className="text-xs text-muted-foreground">Choose a provider</Text>
               </View>
-              <Card className="gap-0 overflow-hidden rounded-2xl border-border/70 p-1 shadow-none">
+              <Card className="gap-0 overflow-hidden rounded-xl border-border p-1 shadow-none">
                 {models.map((model) => (
                   <Pressable
                     key={`${model.providerId}:${model.id}`}
                     accessibilityRole="radio"
                     accessibilityState={{ checked: model.id === modelId }}
                     onPress={() => setModelId(model.id)}
-                    className={`min-h-14 flex-row items-center justify-between rounded-xl border-b border-border/50 px-3 py-2 ${model.id === modelId ? 'bg-secondary' : ''}`}
+                    className={`min-h-14 flex-row items-center justify-between rounded-xl border-b border-border px-3 py-2 ${model.id === modelId ? 'bg-secondary' : ''}`}
                   >
                     <View className="flex-1">
                       <Text className="font-medium text-foreground">{model.name}</Text>
@@ -201,7 +201,7 @@ export default function NewSession() {
           {error ? <Text className="mt-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</Text> : null}
         </ScrollView>
         <View
-          className="border-t border-border/60 bg-background px-4 pt-3"
+          className="border-t border-border bg-background px-4 pt-3"
           style={{ flexShrink: 0, paddingBottom: Math.max(insets.bottom + 8, 8) }}
         >
           <Button
