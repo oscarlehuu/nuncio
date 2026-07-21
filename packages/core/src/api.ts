@@ -601,9 +601,17 @@ export async function fetchGitBlame(id: string, path: string): Promise<GitBlameD
   return res.json();
 }
 
-export async function fetchGitHistory(id: string, limit?: number): Promise<GitHistoryDto> {
+export async function fetchGitHistory(
+  id: string,
+  limitOrOptions?: number | { limit?: number; branch?: string },
+): Promise<GitHistoryDto> {
+  const options =
+    typeof limitOrOptions === 'number' || limitOrOptions == null
+      ? { limit: limitOrOptions }
+      : limitOrOptions;
   const params = new URLSearchParams();
-  if (limit != null) params.set('limit', String(limit));
+  if (options.limit != null) params.set('limit', String(options.limit));
+  if (options.branch?.trim()) params.set('branch', options.branch.trim());
   const query = params.toString() ? `?${params}` : '';
   const res = await apiFetch(`/api/sessions/${id}/git/history${query}`);
   if (!res.ok) throw new Error('Failed to fetch history');

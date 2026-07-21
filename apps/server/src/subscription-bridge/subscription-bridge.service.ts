@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { DatabaseService } from '../db/database.service';
 import { SettingsService } from '../settings/settings.service';
 import type { ModelItemDto, ModelProviderDto } from '../models/models.types';
+import { ultracodeOption } from '../agents/providers/claude-agent.models';
+import { defaultCodexReasoningEffortOption } from '../agents/providers/codex-model-options';
 import {
   codexModelsForClaudePicker,
   isCodexBridgeModelId,
@@ -385,6 +387,7 @@ export class SubscriptionBridgeService implements OnModuleInit, OnModuleDestroy 
       name: model.displayName,
       sub: 'via Subscription bridge',
       badge: 'Codex sub',
+      options: [defaultCodexReasoningEffortOption(), ultracodeOption()],
     }));
 
     return catalog.map((provider) => {

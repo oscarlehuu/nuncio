@@ -9,13 +9,10 @@ import type { ModelProviderDto } from '../../models/models.types';
  * `id` is `claude:<value>` where `<value>` is the exact model string the SDK's
  * `options.model` / `setModel()` accept (the provider strips the `claude:`
  * prefix). Effort options mirror the SDK's supported levels; Haiku has no effort
- * support and so exposes no effort option. `ultracode` is Claude Code's own top
- * effort (xhigh reasoning + standing permission to orchestrate multi-agent
- * dynamic workflows) — the SDK forwards the string verbatim to the Claude Code
- * executable, which only offers it on xhigh-capable models.
+ * support and so exposes no effort option.
  */
 
-const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'] as const;
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 const DEFAULT_EFFORT = 'high';
 
 function effortOption(): ModelOptionDescriptorDto {
@@ -30,6 +27,20 @@ function effortOption(): ModelOptionDescriptorDto {
       isDefault: level === DEFAULT_EFFORT,
     })),
   };
+}
+
+/** Claude Code session flag: xhigh + standing dynamic-workflow orchestration (SDK Settings.ultracode). */
+export function ultracodeOption(): ModelOptionDescriptorDto {
+  return {
+    id: 'ultracode',
+    label: 'Ultracode',
+    type: 'boolean',
+    defaultValue: false,
+  };
+}
+
+function effortfulModelOptions(): ModelOptionDescriptorDto[] {
+  return [effortOption(), ultracodeOption()];
 }
 
 export const CLAUDE_STATIC_MODELS: ModelProviderDto[] = [
@@ -48,19 +59,19 @@ export const CLAUDE_STATIC_MODELS: ModelProviderDto[] = [
             id: 'claude:claude-fable-5[1m]',
             name: 'Fable',
             sub: 'Most capable',
-            options: [effortOption()],
+            options: effortfulModelOptions(),
           },
           {
             id: 'claude:opus[1m]',
             name: 'Opus',
             sub: 'High capability',
-            options: [effortOption()],
+            options: effortfulModelOptions(),
           },
           {
             id: 'claude:sonnet',
             name: 'Sonnet',
             sub: 'Balanced',
-            options: [effortOption()],
+            options: effortfulModelOptions(),
           },
           {
             id: 'claude:haiku',

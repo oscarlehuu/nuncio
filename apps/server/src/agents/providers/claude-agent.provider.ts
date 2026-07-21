@@ -242,24 +242,38 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
     const active = this.activeSessions.get(sessionId);
     if (!active) return;
     await active.query.setModel(this.stripPrefix(model));
-    // Effort rides the same in-session switch: push a changed effort level to the
-    // live query so the next turn honors it without a restart. Model-gated models
-    // (Haiku) simply carry no effort option, so nothing is pushed.
+    // Ultracode + effort ride the in-session switch so the next turn honors them
+    // without a restart. Model-gated models (Haiku) carry no effort/ultracode options.
+    await this.applyUltracode(active, options);
     const effort = this.resolveEffort(options);
     if (effort) await this.applyEffort(active, effort);
   }
 
   /**
    * Push an effort change into a live query. `Settings.effortLevel` does not
-   * include `'max'` or `'ultracode'` (only `Options.effort` at query start does;
-   * ultracode also pairs xhigh with workflow orchestration that can't be toggled
-   * mid-session), so clamp both to the highest mid-session level rather than
-   * sending a value the SDK rejects.
+   * include `'max'` or Codex `'ultra'` (only `Options.effort` at query start does
+   * for max), so clamp max→xhigh and skip ultra for the flag layer.
    */
   private async applyEffort(active: ActiveClaudeSession, effort: string): Promise<void> {
     if (!active.query.applyFlagSettings) return;
-    const effortLevel = effort === 'max' || effort === 'ultracode' ? 'xhigh' : effort;
+    if (effort === 'ultra') return;
+    const effortLevel = effort === 'max' ? 'xhigh' : effort;
     await active.query.applyFlagSettings({ effortLevel });
+  }
+
+  private async applyUltracode(
+    active: ActiveClaudeSession,
+    options: ModelOptionsMap | null | undefined,
+  ): Promise<void> {
+    if (!active.query.applyFlagSettings) return;
+    if (this.resolveUltracode(options)) {
+      await active.query.applyFlagSettings({ ultracode: true, enableWorkflows: true });
+      return;
+    }
+    // Explicit false clears the session flag; absent key leaves prior state alone.
+    if (options && Object.prototype.hasOwnProperty.call(options, 'ultracode')) {
+      await active.query.applyFlagSettings({ ultracode: false });
+    }
   }
 
   protected disposeRuntime(sessionId: string): void {
@@ -492,6 +506,7 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
       ? await this.subscriptionBridge.resolveClaudeSdkEnv(model)
       : null;
     const effort = this.resolveEffort(context.modelOptions);
+    const ultracode = this.resolveUltracode(context.modelOptions);
     const appendSystemPrompt = this.runtimeSystemInstructions(context);
     const trustedMcpToolNames = (context.tools?.tools ?? []).map(
       (tool) => `mcp__${CLAUDE_RUNTIME_MCP_SERVER}__${tool.name}`,
@@ -545,6 +560,7 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
         ...(model ? { model } : {}),
         ...(resume ? { resume } : {}),
         ...(effort ? { effort } : {}),
+        ...(ultracode ? { settings: { ultracode: true, enableWorkflows: true } } : {}),
         ...(mcpServers ? { mcpServers } : {}),
         ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
         // Bridge-routed GPT models force ANTHROPIC_BASE_URL at the local CLIProxyAPI.
@@ -912,6 +928,10 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
   private resolveEffort(options: ModelOptionsMap | null | undefined): string | undefined {
     const value = options?.effort ?? options?.reasoningEffort ?? options?.reasoning;
     return typeof value === 'string' && value.trim() ? value : undefined;
+  }
+
+  private resolveUltracode(options: ModelOptionsMap | null | undefined): boolean {
+    return options?.ultracode === true;
   }
 
   private stripPrefix(model: string | null | undefined): string | undefined {
