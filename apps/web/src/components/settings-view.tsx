@@ -13,7 +13,6 @@ import {
   SlidersHorizontal,
   Smartphone,
   Gauge,
-  Terminal,
   UsersRound,
   Wrench,
 } from 'lucide-react';
@@ -71,8 +70,6 @@ type SettingsSectionId =
   | 'general'
   | 'appearance'
   | 'providers'
-  | 'subscription-bridge'
-  | 'tool-updates'
   | 'usage'
   | 'source-control'
   | 'mcp-tools'
@@ -88,8 +85,6 @@ const SECTION_NAV_ITEMS: ReadonlyArray<SettingsSectionNavItem & { id: SettingsSe
   { id: 'general', label: 'General', icon: Settings2 },
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'providers', label: 'Providers', icon: Bot },
-  { id: 'subscription-bridge', label: 'Subscription bridge', icon: SubscriptionBridgeIcon },
-  { id: 'tool-updates', label: 'Tool updates', icon: Terminal },
   { id: 'usage', label: 'Usage', icon: Gauge },
   { id: 'source-control', label: 'Source control', icon: GitPullRequest },
   { id: 'mcp-tools', label: 'MCP & Tools', icon: Puzzle },
@@ -104,6 +99,9 @@ const SECTION_NAV_ITEMS: ReadonlyArray<SettingsSectionNavItem & { id: SettingsSe
 
 const VALID_SECTION_IDS = new Set<SettingsSectionId>(SECTION_NAV_ITEMS.map((item) => item.id));
 
+/** Legacy nav ids that now live as subsections under Providers. */
+const PROVIDERS_ALIASES = new Set(['subscription-bridge', 'tool-updates']);
+
 /**
  * Initial pane, honoring a `?section=<id>` deep-link so an external entry point
  * (the desktop tray's "Pair mobile device") can land straight on the Mobile section.
@@ -112,6 +110,7 @@ const VALID_SECTION_IDS = new Set<SettingsSectionId>(SECTION_NAV_ITEMS.map((item
 function initialSection(): SettingsSectionId {
   if (typeof window === 'undefined') return 'appearance';
   const requested = new URLSearchParams(window.location.search).get('section');
+  if (requested && PROVIDERS_ALIASES.has(requested)) return 'providers';
   return requested && VALID_SECTION_IDS.has(requested as SettingsSectionId)
     ? (requested as SettingsSectionId)
     : 'appearance';
@@ -162,7 +161,7 @@ const PROVIDER_METAS: Record<string, ProviderMetaInfo> = {
   },
 };
 
-/** AI engines shown in Settings → Providers (bridge + tool updates are their own sections). */
+/** AI engines shown in Settings → Providers (bridge + tool updates follow as page sections). */
 const AI_PROVIDER_IDS = ['cursor', 'pi', 'claude', 'codex', 'devin'] as const;
 
 // Forge automation flags live in the 'advanced' registry category but read most
@@ -338,7 +337,7 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
       <div className="flex items-start gap-3">
         <SubscriptionBridgeIcon className="size-6 text-foreground/80 flex-shrink-0 mt-0.5" />
         <div className="min-w-0">
-          <h2 className="text-ui-lg font-medium text-foreground">Subscription bridge</h2>
+          <h2 className="text-ui-lg font-medium text-muted-foreground">Subscription bridge</h2>
           <p className="text-ui text-muted-foreground leading-normal">
             {subscriptionBridgeSubtitle(bridgeStatus)}
           </p>
@@ -353,6 +352,23 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
         <SubscriptionBridgeSettingsSection status={bridgeStatus} onStatus={setBridgeStatus} />
       </div>
     </section>
+  );
+
+  const renderToolUpdatesSection = () => (
+    <section>
+      <h2 className="mb-2 text-ui-lg font-medium text-muted-foreground">Tool updates</h2>
+      <div className="overflow-hidden rounded-lg border border-border bg-card">
+        <ProviderUpdateSettingsSection />
+      </div>
+    </section>
+  );
+
+  const renderProvidersPage = () => (
+    <div className="space-y-6">
+      {renderProviderGroup('Providers', [...AI_PROVIDER_IDS])}
+      {renderSubscriptionBridgeSection()}
+      {renderToolUpdatesSection()}
+    </div>
   );
 
   const renderSettingGroup = (title: string, rows: Setting[], emptyText: string) => (
@@ -468,16 +484,7 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
       resultSections.push(<div key="subscription-bridge">{renderSubscriptionBridgeSection()}</div>);
     }
     if (toolUpdatesMatch) {
-      resultSections.push(
-        <div key="tool-updates">
-          <section>
-            <h2 className="mb-2 text-ui-lg font-medium text-muted-foreground">Tool updates</h2>
-            <div className="overflow-hidden rounded-lg border border-border bg-card">
-              <ProviderUpdateSettingsSection />
-            </div>
-          </section>
-        </div>,
-      );
+      resultSections.push(<div key="tool-updates">{renderToolUpdatesSection()}</div>);
     }
     const matchingForgeAutomation = filterSettings(forgeAutomation, query);
     const hasSourceProviderMatch = ['github', 'gitlab'].some((id) => renderProviderRow(id, query));
@@ -555,18 +562,7 @@ export function SettingsView({ settings, onUpdate, onClear, onBack }: SettingsVi
       case 'appearance':
         return <AppearanceSettingsSection />;
       case 'providers':
-        return renderProviderGroup('Providers', [...AI_PROVIDER_IDS]);
-      case 'subscription-bridge':
-        return renderSubscriptionBridgeSection();
-      case 'tool-updates':
-        return (
-          <section>
-            <h2 className="mb-2 text-ui-lg font-medium text-muted-foreground">Tool updates</h2>
-            <div className="overflow-hidden rounded-lg border border-border bg-card">
-              <ProviderUpdateSettingsSection />
-            </div>
-          </section>
-        );
+        return renderProvidersPage();
       case 'usage':
         return <UsageSettingsSection />;
       case 'source-control':
