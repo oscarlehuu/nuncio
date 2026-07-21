@@ -251,12 +251,14 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
 
   /**
    * Push an effort change into a live query. `Settings.effortLevel` does not
-   * include `'max'` (only `Options.effort` at query start does), so clamp it to
-   * the highest mid-session level rather than sending a value the SDK rejects.
+   * include `'max'` or `'ultracode'` (only `Options.effort` at query start does;
+   * ultracode also pairs xhigh with workflow orchestration that can't be toggled
+   * mid-session), so clamp both to the highest mid-session level rather than
+   * sending a value the SDK rejects.
    */
   private async applyEffort(active: ActiveClaudeSession, effort: string): Promise<void> {
     if (!active.query.applyFlagSettings) return;
-    const effortLevel = effort === 'max' ? 'xhigh' : effort;
+    const effortLevel = effort === 'max' || effort === 'ultracode' ? 'xhigh' : effort;
     await active.query.applyFlagSettings({ effortLevel });
   }
 
