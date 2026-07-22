@@ -199,13 +199,16 @@ export function SessionChangesPanel({
         }
       }
       setCommitMessage('');
-      await load();
     } catch (error) {
       const messageText = error instanceof Error ? error.message : 'Git action failed';
       if (toastId) toast.error(messageText, { id: toastId });
       else toast.error(messageText);
     } finally {
       setCommitting(false);
+      // Reload even on a mid-chain failure: a commit that landed before a
+      // failed push must be reflected (otherwise retrying re-commits nothing
+      // and the panel keeps offering the wrong action).
+      await load();
     }
   };
 
@@ -223,6 +226,9 @@ export function SessionChangesPanel({
   const hasStash = stash.length > 0;
   const hasHistory = (history?.commits.length ?? 0) > 0;
   const hasFiles = files.length > 0;
+  // Staged-only work leaves the unstaged diff empty but the tree dirty — the
+  // commit box must still show (commit auto-stages, so it can commit the index).
+  const showCommit = hasFiles || !branchSync.clean;
   const fullyEmpty =
     branchSync.clean &&
     !hasFiles &&
@@ -319,7 +325,7 @@ export function SessionChangesPanel({
           </div>
         )}
 
-        {hasFiles && (
+        {showCommit && (
           <div className="border-b border-border/50 px-3 py-3">
             <div className="mb-2 text-sm font-medium">Commit Message</div>
             <div className="relative mb-2">
@@ -386,7 +392,7 @@ export function SessionChangesPanel({
           </div>
         )}
 
-        {!hasFiles && !fullyEmpty && (
+        {!showCommit && !fullyEmpty && (
           <div className="border-b border-border/50 px-3 py-2 text-xs text-muted-foreground">
             Working tree clean.
           </div>

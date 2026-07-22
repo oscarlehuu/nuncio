@@ -182,6 +182,15 @@ describe('SessionChangesPanel', () => {
       expect(commitButton).toBeEnabled();
     });
 
+    it('shows the commit box for staged-only changes (empty unstaged diff, dirty status)', async () => {
+      vi.mocked(fetchSessionDiff).mockResolvedValue({ files: [], truncated: false, omittedFiles: 0 });
+      vi.mocked(fetchGitBranchSync).mockResolvedValue({ ...SYNC_CLEAN, clean: false });
+      render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+      expect(await screen.findByPlaceholderText(/commit message/i)).toBeInTheDocument();
+      expect(screen.queryByText(/working tree clean/i)).not.toBeInTheDocument();
+    });
+
     it('does not render the commit box when the working tree is clean', async () => {
       vi.mocked(fetchSessionDiff).mockResolvedValue({ files: [], truncated: false, omittedFiles: 0 });
       render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
@@ -333,7 +342,9 @@ describe('SessionChangesPanel', () => {
       ],
       incoming: [],
       conflicts: [],
-      clean: false,
+      // Porcelain-clean: outgoing commits do not dirty the working tree (and a
+      // dirty tree would now correctly surface the commit box instead).
+      clean: true,
     });
 
     render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);

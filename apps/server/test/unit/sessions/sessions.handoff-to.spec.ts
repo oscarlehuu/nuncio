@@ -140,6 +140,57 @@ describe('SessionsService.handoffToProvider', () => {
     ).rejects.toThrow(BadRequestException);
   });
 
+  it('blocks steering a source whose worktree has a live successor', async () => {
+    const source = repo.create({
+      prompt: 'src',
+      provider: 'cursor',
+      projectPath: '/tmp/nuncio-handoff-proj',
+      worktreePath: '/tmp/nuncio-handoff-wt',
+      branch: 'nuncio/src-task',
+    });
+    setStatus(source.id, 'IDLE');
+    repo.create({
+      prompt: 'continue',
+      provider: 'cursor',
+      priorSessionId: source.id,
+      projectPath: '/tmp/nuncio-handoff-proj',
+      worktreePath: '/tmp/nuncio-handoff-wt',
+      branch: 'nuncio/src-task',
+    });
+
+    await expect(service.steer(source.id, 'keep going')).rejects.toThrow(BadRequestException);
+  });
+
+  it('blocks a second handoff while the successor is live, and allows it once archived', async () => {
+    const source = makeIdleSource({
+      worktreePath: '/tmp/nuncio-handoff-wt2',
+      branch: 'nuncio/src2',
+    });
+    const successor = repo.create({
+      prompt: 'continue',
+      provider: 'cursor',
+      priorSessionId: source.id,
+      worktreePath: '/tmp/nuncio-handoff-wt2',
+      branch: 'nuncio/src2',
+    });
+
+    await expect(service.handoffToProvider(source.id, { provider: 'cursor' })).rejects.toThrow(
+      BadRequestException,
+    );
+
+    setStatus(successor.id, 'ARCHIVED');
+    const next = await service.handoffToProvider(source.id, { provider: 'cursor' });
+    expect(next.priorSessionId).toBe(source.id);
+  });
+
+  it('surfaces handoff links in lineage (successor as child, source as ancestor)', async () => {
+    const source = makeIdleSource();
+    const next = await service.handoffToProvider(source.id, { provider: 'cursor' });
+
+    expect(service.lineage(source.id).children.map((c) => c.id)).toContain(next.id);
+    expect(service.lineage(next.id).ancestors.map((a) => a.id)).toContain(source.id);
+  });
+
   it('persists priorSessionId through the repository create path', () => {
     const source = repo.create({ prompt: 'src', provider: 'cursor' });
     const next = repo.create({ prompt: 'next', provider: 'cursor', priorSessionId: source.id });

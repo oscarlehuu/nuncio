@@ -119,6 +119,28 @@ describe('SessionsService.applyAutoBranch', () => {
     expect(repo.findById(session.id)?.branch).toBe(worktree.branch);
   });
 
+  it('create() rollback never deletes an adopted (handoff) worktree', async () => {
+    const worktree = await git.createWorktree(repoDir, 'main', 'ab9', 'source task');
+    repo.create({ id: 'ab9', prompt: 'source', provider: 'cursor' });
+
+    // Duplicate id forces the insert to fail AFTER the adoption path resolved
+    // the source worktree — rollback must leave that worktree untouched.
+    await expect(
+      service.create({
+        id: 'ab9',
+        prompt: 'handoff successor',
+        provider: 'cursor',
+        projectPath: repoDir,
+        worktreePath: worktree.worktreePath,
+        branch: worktree.branch,
+      }),
+    ).rejects.toThrow();
+
+    await expect(
+      readGitAsync(worktree.worktreePath, ['rev-parse', '--abbrev-ref', 'HEAD']),
+    ).resolves.toBe(worktree.branch);
+  });
+
   it('is a no-op for sessions that already carry a pull request', async () => {
     const { session, worktree } = await makeWorktreeSession('ab4');
     repo.updateForgeState(session.id, {

@@ -7,6 +7,8 @@ import { SettingsService } from '../settings/settings.service';
 
 /** Bound the patch fed to the completion so a huge diff can't blow the prompt. */
 const DIFF_PROMPT_MAX_BYTES = 24 * 1024;
+const FILE_LIST_PROMPT_MAX_BYTES = 4 * 1024;
+const SUBJECTS_PROMPT_MAX_BYTES = 4 * 1024;
 const COMPLETION_TIMEOUT_MS = 60_000;
 
 export const COMMIT_MESSAGE_MODEL_SETTING = 'NUNCIO_COMMIT_MESSAGE_MODEL';
@@ -70,10 +72,18 @@ export class GitCommitMessageService {
     const model = this.settings?.resolve(COMMIT_MESSAGE_MODEL_SETTING)?.trim() || null;
     const instruction = await this.resolveInstruction(provider, workingDir, model);
 
-    const diff = await this.git.diff(workingDir, {});
-    const fileList = status.files
-      .map((file) => `${(file.index + file.workTree).trim() || 'M'} ${file.path}`)
-      .join('\n');
+    // Diff against HEAD so already-staged changes are described too — the
+    // commit stages everything, so the prompt must see everything. A repo with
+    // no commits yet has no HEAD; fall back to the unstaged diff there.
+    const diff = await this.git
+      .diff(workingDir, { base: 'HEAD' })
+      .catch(() => this.git.diff(workingDir, {}));
+    const fileList = truncateHeadBytes(
+      status.files
+        .map((file) => `${(file.index + file.workTree).trim() || 'M'} ${file.path}`)
+        .join('\n'),
+      FILE_LIST_PROMPT_MAX_BYTES,
+    );
     const prompt = [
       'Changed files:',
       fileList,
@@ -119,7 +129,7 @@ export class GitCommitMessageService {
 
       const raw = await withTimeout(
         provider.completeOneShot!({
-          prompt: `Recent commit subjects from this repository:\n${subjects.join('\n')}`,
+          prompt: `Recent commit subjects from this repository:\n${truncateHeadBytes(subjects.join('\n'), SUBJECTS_PROMPT_MAX_BYTES)}`,
           systemPrompt: LEARN_STYLE_SYSTEM_PROMPT,
           model,
           cwd: workingDir,

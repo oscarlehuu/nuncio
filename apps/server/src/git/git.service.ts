@@ -551,6 +551,17 @@ export class GitService {
     if (exists) {
       throw new BadRequestException(`Branch ${newBranch} already exists`);
     }
+    // A branch that already has an upstream was pushed — renaming it locally
+    // would desync the remote and any PR pointing at it.
+    const hasUpstream = await git(
+      ['rev-parse', '--verify', '--quiet', `${oldBranch}@{upstream}`],
+      worktreePath,
+    )
+      .then(() => true)
+      .catch(() => false);
+    if (hasUpstream) {
+      throw new BadRequestException(`Branch ${oldBranch} is already pushed — refusing to rename`);
+    }
     await git(['branch', '-m', oldBranch, newBranch], worktreePath);
   }
 

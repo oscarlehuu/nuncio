@@ -81,11 +81,15 @@ const MANY_SUBJECTS = [
 
 describe('GitCommitMessageService', () => {
   it('generates a message from the working-tree diff via a one-shot completion', async () => {
-    const { service, inputAt } = makeService({ completions: ['feat: add greeting helper'] });
+    const { service, git, inputAt } = makeService({ completions: ['feat: add greeting helper'] });
 
     const result = await service.generate('/repo/worktree');
 
     expect(result.message).toBe('feat: add greeting helper');
+    // Staged changes must be described too: the prompt diff is vs HEAD.
+    expect((git as unknown as { diff: jest.Mock }).diff).toHaveBeenCalledWith('/repo/worktree', {
+      base: 'HEAD',
+    });
     const input = inputAt(0);
     expect(input.prompt).toContain('+function greet() {}');
     expect(input.prompt).toContain('app.js');

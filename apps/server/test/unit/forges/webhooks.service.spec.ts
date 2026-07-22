@@ -70,6 +70,7 @@ describe('WebhooksService (Phase 4)', () => {
   let projectListFailures: number;
   let forgeStateUpdateFailures: number;
   let clearWorktreeMetadataFailures: number;
+  let activeSuccessor: { id: string } | null;
   let issueSessions: Map<string, { id: string }>;
   let sessionsStub: {
     create: (dto: CreateSessionDto) => Promise<{ id: string }>;
@@ -152,6 +153,7 @@ describe('WebhooksService (Phase 4)', () => {
     projectListFailures = 0;
     forgeStateUpdateFailures = 0;
     clearWorktreeMetadataFailures = 0;
+    activeSuccessor = null;
     issueSessions = new Map();
     sessionsStub = {
       create: async (dto) => {
@@ -238,6 +240,7 @@ describe('WebhooksService (Phase 4)', () => {
           if (candidate?.status === 'ARCHIVED' && !options?.includeArchived) return null;
           return candidate;
         },
+        findActiveSuccessor: () => activeSuccessor,
         updateForgeState: (id: string, state: Record<string, unknown>) => {
           if (forgeStateUpdateFailures-- > 0) throw new Error('forge state unavailable');
           forgeStateUpdates.push({ id, state });
@@ -861,6 +864,21 @@ describe('WebhooksService (Phase 4)', () => {
       subjectId: 'octo/nuncio#7:cleanup',
       payload: expect.objectContaining({ reason: 'dirty-worktree' }),
     }));
+  });
+
+  it('skips merged cleanup while a handoff successor shares the worktree', async () => {
+    ownerSession = {
+      id: 'sess-pr', status: 'IDLE', projectPath: KNOWN_PATH, pullRequestNumber: 7,
+      worktreePath: '/worktrees/sess-pr', baseBranch: 'main',
+    } as never;
+    activeSuccessor = { id: 'succ-1' };
+    const result = await service.handleEvent('github', {
+      ...makeEvent({ deliveryId: 'merged-handed-off' }), kind: 'pull_request', action: 'closed',
+      merged: true, url: 'https://github.com/octo/nuncio/pull/7', labels: [],
+    } as never);
+
+    expect(result).toMatchObject({ reason: 'worktree-handed-off' });
+    expect(removeWorktreeCalls).toHaveLength(0);
   });
 
   it('skips merged cleanup for unpushed commits', async () => {

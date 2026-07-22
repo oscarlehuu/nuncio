@@ -332,6 +332,29 @@ export class SessionsRepository {
   }
 
   /** Direct tree children of a session, oldest first (insertion order on a created_at tie). */
+  /** Handoff successors of a session (sessions continuing it via priorSessionId). */
+  successorsOf(priorSessionId: string): SessionDto[] {
+    const rows = this.database.db
+      .prepare<SessionRow, [string]>(
+        'SELECT * FROM sessions WHERE prior_session_id = ? ORDER BY created_at ASC, rowid ASC',
+      )
+      .all(priorSessionId);
+    return rows.map(toDto);
+  }
+
+  /**
+   * The non-archived handoff successor that co-owns a worktree with its
+   * source, if any — the guard that keeps two live sessions off one checkout.
+   */
+  findActiveSuccessor(priorSessionId: string, worktreePath: string): SessionDto | null {
+    const row = this.database.db
+      .prepare<SessionRow, [string, string]>(
+        "SELECT * FROM sessions WHERE prior_session_id = ? AND worktree_path = ? AND status != 'ARCHIVED' ORDER BY created_at DESC LIMIT 1",
+      )
+      .get(priorSessionId, worktreePath);
+    return row ? toDto(row) : null;
+  }
+
   childrenOf(parentSessionId: string): SessionDto[] {
     const rows = this.database.db
       .prepare<SessionRow, [string]>(

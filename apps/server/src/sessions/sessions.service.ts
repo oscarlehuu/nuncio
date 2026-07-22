@@ -368,6 +368,9 @@ export class SessionsService implements OnModuleDestroy {
     let baseBranch: string | undefined;
     let worktreePath: string | undefined;
     let branch: string | undefined;
+    // Only a worktree created BY this call may be rolled back on failure — an
+    // adopted (handoff) worktree belongs to the source session.
+    let createdWorktree = false;
 
     // Resolve the engine profile ONCE here (ADR-004: adapters get finished
     // strings). It drives both the preamble wrappers and the B4 context file.
@@ -381,6 +384,7 @@ export class SessionsService implements OnModuleDestroy {
         workspace = undefined;
         const slug = input.prompt.trim().split('\n')[0] ?? 'task';
         const worktree = await this.git.createWorktree(projectPath, baseBranch, id, slug);
+        createdWorktree = true;
         worktreePath = worktree.worktreePath;
         branch = input.pushBranch?.trim() || worktree.branch;
         baseBranch = worktree.baseBranch;
@@ -455,7 +459,7 @@ export class SessionsService implements OnModuleDestroy {
         cursorBackend: 'sdk',
       });
     } catch (error) {
-      if (worktreePath && projectPath) {
+      if (createdWorktree && worktreePath && projectPath) {
         try {
           await this.git.removeWorktree(projectPath, worktreePath);
         } catch {
@@ -712,10 +716,14 @@ export class SessionsService implements OnModuleDestroy {
    * renderEventsSince is the sanctioned lossy carrier.
    */
   async handoffToProvider(id: string, input: HandoffToProviderDto): Promise<SessionDto> {
-    const source = this.requireSession(id);
+    // Crew-owned members are read-only outside Crew controls — a handoff would
+    // start a Solo provider on a Crew-leased workspace.
+    const source = this.requirePublicMutableSession(id);
     if (source.status !== 'IDLE' && source.status !== 'PAUSED' && source.status !== 'ERROR') {
       throw new BadRequestException(`Cannot hand off session in status ${source.status}`);
     }
+    // A source whose worktree already has a live successor cannot hand off again.
+    this.assertWorktreeNotHandedOff(source);
     const targetId = input.provider?.trim();
     if (!targetId) throw new BadRequestException('provider is required');
     await this.agents.getAvailable(targetId);
@@ -778,6 +786,7 @@ export class SessionsService implements OnModuleDestroy {
     if (current.status !== 'IDLE' && current.status !== 'PAUSED' && current.status !== 'ERROR') {
       throw new BadRequestException(`Cannot continue session in status ${current.status}`);
     }
+    this.assertWorktreeNotHandedOff(current);
     const prompt = composeSessionPreamble({
       ...(input.contextBrief ? { brief: renderHandoffBrief(input.contextBrief) } : {}),
       prompt: input.prompt,
@@ -860,8 +869,24 @@ export class SessionsService implements OnModuleDestroy {
     attachments?: AgentAttachment[],
     origin?: string,
   ): Promise<SessionDto> {
-    this.requirePublicMutableSession(id);
+    const session = this.requirePublicMutableSession(id);
+    this.assertWorktreeNotHandedOff(session);
     return this.steerInternal(id, message, forceResume, attachments, origin);
+  }
+
+  /**
+   * After a cross-engine handoff the successor owns the shared worktree; the
+   * source must not start new provider runs on it or two agents would mutate
+   * one checkout concurrently. Archiving the successor releases the source.
+   */
+  private assertWorktreeNotHandedOff(session: SessionDto): void {
+    if (!session.worktreePath) return;
+    const successor = this.sessions.findActiveSuccessor(session.id, session.worktreePath);
+    if (successor) {
+      throw new BadRequestException(
+        `This session's worktree was handed off to session ${successor.id} — continue there, or archive it to reclaim this session.`,
+      );
+    }
   }
 
   steerInBackground(
@@ -1128,18 +1153,23 @@ export class SessionsService implements OnModuleDestroy {
     const session = this.sessions.findById(id);
     if (!session) throw new NotFoundException('Session not found');
 
+    // Handoff chains (priorSessionId) are lineage too: walk them like parents
+    // and surface successors alongside spawned children.
     const ancestors: SessionRefDto[] = [];
     const visited = new Set<string>([id]);
-    let cursor = session.parentSessionId;
+    let cursor = session.parentSessionId ?? session.priorSessionId;
     while (cursor && ancestors.length < ANCESTOR_WALK_CAP && !visited.has(cursor)) {
       visited.add(cursor);
       const parent = this.sessions.findById(cursor);
       if (!parent) break;
       ancestors.push(toSessionRef(parent));
-      cursor = parent.parentSessionId;
+      cursor = parent.parentSessionId ?? parent.priorSessionId;
     }
 
-    const children = this.sessions.childrenOf(id).map(toSessionRef);
+    const children = [
+      ...this.sessions.childrenOf(id),
+      ...this.sessions.successorsOf(id),
+    ].map(toSessionRef);
     return { ancestors, children };
   }
 

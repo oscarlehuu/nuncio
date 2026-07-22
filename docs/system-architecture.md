@@ -1214,9 +1214,13 @@ session on the target provider** — never a native resume — seeded through th
 - **Workspace adoption:** the new session reuses the source's working dir. In `create()`'s
   non-worktree branch, an explicit `input.worktreePath`/`input.branch` adopts the source's
   existing worktree instead of creating a new one (no `useWorktree`); a local session passes
-  its `workspace` through. NOTE: source and successor rows then share one `worktree_path` —
-  the successor is the active owner; resuming the source while the successor runs is
-  currently unguarded (documented risk, revisit if it bites).
+  its `workspace` through. Source and successor rows share one `worktree_path`; the
+  successor is the active owner and this is **guarded**: `assertWorktreeNotHandedOff` blocks
+  `steer`/`continueExistingSession`/a second handoff on the source while a non-archived
+  successor exists (`SessionsRepository.findActiveSuccessor`), the PR-lifecycle webhook skips
+  worktree cleanup with reason `worktree-handed-off`, and `create()` rollback only removes a
+  worktree it created itself (`createdWorktree` flag) — never an adopted one. Handoff also
+  requires a public-mutable source (Crew-owned members are rejected).
 - **Model:** explicit `model` wins; same-engine handoff keeps the source model; a different
   engine falls back to its own default.
 - **Lineage:** `priorSessionId` (now settable through `CreateSessionDto` → repository
