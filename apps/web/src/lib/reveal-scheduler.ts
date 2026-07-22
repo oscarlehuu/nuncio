@@ -73,6 +73,11 @@ export class RevealScheduler {
           const instantCps = added / dt;
           this.cpsEma = this.emaAlpha * instantCps + (1 - this.emaAlpha) * this.cpsEma;
         }
+      } else {
+        // First growth after mount: show it whole, immediately. Time-to-first-
+        // text is perceived latency — pacing starts from the second chunk,
+        // once there is a cadence to smooth against.
+        this.revealedExact = targetLen;
       }
       this.lastChunkAt = now;
     }

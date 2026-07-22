@@ -41,12 +41,20 @@ describe('RevealScheduler', () => {
     expect(s.done).toBe(true);
   });
 
+  it('reveals the first chunk instantly — time-to-first-text is never paced', () => {
+    const s = new RevealScheduler(0);
+    s.observe(200, 0);
+    expect(s.revealed).toBe(200);
+    expect(s.done).toBe(true);
+  });
+
   it('reset() snaps revealed and target to a length and clears timing', () => {
     const s = new RevealScheduler(0);
-    s.observe(500, 0);
-    s.tick(0);
-    s.tick(200);
-    expect(s.revealed).toBeLessThan(500);
+    s.observe(20, 0); // first chunk: instant primer
+    s.observe(520, 500);
+    s.tick(500);
+    s.tick(700);
+    expect(s.revealed).toBeLessThan(520);
     s.reset(42);
     expect(s.revealed).toBe(42);
     expect(s.target).toBe(42);
@@ -55,32 +63,34 @@ describe('RevealScheduler', () => {
 
   it('flush() reveals the whole buffer instantly (turn end / interrupt / error)', () => {
     const s = new RevealScheduler(0);
-    s.observe(300, 0);
-    s.tick(0);
-    s.tick(100);
+    s.observe(20, 0); // first chunk: instant primer
+    s.observe(320, 500);
+    s.tick(500);
+    s.tick(600);
     expect(s.done).toBe(false);
-    expect(s.flush()).toBe(300);
-    expect(s.revealed).toBe(300);
+    expect(s.flush()).toBe(320);
+    expect(s.revealed).toBe(320);
     expect(s.done).toBe(true);
   });
 
-  it('reveals a burst gradually — monotonic, bounded, converged within a few seconds', () => {
+  it('reveals a later burst gradually — monotonic, bounded, converged within a few seconds', () => {
     const s = new RevealScheduler(0);
-    s.observe(300, 0);
-    s.tick(0); // prime the tick clock
+    s.observe(20, 0); // first chunk: instant primer
+    s.observe(320, 500);
+    s.tick(500); // prime the tick clock
 
     // Half-second in, some but not all of the burst is on screen.
-    runTicks(s, 16, 500);
-    expect(s.revealed).toBeGreaterThan(0);
-    expect(s.revealed).toBeLessThan(300);
+    runTicks(s, 516, 1000);
+    expect(s.revealed).toBeGreaterThan(20);
+    expect(s.revealed).toBeLessThan(320);
 
     // The bulk lands inside the ~1s lag window.
-    runTicks(s, 516, 1000);
-    expect(s.revealed).toBeGreaterThanOrEqual(150);
+    runTicks(s, 1016, 1500);
+    expect(s.revealed).toBeGreaterThanOrEqual(170);
 
     // And it fully converges (no permanent trailing).
-    runTicks(s, 1016, 4000);
-    expect(s.revealed).toBe(300);
+    runTicks(s, 1516, 4500);
+    expect(s.revealed).toBe(320);
     expect(s.done).toBe(true);
   });
 

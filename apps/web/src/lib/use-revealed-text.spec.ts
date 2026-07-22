@@ -49,7 +49,7 @@ describe('useRevealedText', () => {
     expect(result.current).toBe('done answer');
   });
 
-  it('shows text already present at mount immediately, then animates only new growth', () => {
+  it('shows mount text and the first chunk immediately, then paces later growth', () => {
     const { result, rerender } = renderHook(
       ({ t }) => useRevealedText(t, true, false),
       { initialProps: { t: 'Hello' } },
@@ -57,11 +57,19 @@ describe('useRevealedText', () => {
     // Pre-existing text is not withheld (opening a running session).
     expect(result.current).toBe('Hello');
 
-    // A big new chunk arrives while we watch → it reveals gradually, not at once.
-    const grown = 'Hello' + 'x'.repeat(400);
+    // The first chunk after mount shows whole, at once — time-to-first-text
+    // is perceived latency and is never paced.
+    const first = 'Hello world';
+    rerender({ t: first });
+    advance(16);
+    expect(result.current).toBe(first);
+    advance(500); // realistic inter-chunk gap so the rate estimate stays sane
+
+    // A later big chunk reveals gradually, not at once.
+    const grown = first + 'x'.repeat(400);
     rerender({ t: grown });
     advance(64); // a few frames in
-    expect(result.current.length).toBeGreaterThan('Hello'.length);
+    expect(result.current.length).toBeGreaterThan(first.length);
     expect(result.current.length).toBeLessThan(grown.length);
     expect(grown.startsWith(result.current)).toBe(true); // always a clean prefix
 
@@ -71,11 +79,13 @@ describe('useRevealedText', () => {
   });
 
   it('flushes instantly to the full buffer when streaming ends (turn end / interrupt / error)', () => {
-    const grown = 'partial' + 'y'.repeat(400);
+    const grown = 'partial!' + 'y'.repeat(400);
     const { result, rerender } = renderHook(
       ({ t, s }) => useRevealedText(t, s, false),
       { initialProps: { t: 'partial', s: true } },
     );
+    rerender({ t: 'partial!', s: true }); // first chunk: instant primer
+    advance(500);
     rerender({ t: grown, s: true });
     advance(32);
     expect(result.current.length).toBeLessThan(grown.length); // mid-reveal
@@ -86,11 +96,13 @@ describe('useRevealedText', () => {
   });
 
   it('flushes instantly when the user makes a text selection (copy stays truthful)', () => {
-    const grown = 'answer' + 'z'.repeat(400);
+    const grown = 'answer!' + 'z'.repeat(400);
     const { result, rerender } = renderHook(
       ({ t }) => useRevealedText(t, true, false),
       { initialProps: { t: 'answer' } },
     );
+    rerender({ t: 'answer!' }); // first chunk: instant primer
+    advance(500);
     rerender({ t: grown });
     advance(32);
     expect(result.current.length).toBeLessThan(grown.length);
@@ -106,11 +118,13 @@ describe('useRevealedText', () => {
   });
 
   it('flushes on pointer press, before the browser can build a selection range', () => {
-    const grown = 'answer' + 'z'.repeat(400);
+    const grown = 'answer!' + 'z'.repeat(400);
     const { result, rerender } = renderHook(
       ({ t }) => useRevealedText(t, true, false),
       { initialProps: { t: 'answer' } },
     );
+    rerender({ t: 'answer!' }); // first chunk: instant primer
+    advance(500);
     rerender({ t: grown });
     advance(32);
     expect(result.current.length).toBeLessThan(grown.length);
