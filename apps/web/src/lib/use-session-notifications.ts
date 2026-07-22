@@ -53,7 +53,7 @@ export interface NuncioDesktopServersApi {
   connect: (target: string) => Promise<{ ok: boolean; target?: string; error?: string }>;
 }
 
-export interface NuncioDesktopBrowserApi {
+interface NuncioDesktopBrowserApi {
   show: (payload: {
     id: string;
     url?: string;
@@ -81,12 +81,12 @@ export interface NuncioDesktopBrowserApi {
   onDesignModeExit?: (cb: (payload: { id: string }) => void) => () => void;
 }
 
-export interface NuncioDesktopShellSettings {
+interface NuncioDesktopShellSettings {
   /** Closing the window hides it to the menu-bar/tray instead of quitting. */
   closeToTray: boolean;
 }
 
-export interface NuncioDesktopShellApi {
+interface NuncioDesktopShellApi {
   getSettings: () => Promise<NuncioDesktopShellSettings>;
   setSettings: (
     settings: Partial<NuncioDesktopShellSettings>,
