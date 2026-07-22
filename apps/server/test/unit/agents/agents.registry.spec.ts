@@ -64,12 +64,49 @@ describe('AgentRegistry', () => {
     expect((await registry.available()).map((provider) => provider.id)).toEqual([]);
   });
 
-  it('prefers cursor as default when CURSOR_API_KEY is set', async () => {
-    // Cursor is a legacy engine; the default-preference ordering only applies
-    // when the legacy engines are shown.
+  it('prefers cursor as default when CURSOR_API_KEY is set and Nuncio Engine is unavailable', async () => {
+    // Cursor is a legacy engine; it can only win the default when shown.
+    // Nuncio Engine is stubbed unavailable so the outcome does not depend on
+    // the developer machine's pi credentials.
     process.env.NUNCIO_ENGINES_SHOW_LEGACY = '1';
     process.env.CURSOR_API_KEY = 'cursor_test_key';
-    const registry = await createRegistry();
+    const registry = await createRegistry(
+      Test.createTestingModule({
+        imports: [DatabaseModule, SessionsPersistenceModule, AgentsModule],
+      })
+        .overrideProvider(PiAgentProvider)
+        .useValue(stubAgentProvider('pi', 'Nuncio Engine', false)),
+    );
+
+    expect(await registry.defaultId()).toBe('cursor');
+  });
+
+  it('defaults to the visible Nuncio Engine over available hidden legacy engines', async () => {
+    const registry = await createRegistry(
+      Test.createTestingModule({
+        imports: [DatabaseModule, SessionsPersistenceModule, AgentsModule],
+      })
+        .overrideProvider(PiAgentProvider)
+        .useValue(stubAgentProvider('pi', 'Nuncio Engine', true))
+        .overrideProvider(CursorAgentProvider)
+        .useValue(stubAgentProvider('cursor', 'Cursor', true))
+        .overrideProvider(CodexAgentProvider)
+        .useValue(stubAgentProvider('codex', 'Codex', true)),
+    );
+
+    expect(await registry.defaultId()).toBe('pi');
+  });
+
+  it('falls back to a hidden available engine when nothing visible is available', async () => {
+    const registry = await createRegistry(
+      Test.createTestingModule({
+        imports: [DatabaseModule, SessionsPersistenceModule, AgentsModule],
+      })
+        .overrideProvider(PiAgentProvider)
+        .useValue(stubAgentProvider('pi', 'Nuncio Engine', false))
+        .overrideProvider(CursorAgentProvider)
+        .useValue(stubAgentProvider('cursor', 'Cursor', true)),
+    );
 
     expect(await registry.defaultId()).toBe('cursor');
   });
@@ -130,8 +167,7 @@ describe('AgentRegistry', () => {
     expect(provider.id).toBe('cursor');
   });
 
-  it('uses codex as default after cursor and before pi', async () => {
-    process.env.NUNCIO_ENGINES_SHOW_LEGACY = '1';
+  it('falls back through the hidden legacy order when nothing visible is available', async () => {
     const registry = await createRegistry(
       Test.createTestingModule({
         imports: [DatabaseModule, SessionsPersistenceModule, AgentsModule],
@@ -141,7 +177,7 @@ describe('AgentRegistry', () => {
         .overrideProvider(CodexAgentProvider)
         .useValue(stubAgentProvider('codex', 'Codex', true))
         .overrideProvider(PiAgentProvider)
-        .useValue(stubAgentProvider('pi', 'Nuncio Engine', true)),
+        .useValue(stubAgentProvider('pi', 'Nuncio Engine', false)),
     );
 
     expect(await registry.defaultId()).toBe('codex');
