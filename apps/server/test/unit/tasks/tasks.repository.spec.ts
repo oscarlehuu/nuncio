@@ -90,6 +90,24 @@ describe('TasksRepository', () => {
     expect(tasks.claimNextQueued()).toBeNull();
   });
 
+  it('keeps legacy Crew tasks out of public lists and the runnable queue', () => {
+    const legacy = tasks.create({ prompt: 'retired Crew work' });
+    const current = tasks.create({ prompt: 'current session work' });
+    module.get(DatabaseService).db
+      .prepare("UPDATE tasks SET execution_kind = 'crew-member', verify_owner = 'crew' WHERE id = ?")
+      .run(legacy.id);
+
+    expect(tasks.list().map((task) => task.id)).toEqual([current.id]);
+    expect(tasks.findUserFacingById(legacy.id)).toBeNull();
+    expect(tasks.claimNextQueued()?.id).toBe(current.id);
+    expect(tasks.claimNextQueued()).toBeNull();
+
+    const legacyStatus = module.get(DatabaseService).db
+      .prepare('SELECT status FROM tasks WHERE id = ?')
+      .get(legacy.id) as { status: string };
+    expect(legacyStatus.status).toBe('QUEUED');
+  });
+
   it('records the linked session and the outcome on finish', () => {
     const task = tasks.create({ prompt: 'outcome test' });
     tasks.claimNextQueued();

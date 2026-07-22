@@ -124,6 +124,92 @@ describe('DatabaseService schema + migration', () => {
     });
   });
 
+  it('retires active Crew tasks and attention items when opening a legacy database', () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-retire-crew-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
+
+    const oldDb = new Database(join(dataDir, 'nuncio.db'));
+    oldDb.exec(`
+      CREATE TABLE tasks (
+        id TEXT PRIMARY KEY,
+        prompt TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'QUEUED',
+        execution_kind TEXT NOT NULL DEFAULT 'session',
+        verify_owner TEXT NOT NULL DEFAULT 'session',
+        outcome_json TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        finished_at INTEGER
+      );
+      INSERT INTO tasks
+        (id, prompt, status, execution_kind, verify_owner, created_at, updated_at)
+      VALUES
+        ('crew-queued', 'queued', 'QUEUED', 'crew-member', 'crew', 1, 1),
+        ('crew-running', 'running', 'RUNNING', 'crew-member', 'crew', 2, 2),
+        ('crew-done', 'done', 'DONE', 'crew-member', 'crew', 3, 3),
+        ('session-queued', 'session', 'QUEUED', 'session', 'session', 4, 4);
+
+      CREATE TABLE attention_items (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        subject_id TEXT NOT NULL,
+        project_path TEXT,
+        severity INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        payload_json TEXT,
+        status TEXT NOT NULL DEFAULT 'open',
+        acknowledged_at INTEGER,
+        suppress_reraise INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        resolved_at INTEGER
+      );
+      INSERT INTO attention_items
+        (id, kind, subject_id, severity, title, status, created_at, updated_at)
+      VALUES
+        ('crew-blocked', 'crew-blocked', 'crew-1', 3, 'Crew blocked', 'open', 1, 1),
+        ('crew-run-blocked', 'crew-run-blocked', 'run-1', 3, 'Crew run blocked', 'open', 2, 2),
+        ('permission', 'permission', 'session-1', 3, 'Permission', 'open', 3, 3);
+    `);
+    oldDb.close();
+
+    db = new DatabaseService();
+
+    const tasks = db.db
+      .prepare('SELECT id, status, outcome_json, finished_at FROM tasks ORDER BY id')
+      .all() as Array<{
+      id: string;
+      status: string;
+      outcome_json: string | null;
+      finished_at: number | null;
+    }>;
+    expect(tasks.find((task) => task.id === 'crew-queued')).toMatchObject({
+      status: 'CANCELLED',
+      outcome_json: JSON.stringify({ reason: 'crew_subsystem_removed' }),
+    });
+    expect(tasks.find((task) => task.id === 'crew-running')).toMatchObject({
+      status: 'CANCELLED',
+      outcome_json: JSON.stringify({ reason: 'crew_subsystem_removed' }),
+    });
+    expect(tasks.find((task) => task.id === 'crew-queued')?.finished_at).not.toBeNull();
+    expect(tasks.find((task) => task.id === 'crew-running')?.finished_at).not.toBeNull();
+    expect(tasks.find((task) => task.id === 'crew-done')?.status).toBe('DONE');
+    expect(tasks.find((task) => task.id === 'session-queued')?.status).toBe('QUEUED');
+
+    const attention = db.db
+      .prepare('SELECT id, status, resolved_at FROM attention_items ORDER BY id')
+      .all() as Array<{ id: string; status: string; resolved_at: number | null }>;
+    expect(attention.find((item) => item.id === 'crew-blocked')).toMatchObject({ status: 'resolved' });
+    expect(attention.find((item) => item.id === 'crew-run-blocked')).toMatchObject({ status: 'resolved' });
+    expect(attention.find((item) => item.id === 'crew-blocked')?.resolved_at).not.toBeNull();
+    expect(attention.find((item) => item.id === 'crew-run-blocked')?.resolved_at).not.toBeNull();
+    expect(attention.find((item) => item.id === 'permission')).toEqual({
+      id: 'permission',
+      status: 'open',
+      resolved_at: null,
+    });
+  });
+
   it('defaults provider to pi when omitted on insert', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-default-'));
     process.env.NUNCIO_DATA_DIR = dataDir;

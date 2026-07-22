@@ -219,6 +219,23 @@ describe('TasksService', () => {
     expect(cloneDone.status).toBe('FAILED');
   });
 
+  it('rejects direct operations on a legacy Crew task id', async () => {
+    const legacy = repo.create({ prompt: 'retired Crew task' });
+    module.get(DatabaseService).db
+      .prepare(
+        `UPDATE tasks
+         SET status = 'CANCELLED', execution_kind = 'crew-member', verify_owner = 'crew'
+         WHERE id = ?`,
+      )
+      .run(legacy.id);
+
+    expect(service.findById(legacy.id)).toBeNull();
+    expect(() => service.retry(legacy.id)).toThrow(NotFoundException);
+    expect(() => service.update(legacy.id, { model: 'pi:test' })).toThrow(NotFoundException);
+    await expect(service.cancel(legacy.id)).rejects.toThrow(NotFoundException);
+    expect(() => service.delete(legacy.id)).toThrow(NotFoundException);
+  });
+
   it('starts multitasking by creating provider-neutral child subagent tasks for a parent session', async () => {
     writeVerifyScript('exit 0\n');
     const parent = await sessions.create({

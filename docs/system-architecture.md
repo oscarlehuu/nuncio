@@ -160,7 +160,12 @@ The browser tool contract is the first runtime tool family. When a tool call omi
 
 
 
-`AgentRegistry` holds all providers, exposes `all()`, `available()` (async, filters by `isAvailable`), `get(id)` (sync), `getAvailable(id)` (async, throws `BadRequestException` if unavailable), and `defaultId()` (Cursor if configured, then Codex, then Pi; throws `503` when none is configured — Mock is never a default and must be requested explicitly as `provider: "mock"` under `NUNCIO_FORCE_MOCK=1`).
+`AgentRegistry` holds all providers. `all()` and `available()` remain unfiltered runtime paths so
+stored legacy-engine sessions keep working; `listed()` and `listedAvailable()` are the
+picker-facing paths filtered by `engines.showLegacy`. `get(id)` and `getAvailable(id)` resolve a
+specific stored engine. `defaultId()` prefers forced Mock for hermetic runs, then an available
+visible engine (normally Pi), then an available hidden legacy engine, and throws `503` only when
+nothing is available.
 
 ### Per-session selection flow
 
@@ -1797,4 +1802,3 @@ Server tests run on `bun test`. Unit tests use fakes for provider subprocess/SDK
 - **Pi session revival:** `SessionManager.inMemory()` means Pi conversation history is lost on server restart. File-backed `SessionManager.create(cwd)` + lazy revive is planned to make the "resumable sessions" principle true for Pi. (Note: **imported** Pi handoff sessions are already file-backed — they resume the on-disk jsonl via `providerThreadId` — so they survive restart.)
 - **Approval continuity:** approval request state is durable, but a request waiting inside the Codex app-server cannot continue across a server/app-server restart; stale pending requests are auto-denied on boot with `server_restarted`.
 - **Tool configuration:** Pi tools are hardcoded (`read, bash, grep, find, ls`); env/per-session config is planned.
-- **Additional providers:** future SDKs can be added by implementing `AgentProvider` and registering them in `AgentRegistry`.

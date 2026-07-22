@@ -253,10 +253,10 @@ export class SessionsService implements OnModuleDestroy {
   }
 
   get(id: string): SessionDto | null {
-    const session = this.sessions.findById(id);
+    const session = this.sessions.findUserFacingById(id);
     if (!session) return null;
     this.hydrateIfNeeded(session);
-    const refreshed = this.sessions.findById(id);
+    const refreshed = this.sessions.findUserFacingById(id);
     return refreshed ? this.enrichSession(refreshed) : null;
   }
 
@@ -265,7 +265,7 @@ export class SessionsService implements OnModuleDestroy {
     since = 0,
     opts?: { limit?: number; tail?: number; before?: number },
   ): SessionEvent[] {
-    const session = this.requireSession(id);
+    const session = this.requirePublicSession(id);
     this.hydrateIfNeeded(session);
     this.safeRefreshTranscript(id, session);
     let events: SessionEvent[];
@@ -321,7 +321,7 @@ export class SessionsService implements OnModuleDestroy {
 
   /** Whether Cursor IDE/CLI is likely still running this handoff chat on the host. */
   isCursorCliActive(id: string): boolean {
-    const session = this.requireSession(id);
+    const session = this.requirePublicSession(id);
     if (session.cursorBackend !== 'cli' || !session.cursorChatId || !session.workspace) {
       return false;
     }
@@ -627,7 +627,7 @@ export class SessionsService implements OnModuleDestroy {
     // A prior session links the successor into a linear handoff chain, but only
     // when that predecessor actually exists (a stale/foreign id is ignored).
     const priorSessionId =
-      input.priorSessionId && this.sessions.findById(input.priorSessionId)
+      input.priorSessionId && this.sessions.findUserFacingById(input.priorSessionId)
         ? input.priorSessionId
         : undefined;
 
@@ -1076,8 +1076,7 @@ export class SessionsService implements OnModuleDestroy {
    * first). Throws NotFound when the session itself does not exist.
    */
   lineage(id: string): SessionLineageDto {
-    const session = this.sessions.findById(id);
-    if (!session) throw new NotFoundException('Session not found');
+    const session = this.requirePublicSession(id);
 
     // Handoff chains (priorSessionId) are lineage too: walk them like parents
     // and surface successors alongside spawned children.
@@ -1086,7 +1085,7 @@ export class SessionsService implements OnModuleDestroy {
     let cursor = session.parentSessionId ?? session.priorSessionId;
     while (cursor && ancestors.length < ANCESTOR_WALK_CAP && !visited.has(cursor)) {
       visited.add(cursor);
-      const parent = this.sessions.findById(cursor);
+      const parent = this.sessions.findUserFacingById(cursor);
       if (!parent) break;
       ancestors.push(toSessionRef(parent));
       cursor = parent.parentSessionId ?? parent.priorSessionId;
@@ -1888,15 +1887,16 @@ export class SessionsService implements OnModuleDestroy {
 
   /** Raw bytes of a stored chat image, or null if the id is unknown/malformed. */
   readMedia(sessionId: string, mediaId: string): Buffer | null {
+    this.requirePublicSession(sessionId);
     return this.media?.read(sessionId, mediaId) ?? null;
   }
 
   subscribe(id: string, listener: StreamListener): () => void {
+    const session = this.requirePublicSession(id);
     const bus = this.getOrCreateBus(id);
     const handler = (event: SessionEvent) => listener(event);
     bus.on('event', handler);
-    const session = this.sessions.findById(id);
-    if (session) this.safeRefreshTranscript(id, session);
+    this.safeRefreshTranscript(id, session);
     this.startTranscriptWatch(id);
     return () => {
       bus.off('event', handler);
@@ -2328,8 +2328,14 @@ export class SessionsService implements OnModuleDestroy {
     return this.enrichSession(session);
   }
 
+  private requirePublicSession(id: string): SessionDto {
+    const session = this.sessions.findUserFacingById(id);
+    if (!session) throw new NotFoundException('Session not found');
+    return this.enrichSession(session);
+  }
+
   requirePublicMutableSession(id: string): SessionDto {
-    return this.requireSession(id);
+    return this.requirePublicSession(id);
   }
 
   private enrichSession(session: SessionDto): SessionDto {
@@ -3095,7 +3101,7 @@ export class SessionsService implements OnModuleDestroy {
    * a pure function of the log — so it is safe every boot.
    */
   private resumeVerifyLoops(): void {
-    for (const session of this.sessions.list(false)) {
+    for (const session of this.sessions.listUserFacing(false)) {
       if (session.status !== 'IDLE') continue;
       // Per-session gate: a project override may enable the loop even when the
       // global setting is off (and vice versa). resumeOneVerifyLoop re-checks via
@@ -3129,7 +3135,7 @@ export class SessionsService implements OnModuleDestroy {
 
   private async resumeOneVerifyLoop(sessionId: string): Promise<void> {
     if (this.destroyed) return;
-    const session = this.sessions.findById(sessionId);
+    const session = this.sessions.findUserFacingById(sessionId);
     if (!session || session.status !== 'IDLE') return;
     const state = foldLoopState(this.events.list(sessionId, 0));
     // Crash point: a retry marker was written but its auto-steer never sent —
@@ -3188,7 +3194,7 @@ export class SessionsService implements OnModuleDestroy {
    * user can steer (resumable threads) or restart the task.
    */
   private reconcileInterruptedSessions(): void {
-    for (const session of this.sessions.list(false)) {
+    for (const session of this.sessions.listUserFacing(false)) {
       if (session.status !== 'RUNNING') continue;
       this.sessions.updateProviderRuntimeState(session.id, { providerActiveTurnId: null });
       this.appendAndEmit(session.id, 'runtime_restarted', {
@@ -3206,7 +3212,7 @@ export class SessionsService implements OnModuleDestroy {
    */
   private restorePendingSteerQueues(): void {
     for (const id of this.steerQueue.sessionIdsWithPending()) {
-      const session = this.sessions.findById(id);
+      const session = this.sessions.findUserFacingById(id);
       if (!session) continue;
       if (session.status !== 'IDLE' && session.status !== 'ERROR') continue;
       setTimeout(() => this.drainSteerQueue(id), 0);

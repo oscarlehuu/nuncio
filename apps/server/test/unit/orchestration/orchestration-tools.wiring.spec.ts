@@ -4,10 +4,12 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AgentToolsModule } from '../../../src/agents/tools/agent-tools.module';
 import { AgentToolRegistry } from '../../../src/agents/tools/agent-tool-registry';
+import { DatabaseService } from '../../../src/db/database.service';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
 import { SettingsRepository } from '../../../src/settings/persistence/settings.repository';
 import { TasksModule } from '../../../src/tasks/tasks.module';
+import { TasksRepository } from '../../../src/tasks/tasks.repository';
 
 // Level-3 wiring: the orchestration tools reach AgentToolRegistry.forSession —
 // the same value that flows into AgentRunContext.tools — gated by the setting.
@@ -16,6 +18,8 @@ describe('orchestration tools wiring', () => {
   let registry: AgentToolRegistry;
   let settings: SettingsRepository;
   let sessions: SessionsRepository;
+  let tasks: TasksRepository;
+  let database: DatabaseService;
   let dataDir: string;
 
   beforeAll(async () => {
@@ -28,6 +32,8 @@ describe('orchestration tools wiring', () => {
     registry = module.get(AgentToolRegistry);
     settings = module.get(SettingsRepository);
     sessions = module.get(SessionsRepository);
+    tasks = module.get(TasksRepository);
+    database = module.get(DatabaseService);
   });
 
   afterAll(async () => {
@@ -93,6 +99,51 @@ describe('orchestration tools wiring', () => {
     const projectPaths = rows.map((r) => sessions.findById(r.id)?.projectPath);
     expect(projectPaths.every((p) => p === '/proj-a')).toBe(true);
     expect(rows.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('read tools hide retired Crew sessions and tasks', async () => {
+    settings.set('NUNCIO_ORCHESTRATION_TOOLS', 'read');
+    const here = sessions.create({ prompt: 'caller', projectPath: '/proj-a' });
+    const legacySession = sessions.create({ prompt: 'legacy Crew member', projectPath: '/proj-a' });
+    database.db.prepare("UPDATE sessions SET verify_owner = 'crew' WHERE id = ?").run(legacySession.id);
+
+    const legacyTask = tasks.create({
+      prompt: 'legacy Crew task',
+      parentSessionId: here.id,
+      projectPath: '/proj-a',
+    });
+    database.db
+      .prepare(
+        `UPDATE tasks
+         SET execution_kind = 'crew-member', verify_owner = 'crew', status = 'DONE',
+             outcome_json = '{}', finished_at = updated_at
+         WHERE id = ?`,
+      )
+      .run(legacyTask.id);
+
+    const tools = registry.forSession({ sessionId: here.id, projectPath: '/proj-a' }).tools;
+    const listSessions = tools.find((tool) => tool.name === 'nuncio_list_sessions')!;
+    const readSession = tools.find((tool) => tool.name === 'nuncio_read_session')!;
+    const getTaskResult = tools.find((tool) => tool.name === 'nuncio_get_task_result')!;
+
+    const listed = (await listSessions.execute({})) as {
+      structuredContent: Array<{ id: string }>;
+    };
+    expect(listed.structuredContent.map((row) => row.id)).not.toContain(legacySession.id);
+
+    const sessionResult = (await readSession.execute({ sessionId: legacySession.id })) as {
+      isError?: boolean;
+      content: Array<{ text: string }>;
+    };
+    expect(sessionResult.isError).toBe(true);
+    expect(sessionResult.content[0]?.text).toContain('not found');
+
+    const taskResult = (await getTaskResult.execute({ taskId: legacyTask.id })) as {
+      isError?: boolean;
+      content: Array<{ text: string }>;
+    };
+    expect(taskResult.isError).toBe(true);
+    expect(taskResult.content[0]?.text).toContain('not found');
   });
 
   it('a tool built while enabled refuses after the setting flips to off (F3)', async () => {

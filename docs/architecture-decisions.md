@@ -152,7 +152,7 @@ ADR-011.
   Codex, Cursor, Cursor CLI, Devin) are **legacy: hidden behind the `engines.showLegacy` boolean
   setting (default off), not deleted.** `AgentRegistry` still resolves every engine by id
   (`get(id)`), so existing legacy-engine sessions keep opening, streaming, and resuming; only the
-  listing paths (`all()` / `available()`) are filtered.
+  picker-facing listing paths (`listed()` / `listedAvailable()`) are filtered.
 - **Desktop-first.** The Electron desktop app is the primary surface. It loads the web renderer —
   that renderer code stays and is maintained — but a plain browser tab is no longer a supported way
   to run Nuncio. Mobile stays **native Expo**, dedicated to reviewing and steering.

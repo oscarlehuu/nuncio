@@ -240,6 +240,19 @@ describe('SessionsService lifecycle (phase 3)', () => {
     expect(listed.some((s) => s.id === archivedId && s.status === 'ARCHIVED')).toBe(true);
   });
 
+  it('keeps legacy Crew-owned sessions hidden and rejects direct public access', async () => {
+    const id = seedSession('IDLE');
+    database.db.prepare("UPDATE sessions SET verify_owner = 'crew' WHERE id = ?").run(id);
+
+    expect(service.get(id)).toBeNull();
+    expect(service.list(true).some((session) => session.id === id)).toBe(false);
+    expect(() => service.requirePublicMutableSession(id)).toThrow(NotFoundException);
+    await expect(service.steer(id, 'resume retired work')).rejects.toThrow(NotFoundException);
+    expect(() => service.archive(id)).toThrow(NotFoundException);
+    expect(() => service.getEvents(id)).toThrow(NotFoundException);
+    expect(() => service.subscribe(id, () => {})).toThrow(NotFoundException);
+  });
+
   it('list returns a session from an unregistered provider with capabilities disabled', () => {
     const ghost = sessions.create({
       id: 'ghost-open',

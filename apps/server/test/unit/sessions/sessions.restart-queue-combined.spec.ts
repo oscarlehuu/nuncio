@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { AgentsModule } from '../../../src/agents/agents.module';
 import { CursorLocalModule } from '../../../src/cursor-local/cursor-local.module';
 import { DatabaseModule } from '../../../src/db/database.module';
+import { DatabaseService } from '../../../src/db/database.service';
 import { GitModule } from '../../../src/git/git.module';
 import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
@@ -110,5 +111,33 @@ describe('SessionsService combined restart + steer queue', () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(steerMessages(third.get(EventsRepository).list(id, 0)).length).toBe(2);
     await third.close();
+  });
+
+  it('does not reconcile or drain a persisted legacy Crew member on boot', async () => {
+    const first = await buildModule();
+    const service = first.get(SessionsService);
+    const sessions = first.get(SessionsRepository);
+    const events = first.get(EventsRepository);
+    const database = first.get(DatabaseService);
+
+    const id = sessions.create({ prompt: 'retired Crew member', provider: 'cursor' }).id;
+    sessions.updateStatus(id, 'RUNNING');
+    sessions.updateProviderRuntimeState(id, { providerActiveTurnId: 'crew-turn' });
+    await service.steer(id, 'queued before Crew removal');
+    database.db.prepare("UPDATE sessions SET verify_owner = 'crew' WHERE id = ?").run(id);
+    await first.close();
+
+    const restarted = await buildModule();
+    restarted.get(SessionsService);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const raw = restarted.get(SessionsRepository).findById(id)!;
+    const after = restarted.get(EventsRepository).list(id, 0);
+    expect(raw.status).toBe('RUNNING');
+    expect(raw.providerActiveTurnId).toBe('crew-turn');
+    expect(after.some((event) => event.type === 'runtime_restarted')).toBe(false);
+    expect(steerMessages(after)).toEqual([]);
+
+    await restarted.close();
   });
 });

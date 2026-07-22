@@ -134,6 +134,23 @@ describe('SessionsRepository', () => {
     expect(repo.findById('nope')).toBeNull();
   });
 
+  it('keeps legacy Crew-owned rows available internally but hidden from public lookup', () => {
+    const legacy = repo.create({ prompt: 'legacy Crew member' });
+    module.get(DatabaseService).db
+      .prepare(
+        `UPDATE sessions
+         SET verify_owner = 'crew', cursor_backend = 'cli', cursor_chat_id = ?, provider_thread_id = ?
+         WHERE id = ?`,
+      )
+      .run(legacy.id, legacy.id, legacy.id);
+
+    expect(repo.findById(legacy.id)?.id).toBe(legacy.id);
+    expect(repo.findUserFacingById(legacy.id)).toBeNull();
+    expect(repo.findByCursorChatId(legacy.id, 'cli')).toBeNull();
+    expect(repo.findByProviderThreadId(legacy.id)).toBeNull();
+    expect(repo.listUserFacing(true).some((session) => session.id === legacy.id)).toBe(false);
+  });
+
   it('findByProviderThreadId dedupes imported pi sessions by session file path', () => {
     const piPath = '/Users/me/.pi/agent/sessions/demo/20260701_session.jsonl';
     const s = repo.create({ prompt: 'imported pi', provider: 'pi', providerThreadId: piPath });

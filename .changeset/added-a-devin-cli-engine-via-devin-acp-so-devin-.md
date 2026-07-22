@@ -2,4 +2,4 @@
 "nuncio": minor
 ---
 
-Added a Devin CLI engine (via `devin acp`) so Devin can run as a Nuncio crew worker with session resume and selectable ACP models.
+Added a legacy Devin CLI adapter via `devin acp`, with session resume and selectable ACP models when legacy engines are enabled.

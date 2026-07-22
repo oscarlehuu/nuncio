@@ -30,8 +30,6 @@ behind evidence.
 - **Desktop-first.** The Electron desktop app is the primary surface (it loads the web renderer —
   that renderer code stays). Plain browser access is no longer a supported surface. Mobile stays
   **native Expo**, dedicated to reviewing and steering work from a phone.
-- **Crew is deprecated pending removal.** Solo (one engine, one session) is the product. Crew stays
-  runnable for now but receives no new investment and will be removed once engine trust is built.
 
 ## The problem
 

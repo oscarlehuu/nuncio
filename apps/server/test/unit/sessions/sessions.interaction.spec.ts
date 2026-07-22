@@ -45,7 +45,8 @@ function makeSession(overrides: Partial<SessionDto> = {}): SessionDto {
 describe('SessionsService interaction', () => {
   const sessionsRepo = {
     findById: jest.fn(),
-    list: jest.fn().mockReturnValue([]),
+    findUserFacingById: jest.fn(),
+    listUserFacing: jest.fn().mockReturnValue([]),
   } as unknown as SessionsRepository;
 
   const agents = {
@@ -77,6 +78,7 @@ describe('SessionsService interaction', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (sessionsRepo.findById as jest.Mock).mockReturnValue(makeSession());
+    (sessionsRepo.findUserFacingById as jest.Mock).mockReturnValue(makeSession());
     (agents.supportsInteractionForSession as jest.Mock).mockReturnValue(false);
     (agents.resolveForSession as jest.Mock).mockReturnValue({
       capabilities: {
@@ -120,6 +122,7 @@ describe('SessionsService interaction', () => {
   it('enrichSession uses CLI interaction support for handoff sessions', () => {
     const cliSession = makeSession({ provider: 'cursor', cursorBackend: 'cli' });
     (sessionsRepo.findById as jest.Mock).mockReturnValue(cliSession);
+    (sessionsRepo.findUserFacingById as jest.Mock).mockReturnValue(cliSession);
     (agents.resolveForSession as jest.Mock).mockReturnValue({
       capabilities: {
         interrupt: false,

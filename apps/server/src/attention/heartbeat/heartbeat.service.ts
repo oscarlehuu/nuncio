@@ -253,7 +253,7 @@ export class HeartbeatService implements OnModuleInit {
       // reconcileOpenItems auto-resolve the stale item. subjectId = 'session:<id>'.
       this.attention?.registerProbe('zombie-session', (item) => {
         const sessionId = item.subjectId.replace(/^session:/, '');
-        const session = this.sessions!.findById(sessionId);
+        const session = this.sessions!.findUserFacingById(sessionId);
         if (!session || session.status !== 'RUNNING') return false; // gone/finished → clear
         const lastEventAt = this.events!.latestEventAt(sessionId) ?? session.createdAt;
         return this.clock.now() - lastEventAt > this.infra!.zombieAgeMs; // still stale?

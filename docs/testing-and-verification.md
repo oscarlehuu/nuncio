@@ -144,10 +144,11 @@ become a pure projection first.
 
 ## Provider conformance suite
 
-**Status: standing investment — extend it whenever a gap appears.** One shared spec factory that
-every provider must pass, so edge cases are written once and every engine (current and future)
-inherits them — this is [ADR-004](architecture-decisions.md#adr-004--provider-agnostic-agentprovider-contract-generic-first)
-made executable.
+**Status: compatibility guardrail.** One shared spec factory that every retained provider must
+pass, so edge cases are written once and the legacy adapters remain safe while Nuncio Engine stays
+the product focus. This keeps the compatible portion of
+[ADR-004](architecture-decisions.md#adr-004--provider-agnostic-agentprovider-contract-generic-first)
+executable under ADR-014.
 
 - Shape: `describeAgentProviderContract(makeProvider)` in `apps/server/test/unit/agents/`,
   instantiated per provider with its SDK stubbed at the adapter boundary.
@@ -156,7 +157,7 @@ made executable.
   text; errors land ERROR with an `error` event; dispose is idempotent; steer after dispose
   revives from the event log; capability honesty — a declared-off capability must reject cleanly
   (e.g. `interrupt: false` → 409), a declared-on one must work.
-- **Gate:** a new engine PR (Claude next) must run the suite green before merge; a new
+- **Gate:** changes to a retained engine adapter must run the suite green before merge; a new
   session-layer behavior must be added to the suite, not to one provider's specs.
 
 ## What "invest more in tests" means here

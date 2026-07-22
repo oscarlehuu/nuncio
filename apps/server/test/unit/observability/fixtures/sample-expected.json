@@ -6,14 +6,14 @@
       null,
       600
     ],
-    "median": 400
+    "median": 500
   },
   "interDeltaGapMs": {
     "p50": 200,
     "p95": 2600,
     "max": 2600
   },
-  "tokensPerSecond": 4.027777777777778,
+  "tokensPerSecond": 8.529411764705882,
   "stalls": [
     {
       "turnIndex": 2,

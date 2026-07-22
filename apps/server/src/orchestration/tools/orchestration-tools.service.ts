@@ -63,13 +63,13 @@ export class OrchestrationToolsService {
     return {
       currentMode: () => this.mode(),
       factRecordingEnabled: () => this.factRecording(),
-      listSessions: () => this.sessionsRepo.list(),
-      findSession: (id) => this.sessionsRepo.findById(id),
+      listSessions: () => this.sessionsRepo.listUserFacing(),
+      findSession: (id) => this.sessionsRepo.findUserFacingById(id),
       childrenOf: (parentSessionId) => this.sessionsRepo.childrenOf(parentSessionId),
       listEventsSince: (sessionId, since, limit) => this.events.listSince(sessionId, since, limit),
       listTasks: (parentSessionId) =>
         parentSessionId ? this.tasksRepo.listByParentSession(parentSessionId) : this.tasksRepo.list(),
-      findTask: (id) => this.tasksRepo.findById(id),
+      findTask: (id) => this.tasksRepo.findUserFacingById(id),
       enqueueTask: (input) => {
         if (!this.enqueuer) throw new Error('task runner unavailable');
         return this.enqueuer.enqueue(input);

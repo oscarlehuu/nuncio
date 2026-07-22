@@ -135,10 +135,23 @@ export class SessionsRepository {
     return row ? toDto(row) : null;
   }
 
+  /** Public lookup excludes retired internal rows before their owner is normalized. */
+  findUserFacingById(id: string): SessionDto | null {
+    if (this.database.closed) return null;
+    const row = this.database.db
+      .prepare<SessionRow, [string]>(
+        "SELECT * FROM sessions WHERE id = ? AND verify_owner = 'session'",
+      )
+      .get(id);
+    return row ? toDto(row) : null;
+  }
+
   findByCursorChatId(chatId: string, backend: 'cli' | 'sdk' = 'cli'): SessionDto | null {
     const row = this.database.db
       .prepare<SessionRow, [string, string]>(
-        'SELECT * FROM sessions WHERE cursor_chat_id = ? AND cursor_backend = ? LIMIT 1',
+        `SELECT * FROM sessions
+         WHERE cursor_chat_id = ? AND cursor_backend = ? AND verify_owner = 'session'
+         LIMIT 1`,
       )
       .get(chatId, backend);
     return row ? toDto(row) : null;
@@ -147,7 +160,9 @@ export class SessionsRepository {
   findByProviderThreadId(providerThreadId: string): SessionDto | null {
     const row = this.database.db
       .prepare<SessionRow, [string]>(
-        'SELECT * FROM sessions WHERE provider_thread_id = ? LIMIT 1',
+        `SELECT * FROM sessions
+         WHERE provider_thread_id = ? AND verify_owner = 'session'
+         LIMIT 1`,
       )
       .get(providerThreadId);
     return row ? toDto(row) : null;
@@ -332,7 +347,9 @@ export class SessionsRepository {
   successorsOf(priorSessionId: string): SessionDto[] {
     const rows = this.database.db
       .prepare<SessionRow, [string]>(
-        'SELECT * FROM sessions WHERE prior_session_id = ? ORDER BY created_at ASC, rowid ASC',
+        `SELECT * FROM sessions
+         WHERE prior_session_id = ? AND verify_owner = 'session'
+         ORDER BY created_at ASC, rowid ASC`,
       )
       .all(priorSessionId);
     return rows.map(toDto);
@@ -345,7 +362,10 @@ export class SessionsRepository {
   findActiveSuccessor(priorSessionId: string, worktreePath: string): SessionDto | null {
     const row = this.database.db
       .prepare<SessionRow, [string, string]>(
-        "SELECT * FROM sessions WHERE prior_session_id = ? AND worktree_path = ? AND status != 'ARCHIVED' ORDER BY created_at DESC LIMIT 1",
+        `SELECT * FROM sessions
+         WHERE prior_session_id = ? AND worktree_path = ?
+           AND status != 'ARCHIVED' AND verify_owner = 'session'
+         ORDER BY created_at DESC LIMIT 1`,
       )
       .get(priorSessionId, worktreePath);
     return row ? toDto(row) : null;
@@ -354,7 +374,9 @@ export class SessionsRepository {
   childrenOf(parentSessionId: string): SessionDto[] {
     const rows = this.database.db
       .prepare<SessionRow, [string]>(
-        'SELECT * FROM sessions WHERE parent_session_id = ? ORDER BY created_at ASC, rowid ASC',
+        `SELECT * FROM sessions
+         WHERE parent_session_id = ? AND verify_owner = 'session'
+         ORDER BY created_at ASC, rowid ASC`,
       )
       .all(parentSessionId);
     return rows.map(toDto);

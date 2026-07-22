@@ -119,7 +119,7 @@ export class TasksService implements OnModuleDestroy {
 
   /** One task by id, or null (used by consumers correlating settlement). */
   findById(id: string): TaskDto | null {
-    return this.tasks.findById(id);
+    return this.tasks.findUserFacingById(id);
   }
 
   private notifyFinished(task: TaskDto): void {
@@ -462,7 +462,7 @@ export class TasksService implements OnModuleDestroy {
   }
 
   private requireTask(id: string): TaskDto {
-    const task = this.tasks.findById(id);
+    const task = this.tasks.findUserFacingById(id);
     if (!task) throw new NotFoundException('Task not found');
     return task;
   }

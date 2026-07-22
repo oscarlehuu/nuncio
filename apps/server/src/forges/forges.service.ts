@@ -155,7 +155,7 @@ export class ForgesService {
     id: string,
     opts: OpenPullRequestOptions = {},
   ): Promise<ForgePullRequest> {
-    const session = this.sessions.findById(id);
+    const session = this.sessions.findUserFacingById(id);
     if (!session) throw new BadRequestException(`Session ${id} not found`);
     if (!session.branch) {
       throw new BadRequestException('Session has no branch to open a pull request from');
@@ -190,7 +190,7 @@ export class ForgesService {
   async getPullRequestForSession(
     id: string,
   ): Promise<ForgePullRequestDetail & { checks: ForgeCheck[] }> {
-    const session = this.sessions.findById(id);
+    const session = this.sessions.findUserFacingById(id);
     if (!session) throw new BadRequestException(`Session ${id} not found`);
     if (session.pullRequestNumber == null) {
       throw new BadRequestException('Session has no pull request');
@@ -217,7 +217,7 @@ export class ForgesService {
   }
 
   async addCommentForSession(id: string, body: string): Promise<void> {
-    const session = this.sessions.findById(id);
+    const session = this.sessions.findUserFacingById(id);
     if (!session) throw new BadRequestException(`Session ${id} not found`);
     if (session.pullRequestNumber == null) {
       throw new BadRequestException('Session has no pull request');

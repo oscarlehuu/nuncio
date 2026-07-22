@@ -59,7 +59,9 @@ function sanitize(events: unknown[]): StreamEventInput[] {
     if (typeof ts !== 'number' || !Number.isFinite(ts)) continue;
     if (typeof type !== 'string' || EVENT_TYPES[type as StreamEventType] !== true) continue;
     const event: StreamEventInput = { ts, type: type as StreamEventType };
-    if (typeof tokens === 'number' && Number.isFinite(tokens)) event.tokens = tokens;
+    if (typeof tokens === 'number' && Number.isSafeInteger(tokens) && tokens >= 0) {
+      event.tokens = tokens;
+    }
     clean.push(event);
   }
   // Stable sort by ts ascending (Array.prototype.sort is stable in modern engines).
@@ -73,6 +75,13 @@ function nearestRank(sorted: number[], percentile: number): number | null {
   if (sorted.length === 0) return null;
   const position = Math.max(1, Math.ceil((percentile / 100) * sorted.length));
   return sorted[position - 1];
+}
+
+function median(sorted: number[]): number | null {
+  if (sorted.length === 0) return null;
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) return sorted[middle];
+  return (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
 export function computeStreamMetrics(
@@ -117,7 +126,7 @@ export function computeStreamMetrics(
     turn.deltas.length > 0 ? turn.deltas[0].ts - turn.startTs : null,
   );
   const ttftValues = perTurn.filter((value): value is number => value !== null).sort((a, b) => a - b);
-  const ttftMedian = nearestRank(ttftValues, 50);
+  const ttftMedian = median(ttftValues);
 
   const gaps: number[] = [];
   const stalls: StreamStall[] = [];
@@ -132,21 +141,25 @@ export function computeStreamMetrics(
   }
   const sortedGaps = [...gaps].sort((a, b) => a - b);
 
-  const countedDeltas: CountedDelta[] = [];
   let totalDeltaTokens = 0;
   for (const turn of turns) {
     for (const delta of turn.deltas) {
-      countedDeltas.push(delta);
       totalDeltaTokens += delta.tokens;
     }
   }
 
   let tokensPerSecond: number | null = null;
-  if (countedDeltas.length >= 2) {
-    const firstTs = countedDeltas[0].ts;
-    const lastTs = countedDeltas[countedDeltas.length - 1].ts;
-    const durationSeconds = (lastTs - firstTs) / 1000;
-    if (durationSeconds > 0) tokensPerSecond = totalDeltaTokens / durationSeconds;
+  let streamedTokens = 0;
+  let streamingDurationMs = 0;
+  for (const turn of turns) {
+    if (turn.deltas.length < 2) continue;
+    const durationMs = turn.deltas.at(-1)!.ts - turn.deltas[0]!.ts;
+    if (durationMs <= 0) continue;
+    streamingDurationMs += durationMs;
+    streamedTokens += turn.deltas.reduce((sum, delta) => sum + delta.tokens, 0);
+  }
+  if (streamingDurationMs > 0) {
+    tokensPerSecond = streamedTokens / (streamingDurationMs / 1000);
   }
 
   return {

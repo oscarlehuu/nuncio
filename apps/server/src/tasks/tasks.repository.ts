@@ -83,7 +83,11 @@ export class TasksRepository {
 
   list(): TaskDto[] {
     const rows = this.database.db
-      .prepare<TaskRow, []>('SELECT * FROM tasks ORDER BY created_at DESC, rowid DESC')
+      .prepare<TaskRow, []>(
+        `SELECT * FROM tasks
+         WHERE execution_kind = 'session' AND verify_owner = 'session'
+         ORDER BY created_at DESC, rowid DESC`,
+      )
       .all();
     return rows.map(taskRowToDto);
   }
@@ -93,6 +97,8 @@ export class TasksRepository {
       .prepare<TaskRow, [string]>(
         `SELECT * FROM tasks
          WHERE parent_session_id = ?
+           AND execution_kind = 'session'
+           AND verify_owner = 'session'
          ORDER BY created_at DESC, rowid DESC`,
       )
       .all(parentSessionId);
@@ -106,6 +112,17 @@ export class TasksRepository {
     return row ? taskRowToDto(row) : null;
   }
 
+  /** Public lookup excludes retired internal task kinds before normalization. */
+  findUserFacingById(id: string): TaskDto | null {
+    const row = this.database.db
+      .prepare<TaskRow, [string]>(
+        `SELECT * FROM tasks
+         WHERE id = ? AND execution_kind = 'session' AND verify_owner = 'session'`,
+      )
+      .get(id);
+    return row ? taskRowToDto(row) : null;
+  }
+
   /** Atomically claim the oldest QUEUED task past its hold window, marking it RUNNING. */
   claimNextQueued(): TaskDto | null {
     const now = Date.now();
@@ -113,6 +130,8 @@ export class TasksRepository {
       .prepare<{ id: string }, [number]>(
         `SELECT id FROM tasks
          WHERE status = 'QUEUED'
+           AND execution_kind = 'session'
+           AND verify_owner = 'session'
            AND (hold_until IS NULL OR hold_until <= ?)
          ORDER BY created_at ASC, rowid ASC`,
       )
@@ -236,7 +255,11 @@ export class TasksRepository {
   earliestHold(): number | null {
     const row = this.database.db
       .prepare<{ earliest: number | null }, []>(
-        "SELECT MIN(hold_until) AS earliest FROM tasks WHERE status = 'QUEUED' AND hold_until IS NOT NULL",
+        `SELECT MIN(hold_until) AS earliest FROM tasks
+         WHERE status = 'QUEUED'
+           AND execution_kind = 'session'
+           AND verify_owner = 'session'
+           AND hold_until IS NOT NULL`,
       )
       .get();
     return row?.earliest ?? null;
@@ -258,7 +281,12 @@ export class TasksRepository {
 
   countRunning(): number {
     const row = this.database.db
-      .prepare<{ count: number }, []>("SELECT COUNT(*) AS count FROM tasks WHERE status = 'RUNNING'")
+      .prepare<{ count: number }, []>(
+        `SELECT COUNT(*) AS count FROM tasks
+         WHERE status = 'RUNNING'
+           AND execution_kind = 'session'
+           AND verify_owner = 'session'`,
+      )
       .get();
     return row?.count ?? 0;
   }
@@ -278,6 +306,8 @@ export class TasksRepository {
                ELSE review_state
              END
          WHERE status = 'RUNNING'
+           AND execution_kind = 'session'
+           AND verify_owner = 'session'
          RETURNING *`,
       )
       .all(JSON.stringify({ reason }), now, now);

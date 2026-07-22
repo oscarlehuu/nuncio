@@ -82,6 +82,16 @@ describe('computeStreamMetrics', () => {
     expect(report.totalDeltaTokens).toBe(6);
   });
 
+  it('defaults invalid token counts instead of subtracting or fabricating fractions', () => {
+    const report = computeStreamMetrics([
+      { ts: 1000, type: 'turn_start' },
+      delta(1100, -5),
+      delta(1200, 2.5),
+      delta(1300, 0),
+    ]);
+    expect(report.totalDeltaTokens).toBe(2);
+  });
+
   it('ignores deltas outside an open turn', () => {
     const report = computeStreamMetrics([
       delta(500, 99), // before first turn_start
@@ -120,6 +130,19 @@ describe('computeStreamMetrics', () => {
     expect(report.ttftMs.perTurn).toEqual([200, 300]);
   });
 
+  it('averages the two middle TTFT values for an even-sized median', () => {
+    const report = computeStreamMetrics([
+      { ts: 1000, type: 'turn_start' },
+      delta(1100, 1),
+      { ts: 1200, type: 'turn_end' },
+      { ts: 2000, type: 'turn_start' },
+      delta(2300, 1),
+    ]);
+
+    expect(report.ttftMs.perTurn).toEqual([100, 300]);
+    expect(report.ttftMs.median).toBe(200);
+  });
+
   it('honors a custom stallThresholdMs', () => {
     const events = [
       { ts: 1000, type: 'turn_start' as const },
@@ -139,5 +162,21 @@ describe('computeStreamMetrics', () => {
     ]);
     expect(report.tokensPerSecond).toBeNull();
     expect(report.interDeltaGapMs).toEqual({ p50: null, p95: null, max: null });
+  });
+
+  it('excludes time between turns from aggregate token throughput', () => {
+    const report = computeStreamMetrics([
+      { ts: 1000, type: 'turn_start' },
+      delta(1100, 4),
+      delta(2100, 6),
+      { ts: 2200, type: 'turn_end' },
+      { ts: 20_000, type: 'turn_start' },
+      delta(20_100, 3),
+      delta(21_100, 7),
+      { ts: 21_200, type: 'turn_end' },
+    ]);
+
+    expect(report.totalDeltaTokens).toBe(20);
+    expect(report.tokensPerSecond).toBe(10);
   });
 });

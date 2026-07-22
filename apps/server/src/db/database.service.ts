@@ -451,6 +451,17 @@ export class DatabaseService implements OnModuleDestroy {
     if (!attentionColumns.some((c) => c.name === 'suppress_reraise')) {
       this.db.exec('ALTER TABLE attention_items ADD COLUMN suppress_reraise INTEGER NOT NULL DEFAULT 0');
     }
+    // Crew-only attention conditions can no longer be probed after the runtime
+    // is removed. Resolve them once so upgraded databases do not retain stale
+    // badges with nowhere to navigate.
+    const crewRemovalAt = Date.now();
+    this.db
+      .prepare(
+        `UPDATE attention_items
+         SET status = 'resolved', resolved_at = COALESCE(resolved_at, ?), updated_at = ?
+         WHERE status = 'open' AND kind IN ('crew-blocked', 'crew-run-blocked')`,
+      )
+      .run(crewRemovalAt, crewRemovalAt);
 
     // Heartbeat digest markers (rung 3 sub-phase B). One row per SENT digest slot
     // — the durable record behind not-double-sent-on-catch-up + the since-last
@@ -546,6 +557,30 @@ export class DatabaseService implements OnModuleDestroy {
       if (!taskColumns.some((entry) => entry.name === column)) {
         this.db.exec(`ALTER TABLE tasks ADD COLUMN ${column} ${type}`);
       }
+    }
+
+    // Active Crew attempts cannot resume without the Crew runner. Terminalize
+    // them before the task pump starts so they are never reinterpreted as fresh
+    // session work after an upgrade.
+    const canRetireLegacyTasks = ['outcome_json', 'finished_at'].every((column) =>
+      taskColumns.some((entry) => entry.name === column),
+    );
+    if (canRetireLegacyTasks) {
+      this.db
+        .prepare(
+          `UPDATE tasks
+           SET status = 'CANCELLED',
+               outcome_json = ?,
+               finished_at = COALESCE(finished_at, ?),
+               updated_at = ?
+           WHERE status IN ('QUEUED', 'RUNNING')
+             AND (execution_kind = 'crew-member' OR verify_owner = 'crew')`,
+        )
+        .run(
+          JSON.stringify({ reason: 'crew_subsystem_removed' }),
+          crewRemovalAt,
+          crewRemovalAt,
+        );
     }
 
     this.db.exec(`

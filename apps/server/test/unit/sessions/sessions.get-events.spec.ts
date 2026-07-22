@@ -52,7 +52,8 @@ describe('SessionsService.getEvents windows', () => {
 
   const sessionsRepo = {
     findById: jest.fn().mockReturnValue(makeSession()),
-    list: jest.fn().mockReturnValue([]),
+    findUserFacingById: jest.fn().mockReturnValue(makeSession()),
+    listUserFacing: jest.fn().mockReturnValue([]),
   } as unknown as SessionsRepository;
 
   const agents = {
