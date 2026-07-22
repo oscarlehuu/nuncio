@@ -1,4 +1,5 @@
 import { Injectable, Optional, type OnModuleInit } from '@nestjs/common';
+import { isValidScheduleSpec } from '../../scheduler/schedule-spec';
 import { SchedulerService } from '../../scheduler/scheduler.service';
 import { SettingsService } from '../../settings/settings.service';
 import { LoopsService } from '../../loops/loops.service';
@@ -426,21 +427,33 @@ export class HeartbeatService implements OnModuleInit {
    */
   ensureSchedules(): void {
     if (!this.scheduler || this.isClosed()) return;
-    const bySystemJob = new Map<string, { id: string; spec: string }>();
+    const bySystemJob = new Map<string, { id: string; spec: string; enabled: boolean }>();
     for (const s of this.scheduler.listSchedules()) {
       if (s.target.kind === 'system') {
-        bySystemJob.set((s.target as { kind: 'system'; job: string }).job, { id: s.id, spec: s.spec });
+        bySystemJob.set((s.target as { kind: 'system'; job: string }).job, {
+          id: s.id, spec: s.spec, enabled: s.enabled,
+        });
       }
     }
     for (const { job, specKey, defaultSpec } of SYSTEM_JOBS) {
-      const spec = this.settings?.resolve(specKey)?.trim() || defaultSpec;
+      const configured = this.settings?.resolve(specKey);
+      const spec = configured === undefined ? defaultSpec : configured.trim();
       const kind: 'cron' | 'heartbeat' = spec.startsWith('daily@') ? 'cron' : 'heartbeat';
+      const valid = isValidScheduleSpec(spec);
       const current = bySystemJob.get(job);
       if (!current) {
-        this.scheduler.create({ kind, spec, target: { kind: 'system', job } });
-      } else if (current.spec !== spec) {
-        this.scheduler.updateSpec(current.id, kind, spec);
+        this.scheduler.create({
+          kind, spec, enabled: valid, target: { kind: 'system', job },
+        });
+        continue;
       }
+      if (!valid) {
+        if (current.enabled) this.scheduler.setEnabled(current.id, false);
+        if (current.spec !== spec) this.scheduler.updateSpec(current.id, kind, spec);
+        continue;
+      }
+      if (current.spec !== spec) this.scheduler.updateSpec(current.id, kind, spec);
+      if (!current.enabled) this.scheduler.setEnabled(current.id, true);
     }
   }
 }

@@ -9,6 +9,9 @@ type LooseMessageEntry = {
   message?: {
     role?: string;
     content?: unknown;
+    toolCallId?: unknown;
+    toolName?: unknown;
+    isError?: unknown;
   };
 };
 
@@ -67,13 +70,21 @@ export function piEntriesToSessionEvents(entries: SessionEntry[]): SessionEventI
 
     if (role === 'toolResult') {
       const output = textFromContent(content);
-      const pending = pendingTools.shift();
+      const resultCallId = nonEmptyString(entry.message?.toolCallId);
+      const resultTool = nonEmptyString(entry.message?.toolName);
+      let pending: PendingToolCall | undefined;
+      if (resultCallId) {
+        const pendingIndex = pendingTools.findIndex((candidate) => candidate.callId === resultCallId);
+        if (pendingIndex >= 0) [pending] = pendingTools.splice(pendingIndex, 1);
+      } else {
+        pending = pendingTools.shift();
+      }
       events.push({
         type: 'tool_end',
         payload: {
-          ...(pending?.callId ? { callId: pending.callId } : {}),
-          tool: pending?.tool ?? 'toolResult',
-          isError: false,
+          ...(resultCallId || pending?.callId ? { callId: resultCallId ?? pending?.callId } : {}),
+          tool: resultTool ?? pending?.tool ?? 'toolResult',
+          ...(typeof entry.message?.isError === 'boolean' ? { isError: entry.message.isError } : {}),
           ...(output ? { output: truncatePayload(output).value } : {}),
         },
       });
@@ -99,6 +110,10 @@ function textFromContent(content: unknown[]): string {
     .filter(Boolean)
     .join('\n')
     .trim();
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
 function parseToolInput(value: unknown): unknown {

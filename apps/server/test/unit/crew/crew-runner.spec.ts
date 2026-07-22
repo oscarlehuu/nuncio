@@ -4,15 +4,29 @@ import { CrewRunnerService } from '../../../src/crew/crew-runner.service';
 import type { CrewRunDto } from '../../../src/crew/domain/crew.types';
 
 describe('CrewRunnerService', () => {
-  it('awaits an async member enqueue rejection and deterministically blocks on the provider', async () => {
+  it('quiesces an active member before a drive failure becomes provider-blocked', async () => {
     const harness = runnerHarness({
-      execution: { startMember: async () => { throw new CrewProviderAttemptError('provider down'); } },
+      run: { phase: 'BUILD' },
+      execution: { startBuilder: async () => { throw new CrewProviderAttemptError('provider down'); } },
     });
     const blocked = await harness.runner.drive('run-1');
     expect(blocked).toMatchObject({ status: 'BLOCKED_PROVIDER', blockedReason: 'provider_unavailable' });
+    expect(harness.order).toEqual(['quiesce', 'provider_unavailable']);
     expect(harness.raise).toHaveBeenCalledWith(expect.objectContaining({
       subjectId: 'run-1', payload: expect.objectContaining({ crewTaskId: 'task-1', crewRunId: 'run-1' }),
     }));
+  });
+
+  it('quiesces partial workspace/member startup before recovery-blocked is observable', async () => {
+    const harness = runnerHarness({
+      run: { worktreePath: null },
+      execution: { prepareWorkspace: async () => { throw new Error('partial start failed'); } },
+    });
+
+    await expect(harness.runner.start('run-1')).resolves.toMatchObject({
+      status: 'BLOCKED_USER', blockedReason: 'unrecoverable_failure',
+    });
+    expect(harness.order).toEqual(['quiesce', 'recovery_started', 'recovery_blocked']);
   });
 
   it('awaits an async verifier rejection and enters recoverable user-blocked state', async () => {
@@ -225,6 +239,7 @@ function runnerHarness(options: {
     projectPath: '/repo', baseBranch: 'main', baseHead: 'a'.repeat(40), worktreePath: '/worktree',
     branch: 'nuncio/run', createdAt: 1, updatedAt: 1, ...options.run,
   } as CrewRunDto;
+  const order: string[] = [];
   const runs = {
     findById: (id: string) => id === state.id
       ? state
@@ -232,6 +247,7 @@ function runnerHarness(options: {
         ? { ...state, ...options.additionalRuns[id] } as CrewRunDto
         : null,
     applyEvent: (_id: string, input: { event: { type: string } }) => {
+      order.push(input.event.type);
       if (input.event.type === 'provider_unavailable') {
         state = { ...state, revision: state.revision + 1, status: 'BLOCKED_PROVIDER', blockedReason: 'provider_unavailable' };
       } else if (input.event.type === 'recovery_started') {
@@ -253,7 +269,6 @@ function runnerHarness(options: {
     abortVerification: () => Promise.resolve(), shutdown: () => Promise.resolve(),
     ...options.execution,
   };
-  const order: string[] = [];
   const quiesce = jest.fn(async () => { order.push('quiesce'); });
   const accept = jest.fn(options.stageAccept ?? (async () => {
     order.push('accept');

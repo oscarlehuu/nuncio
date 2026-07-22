@@ -1,11 +1,17 @@
 import { Injectable } from '@nestjs/common';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { SessionManager, type SessionEntry, type SessionInfo } from '@earendil-works/pi-coding-agent';
 import { SessionsRepository } from '../sessions/persistence/sessions.repository';
 import { piEntriesToSessionEvents } from './pi-transcript-hydrate';
 import type { LocalPiSessionDto } from './pi-local-sessions.types';
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent');
+
+type TranscriptEvent = { type: string; payload: unknown };
+export type PiTranscriptReadResult =
+  | { ok: true; events: TranscriptEvent[] }
+  | { ok: false; error: unknown };
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
@@ -40,19 +46,23 @@ export class PiLocalSessionsService {
 
   async find(path: string, workspace: string): Promise<LocalPiSessionDto | null> {
     const target = path.trim();
-    if (!target) return null;
-    const listed = await this.listForWorkspace(workspace, MAX_LIMIT);
+    const requestedWorkspace = workspace.trim();
+    if (!target || !requestedWorkspace) return null;
+    const listed = await this.listForWorkspace(requestedWorkspace, MAX_LIMIT);
     const found = listed.find((item) => item.path === target);
     if (found) return found;
-    return this.readSessionDto(target, workspace.trim());
+    return this.readSessionDto(target, requestedWorkspace);
   }
 
-  readTranscriptEvents(path: string): Array<{ type: string; payload: unknown }> {
+  readTranscriptEvents(path: string): PiTranscriptReadResult {
     try {
       const manager = this.openSession(path);
-      return piEntriesToSessionEvents(manager.getEntries() as SessionEntry[]);
-    } catch {
-      return [];
+      return {
+        ok: true,
+        events: piEntriesToSessionEvents(manager.getEntries() as SessionEntry[]),
+      };
+    } catch (error) {
+      return { ok: false, error };
     }
   }
 
@@ -77,6 +87,8 @@ export class PiLocalSessionsService {
     try {
       const manager = SessionManager.open(path);
       const entries = manager.getEntries() as SessionEntry[];
+      const sessionWorkspace = manager.getCwd?.()?.trim();
+      if (!sessionWorkspace || !sameWorkspace(sessionWorkspace, workspace)) return null;
       const sessionId = manager.getSessionId?.() ?? path;
       const title = manager.getSessionName?.() ?? titleFromEntries(entries) ?? 'Imported Pi session';
       const preview = previewFromEntries(entries);
@@ -85,7 +97,7 @@ export class PiLocalSessionsService {
       return {
         sessionId,
         path,
-        workspace: manager.getCwd?.() || workspace,
+        workspace: sessionWorkspace,
         title,
         preview,
         updatedAt: stat?.mtimeMs ?? Date.now(),
@@ -111,6 +123,19 @@ export class PiLocalSessionsService {
       alreadyImported: Boolean(imported),
       ...(imported ? { nuncioSessionId: imported.id } : {}),
     };
+  }
+}
+
+function sameWorkspace(left: string, right: string): boolean {
+  return workspaceIdentity(left) === workspaceIdentity(right);
+}
+
+function workspaceIdentity(path: string): string {
+  const absolute = resolve(path);
+  try {
+    return realpathSync.native(absolute);
+  } catch {
+    return absolute;
   }
 }
 

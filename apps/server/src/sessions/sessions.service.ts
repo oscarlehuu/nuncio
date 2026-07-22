@@ -8,7 +8,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { EventEmitter } from 'events';
-import { existsSync, watch, type FSWatcher } from 'node:fs';
+import { existsSync, statSync, watch, type FSWatcher } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
@@ -164,11 +164,34 @@ interface CrewStartAttempt {
   cancelled: boolean;
 }
 
+interface TranscriptFileSnapshot {
+  mtimeMs: number;
+  ctimeMs: number;
+  size: number;
+  device: number;
+  inode: number;
+}
+
+type TranscriptReadResult =
+  | { ok: true; events: Array<{ type: string; payload: unknown }> }
+  | { ok: false; error: unknown };
+
+function sameTranscriptSnapshot(
+  left: TranscriptFileSnapshot,
+  right: TranscriptFileSnapshot,
+): boolean {
+  return left.mtimeMs === right.mtimeMs
+    && left.ctimeMs === right.ctimeMs
+    && left.size === right.size
+    && left.device === right.device
+    && left.inode === right.inode;
+}
+
 @Injectable()
 export class SessionsService implements OnModuleDestroy {
   private readonly streams = new Map<string, EventEmitter>();
   private readonly providerRequests = new Map<string, PendingProviderRequest>();
-  private readonly transcriptMtimeCache = new Map<string, number>();
+  private readonly transcriptSnapshotCache = new Map<string, TranscriptFileSnapshot>();
   private readonly locallyProducing = new Set<string>();
   private readonly verifying = new Set<string>();
   private readonly runPromises = new Map<string, Promise<void>>();
@@ -1504,7 +1527,14 @@ export class SessionsService implements OnModuleDestroy {
   private interruptForceIdleMs = 5000;
 
   async interrupt(id: string): Promise<void> {
-    const session = this.requirePublicMutableSession(id);
+    const session = this.sessions.findById(id);
+    if (!session) throw new NotFoundException('Session not found');
+    if (session.verifyOwner === 'crew') {
+      throw new BadRequestException('Crew-owned sessions are read-only outside Crew controls');
+    }
+    if (session.status !== 'RUNNING') {
+      throw new BadRequestException(`Cannot interrupt session in status ${session.status}`);
+    }
     const provider = this.agents.resolveForSession(session);
     if (!provider.capabilities.interrupt || !provider.interrupt) {
       throw new BadRequestException(`Interrupt not supported by provider ${provider.id}`);
@@ -1811,6 +1841,7 @@ export class SessionsService implements OnModuleDestroy {
       throw new PermanentLifecycleCleanupError(error);
     }
     this.sessions.delete(id);
+    this.transcriptSnapshotCache.delete(id);
   }
 
   /** Keep a lifecycle operation pending until the provider's retained tail commits. */
@@ -2185,53 +2216,75 @@ export class SessionsService implements OnModuleDestroy {
   private hydrateIfNeeded(session: SessionDto): void {
     if (this.events.count(session.id) > 0) return;
 
-    const batch = this.readTranscriptEvents(session);
-    if (batch.length === 0) return;
-    this.events.appendBatch(session.id, batch);
-    const mtime = this.transcriptMtime(session);
-    if (mtime !== null) this.transcriptMtimeCache.set(session.id, mtime);
+    const snapshot = this.transcriptSnapshot(session);
+    const cachedSnapshot = this.transcriptSnapshotCache.get(session.id);
+    if (snapshot && cachedSnapshot && sameTranscriptSnapshot(snapshot, cachedSnapshot)) return;
+
+    const read = this.readTranscriptEvents(session);
+    if (!read.ok) return;
+    if (read.events.length > 0) this.events.appendBatch(session.id, read.events);
+    if (snapshot) this.transcriptSnapshotCache.set(session.id, snapshot);
   }
 
-  private refreshTranscriptIfNeeded(session: SessionDto, options: { force?: boolean } = {}): void {
-    const currentMtime = this.transcriptMtime(session);
-    if (currentMtime === null) return;
-    const cachedMtime = this.transcriptMtimeCache.get(session.id);
-    if (!options.force && cachedMtime !== undefined && currentMtime === cachedMtime) return;
+  private refreshTranscriptIfNeeded(session: SessionDto): void {
+    const currentSnapshot = this.transcriptSnapshot(session);
+    if (!currentSnapshot) return;
+    const cachedSnapshot = this.transcriptSnapshotCache.get(session.id);
+    if (cachedSnapshot && sameTranscriptSnapshot(currentSnapshot, cachedSnapshot)) return;
 
-    const hydrated = this.readTranscriptEvents(session);
-    this.transcriptMtimeCache.set(session.id, currentMtime);
-    if (hydrated.length === 0) return;
+    const read = this.readTranscriptEvents(session);
+    if (!read.ok) return;
+    if (read.events.length === 0) {
+      this.transcriptSnapshotCache.set(session.id, currentSnapshot);
+      return;
+    }
 
-    const toAppend = this.missingTranscriptEvents(session.id, hydrated);
-    if (toAppend.length === 0) return;
+    const toAppend = this.missingTranscriptEvents(session.id, read.events);
+    if (toAppend.length === 0) {
+      this.transcriptSnapshotCache.set(session.id, currentSnapshot);
+      return;
+    }
 
     const appended = this.events.appendBatch(session.id, toAppend);
+    this.transcriptSnapshotCache.set(session.id, currentSnapshot);
     for (const event of appended) {
       this.emit(session.id, event);
     }
     this.appendAndEmit(session.id, 'transcript_refreshed', { added: toAppend.length });
   }
 
-  private readTranscriptEvents(session: SessionDto): Array<{ type: string; payload: unknown }> {
+  private readTranscriptEvents(session: SessionDto): TranscriptReadResult {
     if (session.cursorBackend === 'cli' && session.cursorChatId && session.workspace) {
       const workspace = session.worktreePath ?? session.workspace;
-      return turnsToSessionEvents(this.cursorLocal.readTranscript(session.cursorChatId, workspace));
+      return {
+        ok: true,
+        events: turnsToSessionEvents(this.cursorLocal.readTranscript(session.cursorChatId, workspace)),
+      };
     }
     if (session.provider === 'pi' && session.providerThreadId) {
-      return this.piLocal?.readTranscriptEvents(session.providerThreadId) ?? [];
+      return this.piLocal?.readTranscriptEvents(session.providerThreadId) ?? {
+        ok: false,
+        error: new Error('Pi transcript reader is unavailable'),
+      };
     }
-    return [];
+    return { ok: true, events: [] };
   }
 
-  private transcriptMtime(session: SessionDto): number | null {
-    if (session.cursorBackend === 'cli' && session.cursorChatId && session.workspace) {
-      const workspace = session.worktreePath ?? session.workspace;
-      return this.cursorLocal.transcriptMtime(session.cursorChatId, workspace);
+  private transcriptSnapshot(session: SessionDto): TranscriptFileSnapshot | null {
+    const path = this.transcriptPath(session);
+    if (!path) return null;
+    try {
+      const stats = statSync(path);
+      return {
+        mtimeMs: stats.mtimeMs,
+        ctimeMs: stats.ctimeMs,
+        size: stats.size,
+        device: stats.dev,
+        inode: stats.ino,
+      };
+    } catch {
+      return null;
     }
-    if (session.provider === 'pi' && session.providerThreadId) {
-      return this.piLocal?.transcriptMtime(session.providerThreadId) ?? null;
-    }
-    return null;
   }
 
   private transcriptPath(session: SessionDto): string | null {
@@ -2267,7 +2320,7 @@ export class SessionsService implements OnModuleDestroy {
   private refreshTranscriptFromWatch(id: string): void {
     if (this.locallyProducing.has(id)) return;
     try {
-      this.refreshTranscriptIfNeeded(this.requireSession(id), { force: true });
+      this.refreshTranscriptIfNeeded(this.requireSession(id));
     } catch {
       // Ignore transient read/session errors so the stream stays alive.
     }
@@ -2290,7 +2343,7 @@ export class SessionsService implements OnModuleDestroy {
           }
           if (this.locallyProducing.has(id)) return;
           try {
-            this.refreshTranscriptIfNeeded(this.requireSession(id), { force: true });
+            this.refreshTranscriptIfNeeded(this.requireSession(id));
           } catch {
             // Ignore transient read/session errors so the stream stays alive.
           }

@@ -31,7 +31,7 @@ export class PairingClaimError extends Error {
   }
 }
 
-type FetchImpl = (input: string, init?: RequestInit) => Promise<Response>;
+export type PairingFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
 // A malicious or corrupt QR must not make us probe an unbounded list; the
 // server never emits more than a handful (LAN ips + MagicDNS + Funnel).
@@ -75,7 +75,7 @@ export function parsePairingQr(text: string): PairingQr | null {
 }
 
 interface ProbeOptions {
-  fetchImpl?: FetchImpl;
+  fetchImpl?: PairingFetch;
   timeoutMs?: number;
 }
 
@@ -104,7 +104,7 @@ export async function probeCandidates(urls: string[], options: ProbeOptions = {}
   return null;
 }
 
-function probeOne(url: string, fetchImpl: FetchImpl, timeoutMs: number): Promise<boolean> {
+function probeOne(url: string, fetchImpl: PairingFetch, timeoutMs: number): Promise<boolean> {
   const controller = new AbortController();
   // The health fetch resolves to res.ok, or false on any failure. Calling
   // fetchImpl inside a `.then` turns a SYNCHRONOUS throw (an impl that throws
@@ -137,27 +137,43 @@ export interface ClaimRequest {
   platform?: string;
 }
 
-/**
- * Exchanges a pairing code for a device credential on the chosen base URL.
- * Maps the two contract failures to reasons the UI can speak: 401 → the code
- * expired or was already used (single-use), 429 → rate-limited. A 200 with a
- * malformed body throws rather than persisting half a credential.
- */
-export async function claimPairing(
+export interface ClaimPairingOptions {
+  fetchImpl?: PairingFetch;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+
+const DEFAULT_CLAIM_TIMEOUT_MS = 10_000;
+
+function normalizeClaimOptions(input?: PairingFetch | ClaimPairingOptions): Required<
+  Pick<ClaimPairingOptions, 'fetchImpl' | 'timeoutMs'>
+> & Pick<ClaimPairingOptions, 'signal'> {
+  if (typeof input === 'function') {
+    return { fetchImpl: input, timeoutMs: DEFAULT_CLAIM_TIMEOUT_MS };
+  }
+  const timeoutMs = input?.timeoutMs;
+  return {
+    fetchImpl: input?.fetchImpl ?? ((request, init) => globalThis.fetch(request, init)),
+    timeoutMs:
+      typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs >= 0
+        ? timeoutMs
+        : DEFAULT_CLAIM_TIMEOUT_MS,
+    signal: input?.signal,
+  };
+}
+
+async function performClaim(
   baseUrl: string,
   body: ClaimRequest,
-  fetchImpl: FetchImpl = (input, init) => globalThis.fetch(input, init),
+  fetchImpl: PairingFetch,
+  signal: AbortSignal,
 ): Promise<PairingClaim> {
-  let res: Response;
-  try {
-    res = await fetchImpl(`${baseUrl}/api/pairing/claim`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-  } catch {
-    throw new PairingClaimError('error', 'Could not reach the desktop.');
-  }
+  const res = await fetchImpl(`${baseUrl}/api/pairing/claim`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  });
   if (res.status === 401) {
     throw new PairingClaimError('expired', 'This pairing code has expired. Scan a fresh QR code.');
   }
@@ -177,6 +193,54 @@ export async function claimPairing(
     throw new PairingClaimError('error', 'The desktop returned an unexpected response.');
   }
   return { deviceId: parsed.deviceId, deviceSecret: parsed.deviceSecret, serverName: parsed.serverName };
+}
+
+/**
+ * Exchanges a pairing code for a device credential on the chosen base URL.
+ * The whole exchange, including response-body parsing, has a hard deadline;
+ * aborting is best-effort, so even a fetch that ignores AbortSignal cannot hang
+ * the caller. Passing a fetch function as the third argument remains supported.
+ */
+export async function claimPairing(
+  baseUrl: string,
+  body: ClaimRequest,
+  fetchOrOptions?: PairingFetch | ClaimPairingOptions,
+): Promise<PairingClaim> {
+  const options = normalizeClaimOptions(fetchOrOptions);
+  if (options.signal?.aborted) {
+    throw new PairingClaimError('error', 'Pairing was cancelled.');
+  }
+  if (options.timeoutMs === 0) {
+    throw new PairingClaimError('error', 'Pairing timed out.');
+  }
+
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let onCallerAbort: (() => void) | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    onCallerAbort = () => {
+      controller.abort();
+      reject(new PairingClaimError('error', 'Pairing was cancelled.'));
+    };
+    options.signal?.addEventListener('abort', onCallerAbort, { once: true });
+    timeout = setTimeout(() => {
+      controller.abort();
+      reject(new PairingClaimError('error', 'Pairing timed out.'));
+    }, options.timeoutMs);
+  });
+
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => performClaim(baseUrl, body, options.fetchImpl, controller.signal)),
+      deadline,
+    ]);
+  } catch (error) {
+    if (error instanceof PairingClaimError) throw error;
+    throw new PairingClaimError('error', 'Could not reach the desktop.');
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+    if (onCallerAbort) options.signal?.removeEventListener('abort', onCallerAbort);
+  }
 }
 
 /** Builds the device bearer value `nd1.<deviceId>.<deviceSecret>` for REST + WS. */

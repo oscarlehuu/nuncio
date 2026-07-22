@@ -595,15 +595,27 @@ describe('SessionsService lifecycle (phase 3)', () => {
   });
 
   describe('delete', () => {
-    it('permanently removes an archived session and its events', async () => {
+    it('permanently removes an archived session, its events, and only its transcript checkpoint', async () => {
       const id = await seedArchivedWithEvents();
+      const survivorId = 'surviving-transcript-checkpoint';
+      const internals = service as unknown as {
+        transcriptSnapshotCache: Map<string, unknown>;
+      };
+      internals.transcriptSnapshotCache.set(id, { mtimeMs: 1 });
+      internals.transcriptSnapshotCache.set(survivorId, { mtimeMs: 2 });
       expect(service.get(id)).not.toBeNull();
       expect(events.list(id).length).toBeGreaterThan(0);
 
-      await service.delete(id);
+      try {
+        await service.delete(id);
 
-      expect(service.get(id)).toBeNull();
-      expect(events.list(id)).toHaveLength(0);
+        expect(service.get(id)).toBeNull();
+        expect(events.list(id)).toHaveLength(0);
+        expect(internals.transcriptSnapshotCache.has(id)).toBe(false);
+        expect(internals.transcriptSnapshotCache.has(survivorId)).toBe(true);
+      } finally {
+        internals.transcriptSnapshotCache.delete(survivorId);
+      }
     });
 
     it('rejects delete on a non-archived session (must archive first)', async () => {
@@ -628,8 +640,12 @@ describe('SessionsService lifecycle (phase 3)', () => {
 
     it('surfaces a permanent media cleanup failure instead of retrying forever', async () => {
       const id = await seedArchivedWithEvents();
-      const internals = service as unknown as { media?: { deleteSession: (sessionId: string) => void } };
+      const internals = service as unknown as {
+        media?: { deleteSession: (sessionId: string) => void };
+        transcriptSnapshotCache: Map<string, unknown>;
+      };
       const originalMedia = internals.media;
+      internals.transcriptSnapshotCache.set(id, { mtimeMs: 1 });
       let cleanupCalls = 0;
       internals.media = { deleteSession: () => {
         cleanupCalls += 1;
@@ -654,8 +670,10 @@ describe('SessionsService lifecycle (phase 3)', () => {
         const callsAfterSurface = cleanupCalls;
         await new Promise((resolve) => setTimeout(resolve, 250));
         expect(cleanupCalls).toBe(callsAfterSurface);
+        expect(internals.transcriptSnapshotCache.has(id)).toBe(true);
       } finally {
         internals.media = originalMedia;
+        internals.transcriptSnapshotCache.delete(id);
       }
     });
 

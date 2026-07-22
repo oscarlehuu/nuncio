@@ -9,6 +9,8 @@ export interface McpImportCandidate {
   enabled: boolean;
   auth: McpAuthMode;
   secretKeys: string[];
+  secretArgIndexes?: number[];
+  secretUrlQueryKeys?: string[];
 }
 
 export type McpImportSourceId = 'cursor' | 'claude' | 'codex';

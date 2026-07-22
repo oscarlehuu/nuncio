@@ -86,11 +86,21 @@ describe('PiLocalSessionsService', () => {
     ]);
   });
 
-  it('opens a session through the pi SDK when hydrating', async () => {
-    const events = await service.readTranscriptEvents(piPath);
-    expect(events).toEqual([
-      { type: 'user_message', payload: { text: `opened ${piPath}` } },
-    ]);
+  it('opens a session through the pi SDK when hydrating', () => {
+    expect(service.readTranscriptEvents(piPath)).toEqual({
+      ok: true,
+      events: [{ type: 'user_message', payload: { text: `opened ${piPath}` } }],
+    });
+  });
+
+  it('distinguishes a successfully empty transcript from a failed read', () => {
+    const previousOpenSession = service.openSession;
+    service.openSession = () => ({ getEntries: () => [] }) as never;
+    try {
+      expect(service.readTranscriptEvents(piPath)).toEqual({ ok: true, events: [] });
+    } finally {
+      service.openSession = previousOpenSession;
+    }
   });
 
   it('readModelMeta maps Pi buildSessionContext model and thinking level', () => {
@@ -166,10 +176,15 @@ describe('PiLocalSessionsService', () => {
     });
   });
 
-  it('readTranscriptEvents returns an empty array when openSession fails', () => {
+  it('readTranscriptEvents preserves repeated read failures', () => {
+    let attempts = 0;
     service.openSession = () => {
+      attempts += 1;
       throw new Error('missing file');
     };
-    expect(service.readTranscriptEvents(piPath)).toEqual([]);
+
+    expect(service.readTranscriptEvents(piPath)).toMatchObject({ ok: false });
+    expect(service.readTranscriptEvents(piPath)).toMatchObject({ ok: false });
+    expect(attempts).toBe(2);
   });
 });

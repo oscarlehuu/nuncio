@@ -4,14 +4,17 @@ import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseModule } from '../../../src/db/database.module';
+import { DatabaseService } from '../../../src/db/database.service';
 import { MCP_SETTINGS_KEY, McpServersRepository } from '../../../src/mcp/persistence/mcp-servers.repository';
 import { McpService } from '../../../src/mcp/mcp.service';
+import { transportIdentity } from '../../../src/mcp/domain/mcp-transport';
 import type { McpStdioTransport } from '../../../src/mcp/domain/mcp.types';
 
 describe('McpService', () => {
   let module: TestingModule;
   let service: McpService;
   let repo: McpServersRepository;
+  let database: DatabaseService;
   let dataDir: string;
 
   beforeAll(async () => {
@@ -29,6 +32,7 @@ describe('McpService', () => {
 
     service = module.get(McpService);
     repo = module.get(McpServersRepository);
+    database = module.get(DatabaseService);
   });
 
   afterAll(async () => {
@@ -146,6 +150,74 @@ describe('McpService', () => {
       expect(created.scope).toBe('global');
     });
 
+    it('auto-detects and masks direct service create secrets before returning', () => {
+      const created = service.create({
+        name: 'service-auto-create',
+        transport: {
+          type: 'stdio',
+          command: 'service-mcp',
+          args: ['--api-key=service-inline-secret'],
+          env: { API_TOKEN: 'service-env-secret', PLAIN: 'visible' },
+        },
+      });
+
+      const serialized = JSON.stringify(created);
+      expect(serialized).not.toContain('service-inline-secret');
+      expect(serialized).not.toContain('service-env-secret');
+      expect(serialized).toContain('--api-key=');
+      expect(created.secretKeys).toEqual(['API_TOKEN']);
+      expect(created.secretArgIndexes).toEqual([0]);
+      const raw = database.db
+        .prepare<{ transport_json: string }, [string]>(
+          'SELECT transport_json FROM mcp_servers WHERE id = ?',
+        )
+        .get(created.id);
+      expect(raw?.transport_json).not.toContain('service-inline-secret');
+      expect(raw?.transport_json).not.toContain('service-env-secret');
+      expect(repo.getRuntime(created.id)?.transport).toEqual({
+        type: 'stdio',
+        command: 'service-mcp',
+        args: ['--api-key=service-inline-secret'],
+        env: { API_TOKEN: 'service-env-secret', PLAIN: 'visible' },
+      });
+    });
+
+    it('masks imported CLI args, URL query values, and arbitrary header values in list DTOs', () => {
+      service.create({
+        name: 'masked-cli',
+        transport: {
+          type: 'stdio',
+          command: 'npx',
+          args: ['account-mcp', '--token', 'cli-secret', '--api-key=inline-secret'],
+        },
+        sources: ['import:cursor'],
+        secretKeys: [],
+        secretArgIndexes: [2, 3],
+        secretUrlQueryKeys: [],
+      } as never);
+      service.create({
+        name: 'masked-remote',
+        transport: {
+          type: 'http',
+          url: 'https://remote.example/mcp?tenant=query-secret',
+          headers: { 'X-Account': 'header-secret' },
+        },
+        sources: ['import:claude'],
+        secretKeys: ['X-Account'],
+        secretArgIndexes: [],
+        secretUrlQueryKeys: ['tenant'],
+      } as never);
+
+      const serialized = JSON.stringify(service.list());
+      expect(serialized).not.toContain('cli-secret');
+      expect(serialized).not.toContain('inline-secret');
+      expect(serialized).not.toContain('query-secret');
+      expect(serialized).not.toContain('header-secret');
+      expect(serialized).toContain('--api-key=');
+      expect(serialized).toContain('remote.example');
+      expect(serialized).toContain('tenant');
+    });
+
     it('marks project scope on DTOs', () => {
       const created = service.create({
         name: 'proj-dto',
@@ -167,13 +239,56 @@ describe('McpService', () => {
       ).toThrow(/command/i);
     });
 
-    it('rejects a remote transport with an invalid url', () => {
-      expect(() =>
+    it('rejects a remote transport with an invalid url without echoing query secrets', () => {
+      let thrown: unknown;
+      try {
         service.create({
           name: 'broken-url',
-          transport: { type: 'http', url: 'not a url' },
+          transport: { type: 'http', url: 'not a url?token=invalid-url-secret' },
+        });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toMatch(/url/i);
+      expect((thrown as Error).message).not.toContain('invalid-url-secret');
+    });
+
+    it('rejects username-only, password-bearing, and encoded URL userinfo without persistence', () => {
+      const unsafeUrls = [
+        'https://alice@remote.example/mcp',
+        'https://alice:plain-password@remote.example/mcp',
+        'https://%61lice:p%40ssword@remote.example/mcp',
+      ];
+      for (const [index, url] of unsafeUrls.entries()) {
+        let thrown: unknown;
+        try {
+          service.create({ name: `unsafe-${index}`, transport: { type: 'http', url } });
+        } catch (error) {
+          thrown = error;
+        }
+        expect(thrown).toBeInstanceOf(Error);
+        expect((thrown as Error).message).toMatch(/username|password|credentials/i);
+        expect((thrown as Error).message).not.toContain('plain-password');
+        expect((thrown as Error).message).not.toContain('p%40ssword');
+      }
+      expect(repo.list()).toEqual([]);
+    });
+
+    it('rejects URL userinfo on update and retains the prior transport', () => {
+      const created = service.create({
+        name: 'safe-before-update',
+        transport: { type: 'http', url: 'https://remote.example/original' },
+      });
+      expect(() =>
+        service.update(created.id, {
+          transport: { type: 'sse', url: 'https://alice:update-password@remote.example/mcp' },
         }),
-      ).toThrow(/url/i);
+      ).toThrow(/username|password|credentials/i);
+      expect(repo.get(created.id)?.transport).toEqual({
+        type: 'http',
+        url: 'https://remote.example/original',
+      });
     });
 
     it('rejects unknown engine ids', () => {
@@ -277,6 +392,90 @@ describe('McpService', () => {
       const stored = repo.get(created.id);
       expect((stored?.transport as { headers?: Record<string, string> }).headers).toEqual({
         Authorization: 'Bearer topsecret1',
+      });
+    });
+
+    it('restores masked env and mixed CLI argument secrets before identity and persistence', () => {
+      const rawTransport = {
+        type: 'stdio' as const,
+        command: 'npx',
+        args: ['zero-index-secret', '--token', 'separate-secret', '--api-key=inline-secret'],
+        env: { API_TOKEN: 'env-secret', PLAIN: 'visible' },
+      };
+      const created = service.create({
+        name: 'mixed-stdio-secrets',
+        transport: rawTransport,
+        secretKeys: ['API_TOKEN'],
+        secretArgIndexes: [0, 2, 3, -1],
+      });
+      expect(created.secretArgIndexes).toEqual([0, 2, 3]);
+
+      const updated = service.update(created.id, {
+        name: 'mixed-stdio-secrets-updated',
+        transport: created.transport,
+      });
+
+      expect(updated?.name).toBe('mixed-stdio-secrets-updated');
+      expect(repo.get(created.id)?.transport).toEqual(rawTransport);
+      expect(repo.findByIdentity(transportIdentity(rawTransport), null)?.id).toBe(created.id);
+    });
+
+    it('restores masked headers and duplicate Unicode URL query secrets before persistence', () => {
+      const rawTransport = {
+        type: 'http' as const,
+        url: 'https://remote.example/mcp?tenant=first-secret&tenant=s%E1%BA%AFc-second&mode=read',
+        headers: { Authorization: 'Bearer header-secret', Accept: 'application/json' },
+      };
+      const created = service.create({
+        name: 'mixed-remote-secrets',
+        transport: rawTransport,
+        secretKeys: ['Authorization'],
+        secretUrlQueryKeys: ['tenant'],
+      });
+
+      service.update(created.id, { transport: created.transport });
+
+      const stored = repo.get(created.id);
+      expect(stored?.transport).toEqual(rawTransport);
+      const storedUrl = new URL((stored?.transport as { url: string }).url);
+      expect(storedUrl.searchParams.getAll('tenant')).toEqual(['first-secret', 'sắc-second']);
+      expect((stored?.transport as { headers?: Record<string, string> }).headers).toEqual({
+        Authorization: 'Bearer header-secret',
+        Accept: 'application/json',
+      });
+      expect(repo.findByIdentity(transportIdentity(rawTransport), null)?.id).toBe(created.id);
+    });
+
+    it('auto-detects and masks direct service update secrets before returning', () => {
+      const created = service.create({
+        name: 'service-auto-update',
+        transport: { type: 'http', url: 'https://service-update.example/mcp' },
+      });
+
+      const updated = service.update(created.id, {
+        transport: {
+          type: 'http',
+          url: 'https://service-update.example/mcp?tenant=service-query-secret',
+          headers: { Authorization: 'Bearer service-header-secret' },
+        },
+      });
+
+      const serialized = JSON.stringify(updated);
+      expect(serialized).not.toContain('service-query-secret');
+      expect(serialized).not.toContain('service-header-secret');
+      expect(updated?.secretKeys).toEqual(['Authorization']);
+      expect(updated?.secretUrlQueryKeys).toEqual(['tenant']);
+      const raw = database.db
+        .prepare<{ transport_json: string }, [string]>(
+          'SELECT transport_json FROM mcp_servers WHERE id = ?',
+        )
+        .get(created.id);
+      expect(raw?.transport_json).not.toContain('service-query-secret');
+      expect(raw?.transport_json).not.toContain('service-header-secret');
+      expect(repo.getRuntime(created.id)?.transport).toEqual({
+        type: 'http',
+        url: 'https://service-update.example/mcp?tenant=service-query-secret',
+        headers: { Authorization: 'Bearer service-header-secret' },
       });
     });
 

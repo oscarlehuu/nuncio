@@ -15,6 +15,10 @@ interface TerminalClientMessage {
   data?: unknown;
 }
 
+function isTerminalClientMessage(value: unknown): value is TerminalClientMessage {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 export type { RemoteTrust } from '../auth/upgrade-auth';
 
 /** Shared WS upgrade rule (see auth/upgrade-auth.ts), kept under its historical name. */
@@ -92,13 +96,15 @@ export function attachTerminalWebSocketServer(
     };
 
     ws.on('message', (raw) => {
-      let message: TerminalClientMessage;
+      let parsed: unknown;
       try {
         const text = typeof raw === 'string' ? raw : raw.toString('utf8');
-        message = JSON.parse(text) as TerminalClientMessage;
+        parsed = JSON.parse(text) as unknown;
       } catch {
         return;
       }
+      if (!isTerminalClientMessage(parsed)) return;
+      const message = parsed;
 
       if (message.type === 'start') {
         killTerminal();

@@ -168,6 +168,41 @@ describe('FileExplorerService', () => {
     expect(existsSync(join(root, 'README.md'))).toBe(false);
   });
 
+  it('rejects a dangling leaf symlink whose missing target is outside the workspace', () => {
+    const outsideTarget = join(outside, 'not-created.txt');
+    symlinkSync(outsideTarget, join(root, 'dangling-outside'), 'file');
+    expect(existsSync(outsideTarget)).toBe(false);
+
+    expectBadRequest(() => service.writeFile(root, 'dangling-outside', 'must stay inside'));
+
+    expect(existsSync(outsideTarget)).toBe(false);
+  });
+
+  it('rejects a dangling symlink target in a sibling path sharing the root prefix', () => {
+    const siblingRoot = `${root}-sibling`;
+    const siblingTarget = join(siblingRoot, 'not-created.txt');
+    mkdirSync(siblingRoot);
+    symlinkSync(siblingTarget, join(root, 'prefix-sibling-link'), 'file');
+
+    try {
+      expectBadRequest(() => service.writeFile(root, 'prefix-sibling-link', 'outside'));
+      expect(existsSync(siblingTarget)).toBe(false);
+    } finally {
+      rmSync(siblingRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves writes through a dangling leaf symlink to an in-workspace target', () => {
+    const insideTarget = join(root, 'src', 'created-through-link.txt');
+    symlinkSync(insideTarget, join(root, 'dangling-inside'), 'file');
+
+    expect(service.writeFile(root, 'dangling-inside', 'inside')).toEqual({
+      path: 'dangling-inside',
+      size: 6,
+    });
+    expect(readFileSync(insideTarget, 'utf8')).toBe('inside');
+  });
+
   it('requires existing parent directories for file writes', () => {
     expectBadRequest(() => service.writeFile(root, 'missing/new.txt', 'nope'));
   });

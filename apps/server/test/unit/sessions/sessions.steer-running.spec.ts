@@ -1,3 +1,4 @@
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -708,6 +709,61 @@ describe('SessionsService steer while RUNNING', () => {
 
     await expect(service.steer(created.id, 'too late')).rejects.toThrow();
   });
+
+  it('keeps missing-session interrupt rejection provider-free', async () => {
+    const resolve = jest.fn(() => stubProvider());
+    registry.resolveForSession = resolve as AgentRegistry['resolveForSession'];
+
+    await expect(service.interrupt('missing-session')).rejects.toBeInstanceOf(NotFoundException);
+
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it.each(['CREATED', 'IDLE', 'PAUSED', 'ERROR', 'ARCHIVED'] as const)(
+    'rejects interrupt in %s before provider resolution or recovery bookkeeping',
+    async (status) => {
+      const created = sessions.create({ prompt: `interrupt ${status}`, provider: 'cursor' });
+      if (status !== 'CREATED') {
+        sessions.updateStatus(created.id, 'RUNNING');
+        if (status === 'ERROR') {
+          sessions.updateStatus(created.id, 'ERROR');
+        } else {
+          sessions.updateStatus(created.id, 'IDLE');
+          if (status === 'PAUSED') sessions.updateStatus(created.id, 'PAUSED');
+          if (status === 'ARCHIVED') sessions.updateStatus(created.id, 'ARCHIVED');
+        }
+      }
+      const interrupt = jest.fn(async () => undefined);
+      const provider = stubProvider({
+        capabilities: {
+          interrupt: true,
+          modelSwitch: 'none',
+          effortSwitch: 'none',
+          images: false,
+          steerWhileRunning: false,
+        },
+        interrupt,
+      });
+      const resolve = jest.fn(() => provider);
+      registry.resolveForSession = resolve as AgentRegistry['resolveForSession'];
+      const internals = service as unknown as {
+        interruptAttempts: Map<string, symbol>;
+        interruptRecoveriesStarted: Map<string, symbol>;
+        interruptRecoveries: Map<string, unknown>;
+        interruptForceIdleTimers: Map<string, unknown>;
+      };
+
+      await expect(service.interrupt(created.id)).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(resolve).not.toHaveBeenCalled();
+      expect(interrupt).not.toHaveBeenCalled();
+      expect(events.list(created.id).filter((event) => event.type === 'interrupted')).toEqual([]);
+      expect(internals.interruptAttempts.has(created.id)).toBe(false);
+      expect(internals.interruptRecoveriesStarted.has(created.id)).toBe(false);
+      expect(internals.interruptRecoveries.has(created.id)).toBe(false);
+      expect(internals.interruptForceIdleTimers.has(created.id)).toBe(false);
+    },
+  );
 
   it('appends an interrupted event after a successful interrupt', async () => {
     const id = seedRunning();

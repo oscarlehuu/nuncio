@@ -204,6 +204,87 @@ describe('claimPairing', () => {
       claimPairing('http://a', { code: 'c' }, async () => jsonResponse(200, { deviceId: 'd1' })),
     ).rejects.toBeInstanceOf(PairingClaimError);
   });
+
+  it('treats a zero deadline as already expired without starting fetch', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, claim));
+
+    await expect(
+      claimPairing('http://a', { code: 'c' }, { timeoutMs: 0, fetchImpl }),
+    ).rejects.toBeInstanceOf(PairingClaimError);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('settles at the hard deadline when fetch ignores AbortSignal', async () => {
+    vi.useFakeTimers();
+    try {
+      let outcome = 'pending';
+      const rejection = claimPairing('http://a', { code: 'c' }, {
+        timeoutMs: 1000,
+        fetchImpl: () => new Promise<Response>(() => {}),
+      }).then(
+        () => null,
+        (error) => {
+          outcome = 'rejected';
+          return error;
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(outcome).toBe('pending');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await rejection).toMatchObject({
+        name: 'PairingClaimError',
+        reason: 'error',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('applies the hard deadline to a response body that never settles', async () => {
+    vi.useFakeTimers();
+    try {
+      const rejection = claimPairing('http://a', { code: 'c' }, {
+        timeoutMs: 1000,
+        fetchImpl: async () =>
+          ({
+            status: 200,
+            ok: true,
+            json: () => new Promise<never>(() => {}),
+          }) as unknown as Response,
+      }).then(
+        () => null,
+        (error) => error,
+      );
+
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await rejection).toBeInstanceOf(PairingClaimError);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('supports caller cancellation even when fetch ignores the signal', async () => {
+    const caller = new AbortController();
+    let forwardedSignal: AbortSignal | null | undefined;
+    const promise = claimPairing('http://a', { code: 'c' }, {
+      signal: caller.signal,
+      timeoutMs: 60_000,
+      fetchImpl: (_url, init) => {
+        forwardedSignal = init?.signal;
+        return new Promise<Response>(() => {});
+      },
+    });
+
+    await Promise.resolve();
+    caller.abort();
+
+    await expect(promise).rejects.toMatchObject({
+      name: 'PairingClaimError',
+      reason: 'error',
+    });
+    expect(forwardedSignal?.aborted).toBe(true);
+  });
 });
 
 describe('deviceBearer', () => {

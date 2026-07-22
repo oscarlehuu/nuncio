@@ -13,7 +13,11 @@
       ]
     },
     "apps/server": {
-      "entry": ["src/main.ts", "test/e2e/fixtures/mcp-echo-server.ts"],
+      "entry": [
+        "src/main.ts",
+        "test/e2e/fixtures/mcp-echo-server.ts",
+        "test/unit/**/*-child.ts"
+      ],
       "ignoreBinaries": ["src/main.ts"]
     },
     "apps/web": {},

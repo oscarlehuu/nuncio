@@ -100,6 +100,37 @@ describe('TasksService', () => {
     throw new Error(`task ${id} did not reach ${statuses.join('/')} in time`);
   }
 
+  it('atomically rolls back a correlated task when the owner write fails', () => {
+    const prompt = `correlation rollback ${Date.now()}`;
+
+    expect(() => service.enqueueCorrelated(
+      { prompt, holdUntil: Date.now() + 60_000 },
+      () => { throw new Error('owner correlation failed'); },
+    )).toThrow('owner correlation failed');
+
+    expect(repo.list().some((task) => task.prompt === prompt)).toBe(false);
+  });
+
+  it('keeps a nested correlated task queued until its commit continuation runs once', async () => {
+    writeVerifyScript('exit 0\n');
+    const deferred = service.deferPumpUntilCommit(() => service.enqueueCorrelated(
+      { prompt: 'deferred correlated task', provider: 'cursor', workspace },
+      (task) => task.id,
+    ));
+
+    await Promise.resolve();
+    expect(repo.findById(deferred.result.task.id)).toMatchObject({
+      status: 'QUEUED',
+      sessionId: null,
+    });
+
+    deferred.afterCommit();
+    deferred.afterCommit();
+    const done = await waitForStatus(deferred.result.task.id, ['DONE', 'FAILED']);
+    expect(done.status).toBe('DONE');
+    expect(repo.list().filter((task) => task.id === done.id)).toHaveLength(1);
+  });
+
   it('runs an enqueued task to DONE with the verify outcome recorded', async () => {
     writeVerifyScript('echo task-ok\nexit 0\n');
     const task = service.enqueue({ prompt: 'do the thing', provider: 'cursor', workspace });
@@ -341,6 +372,33 @@ describe('TasksService', () => {
     const secondDone = await waitForStatus(second.id, ['DONE', 'FAILED']);
     expect(firstDone.status).toBe('DONE');
     expect(secondDone.status).toBe('DONE');
+  });
+
+  it('retries a transient finish transaction failure so the next queued task can run', async () => {
+    writeVerifyScript('exit 0\n');
+    const originalFinish = repo.finish.bind(repo);
+    let failures = 1;
+    const finishSpy = jest.spyOn(repo, 'finish').mockImplementation((...args) => {
+      if (failures-- > 0) throw new Error('database temporarily unavailable');
+      return originalFinish(...args);
+    });
+    const first = service.enqueue({ prompt: 'finish retries', provider: 'cursor', workspace });
+    const second = service.enqueue({ prompt: 'lane progresses', provider: 'cursor', workspace });
+
+    try {
+      const firstDone = await waitForStatus(first.id, ['DONE', 'FAILED'], 3_000);
+      const secondDone = await waitForStatus(second.id, ['DONE', 'FAILED'], 3_000);
+      expect(firstDone.status).toBe('DONE');
+      expect(secondDone.status).toBe('DONE');
+      expect(finishSpy.mock.calls.length).toBeGreaterThanOrEqual(3);
+    } finally {
+      finishSpy.mockRestore();
+      if (repo.findById(first.id)?.status === 'RUNNING') {
+        repo.finish(first.id, 'FAILED', { reason: 'test-cleanup' });
+      }
+      (service as unknown as { pump: () => void }).pump();
+      await waitForStatus(second.id, ['DONE', 'FAILED']).catch(() => undefined);
+    }
   });
 
   it('marks the task FAILED when the session cannot be created', async () => {

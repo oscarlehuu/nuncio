@@ -12,6 +12,19 @@ import {
   type TaskStatus,
 } from './tasks.types';
 
+export interface TaskReconciliation {
+  taskId: string;
+  digestPending: boolean;
+  settlementPending: boolean;
+  task: TaskDto | null;
+}
+
+interface TaskReconciliationRow {
+  task_id: string;
+  digest_pending: number;
+  settlement_pending: number;
+}
+
 @Injectable()
 export class TasksRepository {
   private readonly cancellationReservations = new Set<string>();
@@ -19,6 +32,11 @@ export class TasksRepository {
 
   create(input: CreateTaskDto): TaskDto {
     return this.createMany([input])[0]!;
+  }
+
+  /** Insert one row inside a transaction already owned by the caller. */
+  createInCurrentTransaction(input: CreateTaskDto): TaskDto {
+    return taskRowToDto(this.insert(input));
   }
 
   createMany(inputs: CreateTaskDto[]): TaskDto[] {
@@ -60,6 +78,7 @@ export class TasksRepository {
       execution_kind: input.executionKind ?? 'session',
       runtime_policy_json: stringifyAgentRuntimePolicy(input.runtimePolicy),
       verify_owner: input.verifyOwner ?? 'session',
+      schedule_dispatch_intent_id: this.database.currentScheduleDispatchIntentId,
       created_at: now,
       updated_at: now,
       started_at: null,
@@ -71,9 +90,9 @@ export class TasksRepository {
            base_branch, use_worktree, workspace, parent_session_id, role, cleanup_policy,
            review_state, session_id, outcome_json, hold_until, context_json, notify_policy, tag,
            crew_run_id, crew_member_key, crew_phase, crew_attempt_key,
-           execution_kind, runtime_policy_json, verify_owner,
+           execution_kind, runtime_policy_json, verify_owner, schedule_dispatch_intent_id,
            created_at, updated_at, started_at, finished_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id, row.prompt, row.status, row.provider, row.model, row.model_options,
@@ -81,7 +100,7 @@ export class TasksRepository {
         row.role, row.cleanup_policy, row.review_state, row.session_id, row.outcome_json,
         row.hold_until, row.context_json, row.notify_policy, row.tag,
         row.crew_run_id, row.crew_member_key, row.crew_phase, row.crew_attempt_key, row.execution_kind,
-        row.runtime_policy_json, row.verify_owner,
+        row.runtime_policy_json, row.verify_owner, row.schedule_dispatch_intent_id,
         row.created_at, row.updated_at, row.started_at, row.finished_at,
       );
     return row;
@@ -110,6 +129,55 @@ export class TasksRepository {
       .prepare<TaskRow, [string]>('SELECT * FROM tasks WHERE id = ?')
       .get(id);
     return row ? taskRowToDto(row) : null;
+  }
+
+  findByApprovalCorrelation(correlationKey: string): TaskDto | null {
+    const row = this.database.db.prepare<TaskRow, [string]>(
+      `SELECT tasks.* FROM tasks
+       INNER JOIN task_approval_correlations AS correlations
+         ON correlations.task_id = tasks.id
+       WHERE correlations.correlation_key = ?`,
+    ).get(correlationKey);
+    if (row) return taskRowToDto(row);
+    this.database.db.prepare(
+      `DELETE FROM task_approval_correlations
+       WHERE correlation_key = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM tasks WHERE tasks.id = task_approval_correlations.task_id
+         )`,
+    ).run(correlationKey);
+    return null;
+  }
+
+  correlateApprovalTask(
+    correlationKey: string,
+    taskId: string,
+    options: { activeOnly?: boolean } = {},
+  ): TaskDto | null {
+    const existing = this.findByApprovalCorrelation(correlationKey);
+    if (existing) return existing;
+    const task = this.findById(taskId);
+    if (!task) return null;
+    if (options.activeOnly && task.status !== 'QUEUED' && task.status !== 'RUNNING') return null;
+    this.database.db.prepare(
+      `INSERT INTO task_approval_correlations (correlation_key, task_id, created_at)
+       VALUES (?, ?, ?)`,
+    ).run(correlationKey, task.id, Date.now());
+    return task;
+  }
+
+  createApprovalTaskInCurrentTransaction(
+    input: CreateTaskDto,
+    correlationKey: string,
+  ): TaskDto {
+    const existing = this.findByApprovalCorrelation(correlationKey);
+    if (existing) return existing;
+    const task = this.createInCurrentTransaction(input);
+    this.database.db.prepare(
+      `INSERT INTO task_approval_correlations (correlation_key, task_id, created_at)
+       VALUES (?, ?, ?)`,
+    ).run(correlationKey, task.id, Date.now());
+    return task;
   }
 
   /** Atomically claim the oldest QUEUED task past its hold window, marking it RUNNING. */
@@ -289,31 +357,98 @@ export class TasksRepository {
     return row?.count ?? 0;
   }
 
-  /** Boot reconciliation: a RUNNING row after restart means the runner died mid-task. */
+  /**
+   * Boot reconciliation: terminalize every orphaned RUNNING task and enqueue its
+   * digest/settlement replay in the same transaction. A daemon death after this
+   * commit can lose neither the FAILED state nor the work needed to publish it.
+   */
   failInterrupted(reason: string): TaskDto[] {
     const now = Date.now();
+    return this.database.immediateTransaction(() => {
+      const rows = this.database.db
+        .prepare<TaskRow, [string, number, number]>(
+          `UPDATE tasks
+           SET status = 'FAILED',
+               outcome_json = ?,
+               finished_at = ?,
+               updated_at = ?,
+               review_state = CASE
+                 WHEN role = 'subagent' THEN 'awaiting_review'
+                 ELSE review_state
+               END
+           WHERE status = 'RUNNING'
+           RETURNING *`,
+        )
+        .all(JSON.stringify({ reason }), now, now);
+      const enqueue = this.database.db.prepare(
+        `INSERT INTO task_reconciliation_outbox
+           (task_id, digest_pending, settlement_pending, created_at, updated_at)
+         VALUES (?, 1, 1, ?, ?)
+         ON CONFLICT(task_id) DO NOTHING`,
+      );
+      for (const row of rows) enqueue.run(row.id, now, now);
+      return rows.map(taskRowToDto);
+    });
+  }
+
+  listPendingReconciliations(): TaskReconciliation[] {
     const rows = this.database.db
-      .prepare<TaskRow, [string, number, number]>(
-        `UPDATE tasks
-         SET status = 'FAILED',
-             outcome_json = ?,
-             finished_at = ?,
-             updated_at = ?,
-             review_state = CASE
-               WHEN role = 'subagent' THEN 'awaiting_review'
-               ELSE review_state
-             END
-         WHERE status = 'RUNNING'
-         RETURNING *`,
+      .prepare<TaskReconciliationRow, []>(
+        `SELECT task_id, digest_pending, settlement_pending
+         FROM task_reconciliation_outbox
+         WHERE digest_pending = 1 OR settlement_pending = 1
+         ORDER BY created_at ASC, rowid ASC`,
       )
-      .all(JSON.stringify({ reason }), now, now);
-    return rows.map(taskRowToDto);
+      .all();
+    return rows.map((row) => ({
+      taskId: row.task_id,
+      digestPending: row.digest_pending === 1,
+      settlementPending: row.settlement_pending === 1,
+      task: this.findById(row.task_id),
+    }));
+  }
+
+  markReconciliationDigestHandled(taskId: string): boolean {
+    const claimed = this.database.db.prepare<{ task_id: string }, [number, string]>(
+      `UPDATE task_reconciliation_outbox
+       SET digest_pending = 0, updated_at = ?
+       WHERE task_id = ? AND digest_pending = 1
+       RETURNING task_id`,
+    ).get(Date.now(), taskId);
+    return Boolean(claimed);
+  }
+
+  markReconciliationSettlementHandled(taskId: string): boolean {
+    return this.database.transaction(() => {
+      const claimed = this.database.db.prepare<{ task_id: string }, [number, string]>(
+        `UPDATE task_reconciliation_outbox
+         SET settlement_pending = 0, updated_at = ?
+         WHERE task_id = ? AND settlement_pending = 1
+         RETURNING task_id`,
+      ).get(Date.now(), taskId);
+      if (!claimed) return false;
+      this.database.db.prepare(
+        `DELETE FROM task_reconciliation_outbox
+         WHERE task_id = ? AND digest_pending = 0 AND settlement_pending = 0`,
+      ).run(taskId);
+      return true;
+    });
+  }
+
+  deleteReconciliation(taskId: string): void {
+    this.database.db.prepare(
+      'DELETE FROM task_reconciliation_outbox WHERE task_id = ?',
+    ).run(taskId);
   }
 
   delete(id: string): boolean {
     const task = this.findById(id);
     if (!task || !TERMINAL_TASK_STATUSES.includes(task.status)) return false;
-    this.database.db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
+    this.database.transaction(() => {
+      this.database.db.prepare('DELETE FROM task_reconciliation_outbox WHERE task_id = ?').run(id);
+      this.database.db.prepare('DELETE FROM task_approval_correlations WHERE task_id = ?').run(id);
+      this.database.db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
+    });
     return true;
   }
 }

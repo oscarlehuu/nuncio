@@ -133,12 +133,18 @@ class DaemonSupervisor {
     this.healthTimeoutMs = options.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS;
     this.healthIntervalMs = options.healthIntervalMs ?? DEFAULT_HEALTH_INTERVAL_MS;
     this.killGraceMs = options.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
+    this.restartDelayMs = options.restartDelayMs ?? 250;
+    this.healthCheck = options.healthCheck ?? waitForHealth;
 
     this.child = null;
     this.port = null;
     this.url = null;
     this.stopping = false;
     this.restartAttempts = 0;
+    this.restartTimer = null;
+    this.restartInFlight = null;
+    this.stopPromise = null;
+    this.expectedExits = new WeakSet();
   }
 
   async start() {
@@ -156,7 +162,7 @@ class DaemonSupervisor {
 
     this.spawnDaemon();
 
-    const healthy = await waitForHealth(this.port, {
+    const healthy = await this.healthCheck(this.port, {
       host: this.host,
       timeoutMs: this.healthTimeoutMs,
       intervalMs: this.healthIntervalMs,
@@ -192,18 +198,20 @@ class DaemonSupervisor {
     });
 
     child.once('exit', (code, signal) => {
+      const expected = this.expectedExits.delete(child);
       if (this.child === child) {
         this.child = null;
       }
 
       this.log(`[daemon exit] code=${code ?? 'null'} signal=${signal ?? 'null'}`);
 
-      if (this.stopping) {
+      if (this.stopping || expected) {
         return;
       }
 
       this.restartAfterUnexpectedExit();
     });
+    return child;
   }
 
   pipeLogs(stream, label) {
@@ -222,6 +230,9 @@ class DaemonSupervisor {
   }
 
   restartAfterUnexpectedExit() {
+    if (this.stopping || this.restartTimer || this.restartInFlight) {
+      return;
+    }
     if (this.restartAttempts >= this.maxRestarts) {
       this.log(`[daemon] restart cap reached (${this.maxRestarts}); not restarting`);
       return;
@@ -231,68 +242,116 @@ class DaemonSupervisor {
     const attempt = this.restartAttempts;
     this.log(`[daemon] unexpected exit; restarting (${attempt}/${this.maxRestarts})`);
 
-    setTimeout(async () => {
-      if (this.stopping) {
-        return;
-      }
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
+      if (this.stopping) return;
 
-      try {
-        this.spawnDaemon();
-        const healthy = await waitForHealth(this.port, {
-          host: this.host,
-          timeoutMs: this.healthTimeoutMs,
-          intervalMs: this.healthIntervalMs,
+      const run = this.runRestartAttempt();
+      this.restartInFlight = run;
+      void run
+        .catch((error) => {
+          this.log(`[daemon] restart failed: ${error.message}`);
+          return false;
+        })
+        .then((healthy) => {
+          if (!healthy && !this.stopping) {
+            this.log('[daemon] restarted process did not become healthy');
+          }
+          return healthy;
+        })
+        .finally(() => {
+          if (this.restartInFlight === run) {
+            this.restartInFlight = null;
+          }
+          if (!this.stopping && !this.child) {
+            this.restartAfterUnexpectedExit();
+          }
         });
-
-        if (!healthy) {
-          this.log('[daemon] restarted process did not become healthy');
-        }
-      } catch (error) {
-        this.log(`[daemon] restart failed: ${error.message}`);
-      }
-    }, 250);
+    }, this.restartDelayMs);
   }
 
-  stop() {
-    this.stopping = true;
-    const child = this.child;
-
-    if (!child) {
-      return Promise.resolve();
+  async runRestartAttempt() {
+    const spawned = this.spawnDaemon();
+    const child = spawned ?? this.child;
+    let healthy = false;
+    try {
+      healthy = await this.healthCheck(this.port, {
+        host: this.host,
+        timeoutMs: this.healthTimeoutMs,
+        intervalMs: this.healthIntervalMs,
+      });
+    } catch (error) {
+      this.log(`[daemon] restart health check failed: ${error.message}`);
     }
 
-    if (hasChildExited(child)) {
+    if (this.stopping) return true;
+    if (healthy && child && this.child === child && !hasChildExited(child)) {
+      return true;
+    }
+
+    if (child && !hasChildExited(child)) {
+      await this.terminateChild(child);
+    } else if (child && this.child === child) {
       this.child = null;
+    }
+    return false;
+  }
+
+  terminateChild(child) {
+    if (hasChildExited(child)) {
+      if (this.child === child) this.child = null;
       return Promise.resolve();
     }
 
+    this.expectedExits.add(child);
     return new Promise((resolve) => {
       let exited = false;
       const finish = () => {
-        if (exited) {
-          return;
-        }
+        if (exited) return;
         exited = true;
         clearTimeout(killTimer);
+        child.off('exit', finish);
         if (this.child === child) {
           this.child = null;
         }
         resolve();
       };
-
       const killTimer = setTimeout(() => {
-        if (!exited) {
-          child.kill('SIGKILL');
+        if (exited) return;
+        try {
+          if (!child.kill('SIGKILL')) finish();
+        } catch {
+          finish();
         }
       }, this.killGraceMs);
 
       child.once('exit', finish);
-
-      if (!child.kill('SIGTERM')) {
-        child.off('exit', finish);
+      try {
+        if (!child.kill('SIGTERM')) finish();
+      } catch {
         finish();
       }
     });
+  }
+
+  stop() {
+    this.stopping = true;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    if (this.stopPromise) return this.stopPromise;
+
+    const child = this.child;
+    if (!child) return Promise.resolve();
+
+    const stopPromise = this.terminateChild(child).finally(() => {
+      if (this.stopPromise === stopPromise) {
+        this.stopPromise = null;
+      }
+    });
+    this.stopPromise = stopPromise;
+    return stopPromise;
   }
 }
 

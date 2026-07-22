@@ -28,6 +28,10 @@ interface RpcMessage {
   params?: unknown;
 }
 
+function isRpcMessage(value: unknown): value is RpcMessage {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 interface RpcError {
   code: number;
   message: string;
@@ -327,13 +331,18 @@ export function attachSessionsWebSocketServer(
     };
 
     ws.on('message', (raw) => {
-      let msg: RpcMessage;
+      let parsed: unknown;
       try {
         const text = typeof raw === 'string' ? raw : raw.toString('utf8');
-        msg = JSON.parse(text) as RpcMessage;
+        parsed = JSON.parse(text) as unknown;
       } catch {
         return;
       }
+      if (!isRpcMessage(parsed)) {
+        send(ws, { error: { code: 400, message: 'Message must be a JSON object' } });
+        return;
+      }
+      const msg = parsed;
       void handle(msg).catch((error) => {
         send(ws, { id: msg.id, error: errorOf(error) });
       });

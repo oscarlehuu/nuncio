@@ -53,6 +53,10 @@ export interface McpServerDefinition {
   sources: McpServerSource[];
   /** Env-var names (stdio) or header names (http/sse) whose values are encrypted at rest. */
   secretKeys: string[];
+  /** Imported CLI argument positions whose values are encrypted and masked. */
+  secretArgIndexes?: number[];
+  /** Imported remote URL query keys whose values are encrypted and masked. */
+  secretUrlQueryKeys?: string[];
   createdAt: number;
   updatedAt: number;
 }
@@ -69,6 +73,8 @@ export interface CreateMcpServerInput {
   auth?: McpAuthMode;
   sources?: McpServerSource[];
   secretKeys?: string[];
+  secretArgIndexes?: number[];
+  secretUrlQueryKeys?: string[];
 }
 
 /** Fields callers may patch on an existing server. */
@@ -82,6 +88,8 @@ export interface UpdateMcpServerInput {
   engines?: McpEngineId[] | null;
   auth?: McpAuthMode;
   secretKeys?: string[];
+  secretArgIndexes?: number[];
+  secretUrlQueryKeys?: string[];
 }
 
 /** API shape: identical to the definition but secret values are masked. */

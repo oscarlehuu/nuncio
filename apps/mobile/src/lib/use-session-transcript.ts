@@ -5,6 +5,14 @@ import {
   type SessionSubscription,
   type WebSocketLike,
 } from '@nuncio/core/session-relay-client';
+import {
+  DEFAULT_SESSION_DETAIL_EVENT_TAIL,
+  hasEarlierSessionEvents,
+  highestSessionEventSeq,
+  mergeSessionEvents,
+  nextSessionEventBackfillBefore,
+  retainSessionEventWindow,
+} from '@nuncio/core/session-event-window';
 import { activeConnection, applyConnection } from './api-setup';
 import { authHeader, relayUrlFor } from './connection-store';
 import { type ConnectionManager, type ConnectionState } from './connection-manager';
@@ -16,48 +24,60 @@ type ScheduledFlush = {
 };
 
 const BOOTSTRAP_RELAY_FALLBACK_MS = 1_000;
-
-function mergeEvents(prev: SessionEvent[], incoming: SessionEvent[]): SessionEvent[] {
-  if (incoming.length === 0) return prev;
-  const seen = new Set(prev.map((event) => event.seq));
-  const fresh: SessionEvent[] = [];
-  for (const event of incoming) {
-    if (seen.has(event.seq)) continue;
-    seen.add(event.seq);
-    fresh.push(event);
-  }
-  if (fresh.length === 0) return prev;
-  return [...prev, ...fresh].sort((a, b) => a.seq - b.seq);
-}
+const MOBILE_TRANSCRIPT_EVENT_TAIL = DEFAULT_SESSION_DETAIL_EVENT_TAIL;
 
 /**
- * React Native cousin of the web's useSessionStream: REST replay first, then
- * the core relay client over a Bearer-authenticated WebSocket. Foregrounding
- * the app resyncs from the last seen seq, so a backgrounded phone catches up
- * gap-free.
+ * React Native cousin of the web's useSessionStream: a finite REST tail first,
+ * then the core relay client over a Bearer-authenticated WebSocket. Older pages
+ * remain available through loadEarlier; foreground/reconnect resumes from the
+ * highest live seq so sleeping phones catch up gap-free.
  */
 export function useSessionTranscript(sessionId: string | null) {
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [connectionState, setConnectionState] = useState<ConnectionState>('connecting');
+  const eventsRef = useRef<SessionEvent[]>([]);
   const sinceRef = useRef(0);
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
+  const generationRef = useRef(0);
   const subscriptionRef = useRef<SessionSubscription | null>(null);
   const managerRef = useRef<ConnectionManager | null>(null);
+  const loadingEarlierRef = useRef<Promise<void> | null>(null);
+  const protectedThroughRef = useRef(0);
+  const pendingProtectionThroughRef = useRef(0);
   const pendingEventsRef = useRef<SessionEvent[]>([]);
   const scheduledFlushRef = useRef<ScheduledFlush | null>(null);
+
+  const replaceEvents = useCallback((next: SessionEvent[]) => {
+    eventsRef.current = next;
+    setEvents(next);
+  }, []);
+
+  const updateEvents = useCallback((updater: (prev: SessionEvent[]) => SessionEvent[]) => {
+    const next = updater(eventsRef.current);
+    eventsRef.current = next;
+    setEvents(next);
+  }, []);
+
+  const applyRetention = useCallback((candidate: SessionEvent[]) => retainSessionEventWindow(
+    candidate,
+    MOBILE_TRANSCRIPT_EVENT_TAIL,
+    Math.max(protectedThroughRef.current, pendingProtectionThroughRef.current),
+  ), []);
 
   const flushPendingEvents = useCallback(() => {
     scheduledFlushRef.current = null;
     const pending = pendingEventsRef.current;
     if (pending.length === 0) return;
     pendingEventsRef.current = [];
-    setEvents((prev) => mergeEvents(prev, pending));
-  }, []);
+    updateEvents((prev) => applyRetention(mergeSessionEvents(prev, pending)));
+  }, [applyRetention, updateEvents]);
 
   const scheduleEventFlush = useCallback(() => {
     if (scheduledFlushRef.current) return;
     if (typeof requestAnimationFrame === 'function') {
       const id = requestAnimationFrame(flushPendingEvents);
-      scheduledFlushRef.current = { id, cancel: cancelAnimationFrame };
+      scheduledFlushRef.current = { id, cancel: (handle) => cancelAnimationFrame(handle) };
       return;
     }
     const id = setTimeout(flushPendingEvents, 16) as unknown as number;
@@ -79,15 +99,69 @@ export function useSessionTranscript(sessionId: string | null) {
     scheduleEventFlush();
   }, [scheduleEventFlush]);
 
+  const isCurrent = useCallback((id: string, generation: number) => (
+    sessionIdRef.current === id && generationRef.current === generation
+  ), []);
+
+  const loadEarlier = useCallback((): Promise<void> => {
+    if (loadingEarlierRef.current) return loadingEarlierRef.current;
+    const id = sessionIdRef.current;
+    const generation = generationRef.current;
+    const before = nextSessionEventBackfillBefore(eventsRef.current);
+    if (!id || before === null) return Promise.resolve();
+
+    pendingProtectionThroughRef.current = Math.max(
+      protectedThroughRef.current,
+      highestSessionEventSeq(eventsRef.current),
+    );
+    let committed = false;
+    const request = (async () => {
+      let earlier: SessionEvent[];
+      try {
+        earlier = await fetchEvents(id, 0, '', { before });
+      } catch (error) {
+        if (isCurrent(id, generation)) throw error;
+        return;
+      }
+      if (!isCurrent(id, generation)) return;
+
+      const pending = pendingEventsRef.current;
+      cancelPendingEventFlush();
+      updateEvents((current) => {
+        const merged = mergeSessionEvents(mergeSessionEvents(current, pending), earlier);
+        protectedThroughRef.current = Math.max(
+          protectedThroughRef.current,
+          highestSessionEventSeq(merged),
+        );
+        pendingProtectionThroughRef.current = 0;
+        return applyRetention(merged);
+      });
+      committed = true;
+    })();
+    loadingEarlierRef.current = request;
+    const clear = () => {
+      if (loadingEarlierRef.current !== request) return;
+      loadingEarlierRef.current = null;
+      if (!committed) {
+        pendingProtectionThroughRef.current = 0;
+        updateEvents((current) => applyRetention(current));
+      }
+    };
+    void request.then(clear, clear);
+    return request;
+  }, [applyRetention, cancelPendingEventFlush, isCurrent, updateEvents]);
+
   useEffect(() => {
+    const generation = ++generationRef.current;
     cancelPendingEventFlush();
-    setEvents([]);
+    replaceEvents([]);
     sinceRef.current = 0;
+    loadingEarlierRef.current = null;
+    protectedThroughRef.current = 0;
+    pendingProtectionThroughRef.current = 0;
     setConnectionState('connecting');
 
-    if (!sessionId) {
-      return;
-    }
+    if (!sessionId) return;
     const connection = activeConnection();
     if (!connection) return;
 
@@ -95,12 +169,8 @@ export function useSessionTranscript(sessionId: string | null) {
     let cleanupManager: (() => void) | null = null;
     let relayStarted = false;
 
-    // A fresh subscription reads the LIVE active connection, so a URL switch (or
-    // a rotated secret) reconnects with the current base URL and bearer. The
-    // manager is the sole reconnect authority: socket open/close are reported to
-    // it, and it drives every reopen (probe → URL-switch → reopen, back off while
-    // offline, cool down on server_shutdown). shouldReconnect keeps the relay
-    // from reconnecting behind it.
+    // A fresh subscription reads the live connection so URL/token rotation is
+    // picked up. The manager remains the only reconnect authority.
     const openSubscription = () => {
       subscriptionRef.current?.close();
       const current = activeConnection() ?? connection;
@@ -108,14 +178,14 @@ export function useSessionTranscript(sessionId: string | null) {
         url: relayUrlFor(current.serverUrl),
         sessionId,
         since: sinceRef.current,
+        tail: MOBILE_TRANSCRIPT_EVENT_TAIL,
         onEvent,
         onNotice: (notice) => managerRef.current?.handleNotice(notice),
         onOpen: () => managerRef.current?.handleOpen(),
         onClose: () => managerRef.current?.handleClose(),
         shouldReconnect: () => managerRef.current?.shouldReconnect() ?? true,
         webSocketFactory: (url) => {
-          // RN's WebSocket accepts an options bag with headers as the third arg,
-          // so the relay upgrade carries the same device/legacy bearer as REST.
+          // React Native accepts upgrade headers in the third constructor arg.
           const RNWebSocket = WebSocket as unknown as new (
             u: string,
             protocols?: string[] | null,
@@ -165,22 +235,25 @@ export function useSessionTranscript(sessionId: string | null) {
 
     void (async () => {
       try {
-        const initial = await fetchEvents(sessionId, 0);
-        if (cancelled) return;
-        setEvents((current) => mergeEvents(current, initial));
-        const fetchedSeq = initial.reduce((max, e) => Math.max(max, e.seq), 0);
+        const initial = await fetchEvents(sessionId, 0, '', {
+          tail: MOBILE_TRANSCRIPT_EVENT_TAIL,
+        });
+        if (!isCurrent(sessionId, generation)) return;
+        updateEvents((current) => applyRetention(mergeSessionEvents(current, initial)));
+        const fetchedSeq = initial.reduce((max, event) => Math.max(max, event.seq), 0);
         sinceRef.current = Math.max(sinceRef.current, fetchedSeq);
       } catch {
-        // REST bootstrap is optional: starting at seq 0 lets durable relay replay
-        // recover the full transcript after a transient HTTP failure.
+        // REST is a bootstrap optimization. Cursor-zero relay replay recovers a
+        // transient HTTP failure without losing durable history.
       }
-      if (cancelled) return;
+      if (!isCurrent(sessionId, generation)) return;
       clearTimeout(fallbackTimer);
       startRelay();
     })();
 
     return () => {
       cancelled = true;
+      if (generationRef.current === generation) generationRef.current += 1;
       clearTimeout(fallbackTimer);
       cleanupManager?.();
       managerRef.current = null;
@@ -188,7 +261,15 @@ export function useSessionTranscript(sessionId: string | null) {
       subscriptionRef.current = null;
       cancelPendingEventFlush();
     };
-  }, [sessionId, onEvent, cancelPendingEventFlush]);
+  }, [
+    sessionId,
+    onEvent,
+    applyRetention,
+    isCurrent,
+    replaceEvents,
+    updateEvents,
+    cancelPendingEventFlush,
+  ]);
 
   const steer = useCallback(
     async (message: string): Promise<Session> => {
@@ -198,5 +279,6 @@ export function useSessionTranscript(sessionId: string | null) {
     [sessionId],
   );
 
-  return { events, steer, connectionState };
+  const hasEarlier = hasEarlierSessionEvents(events);
+  return { events, steer, connectionState, loadEarlier, hasEarlier };
 }

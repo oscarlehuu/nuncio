@@ -36,6 +36,7 @@ export interface WebhookHandleResult {
 
 @Injectable()
 export class WebhooksService implements OnModuleDestroy {
+  deliveryHeartbeatMs = DELIVERY_HEARTBEAT_MS;
   private readonly stopFailureReporting: () => void;
   private readonly stopRecoveryReporting: () => void;
   private readonly deliveries: WebhookDeliveryTracker;
@@ -128,6 +129,7 @@ export class WebhooksService implements OnModuleDestroy {
       const sessionId = this.deliveries.reserveSessionId(claim);
       const existing = this.sessionRecords.findById(sessionId);
       if (existing) return accept(() => ({ created: true, sessionId }));
+      this.deliveries.assertOwned(claim);
       const session = await this.sessions.create({
         id: sessionId,
         prompt: `${event.title}\n\n${event.body}`.trim(),
@@ -169,6 +171,7 @@ export class WebhooksService implements OnModuleDestroy {
           accept,
           deliveryRetrying: claim.retrying,
           cleanupCheckpoint: claim.checkpoint,
+          assertDeliveryOwnership: () => this.deliveries.assertOwned(claim),
           markCleanupCheckpoint: () =>
             this.deliveries.markCheckpoint(claim, 'merge-cleanup-authorized'),
         },
@@ -188,18 +191,26 @@ export class WebhooksService implements OnModuleDestroy {
    * loop and never collides with the auto-session / PR-lifecycle claim on the same id.
    */
   private async dispatchEventLoops(provider: string, event: ForgeWebhookEvent): Promise<void> {
-    if (!this.scheduler) return;
+    const scheduler = this.scheduler;
+    if (!scheduler) return;
     if (event.kind !== 'issue' && event.kind !== 'pull_request') return;
     if (!event.deliveryId) return;
     const claimed = this.deliveries.claim(provider, `${event.deliveryId}#loops`);
     if (claimed.status !== 'claimed') return; // completed (replay) or in-progress → skip
+    const stopHeartbeat = this.startDeliveryHeartbeat(claimed.claim);
     try {
       const projectPath = await findWebhookProject(this.git, event);
-      this.scheduler.handleWebhookEvent(provider, event, projectPath);
-      this.deliveries.complete(claimed.claim, () => undefined);
+      // Commit the scheduler intent/target and delivery acceptance together so a
+      // daemon crash cannot leave a replayable delivery behind a committed target.
+      const afterCommit = this.deliveries.complete(claimed.claim, () =>
+        scheduler.handleWebhookEventTransactional(provider, event, projectPath),
+      );
+      afterCommit();
     } catch {
       // A resolve/dispatch failure stays retryable — release the lease.
       this.deliveries.release(claimed.claim);
+    } finally {
+      stopHeartbeat();
     }
   }
 
@@ -222,14 +233,7 @@ export class WebhooksService implements OnModuleDestroy {
       throw new ServiceUnavailableException('Webhook delivery is already being processed');
     }
     const claim = claimed.claim;
-    const heartbeat = setInterval(() => {
-      try {
-        this.deliveries.renew(claim);
-      } catch {
-        // Completion verifies ownership; a transient renewal failure remains fail closed.
-      }
-    }, DELIVERY_HEARTBEAT_MS);
-    heartbeat.unref?.();
+    const stopHeartbeat = this.startDeliveryHeartbeat(claim);
     let completed = false;
     const accept: WebhookDeliveryAcceptance = <T>(durableWork: () => T): T => {
       const result = this.deliveries.complete(claim, durableWork);
@@ -249,7 +253,19 @@ export class WebhooksService implements OnModuleDestroy {
       }
       throw error;
     } finally {
-      clearInterval(heartbeat);
+      stopHeartbeat();
     }
+  }
+
+  private startDeliveryHeartbeat(claim: WebhookDeliveryClaim): () => void {
+    const heartbeat = setInterval(() => {
+      try {
+        this.deliveries.renew(claim);
+      } catch {
+        // Ownership is rechecked synchronously before every fenced side effect.
+      }
+    }, this.deliveryHeartbeatMs);
+    heartbeat.unref?.();
+    return () => clearInterval(heartbeat);
   }
 }

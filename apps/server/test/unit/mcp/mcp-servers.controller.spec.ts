@@ -89,7 +89,7 @@ describe('McpServersController', () => {
     expect(apply).toHaveBeenCalledWith('cursor');
   });
 
-  it('import preview masks secret values in candidate transports', async () => {
+  it('import preview masks secret env, CLI arg, URL query, and header values', async () => {
     const preview = jest.fn(async () => ({
       source: 'cursor' as const,
       entries: [
@@ -100,25 +100,62 @@ describe('McpServersController', () => {
             transport: {
               type: 'stdio' as const,
               command: 'node',
-              args: [],
-              env: { RUNTIME_TOKEN: 'caed4429deadbeef', PLAIN: 'ok' },
+              args: ['bridge-mcp', '--token', 'cli-secret', '--api-key=inline-secret'],
+              env: { GITHUB_PAT: 'github-pat-secret', PLAIN: 'ok' },
             },
             source: 'import:cursor' as const,
             projectPath: null,
             enabled: true,
             auth: 'none' as const,
-            secretKeys: ['RUNTIME_TOKEN'],
+            secretKeys: ['GITHUB_PAT'],
+            secretArgIndexes: [2, 3],
+            secretUrlQueryKeys: [],
+          },
+        },
+        {
+          status: 'new' as const,
+          candidate: {
+            name: 'remote',
+            transport: {
+              type: 'http' as const,
+              url: 'https://remote.example/mcp?tenant=query-secret',
+              headers: { 'X-Account': 'header-secret' },
+            },
+            source: 'import:cursor' as const,
+            projectPath: null,
+            enabled: true,
+            auth: 'none' as const,
+            secretKeys: ['X-Account'],
+            secretArgIndexes: [],
+            secretUrlQueryKeys: ['tenant'],
           },
         },
       ],
     }));
     const controller = new McpServersController({} as never, { preview } as never, {} as never);
     const result = (await controller.import({ source: 'cursor', dryRun: true })) as {
-      entries: Array<{ candidate: { transport: { env?: Record<string, string> } } }>;
+      entries: Array<{
+        candidate: {
+          transport:
+            | { type: 'stdio'; args: string[]; env?: Record<string, string> }
+            | { type: 'http'; url: string; headers?: Record<string, string> };
+        };
+      }>;
     };
-    const env = result.entries[0].candidate.transport.env;
-    expect(env?.RUNTIME_TOKEN).not.toContain('caed4429deadbeef');
-    expect(env?.RUNTIME_TOKEN).toContain('beef');
-    expect(env?.PLAIN).toBe('ok');
+    const stdio = result.entries[0].candidate.transport;
+    expect(stdio.type).toBe('stdio');
+    if (stdio.type !== 'stdio') throw new Error('expected stdio preview');
+    expect(JSON.stringify(stdio)).not.toContain('cli-secret');
+    expect(JSON.stringify(stdio)).not.toContain('inline-secret');
+    expect(JSON.stringify(stdio)).not.toContain('github-pat-secret');
+    expect(stdio.args[3]).toContain('--api-key=');
+    expect(stdio.env?.PLAIN).toBe('ok');
+
+    const remote = result.entries[1].candidate.transport;
+    expect(remote.type).toBe('http');
+    if (remote.type !== 'http') throw new Error('expected remote preview');
+    expect(remote.url).toContain('tenant=');
+    expect(remote.url).not.toContain('query-secret');
+    expect(remote.headers?.['X-Account']).not.toContain('header-secret');
   });
 });

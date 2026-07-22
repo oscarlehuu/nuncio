@@ -9,6 +9,7 @@ import { redactCrewFailureReason } from './crew-runner-blocker.service';
 import { CrewStageResultsService } from './crew-stage-results.service';
 import { recoveryMemberForPhase, recoveryRoleForPhase, sameCrewProjection } from './crew-recovery-projection';
 import { activeCrewSubmission, crewToolAuthority } from './crew-tool-authority';
+import type { CrewSubmissionNotice } from './crew-runtime-tools.service';
 import type { CrewRunDto } from './domain/crew.types';
 import { CrewMembersRepository } from './persistence/crew-members.repository';
 import { CrewResultsRepository } from './persistence/crew-results.repository';
@@ -75,7 +76,17 @@ export class CrewRecoveryService implements OnApplicationBootstrap {
       }
     }
     run = this.requireRun(run.id);
+    const recoveryMember = recoveryMemberForPhase(run, this.members);
+    const pendingBuild = run.phase === 'BUILD' && recoveryMember
+      ? await this.buildRecovery.finalizeCrashGap(run, recoveryMember)
+      : null;
     if (run.status === 'QUEUED') {
+      if (pendingBuild) {
+        run = await this.replayQueuedBuild(run, pendingBuild);
+        await this.assertBoundary(run, true);
+        this.attention.clear('crew-blocked', run.id);
+        return this.drive(run, () => this.runner.drive(run.id), awaitDrive);
+      }
       await this.assertBoundary(run, run.phase !== 'BUILD');
       return this.drive(run, () => this.runner.drive(run.id), awaitDrive);
     }
@@ -87,6 +98,16 @@ export class CrewRecoveryService implements OnApplicationBootstrap {
       actor: 'nuncio:recovery', event: { type: 'recovery_started', reason: 'daemon_restart' },
     });
     try {
+      if (pendingBuild) {
+        run = this.runs.applyEvent(run.id, {
+          expectedRevision: run.revision, idempotencyKey: `recovery:complete:${run.revision}`,
+          actor: 'nuncio:recovery', event: { type: 'recovery_succeeded' },
+        });
+        run = await this.replayQueuedBuild(run, pendingBuild);
+        await this.assertBoundary(run, true);
+        this.attention.clear('crew-blocked', run.id);
+        return this.drive(run, () => this.runner.drive(run.id), awaitDrive);
+      }
       const boundary = await this.assertBoundary(run, run.phase !== 'BUILD');
       const member = recoveryMemberForPhase(run, this.members);
       if (run.phase === 'BUILD') {
@@ -127,6 +148,17 @@ export class CrewRecoveryService implements OnApplicationBootstrap {
       runId: run.id, memberKey: member.memberKey, kind, result: latest,
       workspaceHead: latest.workspaceHead ?? run.workspaceHead!,
     });
+  }
+
+  private async replayQueuedBuild(
+    run: CrewRunDto, notice: CrewSubmissionNotice,
+  ): Promise<CrewRunDto> {
+    const claimed = this.runs.applyEvent(run.id, {
+      expectedRevision: run.revision,
+      idempotencyKey: `recovery:replay-build:${notice.result.id}:claim:${run.revision}`,
+      actor: 'nuncio:recovery', event: { type: 'builder_claimed' },
+    });
+    return this.stages.accept({ ...notice, runId: claimed.id });
   }
 
   private async assertBoundary(run: CrewRunDto, clean: boolean) {
@@ -174,9 +206,8 @@ export class CrewRecoveryService implements OnApplicationBootstrap {
     this.raise(blocked, safeReason); return blocked;
   }
   private async blockAndQuiesce(run: CrewRunDto, reason: string): Promise<CrewRunDto> {
-    const blocked = this.block(run, reason);
     await this.runner.quiesceCrewRun(run.id);
-    return blocked;
+    return this.block(this.requireRun(run.id), reason);
   }
   private raise(run: CrewRunDto, reason: string): void {
     const safeReason = redactCrewFailureReason(reason);

@@ -66,6 +66,16 @@ export function parseScheduleSpec(spec: string): ParsedSpec {
   reject(spec, 'unrecognized (v1 supports daily@HH:MM, every:<N>m|h, <weekday>@HH:MM)');
 }
 
+/** Validate a clock cadence without leaking parser exceptions into application startup. */
+export function isValidScheduleSpec(spec: string): boolean {
+  try {
+    parseScheduleSpec(spec);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Next fire strictly after `now` (epoch ms) for a parsed spec, in local time. */
 export function nextFireAfter(spec: ParsedSpec, now: number): number {
   if (spec.type === 'interval') {

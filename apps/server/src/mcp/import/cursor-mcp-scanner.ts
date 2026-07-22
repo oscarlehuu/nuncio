@@ -1,4 +1,4 @@
-import { detectSecretKeys, jsonEntryToTransport } from './json-mcp-entry';
+import { detectTransportSecrets, jsonEntryToTransport } from './json-mcp-entry';
 import type { McpImportCandidate } from './mcp-import.types';
 
 /**
@@ -21,7 +21,7 @@ export function parseCursorMcpConfig(
         projectPath,
         enabled: true,
         auth: 'none' as const,
-        secretKeys: detectSecretKeys(transport),
+        ...detectTransportSecrets(transport),
       },
     ];
   });

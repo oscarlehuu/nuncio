@@ -95,14 +95,27 @@ export class AgentRegistry {
    * other available provider.
    */
   async defaultId(): Promise<string> {
-    const available = await this.available();
-    const mock = available.find((p) => p.id === 'mock');
-    if (mock) return mock.id;
-    const preferred = [this.cursor.id, this.codex.id, this.pi.id];
-    for (const id of preferred) {
-      if (available.some((p) => p.id === id)) return id;
+    const preferredIds = ['mock', this.cursor.id, this.codex.id, this.pi.id];
+    const ordered: AgentProvider[] = [];
+    const seenIds = new Set<string>();
+
+    for (const id of preferredIds) {
+      const provider = this.providers.find((item) => item.id === id);
+      if (provider && !seenIds.has(provider.id)) {
+        ordered.push(provider);
+        seenIds.add(provider.id);
+      }
     }
-    if (available.length > 0) return available[0]!.id;
+    for (const provider of this.providers) {
+      if (!seenIds.has(provider.id)) {
+        ordered.push(provider);
+        seenIds.add(provider.id);
+      }
+    }
+
+    for (const provider of ordered) {
+      if (await provider.isAvailable()) return provider.id;
+    }
     throw new ServiceUnavailableException('No agent provider is configured');
   }
 

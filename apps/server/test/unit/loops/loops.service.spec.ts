@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterAll, afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { Test, TestingModule } from '@nestjs/testing';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -68,18 +68,33 @@ interface FakeTask {
   outcome?: Record<string, unknown>;
 }
 
+let taskStoreSequence = 0;
 class SpyTasks {
   readonly enqueued: Array<{ prompt: string; useWorktree?: boolean; projectPath?: string; provider?: string; model?: string }> = [];
   private readonly tasks = new Map<string, FakeTask>();
   private readonly handlers = new Set<(t: FakeTask) => void>();
+  private readonly storeId = ++taskStoreSequence;
   private n = 0;
 
   enqueue(input: { prompt: string; useWorktree?: boolean; projectPath?: string; provider?: string; model?: string }) {
     this.n += 1;
-    const id = `task-${this.n}`;
+    const id = `task-${this.storeId}-${this.n}`;
     this.enqueued.push(input);
     this.tasks.set(id, { id, status: 'RUNNING' });
     return { id };
+  }
+
+  enqueueCorrelated<T>(
+    input: { prompt: string; useWorktree?: boolean; projectPath?: string; provider?: string; model?: string },
+    correlate: (task: { id: string }) => T,
+  ): { task: { id: string }; correlated: T } {
+    const id = `task-${this.storeId}-${this.n + 1}`;
+    const task = { id };
+    const correlated = correlate(task);
+    this.n += 1;
+    this.enqueued.push(input);
+    this.tasks.set(id, { id, status: 'RUNNING' });
+    return { task, correlated };
   }
 
   /** Set a task to a non-terminal state (simulate a QUEUED/RUNNING task at boot). */
@@ -197,6 +212,18 @@ describe('LoopsService', () => {
     expect(scheduler.created[0]!.target).toMatchObject({ kind: 'loop', loopId: loop.id });
   });
 
+  it('rolls back loop ownership when owned schedule creation fails', async () => {
+    const originalCreate = scheduler.create.bind(scheduler);
+    scheduler.create = () => { throw new Error('schedule storage unavailable'); };
+
+    try {
+      await expect(loops.create(create())).rejects.toThrow('schedule storage unavailable');
+      expect(repo.list()).toHaveLength(0);
+    } finally {
+      scheduler.create = originalCreate;
+    }
+  });
+
   describe('read path carries the displayable schedule (UI join)', () => {
     it('list + get include schedule {kind, spec} and nextFireAt joined from the owned row', async () => {
       await loops.create(create({ schedule: { kind: 'cron', spec: 'daily@22:00' } }));
@@ -256,6 +283,22 @@ describe('LoopsService', () => {
       const run = loops.fire(loop.id)!;
       expect(run.outcome).toBe('pending');
       expect(repo.listRuns(loop.id)[0]!.outcome).toBe('pending');
+    });
+
+    it('does not leave an orphan task or duplicate the pair when run persistence fails and retries', async () => {
+      const loop = await loops.create(create());
+      const append = spyOn(repo, 'appendRun');
+      append.mockImplementationOnce(() => { throw new Error('loop run write failed'); });
+
+      expect(() => loops.fire(loop.id)).toThrow('loop run write failed');
+      expect(tasks.enqueued).toHaveLength(0);
+      expect(repo.listRuns(loop.id)).toHaveLength(0);
+
+      const retried = loops.fire(loop.id)!;
+      expect(retried.taskId).toBeTruthy();
+      expect(tasks.enqueued).toHaveLength(1);
+      expect(repo.listRuns(loop.id).filter((run) => run.outcome === 'pending')).toHaveLength(1);
+      append.mockRestore();
     });
   });
 
@@ -573,18 +616,20 @@ describe('LoopsService', () => {
   });
 
   describe('wedged-run safety net (stuck pending, finding #1)', () => {
-    it('force-fails a run whose task is RUNNING past the threshold and raises attention', async () => {
+    it('keeps an old RUNNING task pending and blocks competing execution while raising attention', async () => {
       const loop = await loops.create(create({ maxConsecutiveFailures: 10, maxRunsPerDay: 10 }));
       const run = loops.fire(loop.id)!;
-      tasks.setStatus(run.taskId!, 'RUNNING'); // never settled — wedged
-      // Advance the clock well past a small threshold (run.createdAt is wall time).
+      tasks.setStatus(run.taskId!, 'RUNNING');
       loops.maxPendingAgeMs = 1000;
       const base = Date.now();
       loops.clock = { now: () => base + 60_000 };
 
       loops.reconcilePendingRuns();
+      loops.reconcilePendingRuns();
 
-      expect(repo.listRuns(loop.id).find((r) => r.id === run.id)!.outcome).toBe('failed');
+      expect(repo.listRuns(loop.id).find((r) => r.id === run.id)!.outcome).toBe('pending');
+      expect(loops.fire(loop.id)).toBeNull();
+      expect(tasks.enqueued).toHaveLength(1);
       const item = raised.find((s) => s.kind === 'loop-stuck');
       expect(item).toBeDefined();
       expect(item!.subjectId).toBe(loop.id);
@@ -620,7 +665,7 @@ describe('LoopsService', () => {
       expect(raised.some((s) => s.kind === 'loop-stuck')).toBe(false);
     });
 
-    it('a later real settlement of a force-failed run is a no-op (no double count)', async () => {
+    it('a later real settlement is the only transition for an old live run', async () => {
       const loop = await loops.create(create({ maxConsecutiveFailures: 10, maxRunsPerDay: 10 }));
       const run = loops.fire(loop.id)!;
       tasks.setStatus(run.taskId!, 'RUNNING');
@@ -628,11 +673,10 @@ describe('LoopsService', () => {
       const base = Date.now();
       loops.clock = { now: () => base + 60_000 };
       loops.reconcilePendingRuns();
-      expect(repo.listRuns(loop.id).find((r) => r.id === run.id)!.outcome).toBe('failed');
+      expect(repo.listRuns(loop.id).find((r) => r.id === run.id)!.outcome).toBe('pending');
 
-      // The task finally settles DONE — the already-failed run must not flip back.
       tasks.settle(run.taskId!, 'DONE', { verify: { ok: true } });
-      expect(repo.listRuns(loop.id).find((r) => r.id === run.id)!.outcome).toBe('failed');
+      expect(repo.listRuns(loop.id).find((r) => r.id === run.id)!.outcome).toBe('ok');
     });
   });
 

@@ -557,7 +557,7 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
 
     if (notification.method === 'turn/completed') {
       const turn = asRecord(params?.turn);
-      const turnId = asString(turn?.id) ?? asString(params?.turnId) ?? active.activeTurnId;
+      const turnId = asString(turn?.id) ?? asString(params?.turnId);
       if (!turnId) return;
       const status = asString(turn?.status) ?? 'completed';
       const errorMessage = asString(asRecord(turn?.error)?.message);
@@ -663,16 +663,26 @@ export class CodexAgentProvider extends BaseAgentProvider implements OnModuleDes
     status: string,
     errorMessage?: string,
   ): void {
-    active.completedTurns.set(turnId, { status, ...(errorMessage ? { errorMessage } : {}) });
-    active.activeTurnId = undefined;
-    try {
-      this.sessions.updateProviderRuntimeState(sessionId, { providerActiveTurnId: null });
-    } catch {
-      // Session may have been deleted mid-run.
-    }
+    if (active.completedTurns.has(turnId)) return;
 
     const completion = active.completions.get(turnId);
-    if (!completion) return;
+    const ownsActiveTurn = active.activeTurnId === turnId;
+    if (!completion && !ownsActiveTurn) return;
+
+    if (ownsActiveTurn) {
+      active.activeTurnId = undefined;
+      try {
+        this.sessions.updateProviderRuntimeState(sessionId, { providerActiveTurnId: null });
+      } catch {
+        // Session may have been deleted mid-run.
+      }
+    }
+
+    if (!completion) {
+      active.completedTurns.set(turnId, { status, ...(errorMessage ? { errorMessage } : {}) });
+      return;
+    }
+
     active.completions.delete(turnId);
     if (status === 'failed') {
       completion.reject(new Error(errorMessage ?? 'Codex turn failed.'));

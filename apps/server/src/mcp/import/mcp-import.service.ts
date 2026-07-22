@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { GitService } from '../../git/git.service';
 import { transportIdentity } from '../domain/mcp-transport';
+import { maskTransportSecrets } from '../mcp.service';
 import { McpServersRepository } from '../persistence/mcp-servers.repository';
 import { parseClaudeGlobalConfig, parseClaudeProjectConfig } from './claude-mcp-scanner';
 import { parseCursorMcpConfig } from './cursor-mcp-scanner';
@@ -35,6 +36,10 @@ export class McpImportService {
   ) {}
 
   async preview(source: McpImportSourceId): Promise<McpImportPreview> {
+    return maskPreview(await this.rawPreview(source));
+  }
+
+  private async rawPreview(source: McpImportSourceId): Promise<McpImportPreview> {
     const candidates = await this.scan(source);
     const entries: McpImportPreviewEntry[] = [];
     const seenInScan = new Set<string>();
@@ -57,7 +62,7 @@ export class McpImportService {
   }
 
   async apply(source: McpImportSourceId): Promise<McpImportResult> {
-    const preview = await this.preview(source);
+    const preview = await this.rawPreview(source);
     const createdIds: string[] = [];
     const mergedIds: string[] = [];
     for (const entry of preview.entries) {
@@ -78,6 +83,8 @@ export class McpImportService {
           auth: entry.candidate.auth,
           sources: [entry.candidate.source],
           secretKeys: entry.candidate.secretKeys,
+          secretArgIndexes: entry.candidate.secretArgIndexes,
+          secretUrlQueryKeys: entry.candidate.secretUrlQueryKeys,
         });
         createdIds.push(created.id);
       } catch (error) {
@@ -148,4 +155,22 @@ function readOrEmpty(path: string): string {
   } catch {
     return '';
   }
+}
+
+function maskPreview(preview: McpImportPreview): McpImportPreview {
+  return {
+    ...preview,
+    entries: preview.entries.map((entry) => ({
+      ...entry,
+      candidate: {
+        ...entry.candidate,
+        transport: maskTransportSecrets(
+          entry.candidate.transport,
+          entry.candidate.secretKeys,
+          entry.candidate.secretArgIndexes,
+          entry.candidate.secretUrlQueryKeys,
+        ),
+      },
+    })),
+  };
 }

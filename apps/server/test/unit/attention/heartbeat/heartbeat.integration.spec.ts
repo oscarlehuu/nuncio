@@ -29,17 +29,29 @@ describe('HeartbeatService integration', () => {
 
   class SpyScheduler {
     private handler: ((job: string) => unknown) | null = null;
-    schedules: Array<{ id: string; kind: string; spec: string; target: { kind: string; job?: string } }> = [];
+    schedules: Array<{
+      id: string; kind: string; spec: string; enabled: boolean;
+      target: { kind: string; job?: string };
+    }> = [];
     setSystemFireHandler(h: (job: string) => unknown) { this.handler = h; void this.handler; }
     listSchedules() { return this.schedules; }
-    create(input: { kind: string; spec: string; target: { kind: string; job?: string } }) {
+    create(input: {
+      kind: string; spec: string; enabled?: boolean; target: { kind: string; job?: string };
+    }) {
       const id = `s${this.schedules.length + 1}`;
-      this.schedules.push({ id, kind: input.kind, spec: input.spec, target: input.target });
+      this.schedules.push({
+        id, kind: input.kind, spec: input.spec, enabled: input.enabled !== false, target: input.target,
+      });
       return { id };
     }
     updateSpec(id: string, kind: 'cron' | 'heartbeat', spec: string) {
       const s = this.schedules.find((x) => x.id === id);
       if (s) { s.kind = kind; s.spec = spec; }
+    }
+    setEnabled(id: string, enabled: boolean) {
+      const s = this.schedules.find((x) => x.id === id);
+      if (s) s.enabled = enabled;
+      return s;
     }
   }
   let scheduler: SpyScheduler;
@@ -152,6 +164,22 @@ describe('HeartbeatService integration', () => {
     expect(infraRows).toHaveLength(1); // updated, not duplicated
     expect(infraRows[0]!.spec).toBe('every:5m');
   });
+
+  it.each(['', 'every:0m', 'every:-5m', 'not-a-cadence'])(
+    'disables an invalid heartbeat cadence instead of leaving an enabled dead schedule: %p',
+    (invalid) => {
+      settingsMap.set('NUNCIO_HEARTBEAT_INFRA_SPEC', invalid);
+      heartbeat.ensureSchedules();
+
+      const infraSchedule = scheduler.schedules.find((s) => s.target.job === 'infra')!;
+      expect(infraSchedule.spec).toBe(invalid);
+      expect(infraSchedule.enabled).toBe(false);
+
+      settingsMap.set('NUNCIO_HEARTBEAT_INFRA_SPEC', 'every:5m');
+      heartbeat.ensureSchedules();
+      expect(infraSchedule).toMatchObject({ spec: 'every:5m', enabled: true });
+    },
+  );
 
   it('runDigest reports REAL counts from the bound seam (never fake zeros) — finding #5', async () => {
     heartbeat.gatherDigestCounts = () => ({

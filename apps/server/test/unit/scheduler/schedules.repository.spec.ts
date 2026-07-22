@@ -66,13 +66,13 @@ describe('SchedulesRepository', () => {
 
   it('a disabled schedule is never due', () => {
     const s = repo.create(cron('daily@01:00', 500));
-    repo.setEnabled(s.id, false, null);
+    repo.setEnabled(s, false, null);
     expect(repo.listDue(1000).map((x) => x.id)).not.toContain(s.id);
   });
 
   it('records a fire: last_fire_at + last_result + advanced next_fire_at', () => {
     const s = repo.create(cron('daily@01:00', 500));
-    repo.recordFire(s.id, 1234, 'ok', 88_888);
+    repo.recordFire(s, 1234, 'ok', 88_888);
     const after = repo.findById(s.id)!;
     expect(after.lastFireAt).toBe(1234);
     expect(after.lastResult).toBe('ok');
@@ -81,18 +81,30 @@ describe('SchedulesRepository', () => {
 
   it('records a skipped-overlap / missed / error result verbatim', () => {
     const s = repo.create(cron('daily@01:00', 500));
-    repo.recordFire(s.id, 10, 'skipped-overlap', 20);
+    repo.recordFire(s, 10, 'skipped-overlap', 20);
     expect(repo.findById(s.id)!.lastResult).toBe('skipped-overlap');
-    repo.recordFire(s.id, 30, 'missed', 40);
+    repo.recordFire(repo.findById(s.id)!, 30, 'missed', 40);
     expect(repo.findById(s.id)!.lastResult).toBe('missed');
-    repo.recordFire(s.id, 50, 'error:boom', 60);
+    repo.recordFire(repo.findById(s.id)!, 50, 'error:boom', 60);
     expect(repo.findById(s.id)!.lastResult).toBe('error:boom');
   });
 
   it('setNextFire updates only the next fire (for boot rehydration)', () => {
     const s = repo.create(cron('daily@01:00', 500));
-    repo.setNextFire(s.id, 777);
+    repo.setNextFire(s, 777);
     expect(repo.findById(s.id)!.nextFireAt).toBe(777);
+  });
+
+  it('fences nullable and zero next-fire cursors with generation-aware CAS', () => {
+    const zero = repo.create(cron('daily@01:00', 0));
+    expect(repo.setNextFire(zero, 1)).toBe(true);
+    expect(repo.setNextFire(zero, 2)).toBe(false);
+    expect(repo.findById(zero.id)!.nextFireAt).toBe(1);
+
+    const nullable = repo.create(cron('daily@01:00', null));
+    expect(repo.setNextFire(nullable, 0)).toBe(true);
+    expect(repo.setNextFire(nullable, 2)).toBe(false);
+    expect(repo.findById(nullable.id)!.nextFireAt).toBe(0);
   });
 
   it('deletes a schedule', () => {

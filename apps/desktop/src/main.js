@@ -1,4 +1,5 @@
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const {
   app,
   BrowserWindow,
@@ -13,6 +14,10 @@ const {
   Tray,
 } = require('electron');
 const { DaemonSupervisor } = require('./daemon');
+const {
+  configurePackagedPreLockPaths,
+  formatSmokePreLockPathEvidence,
+} = require('./pre-lock-app-paths');
 const serverProfiles = require('./server-profiles');
 const shellSettings = require('./shell-settings');
 const {
@@ -21,24 +26,19 @@ const {
 } = require('./window-state');
 const { normalizeBrowserUrl } = require('./browser-url');
 const { getWindowChromeOptions } = require('./desktop-chrome');
+const { assertTrustedLocalRenderer } = require('./ipc-origin');
 const {
   buildPickerInstallScript,
   buildPickerUninstallScript,
   normalizeGuestPick,
 } = require('./design-mode');
 
-// A single instance owns the daemon and its stable port. A second launch must
-// not spawn a second daemon on another port (paired phones would race between
-// two servers); the loser quits immediately and hands focus to the first.
-const gotSingleInstanceLock = app.requestSingleInstanceLock();
-if (!gotSingleInstanceLock) {
-  app.quit();
-}
-
-// Dev and stable ship as distinct apps — name them apart (separate window state,
-// server profiles, updater cache) before anything reads app.getPath('userData').
-// The sessions DB is shared across all surfaces via NUNCIO_DATA_DIR below, not
-// userData. Channel is taken from the build's app-update.yml.
+// Dev and stable ship as distinct apps, but production launches share one
+// pre-channel lock namespace. Both channels supervise the same real data dir,
+// so they must contend before restoring their channel-specific presentation.
+// Packaged smoke isolation is explicit: macOS does not reliably re-home
+// Electron appData from HOME alone, so the smoke supplies a validated appData
+// root under its temporary data tree before this lock is requested.
 function detectChannel() {
   try {
     const manifest = require('node:fs').readFileSync(
@@ -53,10 +53,27 @@ function detectChannel() {
 }
 
 if (app.isPackaged) {
-  app.setName(detectChannel() === 'dev' ? 'Nuncio Dev' : 'Nuncio');
+  const preLockPaths = configurePackagedPreLockPaths(app, process.env);
+  if (preLockPaths.smokeIsolated) {
+    console.log(formatSmokePreLockPathEvidence(preLockPaths));
+  }
+}
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else if (app.isPackaged) {
+  const appName = detectChannel() === 'dev' ? 'Nuncio Dev' : 'Nuncio';
+  app.setName(appName);
+  app.setPath('userData', path.join(app.getPath('appData'), appName));
 }
 
 const DEV_SERVER_URL = process.env.NUNCIO_DESKTOP_DEV_URL || 'http://localhost:5173';
+const APP_ENTRY_FILE_URL = pathToFileURL(
+  app.isPackaged
+    ? path.join(process.resourcesPath, 'web', 'dist', 'index.html')
+    : path.resolve(__dirname, '../../web/dist/index.html'),
+).toString();
 const DEV_SERVER_PROBE_TIMEOUT_MS = 600;
 const DEV_SERVER_RETRY_INTERVAL_MS = 300;
 const FORCED_DEV_SERVER_TIMEOUT_MS = 30_000;
@@ -83,6 +100,20 @@ let pendingWindowFocus = false;
 const terminalPtys = new Map();
 const embeddedBrowserViews = new Map();
 let activeEmbeddedBrowserId = null;
+
+function trustedRendererSources() {
+  return [localServerUrl, APP_ENTRY_FILE_URL];
+}
+
+function handleTrustedIpc(channel, handler) {
+  ipcMain.handle(channel, (event, ...args) => {
+    if (!mainWindow || event?.sender !== mainWindow.webContents) {
+      throw new Error(`${channel} requires a trusted local renderer`);
+    }
+    assertTrustedLocalRenderer(event, channel, trustedRendererSources());
+    return handler(event, ...args);
+  });
+}
 
 // Window/tray behavior. closeToTray on (default) keeps the daemon alive when the
 // window is closed so paired phones stay connected; the app lives in the menu
@@ -443,19 +474,19 @@ async function connectToServer(target) {
 }
 
 function registerServerHandlers() {
-  ipcMain.handle('servers:list', () => ({
+  handleTrustedIpc('servers:list', () => ({
     current: currentServerTarget,
     localUrl: localServerUrl,
     servers: serverProfilesState.servers,
   }));
 
-  ipcMain.handle('servers:connect', (_event, target) => connectToServer(target));
+  handleTrustedIpc('servers:connect', (_event, target) => connectToServer(target));
 }
 
 function registerShellHandlers() {
-  ipcMain.handle('shell:get-settings', () => ({ closeToTray: shellSettingsState.closeToTray }));
+  handleTrustedIpc('shell:get-settings', () => ({ closeToTray: shellSettingsState.closeToTray }));
 
-  ipcMain.handle('shell:set-settings', (_event, payload) => {
+  handleTrustedIpc('shell:set-settings', (_event, payload) => {
     // Renderer input: only strict boolean false disables; ignore anything else
     // and keep the current value when the field is absent.
     const requested =
@@ -599,7 +630,7 @@ function escapeHtml(value) {
 }
 
 function registerNotifyHandler() {
-  ipcMain.handle('nuncio:notify', (_event, payload) => {
+  handleTrustedIpc('nuncio:notify', (_event, payload) => {
     if (!payload || typeof payload !== 'object') return;
     const title = typeof payload.title === 'string' ? payload.title : 'Nuncio';
     const body = typeof payload.body === 'string' ? payload.body : '';
@@ -628,7 +659,7 @@ function normalizeExternalUrl(url) {
 }
 
 function registerExternalHandlers() {
-  ipcMain.handle('external:open', async (_event, url) => {
+  handleTrustedIpc('external:open', async (_event, url) => {
     const normalized = normalizeExternalUrl(url);
     if (!normalized) throw new Error('External URL must use http or https');
     await shell.openExternal(normalized);
@@ -865,7 +896,7 @@ async function loadEmbeddedBrowserUrl(entry, url) {
 }
 
 function registerBrowserHandlers() {
-  ipcMain.handle('browser:show', async (_event, payload) => {
+  handleTrustedIpc('browser:show', async (_event, payload) => {
     if (!payload || typeof payload !== 'object') {
       throw new Error('browser:show requires a payload');
     }
@@ -877,33 +908,33 @@ function registerBrowserHandlers() {
     return embeddedBrowserState(entry);
   });
 
-  ipcMain.handle('browser:navigate', async (_event, id, url) => {
+  handleTrustedIpc('browser:navigate', async (_event, id, url) => {
     const entry = getEmbeddedBrowser(id);
     attachEmbeddedBrowser(entry);
     await loadEmbeddedBrowserUrl(entry, url);
     return embeddedBrowserState(entry);
   });
 
-  ipcMain.handle('browser:reload', (_event, id) => {
+  handleTrustedIpc('browser:reload', (_event, id) => {
     const entry = getEmbeddedBrowser(id);
     attachEmbeddedBrowser(entry);
     entry.view.webContents.reload?.();
     return embeddedBrowserState(entry);
   });
 
-  ipcMain.handle('browser:resize', (_event, id, bounds) => {
+  handleTrustedIpc('browser:resize', (_event, id, bounds) => {
     const entry = embeddedBrowserViews.get(id);
     if (!entry) return null;
     entry.view.setBounds(coerceBrowserBounds(bounds));
     return embeddedBrowserState(entry);
   });
 
-  ipcMain.handle('browser:hide', (_event, id) => {
+  handleTrustedIpc('browser:hide', (_event, id) => {
     if (typeof id !== 'string') return;
     detachEmbeddedBrowser(id);
   });
 
-  ipcMain.handle('browser:design-mode-enter', async (_event, id) => {
+  handleTrustedIpc('browser:design-mode-enter', async (_event, id) => {
     const entry = getEmbeddedBrowser(id);
     entry.designMode = true;
     attachEmbeddedBrowser(entry);
@@ -911,7 +942,7 @@ function registerBrowserHandlers() {
     return { ok: true, id: entry.id };
   });
 
-  ipcMain.handle('browser:design-mode-leave', async (_event, id) => {
+  handleTrustedIpc('browser:design-mode-leave', async (_event, id) => {
     const entry = embeddedBrowserViews.get(id);
     if (!entry) return { ok: true, id };
     entry.designMode = false;
@@ -988,7 +1019,7 @@ function killAllTerminalPtys() {
 }
 
 function registerTerminalHandlers() {
-  ipcMain.handle('terminal:create', (_event, payload) => {
+  handleTrustedIpc('terminal:create', (_event, payload) => {
     if (!payload || typeof payload !== 'object' || typeof payload.id !== 'string' || !payload.id) {
       throw new Error('terminal:create requires an id');
     }
@@ -1024,9 +1055,11 @@ function registerTerminalHandlers() {
 
     terminalPtys.set(id, pty);
     pty.onData((data) => {
+      if (terminalPtys.get(id) !== pty) return;
       mainWindow?.webContents.send('terminal:data', { id, data });
     });
     pty.onExit(({ exitCode }) => {
+      if (terminalPtys.get(id) !== pty) return;
       terminalPtys.delete(id);
       mainWindow?.webContents.send('terminal:exit', { id, code: exitCode ?? null });
     });
@@ -1034,19 +1067,19 @@ function registerTerminalHandlers() {
     return { id };
   });
 
-  ipcMain.handle('terminal:write', (_event, id, data) => {
+  handleTrustedIpc('terminal:write', (_event, id, data) => {
     if (typeof id !== 'string' || typeof data !== 'string') return;
     terminalPtys.get(id)?.write(data);
   });
 
-  ipcMain.handle('terminal:resize', (_event, id, cols, rows) => {
+  handleTrustedIpc('terminal:resize', (_event, id, cols, rows) => {
     if (typeof id !== 'string') return;
     const pty = terminalPtys.get(id);
     if (!pty) return;
     pty.resize(coerceTerminalDimension(cols, 80), coerceTerminalDimension(rows, 24));
   });
 
-  ipcMain.handle('terminal:kill', (_event, id) => {
+  handleTrustedIpc('terminal:kill', (_event, id) => {
     if (typeof id !== 'string') return;
     killTerminalPty(id);
   });

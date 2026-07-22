@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { MessageAttachment } from './api';
+import { fitsMessageJsonBudget } from './use-message-attachments-budget';
 
 /** One staged attachment plus the local metadata the tray needs to render it. */
 export interface PendingAttachment {
@@ -9,6 +10,7 @@ export interface PendingAttachment {
   /** Human reference shown in the tray and inserted into the prompt, e.g. "image 1".
    * Numbered monotonically so a token like `[image 2]` never gets reused. */
   label: string;
+  sourceBytes: number;
   attachment: MessageAttachment;
 }
 
@@ -57,39 +59,78 @@ function imageFilesFromDataTransfer(dt: DataTransfer): File[] {
  */
 export function useMessageAttachments() {
   const [items, setItems] = useState<PendingAttachment[]>([]);
+  const itemsRef = useRef<PendingAttachment[]>([]);
   const idRef = useRef(0);
+  const addQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  const commitItems = useCallback((next: PendingAttachment[]) => {
+    itemsRef.current = next;
+    setItems(next);
+  }, []);
 
   const addFiles = useCallback(
-    async (files: Iterable<File> | FileList | null | undefined): Promise<PendingAttachment[]> => {
-      if (!files) return [];
-      const images = Array.from(files as Iterable<File>).filter((f) => f.type.startsWith('image/'));
-      let oversized = 0;
-      const accepted: PendingAttachment[] = [];
-      for (const file of images) {
-        if (file.size > MAX_IMAGE_BYTES) {
-          oversized += 1;
-          continue;
+    (files: Iterable<File> | FileList | null | undefined): Promise<PendingAttachment[]> => {
+      if (!files) return Promise.resolve([]);
+      const images = Array.from(files as Iterable<File>).filter((file) => file.type.startsWith('image/'));
+      const run = async (): Promise<PendingAttachment[]> => {
+        let oversized = 0;
+        let overBudget = 0;
+        const accepted: PendingAttachment[] = [];
+
+        for (const file of images) {
+          if (file.size > MAX_IMAGE_BYTES) {
+            oversized += 1;
+            continue;
+          }
+          const size = { rawBytes: file.size, mimeType: file.type || 'image/png' };
+          const currentSizes = () => itemsRef.current.map((item) => ({
+            rawBytes: item.sourceBytes,
+            mimeType: item.attachment.mimeType,
+          }));
+          if (!fitsMessageJsonBudget([...currentSizes(), size])) {
+            overBudget += 1;
+            continue;
+          }
+          try {
+            const attachment = await readImageFile(file);
+            if (!fitsMessageJsonBudget([...currentSizes(), size])) {
+              overBudget += 1;
+              continue;
+            }
+            idRef.current += 1;
+            const item = {
+              id: `att-${idRef.current}`,
+              name: file.name || 'image',
+              label: `image ${idRef.current}`,
+              sourceBytes: file.size,
+              attachment,
+            };
+            accepted.push(item);
+            commitItems([...itemsRef.current, item]);
+          } catch {
+            // Unreadable file consumes no aggregate admission; continue with the batch.
+          }
         }
-        try {
-          const attachment = await readImageFile(file);
-          idRef.current += 1;
-          accepted.push({
-            id: `att-${idRef.current}`,
-            name: file.name || 'image',
-            label: `image ${idRef.current}`,
-            attachment,
-          });
-        } catch {
-          // Unreadable file — skip it rather than fail the whole batch.
+
+        if (oversized > 0) {
+          toast.error(`${oversized} image${oversized > 1 ? 's' : ''} skipped — over 10MB.`);
         }
-      }
-      if (accepted.length > 0) setItems((prev) => [...prev, ...accepted]);
-      if (oversized > 0) {
-        toast.error(`${oversized} image${oversized > 1 ? 's' : ''} skipped — over 10MB.`);
-      }
-      return accepted;
+        if (overBudget > 0) {
+          toast.error(
+            `${overBudget} image${overBudget > 1 ? 's' : ''} skipped — attachments exceed the request limit.`,
+          );
+        }
+        return accepted;
+      };
+
+      const queued = addQueueRef.current.then(run, run);
+      addQueueRef.current = queued.then(
+        () => undefined,
+        () => undefined,
+      );
+      return queued;
     },
-    [],
+    [commitItems],
   );
 
   const addFromDataTransfer = useCallback(
@@ -103,18 +144,31 @@ export function useMessageAttachments() {
     return !!dt && imageFilesFromDataTransfer(dt).length > 0;
   }, []);
 
-  const remove = useCallback((id: string) => {
-    setItems((prev) => prev.filter((i) => i.id !== id));
-  }, []);
+  const remove = useCallback(
+    (id: string) => commitItems(itemsRef.current.filter((item) => item.id !== id)),
+    [commitItems],
+  );
 
-  const clear = useCallback(() => setItems([]), []);
+  const clear = useCallback(() => commitItems([]), [commitItems]);
 
   /** Re-stage previously cleared items — used to undo an optimistic clear when a send fails. */
-  const restore = useCallback((restored: PendingAttachment[]) => {
-    if (restored.length > 0) setItems((prev) => [...restored, ...prev]);
-  }, []);
+  const restore = useCallback(
+    (restored: PendingAttachment[]) => {
+      if (restored.length === 0) return;
+      const next = [...restored, ...itemsRef.current];
+      if (fitsMessageJsonBudget(next.map((item) => ({
+        rawBytes: item.sourceBytes,
+        mimeType: item.attachment.mimeType,
+      })))) {
+        commitItems(next);
+      } else {
+        toast.error('Attachments could not be restored because the request limit would be exceeded.');
+      }
+    },
+    [commitItems],
+  );
 
-  const attachments = items.map((i) => i.attachment);
+  const attachments = items.map((item) => item.attachment);
 
   return { items, attachments, addFiles, addFromDataTransfer, hasImages, remove, clear, restore };
 }

@@ -389,6 +389,187 @@ describe('useSessionStream', () => {
     await waitFor(() => expect(subscribeSince(lastSocket!)).toBe(6));
   });
 
+  it.each([0, -1, Number.POSITIVE_INFINITY, 0.5])(
+    'does not apply an invalid live-retention tail (%s)',
+    async (tail) => {
+      vi.mocked(fetchEvents).mockResolvedValue([ev(1), ev(2)]);
+      let api: ReturnType<typeof useSessionStream> | undefined;
+      render(<Harness sid="s1" tail={tail} onReady={(stream) => { api = stream; }} />);
+      await waitFor(() => expect(api?.events.map((event) => event.seq)).toEqual([1, 2]));
+
+      act(() => lastSocket!.push(ev(3)));
+      await waitFor(() => expect(api?.events.map((event) => event.seq)).toEqual([1, 2, 3]));
+    },
+  );
+
+  it('retains exactly the semantic tail and marks one-past-tail live history as earlier', async () => {
+    vi.mocked(fetchEvents).mockResolvedValue([ev(1), ev(2), ev(3)]);
+    let api: ReturnType<typeof useSessionStream> | undefined;
+    render(<Harness sid="s1" tail={3} onReady={(stream) => { api = stream; }} />);
+    await waitFor(() => expect(api?.events.map((event) => event.seq)).toEqual([1, 2, 3]));
+    expect(api!.hasEarlier).toBe(false);
+
+    act(() => lastSocket!.push(ev(3)));
+    expect(api!.events.map((event) => event.seq)).toEqual([1, 2, 3]);
+
+    act(() => lastSocket!.push(ev(4)));
+    await waitFor(() => expect(api?.events.map((event) => event.seq)).toEqual([2, 3, 4]));
+    expect(api!.hasEarlier).toBe(true);
+  });
+
+  it('bounds a 10,000-event live burst while reconnecting from the highest seen seq', async () => {
+    vi.mocked(fetchEvents).mockResolvedValue([]);
+    let api: ReturnType<typeof useSessionStream> | undefined;
+    render(<Harness sid="s1" tail={50} onReady={(stream) => { api = stream; }} />);
+    await waitFor(() => expect(lastSocket?.subscribes.length).toBe(1));
+
+    act(() => {
+      for (let seq = 1; seq <= 10_000; seq += 1) {
+        lastSocket!.push(ev(seq, 'assistant_delta', { delta: String(seq) }));
+      }
+    });
+
+    await waitFor(() => expect(api?.events).toHaveLength(50));
+    expect(api!.events[0]?.seq).toBe(9_951);
+    expect(api!.events.at(-1)?.seq).toBe(10_000);
+    expect(api!.hasEarlier).toBe(true);
+
+    const dropped = lastSocket!;
+    const countBefore = MockWebSocket.instances.length;
+    act(() => dropped.drop());
+    await waitFor(() => expect(MockWebSocket.instances.length).toBeGreaterThan(countBefore), {
+      timeout: 5000,
+    });
+    const reconnected = MockWebSocket.instances.at(-1)!;
+    await waitFor(() => expect(reconnected.subscribes).toHaveLength(1));
+    expect(reconnected.subscribes[0].params).toEqual({ sessionId: 's1', since: 10_000 });
+  }, 10000);
+
+  it('keeps a late REST bootstrap inside the live retention bound without cursor regression', async () => {
+    const bootstrap = deferred<ReturnType<typeof ev>[]>();
+    vi.mocked(fetchEvents).mockReturnValueOnce(bootstrap.promise);
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    let api: ReturnType<typeof useSessionStream> | undefined;
+    render(<Harness sid="s1" tail={3} onReady={(stream) => { api = stream; }} />);
+    await act(async () => Promise.resolve());
+    await waitFor(() => expect(lastSocket?.subscribes.length).toBe(1));
+
+    act(() => {
+      lastSocket!.push(ev(8));
+      lastSocket!.push(ev(9));
+      lastSocket!.push(ev(10));
+    });
+    await waitFor(() => expect(api?.events.map((event) => event.seq)).toEqual([8, 9, 10]));
+
+    bootstrap.resolve(Array.from({ length: 9 }, (_, index) => ev(index + 1)));
+    await act(async () => {
+      await bootstrap.promise;
+      await Promise.resolve();
+    });
+
+    expect(api!.events.map((event) => event.seq)).toEqual([8, 9, 10]);
+    expect(api!.hasEarlier).toBe(true);
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    expect(subscribeSince(lastSocket!)).toBe(10);
+  });
+
+  it('loadEarlier restores rows dropped by live retention and can exhaust history', async () => {
+    vi.mocked(fetchEvents)
+      .mockResolvedValueOnce([ev(1), ev(2), ev(3)])
+      .mockResolvedValueOnce([ev(1), ev(2)]);
+    let api: ReturnType<typeof useSessionStream> | undefined;
+    render(<Harness sid="s1" tail={3} onReady={(stream) => { api = stream; }} />);
+    await waitFor(() => expect(api?.events.map((event) => event.seq)).toEqual([1, 2, 3]));
+
+    act(() => {
+      lastSocket!.push(ev(4));
+      lastSocket!.push(ev(5));
+    });
+    await waitFor(() => expect(api?.events.map((event) => event.seq)).toEqual([3, 4, 5]));
+    expect(api!.hasEarlier).toBe(true);
+
+    await act(async () => {
+      await api!.loadEarlier();
+    });
+
+    expect(fetchEvents).toHaveBeenLastCalledWith('s1', 0, '', { before: 3 });
+    expect(api!.events.map((event) => event.seq)).toEqual([1, 2, 3, 4, 5]);
+    expect(api!.hasEarlier).toBe(false);
+  });
+
+  it('protects explicitly expanded rows while bounding later live growth and filling its gap first', async () => {
+    const backfill = deferred<ReturnType<typeof ev>[]>();
+    vi.mocked(fetchEvents)
+      .mockResolvedValueOnce([ev(3), ev(4), ev(5)])
+      .mockReturnValueOnce(backfill.promise)
+      .mockResolvedValueOnce([ev(8), ev(9), ev(10), ev(11)]);
+    let api: ReturnType<typeof useSessionStream> | undefined;
+    render(<Harness sid="s1" tail={3} onReady={(stream) => { api = stream; }} />);
+    await waitFor(() => expect(api?.events.map((event) => event.seq)).toEqual([3, 4, 5]));
+
+    const pendingBackfill = api!.loadEarlier();
+    await waitFor(() => expect(fetchEvents).toHaveBeenLastCalledWith('s1', 0, '', { before: 3 }));
+    act(() => {
+      lastSocket!.push(ev(6));
+      lastSocket!.push(ev(7));
+    });
+    await waitFor(() => expect(api?.events.map((event) => event.seq)).toEqual([3, 4, 5, 6, 7]));
+
+    backfill.resolve([ev(1), ev(2)]);
+    await act(async () => {
+      await pendingBackfill;
+    });
+    expect(api!.events.map((event) => event.seq)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+
+    act(() => {
+      for (let seq = 8; seq <= 14; seq += 1) lastSocket!.push(ev(seq));
+    });
+    await waitFor(() => expect(api?.events.map((event) => event.seq)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 12, 13, 14,
+    ]));
+    expect(api!.hasEarlier).toBe(true);
+
+    await act(async () => {
+      await api!.loadEarlier();
+    });
+    expect(fetchEvents).toHaveBeenLastCalledWith('s1', 0, '', { before: 12 });
+    expect(api!.events.map((event) => event.seq)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+    ]);
+    expect(api!.hasEarlier).toBe(false);
+  });
+
+  it('serializes backfill, rolls back failed expansion, and permits retry', async () => {
+    const failedBackfill = deferred<ReturnType<typeof ev>[]>();
+    vi.mocked(fetchEvents)
+      .mockResolvedValueOnce([ev(3), ev(4), ev(5)])
+      .mockReturnValueOnce(failedBackfill.promise)
+      .mockResolvedValueOnce([ev(4), ev(5), ev(6)]);
+    let api: ReturnType<typeof useSessionStream> | undefined;
+    render(<Harness sid="s1" tail={3} onReady={(stream) => { api = stream; }} />);
+    await waitFor(() => expect(api?.events.map((event) => event.seq)).toEqual([3, 4, 5]));
+
+    const first = api!.loadEarlier();
+    const duplicate = api!.loadEarlier();
+    expect(fetchEvents).toHaveBeenCalledTimes(2);
+    await duplicate;
+
+    act(() => {
+      for (let seq = 6; seq <= 9; seq += 1) lastSocket!.push(ev(seq));
+    });
+    await waitFor(() => expect(api?.events.map((event) => event.seq)).toEqual([3, 4, 5, 7, 8, 9]));
+
+    failedBackfill.reject(new Error('temporary backfill failure'));
+    await expect(first).rejects.toThrow('temporary backfill failure');
+    await waitFor(() => expect(api?.events.map((event) => event.seq)).toEqual([7, 8, 9]));
+
+    await act(async () => {
+      await api!.loadEarlier();
+    });
+    expect(fetchEvents).toHaveBeenLastCalledWith('s1', 0, '', { before: 7 });
+    expect(api!.events.map((event) => event.seq)).toEqual([4, 5, 6, 7, 8, 9]);
+  });
+
   it('loadEarlier prepends the previous page and reports exhausted history', async () => {
     vi.mocked(fetchEvents)
       .mockResolvedValueOnce([ev(5), ev(6)])

@@ -8,27 +8,34 @@ class TestProvider extends DevinAgentProvider {
 }
 
 class FakeClient {
-  readonly calls: Array<{ method: string; params: unknown }> = [];
+  readonly calls: Array<{ method: string; params: unknown; timeoutMs?: number | null }> = [];
   private notification?: (value: { method: string; params?: unknown }) => void;
   private serverRequest?: (value: { id: string | number; method: string; params?: unknown }) => void;
   private closeHandler?: (error: Error) => void;
   requestHandler?: (method: string, params: unknown) => unknown;
   initialize = async () => undefined;
-  request = async <T>(method: string, params: unknown): Promise<T> => {
-    this.calls.push({ method, params });
-    return (this.requestHandler?.(method, params) ?? {}) as T;
+  request = async <T>(method: string, params: unknown, timeoutMs?: number | null): Promise<T> => {
+    this.calls.push({ method, params, ...(timeoutMs !== undefined ? { timeoutMs } : {}) });
+    return (await this.requestHandler?.(method, params) ?? {}) as T;
   };
-  onNotification(listener: (value: { method: string; params?: unknown }) => void): () => void { this.notification = listener; return () => undefined; }
-  onServerRequest(listener: (value: { id: string | number; method: string; params?: unknown }) => void): () => void { this.serverRequest = listener; return () => undefined; }
+  onNotification(listener: (value: { method: string; params?: unknown }) => void): () => void {
+    this.notification = listener;
+    return () => { if (this.notification === listener) this.notification = undefined; };
+  }
+  onServerRequest(listener: (value: { id: string | number; method: string; params?: unknown }) => void): () => void {
+    this.serverRequest = listener;
+    return () => { if (this.serverRequest === listener) this.serverRequest = undefined; };
+  }
   onClose(listener: (error: Error) => void): () => void {
     this.closeHandler = listener;
-    return () => {
-      this.closeHandler = undefined;
-    };
+    return () => { if (this.closeHandler === listener) this.closeHandler = undefined; };
   }
-  readonly responses: Array<{ id: string | number; result: unknown }> = [];
+  readonly responses: Array<{ id: string | number; result?: unknown; error?: { code: number; message: string } }> = [];
   respond(id: string | number, result: unknown): void {
     this.responses.push({ id, result });
+  }
+  respondError(id: string | number, error: { code: number; message: string }): void {
+    this.responses.push({ id, error });
   }
   close(): void {}
   emit(value: { method: string; params?: unknown }): void { this.notification?.(value); }
@@ -284,5 +291,131 @@ describe('DevinAgentProvider', () => {
     client.emitClose(error);
 
     await expect(run).rejects.toBe(error);
+  });
+
+  it('forwards image attachments through the advertised ACP image prompt capability', async () => {
+    const { provider, client } = setup();
+    const run = provider.execute('s1', 'inspect this', false, {
+      cwd: '/tmp',
+      attachments: [{ kind: 'image', mimeType: 'image/png', data: 'base64-opaque' }],
+    });
+    await waitUntil(() => client.calls.some((call) => call.method === 'session/prompt'));
+
+    expect(client.calls.find((call) => call.method === 'session/prompt')).toEqual({
+      method: 'session/prompt',
+      timeoutMs: null,
+      params: {
+        sessionId: 'new-session',
+        prompt: [
+          { type: 'text', text: 'inspect this' },
+          { type: 'image', data: 'base64-opaque', mimeType: 'image/png' },
+        ],
+      },
+    });
+    client.emit({ method: '_cognition.ai/agent_stopped', params: {} });
+    await run;
+  });
+
+  it('keeps text-only prompts unchanged when attachments are empty', async () => {
+    const { provider, client } = setup();
+    const run = provider.execute('s1', 'text only', false, { cwd: '/tmp', attachments: [] });
+    await waitUntil(() => client.calls.some((call) => call.method === 'session/prompt'));
+
+    expect(client.calls.find((call) => call.method === 'session/prompt')?.params).toEqual({
+      sessionId: 'new-session',
+      prompt: [{ type: 'text', text: 'text only' }],
+    });
+    client.emit({ method: '_cognition.ai/agent_stopped', params: {} });
+    await run;
+  });
+
+  it('switches the model on the live ACP session before the session row can change', async () => {
+    const { provider, client } = setup();
+    const run = provider.execute('s1', 'hello', false, { cwd: '/tmp' });
+    await waitUntil(() => client.calls.some((call) => call.method === 'session/prompt'));
+    client.emit({ method: '_cognition.ai/agent_stopped', params: {} });
+    await run;
+
+    const switchable = provider as DevinAgentProvider & {
+      setModel(sessionId: string, model: string): Promise<void>;
+    };
+    await switchable.setModel('s1', 'devin:adaptive');
+
+    expect(client.calls.at(-1)).toEqual({
+      method: 'session/set_config_option',
+      params: { sessionId: 'new-session', configId: 'model', value: 'adaptive' },
+    });
+  });
+
+  it('does not send a model switch when no live ACP session exists', async () => {
+    const { provider, client } = setup();
+    const switchable = provider as DevinAgentProvider & {
+      setModel(sessionId: string, model: string): Promise<void>;
+    };
+
+    await switchable.setModel('missing', 'devin:adaptive');
+
+    expect(client.calls).toEqual([]);
+  });
+
+  it('surfaces a rejected live model switch instead of claiming success', async () => {
+    const { provider, client } = setup();
+    const run = provider.execute('s1', 'hello', false, { cwd: '/tmp' });
+    await waitUntil(() => client.calls.some((call) => call.method === 'session/prompt'));
+    client.emit({ method: '_cognition.ai/agent_stopped', params: {} });
+    await run;
+    client.requestHandler = (method) => {
+      if (method === 'session/set_config_option') throw new Error('model rejected');
+      return {};
+    };
+
+    await expect(provider.setModel('s1', 'devin:adaptive')).rejects.toThrow('model rejected');
+  });
+
+  it('maps ACP plan snapshots to the shared replace-all plan payload', async () => {
+    const { provider, client, events } = setup();
+    const run = provider.execute('s1', 'plan it', false, {
+      cwd: '/tmp',
+      emit: (event) => events.push(event),
+    });
+    await waitUntil(() => client.calls.some((call) => call.method === 'session/prompt'));
+    client.emit({
+      method: 'session/update',
+      params: {
+        update: {
+          sessionUpdate: 'plan',
+          entries: [
+            { content: 'Inspect 世界', priority: 'high', status: 'in_progress' },
+            { content: 'Ship', priority: 'medium', status: 'completed' },
+          ],
+        },
+      },
+    });
+    client.emit({ method: '_cognition.ai/agent_stopped', params: {} });
+    await run;
+
+    expect(events.find((event) => event.type === 'plan_updated')?.payload).toEqual({
+      items: [
+        { id: 'item-1', text: 'Inspect 世界', status: 'in_progress' },
+        { id: 'item-2', text: 'Ship', status: 'done' },
+      ],
+    });
+  });
+
+  it('emits an empty shared plan snapshot to clear a prior plan', async () => {
+    const { provider, client, events } = setup();
+    const run = provider.execute('s1', 'clear plan', false, {
+      cwd: '/tmp',
+      emit: (event) => events.push(event),
+    });
+    await waitUntil(() => client.calls.some((call) => call.method === 'session/prompt'));
+    client.emit({
+      method: 'session/update',
+      params: { update: { sessionUpdate: 'plan', entries: [] } },
+    });
+    client.emit({ method: '_cognition.ai/agent_stopped', params: {} });
+    await run;
+
+    expect(events.find((event) => event.type === 'plan_updated')?.payload).toEqual({ items: [] });
   });
 });

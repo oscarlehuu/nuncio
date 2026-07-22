@@ -4,7 +4,24 @@ import readline from 'node:readline';
 
 export interface DevinAcpNotification { method: string; params?: unknown }
 export interface DevinAcpRequest { id: string | number; method: string; params?: unknown }
-interface Pending { method: string; timer: ReturnType<typeof setTimeout>; resolve: (value: unknown) => void; reject: (error: Error) => void }
+export interface DevinAcpError { code: number; message: string; data?: unknown }
+
+export class DevinAcpRequestError extends Error {
+  constructor(
+    readonly method: string,
+    readonly rpcError: DevinAcpError,
+  ) {
+    super(rpcError.message);
+    this.name = 'DevinAcpRequestError';
+  }
+}
+
+interface Pending {
+  method: string;
+  timer?: ReturnType<typeof setTimeout>;
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+}
 interface Transport {
   send(message: unknown): void;
   close(): void;
@@ -15,11 +32,12 @@ interface Transport {
 
 export interface DevinAcpClientLike {
   initialize(): Promise<void>;
-  request<T>(method: string, params: unknown, timeoutMs?: number): Promise<T>;
+  request<T>(method: string, params: unknown, timeoutMs?: number | null): Promise<T>;
   onNotification(listener: (notification: DevinAcpNotification) => void): () => void;
   onServerRequest(listener: (request: DevinAcpRequest) => void): () => void;
   onClose(listener: (error: Error) => void): () => void;
   respond(id: string | number, result: unknown): void;
+  respondError(id: string | number, error: DevinAcpError): void;
   close(): void;
 }
 
@@ -55,6 +73,7 @@ export class DevinAcpClient implements DevinAcpClientLike {
   private readonly requests = new Set<(request: DevinAcpRequest) => void>();
   private readonly closes = new Set<(error: Error) => void>();
   private closeError?: Error;
+  private transportClosed = false;
   constructor(private readonly transport: Transport) {
     transport.on('line', (line) => this.handleLine(line));
     transport.on('error', (error) => this.handleClose(error));
@@ -66,16 +85,32 @@ export class DevinAcpClient implements DevinAcpClientLike {
       clientCapabilities: { fs: { readTextFile: true, writeTextFile: true } },
     }).then(() => undefined);
   }
-  request<T>(method: string, params: unknown, timeoutMs = 120_000): Promise<T> {
+  request<T>(method: string, params: unknown, timeoutMs: number | null = 120_000): Promise<T> {
+    if (this.closeError) return Promise.reject(this.closeError);
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      if (timeoutMs !== null) {
+        const delayMs = Number.isFinite(timeoutMs) ? Math.max(0, timeoutMs) : 0;
+        timer = setTimeout(() => {
+          this.pending.delete(String(id));
+          reject(new Error(`Timed out waiting for ${method}.`));
+        }, delayMs);
+        timer.unref?.();
+      }
+      this.pending.set(String(id), {
+        method,
+        ...(timer ? { timer } : {}),
+        resolve: (value) => resolve(value as T),
+        reject,
+      });
+      try {
+        this.transport.send({ jsonrpc: '2.0', id, method, params });
+      } catch (error) {
         this.pending.delete(String(id));
-        reject(new Error(`Timed out waiting for ${method}.`));
-      }, timeoutMs);
-      timer.unref?.();
-      this.pending.set(String(id), { method, timer, resolve: (value) => resolve(value as T), reject });
-      this.transport.send({ jsonrpc: '2.0', id, method, params });
+        if (timer) clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
   onNotification(listener: (notification: DevinAcpNotification) => void): () => void {
@@ -89,8 +124,18 @@ export class DevinAcpClient implements DevinAcpClientLike {
     else this.closes.add(listener);
     return () => this.closes.delete(listener);
   }
-  respond(id: string | number, result: unknown): void { this.transport.send({ jsonrpc: '2.0', id, result }); }
-  close(): void { this.handleClose(new Error('Devin ACP client closed.')); this.transport.close(); }
+  respond(id: string | number, result: unknown): void {
+    this.transport.send({ jsonrpc: '2.0', id, result });
+  }
+  respondError(id: string | number, error: DevinAcpError): void {
+    this.transport.send({ jsonrpc: '2.0', id, error });
+  }
+  close(): void {
+    this.handleClose(new Error('Devin ACP client closed.'));
+    if (this.transportClosed) return;
+    this.transportClosed = true;
+    this.transport.close();
+  }
   private handleLine(line: string): void {
     let parsed: unknown;
     try { parsed = JSON.parse(line); } catch { return; }
@@ -104,16 +149,26 @@ export class DevinAcpClient implements DevinAcpClientLike {
     } else if (typeof id === 'string' || typeof id === 'number') {
       const pending = this.pending.get(String(id));
       if (!pending) return;
-      this.pending.delete(String(id)); clearTimeout(pending.timer);
+      this.pending.delete(String(id));
+      if (pending.timer) clearTimeout(pending.timer);
       const error = message.error;
-      if (error && typeof error === 'object') pending.reject(new Error(String((error as Record<string, unknown>).message ?? `ACP request ${pending.method} failed.`)));
-      else pending.resolve(message.result);
+      if (error && typeof error === 'object') {
+        const rpcError = error as Record<string, unknown>;
+        pending.reject(new DevinAcpRequestError(pending.method, {
+          code: typeof rpcError.code === 'number' ? rpcError.code : -32603,
+          message: String(rpcError.message ?? `ACP request ${pending.method} failed.`),
+          ...(rpcError.data !== undefined ? { data: rpcError.data } : {}),
+        }));
+      } else pending.resolve(message.result);
     }
   }
   private handleClose(error: Error): void {
     if (this.closeError) return;
     this.closeError = error;
-    for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(error); }
+    for (const pending of this.pending.values()) {
+      if (pending.timer) clearTimeout(pending.timer);
+      pending.reject(error);
+    }
     this.pending.clear(); this.closes.forEach((listener) => listener(error));
   }
 }

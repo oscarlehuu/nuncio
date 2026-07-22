@@ -1,5 +1,6 @@
 import {
   isAcpToolTerminal,
+  mapAcpPlan,
   mapAcpToolCall,
   mapPermissionDecision,
 } from '../../../src/agents/providers/devin-acp.mappers';
@@ -37,6 +38,36 @@ describe('devin-acp.mappers', () => {
 
     it('returns null without a toolCallId', () => {
       expect(mapAcpToolCall({ title: 'x', kind: 'execute' })).toBeNull();
+    });
+  });
+
+  describe('mapAcpPlan', () => {
+    it('maps ACP content/status fields onto shared plan items', () => {
+      expect(mapAcpPlan({
+        entries: [
+          { content: 'Inspect 世界', status: 'in_progress' },
+          { content: 'Ship', status: 'completed' },
+        ],
+      })).toEqual({
+        items: [
+          { id: 'item-1', text: 'Inspect 世界', status: 'in_progress' },
+          { id: 'item-2', text: 'Ship', status: 'done' },
+        ],
+      });
+    });
+
+    it('keeps an empty snapshot and skips malformed entries with safe pending status', () => {
+      expect(mapAcpPlan({ entries: [] })).toEqual({ items: [] });
+      expect(mapAcpPlan({
+        entries: [
+          null,
+          { content: '' },
+          { content: 'Fallback status', status: 'unknown' },
+        ],
+      })).toEqual({
+        items: [{ id: 'item-3', text: 'Fallback status', status: 'pending' }],
+      });
+      expect(mapAcpPlan({ entries: 'not-an-array' })).toBeNull();
     });
   });
 

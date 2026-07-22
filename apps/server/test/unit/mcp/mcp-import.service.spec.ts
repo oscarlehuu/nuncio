@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseModule } from '../../../src/db/database.module';
+import { DatabaseService } from '../../../src/db/database.service';
 import { GitService } from '../../../src/git/git.service';
 import {
   MCP_SETTINGS_KEY,
@@ -15,6 +16,7 @@ describe('McpImportService', () => {
   let module: TestingModule;
   let service: McpImportService;
   let repo: McpServersRepository;
+  let database: DatabaseService;
   let dataDir: string;
   let home: string;
   let projectDir: string;
@@ -83,6 +85,7 @@ describe('McpImportService', () => {
 
     service = module.get(McpImportService);
     repo = module.get(McpServersRepository);
+    database = module.get(DatabaseService);
   });
 
   afterAll(async () => {
@@ -143,6 +146,87 @@ describe('McpImportService', () => {
     const dupe = preview.entries.find((entry) => entry.candidate.name === 'bridgedupe');
     expect(dupe?.status).toBe('existing');
     expect(dupe?.existingId).toBe('bridgememory');
+  });
+
+  it('carries detected secret metadata through apply so persisted import columns stay clean', async () => {
+    writeFileSync(
+      join(home, '.cursor', 'mcp.json'),
+      JSON.stringify({
+        mcpServers: {
+          'secret-import': {
+            command: 'npx',
+            args: ['account-mcp', '--token', 'import-cli-secret'],
+            env: { GITHUB_PAT: 'import-github-pat-secret' },
+          },
+          'secret-remote-import': {
+            url: 'https://remote.example/mcp?tenant=import-query-secret',
+            headers: { 'X-Account': 'import-header-secret' },
+          },
+        },
+      }),
+    );
+
+    const preview = await service.preview('cursor');
+    const serializedPreview = JSON.stringify(preview);
+    expect(serializedPreview).not.toContain('import-cli-secret');
+    expect(serializedPreview).not.toContain('import-github-pat-secret');
+    expect(serializedPreview).not.toContain('import-query-secret');
+    expect(serializedPreview).not.toContain('import-header-secret');
+    expect(serializedPreview).toContain('--token');
+    expect(serializedPreview).toContain('remote.example');
+
+    const result = await service.apply('cursor');
+    expect(result.createdIds).toEqual(
+      expect.arrayContaining(['secret-import', 'secret-remote-import']),
+    );
+    const rows = database.db
+      .prepare<
+        { transport_json: string; secret_keys_json: string; identity: string },
+        []
+      >(
+        `SELECT transport_json, secret_keys_json, identity
+         FROM mcp_servers
+         WHERE id IN ('secret-import', 'secret-remote-import')`,
+      )
+      .all();
+    const rawColumns = JSON.stringify(rows);
+    expect(rawColumns).not.toContain('import-cli-secret');
+    expect(rawColumns).not.toContain('import-github-pat-secret');
+    expect(rawColumns).not.toContain('import-query-secret');
+    expect(rawColumns).not.toContain('import-header-secret');
+  });
+
+  it('excludes URL userinfo from previews and persisted transport JSON', async () => {
+    writeFileSync(
+      join(home, '.cursor', 'mcp.json'),
+      JSON.stringify({
+        mcpServers: {
+          username: { url: 'https://alice@remote.example/mcp' },
+          password: { url: 'https://alice:preview-password@remote.example/mcp' },
+          encoded: { url: 'https://%61lice:p%40ss@remote.example/mcp' },
+          'safe-userinfo-sibling': { url: 'https://remote.example/safe' },
+        },
+      }),
+    );
+
+    const preview = await service.preview('cursor');
+    const serializedPreview = JSON.stringify(preview);
+    expect(preview.entries.some((entry) => entry.candidate.name === 'safe-userinfo-sibling')).toBe(
+      true,
+    );
+    expect(serializedPreview).not.toContain('preview-password');
+    expect(serializedPreview).not.toContain('p%40ss');
+    expect(serializedPreview).not.toContain('alice@');
+
+    await service.apply('cursor');
+    const persisted = database.db
+      .prepare<{ transport_json: string }, []>('SELECT transport_json FROM mcp_servers')
+      .all()
+      .map((row) => row.transport_json)
+      .join('\n');
+    expect(persisted).not.toContain('preview-password');
+    expect(persisted).not.toContain('p%40ss');
+    expect(persisted).not.toContain('alice@');
   });
 
   it('returns an empty preview when the source files are missing', async () => {

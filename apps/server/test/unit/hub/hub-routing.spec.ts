@@ -29,6 +29,47 @@ describe('parseHubPath', () => {
     expect(parseHubPath('/m/..%2f..%2fapi')).toBeNull();
     expect(parseHubPath('/m/ /api')).toBeNull();
   });
+
+  for (const [label, path] of [
+    ['raw parent segment', '/m/foo/api/webhooks/../sessions?since=4'],
+    ['encoded parent segment', '/m/foo/api/webhooks/%2e%2e/sessions?since=4'],
+    ['mixed-case encoded parent segment', '/m/foo/api/webhooks/.%2E/sessions?since=4'],
+  ] as const) {
+    it(`canonicalizes the ${label} before returning the forwarding path`, () => {
+      expect(parseHubPath(path)).toEqual({
+        machine: 'foo',
+        targetPath: '/api/sessions?since=4',
+      });
+    });
+  }
+
+  for (const malformed of [
+    '/m/%/api/sessions',
+    '/m/%2/api/sessions',
+    '/m/%GG/api/sessions',
+    '/m/foo/api/%',
+    '/m/foo/api/%2',
+    '/m/foo/api/%GG',
+    '/m/foo/api/%E0%A4%A',
+  ]) {
+    it(`rejects malformed percent encoding without throwing: ${malformed}`, () => {
+      expect(() => parseHubPath(malformed)).not.toThrow();
+      expect(parseHubPath(malformed)).toBeNull();
+    });
+  }
+
+  it('preserves valid percent-encoded Unicode without changing path structure', () => {
+    expect(parseHubPath('/m/foo/api/search/%E2%9C%93?q=%E2%9C%93')).toEqual({
+      machine: 'foo',
+      targetPath: '/api/search/%E2%9C%93?q=%E2%9C%93',
+    });
+  });
+
+  it('rejects encoded or raw path separators that could be interpreted differently downstream', () => {
+    expect(parseHubPath('/m/foo/api%2fsessions')).toBeNull();
+    expect(parseHubPath('/m/foo/api%5csessions')).toBeNull();
+    expect(parseHubPath('/m/foo\\api\\sessions')).toBeNull();
+  });
 });
 
 describe('resolveMachineTarget (SSRF guard)', () => {

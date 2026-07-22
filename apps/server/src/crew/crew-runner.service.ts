@@ -59,9 +59,7 @@ export class CrewRunnerService implements OnModuleInit, OnModuleDestroy {
         if (!run.worktreePath) run = await this.execution.prepareWorkspace(run);
         return await this.drive(run.id);
       } catch (error) {
-        const blocked = this.blocker.recovery(this.requireRun(run.id), reasonOf(error));
-        await this.quiesceCrewRun(run.id);
-        return blocked;
+        return this.blockAfterQuiescence(run.id, 'recovery', reasonOf(error));
       }
     });
   }
@@ -115,7 +113,11 @@ export class CrewRunnerService implements OnModuleInit, OnModuleDestroy {
         if (task.status === 'CANCELLED') return run;
         if (run.status !== 'RUNNING' || run.phase !== task.crewPhase) return run;
         const member = this.members.findCurrent(run.id, task.crewMemberKey!);
-        if (!member) return this.blocker.provider(run, 'Crew member settlement has no current member');
+        if (!member) {
+          return this.blockAfterQuiescence(
+            run.id, 'provider', 'Crew member settlement has no current member',
+          );
+        }
         if (task.crewAttemptKey !== expectedCrewAttemptKey(run)) return run;
         const currentResult = findCurrentCrewResult(this.results, run, member);
         if (run.phase === 'BUILD' && currentResult?.result.kind === 'builder-intent') {
@@ -131,7 +133,9 @@ export class CrewRunnerService implements OnModuleInit, OnModuleDestroy {
           run = await this.stages.accept(noticeFromResult(run, member.memberKey, currentResult));
           return await this.drive(run.id);
         }
-        return this.blocker.provider(run, 'Crew member settled without a structured result');
+        return this.blockAfterQuiescence(
+          run.id, 'provider', 'Crew member settled without a structured result',
+        );
       } catch (error) {
         return await this.handleOperationFailure(task.crewRunId!, error);
       }
@@ -165,8 +169,10 @@ export class CrewRunnerService implements OnModuleInit, OnModuleDestroy {
       return run;
     } catch (error) {
       run = this.requireRun(run.id);
-      if (error instanceof CrewProviderAttemptError) return this.blocker.provider(run, error.message);
-      return this.blocker.recovery(run, reasonOf(error));
+      if (error instanceof CrewProviderAttemptError) {
+        return this.blockAfterQuiescence(run.id, 'provider', error.message);
+      }
+      return this.blockAfterQuiescence(run.id, 'recovery', reasonOf(error));
     }
   }
 
@@ -197,10 +203,18 @@ export class CrewRunnerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async handleOperationFailure(runId: string, error: unknown): Promise<CrewRunDto> {
-    const blocked = this.blocker.recovery(this.requireRun(runId), reasonOf(error));
+  private handleOperationFailure(runId: string, error: unknown): Promise<CrewRunDto> {
+    return this.blockAfterQuiescence(runId, 'recovery', reasonOf(error));
+  }
+
+  private async blockAfterQuiescence(
+    runId: string, kind: 'provider' | 'recovery', reason: string,
+  ): Promise<CrewRunDto> {
     await this.quiesceCrewRun(runId);
-    return blocked;
+    const run = this.requireRun(runId);
+    return kind === 'provider'
+      ? this.blocker.provider(run, reason)
+      : this.blocker.recovery(run, reason);
   }
 
   private requireRun(id: string): CrewRunDto {

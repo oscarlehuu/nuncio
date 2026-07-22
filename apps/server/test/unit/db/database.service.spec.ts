@@ -508,6 +508,166 @@ describe('DatabaseService schema + migration', () => {
     expect(tables.map((t) => t.name)).toContain('digest_runs');
   });
 
+  it('centralizes scheduler intent and loop-run correlation schema in DatabaseService', () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-scheduler-intents-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
+
+    db = new DatabaseService();
+    const tables = db.db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .all() as Array<{ name: string }>;
+    const indexes = db.db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index'")
+      .all() as Array<{ name: string }>;
+    const scheduleColumns = db.db.prepare('PRAGMA table_info(schedules)').all() as Array<{ name: string }>;
+    const intentColumns = db.db.prepare('PRAGMA table_info(schedule_dispatch_intents)').all() as Array<{ name: string }>;
+    const taskColumns = db.db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>;
+    const runColumns = db.db.prepare('PRAGMA table_info(loop_runs)').all() as Array<{ name: string }>;
+
+    expect(tables.map((table) => table.name)).toEqual(expect.arrayContaining([
+      'schedule_dispatch_intents',
+      'task_approval_correlations',
+    ]));
+    expect(scheduleColumns.map((column) => column.name)).toContain('generation');
+    expect(intentColumns.map((column) => column.name)).toEqual(expect.arrayContaining([
+      'claim_token',
+      'lease_expires_at',
+    ]));
+    expect(taskColumns.map((column) => column.name)).toContain('schedule_dispatch_intent_id');
+    expect(runColumns.map((column) => column.name)).toContain('schedule_dispatch_intent_id');
+    expect(indexes.map((index) => index.name)).toEqual(expect.arrayContaining([
+      'idx_schedule_dispatch_intents_pending',
+      'idx_tasks_schedule_dispatch_intent',
+      'idx_task_approval_correlations_task',
+      'idx_loop_runs_schedule_dispatch_intent',
+      'idx_loop_runs_task',
+    ]));
+  });
+
+  it('migrates a prior scheduler schema additively and survives repeated boot', () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-scheduler-intents-migrate-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
+
+    const oldDb = new Database(join(dataDir, 'nuncio.db'));
+    oldDb.exec(`
+      CREATE TABLE schedules (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        spec TEXT NOT NULL,
+        target_json TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        next_fire_at INTEGER,
+        last_fire_at INTEGER,
+        last_result TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE tasks (
+        id TEXT PRIMARY KEY,
+        prompt TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'QUEUED',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE loop_runs (
+        id TEXT PRIMARY KEY,
+        loop_id TEXT NOT NULL,
+        task_id TEXT,
+        outcome TEXT NOT NULL,
+        verify TEXT NOT NULL DEFAULT 'none',
+        day_bucket TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE schedule_dispatch_intents (
+        id TEXT PRIMARY KEY,
+        schedule_id TEXT NOT NULL,
+        generation INTEGER NOT NULL,
+        fired_at INTEGER NOT NULL,
+        initial_result TEXT NOT NULL,
+        next_fire_at INTEGER,
+        target_json TEXT NOT NULL,
+        trigger_json TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+    oldDb.prepare(
+      `INSERT INTO schedules
+         (id, kind, spec, target_json, enabled, next_fire_at, created_at, updated_at)
+       VALUES ('schedule-old', 'cron', 'daily@09:00', '{"kind":"task","template":{"prompt":"keep"}}', 1, 10, 1, 2)`,
+    ).run();
+    oldDb.prepare(
+      `INSERT INTO schedule_dispatch_intents
+         (id, schedule_id, generation, fired_at, initial_result, next_fire_at,
+          target_json, status, created_at, updated_at)
+       VALUES ('intent-old', 'schedule-old', 0, 10, 'ok', 20,
+         '{"kind":"system","job":"infra"}', 'pending', 1, 2)`,
+    ).run();
+    oldDb.prepare(
+      "INSERT INTO tasks (id, prompt, status, created_at, updated_at) VALUES ('task-old', 'keep task', 'QUEUED', 1, 2)",
+    ).run();
+    oldDb.prepare(
+      "INSERT INTO loop_runs (id, loop_id, task_id, outcome, day_bucket, created_at) VALUES ('run-old', 'loop-old', 'task-old', 'pending', '2026-07-07', 1)",
+    ).run();
+    oldDb.close();
+
+    db = new DatabaseService();
+    db.onModuleDestroy();
+    db = undefined;
+    db = new DatabaseService();
+
+    const schedule = db.db.prepare(
+      'SELECT id, generation FROM schedules WHERE id = ?',
+    ).get('schedule-old') as { id: string; generation: number };
+    const intent = db.db.prepare(
+      `SELECT status, claim_token, lease_expires_at
+       FROM schedule_dispatch_intents WHERE id = ?`,
+    ).get('intent-old') as {
+      status: string;
+      claim_token: string | null;
+      lease_expires_at: number | null;
+    };
+    const task = db.db.prepare(
+      'SELECT prompt, schedule_dispatch_intent_id FROM tasks WHERE id = ?',
+    ).get('task-old') as { prompt: string; schedule_dispatch_intent_id: string | null };
+    const run = db.db.prepare(
+      'SELECT task_id, schedule_dispatch_intent_id FROM loop_runs WHERE id = ?',
+    ).get('run-old') as { task_id: string; schedule_dispatch_intent_id: string | null };
+
+    expect(schedule).toEqual({ id: 'schedule-old', generation: 0 });
+    expect(intent).toEqual({ status: 'pending', claim_token: null, lease_expires_at: null });
+    expect(task).toEqual({ prompt: 'keep task', schedule_dispatch_intent_id: null });
+    expect(run).toEqual({ task_id: 'task-old', schedule_dispatch_intent_id: null });
+    expect(() => db!.db.prepare(
+      "INSERT INTO loop_runs (id, loop_id, task_id, outcome, day_bucket, created_at) VALUES ('run-duplicate', 'loop-old', 'task-old', 'pending', '2026-07-07', 2)",
+    ).run()).toThrow();
+  });
+
+  it('creates the interrupted-task reconciliation outbox on fresh and repeated boot', () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-task-reconciliation-'));
+    process.env.NUNCIO_DATA_DIR = dataDir;
+
+    db = new DatabaseService();
+    const firstColumns = db.db
+      .prepare('PRAGMA table_info(task_reconciliation_outbox)')
+      .all() as Array<{ name: string }>;
+    expect(firstColumns.map((column) => column.name)).toEqual(expect.arrayContaining([
+      'task_id',
+      'digest_pending',
+      'settlement_pending',
+      'created_at',
+      'updated_at',
+    ]));
+
+    db.onModuleDestroy();
+    db = new DatabaseService();
+    const tables = db.db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .all() as Array<{ name: string }>;
+    expect(tables.map((table) => table.name)).toContain('task_reconciliation_outbox');
+  });
+
   it('enables WAL journal mode', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-db-wal-'));
     process.env.NUNCIO_DATA_DIR = dataDir;

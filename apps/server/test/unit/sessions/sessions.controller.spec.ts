@@ -1,3 +1,5 @@
+import { describe, expect, it, jest } from 'bun:test';
+import { EventEmitter } from 'node:events';
 import { BadRequestException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { SessionsController } from '../../../src/sessions/api/sessions.controller';
 import type { SessionDto, SessionEvent } from '../../../src/sessions/domain/sessions.types';
@@ -43,19 +45,30 @@ const SAMPLE_EVENTS: SessionEvent[] = [
 ];
 
 function makeRes() {
+  const emitter = new EventEmitter();
   const onHandlers: Record<string, (...args: unknown[]) => void> = {};
-  return {
-    res: {
-      setHeader: jest.fn(),
-      flushHeaders: jest.fn(),
-      write: jest.fn(),
-      on: jest.fn((event: string, cb: (...args: unknown[]) => void) => {
-        onHandlers[event] = cb;
-      }),
-      end: jest.fn(),
-    },
-    onHandlers,
+  const res = {
+    setHeader: jest.fn(),
+    flushHeaders: jest.fn(),
+    write: jest.fn((_value: string) => true),
+    on: jest.fn((event: string, cb: (...args: unknown[]) => void) => {
+      onHandlers[event] = cb;
+      emitter.on(event, cb);
+      return res;
+    }),
+    off: jest.fn((event: string, cb: (...args: unknown[]) => void) => {
+      emitter.off(event, cb);
+      return res;
+    }),
+    end: jest.fn(() => {
+      res.writableEnded = true;
+      return res;
+    }),
+    emit: (event: string, ...args: unknown[]) => emitter.emit(event, ...args),
+    writableEnded: false,
+    destroyed: false,
   };
+  return { res, onHandlers };
 }
 
 describe('SessionsController', () => {
@@ -79,7 +92,8 @@ describe('SessionsController', () => {
   });
 
   it('stream sets SSE headers, writes existing events as data: lines, and subscribes', () => {
-    const subscribe = jest.fn(() => jest.fn());
+    const unsubscribe = jest.fn();
+    const subscribe = jest.fn(() => unsubscribe);
     const getEvents = jest.fn(() => SAMPLE_EVENTS);
     const service = { get: () => makeSession(), getEvents, subscribe } as never;
     const controller = new SessionsController(service);
@@ -98,7 +112,8 @@ describe('SessionsController', () => {
     expect(res.on).toHaveBeenCalledWith('close', expect.any(Function));
 
     onHandlers['close']();
-    expect(res.end).toHaveBeenCalled();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(res.end).not.toHaveBeenCalled();
   });
 
   it('stream respects the since cursor', () => {
@@ -106,11 +121,12 @@ describe('SessionsController', () => {
     const getEvents = jest.fn(() => SAMPLE_EVENTS);
     const service = { get: () => makeSession(), getEvents, subscribe } as never;
     const controller = new SessionsController(service);
-    const { res } = makeRes();
+    const { res, onHandlers } = makeRes();
 
     controller.stream('s1', '2', res as never);
 
     expect(getEvents).toHaveBeenCalledWith('s1', 2);
+    onHandlers['close']();
   });
 
   it('stream falls back to cursor 0 for a non-numeric since', () => {
@@ -118,11 +134,262 @@ describe('SessionsController', () => {
     const getEvents = jest.fn(() => SAMPLE_EVENTS);
     const service = { get: () => makeSession(), getEvents, subscribe } as never;
     const controller = new SessionsController(service);
-    const { res } = makeRes();
+    const { res, onHandlers } = makeRes();
 
     controller.stream('s1', 'abc', res as never);
 
     expect(getEvents).toHaveBeenCalledWith('s1', 0);
+    onHandlers['close']();
+  });
+
+  it('stream pauses replay and live writes until the response drains', () => {
+    let live: ((event: SessionEvent) => void) | undefined;
+    const unsubscribe = jest.fn();
+    const subscribe = jest.fn((_id: string, callback: (event: SessionEvent) => void) => {
+      live = callback;
+      return unsubscribe;
+    });
+    const service = {
+      get: () => makeSession(),
+      getEvents: () => SAMPLE_EVENTS,
+      subscribe,
+    } as never;
+    const controller = new SessionsController(service);
+    const { res } = makeRes();
+    let writeCall = 0;
+    res.write.mockImplementation(() => {
+      writeCall += 1;
+      return writeCall !== 1;
+    });
+
+    controller.stream('s1', undefined, res as never);
+    expect(res.write).toHaveBeenCalledTimes(1);
+
+    const liveEvent: SessionEvent = {
+      seq: 3,
+      type: 'assistant_delta',
+      payload: { delta: 'live' },
+      createdAt: 3,
+    };
+    live?.(liveEvent);
+    expect(res.write).toHaveBeenCalledTimes(1);
+
+    res.emit('drain');
+    expect(res.write.mock.calls.map(([value]) => value)).toEqual([
+      `data: ${JSON.stringify(SAMPLE_EVENTS[0])}\n\n`,
+      `data: ${JSON.stringify(SAMPLE_EVENTS[1])}\n\n`,
+      `data: ${JSON.stringify(liveEvent)}\n\n`,
+    ]);
+    res.emit('close');
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  for (const terminalEvent of ['close', 'error'] as const) {
+    it(`stream cleans up exactly once when the response emits ${terminalEvent} while blocked`, () => {
+      let live: ((event: SessionEvent) => void) | undefined;
+      const unsubscribe = jest.fn();
+      const subscribe = jest.fn((_id: string, callback: (event: SessionEvent) => void) => {
+        live = callback;
+        return unsubscribe;
+      });
+      const service = {
+        get: () => makeSession(),
+        getEvents: () => [SAMPLE_EVENTS[0]],
+        subscribe,
+      } as never;
+      const controller = new SessionsController(service);
+      const { res } = makeRes();
+      res.write.mockImplementation(() => false);
+
+      controller.stream('s1', undefined, res as never);
+      let thrown: unknown;
+      try {
+        res.emit(terminalEvent, terminalEvent === 'error' ? new Error('socket failed') : undefined);
+        if (terminalEvent === 'close') res.emit('close');
+      } catch (error) {
+        thrown = error;
+      }
+      const writesAtCleanup = res.write.mock.calls.length;
+      live?.({
+        seq: 2,
+        type: 'assistant_delta',
+        payload: { delta: 'late' },
+        createdAt: 2,
+      });
+
+      expect(thrown).toBeUndefined();
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+      expect(res.end).not.toHaveBeenCalled();
+      expect(res.write).toHaveBeenCalledTimes(writesAtCleanup);
+    });
+  }
+
+  it('stops live writes and unsubscribes when the response is already destroyed', () => {
+    let live: ((event: SessionEvent) => void) | undefined;
+    const unsubscribe = jest.fn();
+    const service = {
+      get: () => makeSession(),
+      getEvents: () => [],
+      subscribe: (_id: string, callback: (event: SessionEvent) => void) => {
+        live = callback;
+        return unsubscribe;
+      },
+    } as never;
+    const controller = new SessionsController(service);
+    const { res } = makeRes();
+
+    controller.stream('s1', undefined, res as never);
+    res.destroyed = true;
+    live?.({ seq: 1, type: 'assistant_delta', payload: { delta: 'late' }, createdAt: 1 });
+
+    expect(res.write).not.toHaveBeenCalled();
+    expect(res.end).not.toHaveBeenCalled();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleans up a synchronously delivered subscription overflow exactly once', () => {
+    const unsubscribe = jest.fn();
+    const service = {
+      get: () => makeSession(),
+      getEvents: () => [],
+      subscribe: (_id: string, callback: (event: SessionEvent) => void) => {
+        callback({ seq: 1, type: 'assistant_delta', payload: { delta: 'blocked' }, createdAt: 1 });
+        callback({
+          seq: 2,
+          type: 'assistant_delta',
+          payload: { delta: 'x'.repeat(1_100_000) },
+          createdAt: 2,
+        });
+        return unsubscribe;
+      },
+    } as never;
+    const controller = new SessionsController(service);
+    const { res } = makeRes();
+    res.write.mockImplementation(() => false);
+
+    controller.stream('s1', undefined, res as never);
+    res.emit('close');
+
+    expect(res.write).toHaveBeenCalledTimes(1);
+    expect(res.end).toHaveBeenCalledTimes(1);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies the same backpressure policy to heartbeat writes', () => {
+    const originalSetInterval = globalThis.setInterval;
+    const originalClearInterval = globalThis.clearInterval;
+    let heartbeat: (() => void) | undefined;
+    globalThis.setInterval = jest.fn((callback: TimerHandler) => {
+      heartbeat = callback as () => void;
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    }) as unknown as typeof setInterval;
+    const clearIntervalMock = jest.fn(() => undefined);
+    globalThis.clearInterval = clearIntervalMock as typeof clearInterval;
+    const unsubscribe = jest.fn();
+    const service = {
+      get: () => makeSession(),
+      getEvents: () => [],
+      subscribe: () => unsubscribe,
+    } as never;
+    const controller = new SessionsController(service);
+    const { res } = makeRes();
+    let writeCall = 0;
+    res.write.mockImplementation(() => {
+      writeCall += 1;
+      return writeCall !== 1;
+    });
+
+    try {
+      controller.stream('s1', undefined, res as never);
+      heartbeat?.();
+      heartbeat?.();
+      expect(res.write).toHaveBeenCalledTimes(1);
+
+      res.emit('drain');
+      expect(res.write.mock.calls.map(([value]) => value)).toEqual([': ping\n\n', ': ping\n\n']);
+      res.emit('close');
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+      expect(clearIntervalMock).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.setInterval = originalSetInterval;
+      globalThis.clearInterval = originalClearInterval;
+    }
+  });
+
+  it('keeps an exactly-full pending queue and disconnects on the next frame', () => {
+    let live: ((event: SessionEvent) => void) | undefined;
+    const unsubscribe = jest.fn();
+    const service = {
+      get: () => makeSession(),
+      getEvents: () => [],
+      subscribe: (_id: string, callback: (event: SessionEvent) => void) => {
+        live = callback;
+        return unsubscribe;
+      },
+    } as never;
+    const controller = new SessionsController(service);
+    const { res } = makeRes();
+    res.write.mockImplementation(() => false);
+
+    controller.stream('s1', undefined, res as never);
+    live?.({ seq: 1, type: 'assistant_delta', payload: { delta: 'blocked' }, createdAt: 1 });
+    const exactEvent = {
+      seq: 2,
+      type: 'assistant_delta',
+      payload: { delta: '' },
+      createdAt: 2,
+    } satisfies SessionEvent;
+    const emptyFrame = `data: ${JSON.stringify(exactEvent)}\n\n`;
+    exactEvent.payload.delta = 'x'.repeat(1_000_000 - Buffer.byteLength(emptyFrame));
+    expect(Buffer.byteLength(`data: ${JSON.stringify(exactEvent)}\n\n`)).toBe(1_000_000);
+
+    live?.(exactEvent);
+    expect(res.end).not.toHaveBeenCalled();
+    expect(unsubscribe).not.toHaveBeenCalled();
+
+    live?.({ seq: 3, type: 'assistant_delta', payload: { delta: 'one-past' }, createdAt: 3 });
+    const observed = {
+      endCalls: res.end.mock.calls.length,
+      unsubscribeCalls: unsubscribe.mock.calls.length,
+      writeCalls: res.write.mock.calls.length,
+    };
+    res.emit('close');
+
+    expect(observed).toEqual({ endCalls: 1, unsubscribeCalls: 1, writeCalls: 1 });
+  });
+
+  it('contains a live SSE write failure and cleans up the subscription', () => {
+    let live: ((event: SessionEvent) => void) | undefined;
+    const unsubscribe = jest.fn();
+    const service = {
+      get: () => makeSession(),
+      getEvents: () => [],
+      subscribe: (_id: string, callback: (event: SessionEvent) => void) => {
+        live = callback;
+        return unsubscribe;
+      },
+    } as never;
+    const controller = new SessionsController(service);
+    const { res } = makeRes();
+    res.write.mockImplementation(() => {
+      throw new Error('write failed');
+    });
+
+    controller.stream('s1', undefined, res as never);
+    let thrown: unknown;
+    try {
+      live?.({ seq: 1, type: 'assistant_delta', payload: { delta: 'x' }, createdAt: 1 });
+    } catch (error) {
+      thrown = error;
+    }
+    const observed = {
+      endCalls: res.end.mock.calls.length,
+      unsubscribeCalls: unsubscribe.mock.calls.length,
+    };
+    res.emit('close');
+
+    expect(thrown).toBeUndefined();
+    expect(observed).toEqual({ endCalls: 1, unsubscribeCalls: 1 });
   });
 
   it('create returns an error object when the prompt is blank', () => {

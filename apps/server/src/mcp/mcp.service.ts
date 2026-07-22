@@ -4,7 +4,15 @@ import { maskSecret } from '../settings/settings.crypto';
 import { ProjectsRepository } from '../projects/projects.repository';
 import { McpOAuthService } from './oauth/mcp-oauth.service';
 import { McpServersRepository } from './persistence/mcp-servers.repository';
-import { transportIdentity } from './domain/mcp-transport';
+import {
+  mapTransportSecrets,
+  mergeSecretMetadata,
+  normalizeSecretMetadata,
+  type McpSecretLocation,
+  type McpSecretMetadata,
+} from './domain/mcp-secret-metadata';
+import { hasRemoteUrlUserinfo, transportIdentity } from './domain/mcp-transport';
+import { detectTransportSecrets } from './import/json-mcp-entry';
 import { isMcpEngineId } from './domain/mcp.types';
 import type {
   CreateMcpServerInput,
@@ -46,7 +54,7 @@ export class McpService {
 
   private scopedServers(scope: McpSessionScope): McpServerDefinition[] {
     const projectPath = scope.projectPath ? normalizePath(scope.projectPath) : null;
-    return this.repo.list().filter((server) => {
+    return this.repo.listRuntime().filter((server) => {
       if (!server.enabled) return false;
       if (server.engines && !server.engines.includes(scope.provider as never)) return false;
       if (server.projectPath === null) return true;
@@ -86,19 +94,23 @@ export class McpService {
 
   /** Unmasked definition for runtime consumers (the bridge needs real secrets to connect). */
   getDefinition(id: string): McpServerDefinition | null {
-    return this.repo.get(id);
+    return this.repo.getRuntime(id);
   }
 
   create(input: CreateMcpServerInput): McpServerDto {
     const transport = this.normalizeAndValidate(input.transport);
     this.validateEngines(input.engines);
     this.assertNoIdentityConflict(transport, input.projectPath ?? null, null);
-    return this.toDto(this.repo.create({ ...input, transport }));
+    const secrets = mergeSecretMetadata(
+      normalizeSecretMetadata(input),
+      detectTransportSecrets(transport),
+    );
+    return this.toDto(this.repo.create({ ...input, transport, ...secrets }));
   }
 
   update(id: string, patch: UpdateMcpServerInput): McpServerDto | null {
     this.validateEngines(patch.engines);
-    const existing = this.repo.get(id);
+    const existing = this.repo.getRuntime(id);
     if (!existing) return null;
     const transport = patch.transport
       ? this.restoreMaskedSecrets(this.normalizeAndValidate(patch.transport), existing)
@@ -106,11 +118,28 @@ export class McpService {
     const projectPath =
       patch.projectPath !== undefined ? patch.projectPath : existing.projectPath;
     this.assertNoIdentityConflict(transport, projectPath, id);
-    const secretKeys = this.guardDeclassification(patch, existing);
+    const guardedSecretKeys = this.guardDeclassification(patch, existing);
+    const secrets = mergeSecretMetadata(
+      normalizeSecretMetadata({
+        secretKeys: guardedSecretKeys ?? existing.secretKeys,
+        secretArgIndexes: patch.secretArgIndexes
+          ? [...new Set([...(existing.secretArgIndexes ?? []), ...patch.secretArgIndexes])]
+          : existing.secretArgIndexes,
+        secretUrlQueryKeys: patch.secretUrlQueryKeys
+          ? [
+              ...new Set([
+                ...(existing.secretUrlQueryKeys ?? []),
+                ...patch.secretUrlQueryKeys,
+              ]),
+            ]
+          : existing.secretUrlQueryKeys,
+      }),
+      detectTransportSecrets(transport),
+    );
     const updated = this.repo.update(id, {
       ...patch,
       ...(patch.transport ? { transport } : {}),
-      ...(secretKeys ? { secretKeys } : {}),
+      ...secrets,
     });
     return updated ? this.toDto(updated) : null;
   }
@@ -124,7 +153,12 @@ export class McpService {
   private toDto(server: McpServerDefinition): McpServerDto {
     return {
       ...server,
-      transport: maskTransportSecrets(server.transport, server.secretKeys),
+      transport: maskTransportSecrets(
+        server.transport,
+        server.secretKeys,
+        server.secretArgIndexes,
+        server.secretUrlQueryKeys,
+      ),
       scope: server.projectPath === null ? 'global' : 'project',
       oauthStatus: this.oauth?.oauthStatus(server.id, server.auth) ?? (server.auth === 'oauth' ? 'required' : 'none'),
     };
@@ -139,10 +173,15 @@ export class McpService {
     incoming: McpTransport,
     existing: McpServerDefinition,
   ): McpTransport {
-    const storedValues = collectSecretValues(existing.transport, existing.secretKeys);
-    return mapSecretValues(incoming, existing.secretKeys, (value, key) => {
-      const stored = storedValues.get(key);
-      return stored !== undefined && value === maskSecret(stored) ? stored : value;
+    const metadata = normalizeSecretMetadata(existing);
+    const storedByLocation = collectSecretValuesByLocation(existing.transport, metadata);
+    const occurrenceByLocation = new Map<string, number>();
+    return mapTransportSecrets(incoming, metadata, (value, location) => {
+      const key = secretLocationKey(location);
+      const occurrence = occurrenceByLocation.get(key) ?? 0;
+      occurrenceByLocation.set(key, occurrence + 1);
+      const stored = storedByLocation.get(key)?.[occurrence];
+      return stored !== undefined && value === maskTransportValue(stored, location) ? stored : value;
     });
   }
 
@@ -192,7 +231,10 @@ export class McpService {
     try {
       new URL(transport.url);
     } catch {
-      throw new BadRequestException(`invalid transport url: ${transport.url}`);
+      throw new BadRequestException('invalid transport URL');
+    }
+    if (hasRemoteUrlUserinfo(transport.url)) {
+      throw new BadRequestException('transport URL must not include a username or password');
     }
     return transport;
   }
@@ -210,32 +252,75 @@ function normalizePath(path: string): string {
   return resolvePath(path).replace(/\/+$/, '');
 }
 
-/** Replace the values of `secretKeys` env/header entries with masked previews. */
-export function maskTransportSecrets(transport: McpTransport, secretKeys: string[]): McpTransport {
-  return mapSecretValues(transport, secretKeys, (value) => maskSecret(value) ?? '');
-}
-
-function mapSecretValues(
+/** Replace every marked transport credential with a usable masked preview. */
+export function maskTransportSecrets(
   transport: McpTransport,
   secretKeys: string[],
-  fn: (value: string, key: string) => string,
+  secretArgIndexes: number[] = [],
+  secretUrlQueryKeys: string[] = [],
 ): McpTransport {
-  const secretSet = new Set(secretKeys);
-  const mapRecord = (record: Record<string, string> | undefined) =>
-    record
-      ? Object.fromEntries(
-          Object.entries(record).map(([key, value]) => [
-            key,
-            secretSet.has(key) ? fn(value, key) : value,
-          ]),
-        )
-      : undefined;
-  if (transport.type === 'stdio') {
-    const env = mapRecord(transport.env);
-    return { ...transport, ...(env ? { env } : {}) };
+  const metadata = normalizeSecretMetadata({
+    secretKeys,
+    secretArgIndexes,
+    secretUrlQueryKeys,
+  });
+  return mapTransportSecrets(transport, metadata, maskTransportValue);
+}
+
+function maskTransportValue(value: string, location: McpSecretLocation): string {
+  if (location.kind !== 'arg') return maskSecret(value) ?? '';
+  const maskedUrl = maskEveryQueryValue(value);
+  if (maskedUrl !== value) return maskedUrl;
+  const equalsAt = value.indexOf('=');
+  if (value.startsWith('-') && equalsAt > 0) {
+    return `${value.slice(0, equalsAt + 1)}${maskSecret(value.slice(equalsAt + 1)) ?? ''}`;
   }
-  const headers = mapRecord(transport.headers);
-  return { ...transport, ...(headers ? { headers } : {}) };
+  return maskSecret(value) ?? '';
+}
+
+function maskEveryQueryValue(value: string): string {
+  try {
+    const parsed = new URL(value);
+    const entries = [...parsed.searchParams.entries()];
+    if (entries.length === 0) return value;
+    parsed.search = '';
+    for (const [key, secret] of entries) {
+      parsed.searchParams.append(key, maskSecret(secret) ?? '');
+    }
+    return parsed.toString();
+  } catch {
+    return value;
+  }
+}
+
+function collectSecretValuesByLocation(
+  transport: McpTransport,
+  metadata: McpSecretMetadata,
+): Map<string, string[]> {
+  const values = new Map<string, string[]>();
+  mapTransportSecrets(transport, metadata, (value, location) => {
+    const key = secretLocationKey(location);
+    const existing = values.get(key);
+    if (existing) existing.push(value);
+    else values.set(key, [value]);
+    return value;
+  });
+  return values;
+}
+
+function secretLocationKey(location: McpSecretLocation): string {
+  switch (location.kind) {
+    case 'record':
+      return `record:${location.key}`;
+    case 'arg':
+      return `arg:${location.index}`;
+    case 'url-query':
+      return `url-query:${location.key}`;
+    default: {
+      const exhaustive: never = location;
+      return exhaustive;
+    }
+  }
 }
 
 function collectSecretValues(transport: McpTransport, secretKeys: string[]): Map<string, string> {

@@ -13,6 +13,7 @@ interface LifecycleDependencies {
   accept: WebhookDeliveryAcceptance;
   deliveryRetrying: boolean;
   cleanupCheckpoint: string | null;
+  assertDeliveryOwnership: () => void;
   markCleanupCheckpoint: () => void;
 }
 
@@ -77,6 +78,7 @@ export async function routePullRequestLifecycle(
         return acceptTerminal(() =>
           skipCleanup(deps.attention, projectPath, event, 'worktree-handed-off'));
       }
+      deps.assertDeliveryOwnership();
       const removal = await deps.git.removeWorktreeIfSafe(
         session.projectPath,
         session.worktreePath,
@@ -140,6 +142,7 @@ export async function routePullRequestLifecycle(
 
   let archived: ReturnType<SessionsService['archive']>;
   try {
+    deps.assertDeliveryOwnership();
     archived = deps.sessions.archive(session.id);
   } catch {
     return acceptTerminal(() => skipCleanup(deps.attention, projectPath, event, 'archive-race'));
@@ -152,6 +155,7 @@ export async function routePullRequestLifecycle(
       skipCleanup(deps.attention, projectPath, event, 'worktree-handed-off'));
   }
   deps.markCleanupCheckpoint();
+  deps.assertDeliveryOwnership();
   const removal = await deps.git.removeWorktreeIfSafe(session.projectPath, session.worktreePath, {
     fallbackBase: session.baseBranch,
   });

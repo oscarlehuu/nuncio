@@ -43,6 +43,7 @@ const MIN_HOLD_SECONDS = 5;
 const MAX_HOLD_SECONDS = 600;
 const DEFAULT_HOLD_SECONDS = 15;
 const RETAINED_PARENT_FLUSH_RETRY_MS = 100;
+const TASK_FINISH_RETRY_MS = 100;
 
 function clampHoldSeconds(seconds: number): number {
   return Math.min(MAX_HOLD_SECONDS, Math.max(MIN_HOLD_SECONDS, seconds));
@@ -87,9 +88,12 @@ export class TasksService implements OnModuleDestroy {
    * settled loop-run without TasksService knowing about loops. Fired best-effort.
    */
   private readonly finishHandlers = new Set<(task: TaskDto) => void>();
-  private readonly bootInterruptedTaskIds = new Set<string>();
+  private reconciliationDrain: Promise<void> | null = null;
+  private reconciliationRerunRequested = false;
+  private reconciliationRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private crewExecutionReady = false;
   private crewQueueReconciled = false;
+  private readonly pumpDeferrals: Array<{ requested: boolean }> = [];
 
   constructor(
     private readonly tasks: TasksRepository,
@@ -101,22 +105,19 @@ export class TasksService implements OnModuleDestroy {
     @Optional() private readonly evidence?: EvidenceCaptureService,
   ) {
     // A RUNNING row at boot means the runner died mid-task; its session was
-    // already reconciled by the sessions sweep. Generic queued work resumes;
+    // already reconciled by the sessions sweep. The FAILED transition and its
+    // replay marker commit together, so a second crash cannot lose the parent
+    // digest or task-settlement notification. Generic queued work then resumes;
     // Crew queued work stays gated until its owner reconciles durable attempts.
-    // Those tasks died with the daemon, but their parents still deserve a
-    // FAILED digest so the delegation loop is closed after a restart.
-    const interrupted = this.tasks.failInterrupted('daemon_restart');
-    for (const failed of interrupted) {
-      this.bootInterruptedTaskIds.add(failed.id);
-      void this.emitTaskDigest(failed, failed.sessionId);
-    }
+    this.tasks.failInterrupted('daemon_restart');
+    this.startReconciliationDrain();
     void this.pump();
   }
 
   /** Register a task-settlement listener (e.g. the loop primitive). */
   onTaskFinished(handler: (task: TaskDto) => void): () => void {
     this.finishHandlers.add(handler);
-    this.replayBootInterruptedTasks(handler);
+    this.startReconciliationDrain();
     return () => this.finishHandlers.delete(handler);
   }
 
@@ -136,14 +137,91 @@ export class TasksService implements OnModuleDestroy {
     }
   }
 
-  private replayBootInterruptedTasks(handler: (task: TaskDto) => void): void {
-    for (const taskId of this.bootInterruptedTaskIds) {
-      const task = this.tasks.findById(taskId);
-      if (!task || !TERMINAL_TASK_STATUSES.includes(task.status)) continue;
-      try {
-        handler(task);
-      } catch {
-        // A listener must never break registration.
+  private startReconciliationDrain(): void {
+    if (this.destroyed || this.database.closed) return;
+    if (this.reconciliationDrain) {
+      this.reconciliationRerunRequested = true;
+      return;
+    }
+    if (this.reconciliationRetryTimer) {
+      clearTimeout(this.reconciliationRetryTimer);
+      this.reconciliationRetryTimer = null;
+    }
+
+    const drain = this.drainBootReconciliations();
+    this.reconciliationDrain = drain;
+    void drain
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[tasks] interrupted-task replay failed; retrying: ${message}`);
+        this.scheduleReconciliationRetry();
+      })
+      .finally(() => {
+        if (this.reconciliationDrain !== drain) return;
+        this.reconciliationDrain = null;
+        if (this.reconciliationRerunRequested) {
+          this.reconciliationRerunRequested = false;
+          this.startReconciliationDrain();
+        }
+      });
+  }
+
+  private scheduleReconciliationRetry(): void {
+    if (
+      this.destroyed || this.database.closed || this.reconciliationRetryTimer
+    ) return;
+    this.reconciliationRetryTimer = setTimeout(() => {
+      this.reconciliationRetryTimer = null;
+      this.startReconciliationDrain();
+    }, TASK_FINISH_RETRY_MS);
+    this.reconciliationRetryTimer.unref?.();
+  }
+
+  /**
+   * Drain durable boot-interruption work in digest-then-settlement order. Digest
+   * construction remains best-effort: a missing parent or snapshot/build failure
+   * is marked handled rather than blocking task/loop reconciliation. Persistence
+   * failures remain pending because event append and marker advancement share one
+   * transaction.
+   */
+  private async drainBootReconciliations(): Promise<void> {
+    for (const pending of this.tasks.listPendingReconciliations()) {
+      if (this.destroyed || this.database.closed) return;
+      const task = pending.task;
+      if (!task || !TERMINAL_TASK_STATUSES.includes(task.status)) {
+        this.tasks.deleteReconciliation(pending.taskId);
+        continue;
+      }
+
+      if (pending.digestPending) {
+        const built = await this.buildTaskDigest(
+          task,
+          digestStatus(task.status),
+          task.sessionId,
+        );
+        if (this.destroyed || this.database.closed) return;
+
+        if (!built) {
+          this.tasks.markReconciliationDigestHandled(task.id);
+        } else {
+          const event = this.database.immediateTransaction(() => {
+            if (!this.tasks.markReconciliationDigestHandled(task.id)) return null;
+            return this.sessions.persistOrchestrationEvent(
+              built.parentSessionId,
+              'task_completed',
+              built.payload,
+            );
+          });
+          if (event) this.sessions.emitPersistedEvent(built.parentSessionId, event);
+        }
+      }
+
+      if (pending.settlementPending && this.finishHandlers.size > 0) {
+        this.database.immediateTransaction(() => {
+          if (this.tasks.markReconciliationSettlementHandled(task.id)) {
+            this.notifyFinished(task);
+          }
+        });
       }
     }
   }
@@ -197,17 +275,114 @@ export class TasksService implements OnModuleDestroy {
     return this.enqueueMany([input])[0]!;
   }
 
+  /**
+   * Hold every nested enqueue's pump request until the caller confirms its outer
+   * transaction committed. A rollback discards the returned continuation, so no
+   * provider/session work can escape rows that never became durable.
+   */
+  deferPumpUntilCommit<T>(work: () => T): { result: T; afterCommit: () => void } {
+    const frame = { requested: false };
+    this.pumpDeferrals.push(frame);
+    let result: T;
+    try {
+      result = work();
+    } catch (error) {
+      this.pumpDeferrals.pop();
+      throw error;
+    }
+
+    this.pumpDeferrals.pop();
+    const parent = this.pumpDeferrals.at(-1);
+    if (parent && frame.requested) parent.requested = true;
+    const ownsContinuation = !parent;
+    let continued = false;
+    return {
+      result,
+      afterCommit: () => {
+        if (continued) return;
+        continued = true;
+        if (ownsContinuation && frame.requested) this.kickPumpAfterCorrelatedCommit();
+      },
+    };
+  }
+
+  /**
+   * Atomically create a task and its owner's durable correlation row. The pump
+   * starts only after both writes commit, so a correlation failure cannot expose
+   * a live orphan task to the lane.
+   */
+  enqueueCorrelated<T>(
+    input: CreateTaskDto, correlate: (task: TaskDto) => T,
+  ): { task: TaskDto; correlated: T } {
+    const [normalized] = this.normalizeInputs([input]);
+    const committed = this.database.transaction(() => {
+      const task = this.tasks.createInCurrentTransaction(normalized!);
+      return { task, correlated: correlate(task) };
+    });
+    this.requestPumpAfterCommit();
+    return committed;
+  }
+
+  enqueueApprovalBatch<T>(
+    entries: Array<{
+      input: CreateTaskDto;
+      correlationKey: string;
+      existingTaskId?: string;
+      reuseCorrelationKey?: string;
+    }>,
+    correlate: (tasks: TaskDto[]) => T,
+  ): { tasks: TaskDto[]; correlated: T } {
+    const normalized = this.normalizeInputs(entries.map((entry) => entry.input));
+    const prepared = entries.map((entry, index) => {
+      const correlationKey = entry.correlationKey.trim();
+      if (!correlationKey) throw new BadRequestException('approval correlation key is required');
+      return { ...entry, input: normalized[index]!, correlationKey };
+    });
+    const committed = this.database.immediateTransaction(() => {
+      const correlatedTasks = prepared.map((entry) => {
+        const existing = this.tasks.findByApprovalCorrelation(entry.correlationKey);
+        if (existing) return existing;
+
+        if (entry.reuseCorrelationKey) {
+          const reused = this.tasks.findByApprovalCorrelation(entry.reuseCorrelationKey);
+          if (reused) {
+            return this.tasks.correlateApprovalTask(entry.correlationKey, reused.id) ?? reused;
+          }
+        }
+
+        if (entry.existingTaskId) {
+          const active = this.tasks.correlateApprovalTask(
+            entry.correlationKey,
+            entry.existingTaskId,
+            { activeOnly: true },
+          );
+          if (active) return active;
+        }
+
+        return this.tasks.createApprovalTaskInCurrentTransaction(entry.input, entry.correlationKey);
+      });
+      return { tasks: correlatedTasks, correlated: correlate(correlatedTasks) };
+    });
+    if (committed.tasks.length > 0) this.requestPumpAfterCommit();
+    return committed;
+  }
+
   enqueueMany(inputs: CreateTaskDto[]): TaskDto[] {
     if (inputs.length === 0) return [];
-    const normalized = inputs.map((input) => {
-      this.assertGenericDelegationParent(input.parentSessionId ? this.sessions.get(input.parentSessionId) : null);
+    const tasks = this.tasks.createMany(this.normalizeInputs(inputs));
+    this.requestPumpNow();
+    return tasks;
+  }
+
+  private normalizeInputs(inputs: CreateTaskDto[]): CreateTaskDto[] {
+    return inputs.map((input) => {
+      this.assertGenericDelegationParent(
+        input.parentSessionId ? this.sessions.get(input.parentSessionId) : null,
+      );
       const prompt = input.prompt?.trim();
       if (!prompt) throw new BadRequestException('prompt is required');
       return { ...input, prompt };
     });
-    const tasks = this.tasks.createMany(normalized);
-    void this.pump();
-    return tasks;
   }
 
   async startMultitask(input: StartMultitaskDto): Promise<StartMultitaskResultDto> {
@@ -552,6 +727,42 @@ export class TasksService implements OnModuleDestroy {
       clearTimeout(this.holdTimer);
       this.holdTimer = null;
     }
+    if (this.reconciliationRetryTimer) {
+      clearTimeout(this.reconciliationRetryTimer);
+      this.reconciliationRetryTimer = null;
+    }
+  }
+
+  private requestPumpNow(): void {
+    const deferred = this.pumpDeferrals.at(-1);
+    if (deferred) {
+      deferred.requested = true;
+      return;
+    }
+    void this.pump();
+  }
+
+  private requestPumpAfterCommit(): void {
+    const deferred = this.pumpDeferrals.at(-1);
+    if (deferred) {
+      deferred.requested = true;
+      return;
+    }
+    this.kickPumpAfterCorrelatedCommit();
+  }
+
+  private kickPumpAfterCorrelatedCommit(): void {
+    queueMicrotask(() => {
+      if (this.destroyed || this.database.closed) return;
+      try {
+        this.pump();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[tasks] correlated task pump failed; retrying: ${message}`);
+        const retry = setTimeout(() => this.kickPumpAfterCorrelatedCommit(), TASK_FINISH_RETRY_MS);
+        retry.unref?.();
+      }
+    });
   }
 
   /**
@@ -651,18 +862,12 @@ export class TasksService implements OnModuleDestroy {
       outcome = { error: message };
     }
 
-    // Finalize OUTSIDE the run try/catch: finish + digest commit atomically. A
-    // transaction failure here must NOT re-enter the run's failure path (that
-    // would double-finish); the transaction rolled back, so the task stays
-    // RUNNING and boot reconciliation will fail it — consistent with a crash
-    // before the commit. Log and leave it; do not re-finish.
-    try {
-      const finished = await this.finishWithDigest(task, status, childSessionId, outcome);
-      if (finished) this.notifyFinished(finished);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn(`[tasks] finish+digest transaction failed for ${task.id}; left for boot recovery: ${message}`);
-    }
+    // Finalize outside the run try/catch so a failed terminal transaction never
+    // re-enters provider execution. Keep retrying the same CAS settlement while
+    // this daemon owns the lane: a transient SQLite failure must not leave the
+    // RUNNING row consuming concurrency until the next restart.
+    const finished = await this.finishWithRetry(task, status, childSessionId, outcome);
+    if (finished) this.notifyFinished(finished);
   }
 
   /** Evidence is annotate-don't-block: capture failure never changes task outcome. */
@@ -677,6 +882,24 @@ export class TasksService implements OnModuleDestroy {
       const reason = error instanceof Error ? error.message : String(error);
       console.warn(`[tasks] ${phase} evidence capture failed for ${session.id}: ${reason}`);
     }
+  }
+
+  private async finishWithRetry(
+    task: TaskDto,
+    status: 'DONE' | 'FAILED',
+    childSessionId: string | null,
+    outcome: Record<string, unknown>,
+  ): Promise<TaskDto | null> {
+    while (!this.destroyed && !this.database.closed) {
+      try {
+        return await this.finishWithDigest(task, status, childSessionId, outcome);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[tasks] finish+digest transaction failed for ${task.id}; retrying: ${message}`);
+        await new Promise((resolve) => setTimeout(resolve, TASK_FINISH_RETRY_MS));
+      }
+    }
+    return null;
   }
 
   /**
@@ -867,22 +1090,6 @@ export class TasksService implements OnModuleDestroy {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[tasks] failed to build task_completed digest for ${task.id}: ${message}`);
       return null;
-    }
-  }
-
-  /**
-   * Emit a digest for an already-terminal task (cancel / boot-recovery paths,
-   * where the task row is not transitioning RUNNING→terminal in this call).
-   * Best-effort; append failure never destabilizes the caller.
-   */
-  private async emitTaskDigest(task: TaskDto, childSessionId: string | null): Promise<void> {
-    const built = await this.buildTaskDigest(task, digestStatus(task.status), childSessionId);
-    if (!built) return;
-    try {
-      this.sessions.appendOrchestrationEvent(built.parentSessionId, 'task_completed', built.payload);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn(`[tasks] failed to append task_completed digest for ${task.id}: ${message}`);
     }
   }
 

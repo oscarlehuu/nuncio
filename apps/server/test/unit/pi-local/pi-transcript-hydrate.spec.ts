@@ -35,6 +35,105 @@ describe('piEntriesToSessionEvents', () => {
     expect(events).toEqual([{ type: 'user_message', payload: { text } }]);
   });
 
+  it('does not invent success when a standalone tool result omits error state', () => {
+    const events = piEntriesToSessionEvents([
+      {
+        type: 'message',
+        message: {
+          role: 'toolResult',
+          content: [{ type: 'text', text: 'legacy output' }],
+        },
+      },
+    ] as never);
+
+    expect(events).toEqual([
+      {
+        type: 'tool_end',
+        payload: { tool: 'toolResult', output: 'legacy output' },
+      },
+    ]);
+  });
+
+  it('preserves authoritative identity and failure state on a standalone tool result', () => {
+    const events = piEntriesToSessionEvents([
+      {
+        type: 'message',
+        message: {
+          role: 'toolResult',
+          toolCallId: 'call-failed',
+          toolName: 'bäsh工具',
+          isError: true,
+          content: [{ type: 'text', text: 'command failed' }],
+        },
+      },
+    ] as never);
+
+    expect(events).toEqual([
+      {
+        type: 'tool_end',
+        payload: {
+          callId: 'call-failed',
+          tool: 'bäsh工具',
+          isError: true,
+          output: 'command failed',
+        },
+      },
+    ]);
+  });
+
+  it('removes authoritative out-of-order results from pending fallback ownership', () => {
+    const events = piEntriesToSessionEvents([
+      {
+        type: 'message',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'toolCall', id: 'call-a', name: 'alpha', arguments: {} },
+            { type: 'toolCall', id: 'call-b', name: 'beta', arguments: {} },
+          ],
+        },
+      },
+      {
+        type: 'message',
+        message: {
+          role: 'toolResult',
+          toolCallId: 'call-b',
+          content: [{ type: 'text', text: 'beta output' }],
+        },
+      },
+      {
+        type: 'message',
+        message: {
+          role: 'toolResult',
+          toolCallId: 'call-a',
+          content: [{ type: 'text', text: 'alpha output' }],
+        },
+      },
+      {
+        type: 'message',
+        message: {
+          role: 'toolResult',
+          content: [{ type: 'text', text: 'legacy output' }],
+        },
+      },
+    ] as never);
+
+    expect(events.filter((event) => event.type === 'tool_end')).toEqual([
+      {
+        type: 'tool_end',
+        payload: { callId: 'call-b', tool: 'beta', output: 'beta output' },
+      },
+      {
+        type: 'tool_end',
+        payload: { callId: 'call-a', tool: 'alpha', output: 'alpha output' },
+      },
+      {
+        type: 'tool_end',
+        payload: { tool: 'toolResult', output: 'legacy output' },
+      },
+    ]);
+  });
+
   it('maps pi SDK parsed entries to Nuncio transcript events and skips thinking', () => {
     const events = piEntriesToSessionEvents([
       {
@@ -54,7 +153,13 @@ describe('piEntriesToSessionEvents', () => {
       },
       {
         type: 'message',
-        message: { role: 'toolResult', content: [{ type: 'text', text: 'file contents' }] },
+        message: {
+          role: 'toolResult',
+          toolCallId: 'call-1',
+          toolName: 'read',
+          isError: false,
+          content: [{ type: 'text', text: 'file contents' }],
+        },
       },
     ] as never);
 

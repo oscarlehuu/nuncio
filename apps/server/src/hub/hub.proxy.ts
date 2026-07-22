@@ -1,20 +1,23 @@
 import type { NextFunction, Request, Response } from 'express';
 import type { NestExpressApplication } from '@nestjs/platform-express';
-import { parseHubPath, resolveMachineTarget } from './hub-routing';
+import {
+  canonicalizeHubTargetPath,
+  parseHubPath,
+  resolveMachineTarget,
+} from './hub-routing';
+import { streamHubResponse } from './hub-response-stream';
 import { HubService } from './hub.service';
 import { HubRegistryService } from './hub-registry.service';
 import type { TokenValidator } from '../auth/auth-request';
 import { isAuthorizedUpgrade, type RemoteTrust } from '../auth/upgrade-auth';
 
-/**
- * Target paths a client may reach through the hub without credentials —
- * mirrors the target's own @Public routes (token exchange, health, HMAC-signed
- * webhooks). Everything else must be authorized AT THE HUB EDGE: the target
- * trusts the hub by whois identity, so an unauthenticated relay would bypass
- * the target's token check entirely.
- */
+const DEFAULT_UPSTREAM_RESPONSE_TIMEOUT_MS = 30_000;
+
+/** Public target routes mirror the target daemon's own @Public routes. */
 export function isPublicHubTargetPath(targetPath: string): boolean {
-  const pathOnly = targetPath.split('?')[0];
+  const canonical = canonicalizeHubTargetPath(targetPath);
+  if (!canonical) return false;
+  const pathOnly = canonical.split('?')[0];
   return (
     pathOnly === '/api/auth/login' ||
     pathOnly === '/api/health' ||
@@ -28,9 +31,9 @@ export function isAuthorizedHubRequest(
   authTokens?: TokenValidator,
   trust?: RemoteTrust,
 ): Promise<boolean> {
-  if (isPublicHubTargetPath(targetPath)) {
-    return Promise.resolve(true);
-  }
+  const canonical = canonicalizeHubTargetPath(targetPath);
+  if (!canonical) return Promise.resolve(false);
+  if (isPublicHubTargetPath(canonical)) return Promise.resolve(true);
   return isAuthorizedUpgrade(
     { headers: req.headers, socket: { remoteAddress: req.socket?.remoteAddress } },
     authTokens,
@@ -59,6 +62,10 @@ export interface ProxyRequest {
   body: string | Buffer | undefined;
 }
 
+export interface HubProxyOptions {
+  upstreamResponseTimeoutMs?: number;
+}
+
 export function buildProxyRequest(
   req: Pick<Request, 'method' | 'headers'> & { rawBody?: Buffer; body?: unknown },
   targetOrigin: string,
@@ -74,42 +81,64 @@ export function buildProxyRequest(
   const method = req.method ?? 'GET';
   let body: string | Buffer | undefined;
   if (method !== 'GET' && method !== 'HEAD') {
-    if (req.rawBody && req.rawBody.length > 0) {
-      body = req.rawBody;
-    } else if (req.body !== undefined && req.body !== null) {
-      body = JSON.stringify(req.body);
-    }
+    if (req.rawBody && req.rawBody.length > 0) body = req.rawBody;
+    else if (req.body !== undefined && req.body !== null) body = JSON.stringify(req.body);
   }
-
   return { url: `${targetOrigin}${targetPath}`, method, headers, body };
 }
 
-/**
- * Hub HTTP proxy. For /m/<machine>/... requests (when hub mode is on), resolves
- * the machine against the auto-discovered registry (SSRF guard) and streams the
- * response from that machine's own nuncio — including SSE, which must not be
- * buffered. Hub→target runs over the tailnet, so the target trusts the hub by
- * whois identity. Non-hub paths and disabled hub mode fall straight through.
- */
+type UpstreamResponse = {
+  status: number;
+  headers: { forEach: (cb: (value: string, key: string) => void) => void };
+  body: ReadableStream<Uint8Array> | null;
+};
+
+type HeaderOutcome =
+  | { type: 'response'; response: UpstreamResponse }
+  | { type: 'error'; error: unknown }
+  | { type: 'timeout' }
+  | { type: 'downstream-closed' };
+
+async function cancelBody(body: ReadableStream<Uint8Array> | null): Promise<void> {
+  if (!body) return;
+  try {
+    await body.cancel();
+  } catch {
+    // Cancellation is cleanup; the primary request outcome is already known.
+  }
+}
+
+/** Install the machine-prefixed HTTP/SSE proxy before local routes/static UI. */
 export function configureHubProxy(
   app: NestExpressApplication,
   hub: HubService,
   registry: HubRegistryService,
   authTokens?: TokenValidator,
   trust?: RemoteTrust,
+  options?: HubProxyOptions,
 ): void {
   app.use(async (req: Request, res: Response, next: NextFunction) => {
     if (!hub.enabled()) return next();
-    const parsed = parseHubPath(req.originalUrl);
-    if (!parsed) return next();
 
-    // Only /api is proxied; /m/<machine>/<app-route> is served the SPA shell
-    // (the shell boots, computes its base path, and calls /m/<machine>/api/*).
-    if (parsed.targetPath !== '/api' && !parsed.targetPath.startsWith('/api/')) {
+    const parsed = parseHubPath(req.originalUrl);
+    if (!parsed) {
+      if (req.originalUrl.startsWith('/m/')) {
+        res.status(400).json({ message: 'Malformed hub target path' });
+        return;
+      }
       return next();
     }
 
-    if (!(await isAuthorizedHubRequest(req, parsed.targetPath, authTokens, trust))) {
+    const targetPathname = parsed.targetPath.split('?')[0];
+    if (targetPathname !== '/api' && !targetPathname.startsWith('/api/')) return next();
+
+    let authorized = false;
+    try {
+      authorized = await isAuthorizedHubRequest(req, parsed.targetPath, authTokens, trust);
+    } catch {
+      authorized = false;
+    }
+    if (!authorized) {
       res.status(401).json({ message: 'Unauthorized' });
       return;
     }
@@ -127,53 +156,107 @@ export function configureHubProxy(
 
     const proxyReq = buildProxyRequest(req, target, parsed.targetPath);
     const controller = new AbortController();
-    res.on('close', () => controller.abort());
+    let abortIssued = false;
+    let downstreamClosed = false;
+    let resolveDownstreamClosed: ((outcome: HeaderOutcome) => void) | undefined;
+    const downstreamClosedOutcome = new Promise<HeaderOutcome>((resolve) => {
+      resolveDownstreamClosed = resolve;
+    });
+    const abortUpstream = () => {
+      if (abortIssued) return;
+      abortIssued = true;
+      controller.abort();
+    };
+    const onDownstreamTerminated = () => {
+      if (downstreamClosed) return;
+      downstreamClosed = true;
+      abortUpstream();
+      resolveDownstreamClosed?.({ type: 'downstream-closed' });
+    };
+    res.on('close', onDownstreamTerminated);
+    res.on('error', onDownstreamTerminated);
 
-    let upstream: Response & { body?: unknown };
-    try {
-      upstream = (await fetch(proxyReq.url, {
+    const timeoutMs =
+      options?.upstreamResponseTimeoutMs && options.upstreamResponseTimeoutMs > 0
+        ? options.upstreamResponseTimeoutMs
+        : DEFAULT_UPSTREAM_RESPONSE_TIMEOUT_MS;
+    const fetchOutcome: Promise<HeaderOutcome> = Promise.resolve()
+      .then(() => fetch(proxyReq.url, {
         method: proxyReq.method,
         headers: proxyReq.headers,
         body: proxyReq.body as BodyInit | undefined,
         redirect: 'manual',
         signal: controller.signal,
-      })) as unknown as Response & { body?: unknown };
-    } catch (error) {
-      if (!res.headersSent) {
-        res.status(502).json({
-          message: `Hub could not reach '${parsed.machine}': ${error instanceof Error ? error.message : String(error)}`,
-        });
-      }
-      return;
-    }
-
-    const upstreamAny = upstream as unknown as {
-      status: number;
-      headers: { forEach: (cb: (v: string, k: string) => void) => void };
-      body: ReadableStream<Uint8Array> | null;
-    };
-    res.status(upstreamAny.status);
-    upstreamAny.headers.forEach((value, key) => {
-      if (!HOP_BY_HOP.has(key.toLowerCase())) res.setHeader(key, value);
+      }))
+      .then(
+        (response) => ({ type: 'response', response: response as unknown as UpstreamResponse }),
+        (error) => ({ type: 'error', error }),
+      );
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const timeoutOutcome = new Promise<HeaderOutcome>((resolve) => {
+      timeout = setTimeout(() => {
+        abortUpstream();
+        resolve({ type: 'timeout' });
+      }, timeoutMs);
     });
 
-    if (!upstreamAny.body) {
-      res.end();
-      return;
-    }
-
-    // Stream chunks as they arrive so SSE stays live (no buffering).
-    const reader = upstreamAny.body.getReader();
     try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value) res.write(Buffer.from(value));
+      const outcome = await Promise.race([fetchOutcome, timeoutOutcome, downstreamClosedOutcome]);
+      if (timeout) clearTimeout(timeout);
+
+      if (outcome.type !== 'response') {
+        void fetchOutcome.then((late) => (
+          late.type === 'response' ? cancelBody(late.response.body) : undefined
+        ));
+        if (outcome.type === 'timeout' && !downstreamClosed && !res.headersSent) {
+          res.status(504).json({ message: `Hub target '${parsed.machine}' timed out` });
+        } else if (outcome.type === 'error' && !downstreamClosed && !res.headersSent) {
+          const detail = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
+          res.status(502).json({ message: `Hub could not reach '${parsed.machine}': ${detail}` });
+        }
+        return;
       }
-    } catch {
-      // Client disconnected or upstream aborted; end the response.
+
+      const upstream = outcome.response;
+      if (downstreamClosed) {
+        await cancelBody(upstream.body);
+        return;
+      }
+
+      try {
+        res.status(upstream.status);
+        upstream.headers.forEach((value, key) => {
+          if (!HOP_BY_HOP.has(key.toLowerCase())) res.setHeader(key, value);
+        });
+      } catch {
+        await cancelBody(upstream.body);
+        return;
+      }
+
+      if (!upstream.body) {
+        if (!downstreamClosed && !res.writableEnded && !res.destroyed) res.end();
+        return;
+      }
+
+      let reader: ReadableStreamDefaultReader<Uint8Array>;
+      try {
+        reader = upstream.body.getReader();
+      } catch {
+        if (!downstreamClosed && !res.writableEnded && !res.destroyed) {
+          try {
+            res.destroy();
+          } catch {
+            // Reader acquisition failed; never turn the unusable response into clean EOF.
+          }
+        }
+        await cancelBody(upstream.body);
+        return;
+      }
+      await streamHubResponse(reader, res);
     } finally {
-      res.end();
+      if (timeout) clearTimeout(timeout);
+      res.off('close', onDownstreamTerminated);
+      res.off('error', onDownstreamTerminated);
     }
   });
 }

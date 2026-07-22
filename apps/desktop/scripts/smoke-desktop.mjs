@@ -5,10 +5,10 @@
  * Builds an UNSIGNED packaged app (`electron-builder --dir`, no notarization),
  * launches the real packaged binary, attaches to its renderer over the Chrome
  * DevTools Protocol (see cdp-client.mjs for why raw CDP instead of Playwright),
- * and asserts the app actually boots: a window for the loopback daemon rendered,
- * the app shell is present and sized (a blank window — renderer that couldn't
- * reach the daemon — leaves #root empty), no uncaught main-process exceptions,
- * then it shuts down cleanly.
+ * and asserts the app actually boots against an isolated loopback daemon: the
+ * app shell is present and sized (a blank window — renderer that couldn't reach
+ * the daemon — leaves #root empty), that exact backend remains alive and healthy,
+ * no fatal runtime evidence appears, then the smoke process group shuts down cleanly.
  *
  * The mock provider never registers in packaged builds, so this asserts the shell
  * renders and the local server booted — it does NOT create sessions.
@@ -17,10 +17,24 @@
  * main-process log land in smoke-artifacts/.
  */
 import { execSync, spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync, rmSync, readdirSync, existsSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sleep, waitForAppPageTarget, connectCdp } from './cdp-client.mjs';
+import { assertRuntimeOwnership } from './smoke-runtime-ownership.mjs';
+import { resolveSmokeAppDataRoot } from '../src/pre-lock-app-paths.js';
 
 const desktopDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const channel = process.env.NUNCIO_CHANNEL || 'stable';
@@ -30,12 +44,10 @@ const artifactsDir = join(desktopDir, 'smoke-artifacts');
 // If a redesign renames it, the same PR runs this smoke (web paths are in the CI
 // filter) and the author updates it here.
 const SHELL_SELECTOR = '[data-testid="desktop-sidebar-rail"]';
-const FATAL_MAIN_MARKERS = [
-  'A JavaScript error occurred in the main process',
-  'Uncaught Exception',
-  'UnhandledPromiseRejection',
-];
 const DEVTOOLS_RE = /DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\/devtools\/browser\//;
+const OWNERSHIP_STABILITY_MS = 2_000;
+const HEALTH_TIMEOUT_MS = 2_000;
+const MAX_PORT_FILE_BYTES = 64;
 
 let logBuffer = '';
 function record(chunk) {
@@ -46,6 +58,60 @@ function record(chunk) {
 function run(cmd, env = {}) {
   record(`\n$ ${cmd}\n`);
   execSync(cmd, { cwd: desktopDir, stdio: 'inherit', env: { ...process.env, ...env } });
+}
+
+function findFreePort() {
+  return new Promise((resolvePort, reject) => {
+    const server = createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : null;
+      server.close((error) => {
+        if (error) reject(error);
+        else if (!port) reject(new Error('failed to lease an isolated smoke port'));
+        else resolvePort(port);
+      });
+    });
+  });
+}
+
+async function probeDaemonHealth(port) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/health`, {
+      signal: controller.signal,
+    });
+    let body = null;
+    try {
+      body = await response.json();
+    } catch {
+      // The ownership assertion rejects non-JSON or malformed health payloads.
+    }
+    return { port, statusCode: response.status, body };
+  } catch (error) {
+    return {
+      port,
+      statusCode: null,
+      body: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function readSmokeDaemonPort(filePath) {
+  const size = statSync(filePath).size;
+  if (size <= 0 || size > MAX_PORT_FILE_BYTES) {
+    throw new Error(`isolated daemon-port file has invalid size ${size}`);
+  }
+  const raw = readFileSync(filePath, 'utf8').trim();
+  if (!/^\d{1,5}$/.test(raw)) {
+    throw new Error(`isolated daemon-port file is malformed: ${JSON.stringify(raw)}`);
+  }
+  return Number(raw);
 }
 
 function findPackagedBinary() {
@@ -81,7 +147,7 @@ function killGroup(child, signal) {
 }
 
 async function shutdown(child) {
-  if (!child || child.exitCode !== null) return;
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
   await new Promise((res) => {
     const forceKill = setTimeout(() => killGroup(child, 'SIGKILL'), 3_000);
     child.once('exit', () => {
@@ -118,6 +184,7 @@ function probeShell(cdp) {
           hasShell: !!rail && rail.getBoundingClientRect().width > 0,
           rootLen: root ? root.innerHTML.trim().length : 0,
           visible: document.visibilityState,
+          rendererUrl: window.location.href,
         };
       })()`,
       returnByValue: true,
@@ -131,12 +198,41 @@ rmSync(artifactsDir, { recursive: true, force: true });
 let child = null;
 let cdp = null;
 let failureShot = null;
+let electronExit = null;
+let spawnError = null;
+let smokeRoot = null;
 try {
   run('bun run build:resources');
   run('bunx electron-builder --config electron-builder.config.cjs --dir', {
     NUNCIO_CHANNEL: channel,
     CSC_IDENTITY_AUTO_DISCOVERY: 'false',
   });
+
+  smokeRoot = mkdtempSync(join(tmpdir(), 'nuncio-desktop-smoke-'));
+  const smokeHome = join(smokeRoot, 'home');
+  const smokeDataDir = join(smokeHome, '.nuncio', 'data');
+  const smokeAppDataRoot = join(smokeDataDir, 'electron-app-data');
+  const smokeUserData = join(smokeAppDataRoot, 'Nuncio');
+  const smokePortFile = join(smokeDataDir, 'daemon-port');
+  const smokeNonce = randomBytes(32).toString('hex');
+  const smokeEnvironment = {
+    HOME: smokeHome,
+    NUNCIO_DATA_DIR: smokeDataDir,
+    NUNCIO_DESKTOP_SMOKE_TEMP_ROOT: smokeRoot,
+    NUNCIO_DESKTOP_SMOKE_APP_DATA_ROOT: smokeAppDataRoot,
+    NUNCIO_DESKTOP_SMOKE_NONCE: smokeNonce,
+  };
+  // Validate the same boundary main.js enforces before touching Electron's
+  // single-instance namespace. HOME alone does not re-home appData on macOS.
+  if (resolveSmokeAppDataRoot(smokeEnvironment) !== smokeAppDataRoot) {
+    throw new Error('smoke appData root did not resolve to the requested temporary path');
+  }
+  mkdirSync(smokeAppDataRoot, { recursive: true });
+  const smokePort = await findFreePort();
+  writeFileSync(smokePortFile, `${smokePort}\n`);
+  record(
+    `\nsmoke isolation\n  HOME=${smokeHome}\n  NUNCIO_DATA_DIR=${smokeDataDir}\n  pre-lock appData=${smokeAppDataRoot}\n  pre-lock userData=${smokeUserData}\n  daemon port=${smokePort}\n`,
+  );
 
   const binary = findPackagedBinary();
   record(`\nlaunching ${binary} --remote-debugging-port=0\n`);
@@ -146,12 +242,20 @@ try {
     stdio: ['ignore', 'pipe', 'pipe'],
     // Own process group so shutdown can take the spawned daemon child down too.
     detached: true,
-    env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: 'false' },
+    env: {
+      ...process.env,
+      ...smokeEnvironment,
+      NUNCIO_DESKTOP_DEV: '0',
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false',
+    },
   });
 
-  let earlyExit = null;
-  child.on('exit', (code) => {
-    earlyExit = code;
+  child.once('error', (error) => {
+    spawnError = error;
+    record(`[main:spawn-error] ${error.stack || error}\n`);
+  });
+  child.on('exit', (code, signal) => {
+    electronExit = { code, signal };
   });
 
   // Chromium prints its chosen DevTools port to stderr; parse it to find the endpoint.
@@ -166,7 +270,12 @@ try {
 
   const portDeadline = Date.now() + 60_000;
   while (devtoolsPort === null && Date.now() < portDeadline) {
-    if (earlyExit !== null) throw new Error(`electron exited early with code ${earlyExit}`);
+    if (spawnError) throw spawnError;
+    if (electronExit) {
+      throw new Error(
+        `electron exited before DevTools opened (code=${electronExit.code ?? 'null'} signal=${electronExit.signal ?? 'null'})`,
+      );
+    }
     await sleep(300);
   }
   if (devtoolsPort === null) throw new Error('electron never opened a DevTools endpoint');
@@ -181,7 +290,12 @@ try {
   let rendered = null;
   const renderDeadline = Date.now() + 30_000;
   while (Date.now() < renderDeadline) {
-    if (earlyExit !== null) throw new Error(`electron exited early with code ${earlyExit}`);
+    if (spawnError) throw spawnError;
+    if (electronExit) {
+      throw new Error(
+        `electron exited before the shell rendered (code=${electronExit.code ?? 'null'} signal=${electronExit.signal ?? 'null'})`,
+      );
+    }
     const state = await probeShell(cdp);
     if (state.hasShell && state.rootLen > 0) {
       rendered = state;
@@ -195,23 +309,58 @@ try {
   }
   if (rendered.visible !== 'visible') throw new Error(`main window is not visible (${rendered.visible})`);
 
-  const fatal = FATAL_MAIN_MARKERS.find((marker) => logBuffer.includes(marker));
-  if (fatal) throw new Error(`uncaught main-process error in log: "${fatal}"`);
-  if (earlyExit !== null) throw new Error(`electron exited early with code ${earlyExit}`);
+  // A foreign daemon can answer health quickly enough to make the shell render.
+  // Keep the packaged app up beyond initial render, then require exact-port Nuncio
+  // health and no evidence that the daemon exited, restarted, or lost its bind.
+  await sleep(OWNERSHIP_STABILITY_MS);
+  const health = await probeDaemonHealth(smokePort);
+  const persistedPort = readSmokeDaemonPort(smokePortFile);
+  record(
+    `\nownership health ${JSON.stringify(health)}\nrenderer URL ${rendered.rendererUrl}\ndaemon-port file ${persistedPort}\n`,
+  );
+  assertRuntimeOwnership({
+    log: logBuffer,
+    expectedPort: smokePort,
+    expectedNonce: smokeNonce,
+    expectedAppDataRoot: smokeAppDataRoot,
+    expectedUserData: smokeUserData,
+    rendererUrl: rendered.rendererUrl,
+    persistedPort,
+    electronExit,
+    spawnError,
+    health,
+  });
 
   cdp.close();
+  cdp = null;
   await shutdown(child);
-  record(`\n✓ desktop boot smoke passed (shell rendered, #root ${rendered.rootLen} chars)\n`);
+  child = null;
+  rmSync(smokeRoot, { recursive: true, force: true });
+  smokeRoot = null;
+  record(
+    `\n✓ desktop boot smoke passed (owned daemon healthy on ${smokePort}, shell rendered, #root ${rendered.rootLen} chars)\n`,
+  );
   process.exit(0);
 } catch (error) {
   record(`\n✗ desktop boot smoke failed: ${error?.stack || error}\n`);
   if (!failureShot) failureShot = await captureShot(cdp);
-  dumpArtifacts(failureShot);
+  try {
+    dumpArtifacts(failureShot);
+  } catch (artifactError) {
+    record(`\nfailed to write smoke artifacts: ${artifactError?.stack || artifactError}\n`);
+  }
   try {
     cdp?.close();
     await shutdown(child);
-  } catch {
-    // The app may already be gone; artifacts are already written.
+  } catch (shutdownError) {
+    record(`\nfailed to shut down smoke process group: ${shutdownError?.stack || shutdownError}\n`);
+  }
+  if (smokeRoot) {
+    try {
+      rmSync(smokeRoot, { recursive: true, force: true });
+    } catch (cleanupError) {
+      record(`\nfailed to remove smoke isolation directory: ${cleanupError?.stack || cleanupError}\n`);
+    }
   }
   process.exit(1);
 }

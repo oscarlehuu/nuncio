@@ -222,6 +222,37 @@ describe('CrewRecoveryService', () => {
     expect(leases.get(runId)).toBeNull();
   });
 
+  it('retries finalized Builder projection after a transient write failure', async () => {
+    createInterruptedBuild(true);
+    const boundary = {
+      ok: true, exists: true, symlink: false, canonicalPath: '/worktree', branch: 'nuncio/run',
+      fullHead: checkpointHead, clean: true, reachable: true, reason: null,
+    };
+    let projectionAttempts = 0;
+    const recovery = service(
+      { canResumeSession: async () => true, ensureMember: jest.fn() }, runnerStub(), boundary,
+      undefined,
+      (notice) => {
+        projectionAttempts += 1;
+        if (projectionAttempts === 1) throw new Error('transient projection write failure');
+        return acceptRecoveredBuild(notice);
+      },
+    );
+
+    await recovery.recoverAll();
+    expect(runs.findById(runId)).toMatchObject({
+      phase: 'BUILD', status: 'BLOCKED_USER', blockedReason: 'unrecoverable_failure',
+    });
+    expect(results.listByRun(runId).filter((item) => item.result.kind === 'builder')).toHaveLength(1);
+    expect(leases.get(runId)).toBeNull();
+
+    const recovered = await recovery.recover(runId);
+
+    expect(recovered).toMatchObject({ phase: 'VERIFY', status: 'QUEUED', workspaceHead: checkpointHead });
+    expect(projectionAttempts).toBe(2);
+    expect(results.listByRun(runId).filter((item) => item.result.kind === 'builder')).toHaveLength(1);
+  });
+
   it('reruns interrupted VERIFY without probing or replacing an unavailable Foreman', async () => {
     let run = runs.findById(runId)!;
     run = runs.applyEvent(runId, {

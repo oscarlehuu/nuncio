@@ -1,4 +1,4 @@
-import { detectSecretKeys, jsonEntryToTransport } from './json-mcp-entry';
+import { detectTransportSecrets, jsonEntryToTransport } from './json-mcp-entry';
 import { readMcpServersBlock } from './cursor-mcp-scanner';
 import type { McpImportCandidate } from './mcp-import.types';
 
@@ -48,7 +48,7 @@ function entriesToCandidates(
         projectPath,
         enabled: true,
         auth: 'none' as const,
-        secretKeys: detectSecretKeys(transport),
+        ...detectTransportSecrets(transport),
       },
     ];
   });

@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { INestApplication } from '@nestjs/common';
 import { APP_GUARD, Reflector } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
@@ -159,6 +159,46 @@ describe('pairing HTTP lifecycle', () => {
       .post('/api/pairing/claim')
       .send({ code, deviceName: 'B' });
     expect(second.status).toBe(401);
+  });
+
+  it('does not consume the code when device persistence fails', async () => {
+    const code = await startCode();
+    const devices = app.get(DevicesService);
+    const createSpy = spyOn(devices, 'create')
+      .mockImplementationOnce(() => { throw new Error('device store unavailable'); });
+
+    try {
+      const failed = await request(app.getHttpServer())
+        .post('/api/pairing/claim')
+        .send({ code, deviceName: 'Retry Phone', platform: 'ios' });
+      expect(failed.status).toBe(500);
+
+      const recovered = await request(app.getHttpServer())
+        .post('/api/pairing/claim')
+        .send({ code, deviceName: 'Retry Phone', platform: 'ios' });
+      expect(recovered.status).toBe(201);
+      expect(devices.verifyDevice(recovered.body.deviceId, recovered.body.deviceSecret)).toBe(true);
+
+      const consumed = await request(app.getHttpServer())
+        .post('/api/pairing/claim')
+        .send({ code, deviceName: 'Too Late' });
+      expect(consumed.status).toBe(401);
+      expect(devices.list().filter((device) => device.name === 'Retry Phone')).toHaveLength(1);
+    } finally {
+      createSpy.mockRestore();
+    }
+  });
+
+  it('allows only one of two concurrent claims to create a device', async () => {
+    const code = await startCode();
+    const before = app.get(DevicesService).list().length;
+    const [first, second] = await Promise.all([
+      request(app.getHttpServer()).post('/api/pairing/claim').send({ code, deviceName: 'Concurrent A' }),
+      request(app.getHttpServer()).post('/api/pairing/claim').send({ code, deviceName: 'Concurrent B' }),
+    ]);
+
+    expect([first.status, second.status].sort()).toEqual([201, 401]);
+    expect(app.get(DevicesService).list()).toHaveLength(before + 1);
   });
 
   it('a wrong code is rejected', async () => {

@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -25,7 +26,8 @@ const SKIP_NAMES = new Set(['.git', 'node_modules']);
 const MAX_FILE_BYTES = 1024 * 1024;
 
 function isInsideRoot(root: string, candidate: string): boolean {
-  return candidate === root || candidate.startsWith(root === sep ? sep : `${root}${sep}`);
+  const rel = relative(root, candidate);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 function toRelative(root: string, abs: string): string {
@@ -183,9 +185,9 @@ export class FileExplorerService {
     const abs = resolve(realRoot, rel);
     if (!isInsideRoot(realRoot, abs)) throw new BadRequestException('Path escapes workspace root');
 
-    if (existsSync(abs)) {
-      const realTarget = realpathSync.native(abs);
-      if (!isInsideRoot(realRoot, realTarget)) throw new BadRequestException('Path escapes workspace root');
+    const canonicalTarget = this.resolveCanonicalCreateTarget(abs);
+    if (!isInsideRoot(realRoot, canonicalTarget)) {
+      throw new BadRequestException('Path escapes workspace root');
     }
 
     const parent = opts.parentMustExist ? dirname(abs) : this.findExistingAncestor(abs);
@@ -200,6 +202,36 @@ export class FileExplorerService {
       throw new BadRequestException('Parent is not a directory');
     }
     return { root: realRoot, abs };
+  }
+
+  private resolveCanonicalCreateTarget(abs: string): string {
+    let candidate = abs;
+    const seenLinks = new Set<string>();
+
+    for (let depth = 0; depth < 40; depth += 1) {
+      try {
+        return realpathSync.native(candidate);
+      } catch {
+        // A missing target may still be a dangling symlink, which lstat can see.
+      }
+
+      try {
+        if (lstatSync(candidate).isSymbolicLink()) {
+          if (seenLinks.has(candidate)) throw new BadRequestException('Path contains a symlink loop');
+          seenLinks.add(candidate);
+          candidate = resolve(dirname(candidate), readlinkSync(candidate));
+          continue;
+        }
+      } catch (error) {
+        if (error instanceof BadRequestException) throw error;
+      }
+
+      const ancestor = this.findExistingAncestor(candidate);
+      const realAncestor = realpathSync.native(ancestor);
+      return resolve(realAncestor, relative(ancestor, candidate));
+    }
+
+    throw new BadRequestException('Path contains too many symlinks');
   }
 
   private findExistingAncestor(abs: string): string {
