@@ -76,6 +76,9 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
   const [projectPath, setProjectPath] = useState('');
   const [baseBranch, setBaseBranch] = useState('');
   const [branches, setBranches] = useState<CrewBranch[]>([]);
+  const [branchesLoading, setBranchesLoading] = useState(false);
+  const [branchesError, setBranchesError] = useState<string | null>(null);
+  const branchReqId = useRef(0);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('local');
   const [sheetMode, setSheetMode] = useState<SheetMode>(null);
   const [modelEngineKey, setModelEngineKey] = useState<string | null>(null);
@@ -99,31 +102,37 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
       .catch(() => {});
   }, []);
 
+  const loadBranches = useCallback(async (path: string) => {
+    const reqId = ++branchReqId.current;
+    setBranchesLoading(true);
+    setBranchesError(null);
+    try {
+      const list = await fetchCrewBranches(path);
+      if (reqId !== branchReqId.current) return;
+      setBranches(list);
+      setBaseBranch(preferredCrewBaseBranch(list));
+    } catch {
+      if (reqId !== branchReqId.current) return;
+      setBranches([]);
+      setBaseBranch('');
+      setBranchesError('Could not load branches — check the connection, then retry.');
+    } finally {
+      if (reqId === branchReqId.current) setBranchesLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    let cancelled = false;
     if (!projectPath) {
+      branchReqId.current++;
       setBaseBranch('');
       setBranches([]);
+      setBranchesError(null);
+      setBranchesLoading(false);
       setWorkspaceMode('local');
-      return () => {
-        cancelled = true;
-      };
+      return;
     }
-    void fetchCrewBranches(projectPath)
-      .then((list) => {
-        if (cancelled) return;
-        setBranches(list);
-        setBaseBranch(preferredCrewBaseBranch(list));
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setBranches([]);
-        setBaseBranch('');
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [projectPath]);
+    void loadBranches(projectPath);
+  }, [projectPath, loadBranches]);
 
   const catalog = useMemo(() => normalizeModelCatalog(providers), [providers]);
   const models = useMemo(() => flattenProviders(catalog), [catalog]);
@@ -599,7 +608,17 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
               </View>
             ) : sheetMode === 'branch' ? (
               <View className="gap-2">
-                {selectableBranches.length ? (
+                {branchesLoading ? (
+                  <ActivityIndicator className="mt-6" accessibilityLabel="Loading branches" />
+                ) : branchesError ? (
+                  <Pressable
+                    accessibilityLabel="Retry loading branches"
+                    onPress={() => void loadBranches(projectPath)}
+                    className="mt-2 min-h-11 items-center justify-center rounded-xl border border-border bg-card px-3 py-2 active:opacity-70"
+                  >
+                    <Text className="text-center text-xs leading-5 text-muted-foreground">{branchesError}</Text>
+                  </Pressable>
+                ) : selectableBranches.length ? (
                   selectableBranches.map((branch) => (
                     <PickerRow
                       key={branch.name}
@@ -614,7 +633,7 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
                   ))
                 ) : (
                   <Text className="mt-1 px-1 text-xs leading-5 text-muted-foreground">
-                    No selectable branches on this project.
+                    No selectable branches — this repo only has Nuncio session branches. Pick another project.
                   </Text>
                 )}
               </View>
