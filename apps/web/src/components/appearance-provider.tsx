@@ -94,6 +94,35 @@ export function useAppearance(): AppearanceContextValue {
   return ctx;
 }
 
+const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
+
+function systemPrefersReducedMotion(): boolean {
+  return typeof window !== 'undefined' && !!window.matchMedia?.(REDUCED_MOTION_QUERY).matches;
+}
+
+/**
+ * The effective "reduce motion" flag, resolving the appearance setting against
+ * the OS query: `off` force-reduces, `on` force-keeps motion, `system` honors
+ * `prefers-reduced-motion`. Tolerates a missing provider (defaults to `system`).
+ */
+export function useReducedMotion(): boolean {
+  const { motion } = useAppearancePreference();
+  const [systemReduced, setSystemReduced] = useState(systemPrefersReducedMotion);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mql = window.matchMedia(REDUCED_MOTION_QUERY);
+    const onChange = () => setSystemReduced(mql.matches);
+    onChange();
+    mql.addEventListener?.('change', onChange);
+    return () => mql.removeEventListener?.('change', onChange);
+  }, []);
+
+  if (motion === 'on') return false;
+  if (motion === 'off') return true;
+  return systemReduced;
+}
+
 /**
  * Read-only appearance access that tolerates a missing provider by returning
  * the defaults. For leaf render components (e.g. DiffView) that only consume a
