@@ -94,10 +94,16 @@ export class GitSessionController {
   }
 
   @Get('history')
-  history(@Param('id') id: string, @Query('limit') limit?: string) {
+  history(
+    @Param('id') id: string,
+    @Query('limit') limit?: string,
+    @Query('branch') branch?: string,
+  ) {
     const parsed = limit ? Number(limit) : undefined;
+    const trimmed = branch?.trim();
     return this.git.history(this.requireSessionGitDir(id), {
       limit: Number.isFinite(parsed) ? parsed : undefined,
+      ...(trimmed ? { branch: trimmed } : {}),
     });
   }
 

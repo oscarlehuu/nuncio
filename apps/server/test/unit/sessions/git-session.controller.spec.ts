@@ -166,6 +166,12 @@ describe('GitSessionController', () => {
     expect(git.history.calls).toEqual([[gitDir, { limit: 25 }]]);
   });
 
+  it('history forwards an optional branch query param', () => {
+    const { controller, git } = controllerFor(makeSession());
+    controller.history('s1', '15', 'feat/other');
+    expect(git.history.calls).toEqual([[gitDir, { limit: 15, branch: 'feat/other' }]]);
+  });
+
   it('commit stages all by default and requires a message', async () => {
     const { controller, git } = controllerFor(makeSession());
     await expect(controller.commit('s1', { message: '  ' })).rejects.toBeInstanceOf(

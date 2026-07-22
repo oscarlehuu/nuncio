@@ -25,6 +25,10 @@ import {
 } from './lib/api';
 import { clearSetting, fetchSettings, updateSetting, type Setting } from './lib/settings-api';
 import { projectDisplayName } from './lib/projects';
+import {
+  parseSettingsSection,
+  type SettingsSectionId,
+} from './lib/settings-sections';
 import { DETAIL_EVENT_TAIL, useSessionStream } from './lib/use-session-stream';
 import { useActiveRun } from './lib/use-active-run';
 import { useSessionNotifications } from './lib/use-session-notifications';
@@ -145,6 +149,10 @@ export default function App() {
   const [handoffInitialWorkspace, setHandoffInitialWorkspace] = useState<string | undefined>();
   const [forceSteerMessage, setForceSteerMessage] = useState<string | null>(null);
   const [settings, setSettings] = useState<Setting[]>([]);
+  const [settingsSection, setSettingsSection] = useState<SettingsSectionId>(() =>
+    parseSettingsSection(typeof window !== 'undefined' ? window.location.search : ''),
+  );
+  const [settingsSearch, setSettingsSearch] = useState('');
   const [inboxUnacked, setInboxUnacked] = useState(0);
   const [listsReady, setListsReady] = useState(false);
   const sessionsErrorShown = useRef(false);
@@ -549,11 +557,34 @@ export default function App() {
     dismissTransientSidebar();
   }, [dismissTransientSidebar, navigate]);
 
+  const settingsRoute = Boolean(matchPath('/settings', location.pathname));
+
+  useEffect(() => {
+    if (!settingsRoute) return;
+    setSettingsSection(parseSettingsSection(location.search));
+  }, [settingsRoute, location.search]);
+
   const handleOpenSettings = useCallback(() => {
+    setSettingsSearch('');
     navigate('/settings');
     dismissTransientSidebar();
     void refreshSettings();
   }, [dismissTransientSidebar, navigate, refreshSettings]);
+
+  const handleSettingsBack = useCallback(() => {
+    setSettingsSearch('');
+    navigate('/');
+    dismissTransientSidebar();
+  }, [dismissTransientSidebar, navigate]);
+
+  const handleSettingsSectionChange = useCallback(
+    (section: SettingsSectionId) => {
+      setSettingsSection(section);
+      setSettingsSearch('');
+      navigate({ pathname: '/settings', search: `?section=${section}` }, { replace: true });
+    },
+    [navigate],
+  );
 
   const handleOpenChangelog = useCallback(() => {
     navigate('/changelog');
@@ -641,6 +672,12 @@ export default function App() {
     onArchive: handleArchiveById,
     onRestore: handleRestore,
     onDelete: handleDelete,
+    settingsMode: settingsRoute,
+    settingsSection,
+    settingsSearch,
+    onSettingsSectionChange: handleSettingsSectionChange,
+    onSettingsSearchChange: setSettingsSearch,
+    onSettingsBack: handleSettingsBack,
   };
 
   return (
@@ -786,7 +823,8 @@ export default function App() {
                     settings={settings}
                     onUpdate={handleUpdateSetting}
                     onClear={handleClearSetting}
-                    onBack={() => navigate('/')}
+                    activeSection={settingsSection}
+                    searchQuery={settingsSearch}
                   />
                 </Suspense>
               </ChunkErrorBoundary>

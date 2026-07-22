@@ -1528,7 +1528,7 @@ The forge layer (`apps/server/src/forges/`) exposes a lightweight connection-sta
 
 ### Settings UI grouping
 
-`apps/web/src/components/settings-view.tsx` (props unchanged: `{ settings, onUpdate, onClear, onBack }`) renders a Cursor-style settings shell: a left `SettingsSectionNav`, a search box, and a single active content pane. The section list is:
+On `/settings`, the main app sidebar switches into Cursor-style settings mode (`settings-sidebar-panel.tsx`: Back + search + `SettingsSectionNav`). `settings-view.tsx` is content-only (`{ settings, onUpdate, onClear, activeSection, searchQuery }`); App owns section/search state and syncs `?section=`. The section list is:
 
 - **General** → legacy catch-all keys that do not have a narrower category.
 - **Appearance** → local-only UI preferences (`AppearanceSettingsSection`, not server settings).

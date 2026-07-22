@@ -730,15 +730,29 @@ export class GitService {
 
   async history(
     path: string,
-    options: { limit?: number } = {},
+    options: { limit?: number; branch?: string } = {},
   ): Promise<GitHistoryDto> {
     const repoRoot = await this.resolveRepoRoot(path);
-    const branch = await this.currentBranchName(repoRoot);
+    const current = await this.currentBranchName(repoRoot);
+    const requested = options.branch?.trim();
+    let rev = 'HEAD';
+    let label = current;
+    if (requested) {
+      const validated = validateGitRevision(requested);
+      try {
+        await git(['rev-parse', '--verify', `${validated}^{commit}`], repoRoot);
+      } catch {
+        throw new BadRequestException(`Unknown git ref: ${validated}`);
+      }
+      rev = validated;
+      label = validated;
+    }
     return loadHistory(
       (args, cwd) => git(args, cwd),
       repoRoot,
-      branch,
+      label,
       options.limit,
+      rev,
     );
   }
 

@@ -248,10 +248,11 @@ export async function history(
   repoRoot: string,
   branch: string,
   limit = DEFAULT_HISTORY_LIMIT,
+  rev = 'HEAD',
 ): Promise<GitHistoryDto> {
   const capped = Math.min(Math.max(limit, 1), MAX_HISTORY_LIMIT);
   const output = await git(
-    ['log', `--max-count=${capped}`, HISTORY_LOG_FORMAT, 'HEAD'],
+    ['log', `--max-count=${capped}`, HISTORY_LOG_FORMAT, rev],
     repoRoot,
   ).catch(() => '');
   return {

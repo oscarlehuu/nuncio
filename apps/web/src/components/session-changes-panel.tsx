@@ -65,6 +65,7 @@ export function SessionChangesPanel({
   const [sync, setSync] = useState<GitBranchSyncDto | null>(null);
   const [stash, setStash] = useState<GitStashEntryDto[]>([]);
   const [history, setHistory] = useState<GitHistoryDto | null>(null);
+  const [historyBranch, setHistoryBranch] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [composerKey, setComposerKey] = useState<ComposerKey | null>(null);
@@ -95,7 +96,10 @@ export function SessionChangesPanel({
         fetchSessionDiff(sessionId),
         fetchGitBranchSync(sessionId).catch(() => null),
         fetchGitStash(sessionId).catch(() => [] as GitStashEntryDto[]),
-        fetchGitHistory(sessionId, 15).catch(() => null),
+        fetchGitHistory(sessionId, {
+          limit: 15,
+          ...(historyBranch ? { branch: historyBranch } : {}),
+        }).catch(() => null),
       ]);
       setDiff(nextDiff);
       setSync(nextSync);
@@ -106,11 +110,15 @@ export function SessionChangesPanel({
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [sessionId, historyBranch]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  const onHistoryBranchChange = useCallback((next: string) => {
+    setHistoryBranch((current) => (current === next ? current : next));
+  }, []);
 
   const totals = useMemo(() => {
     const files = diff?.files ?? [];
@@ -388,7 +396,12 @@ export function SessionChangesPanel({
           <div className="px-3 py-2 text-xs text-muted-foreground">No local changes.</div>
         )}
 
-        <SessionScmHistory history={history} />
+        <SessionScmHistory
+          history={history}
+          repoPath={repoPath}
+          selectedBranch={historyBranch ?? history?.branch}
+          onBranchChange={onHistoryBranchChange}
+        />
         <SessionScmIssues repoPath={repoPath} />
       </div>
     </div>

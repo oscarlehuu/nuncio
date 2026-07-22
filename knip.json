@@ -29,7 +29,8 @@
     "packages/core": {},
     "apps/mobile": {
       "entry": ["metro.config.js"],
-      "metro": false
+      "metro": false,
+      "ignoreBinaries": ["eas"]
     }
   }
 }

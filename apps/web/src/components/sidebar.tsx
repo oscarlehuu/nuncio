@@ -47,7 +47,11 @@ import {
   type SessionGroup,
   type SidebarGroupBy,
 } from '../lib/group-sessions';
+import { resolveSessionPrBadge } from '../lib/session-pr-status';
+import type { SettingsSectionId } from '../lib/settings-sections';
 import { ProviderIcon } from './provider-icon';
+import { SessionPrBadgeButton } from './session-pr-badge';
+import { SettingsSidebarPanel } from './settings-sidebar-panel';
 import { StatusDot } from './status-dot';
 
 interface SidebarProps {
@@ -70,6 +74,16 @@ interface SidebarProps {
   onArchive?: (id: string) => void | Promise<void>;
   onRestore?: (id: string) => void | Promise<void>;
   onDelete?: (id: string) => void | Promise<void>;
+  /**
+   * Cursor-style settings mode: replace the session list with Back + settings
+   * section nav. When true, the settings* props below are required.
+   */
+  settingsMode?: boolean;
+  settingsSection?: SettingsSectionId;
+  settingsSearch?: string;
+  onSettingsSectionChange?: (section: SettingsSectionId) => void;
+  onSettingsSearchChange?: (query: string) => void;
+  onSettingsBack?: () => void;
 }
 
 type View = 'recent' | 'archived';
@@ -88,6 +102,12 @@ export function Sidebar({
   onArchive,
   onRestore,
   onDelete,
+  settingsMode = false,
+  settingsSection = 'appearance',
+  settingsSearch = '',
+  onSettingsSectionChange,
+  onSettingsSearchChange,
+  onSettingsBack,
 }: SidebarProps) {
   const [view, setView] = useState<View>('recent');
   const [query, setQuery] = useState('');
@@ -139,6 +159,32 @@ export function Sidebar({
     void onDelete(pendingDelete.id);
     setPendingDelete(null);
   };
+
+  if (
+    settingsMode &&
+    onSettingsSectionChange &&
+    onSettingsSearchChange &&
+    onSettingsBack
+  ) {
+    return (
+      <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
+        <SettingsSidebarPanel
+          activeSection={settingsSection}
+          searchQuery={settingsSearch}
+          onSectionChange={onSettingsSectionChange}
+          onSearchChange={onSettingsSearchChange}
+          onBack={onSettingsBack}
+        />
+        <footer
+          data-sidebar-footer
+          className="flex shrink-0 items-center justify-end gap-1 border-t border-sidebar-border p-3"
+          style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}
+        >
+          <ModeToggle />
+        </footer>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full bg-sidebar text-sidebar-foreground">
@@ -489,6 +535,7 @@ function needsStatusDot(status: Session['status']): boolean {
 function RecentRow({ session, active, onSelect, onArchive }: RecentRowProps) {
   const showArchive = onArchive && canArchiveRow(session.status);
   const showDot = needsStatusDot(session.status);
+  const prBadge = resolveSessionPrBadge(session);
   return (
     <div
       className={cn(
@@ -496,6 +543,11 @@ function RecentRow({ session, active, onSelect, onArchive }: RecentRowProps) {
         active ? 'bg-sidebar-accent text-sidebar-accent-foreground' : 'hover:bg-sidebar-accent/60',
       )}
     >
+      {prBadge && (
+        <div className="flex w-4 shrink-0 items-center justify-center self-center">
+          <SessionPrBadgeButton badge={prBadge} />
+        </div>
+      )}
       <button
         type="button"
         onClick={() => onSelect(session.id)}
@@ -503,20 +555,20 @@ function RecentRow({ session, active, onSelect, onArchive }: RecentRowProps) {
         aria-label={`Open ${session.title}`}
       >
         <div className="flex items-center gap-1.5">
+          <span
+            aria-label={`${providerMeta(session.provider).name} provider`}
+            className="shrink-0 leading-none"
+          >
+            <ProviderIcon providerId={session.provider} className="size-3.5" />
+          </span>
           {showDot && <StatusDot status={session.status} className="shrink-0" />}
           <span className="text-ui-lg text-sidebar-foreground truncate">{session.title}</span>
           <span className="ml-auto shrink-0 text-ui-sm tabular-nums text-muted-foreground">
             {relativeTime(session.updatedAt)}
           </span>
         </div>
-        <div className="text-ui-sm text-muted-foreground truncate mt-0.5 flex items-center gap-1">
-          <span
-            aria-label={`${providerMeta(session.provider).name} provider`}
-            className="shrink-0 leading-none"
-          >
-            <ProviderIcon providerId={session.provider} className="size-3" />
-          </span>
-          <span className="truncate">{session.preview ?? statusLabel(session.status)}</span>
+        <div className="text-ui-sm text-muted-foreground truncate mt-0.5 pl-[18px]">
+          {session.preview ?? statusLabel(session.status)}
         </div>
       </button>
       {showArchive && (
@@ -548,6 +600,7 @@ interface ArchivedRowProps {
 }
 
 function ArchivedRow({ session, active, onSelect, onRestore, onDelete }: ArchivedRowProps) {
+  const prBadge = resolveSessionPrBadge(session);
   return (
     <div
       className={cn(
@@ -555,6 +608,11 @@ function ArchivedRow({ session, active, onSelect, onRestore, onDelete }: Archive
         active ? 'bg-sidebar-accent text-sidebar-accent-foreground' : 'hover:bg-sidebar-accent/60',
       )}
     >
+      {prBadge && (
+        <div className="flex w-4 shrink-0 items-center justify-center self-center">
+          <SessionPrBadgeButton badge={prBadge} />
+        </div>
+      )}
       <button
         type="button"
         onClick={() => onSelect(session.id)}
@@ -562,21 +620,19 @@ function ArchivedRow({ session, active, onSelect, onRestore, onDelete }: Archive
         aria-label={`Open ${session.title}`}
       >
         <div className="flex items-center gap-1.5">
+          <span
+            aria-label={`${providerMeta(session.provider).name} provider`}
+            className="shrink-0 leading-none"
+          >
+            <ProviderIcon providerId={session.provider} className="size-3.5" />
+          </span>
           <span className="text-ui-lg text-sidebar-foreground truncate">{session.title}</span>
           <span className="ml-auto shrink-0 text-ui-sm tabular-nums text-muted-foreground">
             {relativeTime(session.updatedAt)}
           </span>
         </div>
-        <div className="text-ui-sm text-muted-foreground truncate mt-0.5 flex items-center gap-1">
-          <span
-            aria-label={`${providerMeta(session.provider).name} provider`}
-            className="shrink-0 leading-none"
-          >
-            <ProviderIcon providerId={session.provider} className="size-3" />
-          </span>
-          <span className="truncate">
-            {projectDisplayName(session.projectPath) ?? session.preview ?? statusLabel(session.status)}
-          </span>
+        <div className="text-ui-sm text-muted-foreground truncate mt-0.5 pl-[18px]">
+          {projectDisplayName(session.projectPath) ?? session.preview ?? statusLabel(session.status)}
         </div>
       </button>
       <div className="flex items-center gap-0.5 shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
