@@ -25,7 +25,7 @@ export const QueuedSteersPanel = memo(function QueuedSteersPanel({
   if (steers.length === 0) return null;
   return (
     <div
-      className="mb-2 rounded-lg border border-border/60 bg-card/80 shadow-e1 surface-lit overflow-hidden"
+      className="mb-2 rounded-lg border border-border/60 bg-card/80 overflow-hidden"
       data-testid="queued-steers-panel"
     >
       <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border/40">

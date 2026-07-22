@@ -60,7 +60,7 @@ export function VerifyNeedsAttentionRow({
   return (
     <div
       data-testid="verify-needs-attention-row"
-      className="surface-lit shadow-e1 rounded-lg border border-warning/60 bg-card px-3.5 py-3"
+      className="rounded-lg border border-warning/60 bg-card px-3.5 py-3"
     >
       <div className="flex items-start gap-2.5">
         <AlertTriangle

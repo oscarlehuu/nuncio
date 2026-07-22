@@ -59,7 +59,7 @@ function tileStateClasses(status: SessionStatus, pending: boolean, focused: bool
   else if (status === 'RUNNING') activity = 'border-border tile-glow';
   else if (status === 'ERROR') activity = 'border-destructive';
   else activity = 'border-border/60';
-  return cn(activity, focused && 'ring-2 ring-ring shadow-e2');
+  return cn(activity, focused && 'ring-2 ring-ring');
 }
 
 /** Breath color/intensity for the active tile states; undefined = no breath. */
@@ -196,8 +196,8 @@ export function SessionTile({
       style={glowStyle(status, pending)}
       className={cn(
         'group flex flex-col min-h-0 min-w-0 overflow-hidden rounded-xl border bg-card text-card-foreground',
-        'shadow-e1 surface-lit hover:shadow-e2 hover:-translate-y-0.5',
-        'transition-[box-shadow,border-color,translate] outline-none active:scale-[0.995]',
+        'hover:bg-accent/40',
+        'transition-[box-shadow,border-color,background-color] outline-none active:scale-[0.995]',
         'focus-visible:ring-2 focus-visible:ring-ring',
         tileStateClasses(status, pending, focused),
       )}

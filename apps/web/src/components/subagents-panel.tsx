@@ -161,7 +161,7 @@ export function SubagentsPanel({
   return (
     <section
       data-testid="subagents-panel"
-      className="max-w-[760px] mx-auto mb-2 rounded-lg border border-border/70 bg-card/60 surface-lit"
+      className="max-w-[760px] mx-auto mb-2 rounded-lg border border-border/70 bg-card/60"
     >
       <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-border/40 text-ui-sm text-muted-foreground">
         <GitBranch className="size-3" />

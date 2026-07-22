@@ -58,7 +58,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <form
         onSubmit={handleSubmit}
-        className="w-full max-w-sm space-y-4 rounded-xl border border-border bg-card p-6 shadow-e1 surface-lit"
+        className="w-full max-w-sm space-y-4 rounded-xl border border-border bg-card p-6"
       >
         <div className="space-y-1">
           <h1 className="text-lg font-semibold text-foreground">Nuncio</h1>

@@ -19,7 +19,7 @@ const GATE_PRESENTATION: Record<CrewGateStatus, GatePresentation> = {
 
 export function CrewGates({ gates, currentHead }: { gates: CrewGateDto[]; currentHead: string | null }) {
   return (
-    <section aria-labelledby="crew-gates-heading" className="rounded-xl border bg-card p-4 shadow-e1 surface-lit">
+    <section aria-labelledby="crew-gates-heading" className="rounded-xl border bg-card p-4">
       <h2 id="crew-gates-heading" className="font-semibold">Gate evidence</h2>
       {gates.length === 0 ? <p className="mt-2 text-ui-sm text-muted-foreground">No gate evidence yet.</p> : (
         <ul className="mt-2 divide-y divide-border">

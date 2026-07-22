@@ -65,7 +65,7 @@ export function CodeBlock({ language, code }: { language?: string; code: string 
   const displayLang =
     language && language.length > 0 ? language.toUpperCase() : 'TEXT';
   return (
-    <div className="my-2.5 rounded-lg border border-border/50 bg-muted/20 shadow-e0 surface-lit overflow-hidden">
+    <div className="my-2.5 rounded-lg border border-border/50 bg-muted/20 overflow-hidden">
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/40 bg-muted/40">
         <span className="text-ui-sm font-mono text-muted-foreground tracking-wide">
           {displayLang}

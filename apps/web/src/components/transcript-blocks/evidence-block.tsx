@@ -30,7 +30,7 @@ function Shot({ label, src, route }: { label: string; src: string; route: string
       <ChatImage
         src={src}
         alt={`${label} screenshot of ${route}`}
-        className="w-full border-border/50 shadow-none transition hover:shadow-e1 active:scale-[0.98]"
+        className="w-full border-border/50 shadow-none transition hover:bg-accent/40 active:scale-[0.98]"
       />
     </figure>
   );
@@ -66,7 +66,7 @@ export function EvidenceBlock({ evidence, stale, sessionId, apiBase = '' }: Evid
     <div
       data-testid="evidence-block"
       className={cn(
-        'max-w-[88%] overflow-hidden rounded-lg border bg-card text-foreground shadow-e1 surface-lit',
+        'max-w-[88%] overflow-hidden rounded-lg border bg-card text-foreground',
         stale ? 'border-warning/40' : 'border-border/60',
       )}
     >

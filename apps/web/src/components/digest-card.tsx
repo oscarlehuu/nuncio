@@ -36,7 +36,7 @@ export function DigestCard({ onOpen }: { onOpen: () => void }) {
       type="button"
       onClick={onOpen}
       aria-label={`Read the ${title}`}
-      className="surface-lit group mb-4 flex w-full items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 text-left shadow-e1 transition-shadow hover:shadow-e2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.995]"
+      className="group mb-4 flex w-full items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.995]"
     >
       <span className={cn('grid size-9 shrink-0 place-items-center rounded-lg bg-muted/60 text-muted-foreground')}>
         <Icon className="size-4" />

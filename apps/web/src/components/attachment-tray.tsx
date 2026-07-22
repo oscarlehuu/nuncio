@@ -63,7 +63,7 @@ export function AttachmentTray({
       {items.map((item) =>
         isImageAttachment(item.attachment) ? (
           <div key={item.id} className="group flex flex-col items-center gap-0.5">
-            <div className="relative size-14 overflow-hidden rounded-lg border border-border/70 bg-muted/30 shadow-e1">
+            <div className="relative size-14 overflow-hidden rounded-lg border border-border/70 bg-muted/30">
               <img
                 src={attachmentDataUrl(item.attachment)}
                 alt={item.label}

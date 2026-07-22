@@ -102,7 +102,7 @@ export function GlobalRunsView() {
               No runs yet. Loops record a row here each time they fire.
             </p>
           ) : (
-            <div className="overflow-hidden rounded-xl border border-border bg-card shadow-e1">
+            <div className="overflow-hidden rounded-xl border border-border bg-card">
               <table className="w-full text-ui">
                 <thead>
                   <tr className="border-b border-border text-left text-ui-sm text-muted-foreground">

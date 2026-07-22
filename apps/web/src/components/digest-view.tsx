@@ -186,7 +186,7 @@ function HighlightsSection({
   onOpenTimeline: () => void;
 }) {
   return (
-    <div className="surface-lit rounded-2xl border border-border bg-card p-4 shadow-e1">
+    <div className="rounded-2xl border border-border bg-card p-4">
       <div className="mb-3 flex items-center gap-2">
         <Clock3 className="size-4 text-muted-foreground" />
         <h3 className="text-ui-lg font-medium text-foreground">Highlights</h3>
@@ -259,7 +259,7 @@ interface SectionProps {
 
 function Section({ icon: Icon, title, summary, onOpen, openLabel, children }: SectionProps) {
   return (
-    <div className="surface-lit rounded-2xl border border-border bg-card p-4 shadow-e1">
+    <div className="rounded-2xl border border-border bg-card p-4">
       <div className="mb-3 flex items-center gap-2">
         <Icon className="size-4 text-muted-foreground" />
         <h3 className="text-ui-lg font-medium text-foreground">{title}</h3>

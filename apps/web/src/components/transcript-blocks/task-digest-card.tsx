@@ -50,7 +50,7 @@ export function TaskDigestCard({ digest, onOpenSession }: TaskDigestCardProps) {
   return (
     <div
       data-testid="task-digest-card"
-      className="max-w-[88%] overflow-hidden rounded-lg border border-border/60 bg-card text-foreground shadow-e1 surface-lit"
+      className="max-w-[88%] overflow-hidden rounded-lg border border-border/60 bg-card text-foreground"
     >
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3.5 py-2.5">
         <span

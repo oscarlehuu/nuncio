@@ -949,7 +949,7 @@ export function SessionDetail({
           }}
         />
         <div
-          className={`max-w-[760px] mx-auto rounded-2xl border bg-card shadow-e2 surface-lit transition-shadow focus-within:ring-2 focus-within:ring-ring/40 ${dragActive ? 'border-primary ring-2 ring-primary/40' : 'border-border/70'}`}
+          className={`max-w-[760px] mx-auto rounded-2xl border bg-card transition-shadow focus-within:ring-2 focus-within:ring-ring/40 ${dragActive ? 'border-primary ring-2 ring-primary/40' : 'border-border/70'}`}
           onDragOver={
             canAttachImages
               ? (e) => {

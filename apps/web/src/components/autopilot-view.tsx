@@ -169,7 +169,7 @@ export function AutopilotView({ onBack, providers }: AutopilotViewProps) {
               </div>
               <ul className="flex flex-col gap-3" aria-hidden>
                 {[0, 1].map((i) => (
-                  <li key={i} className="h-24 rounded-xl border border-border bg-card shadow-e1 animate-pulse" />
+                  <li key={i} className="h-24 rounded-xl border border-border bg-card animate-pulse" />
                 ))}
               </ul>
             </>

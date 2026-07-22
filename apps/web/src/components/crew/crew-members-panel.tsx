@@ -9,7 +9,7 @@ const statusDot = (status: string) =>
 
 export function CrewMembersPanel({ members, onOpenSession }: { members: CrewMemberDto[]; onOpenSession?: (sessionId: string) => void }) {
   return (
-    <section aria-labelledby="crew-members-heading" className="rounded-xl border bg-card p-4 shadow-e1 surface-lit">
+    <section aria-labelledby="crew-members-heading" className="rounded-xl border bg-card p-4">
       <h2 id="crew-members-heading" className="font-semibold">Members</h2>
       {members.length === 0 ? <p className="mt-2 text-ui-sm text-muted-foreground">Members appear when their phase starts.</p> : (
         <ul className="mt-2 divide-y divide-border">

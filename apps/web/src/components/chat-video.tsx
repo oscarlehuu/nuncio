@@ -18,7 +18,7 @@ export function ChatVideo({
   return (
     <div
       className={cn(
-        'my-2 max-w-full overflow-hidden rounded-lg border border-border/60 bg-muted/20 shadow-e1',
+        'my-2 max-w-full overflow-hidden rounded-lg border border-border/60 bg-muted/20',
         className,
       )}
     >
