@@ -212,4 +212,52 @@ describe('SessionsService verify evidence auto-fallback', () => {
     },
     TEST_TIMEOUT_MS,
   );
+
+  it(
+    'does not auto-capture when NUNCIO_EVIDENCE_AUTO_CAPTURE is off',
+    async () => {
+      process.env.NUNCIO_EVIDENCE_AUTO_CAPTURE = 'off';
+      try {
+        writeFileSync(join(workspace, 'App.tsx'), 'export const App = () => null;\n');
+        evidence.knownOutcome = {
+          afterRef: { id: 'media-off', mimeType: 'image/png' },
+          route: '/app',
+          viewport: { w: 1440, h: 900 },
+          workspaceHead: 'headsha',
+        };
+        const session = await service.create({ prompt: 'ui change', provider: 'cursor', workspace });
+        await service.awaitRun(session.id);
+        await waitFor(() => events.list(session.id).find((e) => e.type === 'verify_result'));
+        await new Promise((resolve) => setTimeout(resolve, 300));
+
+        expect(evidence.knownCalls).toEqual([]);
+        expect(evidence.captureCalls).toEqual([]);
+        expect(events.list(session.id).some((e) => e.type === 'evidence_captured')).toBe(false);
+        expect(events.list(session.id).some((e) => e.type === 'evidence_skipped')).toBe(false);
+      } finally {
+        delete process.env.NUNCIO_EVIDENCE_AUTO_CAPTURE;
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'records a no-capture-target note when neither target resolves (fail-open)',
+    async () => {
+      writeFileSync(join(workspace, 'App.tsx'), 'export const App = () => null;\n');
+      // knownOutcome stays null and NUNCIO_EVIDENCE_URL is unset (beforeEach).
+      const session = await service.create({ prompt: 'ui change', provider: 'cursor', workspace });
+      await service.awaitRun(session.id);
+
+      const note = await waitFor(() =>
+        events.list(session.id).find((e) => e.type === 'evidence_skipped'),
+      );
+      expect(note).toBeDefined();
+      expect(note!.payload).toMatchObject({ reason: 'no-target' });
+      expect(evidence.knownCalls).toEqual([{ sessionId: session.id, phase: 'after' }]);
+      expect(events.list(session.id).some((e) => e.type === 'evidence_captured')).toBe(false);
+      expect(service.get(session.id)?.status).toBe('IDLE');
+    },
+    TEST_TIMEOUT_MS,
+  );
 });

@@ -62,7 +62,11 @@ import type { MultitaskCoordinator } from './domain/multitask-coordinator.types'
 import type { SpawnTaskEventHandler } from '../chips/chips.types';
 import type { ReproduceEventHandler } from '../reproduce/reproduce.types';
 import { deriveHasPendingInput } from './domain/derive-pending-input';
-import type { RuntimePolicyPayload, SessionEventType } from './domain/events.types';
+import type {
+  EvidenceSkippedPayload,
+  RuntimePolicyPayload,
+  SessionEventType,
+} from './domain/events.types';
 import type {
   CreateSessionDto,
   ContinueExistingSessionDto,
@@ -2989,7 +2993,7 @@ export class SessionsService implements OnModuleDestroy {
       // A green verify on a ui-touching turn earns after-evidence. Deliberately
       // NOT awaited: capture can take seconds and must never delay loop
       // settlement (fail-open, annotate-don't-block).
-      if (result?.ok && result.classes?.includes('ui')) {
+      if (result?.ok && result.classes?.includes('ui') && this.autoEvidenceEnabled()) {
         this.trackPendingWork(this.captureVerifyEvidence(sessionId));
       }
       // Green verify (or nothing to drive): the loop, if any, has settled.
@@ -3003,6 +3007,18 @@ export class SessionsService implements OnModuleDestroy {
    * target first, else the `NUNCIO_EVIDENCE_URL` fallback. Every failure path
    * logs and returns; the verify loop and session status are never touched.
    */
+  /** Auto after-image capture toggle (on unless explicitly disabled). */
+  private autoEvidenceEnabled(): boolean {
+    const raw = (
+      this.settings?.resolve('NUNCIO_EVIDENCE_AUTO_CAPTURE') ??
+      process.env.NUNCIO_EVIDENCE_AUTO_CAPTURE ??
+      'true'
+    )
+      .trim()
+      .toLowerCase();
+    return raw !== 'off' && raw !== 'false' && raw !== '0';
+  }
+
   private async captureVerifyEvidence(sessionId: string): Promise<void> {
     if (!this.evidence || this.destroyed) return;
     const session = this.sessions.findById(sessionId);
@@ -3011,7 +3027,18 @@ export class SessionsService implements OnModuleDestroy {
       let outcome = await this.evidence.captureKnown(session, 'after');
       if (outcome === null) {
         const url = this.settings?.resolve('NUNCIO_EVIDENCE_URL')?.trim();
-        if (!url) return;
+        if (!url) {
+          // Neither a known target nor a fallback URL resolved: skip quietly and
+          // record a one-line note on the turn's durable event log (not a
+          // transcript card — the card is reserved for a real captured image).
+          if (!this.destroyed) {
+            this.appendAndEmit(sessionId, 'evidence_skipped', {
+              reason: 'no-target',
+              message: 'No preview target to capture — skipped the after-image for this turn.',
+            } satisfies EvidenceSkippedPayload);
+          }
+          return;
+        }
         outcome = await this.evidence.capture(session, { url, phase: 'after' });
       }
       if (this.destroyed || !outcome) return;
