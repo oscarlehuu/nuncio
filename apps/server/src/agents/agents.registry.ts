@@ -120,18 +120,27 @@ export class AgentRegistry {
    * AVAILABLE provider through the registry — never a hardcoded fallthrough to an
    * unavailable engine. The forced Mock (`NUNCIO_FORCE_MOCK=1`) wins when present:
    * it is the deliberate offline/smoke engine, so an operator who opts in expects
-   * it to be the default. Otherwise: cursor → codex → pi by preference, then any
-   * other available provider.
+   * it to be the default. Visible engines are chosen first so an implicit
+   * default never lands on an engine the pickers hide; a hidden-but-available
+   * engine still beats failing outright, keeping unattended runs (webhooks,
+   * loops) alive when Nuncio Engine is unauthenticated.
    */
   async defaultId(): Promise<string> {
     const available = await this.available();
     const mock = available.find((p) => p.id === 'mock');
     if (mock) return mock.id;
-    const preferred = [this.cursor.id, this.codex.id, this.pi.id];
-    for (const id of preferred) {
-      if (available.some((p) => p.id === id)) return id;
-    }
-    if (available.length > 0) return available[0]!.id;
+    const visibleIds = new Set(this.listed().map((provider) => provider.id));
+    const rank = (pool: AgentProvider[], order: string[]): string | undefined => {
+      for (const id of order) {
+        if (pool.some((provider) => provider.id === id)) return id;
+      }
+      return pool[0]?.id;
+    };
+    const visible = available.filter((provider) => visibleIds.has(provider.id));
+    const visibleChoice = rank(visible, [this.pi.id, this.cursor.id, this.codex.id]);
+    if (visibleChoice) return visibleChoice;
+    const fallback = rank(available, [this.cursor.id, this.codex.id, this.pi.id]);
+    if (fallback) return fallback;
     throw new ServiceUnavailableException('No agent provider is configured');
   }
 

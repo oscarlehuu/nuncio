@@ -16,14 +16,14 @@
 
 </div>
 
-Run it on your own machine, point it at your own Pi / Codex / Cursor / Claude credentials, and assign work from your phone — agents keep going while you're away, and you can steer them mid-task.
+Run it on your own machine with your own credentials and assign work from your phone — agents keep going while you're away, and you can steer them mid-task.
 
-Think Devin, but self-hosted and provider-neutral: the agent layer is a single interface, so Pi, Codex, Cursor, and future agent SDKs plug in uniformly.
+Think Devin, but self-hosted: **Nuncio Engine** is the engine, built on the Pi SDK and extended by Nuncio. The legacy vendor adapters (Codex, Cursor, Claude, Devin) still exist behind the same `AgentProvider` interface but are hidden from pickers by default — flip **Settings → Show legacy engines** (`engines.showLegacy`) to bring them back; sessions created with them keep opening either way.
 
 ## Features
 
 - **Delegate tasks** — create a session with a prompt; the agent runs in-process and streams output as events
-- **Per-session provider + model** — choose the agent provider (`pi` / `codex` / `cursor` / `claude`) and the exact model (e.g. `codex:gpt-5.6-sol`, `cursor:composer-2`, `claude:sonnet`) per session; both are stored on the session and wired through to the provider runtime
+- **Per-session model** — Nuncio Engine is the only engine shown by default; pick the exact model (e.g. `anthropic:claude-opus-4-8`, `cliproxyapi:claude-opus-4-8`) and thinking level per session, both stored on the session and wired through to the runtime. Legacy vendor engines (`codex` / `cursor` / `claude` / `devin`) reappear in the picker when **Show legacy engines** is on
 - **Session modes (Nuncio Engine)** — pick a mode from the composer to frame the run: **Debug** works hypothesis-first (enumerate likely causes, add removable `// nuncio-debug` instrumentation, fix only once the evidence confirms it) and **Multitask** decomposes the goal into independent, parallel subtasks. The choice shows as a chip on the session; modes are capability-gated per provider, so engines that don't support them just omit the picker
 - **Solo or Crew** — Solo keeps the per-session engine/model picker. Crew uses a saved Quality profile to bind independent Foreman, Builder, and Reviewer models across Pi, Codex, and Claude, then runs the fixed local workflow `Plan → Build → Verify → Review → Synthesize → Done` in one isolated worktree from the selected base branch on web or mobile. Nuncio owns deterministic verification, retry caps, writer authority, recovery, Attention blockers, and immutable successor runs; models never self-certify or silently switch providers.
 - **Steer mid-task** — send follow-up messages that continue the same agent conversation when the provider supports it; live steers appear immediately, then reconcile in place if accepted or move to the existing queued-steers panel if the provider cannot take them yet
@@ -46,7 +46,7 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 - **Desktop windows reopen where you left them** — Electron restores the previous normal size, position, and maximized state, then validates those bounds against the current monitor work area so a removed or rearranged display cannot strand the window off-screen
 - **Interactive browser dock** — desktop uses a real embedded Electron browser view with a persistent Nuncio profile; the web/PWA surface does not expose a browser dock
 - **Self-hosted** — your machine, your SQLite, your credentials; nothing leaves your tailnet
-- **Provider-neutral agent layer** — `AgentProvider` interface + `AgentRegistry`; Pi, Codex, Cursor, and Claude today (plus a source-only `NUNCIO_FORCE_MOCK=1`-gated Mock for hermetic testing), extensible
+- **Provider-neutral agent layer, single-engine surface** — `AgentProvider` interface + `AgentRegistry` host every engine (plus a source-only `NUNCIO_FORCE_MOCK=1`-gated Mock for hermetic testing); Nuncio Engine is the only one listed by default, the legacy vendor adapters stay registered for existing sessions and the `engines.showLegacy` toggle
 - **Runtime-aware agents** — every hosted agent receives a non-overridable Nuncio identity plus a truthful post-policy capability manifest without repeatedly polluting user turns; `nuncio_runtime_info` exposes the same session/tool/constraint facts where the engine supports adding it without breaking conversation continuity
 - **Settings store** — runtime-configurable env vars (API keys, paths, flags) stored in SQLite and editable via the frontend; secrets encrypted at rest (AES-256-GCM), env vars still honoured as fallback
 - **Trusted provider defaults** — Codex and Claude run with full workspace access by default; advanced provider settings can opt into approval-required modes, whose pending actions remain actionable in the transcript
@@ -71,7 +71,7 @@ Think Devin, but self-hosted and provider-neutral: the agent layer is a single i
 
 ![A Nuncio session streaming an agent's plan, tool calls, and terminal](assets/session-agent-run.png)
 
-**Provider-neutral model picker** — Pi ("Nuncio Engine"), Codex, Cursor, and Claude plug into one interface; switch model and thinking level per session.
+**Model picker** — Nuncio Engine by default; switch model and thinking level per session (legacy vendor engines appear when **Show legacy engines** is on).
 
 ![The per-session provider and model picker showing Nuncio Engine and Codex models](assets/model-picker.png)
 
@@ -469,7 +469,7 @@ assets/     Screenshots for the README (un-ignored only here — see .gitignore)
 ## Design principles
 
 - **3-layer state decoupling:** Conversation (durable) / Agent loop (replaceable) / Machine state (FSM)
-- **Provider-neutral agent layer:** every agent SDK implements `AgentProvider`; `AgentRegistry` resolves per session so Pi/Codex/Cursor/any future SDK plug in uniformly
+- **Provider-neutral agent layer, single-engine surface:** every agent SDK implements `AgentProvider` and `AgentRegistry` resolves per session; Nuncio Engine is the default and only listed engine, legacy adapters stay resolvable for their existing sessions
 - **Workspace harness above provider loops:** Crew shares durable context and Git evidence, not hidden reasoning or provider caches; each provider retains its own conversation runtime while Nuncio owns the outer workflow and authority boundary
 - **Per-session provider + model selection** — `provider` + `model` stored on the session, wired through to the SDK
 - **Long-running, resumable sessions** — FSM + event log persist in SQLite; Pi conversation history is in-memory pending session revival (planned)

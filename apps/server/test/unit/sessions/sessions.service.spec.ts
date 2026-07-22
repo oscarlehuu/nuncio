@@ -1056,10 +1056,18 @@ describe('SessionsService lifecycle (phase 3)', () => {
   });
 
   describe('per-session provider selection', () => {
-    it('defaults to cursor when provider omitted and cursor is available', async () => {
-      const session = await service.create({ prompt: 'default provider task' });
-      expect(session.provider).toBe('cursor');
-      await waitForIdle(service, session.id);
+    it('defaults to cursor when provider omitted and Nuncio Engine is unavailable', async () => {
+      // Pin pi unavailable so the default does not depend on the developer
+      // machine's pi credentials.
+      const piProvider = registry.get('pi');
+      const availableSpy = jest.spyOn(piProvider, 'isAvailable').mockResolvedValue(false);
+      try {
+        const session = await service.create({ prompt: 'default provider task' });
+        expect(session.provider).toBe('cursor');
+        await waitForIdle(service, session.id);
+      } finally {
+        availableSpy.mockRestore();
+      }
     });
 
     it('stores an explicit cursor provider', async () => {

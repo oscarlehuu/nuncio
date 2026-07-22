@@ -7,11 +7,13 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AppModule } from '../../src/app.module';
 import { CursorLocalSessionsService } from '../../src/cursor-local/cursor-local-sessions.service';
+import { PiAgentProvider } from '../../src/agents/providers/pi-agent.provider';
 import { toProjectSlug } from '../../src/cursor-local/cursor-project-slug';
 import {
   configureSimulatedCursorEnv,
   withSimulatedCursorProvider,
 } from '../helpers/simulated-cursor-app';
+import { stubAgentProvider } from '../helpers/stub-agent-provider';
 
 async function runGitAsync(cwd: string, args: string[]): Promise<void> {
   const proc = Bun.spawn(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });
@@ -59,7 +61,12 @@ describe('Nuncio API (e2e)', () => {
       Test.createTestingModule({
         imports: [AppModule],
       }),
-    ).compile();
+    )
+      // Pin pi unavailable so implicit defaults (sessions, webhook flows) stay
+      // on the simulated cursor engine regardless of local pi credentials.
+      .overrideProvider(PiAgentProvider)
+      .useValue(stubAgentProvider('pi', 'Nuncio Engine', false))
+      .compile();
 
     app = moduleFixture.createNestApplication({ rawBody: true });
     app.setGlobalPrefix('api');
