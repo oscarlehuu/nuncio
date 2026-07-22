@@ -3,9 +3,9 @@ import { AgentRegistry } from '../agents/agents.registry';
 import { truncateHeadBytes } from '../orchestration/byte-truncate';
 import { SettingsService } from '../settings/settings.service';
 
-export const AUTO_TITLE_SETTING = 'NUNCIO_AUTO_TITLE';
-export const AUTO_BRANCH_NAME_SETTING = 'NUNCIO_AUTO_BRANCH_NAME';
-export const SESSION_TITLE_MODEL_SETTING = 'NUNCIO_SESSION_TITLE_MODEL';
+const AUTO_TITLE_SETTING = 'NUNCIO_AUTO_TITLE';
+const AUTO_BRANCH_NAME_SETTING = 'NUNCIO_AUTO_BRANCH_NAME';
+const SESSION_TITLE_MODEL_SETTING = 'NUNCIO_SESSION_TITLE_MODEL';
 
 const REQUEST_PROMPT_MAX_BYTES = 2 * 1024;
 const TITLE_MAX_CHARS = 80;
