@@ -44,6 +44,20 @@ describe('codex-model-options', () => {
       );
       expect(option.options?.filter((o) => o.isDefault)).toHaveLength(1);
     });
+
+    it('drops ultra when excludeUltra is set (Claude Codex-sub catalog rows)', () => {
+      // Native Codex CLI can run Multi-agent ultra; Claude-routed Codex-sub cannot.
+      const option = defaultCodexReasoningEffortOption({ excludeUltra: true });
+      expect(option.options?.map((o) => o.id)).toEqual([
+        'low',
+        'medium',
+        'high',
+        'xhigh',
+      ]);
+      expect(option.options?.some((o) => o.id === 'ultra')).toBe(false);
+      expect(option.defaultValue).toBe('medium');
+      expect(option.options?.find((o) => o.id === 'medium')?.isDefault).toBe(true);
+    });
   });
 
   describe('codexFastOption / defaultCodexModelOptions', () => {
