@@ -211,6 +211,12 @@ To run **Codex-subscription GPT models inside a Claude session** (Claude harness
 
 When the bridge is healthy, the Claude model picker lists GPT models with a **Codex sub** badge — pick one and Nuncio injects `ANTHROPIC_BASE_URL` for that session. This is not a separate engine. Native **Codex** sessions still use `codex app-server` directly. Use **Copy Claude Code env** if you also want shell exports for an external `claude` CLI.
 
+### Subscription model host (managed)
+
+A newer **Subscription model host** lets Nuncio reach subscription models with **zero manual setup** — no helper to install or start by hand. Turn on **Settings → Subscription model host (managed)** (`NUNCIO_SUBHOST_ENABLED`) and Nuncio installs the **pinned** helper into `$NUNCIO_DATA_DIR/subscription-host/` (never global), starts and supervises its two loopback subprocesses (a sign-in store and a model router), health-checks them, and restarts them on exit. The sign-in vault lives under the data dir so it backs up and moves with Nuncio; Nuncio supervises the process but never reads the sign-in secrets. When it is up, its models appear as a **Subscription models** group under **Nuncio Engine** in the picker.
+
+Status (up/down, version, ports) and a restart button live in Settings via `GET /api/subscription-host/status` and `POST /api/subscription-host/restart`. It is **fail-soft**: if install or start fails, Settings shows the error and the model group is simply absent — Nuncio still boots and the existing Subscription bridge keeps working side by side. Configure it with `NUNCIO_SUBHOST_MODE` (managed / adopt existing), `NUNCIO_SUBHOST_VERSION` (the pinned version — bump deliberately), and `NUNCIO_SUBHOST_BROKER_PORT` / `NUNCIO_SUBHOST_ROUTER_PORT`. This is a soak-stage option that adds to, and does not replace, the existing helper.
+
 ### Provider CLI updates
 
 Nuncio checks the installed Pi and Codex CLI versions against their public npm package versions and notifies when a newer version is available. It never auto-updates a CLI: users choose **Settings -> Providers -> Tool updates -> Update**.

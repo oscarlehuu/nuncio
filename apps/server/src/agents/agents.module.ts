@@ -4,6 +4,7 @@ import { SettingsModule } from '../settings/settings.module';
 import { ContextModule } from '../context/context.module';
 import { EvidenceModule } from '../evidence/evidence.module';
 import { SubscriptionBridgeModule } from '../subscription-bridge/subscription-bridge.module';
+import { SubscriptionHostModule } from '../subscription-host/subscription-host.module';
 import {
   NuncioContextRepository,
   NuncioContextService,
@@ -60,6 +61,7 @@ const mockProviderBinding: Provider = {
     ContextModule,
     EvidenceModule,
     SubscriptionBridgeModule,
+    SubscriptionHostModule,
   ],
   providers: [
     PiAgentProvider,

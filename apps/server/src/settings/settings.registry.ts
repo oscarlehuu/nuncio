@@ -416,7 +416,73 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
       'Path to `cli-proxy-api` (e.g. ~/cliproxyapi/cli-proxy-api). Used for login hints and for starting the managed process.',
     envVar: 'NUNCIO_CLIPROXY_BIN',
   },
-  // ── Provider behavioral ──────────────────────────────────────────────────
+  // ── Subscription model host (managed) ────────────────────────────────────
+  {
+    key: 'NUNCIO_SUBHOST_ENABLED',
+    category: 'provider',
+    providerId: 'subscription-host',
+    type: 'boolean',
+    label: 'Subscription model host (managed)',
+    description:
+      'When on, Nuncio installs, starts, and supervises a local subscription model host on loopback — no manual setup. Its models appear as a group under Nuncio Engine in the picker. Off by default while it soaks alongside the existing helper.',
+    envVar: 'NUNCIO_SUBHOST_ENABLED',
+    default: '0',
+  },
+  {
+    key: 'NUNCIO_SUBHOST_MODE',
+    category: 'provider',
+    providerId: 'subscription-host',
+    type: 'string',
+    label: 'Subscription model host mode',
+    description: 'How Nuncio relates to the subscription model host process.',
+    envVar: 'NUNCIO_SUBHOST_MODE',
+    default: 'managed',
+    options: [
+      {
+        value: 'managed',
+        label: 'Managed by Nuncio',
+        description:
+          'Nuncio installs the pinned host under `$NUNCIO_DATA_DIR/subscription-host/` and supervises it.',
+      },
+      {
+        value: 'external',
+        label: 'Adopt existing',
+        description: 'Connect to a subscription model host you already run on loopback.',
+      },
+    ],
+  },
+  {
+    key: 'NUNCIO_SUBHOST_VERSION',
+    category: 'provider',
+    providerId: 'subscription-host',
+    type: 'string',
+    label: 'Subscription model host version',
+    description:
+      'Pinned version Nuncio installs into the data dir. Bump deliberately — a version that breaks the host contract twice is a signal to escalate.',
+    envVar: 'NUNCIO_SUBHOST_VERSION',
+    default: '0.1.0',
+  },
+  {
+    key: 'NUNCIO_SUBHOST_BROKER_PORT',
+    category: 'provider',
+    providerId: 'subscription-host',
+    type: 'string',
+    label: 'Subscription model host sign-in port',
+    description: 'Loopback port for the managed sign-in store. Default 18700.',
+    envVar: 'NUNCIO_SUBHOST_BROKER_PORT',
+    default: '18700',
+  },
+  {
+    key: 'NUNCIO_SUBHOST_ROUTER_PORT',
+    category: 'provider',
+    providerId: 'subscription-host',
+    type: 'string',
+    label: 'Subscription model host router port',
+    description: 'Loopback port for the managed model router (models + routing endpoint). Default 18701.',
+    envVar: 'NUNCIO_SUBHOST_ROUTER_PORT',
+    default: '18701',
+  },
+  // ── Provider behavioral ───────────────────────────────────────
   {
     key: 'NUNCIO_CURSOR_CWD',
     category: 'provider',
