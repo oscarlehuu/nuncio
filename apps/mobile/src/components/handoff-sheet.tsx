@@ -8,7 +8,7 @@ import {
 } from '@gorhom/bottom-sheet';
 import type { ModelProvider } from '@nuncio/core/model-providers';
 import { Text } from './ui/text';
-import { ProviderIcon } from './provider-icon';
+import { ProviderIcon, brandForProvider } from './provider-icon';
 
 interface HandoffSheetProps {
   sheetRef: RefObject<BottomSheetModal | null>;
@@ -72,7 +72,7 @@ export function HandoffSheet({
                 className={`min-h-14 flex-row items-center gap-3 rounded-xl border border-border bg-card px-3 py-3 active:bg-accent ${busy && !inFlight ? 'opacity-50' : ''}`}
               >
                 <View className="h-9 w-9 items-center justify-center rounded-lg bg-secondary">
-                  <ProviderIcon providerId={target.id} size={18} color="#eff0f1" />
+                  <ProviderIcon brand={brandForProvider(target.id)} size={18} color="#eff0f1" />
                 </View>
                 <View className="min-w-0 flex-1">
                   <Text className="font-medium text-foreground" numberOfLines={1}>
