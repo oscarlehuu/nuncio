@@ -2,8 +2,6 @@ export * from './api';
 export * from './attention-api';
 export * from './chips-api';
 export * from './cursor-context';
-export * from './crew-api';
-export * from './crew-run-projection';
 export * from './derive-composer-enabled';
 export * from './derive-pending-user-input';
 export * from './derive-plan';

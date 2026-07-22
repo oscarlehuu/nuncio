@@ -2,7 +2,6 @@ import type { SessionStatus } from './api';
 
 export interface ComposerEnabledInput {
   status: SessionStatus;
-  managedByCrew: boolean;
   steering: boolean;
   lifecycleBusy: boolean;
   hasPendingUserInput: boolean;
@@ -15,16 +14,13 @@ export interface ComposerEnabledResult {
 
 /**
  * Whether the session composer accepts input. Mirrors session-detail steer gating:
- * crew ownership, archived sessions, in-flight steers, lifecycle actions, and
- * unresolved AskQuestion prompts disable the composer.
+ * archived sessions, in-flight steers, lifecycle actions, and unresolved
+ * AskQuestion prompts disable the composer.
  *
  * RUNNING alone does not disable — mid-run steer is gated separately via
  * `supportsSteerWhileRunning` on the session, not here.
  */
 export function deriveComposerEnabled(input: ComposerEnabledInput): ComposerEnabledResult {
-  if (input.managedByCrew) {
-    return { enabled: false, reason: 'managed_by_crew' };
-  }
   if (input.status === 'ARCHIVED') {
     return { enabled: false, reason: 'archived' };
   }
