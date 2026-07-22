@@ -53,18 +53,26 @@ export function useRevealedText(
     return () => cancelAnimationFrame(raf);
   }, [animate]);
 
-  // Truthful when acted upon: a live selection flushes the reveal so a
-  // drag-select / copy always captures the full durable text, not a prefix.
+  // Truthful when acted upon: any pointer press flushes the reveal BEFORE the
+  // browser can build a selection range against the truncated DOM, so
+  // drag-select and the mouseup copy path always see the full durable text.
+  // selectionchange stays as a fallback flush for keyboard selection
+  // (shift+arrows, select-all).
   useEffect(() => {
     if (!animate || typeof document === 'undefined') return;
+    const flush = () => setCount(schedulerRef.current!.flush());
     const onSelectionChange = () => {
       const selection = document.getSelection?.();
       if (selection && !selection.isCollapsed && selection.toString().length > 0) {
-        setCount(schedulerRef.current!.flush());
+        flush();
       }
     };
+    document.addEventListener('pointerdown', flush, true);
     document.addEventListener('selectionchange', onSelectionChange);
-    return () => document.removeEventListener('selectionchange', onSelectionChange);
+    return () => {
+      document.removeEventListener('pointerdown', flush, true);
+      document.removeEventListener('selectionchange', onSelectionChange);
+    };
   }, [animate]);
 
   return count >= text.length ? text : text.slice(0, count);

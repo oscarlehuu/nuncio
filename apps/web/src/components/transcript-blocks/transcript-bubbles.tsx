@@ -14,16 +14,29 @@ export function AssistantBubble({
   streaming?: boolean;
   onLinkClick?: MarkdownLinkClickHandler;
 }) {
-  // Smoothly reveal streamed text (see use-revealed-text); historical, settled,
-  // and reduce-motion messages pass through in whole chunks exactly like before.
+  // Only the actively streaming bubble pays for reveal state and the
+  // motion-preference listener; the (many) settled bubbles render plain.
+  if (streaming) {
+    return <StreamingAssistantBubble text={text} onLinkClick={onLinkClick} />;
+  }
+  return <MarkdownView text={text} onLinkClick={onLinkClick} />;
+}
+
+function StreamingAssistantBubble({
+  text,
+  onLinkClick,
+}: {
+  text: string;
+  onLinkClick?: MarkdownLinkClickHandler;
+}) {
+  // Smoothly reveal streamed text (see use-revealed-text); reduce-motion
+  // passes through in whole chunks exactly like before.
   const reduceMotion = useReducedMotion();
-  const revealed = useRevealedText(text, streaming, reduceMotion);
+  const revealed = useRevealedText(text, true, reduceMotion);
   return (
     <>
-      <MarkdownView text={revealed} streaming={streaming} onLinkClick={onLinkClick} />
-      {streaming && (
-        <span className="inline-block w-2 h-4 ml-0.5 bg-primary animate-pulse align-middle" />
-      )}
+      <MarkdownView text={revealed} streaming onLinkClick={onLinkClick} />
+      <span className="inline-block w-2 h-4 ml-0.5 bg-primary animate-pulse align-middle" />
     </>
   );
 }

@@ -105,6 +105,22 @@ describe('useRevealedText', () => {
     expect(result.current).toBe(grown);
   });
 
+  it('flushes on pointer press, before the browser can build a selection range', () => {
+    const grown = 'answer' + 'z'.repeat(400);
+    const { result, rerender } = renderHook(
+      ({ t }) => useRevealedText(t, true, false),
+      { initialProps: { t: 'answer' } },
+    );
+    rerender({ t: grown });
+    advance(32);
+    expect(result.current.length).toBeLessThan(grown.length);
+
+    act(() => {
+      document.dispatchEvent(new Event('pointerdown'));
+    });
+    expect(result.current).toBe(grown);
+  });
+
   it('leaves no animation frame scheduled once the message settles', () => {
     const cancelSpy = vi.spyOn(globalThis, 'cancelAnimationFrame');
     const grown = 'a' + 'b'.repeat(200);
