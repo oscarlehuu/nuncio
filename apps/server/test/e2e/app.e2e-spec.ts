@@ -50,6 +50,10 @@ describe('Nuncio API (e2e)', () => {
     configureSimulatedCursorEnv();
     process.env.NUNCIO_PROJECT_ROOTS = rootsDir;
     process.env.NUNCIO_WORKSPACES_DIR = workspacesDir;
+    // This suite drives HTTP flows through the simulated cursor engine, which
+    // is hidden from listings by default; visibility itself is covered by unit
+    // specs.
+    process.env.NUNCIO_ENGINES_SHOW_LEGACY = '1';
 
     const moduleFixture: TestingModule = await withSimulatedCursorProvider(
       Test.createTestingModule({
@@ -71,6 +75,7 @@ describe('Nuncio API (e2e)', () => {
     delete process.env.CURSOR_API_KEY;
     delete process.env.NUNCIO_PROJECT_ROOTS;
     delete process.env.NUNCIO_WORKSPACES_DIR;
+    delete process.env.NUNCIO_ENGINES_SHOW_LEGACY;
   });
 
   it('GET /api/health returns ok', async () => {
