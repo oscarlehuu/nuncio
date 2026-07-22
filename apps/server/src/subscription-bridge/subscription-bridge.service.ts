@@ -387,7 +387,10 @@ export class SubscriptionBridgeService implements OnModuleInit, OnModuleDestroy 
       name: model.displayName,
       sub: 'via Subscription bridge',
       badge: 'Codex sub',
-      options: [defaultCodexReasoningEffortOption(), ultracodeOption()],
+      // A Codex model shown under the Claude engine runs via Claude Code, which
+      // can't use Codex's native `ultra` (Multi-agent) tier — offer effort only
+      // up to `xhigh` here, not the misleading Ultra option.
+      options: [defaultCodexReasoningEffortOption({ excludeUltra: true }), ultracodeOption()],
     }));
 
     return catalog.map((provider) => {

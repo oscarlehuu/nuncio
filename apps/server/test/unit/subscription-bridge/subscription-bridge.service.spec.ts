@@ -93,6 +93,10 @@ describe('SubscriptionBridgeService', () => {
       badge: 'Codex sub',
     });
     expect(group?.models[0]?.options?.map((o) => o.id)).toEqual(['reasoningEffort', 'ultracode']);
+    // Codex's native `ultra` (Multi-agent) tier is not runnable via Claude Code,
+    // so it must not be offered on Codex-sub rows in the Claude picker.
+    const reasoning = group?.models[0]?.options?.find((o) => o.id === 'reasoningEffort');
+    expect(reasoning?.options?.map((c) => c.id)).toEqual(['low', 'medium', 'high', 'xhigh']);
   });
 
   it('fail-closes resolveClaudeSdkEnv when bridge is offline', async () => {
