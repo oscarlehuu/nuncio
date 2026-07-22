@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { MarkdownView, type MarkdownLinkClickHandler } from '../markdown-view';
+import { useReducedMotion } from '../appearance-provider';
+import { useRevealedText } from '@/lib/use-revealed-text';
 import { cn } from '@/lib/utils';
 
 export function AssistantBubble({
@@ -12,9 +14,13 @@ export function AssistantBubble({
   streaming?: boolean;
   onLinkClick?: MarkdownLinkClickHandler;
 }) {
+  // Smoothly reveal streamed text (see use-revealed-text); historical, settled,
+  // and reduce-motion messages pass through in whole chunks exactly like before.
+  const reduceMotion = useReducedMotion();
+  const revealed = useRevealedText(text, streaming, reduceMotion);
   return (
     <>
-      <MarkdownView text={text} streaming={streaming} onLinkClick={onLinkClick} />
+      <MarkdownView text={revealed} streaming={streaming} onLinkClick={onLinkClick} />
       {streaming && (
         <span className="inline-block w-2 h-4 ml-0.5 bg-primary animate-pulse align-middle" />
       )}
