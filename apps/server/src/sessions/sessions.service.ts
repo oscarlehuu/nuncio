@@ -19,6 +19,8 @@ import {
   assertRuntimePolicySupported,
   runtimeToolsForPolicy,
 } from '../agents/agent-runtime-policy';
+import { resolveDefaultRuntimePolicy } from '../agents/default-runtime-policy';
+import { isRuntimeCommandSandboxAvailable } from '../agents/runtime-command-sandbox';
 import type {
   AgentAttachment,
   AgentProvider,
@@ -60,7 +62,7 @@ import type { MultitaskCoordinator } from './domain/multitask-coordinator.types'
 import type { SpawnTaskEventHandler } from '../chips/chips.types';
 import type { ReproduceEventHandler } from '../reproduce/reproduce.types';
 import { deriveHasPendingInput } from './domain/derive-pending-input';
-import type { SessionEventType } from './domain/events.types';
+import type { RuntimePolicyPayload, SessionEventType } from './domain/events.types';
 import type {
   CreateSessionDto,
   ContinueExistingSessionDto,
@@ -404,8 +406,9 @@ export class SessionsService implements OnModuleDestroy {
       }
     }
 
-    const runtimePolicy = this.validateRuntimePolicy(
+    const { policy: runtimePolicy, notice: confinementNotice } = this.resolveCreateRuntimePolicy(
       provider,
+      providerId,
       input.runtimePolicy,
       worktreePath ?? workspace,
     );
@@ -465,6 +468,11 @@ export class SessionsService implements OnModuleDestroy {
     // B4: materialize the engine's native context file into the worktree now
     // that the session row exists (so a skip note can be recorded). Opt-in per
     // project; the preamble injection above is the guarantee, this reinforces it.
+    if (confinementNotice) {
+      // Surface confinement (and whether the OS shell sandbox actually enforces
+      // it) so a requested-but-advisory case is visible on the session.
+      this.appendAndEmit(session.id, 'runtime_policy', confinementNotice);
+    }
     if (worktreePath && projectPath) {
       this.materializeWorktreeContextFile(worktreePath, projectPath, profile?.contextFileName, session.id);
     }
@@ -2483,6 +2491,61 @@ export class SessionsService implements OnModuleDestroy {
       return assertRuntimePolicySupported(policy, provider.capabilities, workspace);
     } catch (error) {
       throw new BadRequestException(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  /** Global default-confinement opt-out (on unless explicitly disabled). */
+  private workspaceConfinementEnabled(): boolean {
+    const raw =
+      this.settings?.resolve('NUNCIO_ENGINE_WORKSPACE_CONFINEMENT') ??
+      process.env.NUNCIO_ENGINE_WORKSPACE_CONFINEMENT;
+    return (raw ?? 'on').trim().toLowerCase() !== 'off';
+  }
+
+  /**
+   * Resolve the runtime policy a create call runs under. An explicit policy is
+   * validated strictly (and may reject the request). Otherwise the Nuncio
+   * Engine default confines writes to the session's workspace; that default is
+   * best-effort — it never hard-fails create — and yields a notice event so the
+   * confinement (and whether the OS shell sandbox enforces it) is visible.
+   */
+  private resolveCreateRuntimePolicy(
+    provider: AgentProvider,
+    providerId: string,
+    explicit: AgentRuntimePolicy | null | undefined,
+    workspace: string | null | undefined,
+  ): { policy: AgentRuntimePolicy | undefined; notice?: RuntimePolicyPayload } {
+    if (explicit) {
+      return { policy: this.validateRuntimePolicy(provider, explicit, workspace) };
+    }
+    const defaultPolicy = resolveDefaultRuntimePolicy({
+      providerId,
+      capabilities: provider.capabilities,
+      hasExplicitPolicy: false,
+      workspace,
+      confinementEnabled: this.workspaceConfinementEnabled(),
+    });
+    if (!defaultPolicy) return { policy: undefined };
+    try {
+      const policy = assertRuntimePolicySupported(defaultPolicy, provider.capabilities, workspace);
+      if (!policy) return { policy: undefined };
+      const shellSandboxEnforced = isRuntimeCommandSandboxAvailable();
+      return {
+        policy,
+        notice: {
+          filesystem: 'workspace-write',
+          workspaceRoot: policy.workspaceRoot,
+          source: 'default',
+          shellSandboxEnforced,
+          message: shellSandboxEnforced
+            ? 'Writes are confined to this workspace (OS sandbox enforced).'
+            : 'Writes are confined to this workspace; no OS sandbox backend is available, so shell command confinement is advisory.',
+        },
+      };
+    } catch {
+      // Never block session creation over the auto-applied default — fall back
+      // to running unconfined rather than failing the request.
+      return { policy: undefined };
     }
   }
 
