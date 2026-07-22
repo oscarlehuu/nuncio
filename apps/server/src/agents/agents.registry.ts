@@ -53,13 +53,28 @@ export class AgentRegistry {
     });
   }
 
+  /** Every registered provider. Runtime paths (shutdown durability flushes,
+   * title/commit-message helpers, routing) must see hidden engines too, so
+   * this is never filtered by visibility. */
   all(): AgentProvider[] {
+    return this.providers;
+  }
+
+  async available(): Promise<AgentProvider[]> {
+    const flags = await Promise.all(this.providers.map((provider) => provider.isAvailable()));
+    return this.providers.filter((_, index) => flags[index]);
+  }
+
+  /** Providers shown in engine/model pickers — legacy engines are dropped
+   * unless the operator opts back in. Visibility only: hidden engines stay
+   * fully operational for existing sessions and runtime helpers. */
+  listed(): AgentProvider[] {
     if (this.legacyEnginesVisible()) return this.providers;
     return this.providers.filter((provider) => !LEGACY_ENGINE_IDS.has(provider.id));
   }
 
-  async available(): Promise<AgentProvider[]> {
-    const shown = this.all();
+  async listedAvailable(): Promise<AgentProvider[]> {
+    const shown = this.listed();
     const flags = await Promise.all(shown.map((provider) => provider.isAvailable()));
     return shown.filter((_, index) => flags[index]);
   }

@@ -9,10 +9,12 @@ import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persis
 import { SettingsService } from '../../../src/settings/settings.service';
 
 /**
- * Nuncio Engine is the only engine shown. The vendor engines (Claude, Codex,
- * Cursor, Devin) are legacy: hidden from every picker by default, resolvable
- * forever so their existing sessions keep opening. A single setting flips the
- * legacy engines back into view without a restart.
+ * Nuncio Engine is the only engine shown in pickers. The vendor engines
+ * (Claude, Codex, Cursor, Devin) are legacy: hidden from `listed()` by
+ * default, but always present in `all()`/`available()` so runtime paths —
+ * shutdown durability flushes, title/commit helpers, existing sessions —
+ * keep working. A single setting flips the legacy engines back into view
+ * without a restart.
  */
 describe('AgentRegistry legacy-engine visibility', () => {
   let module: TestingModule;
@@ -35,29 +37,13 @@ describe('AgentRegistry legacy-engine visibility', () => {
     return { registry: module.get(AgentRegistry), settings: module.get(SettingsService) };
   }
 
-  it('lists only Nuncio Engine when the legacy flag is off (default)', async () => {
+  it('lists only Nuncio Engine in listed() when the legacy flag is off (default)', async () => {
     const { registry } = await bootRegistry();
 
-    expect(registry.all().map((provider) => provider.id)).toEqual(['pi']);
+    expect(registry.listed().map((provider) => provider.id)).toEqual(['pi']);
   });
 
-  it('keeps resolving every legacy engine by id so their sessions still open', async () => {
-    const { registry } = await bootRegistry();
-
-    for (const id of ['pi', 'cursor', 'codex', 'claude', 'devin', 'cursor-cli']) {
-      expect(registry.get(id).id).toBe(id);
-    }
-  });
-
-  it('excludes an otherwise-available legacy engine from available() while hidden', async () => {
-    process.env.CURSOR_API_KEY = 'cursor_test_key';
-    const { registry } = await bootRegistry();
-
-    expect((await registry.available()).map((provider) => provider.id)).not.toContain('cursor');
-  });
-
-  it('shows the legacy engines in all() when the flag is on', async () => {
-    process.env.NUNCIO_ENGINES_SHOW_LEGACY = '1';
+  it('keeps every registered engine in all() regardless of visibility', async () => {
     const { registry } = await bootRegistry();
 
     expect(registry.all().map((provider) => provider.id).sort()).toEqual([
@@ -69,21 +55,58 @@ describe('AgentRegistry legacy-engine visibility', () => {
     ]);
   });
 
-  it('reveals a now-available legacy engine in available() when the flag is on', async () => {
+  it('keeps resolving every legacy engine by id so their sessions still open', async () => {
+    const { registry } = await bootRegistry();
+
+    for (const id of ['pi', 'cursor', 'codex', 'claude', 'devin', 'cursor-cli']) {
+      expect(registry.get(id).id).toBe(id);
+    }
+  });
+
+  it('keeps an available legacy engine operational in available() while hidden', async () => {
     process.env.CURSOR_API_KEY = 'cursor_test_key';
-    process.env.NUNCIO_ENGINES_SHOW_LEGACY = '1';
     const { registry } = await bootRegistry();
 
     expect((await registry.available()).map((provider) => provider.id)).toContain('cursor');
   });
 
+  it('excludes an otherwise-available legacy engine from listedAvailable() while hidden', async () => {
+    process.env.CURSOR_API_KEY = 'cursor_test_key';
+    const { registry } = await bootRegistry();
+
+    expect((await registry.listedAvailable()).map((provider) => provider.id)).not.toContain(
+      'cursor',
+    );
+  });
+
+  it('shows the legacy engines in listed() when the flag is on', async () => {
+    process.env.NUNCIO_ENGINES_SHOW_LEGACY = '1';
+    const { registry } = await bootRegistry();
+
+    expect(registry.listed().map((provider) => provider.id).sort()).toEqual([
+      'claude',
+      'codex',
+      'cursor',
+      'devin',
+      'pi',
+    ]);
+  });
+
+  it('reveals a now-available legacy engine in listedAvailable() when the flag is on', async () => {
+    process.env.CURSOR_API_KEY = 'cursor_test_key';
+    process.env.NUNCIO_ENGINES_SHOW_LEGACY = '1';
+    const { registry } = await bootRegistry();
+
+    expect((await registry.listedAvailable()).map((provider) => provider.id)).toContain('cursor');
+  });
+
   it('re-reads the flag at runtime - flipping it on reveals legacy without a restart', async () => {
     const { registry, settings } = await bootRegistry();
-    expect(registry.all().map((provider) => provider.id)).toEqual(['pi']);
+    expect(registry.listed().map((provider) => provider.id)).toEqual(['pi']);
 
     settings.set('engines.showLegacy', '1');
 
-    expect(registry.all().map((provider) => provider.id).sort()).toEqual([
+    expect(registry.listed().map((provider) => provider.id).sort()).toEqual([
       'claude',
       'codex',
       'cursor',

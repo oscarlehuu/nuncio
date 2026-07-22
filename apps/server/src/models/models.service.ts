@@ -7,7 +7,7 @@ export class ModelsService {
   constructor(private readonly agents: AgentRegistry) {}
 
   async list(): Promise<ModelProviderDto[]> {
-    const providers = await this.agents.available();
+    const providers = await this.agents.listedAvailable();
     const modelLists = await Promise.all(
       providers.map(async (provider) => {
         const models = await provider.listModels();
