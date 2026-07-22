@@ -13,7 +13,6 @@ describe('HeartbeatService digest session source', () => {
     rows = [
       { id: 'live', status: 'IDLE', verifyOwner: 'session', createdAt: 0, projectPath: null, updatedAt: 0 },
       { id: 'archived', status: 'ARCHIVED', verifyOwner: 'session', createdAt: 0, projectPath: null, updatedAt: 0 },
-      { id: 'crew', status: 'IDLE', verifyOwner: 'crew', createdAt: 0, projectPath: null, updatedAt: 0 },
     ];
     list(includeArchived = false) {
       this.calls.push(includeArchived);
@@ -21,8 +20,7 @@ describe('HeartbeatService digest session source', () => {
     }
     listUserFacing(includeArchived = false) {
       this.userFacingCalls.push(includeArchived);
-      return this.rows.filter((row) => row.verifyOwner !== 'crew'
-        && (includeArchived || row.status !== 'ARCHIVED'));
+      return this.rows.filter((row) => includeArchived || row.status !== 'ARCHIVED');
     }
   }
 
@@ -42,7 +40,7 @@ describe('HeartbeatService digest session source', () => {
     (svc as unknown as { bindDataSeams: () => void }).bindDataSeams();
 
     const counts = svc.gatherDigestCounts(0, 500);
-    // Both user-facing rows count; the internal Crew member does not.
+    // Both user-facing rows count.
     expect(counts.sessionsCompleted).toBe(2);
     expect(sessions.userFacingCalls.some((c) => c === true)).toBe(true);
     expect(sessions.calls).toEqual([]);

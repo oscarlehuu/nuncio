@@ -47,13 +47,13 @@ describe('AnomalyCollector', () => {
     delete process.env.NUNCIO_DATA_DIR;
   });
 
-  it('excludes Crew member sessions from repository-backed anomaly inputs', () => {
+  it('uses the user-facing session source, not the raw list, for anomaly inputs', () => {
     let rawCalls = 0;
     let userFacingCalls = 0;
     const sessions = {
       list: () => {
         rawCalls += 1;
-        return [{ id: 'crew', verifyOwner: 'crew', status: 'RUNNING', updatedAt: 0 }];
+        return [{ id: 'raw', verifyOwner: 'session', status: 'RUNNING', updatedAt: 0 }];
       },
       listUserFacing: () => {
         userFacingCalls += 1;

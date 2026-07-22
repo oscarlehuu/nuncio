@@ -6,7 +6,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PiAgentProvider, buildPiCustomTools } from '../../../src/agents/providers/pi-agent.provider';
-import { defineCrewRuntimeTool } from '../../../src/agents/tools/agent-runtime-tools-policy';
+import { defineTrustedRuntimeTool } from '../../../src/agents/tools/agent-runtime-tools-policy';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { EventsRepository } from '../../../src/sessions/persistence/events.repository';
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
@@ -348,13 +348,13 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
     }
   });
 
-  it('explicit policies register and execute only trusted Crew runtime tools', async () => {
+  it('explicit policies register and execute only trusted runtime tools', async () => {
     for (const testCase of [
       { filesystem: 'read-only' as const, toolName: 'submit_plan', builtins: ['read', 'grep', 'ls'] },
       {
         filesystem: 'workspace-write' as const,
         toolName: 'submit_build',
-        // Writers get the Nuncio policy shell; read-only members never do.
+        // Writers get the Nuncio policy shell; read-only policies never do.
         builtins: ['read', 'edit', 'write', 'grep', 'ls', 'bash'],
       },
     ]) {
@@ -368,9 +368,9 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
             { filesystem: 'read-only' as const, network: 'disabled' as const },
             { filesystem: 'workspace-write' as const, network: 'disabled' as const },
           ],
-          scope: 'crew-internal' as const,
+          scope: 'policy-internal' as const,
         };
-        const trusted = defineCrewRuntimeTool({
+        const trusted = defineTrustedRuntimeTool({
           name: testCase.toolName,
           inputSchema: { type: 'object', properties: { marker: { type: 'string' } } },
           security,
@@ -437,7 +437,7 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
         expect(customTools.map((tool) => tool.name)).not.toContain('browser_open');
 
         const result = await customTools.find((tool) => tool.name === testCase.toolName)!
-          .execute!('crew-call', { marker: testCase.toolName });
+          .execute!('tool-call', { marker: testCase.toolName });
         expect(calls).toEqual([{ marker: testCase.toolName }]);
         expect(result.content).toEqual([{ type: 'text', text: `stored ${testCase.toolName}` }]);
       } finally {
@@ -446,7 +446,7 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
     }
   });
 
-  it('recreates the Pi handle for refreshed Crew closures while reopening the same session file', async () => {
+  it('recreates the Pi handle for refreshed trusted closures while reopening the same session file', async () => {
     const workspaceRoot = mkdtempSync(join(tmpdir(), 'nuncio-pi-tool-refresh-'));
     const canonicalRoot = realpathSync(workspaceRoot);
     const policy = {
@@ -454,7 +454,7 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
       workspaceRoot,
       network: 'disabled' as const,
     };
-    const crewTool = (name: string, revision: number) => defineCrewRuntimeTool({
+    const trustedTool = (name: string, revision: number) => defineTrustedRuntimeTool({
       name,
       inputSchema: {
         type: 'object',
@@ -464,7 +464,7 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
         network: 'disabled' as const,
         workspaceMutation: 'none' as const,
         runtimePolicies: [{ filesystem: 'read-only' as const, network: 'disabled' as const }],
-        scope: 'crew-internal' as const,
+        scope: 'policy-internal' as const,
       },
       execute: async () => `revision ${revision}`,
     });
@@ -474,7 +474,7 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
         cwd: canonicalRoot,
         runtimePolicy: policy,
         tools: {
-          tools: [crewTool('submit_plan', 1), crewTool('submit_synthesis', 1)],
+          tools: [trustedTool('submit_plan', 1), trustedTool('submit_synthesis', 1)],
         },
         emit: () => {},
       });
@@ -498,7 +498,7 @@ describe('PiAgentProvider cwd/session-manager wiring', () => {
         cwd: canonicalRoot,
         runtimePolicy: policy,
         tools: {
-          tools: [crewTool('submit_plan', 2), crewTool('submit_synthesis', 2)],
+          tools: [trustedTool('submit_plan', 2), trustedTool('submit_synthesis', 2)],
         },
         emit: () => {},
       });

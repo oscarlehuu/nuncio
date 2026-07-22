@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import type { Session } from '@nuncio/core/api';
-import type { CrewRunRowModel } from './crew-run-list';
 import {
   buildHomeSections,
   isHomeItemRunning,
@@ -37,36 +36,15 @@ function session(
   };
 }
 
-function crew(
-  taskId: string,
-  updatedAt: number,
-  status: CrewRunRowModel['status'] = 'TERMINAL',
-): CrewRunRowModel {
-  return {
-    key: `crew:${taskId}`,
-    taskId,
-    objective: taskId,
-    phase: 'DONE',
-    status,
-    updatedAt,
-  };
-}
-
 function sessionItem(value: Session): HomeItem {
   return { kind: 'session', key: `session:${value.id}`, updatedAt: value.updatedAt, session: value };
 }
 
-function crewItem(value: CrewRunRowModel): HomeItem {
-  return { kind: 'crew', key: value.key, updatedAt: value.updatedAt, row: value };
-}
-
 describe('home sections', () => {
-  it('identifies running sessions, pending input, and active Crew statuses', () => {
+  it('identifies running sessions and pending input', () => {
     expect(isHomeItemRunning(sessionItem(session('running', 4, { status: 'RUNNING' })))).toBe(true);
     expect(isHomeItemRunning(sessionItem(session('question', 3, { pendingInput: true })))).toBe(true);
     expect(isHomeItemRunning(sessionItem(session('idle', 2)))).toBe(false);
-    expect(isHomeItemRunning(crewItem(crew('blocked', 5, 'BLOCKED_USER')))).toBe(true);
-    expect(isHomeItemRunning(crewItem(crew('done', 1)))).toBe(false);
   });
 
   it('uses the project basename and falls back when there is no project', () => {
@@ -75,37 +53,30 @@ describe('home sections', () => {
     expect(projectLabelForSession(session('three', 1))).toBe('No project');
   });
 
-  it('puts running work first and groups the remainder by project and Crew', () => {
+  it('puts running work first and groups the remainder by project', () => {
     const items = [
       sessionItem(session('old-api', 10, { projectPath: '/repos/api' })),
-      crewItem(crew('crew-old', 11)),
       sessionItem(session('running', 30, { status: 'RUNNING', projectPath: '/repos/api' })),
       sessionItem(session('new-web', 20, { projectPath: '/repos/web' })),
       sessionItem(session('question', 25, { pendingInput: true, projectPath: '/repos/web' })),
       sessionItem(session('new-api', 15, { projectPath: '/repos/api' })),
-      crewItem(crew('crew-new', 22)),
     ];
 
     expect(buildHomeSections(items)).toEqual([
       {
         key: 'running',
         title: 'Running now',
-        data: [items[2], items[4]],
-      },
-      {
-        key: 'Crew runs',
-        title: 'Crew runs',
-        data: [items[6], items[1]],
+        data: [items[1], items[3]],
       },
       {
         key: 'web',
         title: 'web',
-        data: [items[3]],
+        data: [items[2]],
       },
       {
         key: 'api',
         title: 'api',
-        data: [items[5], items[0]],
+        data: [items[4], items[0]],
       },
     ]);
   });

@@ -342,7 +342,7 @@ export class GitService {
     }
   }
 
-  /** Read-only validation of a Crew-owned Git workspace boundary. */
+  /** Read-only validation of a Git workspace boundary. */
   async inspectBoundary(
     path: string,
     expectation: string | GitBoundaryExpectation = {},
@@ -356,10 +356,10 @@ export class GitService {
     });
   }
 
-  /** Validate committed Builder output from one exact durable head to current HEAD. */
+  /** Validate committed output from one exact durable head to current HEAD. */
   async validateCheckpointRange(path: string, fromHead: string, toHead: string): Promise<void> {
     return validateGitCheckpointRange(expandHome(path), fromHead, toHead, {
-      // Builder-controlled refs/replace must not rewrite the graph or blobs that
+      // Committed refs/replace must not rewrite the graph or blobs that
       // the acceptance scan sees.
       git: (args, cwd) => git(['--no-replace-objects', ...args], cwd),
       isAncestor: gitIsAncestor,

@@ -13,7 +13,6 @@ import {
   LogOut,
   Server,
 } from 'lucide-react-native';
-import { crewProfileSettingsUrl } from '../../lib/crew-composer';
 import { applyConnection } from '../../lib/api-setup';
 import { clearConnection, loadConnection, type ConnectionConfig } from '../../lib/connection-store';
 import { secureStore } from '../../lib/secure-store-adapter';
@@ -32,7 +31,6 @@ export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const [connection, setConnection] = useState<ConnectionConfig | null | undefined>(undefined);
   const [notificationStatus, setNotificationStatus] = useState<NotificationStatus>('checking');
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -56,16 +54,6 @@ export default function SettingsScreen() {
   const disconnect = async () => {
     await clearConnection(secureStore);
     router.replace('/pairing');
-  };
-
-  const openCrewSettings = () => {
-    if (!connection?.serverUrl) {
-      setError('Pair with your Nuncio machine before opening Crew settings.');
-      return;
-    }
-    void Linking.openURL(crewProfileSettingsUrl(connection.serverUrl)).catch(() => {
-      setError('Could not open Crew profile settings.');
-    });
   };
 
   if (connection === undefined) {
@@ -147,27 +135,6 @@ export default function SettingsScreen() {
             <ExternalLink color="#83868b" size={16} />
           </Pressable>
         </Card>
-
-        <Card className="gap-0 rounded-xl border-border px-4 py-4 shadow-none">
-          <View className="flex-row items-center gap-2">
-            <Link2 color="#208AEF" size={17} />
-            <Text className="font-semibold text-foreground">Crew profiles</Text>
-          </View>
-          <Text className="mt-3 text-sm leading-5 text-muted-foreground">
-            Configure the Foreman, Builder, and Reviewer profiles used by Crew runs.
-          </Text>
-          <Pressable
-            onPress={openCrewSettings}
-            className="mt-4 min-h-11 flex-row items-center justify-between rounded-xl bg-secondary px-3 active:opacity-70"
-          >
-            <Text className="font-medium text-foreground">Open Crew profile setup</Text>
-            <ExternalLink color="#83868b" size={16} />
-          </Pressable>
-        </Card>
-
-        {error ? (
-          <Text className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</Text>
-        ) : null}
 
         <Card className="gap-0 rounded-xl border-border px-4 py-4 shadow-none">
           <View className="flex-row items-center gap-2">

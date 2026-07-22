@@ -10,18 +10,6 @@ import type { AgentCapabilities, AgentRunContext } from '../agents.types';
 import { BaseAgentProvider } from '../agents.base-provider';
 import { spawnTaskRef } from '../pi-engine/spawn-task-tool';
 import { reproductionGateRef } from '../pi-engine/request-reproduction-tool';
-import { isCrewRuntimeToolAllowed } from '../tools/agent-runtime-tools-policy';
-import {
-  normalizeAgentRuntimeToolResult,
-  type AgentRuntimeTool,
-} from '../tools/agent-runtime-tools.types';
-
-const CREW_SUBMISSION_TOOLS = new Set([
-  'submit_plan',
-  'submit_build',
-  'submit_review',
-  'submit_synthesis',
-]);
 
 /**
  * Zero-credential fallback engine. Registered ONLY when the operator opts in with
@@ -48,8 +36,7 @@ export class MockAgentProvider extends BaseAgentProvider {
     // composer's mode picker; the overlay itself is a Pi-side implementation.
     modes: ['debug', 'multitask'],
     // The smoke adapter never reads/writes the workspace, starts a shell, or
-    // opens a network connection. Its only tool path is a trusted in-process
-    // Crew stage submission with schema-bound authority fields.
+    // opens a network connection, so it is safe under any runtime policy.
     runtimePolicies: [
       { filesystem: 'read-only', network: 'disabled' },
       { filesystem: 'workspace-write', network: 'disabled' },
@@ -141,7 +128,6 @@ export class MockAgentProvider extends BaseAgentProvider {
     if (!isSteer && wantsReproduceGate(userText)) {
       this.emitMockReproduceGate(sessionId, context);
     }
-    await submitMockCrewResult(context);
   }
 
   /**
@@ -199,89 +185,6 @@ function wantsSpawnChip(userText: string): boolean {
 /** The offline smoke asks for a reproduction gate with this marker. */
 function wantsReproduceGate(userText: string): boolean {
   return /\breproduce-gate\b/i.test(userText);
-}
-
-async function submitMockCrewResult(context: AgentRunContext): Promise<void> {
-  if (!context.runtimePolicy) return;
-  const submissions = context.tools?.tools.filter(
-    (tool) => CREW_SUBMISSION_TOOLS.has(tool.name)
-      && isCrewRuntimeToolAllowed(tool, context.runtimePolicy!),
-  ) ?? [];
-  if (submissions.length === 0) return;
-  const active = submissions.flatMap((tool) => {
-    const authority = tool.testInput?.() ?? schemaBoundAuthority(tool);
-    return authority ? [{ tool, input: { ...authority, result: mockResultFor(tool.name) } }] : [];
-  });
-  if (active.length !== 1) {
-    throw new Error('Mock Crew run requires exactly one trusted stage submission tool.');
-  }
-
-  const { tool, input } = active[0]!;
-  const result = normalizeAgentRuntimeToolResult(await tool.execute(input));
-  if (result.isError) {
-    const reason = result.content
-      .filter((item) => item.type === 'text')
-      .map((item) => item.text)
-      .join('\n');
-    throw new Error(reason || `Mock Crew submission ${tool.name} failed.`);
-  }
-}
-
-function schemaBoundAuthority(tool: AgentRuntimeTool): Record<string, unknown> | null {
-  try {
-    return {
-      runId: requiredSchemaConst(tool, 'runId', 'string'),
-      memberKey: requiredSchemaConst(tool, 'memberKey', 'string'),
-      contextRevision: requiredSchemaConst(tool, 'contextRevision', 'number'),
-      workspaceHead: requiredSchemaConst(tool, 'workspaceHead', 'string'),
-      idempotencyKey: requiredSchemaConst(tool, 'idempotencyKey', 'string'),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function requiredSchemaConst(
-  tool: AgentRuntimeTool,
-  field: string,
-  expectedType: 'string' | 'number',
-): string | number {
-  const properties = tool.inputSchema.properties;
-  const property = properties && typeof properties === 'object' && !Array.isArray(properties)
-    ? (properties as Record<string, unknown>)[field]
-    : undefined;
-  const value = property && typeof property === 'object' && !Array.isArray(property)
-    ? (property as Record<string, unknown>).const
-    : undefined;
-  if (expectedType === 'string') {
-    if (typeof value === 'string' && value.length > 0) return value;
-  } else if (typeof value === 'number' && Number.isInteger(value) && value >= 0) {
-    return value;
-  }
-  throw new Error(`Mock Crew tool ${tool.name} must bind ${field} with JSON Schema const.`);
-}
-
-function mockResultFor(toolName: string): Record<string, unknown> {
-  switch (toolName) {
-    case 'submit_plan':
-      return {
-        summary: 'Mock plan accepted for the deterministic Crew smoke run.',
-        steps: ['Run the deterministic Crew smoke workflow.'],
-        openQuestions: [],
-      };
-    case 'submit_build':
-      return { summary: 'Mock build completed without host edits.', changedFiles: [] };
-    case 'submit_review':
-      return { summary: 'Mock review completed with no blocking findings.', findings: [] };
-    case 'submit_synthesis':
-      return {
-        summary: 'Mock Crew smoke run completed.',
-        verification: 'Deterministic smoke verification passed.',
-        remainingRisks: [],
-      };
-    default:
-      throw new Error(`Unsupported Mock Crew submission tool: ${toolName}`);
-  }
 }
 
 function sleep(ms: number): Promise<void> {

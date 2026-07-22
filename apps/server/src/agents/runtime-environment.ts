@@ -4,7 +4,7 @@ import type {
   AgentRuntimePolicy,
   NuncioOrchestrationCapability,
 } from './agents.types';
-import { defineCrewRuntimeTool } from './tools/agent-runtime-tools-policy';
+import { defineTrustedRuntimeTool } from './tools/agent-runtime-tools-policy';
 import type { AgentRuntimeTool, AgentRuntimeTools } from './tools/agent-runtime-tools.types';
 
 export const NUNCIO_RUNTIME_CONTRACT_VERSION = 1;
@@ -91,7 +91,7 @@ export function createNuncioRuntimeInfoTool(
         { filesystem: 'read-only', network: 'disabled' },
         { filesystem: 'workspace-write', network: 'disabled' },
       ],
-      scope: policy ? 'crew-internal' : 'session',
+      scope: policy ? 'policy-internal' : 'session',
     },
     execute: () => {
       const info = getEnvironment().info;
@@ -101,7 +101,7 @@ export function createNuncioRuntimeInfoTool(
       };
     },
   };
-  return policy ? defineCrewRuntimeTool(tool as AgentRuntimeTool & { security: NonNullable<AgentRuntimeTool['security']> }) : tool;
+  return policy ? defineTrustedRuntimeTool(tool as AgentRuntimeTool & { security: NonNullable<AgentRuntimeTool['security']> }) : tool;
 }
 
 function buildRuntimeInfo(

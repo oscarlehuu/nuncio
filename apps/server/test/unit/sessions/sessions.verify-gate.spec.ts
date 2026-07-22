@@ -98,21 +98,6 @@ describe('SessionsService verifier gate', () => {
     expect(service.get(session.id)?.status).toBe('IDLE');
   });
 
-  it('skips the Solo verifier when verification is owned by Crew', async () => {
-    writeVerifyScript('echo should-not-run\nexit 1\n');
-    const session = await service.create({
-      prompt: 'crew verifies this member',
-      provider: 'cursor',
-      workspace,
-      verifyOwner: 'crew',
-    });
-
-    await service.awaitRun(session.id);
-
-    expect(service.get(session.id)?.verifyOwner).toBe('crew');
-    expect(events.list(session.id).some((event) => event.type.startsWith('verify_'))).toBe(false);
-  });
-
   it('rejects an explicit policy before invoking a provider that does not advertise support', async () => {
     await expect(
       service.create({

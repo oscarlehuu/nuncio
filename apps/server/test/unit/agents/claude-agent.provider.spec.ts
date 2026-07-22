@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ClaudeAgentProvider } from '../../../src/agents/providers/claude-agent.provider';
 import { buildAgentRuntimeEnvironment } from '../../../src/agents/runtime-environment';
-import { defineCrewRuntimeTool } from '../../../src/agents/tools/agent-runtime-tools-policy';
+import { defineTrustedRuntimeTool } from '../../../src/agents/tools/agent-runtime-tools-policy';
 import {
   CLAUDE_RUNTIME_MCP_SERVER,
   type ClaudeMcpToolDefinition,
@@ -608,7 +608,7 @@ describe('ClaudeAgentProvider', () => {
       }
     });
 
-    it('explicit policies allow only exact trusted Crew MCP submission names', async () => {
+    it('explicit policies allow only exact trusted runtime MCP submission names', async () => {
       for (const testCase of [
         { filesystem: 'read-only' as const, toolName: 'submit_plan', builtins: ['Read', 'Grep', 'Glob'] },
         {
@@ -635,9 +635,9 @@ describe('ClaudeAgentProvider', () => {
               { filesystem: 'read-only' as const, network: 'disabled' as const },
               { filesystem: 'workspace-write' as const, network: 'disabled' as const },
             ],
-            scope: 'crew-internal' as const,
+            scope: 'policy-internal' as const,
           };
-          const trusted = defineCrewRuntimeTool({
+          const trusted = defineTrustedRuntimeTool({
             name: testCase.toolName,
             inputSchema: { type: 'object', properties: { marker: { type: 'string' } } },
             security,
@@ -679,7 +679,7 @@ describe('ClaudeAgentProvider', () => {
           expect(options.tools).toEqual([...testCase.builtins, exactMcpName]);
           expect(definitions.map((definition) => definition.name)).toEqual([testCase.toolName]);
           await expect(
-            options.canUseTool(exactMcpName, { marker: testCase.toolName }, { requestId: 'crew-safe' }),
+            options.canUseTool(exactMcpName, { marker: testCase.toolName }, { requestId: 'trusted-safe' }),
           ).resolves.toMatchObject({ behavior: 'allow' });
           await expect(
             options.canUseTool(
@@ -820,8 +820,8 @@ describe('ClaudeAgentProvider', () => {
       expect(records).toHaveLength(0);
     });
 
-    it('refreshes stable Crew MCP definitions so a follow-up executes the current closure', async () => {
-      const workspaceRoot = mkdtempSync(join(tmpdir(), 'nuncio-claude-crew-refresh-'));
+    it('refreshes stable trusted MCP definitions so a follow-up executes the current closure', async () => {
+      const workspaceRoot = mkdtempSync(join(tmpdir(), 'nuncio-claude-tool-refresh-'));
       const records: Array<Record<string, unknown>> = [];
       const definitionBatches: ClaudeMcpToolDefinition[][] = [];
       const calls: string[] = [];
@@ -844,8 +844,8 @@ describe('ClaudeAgentProvider', () => {
           workspaceRoot,
           network: 'disabled' as const,
         };
-        const crewTools = (revision: number) => ({
-          tools: ['plan', 'synthesis'].map((kind) => defineCrewRuntimeTool({
+        const trustedTools = (revision: number) => ({
+          tools: ['plan', 'synthesis'].map((kind) => defineTrustedRuntimeTool({
             name: `submit_${kind}`,
             inputSchema: {
               type: 'object',
@@ -857,7 +857,7 @@ describe('ClaudeAgentProvider', () => {
               runtimePolicies: [
                 { filesystem: 'read-only' as const, network: 'disabled' as const },
               ],
-              scope: 'crew-internal' as const,
+              scope: 'policy-internal' as const,
             },
             execute: async () => {
               calls.push(`${kind}:${revision}`);
@@ -870,13 +870,13 @@ describe('ClaudeAgentProvider', () => {
           cwd: workspaceRoot,
           model: 'claude:haiku',
           runtimePolicy,
-          tools: crewTools(1),
+          tools: trustedTools(1),
         });
         await provider.steer(created.id, 'synthesize revision two', {
           cwd: workspaceRoot,
           model: 'claude:haiku',
           runtimePolicy,
-          tools: crewTools(2),
+          tools: trustedTools(2),
         });
 
         expect(records).toHaveLength(1);

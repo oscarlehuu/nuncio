@@ -206,7 +206,7 @@ export interface CreateSessionDto {
   providerActiveTurnId?: string | null;
   providerState?: Record<string, unknown> | null;
   runtimePolicy?: AgentRuntimePolicy | null;
-  /** Crew owns verification for member sessions; ordinary sessions retain the Solo verifier. */
+  /** Verification owner for this session. */
   verifyOwner?: SessionVerifyOwner;
   cursorBackend?: 'sdk' | 'cli' | null;
   cursorChatId?: string | null;
@@ -232,7 +232,7 @@ export interface CreateSessionDto {
   mcpServerIds?: string[] | null;
 }
 
-export type SessionVerifyOwner = 'session' | 'crew';
+export type SessionVerifyOwner = 'session';
 
 export interface SteerSessionDto {
   message: string;

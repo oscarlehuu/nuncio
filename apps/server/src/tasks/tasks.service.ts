@@ -88,8 +88,6 @@ export class TasksService implements OnModuleDestroy {
    */
   private readonly finishHandlers = new Set<(task: TaskDto) => void>();
   private readonly bootInterruptedTaskIds = new Set<string>();
-  private crewExecutionReady = false;
-  private crewQueueReconciled = false;
 
   constructor(
     private readonly tasks: TasksRepository,
@@ -101,10 +99,9 @@ export class TasksService implements OnModuleDestroy {
     @Optional() private readonly evidence?: EvidenceCaptureService,
   ) {
     // A RUNNING row at boot means the runner died mid-task; its session was
-    // already reconciled by the sessions sweep. Generic queued work resumes;
-    // Crew queued work stays gated until its owner reconciles durable attempts.
-    // Those tasks died with the daemon, but their parents still deserve a
-    // FAILED digest so the delegation loop is closed after a restart.
+    // already reconciled by the sessions sweep. Queued work resumes on the next
+    // pump; the interrupted tasks died with the daemon, but their parents still
+    // deserve a FAILED digest so the delegation loop is closed after a restart.
     const interrupted = this.tasks.failInterrupted('daemon_restart');
     for (const failed of interrupted) {
       this.bootInterruptedTaskIds.add(failed.id);
@@ -152,14 +149,6 @@ export class TasksService implements OnModuleDestroy {
     const tasks = parentSessionId
       ? this.tasks.listByParentSession(parentSessionId)
       : this.tasks.list();
-    return this.enrichTasks(tasks.filter((task) => task.executionKind !== 'crew-member'));
-  }
-
-  /** Internal owner view; Crew uses this for recovery without leaking member attempts publicly. */
-  listInternal(parentSessionId?: string): TaskDto[] {
-    const tasks = parentSessionId
-      ? this.tasks.listByParentSession(parentSessionId)
-      : this.tasks.list();
     return this.enrichTasks(tasks);
   }
 
@@ -173,26 +162,6 @@ export class TasksService implements OnModuleDestroy {
     }));
   }
 
-  /** Record that the Crew owner reconciled durable queued attempts for this boot. */
-  markCrewQueueReconciled(): void {
-    if (!this.crewExecutionReady) this.crewQueueReconciled = true;
-  }
-
-  /** Open Crew task claims only after recovery and queued-attempt reconciliation. */
-  markCrewExecutionReady(): void {
-    if (this.crewExecutionReady) return;
-    if (!this.crewQueueReconciled) {
-      throw new Error('Crew queue reconciliation is required before execution can start');
-    }
-    this.crewExecutionReady = true;
-    try {
-      this.pump();
-    } catch (error) {
-      this.crewExecutionReady = false;
-      throw error;
-    }
-  }
-
   enqueue(input: CreateTaskDto): TaskDto {
     return this.enqueueMany([input])[0]!;
   }
@@ -200,7 +169,6 @@ export class TasksService implements OnModuleDestroy {
   enqueueMany(inputs: CreateTaskDto[]): TaskDto[] {
     if (inputs.length === 0) return [];
     const normalized = inputs.map((input) => {
-      this.assertGenericDelegationParent(input.parentSessionId ? this.sessions.get(input.parentSessionId) : null);
       const prompt = input.prompt?.trim();
       if (!prompt) throw new BadRequestException('prompt is required');
       return { ...input, prompt };
@@ -215,7 +183,6 @@ export class TasksService implements OnModuleDestroy {
     if (!parentSessionId) throw new BadRequestException('parentSessionId is required');
     const parent = this.sessions.get(parentSessionId);
     if (!parent) throw new NotFoundException('Parent session not found');
-    this.assertGenericDelegationParent(parent);
 
     const prompts = input.prompts
       ?.map((prompt) => prompt.trim())
@@ -245,7 +212,6 @@ export class TasksService implements OnModuleDestroy {
     if (!trimmed) throw new BadRequestException('parentSessionId is required');
     const parent = this.sessions.get(trimmed);
     if (!parent) throw new NotFoundException('Parent session not found');
-    this.assertGenericDelegationParent(parent);
 
     // Claim (lease) the queued rows synchronously, BEFORE any await. A claim
     // hides them from the normal settle-drain, so a parent run that settles
@@ -340,7 +306,7 @@ export class TasksService implements OnModuleDestroy {
   }
 
   async cancel(id: string): Promise<TaskDto> {
-    const task = this.requirePublicTask(id);
+    const task = this.requireTask(id);
     const reserved = this.tasks.reserveCancellation(id);
     if (!reserved) throw new BadRequestException('Only queued tasks can be cancelled');
     // A cancelled task is QUEUED and never ran, so it has no child session and
@@ -394,7 +360,7 @@ export class TasksService implements OnModuleDestroy {
 
   /** Explicit retry: clone a terminal task into a fresh queued run. */
   retry(id: string): TaskDto {
-    const task = this.requirePublicTask(id);
+    const task = this.requireTask(id);
     if (!TERMINAL_TASK_STATUSES.includes(task.status)) {
       throw new BadRequestException('Only finished tasks can be retried');
     }
@@ -413,17 +379,13 @@ export class TasksService implements OnModuleDestroy {
       ...(task.contextBrief ? { contextBrief: task.contextBrief } : {}),
       ...(task.notifyPolicy ? { notifyPolicy: task.notifyPolicy } : {}),
       executionKind: task.executionKind ?? 'session',
-      ...(task.crewRunId ? { crewRunId: task.crewRunId } : {}),
-      ...(task.crewMemberKey ? { crewMemberKey: task.crewMemberKey } : {}),
-      ...(task.crewPhase ? { crewPhase: task.crewPhase } : {}),
-      ...(task.executionKind === 'crew-member' && task.sessionId ? { sessionId: task.sessionId } : {}),
       ...(task.runtimePolicy ? { runtimePolicy: task.runtimePolicy } : {}),
       verifyOwner: task.verifyOwner ?? 'session',
     });
   }
 
   markReviewed(id: string): TaskDto {
-    this.requirePublicTask(id);
+    this.requireTask(id);
     const reviewed = this.tasks.markReviewed(id);
     if (!reviewed) {
       throw new BadRequestException('Only finished subagents awaiting review can be marked reviewed');
@@ -440,7 +402,7 @@ export class TasksService implements OnModuleDestroy {
     id: string,
     input: { provider?: string; model?: string; modelOptions?: ModelOptionsMap | null; holdSeconds?: number },
   ): TaskDto {
-    const task = this.requirePublicTask(id);
+    const task = this.requireTask(id);
     if (task.status !== 'QUEUED') {
       throw new BadRequestException('Only queued tasks can be updated');
     }
@@ -483,7 +445,7 @@ export class TasksService implements OnModuleDestroy {
 
   /** Skip the rest of a held task's countdown and let the pump claim it now. */
   startNow(id: string): TaskDto {
-    this.requirePublicTask(id);
+    this.requireTask(id);
     const cleared = this.tasks.clearHold(id);
     if (!cleared) {
       throw new BadRequestException('Only held tasks can be started now');
@@ -493,7 +455,7 @@ export class TasksService implements OnModuleDestroy {
   }
 
   delete(id: string): void {
-    this.requirePublicTask(id);
+    this.requireTask(id);
     if (!this.tasks.delete(id)) {
       throw new BadRequestException('Only finished tasks can be deleted');
     }
@@ -503,33 +465,6 @@ export class TasksService implements OnModuleDestroy {
     const task = this.tasks.findById(id);
     if (!task) throw new NotFoundException('Task not found');
     return task;
-  }
-
-  private requirePublicTask(id: string): TaskDto {
-    const task = this.requireTask(id);
-    if (task.executionKind === 'crew-member') {
-      throw new BadRequestException('Crew-owned tasks can only be changed through Crew controls');
-    }
-    return task;
-  }
-
-  private assertGenericDelegationParent(parent: SessionDto | null): void {
-    if (parent?.verifyOwner === 'crew') {
-      throw new BadRequestException('Crew-owned sessions cannot delegate generic tasks');
-    }
-  }
-
-  /** Narrow internal cancellation seam used by the Crew owner during run teardown. */
-  cancelCrewMember(id: string): TaskDto {
-    const task = this.requireTask(id);
-    if (task.executionKind !== 'crew-member') {
-      throw new BadRequestException('Task is not Crew-owned');
-    }
-    if (task.status === 'CANCELLED') return task;
-    const cancelled = this.tasks.cancelCrewMember(id);
-    if (!cancelled) throw new BadRequestException('Only active Crew tasks can be cancelled');
-    this.notifyFinished(cancelled);
-    return cancelled;
   }
 
   private concurrency(): number {
@@ -563,7 +498,7 @@ export class TasksService implements OnModuleDestroy {
   private pump(): void {
     if (this.destroyed) return;
     while (this.tasks.countRunning() < this.concurrency()) {
-      const task = this.tasks.claimNextQueued({ includeCrewMembers: this.crewExecutionReady });
+      const task = this.tasks.claimNextQueued();
       if (!task) break;
       void this.execute(task).finally(() => this.pump());
     }
@@ -596,40 +531,25 @@ export class TasksService implements OnModuleDestroy {
     let status: 'DONE' | 'FAILED' = 'FAILED';
     let outcome: Record<string, unknown> = {};
     try {
-      let session: SessionDto;
-      if (task.executionKind === 'crew-member' && task.sessionId) {
-        childSessionId = task.sessionId;
-        const existing = this.sessions.get(task.sessionId);
-        if (existing) await this.captureTaskEvidence(existing, 'before');
-        session = await this.sessions.continueExistingSession(task.sessionId, {
-          prompt: task.prompt,
-          ...(task.contextBrief ? { contextBrief: task.contextBrief } : {}),
-          origin: 'crew-member-task',
-        });
-      } else {
-        // The brief travels as a field; SessionsService.create composes it (and
-        // project facts) into the first prompt at the single choke point, so
-        // task.prompt stays pure in the DB (retry/clone semantics unaffected).
-        session = await this.sessions.create({
-          prompt: task.prompt,
-          ...(task.contextBrief ? { contextBrief: task.contextBrief } : {}),
-          ...(task.provider ? { provider: task.provider } : {}),
-          ...(task.model ? { model: task.model } : {}),
-          ...(task.modelOptions ? { modelOptions: task.modelOptions } : {}),
-          ...(task.projectPath ? { projectPath: task.projectPath } : {}),
-          ...(task.baseBranch ? { baseBranch: task.baseBranch } : {}),
-          ...(task.useWorktree ? { useWorktree: true } : {}),
-          ...(task.workspace ? { workspace: task.workspace } : {}),
-          ...(task.parentSessionId ? { parentSessionId: task.parentSessionId } : {}),
-          ...(task.runtimePolicy ? { runtimePolicy: task.runtimePolicy } : {}),
-          verifyOwner: task.verifyOwner ?? 'session',
-          originTaskId: task.id,
-        });
-        childSessionId = session.id;
-        this.tasks.attachSession(task.id, session.id);
-        await this.captureTaskEvidence(session, 'before');
-        await this.sessions.awaitRun(session.id);
-      }
+      const session = await this.sessions.create({
+        prompt: task.prompt,
+        ...(task.contextBrief ? { contextBrief: task.contextBrief } : {}),
+        ...(task.provider ? { provider: task.provider } : {}),
+        ...(task.model ? { model: task.model } : {}),
+        ...(task.modelOptions ? { modelOptions: task.modelOptions } : {}),
+        ...(task.projectPath ? { projectPath: task.projectPath } : {}),
+        ...(task.baseBranch ? { baseBranch: task.baseBranch } : {}),
+        ...(task.useWorktree ? { useWorktree: true } : {}),
+        ...(task.workspace ? { workspace: task.workspace } : {}),
+        ...(task.parentSessionId ? { parentSessionId: task.parentSessionId } : {}),
+        ...(task.runtimePolicy ? { runtimePolicy: task.runtimePolicy } : {}),
+        verifyOwner: task.verifyOwner ?? 'session',
+        originTaskId: task.id,
+      });
+      childSessionId = session.id;
+      this.tasks.attachSession(task.id, session.id);
+      await this.captureTaskEvidence(session, 'before');
+      await this.sessions.awaitRun(session.id);
       // Wait for the verify-feedback loop (if any) to settle — a task's outcome
       // must reflect the loop's terminal verify (green / needs-attention), not the
       // first red result the initial run produced.

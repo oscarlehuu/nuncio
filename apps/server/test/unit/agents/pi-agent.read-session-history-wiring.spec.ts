@@ -14,7 +14,7 @@ import { SettingsModule } from '../../../src/settings/settings.module';
 /**
  * Solo Nuncio Engine sessions carry read_session_history wired to the durable
  * event log, so a compaction pointer can actually be followed. Policy sessions
- * (Crew members) do not get it in this round — deferred with Crew compaction.
+ * do not get it in this round — deferred with policy-session compaction.
  */
 
 type CreateAgentSessionOptions = Record<string, unknown>;
@@ -129,7 +129,7 @@ describe('PiAgentProvider read_session_history wiring', () => {
   it('does not expose read_session_history to runtime-policy sessions', async () => {
     const workspaceRoot = realpathSync(mkdtempSync(join(tmpdir(), 'nuncio-history-policy-')));
     try {
-      const created = sessions.create({ prompt: 'crew member', provider: 'pi' });
+      const created = sessions.create({ prompt: 'policy session', provider: 'pi' });
       await provider.run(created.id, created.prompt, {
         cwd: workspaceRoot,
         runtimePolicy: { filesystem: 'read-only', workspaceRoot, network: 'disabled' },

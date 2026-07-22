@@ -816,7 +816,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     ];
     // capture_evidence hits the local dev server over HTTP, so it stays out of
     // hermetic runtime-policy (disabled-network) sessions. read_session_history
-    // is solo-only for now too — Crew members get it with Crew compaction.
+    // is solo-only for now too.
     const soloEngineTools = [
       ...engineTools,
       buildCaptureEvidenceTool(
@@ -835,8 +835,8 @@ export class PiAgentProvider extends BaseAgentProvider {
       ? [...policyOptions.customTools, ...runtimeCustomTools, ...engineTools]
       : [...(buildPiCustomTools(cwd, pi, context.tools) ?? []), ...soloEngineTools];
     // Pi 0.80.6 treats `tools` as the allowlist for built-ins AND customTools.
-    // Include the already-vetted Crew definitions or the SDK silently removes
-    // submit_* from the registry despite receiving it in customTools.
+    // Include the already-vetted runtime-tool definitions or the SDK silently
+    // removes them from the registry despite receiving them in customTools.
     const policyToolNames = policyOptions
       ? [...new Set([
           ...policyOptions.toolNames,

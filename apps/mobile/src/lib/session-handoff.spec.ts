@@ -16,18 +16,13 @@ describe('canHandoffSession', () => {
     ['RUNNING', false],
     ['CREATED', false],
     ['ARCHIVED', false],
-  ] as const)('returns %s → %s for a solo session', (status, expected) => {
-    expect(canHandoffSession(status, false)).toBe(expected);
+  ] as const)('returns %s → %s for a session', (status, expected) => {
+    expect(canHandoffSession(status)).toBe(expected);
   });
 
   it('is false while the session has not loaded yet', () => {
-    expect(canHandoffSession(undefined, false)).toBe(false);
-    expect(canHandoffSession(null, false)).toBe(false);
-  });
-
-  it('is false for crew-managed sessions regardless of status', () => {
-    expect(canHandoffSession('IDLE', true)).toBe(false);
-    expect(canHandoffSession('ERROR', true)).toBe(false);
+    expect(canHandoffSession(undefined)).toBe(false);
+    expect(canHandoffSession(null)).toBe(false);
   });
 });
 

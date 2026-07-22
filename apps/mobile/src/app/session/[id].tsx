@@ -46,7 +46,6 @@ import { TranscriptBlockView } from '../../components/transcript-block-view';
 import { ConnectionPill } from '../../components/connection-pill';
 import { QuotaSheetTrigger } from '../../components/quota-sheet';
 import { ATTENTION_COLOR, SessionStatusDot } from '../../components/session-status-dot';
-import { crewMemberSessionAccess } from '../../lib/crew-member-session';
 import { deriveNeedsInput, latestSessionStatus } from '../../lib/session-pending-input';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -76,9 +75,8 @@ export default function SessionDetail() {
 
   const { events, steer, connectionState } = useSessionTranscript(sessionId);
   const blocks = groupTranscriptBlocks(useTranscriptBlocks(events));
-  const access = crewMemberSessionAccess(session);
   const sessionLoaded = session !== null;
-  const canRespond = access.canMutate && session?.supportsInteraction === true;
+  const canRespond = session?.supportsInteraction === true;
   const needsInput = useMemo(
     () => deriveNeedsInput(events, session?.status, session?.pendingInput),
     [events, session?.status, session?.pendingInput],
@@ -107,7 +105,7 @@ export default function SessionDetail() {
     void fetchModels().then(setProviders).catch(() => {});
   }, []);
 
-  const canHandoff = canHandoffSession(session?.status, access.managedByCrew);
+  const canHandoff = canHandoffSession(session?.status);
   const handoffTargetList = useMemo(
     () => (canHandoff ? handoffTargets(providers, session?.provider) : []),
     [canHandoff, providers, session?.provider],
@@ -118,7 +116,7 @@ export default function SessionDetail() {
 
   const send = useCallback(async () => {
     const text = message.trim();
-    if (!text || sending || !access.canMutate) return;
+    if (!text || sending) return;
     setSending(true);
     setError(null);
     try {
@@ -130,7 +128,7 @@ export default function SessionDetail() {
     } finally {
       setSending(false);
     }
-  }, [access.canMutate, message, sending, steer]);
+  }, [message, sending, steer]);
 
   const runAction = useCallback(
     async (action: (id: string) => Promise<unknown>, label: string) => {
@@ -157,10 +155,10 @@ export default function SessionDetail() {
   }, [router, sessionId]);
 
   const openActions = useCallback(() => {
-    if (!session || !access.canMutate) return;
+    if (!session) return;
     setConfirmDelete(false);
     actionsRef.current?.present();
-  }, [access.canMutate, session]);
+  }, [session]);
 
   // Present the handoff sheet only once the actions sheet has fully dismissed —
   // presenting a second modal mid-dismiss races gorhom's modal stack. The
@@ -224,7 +222,6 @@ export default function SessionDetail() {
               ) : (
                 session ? statusLabel(session.status) : '…'
               )}
-              {access.managedByCrew ? ' · Managed by Crew' : ''}
             </Text>
           </View>
         </View>
@@ -235,15 +232,13 @@ export default function SessionDetail() {
             <UItext>{statusLabel(session.status)}</UItext>
           </Badge>
         ) : null}
-        {access.canMutate ? (
-          <Pressable
-            accessibilityLabel="Session actions"
-            onPress={openActions}
-            className="h-9 w-9 items-center justify-center rounded-full active:bg-card"
-          >
-            <MoreHorizontal color="#9ca3af" size={21} />
-          </Pressable>
-        ) : null}
+        <Pressable
+          accessibilityLabel="Session actions"
+          onPress={openActions}
+          className="h-9 w-9 items-center justify-center rounded-full active:bg-card"
+        >
+          <MoreHorizontal color="#9ca3af" size={21} />
+        </Pressable>
       </View>
 
       <FlatList
@@ -280,7 +275,6 @@ export default function SessionDetail() {
         </View>
       ) : null}
 
-      {access.canMutate ? (
         <View
           className="border-t border-border bg-background px-3 pt-2"
           style={{ flexShrink: 0, paddingBottom: Math.max(insets.bottom + 10, 10) }}
@@ -323,12 +317,6 @@ export default function SessionDetail() {
             </Button>
           </View>
         </View>
-      ) : (
-        <View className="border-t border-border px-4 py-3 pb-8">
-          <Text className="text-sm font-semibold text-foreground">Managed by Crew</Text>
-          <Text className="mt-1 text-xs text-muted-foreground">Inspect-only member session</Text>
-        </View>
-      )}
 
       <BottomSheetModal
         ref={actionsRef}

@@ -44,10 +44,9 @@ does **not** mean the capability is unique to that file.
 
 | Route | Surface | Canonical entry |
 |---|---|---|
-| `/` | **Home** — composer + digest + attention + recent Crew | `home-surface.tsx` → `home-view.tsx` |
+| `/` | **Home** — composer + digest + attention + recent sessions | `home-surface.tsx` → `home-view.tsx` |
 | `/grid` | **Workbench** — multi-session grid | `grid-view.tsx` |
 | `/session/:sessionId` | **Session detail** — transcript + steer + inspector dock | `session-detail.tsx` |
-| `/crew/:taskId` | **Crew task / run** | `crew/crew-task-detail.tsx` |
 | `/autopilot/*` | **Autopilot / loops** | `autopilot-routes.tsx` |
 | `/settings` | **Settings** (`?section=`) — main sidebar swaps to settings nav + Back; content is `settings-view.tsx` |
 | `/digest` | Digest detail | `digest-view.tsx` |
@@ -62,10 +61,9 @@ does **not** mean the capability is unique to that file.
 
 | Route | Surface |
 |---|---|
-| `/` | Session list + Crew rows |
-| `/new` | Create Solo / Crew |
+| `/` | Session list |
+| `/new` | Create session |
 | `/session/[id]` | Transcript + steer |
-| `/crew/[taskId]` | Crew task / run |
 | `/pairing` | Tailscale URL + Bearer pairing |
 
 Mobile has **no** Workbench, Autopilot, Settings shell, Forge dock, File explorer, Terminal, or Browser.
@@ -98,7 +96,7 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 | **Mobile** | `apps/mobile/src/app/new.tsx` |
 | **Settings** | Providers / Projects defaults affect create; not the composer UI itself |
 | **Server** | `POST /api/sessions` (`mode?`), `sessions/`, `models/`, `git/`, `projects/`; per-mode prompt overlay in `sessions/domain/session-modes.ts` |
-| **Also check** | Both Home **and** Workbench composers; mobile `/new` if create UX changes; Crew create only on Home + mobile (Workbench has **no** Crew path today); hub machine picker on Workbench slots **and** Home Crew create (routes the run to the chosen machine, which then owns it) |
+| **Also check** | Both Home **and** Workbench composers; mobile `/new` if create UX changes; hub machine picker on Workbench slots **and** Home create (routes the run to the chosen machine, which then owns it) |
 | **Prefs** | `packages/core/src/model-preference.ts` — scoped keys above |
 
 ### Steer / chat input (existing session)
@@ -124,21 +122,11 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 
 | | |
 |---|---|
-| **Web** | `model-picker.tsx` on Home composer, Workbench slot composer, Autopilot `create-loop-dialog` / loop settings, Crew profile dialogs, `subagent-row`, Settings Agents / subagent models. **The picker lists only Nuncio Engine by default;** the legacy vendor engines (Claude / Codex / Cursor / Devin) appear only when *Show legacy engines* (`engines.showLegacy`, Advanced settings) is on — mobile `/new` collapses the same way because it reads the same `/api/models`. |
+| **Web** | `model-picker.tsx` on Home composer, Workbench slot composer, Autopilot `create-loop-dialog` / loop settings, `subagent-row`, Settings Agents / subagent models. **The picker lists only Nuncio Engine by default;** the legacy vendor engines (Claude / Codex / Cursor / Devin) appear only when *Show legacy engines* (`engines.showLegacy`, Advanced settings) is on — mobile `/new` collapses the same way because it reads the same `/api/models`. |
 | **Mobile** | `/new` only |
 | **Settings** | Providers page sections: engines (Cursor / Nuncio Engine / Claude / Codex / Devin), **Subscription bridge** (existing CLIProxyAPI discover→external/migrate + fresh managed), **Tool updates**. Agents (subagent models), Usage. Default solo permission/runtime modes: Claude `NUNCIO_CLAUDE_PERMISSION_MODE`, Codex `NUNCIO_CODEX_RUNTIME_MODE`, Devin `NUNCIO_DEVIN_PERMISSION_MODE` (Pi has no permission mode). Subscription bridge keys: `NUNCIO_CLIPROXY_ENABLED`, `NUNCIO_CLIPROXY_MODE`, `NUNCIO_CLIPROXY_BASE_URL`, `NUNCIO_CLIPROXY_PORT`, `NUNCIO_CLIPROXY_API_KEY`, `NUNCIO_CLIPROXY_BIN`. |
 | **Server** | `models/`, provider `listModels()` (Claude merges CLIProxyAPI Codex-sub models when bridge is healthy), `subscription-bridge/` (`GET …/status`, `GET …/discover`, `POST …/refresh`, `POST …/adopt-external`, `POST …/migrate-managed`, `POST …/init-managed`, `POST …/managed/start|stop`, `POST …/claude-code-env`), `usage/`, settings registry keys above |
 | **Also check** | Every picker host that should inherit catalog/effort/fast UX — not only Home; Providers pane must list Claude + Devin (not search-only); Subscription bridge + Tool updates are sections on the Providers page (not separate nav); Claude models expose effort + Ultracode (SDK `Settings.ultracode`); Codex-sub under Claude expose `reasoningEffort` (incl. Ultra) + Ultracode and a `Codex sub` badge; transcript user bubbles strip injected Workspace preamble (display-only) |
-
-### Crew
-
-| | |
-|---|---|
-| **Web** | Create: Home `use-crew-composer.ts` + `execution-mode-picker.tsx`, plus `crew/crew-machine-picker.tsx` to route the run to a tailnet machine (which then owns it end to end). Detail: `/crew/:taskId`, or `/m/<machine>/crew/:taskId` for a run owned by another machine → `crew/*`. Recent: `recent-crew-runs.tsx` on Home (local runs only). Profiles: Settings → Crew profiles |
-| **Mobile** | Create on `/new`; detail `/crew/[taskId]` |
-| **Settings** | `crew-profiles` |
-| **Server** | `crew/` (see [`crew-workspace-harness.md`](crew-workspace-harness.md)); unchanged for hub routing — the owning machine serves the full Crew API under `/m/<machine>/` |
-| **Also check** | Web create + Settings profiles + mobile create/detail; hub-routed create (Home machine picker → full nav to `/m/<machine>/crew/:taskId`) keeps every locked invariant on the owning machine (ADR-013); remote runs raise attention on that machine, not Home; member sessions stay readable but not publicly mutable |
 
 ### Autopilot / loops
 
@@ -155,7 +143,7 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 | | |
 |---|---|
 | **Web** | Home embedded: `attention-queue.tsx`, `digest-card.tsx`. Full: `/digest`, `/timeline`. Sidebar badge. Routing kinds: `lib/attention-kind.ts` |
-| **Mobile** | Push deep-links to session/crew — no full inbox UI |
+| **Mobile** | Push deep-links to sessions — no full inbox UI |
 | **Server** | `attention/`, `attention/heartbeat/`, `attention/fleet/`, `dispatcher/`, `observability/` |
 | **Also check** | Home queue + digest/timeline + collectors; dispatcher approvals are **attention rows**, not a `/dispatcher` route |
 | **Legacy** | `inbox-view.tsx` is **not routed** (`/inbox` → `/`). Do not revive without updating this doc |
@@ -175,11 +163,11 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 
 | | |
 |---|---|
-| **Web** | `verify-chip.tsx`, transcript `verify-rows`, `session-changes-panel.tsx`, `edit-project-config-dialog.tsx`, Crew `crew-gates.tsx`, Autopilot run detail |
+| **Web** | `verify-chip.tsx`, transcript `verify-rows`, `session-changes-panel.tsx`, `edit-project-config-dialog.tsx`, Autopilot run detail |
 | **Shared** | `derive-verify-status.ts` (and related helpers) |
 | **Settings** | Projects (verify command / policy); Agents: `NUNCIO_EVIDENCE_URL` (green-verify auto-evidence fallback); Providers → Nuncio Engine: `NUNCIO_ENGINE_GATE_GUARD` (blocks agent writes to `.nuncio/`) |
-| **Server** | sessions verify/diff (`diff/turn-diff-classifier.ts` skip-on-clean fingerprint + file classes), `evidence/` (+ `SessionsService.captureVerifyEvidence` auto-capture, `pi-engine/capture-evidence-tool.ts`), `pi-engine/gate-integrity.ts` + `engine-extension.ts`, Crew verifier, loop verify |
-| **Also check** | Settings/projects + session/tile chips + transcript (incl. evidence blocks) + Crew gates + loop run detail |
+| **Server** | sessions verify/diff (`diff/turn-diff-classifier.ts` skip-on-clean fingerprint + file classes), `evidence/` (+ `SessionsService.captureVerifyEvidence` auto-capture, `pi-engine/capture-evidence-tool.ts`), `pi-engine/gate-integrity.ts` + `engine-extension.ts`, loop verify |
+| **Also check** | Settings/projects + session/tile chips + transcript (incl. evidence blocks) + loop run detail |
 
 ### Tasks / subagents / multitask
 
@@ -208,11 +196,11 @@ changing a **tool** means the panel + its server module.
 
 | | |
 |---|---|
-| **Web** | Workbench slots: hub machine picker in `grid-slot-composer.tsx`. Home Crew create: `crew/crew-machine-picker.tsx` (routes a run to the owning machine). Shared: `remote-session-tile.tsx`, `machine-switcher.tsx`, `lib/hub-api.ts` (`machineApiBase` is the per-call base seam) |
+| **Web** | Workbench slots: hub machine picker in `grid-slot-composer.tsx`. Shared: `remote-session-tile.tsx`, `machine-switcher.tsx`, `lib/hub-api.ts` (`machineApiBase` is the per-call base seam) |
 | **Mobile** | Pairing / connection store (not full hub grid) |
 | **Settings** | Remote access |
 | **Server** | `hub/`, `relay/`, `pairing/`, `devices/`, `auth/` |
-| **Also check** | Grid hub UX + Home Crew machine routing + remote access settings + pairing/auth |
+| **Also check** | Grid hub UX + remote access settings + pairing/auth |
 
 ### Handoff (Continue on mobile)
 
@@ -260,7 +248,6 @@ Read-only Claude Code / Codex CLI memories indexed into Pi sessions; stores stay
 | `source-control` | GitHub / GitLab |
 | `mcp-tools` | MCP & tools — MCP Store rows (import, enable/disable, lazy/full advertise, OAuth Connect/Reconnect for remote servers, remove) + tool defaults |
 | `agents` | Agent / subagent model prefs |
-| `crew-profiles` | Crew profiles |
 | `workspaces` | Workspace roots / worktree dirs |
 | `projects` | Per-project defaults (verify, default MCP servers, loops, …) |
 | `remote-access` | Tailscale / pairing / remote |
@@ -284,12 +271,11 @@ Use these literally when the change touches that capability:
 
 - **Composer / create UX:** `home-view.tsx` + `grid-slot-composer.tsx` (+ mobile `new.tsx` if create flow)
 - **Steer / composer lock / attachments on run:** `session-detail.tsx` + `session-tile.tsx` (+ mobile session)
-- **Model picker behavior:** `model-picker.tsx` first, then every host that embeds it (Home, Workbench, loops, Crew profiles, subagents, Settings)
+- **Model picker behavior:** `model-picker.tsx` first, then every host that embeds it (Home, Workbench, loops, subagents, Settings)
 - **Forge / PR / changes:** Settings source-control + `forge/scm-panel.tsx` + `/forge/pr` (+ attention PR kinds). Skip orphans unless deleting them
-- **Verify:** Projects settings + chips + transcript rows + Crew gates + Autopilot run detail
+- **Verify:** Projects settings + chips + transcript rows + Autopilot run detail
 - **Attention item kinds:** collectors (server) + `attention-row` actions + Home queue (+ digest/timeline if presentation)
 - **Loops:** `/autopilot/*` + Settings Projects + `loops/`/`scheduler/` (+ attention breakers)
-- **Crew:** Home create + `/crew/:taskId` + Settings crew-profiles + mobile create/detail
 
 ---
 
@@ -297,9 +283,9 @@ Use these literally when the change touches that capability:
 
 | Pair | Why both exist |
 |---|---|
-| Home composer vs Workbench slot composer | Home = delegate cockpit (Crew). Workbench = per-slot create + hub/attach |
+| Home composer vs Workbench slot composer | Home = delegate cockpit. Workbench = per-slot create + hub/attach |
 | Session detail vs session tile | Full review vs dense monitoring |
-| Web vs mobile | Phone is thin client: list / create / steer / crew — not Workbench/Settings/Forge dock |
+| Web vs mobile | Phone is thin client: list / create / steer — not Workbench/Settings/Forge dock |
 | Desktop browser dock vs web | Browser dock is desktop-only by product decision |
 
 ---
@@ -321,7 +307,6 @@ Use these literally when the change touches that capability:
 | Server module | Primary UI |
 |---|---|
 | `sessions/`, `agents/`, `models/` | Home, Workbench, Session, Mobile |
-| `crew/` | Home create, `/crew/*`, Settings crew-profiles, Mobile |
 | `loops/`, `scheduler/` | `/autopilot/*`, Settings projects |
 | `attention/`, `dispatcher/`, `observability/` | Home queue, `/digest`, `/timeline`, push |
 | `forges/`, `git/` | Settings source-control, session SCM, `/forge/pr` |

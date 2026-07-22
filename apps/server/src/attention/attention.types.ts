@@ -14,7 +14,6 @@ export type AttentionKind =
   | 'tripped-breaker'
   | 'loop-stuck'
   | 'missed-schedule'
-  | 'crew-blocked'
   | 'zombie-session'
   | 'pr-review'
   | 'pr-feedback'
@@ -42,7 +41,6 @@ export const SEVERITY_BY_KIND: Readonly<Record<AttentionKind, number>> = {
   'relay-down': 5,
   'tripped-breaker': 4,
   'loop-stuck': 4,
-  'crew-blocked': 4,
   'zombie-session': 3,
   'missed-schedule': 3,
   // A debug run paused on a reproduction gate is actively blocked on the human —

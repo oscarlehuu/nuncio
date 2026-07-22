@@ -119,7 +119,7 @@ interface ActiveClaudeSession {
   pendingRedirects: number;
   /**
    * Signature of the runtime toolset the live query was last built with,
-   * including execute-closure identity so stable Crew schemas still refresh
+   * including execute-closure identity so stable runtime-tool schemas still refresh
    * their turn-scoped authority through `setMcpServers`.
    */
   mcpToolSignature: string;
@@ -613,7 +613,7 @@ export class ClaudeAgentProvider extends BaseAgentProvider implements OnModuleDe
   }
 
   /**
-   * A signature of each advertised definition plus its execute closure. Crew
+   * A signature of each advertised definition plus its execute closure. Runtime-tool
    * schemas stay stable across revisions, but their closures carry turn-scoped
    * authority; treating a new closure as a changed MCP server prevents a resumed
    * query from executing the prior turn's authority.

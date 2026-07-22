@@ -32,7 +32,6 @@ describe('AttentionRow', () => {
           item={makeItem()}
           onOpen={onOpen}
           onApprove={vi.fn()}
-          onAck={vi.fn()}
           onResolve={onResolve}
         />
       </ul>,
@@ -45,26 +44,5 @@ describe('AttentionRow', () => {
 
     await user.click(screen.getByRole('button', { name: 'Dismiss "Agent needs approval"' }));
     expect(onResolve).toHaveBeenCalledWith('i1');
-  });
-
-  it('shows Mark seen for crew items instead of Dismiss', async () => {
-    const onAck = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <ul>
-        <AttentionRow
-          item={makeItem({ kind: 'crew-blocked', title: 'Crew is blocked', payload: { taskId: 't1' } })}
-          onOpen={vi.fn()}
-          onApprove={vi.fn()}
-          onAck={onAck}
-          onResolve={vi.fn()}
-        />
-      </ul>,
-    );
-
-    expect(screen.getByText('Crew blocked')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Dismiss/ })).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Mark "Crew is blocked" seen' }));
-    expect(onAck).toHaveBeenCalledWith('i1');
   });
 });

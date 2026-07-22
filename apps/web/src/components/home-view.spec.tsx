@@ -13,18 +13,6 @@ import {
   recordProjectSelection,
 } from '../lib/project-preference';
 import type { ModelProvider } from '../lib/model-providers';
-import {
-  createCrewTask,
-  fetchCrewProfiles,
-  resolveCrewProfile,
-  type CrewProfileDto,
-} from '@nuncio/core/crew-api';
-
-vi.mock('@nuncio/core/crew-api', () => ({
-  createCrewTask: vi.fn(),
-  fetchCrewProfiles: vi.fn(),
-  resolveCrewProfile: vi.fn(),
-}));
 
 const PI_ONLY_PROVIDERS: ModelProvider[] = [
   {
@@ -84,31 +72,6 @@ const CODEX_ONLY_PROVIDERS: ModelProvider[] = [
   },
 ];
 
-const CREW_PROFILE: CrewProfileDto = {
-  id: 'quality', name: 'Oscar Quality Crew', revision: 2, presetId: 'quality',
-  definition: {
-    bindings: {
-      foreman: { provider: 'claude', model: 'fable', label: 'Fable' },
-      builder: { provider: 'codex', model: 'sol', label: 'Sol' },
-      reviewer: { provider: 'claude', model: 'opus', label: 'Opus' },
-    },
-    policy: { verifyCommand: 'bun test', maxVerifyRetries: 2, maxReviewRetries: 2, strictFreshFinalReviewer: true },
-  },
-  createdAt: 1, updatedAt: 2,
-};
-const READY = {
-  state: 'ready' as const,
-  snapshot: {
-    ...CREW_PROFILE.definition,
-    presetId: 'quality' as const,
-    sourceProfileId: CREW_PROFILE.id,
-    sourceProfileRevision: CREW_PROFILE.revision,
-    tester: { kind: 'nuncio' as const, runtimePolicy: 'read-only' as const },
-    resolvedAt: 3,
-  },
-  issues: [],
-};
-
 vi.mock('../lib/api', async () => {
   const actual = await vi.importActual<typeof import('../lib/api')>('../lib/api');
   return { ...actual, fetchModels: vi.fn().mockResolvedValue([]) };
@@ -154,12 +117,6 @@ vi.mock('./branch-picker', async () => {
 describe('HomeView', () => {
   beforeEach(() => {
     localStorage.clear();
-    vi.mocked(fetchCrewProfiles).mockReset().mockResolvedValue([CREW_PROFILE]);
-    vi.mocked(resolveCrewProfile).mockReset().mockResolvedValue(READY);
-    vi.mocked(createCrewTask).mockReset().mockResolvedValue({
-      task: { id: 'task-1', objective: 'Ship it', projectPath: '/code/nuncio', baseBranch: 'main', createdAt: 1, updatedAt: 1 },
-      run: {} as never,
-    });
   });
 
   it('submits the prompt on Enter', async () => {
@@ -213,15 +170,6 @@ describe('HomeView', () => {
     const textarea = screen.getByPlaceholderText(/ask nuncio/i) as HTMLTextAreaElement;
     expect(textarea.value).toBe(AGENTS_MD_GENERATION_PROMPT);
     expect(textarea.value).toContain('operating manual');
-
-    // Crew mode hides the solo-only quick action; toggling back must keep the draft.
-    await userEvent.click(screen.getByRole('switch', { name: /crew/i }));
-    expect(screen.queryByRole('button', { name: /agents\.md/i })).toBeNull();
-    await userEvent.click(screen.getByRole('switch', { name: /crew/i }));
-    expect(screen.getByRole('button', { name: /agents\.md/i })).toBeInTheDocument();
-    expect((screen.getByPlaceholderText(/ask nuncio/i) as HTMLTextAreaElement).value).toBe(
-      AGENTS_MD_GENERATION_PROMPT,
-    );
   });
 
   it('removes the hero heading — the composer is the centerpiece', () => {
@@ -431,112 +379,6 @@ describe('HomeView', () => {
     );
     await userEvent.click(screen.getByRole('button', { name: /continue on mobile/i }));
     expect(onContinue).toHaveBeenCalledTimes(1);
-  });
-
-  it('starts every fresh composer in Solo mode', () => {
-    const { unmount } = render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
-    expect(screen.getByRole('switch', { name: /crew/i })).toHaveAttribute('aria-checked', 'false');
-    unmount();
-    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
-    expect(screen.getByRole('switch', { name: /crew/i })).toHaveAttribute('aria-checked', 'false');
-  });
-
-  it('Crew mode swaps the Solo model for the configured crew profile', async () => {
-    render(
-      <HomeView sessionCount={0} onSubmit={vi.fn()} providers={CODEX_ONLY_PROVIDERS}
-        onCrewCreated={vi.fn()} />,
-    );
-    expect(await screen.findByRole('button', { name: /gpt 5.5/i })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('switch', { name: /crew/i }));
-    expect(screen.queryByRole('button', { name: /gpt 5.5/i })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /crew profile: oscar quality crew/i })).toBeInTheDocument();
-  });
-
-  it('keeps the no-profile Crew state compact and actionable inside the toolbar', async () => {
-    vi.mocked(fetchCrewProfiles).mockResolvedValue([]);
-    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
-
-    await userEvent.click(screen.getByRole('switch', { name: /crew/i }));
-
-    expect(await screen.findByRole('link', { name: /set up crew/i })).toHaveAttribute(
-      'href',
-      '/settings?section=crew-profiles',
-    );
-    expect(screen.queryByText(/no crew profile/i)).toBeNull();
-    expect(screen.queryByRole('combobox', { name: /crew profile/i })).toBeNull();
-  });
-
-  it('keeps normal branch selection but hides Crew worktree implementation detail', async () => {
-    const { container } = render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
-    expect(screen.getByRole('button', { name: /workspace mode: work locally/i })).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole('button', { name: /no repo/i }));
-    await userEvent.click(screen.getByRole('switch', { name: /crew/i }));
-    expect(screen.queryByRole('button', { name: /workspace mode/i })).not.toBeInTheDocument();
-    expect(screen.queryByText(/crew worktree/i)).toBeNull();
-    expect(screen.getByRole('button', { name: /^main$/i })).toBeInTheDocument();
-    expect(container.querySelector('.home-composer-context-row')?.textContent?.trim()).not.toMatch(/·$/);
-
-    await userEvent.click(screen.getByRole('switch', { name: /crew/i }));
-    expect(screen.getByRole('button', { name: /workspace mode: work locally/i })).toBeInTheDocument();
-  });
-
-  it('refreshes saved profiles whenever Crew mode is re-entered', async () => {
-    const updated = { ...CREW_PROFILE, name: 'Updated Quality Crew', revision: 3 };
-    vi.mocked(fetchCrewProfiles)
-      .mockReset()
-      .mockResolvedValueOnce([CREW_PROFILE])
-      .mockResolvedValueOnce([updated]);
-    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
-
-    await userEvent.click(screen.getByRole('switch', { name: /crew/i }));
-    expect(await screen.findByRole('button', { name: /crew profile: oscar quality crew/i })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('switch', { name: /crew/i }));
-    await userEvent.click(screen.getByRole('switch', { name: /crew/i }));
-
-    expect(await screen.findByRole('button', { name: /crew profile: updated quality crew/i })).toBeInTheDocument();
-    expect(fetchCrewProfiles).toHaveBeenCalledTimes(2);
-  });
-
-  it('resolves a Ready profile, creates once on double tap, and calls the lead route callback', async () => {
-    const onCrewCreated = vi.fn();
-    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} onCrewCreated={onCrewCreated} />);
-    await userEvent.click(screen.getByRole('button', { name: /no repo/i }));
-    await userEvent.click(screen.getByRole('switch', { name: /crew/i }));
-    expect(await screen.findByText('Ready')).toBeInTheDocument();
-    expect(resolveCrewProfile).toHaveBeenCalledWith(
-      'quality', '/code/nuncio', 'main', expect.any(AbortSignal), '',
-    );
-    await userEvent.type(screen.getByPlaceholderText(/ask nuncio/i), 'Ship it');
-    const send = screen.getByRole('button', { name: /send/i });
-    expect(send).toBeEnabled();
-    await userEvent.dblClick(send);
-    expect(createCrewTask).toHaveBeenCalledTimes(1);
-    expect(createCrewTask).toHaveBeenCalledWith({ objective: 'Ship it', projectPath: '/code/nuncio', baseBranch: 'main', profileId: 'quality' }, '');
-    expect(onCrewCreated).toHaveBeenCalledWith('task-1', null);
-  });
-
-  it('re-resolves Crew readiness when the selected base branch changes', async () => {
-    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} />);
-    await userEvent.click(screen.getByRole('button', { name: /no repo/i }));
-    await userEvent.click(screen.getByRole('switch', { name: /crew/i }));
-    expect(await screen.findByText('Ready')).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole('button', { name: /^main$/i }));
-
-    await waitFor(() => expect(resolveCrewProfile).toHaveBeenCalledWith(
-      'quality', '/code/nuncio', 'release', expect.any(AbortSignal), '',
-    ));
-  });
-
-  it('Needs setup disables Delegate and links directly to Crew profile settings', async () => {
-    vi.mocked(resolveCrewProfile).mockResolvedValue({ ...READY, state: 'needs_setup', issues: [{ code: 'MODEL_UNAVAILABLE', role: 'builder', message: 'Builder model unavailable' }] });
-    render(<HomeView sessionCount={0} onSubmit={vi.fn()} providers={CURSOR_AND_PI} onCrewCreated={vi.fn()} />);
-    await userEvent.click(screen.getByRole('button', { name: /no repo/i }));
-    await userEvent.click(screen.getByRole('switch', { name: /crew/i }));
-    expect(await screen.findByText('Needs setup')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /send/i })).toBeDisabled();
-    expect(screen.getByRole('link', { name: /set up profile/i })).toHaveAttribute('href', '/settings?section=crew-profiles');
   });
 
   it('hides the mode picker when the provider advertises no modes', async () => {

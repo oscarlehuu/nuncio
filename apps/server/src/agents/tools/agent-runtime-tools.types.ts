@@ -17,14 +17,14 @@ export interface AgentRuntimeToolPolicySupport {
 
 /**
  * Declarative security facts used by the explicit-policy tool gate. Metadata is
- * necessary but not sufficient: Crew tools must also be created through the
+ * necessary but not sufficient: such tools must also be created through the
  * trusted constructor so a lookalike object cannot opt itself into the gate.
  */
 export interface AgentRuntimeToolSecurity {
   network: 'disabled' | 'required';
   workspaceMutation: 'none' | 'workspace';
   runtimePolicies: readonly AgentRuntimeToolPolicySupport[];
-  scope: 'session' | 'crew-internal';
+  scope: 'session' | 'policy-internal';
 }
 
 export interface AgentRuntimeTool {

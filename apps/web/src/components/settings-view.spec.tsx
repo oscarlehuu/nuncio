@@ -176,7 +176,6 @@ describe('SettingsView', () => {
     expect(within(nav).getByRole('button', { name: 'Usage' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'Source control' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'MCP & Tools' })).toBeInTheDocument();
-    expect(within(nav).getByRole('button', { name: 'Crew profiles' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'Mobile' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'Remote access' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'General' })).toBeInTheDocument();
@@ -299,12 +298,6 @@ describe('SettingsView', () => {
     const search = screen.getByRole('searchbox', { name: /search settings/i });
     await userEvent.type(search, 'phone');
     expect(screen.getByRole('heading', { name: 'Mobile' })).toBeInTheDocument();
-  });
-
-  it('opens Crew profiles directly from the composer setup deep-link', async () => {
-    window.history.replaceState(null, '', '/settings?section=crew-profiles');
-    renderWithTheme(<SettingsHarness settings={[]} />);
-    expect(screen.getByRole('heading', { name: 'Crew profiles' })).toBeInTheDocument();
   });
 
   it('falls back to Appearance when the ?section value is unknown', () => {

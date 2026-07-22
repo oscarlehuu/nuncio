@@ -10,7 +10,6 @@ import {
   Settings2,
   SlidersHorizontal,
   Smartphone,
-  UsersRound,
   Wrench,
 } from 'lucide-react';
 
@@ -22,7 +21,6 @@ export type SettingsSectionId =
   | 'source-control'
   | 'mcp-tools'
   | 'agents'
-  | 'crew-profiles'
   | 'workspaces'
   | 'projects'
   | 'mobile'
@@ -43,7 +41,6 @@ export const SETTINGS_SECTION_NAV_ITEMS: ReadonlyArray<SettingsSectionNavItem> =
   { id: 'source-control', label: 'Source control', icon: GitPullRequest },
   { id: 'mcp-tools', label: 'MCP & Tools', icon: Puzzle },
   { id: 'agents', label: 'Agents', icon: SlidersHorizontal },
-  { id: 'crew-profiles', label: 'Crew profiles', icon: UsersRound },
   { id: 'workspaces', label: 'Workspaces', icon: FolderGit2 },
   { id: 'projects', label: 'Projects', icon: FolderGit2 },
   { id: 'mobile', label: 'Mobile', icon: Smartphone },

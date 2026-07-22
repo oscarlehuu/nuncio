@@ -195,11 +195,11 @@ describe('DispatcherService', () => {
     });
   });
 
-  it('excludes Crew member sessions from repository-backed dispatcher inputs', () => {
+  it('uses the user-facing session source, not the raw list, for dispatcher inputs', () => {
     let rawCalls = 0;
     let userFacingCalls = 0;
     const sessions = {
-      list: () => { rawCalls += 1; return [{ id: 'crew', verifyOwner: 'crew' }]; },
+      list: () => { rawCalls += 1; return [{ id: 'raw', verifyOwner: 'session' }]; },
       listUserFacing: () => {
         userFacingCalls += 1;
         return [{ id: 'solo', verifyOwner: 'session' }];

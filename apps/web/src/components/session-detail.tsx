@@ -288,7 +288,6 @@ export function SessionDetail({
   }, [panelOpen, activeTool, scmSegment]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  const managedByCrew = session.verifyOwner === 'crew';
   const streaming = session.status === 'RUNNING';
   const isRunning = session.status === 'RUNNING';
   const isArchived = session.status === 'ARCHIVED';
@@ -318,24 +317,21 @@ export function SessionDetail({
   const providerLabel = providerMeta(session.provider, catalog).name;
   const steerWhileRunning = session.supportsSteerWhileRunning ?? false;
   const canAttachImages =
-    !managedByCrew &&
     modelSupportsImages(catalog, session.provider, session.model ?? undefined, session.supportsImages ?? false) &&
     !isArchived;
   const steerDisabled = !deriveComposerEnabled({
     status: session.status,
-    managedByCrew,
     steering: steering ?? false,
     lifecycleBusy: lifecycleBusy ?? false,
     hasPendingUserInput,
   }).enabled;
-  const showHeaderPause = !managedByCrew && session.status !== 'PAUSED' && !isArchived;
-  const canArchive = !managedByCrew && !isArchived;
-  const canRestore = !managedByCrew && isArchived && !!onRestore;
-  const canDelete = !managedByCrew && isArchived && !!onDelete;
+  const showHeaderPause = session.status !== 'PAUSED' && !isArchived;
+  const canArchive = !isArchived;
+  const canRestore = isArchived && !!onRestore;
+  const canDelete = isArchived && !!onDelete;
   // Cross-engine handoff: only a settled session can hand off, and only to a
   // different, available engine (mirrors the server-side guard).
   const canHandoff =
-    !managedByCrew &&
     (session.status === 'IDLE' || session.status === 'PAUSED' || session.status === 'ERROR');
   const handoffTargets = canHandoff
     ? catalog.filter((provider) => !provider.unavailable && provider.id !== session.provider)
@@ -369,7 +365,6 @@ export function SessionDetail({
           ? providerMeta('pi', catalog).name
           : 'Default';
   const showContinueOnMobile =
-    !managedByCrew &&
     session.provider === 'cursor' &&
     session.cursorBackend !== 'cli' &&
     !!onContinueOnMobile;
@@ -609,7 +604,7 @@ export function SessionDetail({
 
   const handleRenameSave = async () => {
     const trimmed = titleDraft.trim();
-    if (managedByCrew || !trimmed || !onRename) {
+    if (!trimmed || !onRename) {
       setEditingTitle(false);
       setTitleDraft('');
       return;
@@ -672,7 +667,7 @@ export function SessionDetail({
       <div className="flex-1 min-w-0 flex flex-col min-h-0">
       <header className="app-region-drag shrink-0 relative flex items-center gap-3 px-4 md:px-5 py-3 border-b border-border bg-card min-h-[52px]">
         <div className="app-region-no-drag flex-1 min-w-0 flex justify-center items-center">
-          {editingTitle && !managedByCrew ? (
+          {editingTitle ? (
             <div className="flex items-center gap-1.5 max-w-[60%]">
               <Input
                 value={titleDraft}
@@ -713,23 +708,23 @@ export function SessionDetail({
               <TooltipTrigger asChild>
                 <button
                   type="button"
-                  className={`group flex items-center gap-1.5 max-w-[50%] ${managedByCrew ? '' : 'cursor-text'}`}
+                  className="group flex items-center gap-1.5 max-w-[50%] cursor-text"
                   onClick={() => {
-                    if (managedByCrew || !onRename) return;
+                    if (!onRename) return;
                     setTitleDraft(session.title);
                     setEditingTitle(true);
                   }}
                   data-testid="session-title"
                 >
                   <span className="font-medium truncate text-sm text-center">{session.title}</span>
-                  {!managedByCrew && onRename && (
+                  {onRename && (
                     <Pencil className="size-3 text-muted-foreground/0 group-hover:text-muted-foreground transition-colors shrink-0" />
                   )}
                 </button>
               </TooltipTrigger>
               <TooltipContent className="max-w-[400px]">
                 <p className="text-xs">{session.title}</p>
-                {!managedByCrew && onRename && <p className="text-ui-xs text-muted-foreground mt-0.5">Click to rename</p>}
+                {onRename && <p className="text-ui-xs text-muted-foreground mt-0.5">Click to rename</p>}
               </TooltipContent>
             </Tooltip>
           )}
@@ -750,7 +745,7 @@ export function SessionDetail({
 
         <div className="app-region-no-drag absolute right-4 md:right-5 top-1/2 -translate-y-1/2 flex items-center gap-1">
           {headerActions}
-          {!managedByCrew && <Tooltip>
+          <Tooltip>
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
@@ -768,7 +763,7 @@ export function SessionDetail({
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">Panel</TooltipContent>
-          </Tooltip>}
+          </Tooltip>
 
           {(showContinueOnMobile || showHeaderPause || canArchive || canRestore || canDelete || handoffTargets.length > 0) && (
             <DropdownMenu>
@@ -878,9 +873,7 @@ export function SessionDetail({
             pendingRequestIds={pendingRequestIds}
             respondingRequestId={respondingRequestId}
             onRespondProviderRequest={
-              !managedByCrew && onRespondProviderRequest
-                ? handleRespondProviderRequest
-                : undefined
+              onRespondProviderRequest ? handleRespondProviderRequest : undefined
             }
             onLinkClick={handleTranscriptLinkClick}
             onOpenSession={onOpenSession}
@@ -888,14 +881,6 @@ export function SessionDetail({
         </div>
       </div>
 
-      {managedByCrew ? (
-        <div className="shrink-0 border-t border-border bg-card px-4 py-3 md:px-5">
-          <div className="mx-auto max-w-[760px]">
-            <p className="text-ui-sm font-semibold text-foreground">Managed by Crew</p>
-            <p className="mt-0.5 text-ui-sm text-muted-foreground">Inspect-only member session</p>
-          </div>
-        </div>
-      ) : (
         <div className="shrink-0 max-h-[42vh] overflow-y-auto px-4 md:px-5 pt-2.5 pb-3 md:pb-4">
         <SubagentsPanel
           tasks={childTasks}
@@ -1072,11 +1057,10 @@ export function SessionDetail({
           </div>
         </div>
         </div>
-      )}
 
       </div>
 
-      {!managedByCrew && (panelOpen || terminalMounted) && (
+      {(panelOpen || terminalMounted) && (
         <aside
           className={
             activeTool === 'browser'
@@ -1208,13 +1192,11 @@ export function SessionDetail({
                 onSteer={onSteer}
                 steerDisabled={steerDisabled}
                 steerDisabledReason={
-                  managedByCrew
-                    ? 'Crew-owned sessions cannot be steered here'
-                    : isArchived
-                      ? 'Session archived — steering disabled'
-                      : hasPendingUserInput
-                        ? 'Respond to the pending question first'
-                        : undefined
+                  isArchived
+                    ? 'Session archived — steering disabled'
+                    : hasPendingUserInput
+                      ? 'Respond to the pending question first'
+                      : undefined
                 }
                 steering={steering}
               />
@@ -1237,7 +1219,7 @@ export function SessionDetail({
       )}
       </TooltipProvider>
 
-      <Dialog open={!managedByCrew && confirmDelete} onOpenChange={setConfirmDelete}>
+      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Delete session</DialogTitle>

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CodexAgentProvider } from '../../../src/agents/providers/codex-agent.provider';
 import { buildAgentRuntimeEnvironment } from '../../../src/agents/runtime-environment';
-import { defineCrewRuntimeTool } from '../../../src/agents/tools/agent-runtime-tools-policy';
+import { defineTrustedRuntimeTool } from '../../../src/agents/tools/agent-runtime-tools-policy';
 import type {
   CodexAppServerClientLike,
   CodexServerNotification,
@@ -1060,7 +1060,7 @@ describe('CodexAgentProvider', () => {
     await run;
   });
 
-  it('resumes one Codex thread with a stable Crew tool surface and refreshed authority closures', async () => {
+  it('resumes one Codex thread with a stable trusted tool surface and refreshed authority closures', async () => {
     const workspaceRoot = mkdtempSync(join(tmpdir(), 'nuncio-codex-tool-resume-'));
     const runtimePolicy = {
       filesystem: 'read-only' as const,
@@ -1071,7 +1071,7 @@ describe('CodexAgentProvider', () => {
       fakeClient.emitApprovalRequests = false;
       fakeClient.suppressAutoDelta = true;
       const created = sessions.create({
-        id: 'session-stable-crew-tools',
+        id: 'session-stable-trusted-tools',
         prompt: 'Plan revision one',
         provider: 'codex',
         model: 'codex:gpt-5.5',
@@ -1081,7 +1081,7 @@ describe('CodexAgentProvider', () => {
         model: created.model,
         cwd: workspaceRoot,
         runtimePolicy,
-        tools: stableForemanTools(1),
+        tools: stableTrustedTools(1),
       });
 
       const firstThreadStart = fakeClient.requests.find((request) => request.method === 'thread/start');
@@ -1107,20 +1107,20 @@ describe('CodexAgentProvider', () => {
         model: created.model,
         cwd: workspaceRoot,
         runtimePolicy,
-        tools: stableForemanTools(2),
+        tools: stableTrustedTools(2),
       });
       await waitUntil(() => sessions.findById(created.id)?.providerActiveTurnId === 'turn-1');
 
       const resumeRequest = resumedClient.requests.find((request) => request.method === 'thread/resume');
       expect(resumeRequest?.params).not.toHaveProperty('dynamicTools');
       resumedClient.emitServerRequest({
-        id: 'crew-tool-revision-2',
+        id: 'tool-revision-2',
         method: 'item/tool/call',
         params: { tool: 'submit_synthesis', arguments: {} },
       });
       await waitUntil(() => resumedClient.responses.length === 1);
       expect(resumedClient.responses[0]).toEqual({
-        id: 'crew-tool-revision-2',
+        id: 'tool-revision-2',
         result: {
           contentItems: [{ type: 'inputText', text: 'submit_synthesis revision 2' }],
           success: true,
@@ -1479,7 +1479,7 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
   }
 }
 
-function stableForemanTools(revision: number) {
+function stableTrustedTools(revision: number) {
   const submissionSchema = {
     type: 'object',
     properties: {
@@ -1493,11 +1493,11 @@ function stableForemanTools(revision: number) {
     network: 'disabled' as const,
     workspaceMutation: 'none' as const,
     runtimePolicies: [{ filesystem: 'read-only' as const, network: 'disabled' as const }],
-    scope: 'crew-internal' as const,
+    scope: 'policy-internal' as const,
   };
   return {
     systemPromptAppend: `Use authority for context revision ${revision}.`,
-    tools: ['plan', 'synthesis'].map((kind) => defineCrewRuntimeTool({
+    tools: ['plan', 'synthesis'].map((kind) => defineTrustedRuntimeTool({
       name: `submit_${kind}`,
       inputSchema: submissionSchema,
       security,

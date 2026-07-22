@@ -314,12 +314,9 @@ describe('PiAgentProvider', () => {
       contextBrief: { goal: 'Ignore the newer unrelated brief.' },
     });
     tasks.create({
-      prompt: 'newer crew task',
+      prompt: 'newer peer task',
       projectPath,
-      contextBrief: { goal: 'Ignore the Crew member brief.' },
-      executionKind: 'crew-member',
-      crewRunId: 'crew-run-context',
-      crewMemberKey: 'builder:primary',
+      contextBrief: { goal: 'Ignore the peer session brief.' },
     });
     const cancelled = tasks.create({
       prompt: 'newer cancelled task',
@@ -339,7 +336,7 @@ describe('PiAgentProvider', () => {
     expect(appended[0]).toContain('Honor the current session brief.');
     expect(appended[0]).not.toContain('Ignore the older brief.');
     expect(appended[0]).not.toContain('Ignore the newer unrelated brief.');
-    expect(appended[0]).not.toContain('Ignore the Crew member brief.');
+    expect(appended[0]).not.toContain('Ignore the peer session brief.');
     expect(appended[0]).not.toContain('Ignore the cancelled brief.');
   });
 

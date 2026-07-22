@@ -5,8 +5,8 @@ import { spawnSync } from 'node:child_process';
 
 /**
  * Generic OS-sandboxed command launch builder (Seatbelt on macOS, bubblewrap on
- * Linux). This is the shared confinement core: the Crew verifier wraps it as
- * `crew-command-sandbox.ts`, and the Pi policy shell tool consumes it directly.
+ * Linux). This is the shared confinement core consumed directly by the Pi
+ * policy shell tool for hermetic runtime-policy sessions.
  * The contract is deny-network + writes confined to the working directory (+
  * a private temp dir), with `.git` and any `extraWriteDenySubpaths` read-only.
  */
@@ -38,7 +38,7 @@ export interface RuntimeSandboxLaunch {
 // directly; on Linux the cache is bind-mounted read-only at `guestPath`. `env` and `pathPrepend`
 // are resolved for the target platform by the projection (guest paths on Linux, host paths on
 // macOS) and point the toolchain at the projected cache.
-export interface RuntimeDependencyMount {
+interface RuntimeDependencyMount {
   hostPath: string;
   guestPath: string;
   env: Record<string, string>;

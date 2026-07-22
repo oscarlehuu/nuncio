@@ -2,7 +2,6 @@ import { Global, Injectable, OnModuleDestroy } from '@nestjs/common';
 import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
-import { ensureCrewSchema } from '../crew/persistence/crew-schema';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -113,7 +112,6 @@ export class DatabaseService implements OnModuleDestroy {
     this.db.exec('PRAGMA busy_timeout = 5000');
     this.db.exec(SCHEMA);
     this.migrate();
-    ensureCrewSchema(this);
   }
 
   onModuleDestroy() {
@@ -511,10 +509,6 @@ export class DatabaseService implements OnModuleDestroy {
         session_id TEXT,
         outcome_json TEXT,
         hold_until INTEGER,
-        crew_run_id TEXT,
-        crew_member_key TEXT,
-        crew_phase TEXT,
-        crew_attempt_key TEXT,
         execution_kind TEXT NOT NULL DEFAULT 'session',
         runtime_policy_json TEXT,
         verify_owner TEXT NOT NULL DEFAULT 'session',
@@ -543,10 +537,6 @@ export class DatabaseService implements OnModuleDestroy {
       ['context_json', 'TEXT'],
       ['notify_policy', 'TEXT'],
       ['tag', 'TEXT'],
-      ['crew_run_id', 'TEXT'],
-      ['crew_member_key', 'TEXT'],
-      ['crew_phase', 'TEXT'],
-      ['crew_attempt_key', 'TEXT'],
       ['execution_kind', "TEXT NOT NULL DEFAULT 'session'"],
       ['runtime_policy_json', 'TEXT'],
       ['verify_owner', "TEXT NOT NULL DEFAULT 'session'"],
@@ -561,10 +551,6 @@ export class DatabaseService implements OnModuleDestroy {
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_tasks_parent_session
       ON tasks(parent_session_id, created_at)
-    `);
-    this.db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_tasks_crew_run
-      ON tasks(crew_run_id, created_at)
     `);
 
     this.db.exec(`

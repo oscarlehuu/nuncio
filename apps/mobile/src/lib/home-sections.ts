@@ -1,9 +1,6 @@
 import type { Session } from '@nuncio/core/api';
-import type { CrewRunRowModel } from './crew-run-list';
 
-export type HomeItem =
-  | { kind: 'session'; key: string; updatedAt: number; session: Session }
-  | { kind: 'crew'; key: string; updatedAt: number; row: CrewRunRowModel };
+export type HomeItem = { kind: 'session'; key: string; updatedAt: number; session: Session };
 
 export function basename(path: string): string {
   const trimmed = path.replace(/\/+$/, '');
@@ -19,11 +16,7 @@ export function projectLabelForSession(session: Session): string {
 }
 
 export function isHomeItemRunning(item: HomeItem): boolean {
-  if (item.kind === 'session') {
-    return item.session.status === 'RUNNING' || item.session.pendingInput === true;
-  }
-  return ['RUNNING', 'QUEUED', 'RECOVERING', 'BLOCKED_USER', 'BLOCKED_PROVIDER']
-    .includes(item.row.status);
+  return item.session.status === 'RUNNING' || item.session.pendingInput === true;
 }
 
 function byUpdatedAtDescending(a: HomeItem, b: HomeItem): number {
@@ -42,7 +35,7 @@ export function buildHomeSections(
   const groups = new Map<string, HomeItem[]>();
   for (const item of items) {
     if (isHomeItemRunning(item)) continue;
-    const title = item.kind === 'session' ? projectLabelForSession(item.session) : 'Crew runs';
+    const title = projectLabelForSession(item.session);
     const group = groups.get(title);
     if (group) group.push(item);
     else groups.set(title, [item]);

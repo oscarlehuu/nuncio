@@ -62,22 +62,22 @@ describe('SessionsRepository', () => {
     expect(s.verifyOwner).toBe('session');
   });
 
-  it('persists runtime policy and crew-owned verification across repository reads', () => {
+  it('persists runtime policy and verification owner across repository reads', () => {
     const runtimePolicy = {
       filesystem: 'workspace-write' as const,
-      workspaceRoot: '/tmp/nuncio-crew-workspace',
+      workspaceRoot: '/tmp/nuncio-session-workspace',
       network: 'disabled' as const,
     };
     const created = repo.create({
-      prompt: 'crew member',
+      prompt: 'policy session',
       workspace: runtimePolicy.workspaceRoot,
       runtimePolicy,
-      verifyOwner: 'crew',
+      verifyOwner: 'session',
     });
 
     expect(created.runtimePolicy).toEqual(runtimePolicy);
-    expect(created.verifyOwner).toBe('crew');
-    expect(repo.findById(created.id)).toMatchObject({ runtimePolicy, verifyOwner: 'crew' });
+    expect(created.verifyOwner).toBe('session');
+    expect(repo.findById(created.id)).toMatchObject({ runtimePolicy, verifyOwner: 'session' });
   });
 
   it('restores policy, verification owner, and provider thread after a database restart', async () => {
@@ -100,7 +100,7 @@ describe('SessionsRepository', () => {
         provider: 'codex',
         providerThreadId: 'thread-policy-1',
         runtimePolicy,
-        verifyOwner: 'crew',
+        verifyOwner: 'session',
       });
       await first.close();
       first = undefined;
@@ -111,7 +111,7 @@ describe('SessionsRepository', () => {
       expect(second.get(SessionsRepository).findById('policy-restart')).toMatchObject({
         providerThreadId: 'thread-policy-1',
         runtimePolicy,
-        verifyOwner: 'crew',
+        verifyOwner: 'session',
       });
     } finally {
       await first?.close();

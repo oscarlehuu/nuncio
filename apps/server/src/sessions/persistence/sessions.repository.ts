@@ -38,11 +38,6 @@ function parsePullRequestNumber(raw: number | string | null): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function parseVerifyOwner(raw: string): 'session' | 'crew' {
-  if (raw === 'session' || raw === 'crew') return raw;
-  throw new Error(`Stored session verify owner is invalid: ${raw}`);
-}
-
 function parseMcpServerIdsJson(raw: string | null | undefined): string[] | null {
   if (raw == null) return null;
   try {
@@ -79,7 +74,8 @@ function toDto(row: SessionRow): SessionDto {
     providerActiveTurnId: row.provider_active_turn_id ?? null,
     providerState: parseProviderStateJson(row.provider_state_json),
     runtimePolicy: parseAgentRuntimePolicy(row.runtime_policy_json),
-    verifyOwner: parseVerifyOwner(row.verify_owner),
+    // Legacy rows may store other owners; the only supported owner is 'session'.
+    verifyOwner: 'session',
     cursorBackend: row.cursor_backend === 'cli' ? 'cli' : row.cursor_backend === 'sdk' ? 'sdk' : null,
     cursorChatId: row.cursor_chat_id ?? null,
     forgeProvider: row.forge_provider ?? null,
@@ -118,7 +114,7 @@ export class SessionsRepository {
     return rows.map(toDto);
   }
 
-  /** Public projections omit internal Crew member sessions by construction. */
+  /** Public projections show only session-owned rows; legacy internal rows are omitted. */
   listUserFacing(includeArchived = false): SessionDto[] {
     const sql = includeArchived
       ? "SELECT * FROM sessions WHERE verify_owner = 'session' ORDER BY updated_at DESC"

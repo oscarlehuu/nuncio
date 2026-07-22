@@ -51,7 +51,6 @@ function renderInbox() {
         <Route path="/session/:id" element={<div>session page</div>} />
         <Route path="/autopilot/:loopId" element={<div>loop page</div>} />
         <Route path="/forge/pr" element={<LocationProbe />} />
-        <Route path="/crew/:taskId" element={<LocationProbe />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -197,27 +196,6 @@ describe('InboxView', () => {
     expect(screen.getByText('Seen')).toBeInTheDocument();
     // An acked item exposes no "Seen" action button (already seen).
     expect(screen.queryByRole('button', { name: /mark .* seen/i })).not.toBeInTheDocument();
-  });
-
-  it('Crew blockers deep-link to the exact run and can only be marked seen, never dismissed', async () => {
-    vi.mocked(fetchAttention).mockResolvedValue({
-      items: [item({
-        id: 'crew-a',
-        kind: 'crew-blocked',
-        subjectId: 'task-9',
-        title: 'Crew verify cap needs you',
-        payload: { crewTaskId: 'task-9', crewRunId: 'run-4', reason: 'verify_round_cap' },
-      })],
-      counts: { total: 1, unacked: 1, bySeverity: {} },
-    });
-    renderInbox();
-    const seen = await screen.findByRole('button', { name: /mark .* seen/i });
-    expect(screen.queryByRole('button', { name: /dismiss/i })).not.toBeInTheDocument();
-    await userEvent.click(seen);
-    expect(ackAttentionItem).toHaveBeenCalledWith('crew-a');
-    expect(resolveAttentionItem).not.toHaveBeenCalled();
-    await userEvent.click(screen.getByRole('button', { name: /open/i }));
-    expect(screen.getByTestId('loc').textContent).toBe('/crew/task-9?run=run-4');
   });
 
   it('renders dispatcher proposals as a distinct expandable row', async () => {

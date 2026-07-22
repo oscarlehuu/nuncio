@@ -6,7 +6,6 @@ import * as Notifications from 'expo-notifications';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { PortalHost } from '@rn-primitives/portal';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { notificationPath } from '../lib/crew-navigation';
 import {
   notificationTargetFromNotification,
   sessionPathFromNotification,
@@ -37,9 +36,8 @@ export default function RootLayout() {
     void registerNotificationCategories();
 
     // A tap on the body OR any action button (Approve / Deny / Option N) opens
-    // the session for now — per-action answering is a later lane. Prefer the
-    // payload's explicit deepLink, then fall back to id routing (Crew pushes
-    // carry a crewTaskId instead of a session deep link).
+    // the session. Prefer the payload's explicit deepLink, then fall back to
+    // the session id carried in the push payload.
     const route = (response: Notifications.NotificationResponse | null): void => {
       if (!response) return;
       const key = response.notification.request.identifier;
@@ -51,7 +49,7 @@ export default function RootLayout() {
         return;
       }
       const target = notificationTargetFromNotification(response);
-      if (target) router.push(notificationPath(target));
+      if (target) router.push(`/session/${encodeURIComponent(target.sessionId)}`);
     };
 
     // Cold start: the notification that launched the app is not delivered to the

@@ -298,22 +298,6 @@ describe('SessionsController', () => {
     })).rejects.toBeInstanceOf(NotFoundException);
   });
 
-  it('rejects Crew-owned evidence mutation before capture or append', async () => {
-    const capture = jest.fn();
-    const appendOrchestrationEvent = jest.fn();
-    const controller = new SessionsController({
-      requirePublicMutableSession: () => {
-        throw new BadRequestException('Crew-owned sessions are read-only outside Crew controls');
-      },
-      appendOrchestrationEvent,
-    } as never, { capture } as never);
-    await expect(controller.captureEvidence('crew-member', {
-      url: 'http://localhost:5173', phase: 'before',
-    })).rejects.toBeInstanceOf(BadRequestException);
-    expect(capture).not.toHaveBeenCalled();
-    expect(appendOrchestrationEvent).not.toHaveBeenCalled();
-  });
-
   it('rejects a missing evidence body with BadRequestException', async () => {
     const controller = new SessionsController({
       requirePublicMutableSession: () => makeSession(),

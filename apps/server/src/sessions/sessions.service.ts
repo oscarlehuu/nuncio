@@ -160,10 +160,6 @@ interface LifecycleRetry {
   failure?: unknown;
 }
 
-interface CrewStartAttempt {
-  cancelled: boolean;
-}
-
 @Injectable()
 export class SessionsService implements OnModuleDestroy {
   private readonly streams = new Map<string, EventEmitter>();
@@ -173,8 +169,6 @@ export class SessionsService implements OnModuleDestroy {
   private readonly verifying = new Set<string>();
   private readonly runPromises = new Map<string, Promise<void>>();
   private readonly startingSteers = new Set<string>();
-  private readonly crewStartAttempts = new Map<string, Set<CrewStartAttempt>>();
-  private readonly crewQuiesceCounts = new Map<string, number>();
   private readonly drainingSteerQueues = new Set<string>();
   // A multitask parent's coordinating turn runs here instead of a provider turn.
   // Registered by TasksModule at boot (the session layer never imports Tasks).
@@ -427,7 +421,7 @@ export class SessionsService implements OnModuleDestroy {
     // hermetic policy loader never receives the managed context.
     const factsInPreamble =
       Boolean(projectPath) && !(provider.capabilities.systemContextInjection && !runtimePolicy);
-    // Same hermetic rationale as Crew envelopes: a runtime-policy session gets
+    // Same hermetic rationale for policy sessions: a runtime-policy session gets
     // exactly its bounded prompt, so the workspace block stays out of it.
     const workspaceContext = runtimePolicy
       ? ''
@@ -716,8 +710,6 @@ export class SessionsService implements OnModuleDestroy {
    * renderEventsSince is the sanctioned lossy carrier.
    */
   async handoffToProvider(id: string, input: HandoffToProviderDto): Promise<SessionDto> {
-    // Crew-owned members are read-only outside Crew controls — a handoff would
-    // start a Solo provider on a Crew-leased workspace.
     const source = this.requirePublicMutableSession(id);
     if (source.status !== 'IDLE' && source.status !== 'PAUSED' && source.status !== 'ERROR') {
       throw new BadRequestException(`Cannot hand off session in status ${source.status}`);
@@ -807,59 +799,6 @@ export class SessionsService implements OnModuleDestroy {
       this.settleVerify(id);
       throw error;
     }
-  }
-
-  /** Stop a Crew member handle without exposing pause/interrupt controls publicly. */
-  async quiesceCrewSession(id: string): Promise<SessionDto> {
-    const session = this.requireSession(id);
-    if (session.verifyOwner !== 'crew') {
-      throw new BadRequestException('Session is not Crew-owned');
-    }
-    this.beginCrewQuiescence(id);
-    try {
-      const provider = this.agents.resolveForSession(session);
-      await provider.quiesce(id);
-      if (session.status === 'RUNNING') this.appendAndEmit(id, 'interrupted', { owner: 'crew' });
-      this.locallyProducing.delete(id);
-      this.cancelProviderRequests(id);
-      this.steerQueue.deleteForSession(id);
-      this.settleVerify(id);
-      if (this.sessions.findById(id)?.status === 'RUNNING') this.transition(id, 'IDLE');
-      return this.requireSession(id);
-    } finally {
-      this.endCrewQuiescence(id);
-    }
-  }
-
-  private beginCrewQuiescence(id: string): void {
-    this.crewQuiesceCounts.set(id, (this.crewQuiesceCounts.get(id) ?? 0) + 1);
-    for (const attempt of this.crewStartAttempts.get(id) ?? []) attempt.cancelled = true;
-  }
-
-  private endCrewQuiescence(id: string): void {
-    const remaining = (this.crewQuiesceCounts.get(id) ?? 1) - 1;
-    if (remaining > 0) this.crewQuiesceCounts.set(id, remaining);
-    else this.crewQuiesceCounts.delete(id);
-  }
-
-  private beginCrewStart(session: SessionDto): CrewStartAttempt | null {
-    if (session.verifyOwner !== 'crew') return null;
-    const attempt = { cancelled: (this.crewQuiesceCounts.get(session.id) ?? 0) > 0 };
-    const attempts = this.crewStartAttempts.get(session.id) ?? new Set<CrewStartAttempt>();
-    attempts.add(attempt);
-    this.crewStartAttempts.set(session.id, attempts);
-    return attempt;
-  }
-
-  private endCrewStart(id: string, attempt: CrewStartAttempt | null): void {
-    if (!attempt) return;
-    const attempts = this.crewStartAttempts.get(id);
-    attempts?.delete(attempt);
-    if (attempts?.size === 0) this.crewStartAttempts.delete(id);
-  }
-
-  private canStartCrewAttempt(attempt: CrewStartAttempt | null): boolean {
-    return attempt?.cancelled !== true;
   }
 
   async steer(
@@ -953,12 +892,6 @@ export class SessionsService implements OnModuleDestroy {
     // concurrent steer queues, while provider/preflight failure preserves the
     // exact prior state (CREATED, IDLE, PAUSED, or ERROR).
     this.startingSteers.add(id);
-    const crewStart = this.beginCrewStart(current);
-    if (!this.canStartCrewAttempt(crewStart)) {
-      this.startingSteers.delete(id);
-      this.endCrewStart(id, crewStart);
-      return this.requireSession(id);
-    }
     let provider: AgentProvider;
     try {
       provider = await this.trackPendingWork(this.agents.resolveAvailableForSession(current));
@@ -967,14 +900,8 @@ export class SessionsService implements OnModuleDestroy {
       }
     } catch (error) {
       this.startingSteers.delete(id);
-      this.endCrewStart(id, crewStart);
       this.scheduleSteerDrainAfterFailedStart(id, current.status);
       throw error;
-    }
-    if (!this.canStartCrewAttempt(crewStart)) {
-      this.startingSteers.delete(id);
-      this.endCrewStart(id, crewStart);
-      return this.requireSession(id);
     }
 
     this.locallyProducing.add(id);
@@ -993,7 +920,6 @@ export class SessionsService implements OnModuleDestroy {
       throw error;
     } finally {
       this.startingSteers.delete(id);
-      this.endCrewStart(id, crewStart);
       this.locallyProducing.delete(id);
       if (startFailed) this.scheduleSteerDrainAfterFailedStart(id, current.status);
     }
@@ -1333,12 +1259,9 @@ export class SessionsService implements OnModuleDestroy {
     // events or the status write are retrying. Never let an older queue timer
     // restart provider work before that lifecycle intent settles.
     if (this.lifecycleRetries.has(id)) return;
-    // Crew owns every continuation of its hidden member Sessions. A stale
-    // generic queue row must remain inert for owner reconciliation instead of
-    // entering the public steer path and retrying forever after authorization
-    // rejects it.
-    const owner = this.sessions.findById(id);
-    if (!owner || owner.verifyOwner === 'crew') return;
+    // A stale generic queue row for a missing session must remain inert instead
+    // of entering the public steer path and retrying forever.
+    if (!this.sessions.findById(id)) return;
 
     // Skip any leading task-digest wakes that must not restart an ERROR/PAUSED
     // session, then deliver the first eligible row. Skipping is atomic (row
@@ -2406,11 +2329,7 @@ export class SessionsService implements OnModuleDestroy {
   }
 
   requirePublicMutableSession(id: string): SessionDto {
-    const session = this.requireSession(id);
-    if (session.verifyOwner === 'crew') {
-      throw new BadRequestException('Crew-owned sessions are read-only outside Crew controls');
-    }
-    return session;
+    return this.requireSession(id);
   }
 
   private enrichSession(session: SessionDto): SessionDto {
@@ -2836,22 +2755,18 @@ export class SessionsService implements OnModuleDestroy {
   private startRun(session: SessionDto, attachments?: AgentAttachment[]): void {
     if (session.cursorBackend === 'cli') return;
     const persisted = this.persistImageAttachments(session.id, attachments);
-    const crewStart = this.beginCrewStart(session);
     this.locallyProducing.add(session.id);
     // Arm loop settlement before the run so a task can awaitVerifySettled and
     // wait for the whole verify-feedback loop, not just the first turn+verify.
     this.armVerifySettlement(session.id);
     const run = (async () => {
       try {
-        if (!this.canStartCrewAttempt(crewStart)) return;
         const provider = await this.agents.resolveAvailableForSession(session);
-        if (!this.canStartCrewAttempt(crewStart)) return;
         await provider.run(session.id, session.prompt, {
           ...this.buildAgentRunContext(session),
           attachments: persisted,
         });
       } finally {
-        this.endCrewStart(session.id, crewStart);
         this.locallyProducing.delete(session.id);
       }
       await this.maybeVerify(session.id);
@@ -2886,10 +2801,6 @@ export class SessionsService implements OnModuleDestroy {
     if (this.verifying.has(sessionId)) return;
     const session = this.sessions.findById(sessionId);
     if (!session || session.status !== 'IDLE') {
-      this.settleVerify(sessionId);
-      return;
-    }
-    if (session.verifyOwner === 'crew') {
       this.settleVerify(sessionId);
       return;
     }
@@ -3081,10 +2992,6 @@ export class SessionsService implements OnModuleDestroy {
       this.settleVerify(sessionId);
       return;
     }
-    if (session.verifyOwner === 'crew') {
-      this.settleVerify(sessionId);
-      return;
-    }
     const { enabled, maxRounds } = this.verifyFeedbackConfig(session.projectPath ?? null);
     if (!enabled) {
       this.settleVerify(sessionId);
@@ -3140,10 +3047,6 @@ export class SessionsService implements OnModuleDestroy {
       this.settleVerify(sessionId);
       return;
     }
-    if (session.verifyOwner === 'crew') {
-      this.settleVerify(sessionId);
-      return;
-    }
     let provider;
     try {
       // Sync resolve — no availability await before the claim, so the RUNNING
@@ -3194,7 +3097,6 @@ export class SessionsService implements OnModuleDestroy {
   private resumeVerifyLoops(): void {
     for (const session of this.sessions.list(false)) {
       if (session.status !== 'IDLE') continue;
-      if (session.verifyOwner === 'crew') continue;
       // Per-session gate: a project override may enable the loop even when the
       // global setting is off (and vice versa). resumeOneVerifyLoop re-checks via
       // driveVerifyFeedback, but skipping the disabled ones here avoids needless

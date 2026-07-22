@@ -23,12 +23,14 @@ function parseJson<T>(value: string | null): T | null {
   }
 }
 
-function parseVerifyOwner(value: string): SessionVerifyOwner {
-  return value === 'crew' ? 'crew' : 'session';
+function parseVerifyOwner(_value: string): SessionVerifyOwner {
+  // Legacy rows may store other owners; the only supported owner is 'session'.
+  return 'session';
 }
 
-function parseExecutionKind(value: string): TaskExecutionKind {
-  return value === 'crew-member' ? 'crew-member' : 'session';
+function parseExecutionKind(_value: string): TaskExecutionKind {
+  // Legacy rows may store other kinds; the only supported kind is 'session'.
+  return 'session';
 }
 
 export function taskRowToDto(row: TaskRow): TaskDto {
@@ -53,10 +55,6 @@ export function taskRowToDto(row: TaskRow): TaskDto {
     notifyPolicy: parseNotifyPolicy(row.notify_policy),
     tag: row.tag,
     executionKind: parseExecutionKind(row.execution_kind),
-    crewRunId: row.crew_run_id,
-    crewMemberKey: row.crew_member_key,
-    crewPhase: row.crew_phase,
-    crewAttemptKey: row.crew_attempt_key,
     runtimePolicy: parseJson<AgentRuntimePolicy>(row.runtime_policy_json),
     verifyOwner: parseVerifyOwner(row.verify_owner),
     holdUntil: row.hold_until,

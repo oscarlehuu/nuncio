@@ -14,7 +14,6 @@ import { MobileSettingsSection } from './mobile-settings-section';
 import { ProviderUpdateSettingsSection } from './provider-update-settings-section';
 import { SubagentModelsSettingsSection } from './subagent-models-settings-section';
 import { UsageSettingsSection } from './usage-settings-section';
-import { CrewProfilesSettingsSection } from './crew/crew-profiles-settings-section';
 import { McpServersSettingsSection } from './mcp-servers-settings-section';
 import { HeartbeatHealthSection } from './heartbeat-health-section';
 import { SubscriptionBridgeSettingsSection } from './subscription-bridge-settings-section';
@@ -413,9 +412,6 @@ export function SettingsView({
     const matchingNetwork = filterSettings(network, query);
     const matchingAdvanced = filterSettings(advanced, query);
     const matchingGeneral = filterSettings(general, query);
-    const crewProfilesMatch = ['crew profiles', 'crew', 'foreman', 'builder', 'reviewer']
-      .some((term) => term.includes(query) || query.includes(term));
-
     if (AI_PROVIDER_IDS.some((id) => renderProviderRow(id, query))) {
       resultSections.push(<div key="providers">{providerResult}</div>);
     }
@@ -449,7 +445,6 @@ export function SettingsView({
     if (matchingAgents.length > 0 || subagentModelsMatch) {
       resultSections.push(<div key="agents">{renderAgentsSection(matchingAgents, '')}</div>);
     }
-    if (crewProfilesMatch) resultSections.push(<div key="crew-profiles"><CrewProfilesSettingsSection /></div>);
     if (matchingTools.length > 0) {
       resultSections.push(<div key="mcp-tools">{renderSettingGroup('MCP & Tools', matchingTools, '')}</div>);
     }
@@ -521,8 +516,6 @@ export function SettingsView({
         );
       case 'agents':
         return renderAgentsSection(agents, 'No agent defaults are available.');
-      case 'crew-profiles':
-        return <CrewProfilesSettingsSection />;
       case 'workspaces':
         return renderSettingGroup('Workspaces', workspaces, 'No workspace settings are available.');
       case 'projects':
