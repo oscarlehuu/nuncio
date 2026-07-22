@@ -51,6 +51,9 @@ describe('Nuncio API', () => {
     await initRepo(repoPath);
 
     process.env.NUNCIO_DATA_DIR = dataDir;
+    // This HTTP suite drives the simulated Cursor engine as its default, so the
+    // legacy engines are shown here.
+    process.env.NUNCIO_ENGINES_SHOW_LEGACY = '1';
     configureSimulatedCursorEnv();
     process.env.NUNCIO_PROJECT_ROOTS = rootsDir;
     process.env.NUNCIO_WORKSPACES_DIR = workspacesDir;
@@ -73,6 +76,7 @@ describe('Nuncio API', () => {
     rmSync(workspacesDir, { recursive: true, force: true });
     delete process.env.NUNCIO_DATA_DIR;
     delete process.env.CURSOR_API_KEY;
+    delete process.env.NUNCIO_ENGINES_SHOW_LEGACY;
     delete process.env.NUNCIO_PROJECT_ROOTS;
     delete process.env.NUNCIO_WORKSPACES_DIR;
   });

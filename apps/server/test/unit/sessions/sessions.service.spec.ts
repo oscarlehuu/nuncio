@@ -57,6 +57,8 @@ describe('SessionsService lifecycle (phase 3)', () => {
     repoPath = mkdtempSync(join(tmpdir(), 'nuncio-svc-repo-'));
     workspacesDir = mkdtempSync(join(tmpdir(), 'nuncio-svc-ws-'));
     process.env.NUNCIO_DATA_DIR = dataDir;
+    // Simulated Cursor is this suite's default engine, so the legacy engines are shown.
+    process.env.NUNCIO_ENGINES_SHOW_LEGACY = '1';
     configureSimulatedCursorEnv();
     process.env.NUNCIO_WORKSPACES_DIR = workspacesDir;
     await initRepo(repoPath);
@@ -82,6 +84,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
     rmSync(workspacesDir, { recursive: true, force: true });
     delete process.env.NUNCIO_DATA_DIR;
     delete process.env.CURSOR_API_KEY;
+    delete process.env.NUNCIO_ENGINES_SHOW_LEGACY;
     delete process.env.NUNCIO_WORKSPACES_DIR;
   });
 

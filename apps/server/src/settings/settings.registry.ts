@@ -102,6 +102,16 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     default: '1',
   },
   {
+    key: 'engines.showLegacy',
+    category: 'advanced',
+    type: 'boolean',
+    label: 'Show legacy engines',
+    description:
+      'Show the legacy vendor engines (Claude, Codex, Cursor, Devin) in the engine and model pickers. Off by default, so Nuncio Engine is the only engine shown. Sessions already created with a legacy engine keep opening whether this is on or off.',
+    envVar: 'NUNCIO_ENGINES_SHOW_LEGACY',
+    default: '0',
+  },
+  {
     key: 'PI_AGENT_DIR',
     category: 'provider',
     providerId: 'pi',
