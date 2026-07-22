@@ -18,6 +18,7 @@ export type SessionEventType =
   | 'evidence_captured'
   | 'error'
   | 'status'
+  | 'runtime_policy'
   | 'transcript_refreshed'
   | 'runtime_restarted'
   | 'runtime_stalled'
@@ -89,6 +90,23 @@ export interface TaskCompletedPayload {
   workspace: WorkspaceSnapshot | null;
   /** Branch the work lives on. */
   childBranch: string | null;
+}
+
+export interface RuntimePolicyPayload {
+  /** Filesystem confinement the session runs under. */
+  filesystem: 'workspace-write';
+  /** Absolute workspace root writes are confined to. */
+  workspaceRoot: string;
+  /** How the policy was chosen — currently only the auto-applied default. */
+  source: 'default';
+  /**
+   * Whether an OS sandbox backend is available to confine shell side effects.
+   * File-tool writes are always confined in-process; when this is false the
+   * `bash` shell's confinement is advisory (requested-but-not-enforced).
+   */
+  shellSandboxEnforced: boolean;
+  /** One-line, human-readable notice surfaced in the transcript. */
+  message: string;
 }
 
 export interface EvidenceMediaRef {

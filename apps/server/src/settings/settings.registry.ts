@@ -158,6 +158,29 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     ],
   },
   {
+    key: 'NUNCIO_ENGINE_WORKSPACE_CONFINEMENT',
+    category: 'provider',
+    providerId: 'pi',
+    type: 'string',
+    label: 'Nuncio Engine workspace confinement',
+    description:
+      'Confines a Nuncio Engine session\'s file writes and shell side effects to its own workspace by default whenever the session has a project or worktree. Reads and the OS shell sandbox follow the policy shell setting. Ad-hoc chats with no workspace are unaffected, an explicit per-session runtime policy always wins, and legacy vendor engines are unchanged.',
+    envVar: 'NUNCIO_ENGINE_WORKSPACE_CONFINEMENT',
+    default: 'on',
+    options: [
+      {
+        value: 'on',
+        label: 'On',
+        description: 'Default new project sessions to workspace-write confinement (recommended).',
+      },
+      {
+        value: 'off',
+        label: 'Off',
+        description: 'Run project sessions unconfined unless an explicit runtime policy is set.',
+      },
+    ],
+  },
+  {
     key: 'NUNCIO_ENGINE_POLICY_SHELL',
     category: 'provider',
     providerId: 'pi',
