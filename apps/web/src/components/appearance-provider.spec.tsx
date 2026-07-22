@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, renderHook, act } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { AppearanceProvider, useAppearance } from './appearance-provider';
+import { AppearanceProvider, useAppearance, useReducedMotion } from './appearance-provider';
 import { APPEARANCE_STORAGE_KEY } from '@/lib/appearance-preference';
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -103,5 +103,51 @@ describe('AppearanceProvider', () => {
     expect(result.current.motion).toBe('system');
     expect(result.current.pointerCursors).toBe(false);
     expect(result.current.diffMarkers).toBe('color');
+  });
+});
+
+describe('useReducedMotion', () => {
+  it('force-reduces when motion is off, regardless of the OS query', () => {
+    const { result } = renderHook(
+      () => {
+        const a = useAppearance();
+        return { reduced: useReducedMotion(), setMotion: a.setMotion };
+      },
+      { wrapper },
+    );
+    expect(result.current.reduced).toBe(false); // default 'system' + matchMedia:false
+    act(() => result.current.setMotion('off'));
+    expect(result.current.reduced).toBe(true);
+  });
+
+  it('keeps motion when set to on even if the OS asks to reduce', () => {
+    const original = window.matchMedia;
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    })) as unknown as typeof window.matchMedia;
+    try {
+      const { result } = renderHook(
+        () => {
+          const a = useAppearance();
+          return { reduced: useReducedMotion(), setMotion: a.setMotion };
+        },
+        { wrapper },
+      );
+      act(() => result.current.setMotion('system'));
+      expect(result.current.reduced).toBe(true); // system honors the OS query
+      act(() => result.current.setMotion('on'));
+      expect(result.current.reduced).toBe(false); // on overrides the OS query
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+
+  it('defaults to not-reduced without a provider (tolerant read)', () => {
+    const { result } = renderHook(() => useReducedMotion());
+    expect(result.current).toBe(false);
   });
 });
