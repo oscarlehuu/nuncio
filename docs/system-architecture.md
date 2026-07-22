@@ -113,7 +113,7 @@ exact:
   exact user text. The versioned envelope is losslessly decodable at transcript boundaries.
 
 `nuncio_runtime_info` returns the same bounded host/session/tool/constraint snapshot as a read-only
-tool and is trusted through explicit Crew policies. Codex deliberately omits only this convenience
+tool and is trusted through explicit runtime policies. Codex deliberately omits only this convenience
 tool from `dynamicTools`, because its app-server fixes that surface at `thread/start`; equivalent
 developer instructions preserve old thread continuity without silently resetting a conversation.
 
@@ -140,14 +140,14 @@ The browser tool contract is the first runtime tool family. When a tool call omi
 - **Import:** `McpImportService` scans read-only — Cursor `~/.cursor/mcp.json` + `<proj>/.cursor/mcp.json`, Claude `~/.claude.json` (global + `projects` map) + `<proj>/.mcp.json`, Codex `~/.codex/config.toml` + `<proj>/.codex/config.toml` — normalizes to candidates, dedupes by **transport identity** (command+args or normalized url; env/headers deliberately excluded), and copies into the DB. Re-import merges provenance instead of duplicating; source files are never written.
 - **Bridge (lazy gateway):** `McpBridgeToolSource` registers into `AgentToolRegistry`, so **all engines** (Pi/Claude/Codex/Cursor) receive it through their existing runtime-tools adapters. Sessions get two constant-cost tools — `nuncio_mcp_find_tools` (discover tools + input schemas, optional query/server filter) and `nuncio_mcp_call` (invoke) — plus a one-line inventory per server in the system-prompt append. `${workspace}` placeholders in a transport resolve against the session's worktree-aware workspace (`AgentRuntimeToolScope.workspace`). Servers with `advertise: 'full'` additionally expose direct `<server>_<tool>` tools once the schema cache warms (lazily, in the background).
 - **Client pool:** `McpClientPool` keys one shared client per fully-resolved transport (env/cwd/headers **included** — a different env is a different server process), across sessions and engines. Connect is lazy (first `find_tools`/`call`), idle clients are swept, a failed connect is never cached, and a mid-call transport error invalidates the entry and returns an `isError` tool result — a dead MCP server can never fail a session. The real factory (`SdkMcpClientFactory`) rides `@modelcontextprotocol/sdk` (stdio child process with the SDK default env allowlist, Streamable HTTP, or SSE).
-- **Crew exclusion:** gateway tools carry `security.runtimePolicies: []` + `network: 'required'`, so the explicit-policy tool gate strips them from policy-bound (network-disabled) Crew sessions by construction.
+- **Runtime-policy exclusion:** gateway tools carry `security.runtimePolicies: []` + `network: 'required'`, so the explicit-policy tool gate strips them from policy-bound (network-disabled) sessions by construction.
 - **Deferred:** Nuncio-side OAuth for protected remotes (imported Codex entries with `oauth_resource`/`scopes` are stored as `auth: 'oauth'` and surface a badge), per-session server picker, Codex inherited-`config.toml` suppression — see `plans/260719-mcp-store/brainstorm.md`.
 
 ### Capabilities (invariants)
 
 `BaseAgentProvider.capabilities` defaults to **all-off**: `{ interrupt: false, modelSwitch: 'none', effortSwitch: 'none', images: false, steerWhileRunning: false }`. Providers opt in by overriding the field.
 
-| Provider | interrupt | modelSwitch | effortSwitch | images | live steer | explicit Crew policies |
+| Provider | interrupt | modelSwitch | effortSwitch | images | live steer | explicit runtime policies |
 |----------|-----------|-------------|--------------|--------|------------|------------------------|
 | Pi | true | in-session | in-session | true | true | read-only + workspace-write; network disabled |
 | Codex | true | none | none | false | false | read-only + workspace-write; network disabled |
@@ -160,7 +160,12 @@ The browser tool contract is the first runtime tool family. When a tool call omi
 
 
 
-`AgentRegistry` holds all providers, exposes `all()`, `available()` (async, filters by `isAvailable`), `get(id)` (sync), `getAvailable(id)` (async, throws `BadRequestException` if unavailable), and `defaultId()` (Cursor if configured, then Codex, then Pi; throws `503` when none is configured — Mock is never a default and must be requested explicitly as `provider: "mock"` under `NUNCIO_FORCE_MOCK=1`).
+`AgentRegistry` holds all providers. `all()` and `available()` remain unfiltered runtime paths so
+stored legacy-engine sessions keep working; `listed()` and `listedAvailable()` are the
+picker-facing paths filtered by `engines.showLegacy`. `get(id)` and `getAvailable(id)` resolve a
+specific stored engine. `defaultId()` prefers forced Mock for hermetic runs, then an available
+visible engine (normally Pi), then an available hidden legacy engine, and throws `503` only when
+nothing is available.
 
 ### Per-session selection flow
 
@@ -366,7 +371,7 @@ Rung 4 adds read-only intelligence folds, a global timeline, a local MCP server,
 
 Observability is derive-on-demand. `emptyObservabilityMetrics()` initializes usage as `inputTokens`, `outputTokens`, `totalTokens`, and `costUsd` all `null`, with `source: 'unavailable'`; those fields remain unknown until a provider emits structured usage (`apps/server/src/observability/observability-metrics.ts:18`, `apps/server/src/observability/observability-metrics.ts:28`). The main fold counts only durable facts: sessions/tasks/loop runs by created time, session events for turns, steers, verify results, status-event durations, and current/resolved attention rows (`apps/server/src/observability/observability-metrics.ts:38`, `apps/server/src/observability/observability-metrics.ts:49`, `apps/server/src/observability/observability-metrics.ts:84`, `apps/server/src/observability/observability-metrics.ts:110`). Rollups are pure filters over the same sources by provider, project, or day, with `unassigned` and `unknown` buckets instead of throwing on missing metadata (`apps/server/src/observability/observability-rollups.ts:11`, `apps/server/src/observability/observability-rollups.ts:31`, `apps/server/src/observability/observability-rollups.ts:50`).
 
-The derive-on-demand session-event path reads an indexed fact projection rather than every transcript event. `EventsRepository.listObservabilityWindow()` retains all historical `status` rows so lifetime duration semantics stay unchanged, but bounds turn/steer/verify/attention facts to `[from,to)`; `listTimelineWindow()` bounds the two timeline event types strictly to the feed window. A partial SQLite index covers only those low-volume fact types, so streamed assistant deltas and tool payloads add no observability-index write amplification. Public folds query only `listUserFacing(true)` session ids, preserving the Crew member-session boundary.
+The derive-on-demand session-event path reads an indexed fact projection rather than every transcript event. `EventsRepository.listObservabilityWindow()` retains all historical `status` rows so lifetime duration semantics stay unchanged, but bounds turn/steer/verify/attention facts to `[from,to)`; `listTimelineWindow()` bounds the two timeline event types strictly to the feed window. A partial SQLite index covers only those low-volume fact types, so streamed assistant deltas and tool payloads add no observability-index write amplification. Public folds query only `listUserFacing(true)` session ids.
 
 The REST surface is `GET /api/observability/summary`, `/sessions/:id`, `/rollups`, and `/timeline`; `/api/timeline` is the phone-first feed wrapper that returns entries plus pagination metadata (`apps/server/src/observability/observability.controller.ts:5`, `apps/server/src/observability/observability.controller.ts:32`, `apps/server/src/observability/observability.controller.ts:45`).
 
@@ -404,9 +409,7 @@ task row with:
 
 `POST /api/tasks/multitask` is the Cursor-style fan-out entrypoint. It accepts a
 `parentSessionId` plus one or more prompts, creates provider-neutral child tasks,
-and returns those task rows. Both generic enqueue and multitask reject a Crew-owned
-parent Session; only the Crew runner may create correlated member work, so ordinary
-task APIs cannot inherit its retained worktree or bypass its writer lease. The current parent session is not counted as a task
+and returns those task rows. The current parent session is not counted as a task
 queue slot, so starting multitasking can launch child work even while the parent
 session is already `RUNNING`. Child tasks inherit provider/model/model options,
 workspace, project path, and branch from the parent session unless the request
@@ -425,131 +428,6 @@ marks a terminal child task reviewed; automatic destructive cleanup is not run
 from this state yet. Future cleanup workers should key off `role`,
 `review_state`, and `cleanup_policy` rather than inferring intent from `DONE`
 alone.
-
-## Crew workspace harness
-
-**Implementation status:** present on the Crew feature branch; pending final verification and
-merge, not yet a shipped-release claim.
-
-`apps/server/src/crew/` is an additive aggregate above ordinary Tasks and Sessions. It does not
-extend the Session FSM or the frozen Session WS relay.
-
-```text
-CrewTask (stable objective)
-  -> CrewRun (immutable execution revision + frozen profile)
-       -> append-only Crew events / projected tuple
-       -> one retained worktree / one Builder writer lease
-       -> ordinary correlated Tasks and Sessions for members
-       -> structured results + redacted artifacts
-```
-
-The workflow is fixed:
-
-```text
-PLAN -> BUILD -> VERIFY -> REVIEW -> SYNTHESIZE -> DONE
-```
-
-Solo stays the composer default. Crew profile resolution returns only `ready` or
-`needs_setup`. Pi, Codex, and Claude can be frozen independently for Foreman, Builder, and
-Reviewer; Nuncio Tester is deterministic. Foreman/Reviewer use read-only policy, Builder uses
-workspace-write, and every explicit policy disables network. A missing provider/model, unsupported
-policy, missing verify command, non-independent Reviewer, or missing verifier sandbox makes the
-profile `needs_setup`. Task creation resolves the selected branch to an exact SHA and rechecks a
-project `.nuncio/verify` against that Git tree before freezing the snapshot; the script runs via
-`sh` so its executable bit is irrelevant. Builder checkpoint commits require repository-local Git
-author identity.
-
-### State and authority
-
-`CrewRun` stores phase and operational status separately:
-
-- phases: `PLAN | BUILD | VERIFY | REVIEW | SYNTHESIZE | DONE`;
-- statuses: `QUEUED | RUNNING | BLOCKED_USER | BLOCKED_PROVIDER | PAUSED | RECOVERING | TERMINAL`;
-- outcomes: `SUCCEEDED | FAILED | CANCELLED | null`.
-
-`CrewRunsRepository.applyEvent` performs expected-revision CAS, append, and projection update
-transactionally. Idempotency keys make duplicate callbacks safe, while
-`CrewRunsRepository.replay` must reproduce the stored projection. Only Nuncio applies reducer
-events. Verify and Review are required current-head gates.
-
-`CrewRunControlService` and the runner use the same per-run serialization chain. Pause/cancel abort
-an active Verify immediately, then recheck the caller's exact revision, quiesce every member/task,
-and only afterward persist `PAUSED` or `CANCELLED`; an aborted/infrastructure Verify neither
-consumes a retry nor appears as a failed gate.
-
-Verify-fix and review-fix counters are independent, default 2, and route back to the same Builder
-Session. Reviewer is reused during feedback. With strict freshness enabled, a linked fresh final
-Reviewer is created only after a review-fix loop reaches a clean reused-reviewer result.
-
-See [CrewRun Authority Boundary and State Machine](crew-run-authority-and-state-machine.md) for the
-exact event table and guards.
-
-### Workspace, runtime policy, and verifier
-
-`CrewRunnerExecutionService` prepares one run-owned worktree through the generic Git adapter.
-Every member boundary verifies canonical path, expected branch, reachable full head, and required
-cleanliness. `CrewWriterLeaseService` admits only `builder:primary`; build finalization
-independently commits/inspects the workspace before emitting `builder_completed`.
-
-The ordinary Session row persists `AgentRuntimePolicy`. `SessionsService` revalidates it against
-provider capabilities and the exact Session workspace on every run/resume. Pi uses confined file
-tools without shell, Codex maps to app-server sandbox policy, and Claude uses allowlisted tools plus
-path authorization hooks. `runtimeToolsForPolicy` exposes only statically trusted Crew tools whose
-security metadata matches the policy.
-
-`CrewCommandRunner` refuses unsandboxed verification: Seatbelt
-`/usr/bin/sandbox-exec` on macOS, bubblewrap `/usr/bin/bwrap` on Linux. Network is disabled;
-HOME/temp are isolated; host file contents, Keychain IPC, and Apple Events are denied on macOS;
-the worktree is bound while Git metadata is protected. The combined output
-budget defaults to 16 MiB and cannot exceed 64 MiB; overflow kills the process group and fails the
-gate.
-
-### Artifacts and public reads
-
-`CrewArtifactStore` redacts full captured verify logs and workspace diffs before writing
-mode-`0600` files under the server data directory. Repository rows carry run ownership,
-SHA-256, byte count, kind, retention state, and internal metadata. Every read verifies byte count
-and hash. A truncated workspace diff fails closed before Reviewer execution.
-
-Run detail removes internal storage paths and allowlists public metadata. The progressive endpoint
-is:
-
-```text
-GET /api/crew-runs/:runId/artifacts/:artifactId?offset=<byte>&limit=<bytes>
-```
-
-It defaults to 16,384 bytes, caps at 65,536, rejects cross-run ids and invalid/continuation-byte
-offsets, and returns UTF-8 text with authoritative `nextOffset` and `eof`. Web and Expo consume
-that byte cursor; they do not derive progress from string length.
-
-`GET /api/crew-runs` is a separate bounded summary projection: latest run per task, default 20,
-maximum 100, `offset` pagination. It joins the task objective but excludes the profile snapshot,
-shared context, project/worktree paths, and artifact state. Web polls five rows; Expo requests at
-most fifty. Full state remains available only from the id-scoped detail endpoint.
-
-### Context, recovery, and successors
-
-`CrewContextService` projects bounded role envelopes and deltas from objective, decisions,
-context revision, current head, prior failure, results, and artifact references. Hidden reasoning
-and full member transcripts are not merged. `CrewRuntimeToolsService` accepts only schema-bound,
-run/member/phase-authorized structured submissions.
-
-On boot, `CrewRecoveryService` scans non-terminal runs, compares event replay with projection,
-validates the retained workspace, and idempotently finishes any interrupted Builder
-intent → checkpoint → result → lease-release chain before comparing heads. A pre-existing
-deterministic worktree must equal the frozen base SHA; only the correlated finalizer may reconcile
-its clean checkpoint descendant. An acknowledged BUILD pause sets the same explicit dirty-resume
-marker used by crash recovery before the phase is queued again. Recovery then resumes the frozen
-provider Session when possible. A non-resumable member gets a linked
-replacement with the same provider/model. Irreconcilable state becomes one `crew-blocked`
-Attention item; no unexpected Git state or provider binding is silently adopted.
-
-Terminal runs never reopen. `CrewSuccessorService` requires the prior exact clean head, creates a
-new run with `priorRunId` and a new frozen snapshot, retains bounded prior context, and starts with
-new invalid gates. Compatible Foreman/Builder Sessions may continue; prior run state never mutates.
-
-The complete baseline and deferred work are recorded in
-[Crew Workspace Harness](crew-workspace-harness.md).
 
 ## Autopilot: projects, scheduler, loops (rung 2)
 
@@ -1219,8 +1097,7 @@ session on the target provider** — never a native resume — seeded through th
   `steer`/`continueExistingSession`/a second handoff on the source while a non-archived
   successor exists (`SessionsRepository.findActiveSuccessor`), the PR-lifecycle webhook skips
   worktree cleanup with reason `worktree-handed-off`, and `create()` rollback only removes a
-  worktree it created itself (`createdWorktree` flag) — never an adopted one. Handoff also
-  requires a public-mutable source (Crew-owned members are rejected).
+  worktree it created itself (`createdWorktree` flag) — never an adopted one.
 - **Model:** explicit `model` wins; same-engine handoff keeps the source model; a different
   engine falls back to its own default.
 - **Lineage:** `priorSessionId` (now settable through `CreateSessionDto` → repository
@@ -1925,4 +1802,3 @@ Server tests run on `bun test`. Unit tests use fakes for provider subprocess/SDK
 - **Pi session revival:** `SessionManager.inMemory()` means Pi conversation history is lost on server restart. File-backed `SessionManager.create(cwd)` + lazy revive is planned to make the "resumable sessions" principle true for Pi. (Note: **imported** Pi handoff sessions are already file-backed — they resume the on-disk jsonl via `providerThreadId` — so they survive restart.)
 - **Approval continuity:** approval request state is durable, but a request waiting inside the Codex app-server cannot continue across a server/app-server restart; stale pending requests are auto-denied on boot with `server_restarted`.
 - **Tool configuration:** Pi tools are hardcoded (`read, bash, grep, find, ls`); env/per-session config is planned.
-- **Additional providers:** future SDKs can be added by implementing `AgentProvider` and registering them in `AgentRegistry`.

@@ -164,7 +164,7 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     type: 'string',
     label: 'Nuncio Engine policy shell',
     description:
-      'Shell (bash) for Nuncio Engine sessions running under an explicit runtime policy — e.g. a Crew Builder. Commands run inside a Nuncio-enforced OS sandbox (Seatbelt/bubblewrap: network denied, writes confined to the workspace, .git and .nuncio read-only) whenever a sandbox backend is available.',
+      'Shell (bash) for Nuncio Engine sessions running under an explicit runtime policy. Commands run inside a Nuncio-enforced OS sandbox (Seatbelt/bubblewrap: network denied, writes confined to the workspace, .git and .nuncio read-only) whenever a sandbox backend is available.',
     envVar: 'NUNCIO_ENGINE_POLICY_SHELL',
     default: 'auto',
     options: [
@@ -795,7 +795,7 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     type: 'string',
     label: 'Fact distillation',
     description:
-      'When on, a substantive solo run that settles to idle triggers one cheap background completion that distills up to 3 durable project facts (agent provenance, reviewable in the facts UI; founder conflicts become proposals). Hermetic policy/Crew sessions are never distilled. Set to off to disable the background model call.',
+      'When on, a substantive solo run that settles to idle triggers one cheap background completion that distills up to 3 durable project facts (agent provenance, reviewable in the facts UI; founder conflicts become proposals). Hermetic policy sessions are never distilled. Set to off to disable the background model call.',
     envVar: 'NUNCIO_FACT_DISTILLATION',
     default: 'on',
     options: [

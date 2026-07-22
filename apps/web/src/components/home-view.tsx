@@ -46,13 +46,7 @@ import {
   pickDefaultModelSelection,
   type ModelProvider,
 } from '../lib/model-providers';
-import { CrewMachinePicker } from './crew/crew-machine-picker';
 import { McpServerChipPicker } from './mcp-server-chip-picker';
-import { CrewProfilePicker } from './crew/crew-profile-picker';
-import { ExecutionModePicker, type ExecutionMode } from './crew/execution-mode-picker';
-import { ResolvedCrewPreview } from './crew/resolved-crew-preview';
-import { useCrewComposer } from './crew/use-crew-composer';
-import { machineApiBase } from '../lib/hub-api';
 
 const HOME_MODEL_PREFERENCE_SCOPE = 'home:new-agent';
 
@@ -90,12 +84,6 @@ interface HomeViewProps {
   ) => Promise<void>;
   onContinueOnMobile?: () => void;
   loading?: boolean;
-  /**
-   * Lead-owned routing callback after the Crew task is durably created. `machine`
-   * is the tailnet peer that OWNS the run (null = local): the caller navigates to
-   * that machine's base so follow/steer polls the owning daemon.
-   */
-  onCrewCreated?: (taskId: string, machine?: string | null) => void;
 }
 
 export function HomeView({
@@ -106,7 +94,6 @@ export function HomeView({
   onSubmit,
   onContinueOnMobile,
   loading,
-  onCrewCreated,
 }: HomeViewProps) {
   const initialWorkspace = resolveWorkspacePreference();
   // One-shot prefill (e.g. "Start session from issue") wins over the sticky workspace.
@@ -123,17 +110,6 @@ export function HomeView({
   const [mode, setMode] = useState<SessionMode | null>(null);
   const [mcpServerIds, setMcpServerIds] = useState<string[]>([]);
   const [dragActive, setDragActive] = useState(false);
-  // Hub mode: a Crew run can be routed to any tailnet peer, which then owns it
-  // end to end. null = local (the machine this page talks to). Only Crew create
-  // routes remotely — Solo create always stays on this machine.
-  const [machine, setMachine] = useState<string | null>(null);
-  const remoteBase = machineApiBase(machine);
-  const crew = useCrewComposer({
-    projectPath,
-    baseBranch,
-    remoteBase,
-    onCreated: (taskId) => onCrewCreated?.(taskId, machine),
-  });
   const imageAttachments = useComposerAttachments(setPrompt);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -147,8 +123,8 @@ export function HomeView({
   // Prefer registry metadata for the selected model. Provider capability is a
   // compatibility fallback for engines that do not report per-model metadata.
   const canAttachImages = useMemo(
-    () => crew.mode === 'solo' && modelSupportsImages(catalog, provider, model),
-    [provider, model, catalog, crew.mode],
+    () => modelSupportsImages(catalog, provider, model),
+    [provider, model, catalog],
   );
   // Modes are capability-gated per provider (`capabilities.modes`). Only the
   // known modes we render metadata for are offered.
@@ -192,13 +168,6 @@ export function HomeView({
   const handleSubmit = async () => {
     const text = prompt.trim();
     if (!text || loading) return;
-    if (crew.mode === 'crew') {
-      if (!crew.canSubmit) return;
-      await crew.submit(text);
-      setPrompt('');
-      setWorkspaceMode('local');
-      return;
-    }
     if (!catalogLoaded || !model || !provider) return;
     const selected = modelById(catalog)[model];
     const hasConfigurable =
@@ -250,36 +219,15 @@ export function HomeView({
     setProjectPath(path);
     const savedBranch = loadProjectPreference().lastBranchByProject?.[path];
     setBaseBranch(isNuncioSessionBranch(savedBranch) ? undefined : savedBranch);
-    // Recents are this-browser, this-machine only — never remember a remote path.
-    if (!machine) recordProjectSelection(path, projectDisplayName(path) ?? undefined);
-  }, [machine]);
+    recordProjectSelection(path, projectDisplayName(path) ?? undefined);
+  }, []);
 
   const handleBranchChange = useCallback((branch: string) => {
     setBaseBranch(branch);
-    if (!machine && projectPath) recordBranchSelection(projectPath, branch);
-  }, [machine, projectPath]);
+    if (projectPath) recordBranchSelection(projectPath, branch);
+  }, [projectPath]);
 
-  // Switching the target machine clears the per-machine inputs: a project path
-  // and branch chosen on one machine are meaningless on another.
-  const selectMachine = (next: string | null) => {
-    if (next === machine) return;
-    setMachine(next);
-    const local = resolveWorkspacePreference();
-    setProjectPath(next ? undefined : local.projectPath);
-    setBaseBranch(next ? undefined : local.baseBranch);
-    setWorkspaceMode('local');
-  };
-
-  // Solo create always runs on this machine, so leaving Crew drops any remote
-  // target (and restores the local project/branch).
-  const handleExecutionModeChange = (next: ExecutionMode) => {
-    if (next !== 'crew') selectMachine(null);
-    crew.setMode(next);
-  };
-
-  const canSend = Boolean(prompt.trim()) && !loading && (
-    crew.mode === 'crew' ? crew.canSubmit : catalogLoaded && !!model && !!provider
-  );
+  const canSend = Boolean(prompt.trim()) && !loading && catalogLoaded && !!model && !!provider;
   const usageProvider = resolveUsageProvider(provider, model);
   const { snapshots: usageSnapshots, reload: reloadUsage } = useProviderUsage(usageProvider);
 
@@ -301,7 +249,6 @@ export function HomeView({
             value={projectPath}
             onChange={handleProjectChange}
             variant="text"
-            apiBase={remoteBase}
           />
           <span aria-hidden className="text-muted-foreground/40 select-none">
             ·
@@ -311,22 +258,17 @@ export function HomeView({
             value={baseBranch}
             onChange={handleBranchChange}
             variant="text"
-            apiBase={remoteBase}
           />
-          {crew.mode === 'solo' ? (
-            <>
-              <span aria-hidden className="text-muted-foreground/40 select-none">
-                ·
-              </span>
-              <WorkspaceModePicker
-                value={workspaceMode}
-                onChange={setWorkspaceMode}
-                disabled={!projectPath}
-                variant="text"
-              />
-            </>
-          ) : null}
-          {crew.mode === 'solo' && projectPath ? (
+          <span aria-hidden className="text-muted-foreground/40 select-none">
+            ·
+          </span>
+          <WorkspaceModePicker
+            value={workspaceMode}
+            onChange={setWorkspaceMode}
+            disabled={!projectPath}
+            variant="text"
+          />
+          {projectPath ? (
             <>
               <span aria-hidden className="text-muted-foreground/40 select-none">
                 ·
@@ -392,7 +334,7 @@ export function HomeView({
                   void handleSubmit();
                 }
               }}
-              placeholder={crew.mode === 'solo' ? modePlaceholder(mode) : 'Ask Nuncio to build features, fix bugs, or work on your code…'}
+              placeholder={modePlaceholder(mode)}
               className={cn(
                 'shrink-0 resize-none border-0 shadow-none bg-transparent text-md px-5 pb-2.5 focus-visible:ring-0 focus-visible:border-0',
                 // Embedded (board top bar) reads as a docked task bar, not a hero:
@@ -400,14 +342,6 @@ export function HomeView({
                 embedded ? 'min-h-[60px] pt-3' : 'min-h-[112px] pt-5',
               )}
             />
-            {crew.mode === 'crew' ? (
-              <ResolvedCrewPreview
-                resolution={crew.resolution}
-                loading={crew.loadingProfiles || crew.resolving}
-                error={crew.error}
-                needsProject={!projectPath}
-              />
-            ) : null}
         </div>
         <McpServerChipPicker
           projectPath={projectPath}
@@ -423,41 +357,21 @@ export function HomeView({
               />
             )}
             <div className="home-composer-pickers flex min-w-0 flex-1 items-center overflow-x-auto [&_button]:shrink-0">
-              <ExecutionModePicker value={crew.mode} onChange={handleExecutionModeChange} />
-              {crew.mode === 'solo' ? (
-                <>
-                  <ModelPicker
-                    value={model}
-                    modelOptions={modelOptions}
-                    onChange={handleModelChange}
-                    providers={providers}
-                    variant="text"
-                    compact
-                  />
-                  <SessionModePicker
-                    value={mode}
-                    onChange={setMode}
-                    supportedModes={supportedModes}
-                    disabled={loading}
-                    className="ml-1"
-                  />
-                </>
-              ) : (
-                <>
-                  <CrewMachinePicker
-                    value={machine}
-                    onChange={selectMachine}
-                    disabled={crew.submitting}
-                  />
-                  <CrewProfilePicker
-                    profiles={crew.profiles}
-                    value={crew.profileId}
-                    onChange={crew.setProfileId}
-                    disabled={crew.loadingProfiles || crew.resolving || crew.submitting}
-                    loading={crew.loadingProfiles}
-                  />
-                </>
-              )}
+              <ModelPicker
+                value={model}
+                modelOptions={modelOptions}
+                onChange={handleModelChange}
+                providers={providers}
+                variant="text"
+                compact
+              />
+              <SessionModePicker
+                value={mode}
+                onChange={setMode}
+                supportedModes={supportedModes}
+                disabled={loading}
+                className="ml-1"
+              />
             </div>
             <QuotaChip
               activeProvider={usageProvider}

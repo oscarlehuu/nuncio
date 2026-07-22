@@ -21,7 +21,6 @@ import { mkdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { ensureWebBuild, findFreePort, repoRoot, startServer } from './smoke-ui-stack.mjs';
-import { runCrewSmoke } from './lib/crew-smoke-flow.mjs';
 import { runComposerControls } from './journeys/composer-controls.mjs';
 import { runGenerateAgentsMd } from './journeys/generate-agents-md.mjs';
 import { runSessionModes } from './journeys/session-modes.mjs';
@@ -45,8 +44,7 @@ const ARTIFACTS_DIR = join(repoRoot, 'smoke-artifacts');
 const STEP_TIMEOUT_MS = 20000;
 
 // Ordered journeys. archive-last runs first for a clean, deterministic "last
-// remaining session"; reconnect (which restarts the server) runs before the long
-// Crew flow so it never disrupts a live Crew run.
+// remaining session"; reconnect runs last because it restarts the server.
 const JOURNEYS = [
   { name: 'archive-last-session', run: runArchiveLastSession },
   { name: 'composer-controls', run: runComposerControls },
@@ -61,7 +59,6 @@ const JOURNEYS = [
   { name: 'transcript-selection-copy', run: runTranscriptSelectionCopy },
   { name: 'theme-switch-mid-session', run: runThemeSwitchMidSession },
   { name: 'websocket-reconnect', run: runWebsocketReconnect },
-  { name: 'crew-workflow', run: runCrewSmoke },
 ];
 
 const steps = [];

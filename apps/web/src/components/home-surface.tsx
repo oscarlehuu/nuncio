@@ -5,7 +5,6 @@ import type { ModelOptionsMap } from '../lib/model-options';
 import { AttentionQueue } from './attention-queue';
 import { DigestCard } from './digest-card';
 import { HomeView } from './home-view';
-import { RecentCrewRuns } from './crew/recent-crew-runs';
 import { cn } from '@/lib/utils';
 
 interface HomeSurfaceProps {
@@ -23,7 +22,6 @@ interface HomeSurfaceProps {
   ) => Promise<void>;
   onContinueOnMobile?: () => void;
   loading?: boolean;
-  onCrewCreated?: (taskId: string, machine?: string | null) => void;
   /** Increment to focus the composer (the new-agent shortcut). */
   composerFocusKey?: number;
   /** True when the unpinned desktop sidebar rail overlays the content's left edge. */
@@ -37,7 +35,6 @@ export function HomeSurface({
   onSubmit,
   onContinueOnMobile,
   loading,
-  onCrewCreated,
   composerFocusKey,
   railOverlay = true,
 }: HomeSurfaceProps) {
@@ -64,9 +61,7 @@ export function HomeSurface({
             onSubmit={onSubmit}
             onContinueOnMobile={onContinueOnMobile}
             loading={loading}
-            onCrewCreated={onCrewCreated}
           />
-          <RecentCrewRuns />
           <DigestCard onOpen={() => navigate('/digest')} />
           <AttentionQueue compactEmpty />
         </div>

@@ -12,7 +12,7 @@ let dataDir: string;
 let sent: PushMessage[][];
 let service: PushService;
 
-function seedSession(id: string, title: string, verifyOwner: 'session' | 'crew' = 'session') {
+function seedSession(id: string, title: string, verifyOwner: 'session' = 'session') {
   db.db
     .prepare(
       `INSERT INTO sessions (id, title, prompt, verify_owner, created_at, updated_at)
@@ -101,18 +101,6 @@ describe('PushService', () => {
     events.append('s1', 'assistant_message', { text: 'hi' });
     events.append('s1', 'status', { status: 'IDLE' }); // no tokens registered
     await new Promise((r) => setTimeout(r, 10));
-    expect(sent).toHaveLength(0);
-  });
-
-  it('suppresses lifecycle pushes for inspect-only Crew member sessions', async () => {
-    seedSession('crew-member', 'Builder', 'crew');
-    service.register('ExponentPushToken[a]', 'ios');
-
-    const events = new EventsRepository(db);
-    events.append('crew-member', 'status', { status: 'IDLE' });
-    events.append('crew-member', 'user_input_requested', { requestId: 'blocked' });
-
-    await new Promise((resolve) => setTimeout(resolve, 10));
     expect(sent).toHaveLength(0);
   });
 });

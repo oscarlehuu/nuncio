@@ -4,7 +4,6 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentRegistry } from '../../../src/agents/agents.registry';
-import { defineCrewRuntimeTool } from '../../../src/agents/tools/agent-runtime-tools-policy';
 import { AgentsModule } from '../../../src/agents/agents.module';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
@@ -149,115 +148,6 @@ describe('MockAgentProvider gating (NUNCIO_FORCE_MOCK)', () => {
     const streamed = deltas.map((e) => (e.payload as { delta: string }).delta).join('');
     expect(streamed).toBe(finalText);
     // Session reaches IDLE via the base orchestration.
-    expect(sessions.findById(created.id)?.status).toBe('IDLE');
-  });
-
-  it('invokes exactly one trusted stage submission tool with schema-bound smoke data', async () => {
-    process.env.NUNCIO_FORCE_MOCK = '1';
-    const registry = await bootRegistry();
-    const sessions = module.get(SessionsRepository);
-    const calls: Array<Record<string, unknown>> = [];
-    const head = 'a'.repeat(40);
-    const submit = defineCrewRuntimeTool({
-      name: 'submit_review',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          runId: { type: 'string', const: 'run-smoke' },
-          memberKey: { type: 'string', const: 'reviewer-smoke' },
-          contextRevision: { type: 'integer', const: 3 },
-          workspaceHead: { type: 'string', const: head },
-          idempotencyKey: { type: 'string', const: 'review-smoke-3' },
-        },
-      },
-      security: {
-        network: 'disabled',
-        workspaceMutation: 'none',
-        runtimePolicies: [{ filesystem: 'read-only', network: 'disabled' }],
-        scope: 'crew-internal',
-      },
-      execute: async (input) => {
-        calls.push(input);
-        return 'stored';
-      },
-    });
-    const created = sessions.create({ id: 'mock-crew-1', provider: 'mock', prompt: 'review the smoke run' });
-
-    await registry.get('mock').run(created.id, created.prompt, {
-      emit: () => undefined,
-      runtimePolicy: { filesystem: 'read-only', workspaceRoot: '/tmp', network: 'disabled' },
-      tools: { tools: [submit] },
-    });
-
-    expect(calls).toEqual([{
-      runId: 'run-smoke',
-      memberKey: 'reviewer-smoke',
-      contextRevision: 3,
-      workspaceHead: head,
-      idempotencyKey: 'review-smoke-3',
-      result: {
-        summary: 'Mock review completed with no blocking findings.',
-        findings: [],
-      },
-    }]);
-  });
-
-  it('executes only the active stable-schema Crew tool with current Mock authority', async () => {
-    process.env.NUNCIO_FORCE_MOCK = '1';
-    const registry = await bootRegistry();
-    const sessions = module.get(SessionsRepository);
-    const calls: string[] = [];
-    const schema = {
-      type: 'object',
-      properties: {
-        runId: { type: 'string' },
-        memberKey: { type: 'string' },
-        contextRevision: { type: 'integer' },
-        workspaceHead: { type: 'string' },
-        idempotencyKey: { type: 'string' },
-        result: { type: 'object' },
-      },
-    };
-    const security = {
-      network: 'disabled' as const,
-      workspaceMutation: 'none' as const,
-      runtimePolicies: [{ filesystem: 'read-only' as const, network: 'disabled' as const }],
-      scope: 'crew-internal' as const,
-    };
-    const plan = defineCrewRuntimeTool({
-      name: 'submit_plan',
-      inputSchema: schema,
-      security,
-      execute: async () => { calls.push('plan'); return 'stored'; },
-    });
-    const synthesis = defineCrewRuntimeTool({
-      name: 'submit_synthesis',
-      inputSchema: schema,
-      security,
-      testInput: () => ({
-        runId: 'run-current',
-        memberKey: 'foreman:primary',
-        contextRevision: 2,
-        workspaceHead: 'b'.repeat(40),
-        idempotencyKey: 'synthesis-current',
-      }),
-      execute: async (input) => {
-        calls.push(`synthesis:${String(input.contextRevision)}`);
-        return 'stored';
-      },
-    });
-    const created = sessions.create({
-      id: 'mock-crew-stable-schema',
-      provider: 'mock',
-      prompt: 'synthesize the current revision',
-    });
-
-    await registry.get('mock').run(created.id, created.prompt, {
-      runtimePolicy: { filesystem: 'read-only', workspaceRoot: '/tmp', network: 'disabled' },
-      tools: { tools: [plan, synthesis] },
-    });
-
-    expect(calls).toEqual(['synthesis:2']);
     expect(sessions.findById(created.id)?.status).toBe('IDLE');
   });
 });

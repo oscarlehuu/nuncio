@@ -4,14 +4,11 @@ import type { ModelProvider } from '@nuncio/core/model-providers';
 /**
  * A session can hand its work to another engine only once it has settled — a
  * live run is still producing the very timeline the target engine would inherit.
- * Crew-managed sessions are inspect-only from the phone, so they never hand off.
  * Mirrors the server-side guard and the web `canHandoff` derivation.
  */
 export function canHandoffSession(
   status: SessionStatus | null | undefined,
-  managedByCrew: boolean,
 ): boolean {
-  if (managedByCrew) return false;
   return status === 'IDLE' || status === 'PAUSED' || status === 'ERROR';
 }
 

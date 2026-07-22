@@ -62,22 +62,22 @@ describe('SessionsRepository', () => {
     expect(s.verifyOwner).toBe('session');
   });
 
-  it('persists runtime policy and crew-owned verification across repository reads', () => {
+  it('persists runtime policy and verification owner across repository reads', () => {
     const runtimePolicy = {
       filesystem: 'workspace-write' as const,
-      workspaceRoot: '/tmp/nuncio-crew-workspace',
+      workspaceRoot: '/tmp/nuncio-session-workspace',
       network: 'disabled' as const,
     };
     const created = repo.create({
-      prompt: 'crew member',
+      prompt: 'policy session',
       workspace: runtimePolicy.workspaceRoot,
       runtimePolicy,
-      verifyOwner: 'crew',
+      verifyOwner: 'session',
     });
 
     expect(created.runtimePolicy).toEqual(runtimePolicy);
-    expect(created.verifyOwner).toBe('crew');
-    expect(repo.findById(created.id)).toMatchObject({ runtimePolicy, verifyOwner: 'crew' });
+    expect(created.verifyOwner).toBe('session');
+    expect(repo.findById(created.id)).toMatchObject({ runtimePolicy, verifyOwner: 'session' });
   });
 
   it('restores policy, verification owner, and provider thread after a database restart', async () => {
@@ -100,7 +100,7 @@ describe('SessionsRepository', () => {
         provider: 'codex',
         providerThreadId: 'thread-policy-1',
         runtimePolicy,
-        verifyOwner: 'crew',
+        verifyOwner: 'session',
       });
       await first.close();
       first = undefined;
@@ -111,7 +111,7 @@ describe('SessionsRepository', () => {
       expect(second.get(SessionsRepository).findById('policy-restart')).toMatchObject({
         providerThreadId: 'thread-policy-1',
         runtimePolicy,
-        verifyOwner: 'crew',
+        verifyOwner: 'session',
       });
     } finally {
       await first?.close();
@@ -132,6 +132,23 @@ describe('SessionsRepository', () => {
 
   it('findById returns null for a missing id', () => {
     expect(repo.findById('nope')).toBeNull();
+  });
+
+  it('keeps legacy Crew-owned rows available internally but hidden from public lookup', () => {
+    const legacy = repo.create({ prompt: 'legacy Crew member' });
+    module.get(DatabaseService).db
+      .prepare(
+        `UPDATE sessions
+         SET verify_owner = 'crew', cursor_backend = 'cli', cursor_chat_id = ?, provider_thread_id = ?
+         WHERE id = ?`,
+      )
+      .run(legacy.id, legacy.id, legacy.id);
+
+    expect(repo.findById(legacy.id)?.id).toBe(legacy.id);
+    expect(repo.findUserFacingById(legacy.id)).toBeNull();
+    expect(repo.findByCursorChatId(legacy.id, 'cli')).toBeNull();
+    expect(repo.findByProviderThreadId(legacy.id)).toBeNull();
+    expect(repo.listUserFacing(true).some((session) => session.id === legacy.id)).toBe(false);
   });
 
   it('findByProviderThreadId dedupes imported pi sessions by session file path', () => {

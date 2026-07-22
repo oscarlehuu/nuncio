@@ -141,73 +141,18 @@ must pass the provider conformance suite
 engines we have.
 **Reverse only if:** the user re-prioritizes.
 
-## ADR-012 — Crew is a fixed, evidence-gated local workflow
-
-> **Deprecated by ADR-014 (2026-07-22).** Crew is deprecated pending removal — still runnable, no new investment. The invariants below stay accurate for as long as Crew ships.
-
-**Status:** locked implementation baseline; implemented on the feature branch, pending final
-verification and merge.
-**Decision:** Solo remains the default. Crew uses a separate durable `CrewTask`/`CrewRun`
-aggregate above ordinary Tasks and Sessions and executes exactly
-`PLAN -> BUILD -> VERIFY -> REVIEW -> SYNTHESIZE -> DONE`. Profile resolution returns only
-`ready` or `needs_setup`; Pi, Codex, and Claude are configurable frozen role bindings, while
-Nuncio Tester is deterministic. Verify and Review are mandatory. Verify-fix and review-fix caps
-are independent and default to 2. The same Builder Session is reused for feedback; Reviewer is
-reused during the loop, and a strict fresh final Reviewer is created only after a review-fix loop.
-Every run owns one worktree and one Builder writer lease. Terminal runs are immutable; change
-requests create exact-head successors. Provider/model changes never happen silently.
-
-Crew completion is local and has only `SUCCEEDED`, `FAILED`, or `CANCELLED` terminal outcomes.
-The baseline has no outbound forge/release/deployment stage and no mechanism that relabels failed
-gate evidence. Full verify logs and workspace diffs are redacted, integrity-checked artifacts read
-through bounded UTF-8-safe byte ranges. Deterministic verification refuses unsandboxed execution:
-Seatbelt on macOS, bubblewrap on Linux.
-**Why:** a model may propose work but cannot be the scheduler, permission boundary, Git witness, or
-proof of completion. Fixed phases and deterministic evidence keep restart recovery auditable,
-provider-neutral, and safe on the user's machine.
-**Reverse only if:** the user explicitly approves a new Crew contract. General workflow graphs,
-custom roles/prompts, provider substitution policy, outbound forge/deployment actions, broader
-context reads, and automated cleanup/retention require separate decisions.
-
-## ADR-013 — Remote Crew runs are routing, not distributed execution
-
-> **Deprecated by ADR-014 (2026-07-22).** Follows ADR-012 — Crew, including remote Crew routing, is deprecated pending removal.
-
-**Status:** locked, shipped.
-**Decision:** a Crew run created from one machine's Home can target another same-account tailnet
-peer (the machine picker beside the Crew controls). The chosen machine then **owns everything** —
-the `CrewTask`/`CrewRun`, the append-only event stream and projection, the profile snapshot, the
-single worktree and Builder writer lease, the verifier sandbox, recovery, and terminal outcomes —
-because it *is* a local run from that machine's perspective. The creating machine is a pure
-viewer/creator: it lists+resolves the profile against the owning machine's catalog and posts the
-create request through the hub proxy (`POST /m/<machine>/api/crew/tasks`), then navigates to
-`/m/<machine>/crew/<taskId>` so the detail view's existing HTTP polling follows the owning daemon.
-No Crew authority, lease, worktree bytes, or state ever crosses the network; the wire carries only
-the create request, the profile list/resolve, and read-only run polling. The profile is resolved
-and frozen **on the owning machine**, never shipped as a snapshot minted elsewhere.
-**Why:** every ADR-012 invariant (one canonical worktree, one writer lease, deterministic sandboxed
-verify, LOCAL Git-truth recovery) is expressed in terms of one daemon's local filesystem. Splitting
-any of them across a network boundary would re-open all of them. Keeping the whole reducer on the
-owning machine means the Crew module and hub server are unchanged — remote is a client base +
-navigation concern, and every failure mode reduces to an already-solved single-daemon recovery plus
-a transient viewer reconnect.
-**Reverse only if:** the user explicitly wants split/distributed Crew execution (an orchestrator on
-one machine driving an executor on another), which requires re-deriving the ADR-012 authority model
-across a network boundary. Cross-machine attention aggregation on Home is a separate, additive
-decision — its absence does not reverse this one.
-
 ## ADR-014 — Engine refocus: one engine, desktop-first, evidence-led (2026-07-22)
 
 **Status:** locked (product thesis). Authorized by Oscar in the 2026-07-22 direction session.
-Supersedes the "one surface for N engines" framing; amends ADR-004 and ADR-010, supersedes ADR-011,
-and deprecates ADR-012 + ADR-013 (Crew).
+Supersedes the "one surface for N engines" framing; amends ADR-004 and ADR-010, and supersedes
+ADR-011.
 **Decision:**
 - **One engine.** Nuncio Engine (the Pi coding agent + Nuncio's own extensions) is the only engine
   Nuncio invests in and the only one shown in every picker by default. The vendor engines (Claude,
   Codex, Cursor, Cursor CLI, Devin) are **legacy: hidden behind the `engines.showLegacy` boolean
   setting (default off), not deleted.** `AgentRegistry` still resolves every engine by id
   (`get(id)`), so existing legacy-engine sessions keep opening, streaming, and resuming; only the
-  listing paths (`all()` / `available()`) are filtered.
+  picker-facing listing paths (`listed()` / `listedAvailable()`) are filtered.
 - **Desktop-first.** The Electron desktop app is the primary surface. It loads the web renderer —
   that renderer code stays and is maintained — but a plain browser tab is no longer a supported way
   to run Nuncio. Mobile stays **native Expo**, dedicated to reviewing and steering.
@@ -221,8 +166,6 @@ and deprecates ADR-012 + ADR-013 (Crew).
 - **Factory-as-skills, no new substrate.** The "company of agents" arc grows as a library of skills
   on top of one good engine plus the existing tasks / dispatcher / loops. Building a new
   orchestration substrate is a non-goal.
-- **Crew is deprecated pending removal.** Solo is the product. Crew stays runnable but receives no
-  new investment (see the deprecation notes on ADR-012 / ADR-013).
 - **Dogfood inversion.** Every Nuncio dev task runs through Nuncio Engine; each escape to a vendor
   tool costs one line in the pain log, which is the engine backlog.
 **Why:** matching five vendor UIs is a treadmill Nuncio loses — Claude Code and Cursor already own

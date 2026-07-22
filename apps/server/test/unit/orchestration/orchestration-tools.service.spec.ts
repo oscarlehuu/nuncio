@@ -42,15 +42,15 @@ describe('OrchestrationToolsService', () => {
     const enqueueCalls: unknown[] = [];
     const upsertCalls: unknown[] = [];
     const sessionsRepo = {
-      list: () => [makeSession()],
-      findById: (id: string) => (id === 'parent' ? makeSession() : null),
+      listUserFacing: () => [makeSession()],
+      findUserFacingById: (id: string) => (id === 'parent' ? makeSession() : null),
       childrenOf: () => [],
     };
     const events = { listSince: () => [] };
     const tasksRepo = {
       list: () => [],
       listByParentSession: () => [],
-      findById: () => null,
+      findUserFacingById: () => null,
     };
     const settings = {
       resolve: (key: string) => {

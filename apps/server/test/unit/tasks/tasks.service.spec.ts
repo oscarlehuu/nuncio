@@ -152,183 +152,6 @@ describe('TasksService', () => {
       .toBe(false);
   });
 
-  it('defers queued Crew members until the Crew execution owner marks itself ready', async () => {
-    const task = service.enqueue({
-      prompt: 'resume only after Crew bootstrap',
-      executionKind: 'crew-member',
-      crewRunId: 'crew-run-boot-gate',
-      crewMemberKey: 'builder:primary',
-      sessionId: 'missing-until-owner-ready',
-      verifyOwner: 'crew',
-    });
-
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(repo.findById(task.id)?.status).toBe('QUEUED');
-
-    service.markCrewQueueReconciled();
-    service.markCrewExecutionReady();
-    const settled = await waitForStatus(task.id, ['DONE', 'FAILED']);
-    expect(settled.status).toBe('FAILED');
-  });
-
-  it('refuses to open Crew claims before boot queue reconciliation is acknowledged', async () => {
-    const restarted = await buildModule();
-    try {
-      const restartedService = restarted.get(TasksService);
-      const restartedRepo = restarted.get(TasksRepository);
-      const task = restartedService.enqueue({
-        prompt: 'must remain gated',
-        executionKind: 'crew-member',
-        crewRunId: 'crew-run-unreconciled',
-        crewMemberKey: 'builder:primary',
-        verifyOwner: 'crew',
-      });
-
-      expect(() => restartedService.markCrewExecutionReady()).toThrow('reconciliation');
-      expect(restartedRepo.findById(task.id)?.status).toBe('QUEUED');
-    } finally {
-      await restarted.close();
-    }
-  });
-
-  it('hides Crew member rows from public lists and rejects public task mutations', () => {
-    const crew = repo.create({
-      prompt: 'internal builder attempt',
-      executionKind: 'crew-member',
-      crewRunId: 'crew-run-hidden',
-      crewMemberKey: 'builder:primary',
-      sessionId: 'crew-hidden-session',
-      holdUntil: Date.now() + 60_000,
-      verifyOwner: 'crew',
-    });
-    const solo = repo.create({ prompt: 'visible task', holdUntil: Date.now() + 60_000 });
-
-    expect(service.list().map((task) => task.id)).toContain(solo.id);
-    expect(service.list().map((task) => task.id)).not.toContain(crew.id);
-    expect(service.listInternal().map((task) => task.id)).toContain(crew.id);
-    for (const mutate of [
-      () => service.update(crew.id, { model: 'mock:builder' }),
-      () => service.startNow(crew.id),
-      () => service.cancel(crew.id),
-      () => service.retry(crew.id),
-      () => service.markReviewed(crew.id),
-      () => service.delete(crew.id),
-    ]) {
-      expect(mutate).toThrow('Crew-owned tasks can only be changed through Crew controls');
-    }
-    expect(repo.findById(crew.id)?.status).toBe('QUEUED');
-  });
-
-  it('idempotently cancels an active Crew task through the internal owner seam', () => {
-    const crew = repo.create({
-      prompt: 'active internal builder attempt',
-      executionKind: 'crew-member',
-      crewRunId: 'crew-run-active-cancel',
-      crewMemberKey: 'builder:primary',
-      sessionId: 'crew-active-session',
-      verifyOwner: 'crew',
-    });
-    expect(repo.claimNextQueued({ includeCrewMembers: true })?.id).toBe(crew.id);
-
-    expect(service.cancelCrewMember(crew.id)).toMatchObject({
-      id: crew.id,
-      status: 'CANCELLED',
-    });
-    expect(service.cancelCrewMember(crew.id)).toMatchObject({
-      id: crew.id,
-      status: 'CANCELLED',
-    });
-    expect(repo.findById(crew.id)?.status).toBe('CANCELLED');
-  });
-
-  it('rejects generic enqueue under a Crew-owned parent even without a new worktree', async () => {
-    const parent = await sessions.create({
-      prompt: 'owned Builder', provider: 'cursor', workspace, verifyOwner: 'crew',
-    });
-    expect(() => service.enqueue({
-      prompt: 'escape Crew authority', parentSessionId: parent.id, role: 'subagent',
-      workspace, useWorktree: false, holdUntil: Date.now() + 60_000,
-    })).toThrow('Crew-owned sessions cannot delegate generic tasks');
-    expect(service.list(parent.id)).toHaveLength(0);
-  });
-
-  it('rejects explicit multitask under a Crew-owned parent even when useWorktree is false', async () => {
-    const parent = await sessions.create({
-      prompt: 'owned Reviewer', provider: 'cursor', workspace, verifyOwner: 'crew',
-    });
-    await expect(service.startMultitask({
-      parentSessionId: parent.id, prompts: ['escape review authority'], useWorktree: false,
-    })).rejects.toThrow('Crew-owned sessions cannot delegate generic tasks');
-    expect(service.list(parent.id)).toHaveLength(0);
-  });
-
-  it('rejects steer-queue multitask under a Crew-owned parent before claiming messages', async () => {
-    const parent = await sessions.create({
-      prompt: 'owned Foreman', provider: 'cursor', workspace, verifyOwner: 'crew',
-    });
-    const steerQueue = module.get(SteerQueueRepository);
-    steerQueue.enqueue(parent.id, 'escape Foreman authority');
-    const steerSpy = jest.spyOn(sessions, 'steer');
-    try {
-      await expect(service.startMultitaskFromQueue(parent.id))
-        .rejects.toThrow('Crew-owned sessions cannot delegate generic tasks');
-      await sessions.awaitRun(parent.id);
-      await new Promise((resolve) => setTimeout(resolve, 300));
-
-      expect(steerSpy).not.toHaveBeenCalled();
-      expect(steerQueue.count(parent.id)).toBe(1);
-      expect(events.list(parent.id).some((event) => event.type === 'steer_queue_cleared')).toBe(false);
-      expect(events.list(parent.id).some(
-        (event) => event.type === 'error' && String((event.payload as { message?: string }).message)
-          .includes('Queued message failed to send'),
-      )).toBe(false);
-    } finally {
-      steerSpy.mockRestore();
-    }
-  });
-
-  it('runs a Crew member task by continuing its exact existing session', async () => {
-    writeVerifyScript('exit 0\n');
-    const existing = await sessions.create({
-      prompt: 'initial builder turn',
-      provider: 'cursor',
-      workspace,
-      verifyOwner: 'crew',
-    });
-    await sessions.awaitRun(existing.id);
-    const beforeIds = sessions.list(true).map((session) => session.id);
-
-    service.markCrewExecutionReady();
-
-    const task = service.enqueue({
-      prompt: 'continue the same builder',
-      executionKind: 'crew-member',
-      crewRunId: 'crew-run-exact',
-      crewMemberKey: 'builder-exact',
-      crewPhase: 'build',
-      sessionId: existing.id,
-      verifyOwner: 'crew',
-    });
-
-    const done = await waitForStatus(task.id, ['DONE', 'FAILED']);
-    expect(done).toMatchObject({
-      status: 'DONE',
-      sessionId: existing.id,
-      executionKind: 'crew-member',
-      crewRunId: 'crew-run-exact',
-      crewMemberKey: 'builder-exact',
-      crewPhase: 'build',
-    });
-    expect(sessions.list(true).map((session) => session.id)).toEqual(beforeIds);
-    const messages = events.list(existing.id).filter(
-      (event) => event.type === 'user_message' || event.type === 'steer_message',
-    );
-    expect(messages).toHaveLength(2);
-    expect(messages.at(-1)?.payload).toEqual(expect.objectContaining({
-      text: expect.stringContaining('continue the same builder'),
-    }));
-  });
-
   it('runs tasks one at a time: the second stays QUEUED while the first runs', async () => {
     writeVerifyScript('sleep 0.5\nexit 0\n');
     const first = service.enqueue({ prompt: 'slow first', provider: 'cursor', workspace });
@@ -394,6 +217,23 @@ describe('TasksService', () => {
     expect(clone.prompt).toBe('retry me');
     const cloneDone = await waitForStatus(clone.id, ['DONE', 'FAILED']);
     expect(cloneDone.status).toBe('FAILED');
+  });
+
+  it('rejects direct operations on a legacy Crew task id', async () => {
+    const legacy = repo.create({ prompt: 'retired Crew task' });
+    module.get(DatabaseService).db
+      .prepare(
+        `UPDATE tasks
+         SET status = 'CANCELLED', execution_kind = 'crew-member', verify_owner = 'crew'
+         WHERE id = ?`,
+      )
+      .run(legacy.id);
+
+    expect(service.findById(legacy.id)).toBeNull();
+    expect(() => service.retry(legacy.id)).toThrow(NotFoundException);
+    expect(() => service.update(legacy.id, { model: 'pi:test' })).toThrow(NotFoundException);
+    await expect(service.cancel(legacy.id)).rejects.toThrow(NotFoundException);
+    expect(() => service.delete(legacy.id)).toThrow(NotFoundException);
   });
 
   it('starts multitasking by creating provider-neutral child subagent tasks for a parent session', async () => {

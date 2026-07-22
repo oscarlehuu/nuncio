@@ -2,7 +2,6 @@ import { Global, Injectable, OnModuleDestroy } from '@nestjs/common';
 import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
-import { ensureCrewSchema } from '../crew/persistence/crew-schema';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -113,7 +112,6 @@ export class DatabaseService implements OnModuleDestroy {
     this.db.exec('PRAGMA busy_timeout = 5000');
     this.db.exec(SCHEMA);
     this.migrate();
-    ensureCrewSchema(this);
   }
 
   onModuleDestroy() {
@@ -453,6 +451,17 @@ export class DatabaseService implements OnModuleDestroy {
     if (!attentionColumns.some((c) => c.name === 'suppress_reraise')) {
       this.db.exec('ALTER TABLE attention_items ADD COLUMN suppress_reraise INTEGER NOT NULL DEFAULT 0');
     }
+    // Crew-only attention conditions can no longer be probed after the runtime
+    // is removed. Resolve them once so upgraded databases do not retain stale
+    // badges with nowhere to navigate.
+    const crewRemovalAt = Date.now();
+    this.db
+      .prepare(
+        `UPDATE attention_items
+         SET status = 'resolved', resolved_at = COALESCE(resolved_at, ?), updated_at = ?
+         WHERE status = 'open' AND kind IN ('crew-blocked', 'crew-run-blocked')`,
+      )
+      .run(crewRemovalAt, crewRemovalAt);
 
     // Heartbeat digest markers (rung 3 sub-phase B). One row per SENT digest slot
     // — the durable record behind not-double-sent-on-catch-up + the since-last
@@ -511,10 +520,6 @@ export class DatabaseService implements OnModuleDestroy {
         session_id TEXT,
         outcome_json TEXT,
         hold_until INTEGER,
-        crew_run_id TEXT,
-        crew_member_key TEXT,
-        crew_phase TEXT,
-        crew_attempt_key TEXT,
         execution_kind TEXT NOT NULL DEFAULT 'session',
         runtime_policy_json TEXT,
         verify_owner TEXT NOT NULL DEFAULT 'session',
@@ -543,10 +548,6 @@ export class DatabaseService implements OnModuleDestroy {
       ['context_json', 'TEXT'],
       ['notify_policy', 'TEXT'],
       ['tag', 'TEXT'],
-      ['crew_run_id', 'TEXT'],
-      ['crew_member_key', 'TEXT'],
-      ['crew_phase', 'TEXT'],
-      ['crew_attempt_key', 'TEXT'],
       ['execution_kind', "TEXT NOT NULL DEFAULT 'session'"],
       ['runtime_policy_json', 'TEXT'],
       ['verify_owner', "TEXT NOT NULL DEFAULT 'session'"],
@@ -558,13 +559,33 @@ export class DatabaseService implements OnModuleDestroy {
       }
     }
 
+    // Active Crew attempts cannot resume without the Crew runner. Terminalize
+    // them before the task pump starts so they are never reinterpreted as fresh
+    // session work after an upgrade.
+    const canRetireLegacyTasks = ['outcome_json', 'finished_at'].every((column) =>
+      taskColumns.some((entry) => entry.name === column),
+    );
+    if (canRetireLegacyTasks) {
+      this.db
+        .prepare(
+          `UPDATE tasks
+           SET status = 'CANCELLED',
+               outcome_json = ?,
+               finished_at = COALESCE(finished_at, ?),
+               updated_at = ?
+           WHERE status IN ('QUEUED', 'RUNNING')
+             AND (execution_kind = 'crew-member' OR verify_owner = 'crew')`,
+        )
+        .run(
+          JSON.stringify({ reason: 'crew_subsystem_removed' }),
+          crewRemovalAt,
+          crewRemovalAt,
+        );
+    }
+
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_tasks_parent_session
       ON tasks(parent_session_id, created_at)
-    `);
-    this.db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_tasks_crew_run
-      ON tasks(crew_run_id, created_at)
     `);
 
     this.db.exec(`

@@ -37,7 +37,6 @@ describe('severityForKind', () => {
     expect(severityForKind('credential-expiring')).toBe(6);
     expect(severityForKind('verify-dead')).toBe(5);
     expect(severityForKind('tripped-breaker')).toBe(4);
-    expect(severityForKind('crew-blocked')).toBe(4);
     expect(severityForKind('zombie-session')).toBe(3);
     expect(severityForKind('pr-review')).toBe(2);
     expect(severityForKind('anomaly')).toBe(1);

@@ -40,13 +40,7 @@ const KIND_META: Record<string, AttentionKindMeta> = {
   // A follow-up the agent flagged mid-turn — a proposal, so it shares the calmer
   // review class rather than the amber needs-you one.
   'spawn-task': { label: 'Follow-up', icon: Sparkles, tone: 'info' },
-  'crew-blocked': { label: 'Crew blocked', icon: ShieldQuestion, tone: 'warning' },
-  'crew-run-blocked': { label: 'Crew blocked', icon: ShieldQuestion, tone: 'warning' },
 };
-
-export function isCrewAttentionKind(kind: string): boolean {
-  return kind === 'crew-blocked' || kind === 'crew-run-blocked';
-}
 
 export function attentionKindMeta(kind: string): AttentionKindMeta {
   return (
@@ -109,14 +103,6 @@ export function openTargetFor(item: AttentionItemDto): OpenTarget | null {
   const sessionId = payloadString(p, 'sessionId');
   const loopId = payloadString(p, 'loopId');
   const url = payloadString(p, 'url');
-
-  if (isCrewAttentionKind(item.kind)) {
-    const taskId = payloadString(p, 'crewTaskId') ?? item.subjectId;
-    const runId = payloadString(p, 'crewRunId');
-    return {
-      to: `/crew/${encodeURIComponent(taskId)}${runId ? `?run=${encodeURIComponent(runId)}` : ''}`,
-    };
-  }
 
   switch (item.kind) {
     case 'permission':

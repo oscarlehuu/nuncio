@@ -71,9 +71,9 @@ describe('Nuncio runtime environment', () => {
     );
   });
 
-  it('reports absent tools as unavailable under a network-disabled Crew policy', () => {
+  it('reports absent tools as unavailable under a network-disabled policy', () => {
     const environment = buildAgentRuntimeEnvironment({
-      sessionId: 'crew-session',
+      sessionId: 'policy-session',
       provider: 'claude',
       model: 'claude:sonnet',
       projectPath: '/repo',
@@ -93,7 +93,7 @@ describe('Nuncio runtime environment', () => {
     expect(environment.capabilityManifest).toContain('browser: unavailable');
   });
 
-  it('exposes nuncio_runtime_info in Solo and through the trusted Crew policy gate', async () => {
+  it('exposes nuncio_runtime_info in Solo and through the trusted policy gate', async () => {
     let environment = buildAgentRuntimeEnvironment({
       sessionId: 'session-2',
       provider: 'pi',
@@ -109,8 +109,8 @@ describe('Nuncio runtime environment', () => {
       structuredContent: { host: 'nuncio', session: { id: 'session-2' } },
     });
 
-    const crew = createNuncioRuntimeInfoTool(() => environment, readOnly);
-    const filtered = runtimeToolsForPolicy(readOnly, { tools: [crew] });
+    const policyTool = createNuncioRuntimeInfoTool(() => environment, readOnly);
+    const filtered = runtimeToolsForPolicy(readOnly, { tools: [policyTool] });
     expect(filtered?.tools.map((tool) => tool.name)).toEqual(['nuncio_runtime_info']);
 
     environment = buildAgentRuntimeEnvironment({
@@ -123,7 +123,7 @@ describe('Nuncio runtime environment', () => {
       runtimePolicy: readOnly,
       runtimeTools: filtered,
     });
-    expect(await crew.execute({})).toMatchObject({
+    expect(await policyTool.execute({})).toMatchObject({
       structuredContent: {
         capabilities: { tools: ['nuncio_runtime_info'], browser: false, orchestration: 'off' },
         constraints: { filesystem: 'read-only', network: 'disabled' },

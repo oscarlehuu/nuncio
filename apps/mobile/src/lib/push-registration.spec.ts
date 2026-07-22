@@ -56,7 +56,7 @@ describe('pathFromSessionDeepLink', () => {
   });
 
   it('rejects other schemes, other hosts, and non-strings', () => {
-    expect(pathFromSessionDeepLink('nuncio://crew/task-1')).toBeNull();
+    expect(pathFromSessionDeepLink('nuncio://project/task-1')).toBeNull();
     expect(pathFromSessionDeepLink('https://nuncio/session/abc')).toBeNull();
     expect(pathFromSessionDeepLink('nuncio://session/')).toBeNull();
     expect(pathFromSessionDeepLink(undefined)).toBeNull();
@@ -72,32 +72,16 @@ describe('sessionPathFromNotification', () => {
   });
 
   it('is null when the payload has no session deep link', () => {
-    expect(sessionPathFromNotification(response({ crewTaskId: 'task-1' }))).toBeNull();
+    expect(sessionPathFromNotification(response({ sessionId: 's-1' }))).toBeNull();
   });
 });
 
 describe('notificationTargetFromNotification', () => {
-  it('routes a Crew notification to the stable CrewTask', () => {
-    expect(notificationTargetFromNotification(response({ crewTaskId: 'task-1', crewRunId: 'run-2' }))).toEqual({
-      kind: 'crew',
-      taskId: 'task-1',
-      runId: 'run-2',
-    });
-  });
-
-  it('prefers Crew routing when a backwards-compatible session id is also present', () => {
-    expect(notificationTargetFromNotification(response({ crewTaskId: 'task-1', sessionId: 'session-1' }))).toEqual({
-      kind: 'crew',
-      taskId: 'task-1',
-      runId: null,
-    });
-  });
-
-  it('preserves existing session routing and rejects malformed ids', () => {
+  it('routes a session notification to its session and rejects malformed ids', () => {
     expect(notificationTargetFromNotification(response({ sessionId: 'session-1' }))).toEqual({
       kind: 'session',
       sessionId: 'session-1',
     });
-    expect(notificationTargetFromNotification(response({ crewTaskId: 42, sessionId: null }))).toBeNull();
+    expect(notificationTargetFromNotification(response({ sessionId: null }))).toBeNull();
   });
 });

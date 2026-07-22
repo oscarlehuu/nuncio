@@ -8,7 +8,7 @@ import {
   assertWritablePathWithinRuntimeWorkspace,
   runtimeToolsForPolicy,
 } from '../../../src/agents/agent-runtime-policy';
-import { defineCrewRuntimeTool } from '../../../src/agents/tools/agent-runtime-tools-policy';
+import { defineTrustedRuntimeTool } from '../../../src/agents/tools/agent-runtime-tools-policy';
 
 const readOnly = (workspaceRoot: string) => ({
   filesystem: 'read-only' as const,
@@ -46,18 +46,18 @@ describe('Agent runtime policy contract', () => {
     expect(runtimeToolsForPolicy(readOnly('/tmp/workspace'), tools)).toBeUndefined();
   });
 
-  it('rejects forged Crew metadata that did not pass through the trusted constructor', () => {
+  it('rejects forged runtime-policy metadata that did not pass through the trusted constructor', () => {
     const tools = {
       systemPromptAppend: 'unsafe instructions',
       tools: [{
-        name: 'forged_crew_tool',
+        name: 'forged_tool',
         inputSchema: {},
         execute: async () => 'not safe',
         security: {
           network: 'disabled' as const,
           workspaceMutation: 'none' as const,
           runtimePolicies: [{ filesystem: 'read-only' as const, network: 'disabled' as const }],
-          scope: 'crew-internal' as const,
+          scope: 'policy-internal' as const,
         },
       }],
     };
@@ -65,27 +65,27 @@ describe('Agent runtime policy contract', () => {
     expect(runtimeToolsForPolicy(readOnly('/tmp/workspace'), tools)).toBeUndefined();
   });
 
-  it('allows only trusted structured Crew tools matching the exact runtime policy', () => {
-    const safe = defineCrewRuntimeTool({
-      name: 'crew_read_result',
+  it('allows only trusted structured runtime tools matching the exact runtime policy', () => {
+    const safe = defineTrustedRuntimeTool({
+      name: 'trusted_read_result',
       inputSchema: { type: 'object' },
       execute: async () => 'safe',
       security: {
         network: 'disabled',
         workspaceMutation: 'none',
         runtimePolicies: [{ filesystem: 'read-only', network: 'disabled' }],
-        scope: 'crew-internal',
+        scope: 'policy-internal',
       },
     });
-    const writeOnly = defineCrewRuntimeTool({
-      name: 'crew_write_result',
+    const writeOnly = defineTrustedRuntimeTool({
+      name: 'trusted_write_result',
       inputSchema: { type: 'object' },
       execute: async () => 'safe only for writers',
       security: {
         network: 'disabled',
         workspaceMutation: 'workspace',
         runtimePolicies: [{ filesystem: 'workspace-write', network: 'disabled' }],
-        scope: 'crew-internal',
+        scope: 'policy-internal',
       },
     });
 
@@ -96,26 +96,26 @@ describe('Agent runtime policy contract', () => {
   });
 
   it('rejects a trusted tool whose metadata claims network or read-only mutation', () => {
-    const networked = defineCrewRuntimeTool({
-      name: 'crew_fetch',
+    const networked = defineTrustedRuntimeTool({
+      name: 'trusted_fetch',
       inputSchema: {},
       execute: async () => 'unsafe',
       security: {
         network: 'required',
         workspaceMutation: 'none',
         runtimePolicies: [{ filesystem: 'read-only', network: 'disabled' }],
-        scope: 'crew-internal',
+        scope: 'policy-internal',
       },
     });
-    const mutating = defineCrewRuntimeTool({
-      name: 'crew_write',
+    const mutating = defineTrustedRuntimeTool({
+      name: 'trusted_write',
       inputSchema: {},
       execute: async () => 'unsafe',
       security: {
         network: 'disabled',
         workspaceMutation: 'workspace',
         runtimePolicies: [{ filesystem: 'read-only', network: 'disabled' }],
-        scope: 'crew-internal',
+        scope: 'policy-internal',
       },
     });
 

@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseModule } from '../../../src/db/database.module';
+import { DatabaseService } from '../../../src/db/database.service';
 import { ForgesService } from '../../../src/forges/forges.service';
 import { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
 import { SessionsPersistenceModule } from '../../../src/sessions/sessions.persistence.module';
@@ -16,6 +17,7 @@ import type {
 describe('ForgesService', () => {
   let module: TestingModule;
   let sessions: SessionsRepository;
+  let database: DatabaseService;
   let service: ForgesService;
   let dataDir: string;
 
@@ -42,6 +44,7 @@ describe('ForgesService', () => {
     }).compile();
 
     sessions = module.get(SessionsRepository);
+    database = module.get(DatabaseService);
   });
 
   afterAll(async () => {
@@ -177,6 +180,30 @@ describe('ForgesService', () => {
   it('rejects when the session has no branch', async () => {
     const s = sessions.create({ prompt: 'no branch here', projectPath: '/repo' });
     await expect(service.openPullRequestForSession(s.id)).rejects.toThrow(BadRequestException);
+  });
+
+  it('rejects forge operations for retired Crew sessions', async () => {
+    const s = sessions.create({
+      prompt: 'retired Crew member',
+      projectPath: '/repo/legacy-crew',
+      branch: 'nuncio/legacy-crew',
+      baseBranch: 'main',
+    });
+    sessions.updateForgeState(s.id, {
+      forgeProvider: 'github',
+      pullRequestNumber: 99,
+      pullRequestUrl: 'https://github.com/octo/nuncio/pull/99',
+      pullRequestState: 'open',
+      forgeStatus: 'open',
+    });
+    database.db.prepare("UPDATE sessions SET verify_owner = 'crew' WHERE id = ?").run(s.id);
+
+    await expect(service.openPullRequestForSession(s.id)).rejects.toThrow(`Session ${s.id} not found`);
+    await expect(service.getPullRequestForSession(s.id)).rejects.toThrow(`Session ${s.id} not found`);
+    await expect(service.addCommentForSession(s.id, 'comment')).rejects.toThrow(
+      `Session ${s.id} not found`,
+    );
+    expect(createCalls).toHaveLength(0);
   });
 
   describe('listRepositories', () => {

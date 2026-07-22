@@ -219,7 +219,7 @@ describe('buildPolicyShellTool', () => {
   });
 
   // Proves the host OS actually enforces the contract (Seatbelt or bubblewrap), not just that
-  // the launch args are shaped right — same live pattern as the Crew sandbox ecosystem spec.
+  // the launch args are shaped right — same live pattern as the runtime sandbox ecosystem spec.
   it('enforces workspace confinement and the .nuncio gate inside the real sandbox', async () => {
     if (!isRuntimeCommandSandboxAvailable()) return; // no backend here — advisory path covered above
     const workspaceRoot = realpathSync(mkdtempSync(join(tmpdir(), 'nuncio-shell-live-')));

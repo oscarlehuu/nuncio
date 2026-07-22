@@ -82,10 +82,9 @@ export class FactDistillationService implements OnModuleInit, OnModuleDestroy {
 
     const session = this.sessions.findById(sessionId);
     if (!session?.projectPath) return;
-    // Hermetic sessions (runtime policy, Crew members) get exactly their
-    // bounded prompt and never feed background memory.
+    // Hermetic sessions (runtime policy) get exactly their bounded prompt and
+    // never feed background memory.
     if (session.runtimePolicy) return;
-    if (session.verifyOwner === 'crew') return;
 
     const now = Date.now();
     const last = this.lastDistilledAt.get(sessionId) ?? 0;

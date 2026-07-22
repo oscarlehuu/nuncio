@@ -15,7 +15,6 @@ describe('settings-sections', () => {
       'source-control',
       'mcp-tools',
       'agents',
-      'crew-profiles',
       'workspaces',
       'projects',
       'mobile',
@@ -26,7 +25,7 @@ describe('settings-sections', () => {
 
   it('parses known ?section= values and falls back for unknown', () => {
     expect(parseSettingsSection('?section=remote-access')).toBe('remote-access');
-    expect(parseSettingsSection('section=crew-profiles')).toBe('crew-profiles');
+    expect(parseSettingsSection('section=agents')).toBe('agents');
     expect(parseSettingsSection('?section=mobile')).toBe('mobile');
     expect(parseSettingsSection('?section=subscription-bridge')).toBe('providers');
     expect(parseSettingsSection('?section=tool-updates')).toBe('providers');

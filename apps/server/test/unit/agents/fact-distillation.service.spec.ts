@@ -97,11 +97,10 @@ describe('FactDistillationService', () => {
     expect(completions).toHaveLength(0);
   });
 
-  it('skips sessions without a project, policy sessions, and crew-owned sessions', async () => {
+  it('skips sessions without a project and policy sessions', async () => {
     for (const session of [
       { projectPath: null },
       { runtimePolicy: { filesystem: 'workspace-write', network: 'disabled', workspaceRoot: '/repo' } },
-      { verifyOwner: 'crew' },
     ]) {
       const { service, completions } = makeHarness({ session });
       await service.handleEvent('s1', statusIdle());

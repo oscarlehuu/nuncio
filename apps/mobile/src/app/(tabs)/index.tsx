@@ -11,18 +11,14 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Redirect, useFocusEffect, useRouter } from 'expo-router';
 import { ChevronRight, Server, X } from 'lucide-react-native';
 import { fetchArchivedSessions, fetchSessions, type Session } from '@nuncio/core/api';
-import { fetchCrewRuns } from '@nuncio/core/crew-api';
 import { applyConnection, updateActiveSecret } from '../../lib/api-setup';
 import { clearConnection, loadConnection, type ConnectionConfig } from '../../lib/connection-store';
-import { crewTaskPath } from '../../lib/crew-navigation';
-import { buildCrewRunRows, type CrewRunRowModel } from '../../lib/crew-run-list';
 import { secureStore } from '../../lib/secure-store-adapter';
 import { registerForPush } from '../../lib/push-registration';
 import { rotateDeviceSecret } from '../../lib/rotate-secret';
 import { useSessionPlans } from '../../lib/use-session-plans';
 import { planStepsLabel } from '../../lib/session-plan-progress';
 import { buildHomeSections, type HomeItem } from '../../lib/home-sections';
-import { CrewRunRow } from '../../components/crew-run-row';
 import { HomeComposer } from '../../components/home-composer';
 import { SessionRow } from '../../components/session-row';
 import { Button } from '../../components/ui/button';
@@ -45,7 +41,6 @@ export default function SessionList() {
   const [connection, setConnection] = useState<ConnectionConfig | null | undefined>(undefined);
   const [tab, setTab] = useState<Tab>('active');
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [crewRows, setCrewRows] = useState<CrewRunRowModel[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pushDenied, setPushDenied] = useState(false);
@@ -88,14 +83,9 @@ export default function SessionList() {
     try {
       if (tab === 'archived') {
         setSessions(await fetchArchivedSessions());
-        setCrewRows([]);
       } else {
-        const [sessionList, runs] = await Promise.all([
-          fetchSessions(),
-          fetchCrewRuns({ limit: 50 }),
-        ]);
+        const sessionList = await fetchSessions();
         setSessions(sessionList.filter((session) => session.status !== 'ARCHIVED'));
-        setCrewRows(buildCrewRunRows(runs));
       }
       setError(null);
     } catch {
@@ -116,16 +106,10 @@ export default function SessionList() {
       updatedAt: session.updatedAt,
       session,
     }));
-    const crewItems: HomeItem[] = crewRows.map((row) => ({
-      kind: 'crew',
-      key: row.key,
-      updatedAt: row.updatedAt,
-      row,
-    }));
-    return [...sessionItems, ...crewItems].sort(
+    return sessionItems.sort(
       (a, b) => b.updatedAt - a.updatedAt || a.key.localeCompare(b.key),
     );
-  }, [crewRows, sessions]);
+  }, [sessions]);
 
   const sessionPlans = useSessionPlans(sessions);
   const initialLoading = refreshing && items.length === 0;
@@ -153,15 +137,13 @@ export default function SessionList() {
           keyExtractor={(item) => item.key}
           extraData={sessionPlans}
           ItemSeparatorComponent={() => <View className="mx-4 h-px bg-border" />}
-          renderItem={({ item }) => item.kind === 'session'
-            ? (
-              <SessionRow
-                session={item.session}
-                steps={planStepsLabel(sessionPlans.get(item.session.id))}
-                onPress={() => router.push(`/session/${item.session.id}`)}
-              />
-            )
-            : <CrewRunRow row={item.row} onPress={() => router.push(crewTaskPath(item.row.taskId))} />}
+          renderItem={({ item }) => (
+            <SessionRow
+              session={item.session}
+              steps={planStepsLabel(sessionPlans.get(item.session.id))}
+              onPress={() => router.push(`/session/${item.session.id}`)}
+            />
+          )}
           renderSectionHeader={({ section }) => (
             <Text className="px-4 pb-2 pt-5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               {section.title}

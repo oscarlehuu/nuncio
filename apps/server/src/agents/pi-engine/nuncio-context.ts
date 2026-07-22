@@ -112,8 +112,7 @@ export class NuncioContextRepository {
          WHERE project_path = ?
            AND context_json IS NOT NULL
            AND status <> 'CANCELLED'
-           AND crew_run_id IS NULL
-           AND COALESCE(execution_kind, 'session') <> 'crew-member'
+           AND COALESCE(execution_kind, 'session') = 'session'
          ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, created_at DESC, rowid DESC`,
       )
       .all(projectPath, originTaskId ?? null);

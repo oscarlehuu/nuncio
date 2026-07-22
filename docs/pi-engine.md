@@ -7,8 +7,6 @@
 screenshots bound to workspace HEAD) also shipped on `dev`. **Extension rail + gate-integrity
 hook, diff-aware verify + evidence layers 2–3, and the recorded-session eval extractor** shipped
 2026-07-18. Step 2 (porting foreman/subagent into in-repo factories) remains planned.
-**Companions:** [Crew workspace harness](crew-workspace-harness.md),
-[CrewRun authority and state machine](crew-run-authority-and-state-machine.md).
 
 ## What it is
 
@@ -26,7 +24,7 @@ Nuncio Engine claims the four questions above that loop:
 Why Pi gets this treatment and Claude/Codex do not: Claude Agent SDK and Codex app-server are
 black-box vendor runtimes — Nuncio can only orchestrate their outer loop. Pi is the one runtime
 where Nuncio can own the entire inner loop while staying multi-provider (Claude, GPT, Grok, and
-anything Pi's registry supports). This resolves the Crew doc's open decision 5: **Pi stays, and is
+anything Pi's registry supports). **Pi stays, and is
 upgraded in place** — `apps/server/src/agents/providers/pi-agent.provider.ts` evolves; no parallel
 provider is added.
 
@@ -41,17 +39,6 @@ provider is added.
    layer.
 4. **Evaluation is the gate.** Nuncio Engine must beat vanilla Pi on real Nuncio tasks (same model,
    same task set) or a layer does not ship.
-
-## Boundary versus the Crew harness
-
-| | Crew harness | Nuncio Engine |
-|---|---|---|
-| Layer | provider-neutral **outer** loop | Pi-slot **inner** loop |
-| Owns | roles, task routing, shared workspace, gates, attention | context, tool belt, hooks, compaction of one provider |
-| Applies to | every engine | Pi sessions only |
-
-Engine specifics must never leak into shared session/task/UI layers (same rule the Crew doc sets
-for Fable/Sol/Claude/Codex/Pi ids).
 
 ## Separation model: what stays in `.pi/`, what Nuncio owns
 
@@ -139,14 +126,14 @@ this recipe; use `noContextFiles`/`agentsFilesOverride` if the personal file sho
   edit/write into any `.nuncio/` directory is blocked pre-execution (lexical + symlink-realpath
   check), bash gets a best-effort advisory block, and the shared turn-diff classifier's
   `gate-protected` class is the durable backstop. This claims the "blocked from" quadrant.
-  Since 2026-07-19 the rail also loads into **runtime-policy sessions** (Crew members), which stay
+  Since 2026-07-19 the rail also loads into **runtime-policy sessions**, which stay
   otherwise hermetic; the shared policy write guard additionally refuses `.nuncio` targets for
   every engine's confined edit/write tools.
-- **Sandboxed policy shell. DONE (2026-07-19).** Workspace-write policy sessions (Crew Builder)
+- **Sandboxed policy shell. DONE (2026-07-19).** Workspace-write policy sessions
   get a `bash` tool that runs every command through the shared OS sandbox
-  (`agents/runtime-command-sandbox.ts` — the same Seatbelt/bubblewrap core the Crew verifier
-  wraps): network denied, writes confined to the workspace, `.git` and `.nuncio` read-only. The
-  Builder can finally run builds/tests before submitting instead of coding blind.
+  (`agents/runtime-command-sandbox.ts` — the shared Seatbelt/bubblewrap core the verifier
+  wraps): network denied, writes confined to the workspace, `.git` and `.nuncio` read-only.
+  A workspace-write session can finally run builds/tests before submitting instead of coding blind.
   `NUNCIO_ENGINE_POLICY_SHELL` = `auto` (default; without a sandbox backend the shell stays
   available but its description announces confinement is advisory — never silently) /
   `sandboxed-only` / `off`. Read-only policies never get a shell. Live-enforced by
@@ -204,7 +191,7 @@ ships independently of Nuncio Engine (all engines benefit — candidate for the 
 1. **Capture service (nuncio layer).** Deterministic playwright-core against the dev server:
    *before* = baseline at task start, *after* = at completion. Artifact:
    `{ beforeRef, afterRef, route, viewport, workspaceHead }`, images via MediaStore, invalidated
-   when the workspace head moves (same rule as verify/review results in the Crew doc).
+   when the workspace head moves (same rule as verify/review results).
 2. **`capture_evidence` tool (Engine tool belt).** Some states must be *driven to* (click through
    a flow, open a dialog). The agent uses its browser skill to reach the state, then calls the
    tool; the harness captures deterministically and stores it in the right place.
@@ -216,7 +203,7 @@ screenshots first, recordings/GIF tier-2.
 
 ## Non-goals
 
-- No raw model API harness inside Nuncio (unchanged from the Crew doc); Pi owns the model loop.
+- No raw model API harness inside Nuncio; Pi owns the model loop.
 - No fork of Pi; no rebuild of Pi's config/auth/session plumbing.
 - No `.nuncio/harness/` user-land directory yet — in-repo factories cover the only current user;
   add the directory when an out-of-repo extension actually needs a home.

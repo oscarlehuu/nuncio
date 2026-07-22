@@ -5,7 +5,6 @@ import { deriveComposerEnabled } from './derive-composer-enabled';
 function input(
   overrides: Partial<{
     status: SessionStatus;
-    managedByCrew: boolean;
     steering: boolean;
     lifecycleBusy: boolean;
     hasPendingUserInput: boolean;
@@ -13,7 +12,6 @@ function input(
 ) {
   return {
     status: 'IDLE' as SessionStatus,
-    managedByCrew: false,
     steering: false,
     lifecycleBusy: false,
     hasPendingUserInput: false,
@@ -34,13 +32,6 @@ describe('deriveComposerEnabled', () => {
     expect(deriveComposerEnabled(input({ status: 'ARCHIVED' }))).toEqual({
       enabled: false,
       reason: 'archived',
-    });
-  });
-
-  it('disables when managed by Crew', () => {
-    expect(deriveComposerEnabled(input({ managedByCrew: true }))).toEqual({
-      enabled: false,
-      reason: 'managed_by_crew',
     });
   });
 
@@ -67,9 +58,7 @@ describe('deriveComposerEnabled', () => {
 
   it('ARCHIVED wins over other enable signals', () => {
     expect(
-      deriveComposerEnabled(
-        input({ status: 'ARCHIVED', managedByCrew: false, steering: false }),
-      ),
+      deriveComposerEnabled(input({ status: 'ARCHIVED', steering: false })),
     ).toEqual({ enabled: false, reason: 'archived' });
   });
 });

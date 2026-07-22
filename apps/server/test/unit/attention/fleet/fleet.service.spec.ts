@@ -34,13 +34,13 @@ describe('FleetService', () => {
     svc = new FleetService();
   });
 
-  it('excludes Crew member sessions from repository-backed Fleet sources', () => {
+  it('uses the user-facing session source, not the raw list, for Fleet sources', () => {
     let rawCalls = 0;
     let userFacingCalls = 0;
     const sessions = {
       list: () => {
         rawCalls += 1;
-        return [{ id: 'crew', verifyOwner: 'crew', projectPath: '/crew', status: 'RUNNING', updatedAt: 2 }];
+        return [{ id: 'raw', verifyOwner: 'session', projectPath: '/raw', status: 'RUNNING', updatedAt: 2 }];
       },
       listUserFacing: () => {
         userFacingCalls += 1;

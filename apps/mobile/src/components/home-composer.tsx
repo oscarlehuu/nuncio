@@ -25,14 +25,14 @@ import {
 import { modelSupportsFast } from '@nuncio/core/model-effort-options';
 import { ProviderIcon, brandForModel, type Brand } from './provider-icon';
 import {
-  fetchCrewBranches,
-  fetchCrewProjects,
-  preferredCrewBaseBranch,
-  selectableCrewBranches,
-  type CrewBranch,
-  type CrewProject,
-} from '../lib/crew-projects';
-import { createCrewSubmitLock } from '../lib/crew-composer';
+  fetchBranches,
+  fetchProjects,
+  preferredBaseBranch,
+  selectableBranches,
+  type Branch,
+  type Project,
+} from '../lib/projects';
+import { createSubmitLock } from '../lib/submit-lock';
 import { fetchDirectories, type DirListing } from '../lib/fs-api';
 import { basename } from '../lib/home-sections';
 import { Button } from './ui/button';
@@ -69,15 +69,15 @@ interface HomeComposerProps {
 export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
   const insets = useSafeAreaInsets();
   const sheetRef = useRef<BottomSheetModal>(null);
-  const submitLock = useRef(createCrewSubmitLock());
+  const submitLock = useRef(createSubmitLock());
   const [prompt, setPrompt] = useState('');
   const [promptHeight, setPromptHeight] = useState(64);
   const [providers, setProviders] = useState<ModelProvider[]>([]);
   const [modelId, setModelId] = useState<string | null>(null);
-  const [projects, setProjects] = useState<CrewProject[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [projectPath, setProjectPath] = useState('');
   const [baseBranch, setBaseBranch] = useState('');
-  const [branches, setBranches] = useState<CrewBranch[]>([]);
+  const [branches, setBranches] = useState<Branch[]>([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [branchesError, setBranchesError] = useState<string | null>(null);
   const branchReqId = useRef(0);
@@ -99,7 +99,7 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
         if (preferred) setModelId(preferred.modelId);
       })
       .catch(() => setError('Could not load available models.'));
-    void fetchCrewProjects()
+    void fetchProjects()
       .then(setProjects)
       .catch(() => {});
   }, []);
@@ -109,10 +109,10 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
     setBranchesLoading(true);
     setBranchesError(null);
     try {
-      const list = await fetchCrewBranches(path);
+      const list = await fetchBranches(path);
       if (reqId !== branchReqId.current) return;
       setBranches(list);
-      setBaseBranch(preferredCrewBaseBranch(list));
+      setBaseBranch(preferredBaseBranch(list));
     } catch {
       if (reqId !== branchReqId.current) return;
       setBranches([]);
@@ -146,7 +146,7 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
     const model = models.find((entry) => entry.id === modelId);
     setModelOptions(defaultSelectionsFromDescriptors(model?.options));
   }, [modelId, models]);
-  const selectableBranches = useMemo(() => selectableCrewBranches(branches), [branches]);
+  const selectableBranchList = useMemo(() => selectableBranches(branches), [branches]);
   const sheetCopy = sheetMode ? SHEET_COPY[sheetMode] : null;
   const modelOptionDescriptors = useMemo<ModelOptionDescriptor[]>(() => {
     const base = selectedModel?.options ?? [];
@@ -331,11 +331,11 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
         ) : null}
         <View className="mt-3 flex-row items-center justify-between">
           <Pressable
-            accessibilityLabel="Switch to Crew or advanced options"
+            accessibilityLabel="Open advanced options"
             onPress={onAdvanced}
             className="min-h-11 flex-row items-center gap-1 py-1 active:opacity-70"
           >
-            <Text className="text-xs font-medium text-muted-foreground">Crew / advanced</Text>
+            <Text className="text-xs font-medium text-muted-foreground">Advanced</Text>
             <ChevronRight color="#83868b" size={13} />
           </Pressable>
           <Button
@@ -629,8 +629,8 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
                   >
                     <Text className="text-center text-xs leading-5 text-muted-foreground">{branchesError}</Text>
                   </Pressable>
-                ) : selectableBranches.length ? (
-                  selectableBranches.map((branch) => (
+                ) : selectableBranchList.length ? (
+                  selectableBranchList.map((branch) => (
                     <PickerRow
                       key={branch.name}
                       label={branch.name}

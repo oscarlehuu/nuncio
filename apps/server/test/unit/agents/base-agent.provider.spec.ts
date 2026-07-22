@@ -120,7 +120,7 @@ describe('BaseAgentProvider error path', () => {
     const delayed = new DelayedInterruptProvider(sessions, events);
     let settled = false;
 
-    const quiescing = delayed.quiesce('crew-session').then(() => {
+    const quiescing = delayed.quiesce('policy-session').then(() => {
       settled = true;
     });
     await Promise.resolve();

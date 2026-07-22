@@ -39,7 +39,6 @@ import { ChunkErrorBoundary } from './components/chunk-error-boundary';
 import { HandoffPicker } from './components/handoff-picker';
 import { DesktopSidebarHoverRail, DesktopSidebarPinned } from './components/desktop-sidebar-shell';
 import { SessionDetail } from './components/session-detail';
-import { CrewTaskDetail } from './components/crew/crew-task-detail';
 import { Sidebar } from './components/sidebar';
 import type { ModelProvider } from './lib/model-providers';
 import type { ModelOptionsMap } from './lib/model-options';
@@ -722,15 +721,6 @@ export default function App() {
                 onSubmit={handleCreate}
                 onContinueOnMobile={() => openHandoff()}
                 loading={creating}
-                onCrewCreated={(taskId, machine) =>
-                  // Remote runs live on their owning daemon: a full navigation to
-                  // /m/<machine>/ reboots the SPA under that machine's base, so the
-                  // detail view's polling auto-routes to it through the hub proxy.
-                  // Local runs keep the lightweight client-side route change.
-                  machine
-                    ? window.location.assign(`/m/${machine}/crew/${taskId}`)
-                    : navigate(`/crew/${taskId}`)
-                }
                 composerFocusKey={composerFocusKey}
                 railOverlay={!desktopSidebar.pinned}
               />
@@ -738,15 +728,6 @@ export default function App() {
           />
           {/* Legacy /new → the merged Home composer. */}
           <Route path="/new" element={<Navigate to="/" replace />} />
-          <Route
-            path="/crew/:taskId"
-            element={
-              <CrewTaskRoute
-                onBack={() => navigate('/')}
-                onOpenSession={(sessionId) => handleSelect(sessionId)}
-              />
-            }
-          />
           <Route
             path="/grid"
             element={
@@ -799,7 +780,6 @@ export default function App() {
                 steering={steering}
                 lifecycleBusy={lifecycleBusy}
                 onSessionLoaded={(session) => {
-                  if (session.verifyOwner === 'crew') return;
                   setSessions((prev) => {
                     if (prev.some((s) => s.id === session.id)) return prev;
                     return [session, ...prev];
@@ -937,20 +917,6 @@ export default function App() {
       <Toaster richColors closeButton />
     </div>
   );
-}
-
-function CrewTaskRoute({
-  onBack,
-  onOpenSession,
-}: {
-  onBack: () => void;
-  onOpenSession: (sessionId: string) => void;
-}) {
-  const { taskId } = useParams<{ taskId: string }>();
-  const location = useLocation();
-  const runId = new URLSearchParams(location.search).get('run') || undefined;
-  if (!taskId) return <Navigate to="/" replace />;
-  return <CrewTaskDetail taskId={taskId} runId={runId} onBack={onBack} onOpenSession={onOpenSession} />;
 }
 
 interface SessionRouteProps {

@@ -162,7 +162,7 @@ describe('PiAgentProvider engine extension wiring', () => {
   it('loads the gate-guard rail into policy sessions while keeping them hermetic', async () => {
     const workspaceRoot = mkdtempSync(join(tmpdir(), 'nuncio-policy-rail-'));
     try {
-      const created = sessions.create({ prompt: 'crew builder', provider: 'pi' });
+      const created = sessions.create({ prompt: 'policy session', provider: 'pi' });
 
       await provider.run(created.id, created.prompt, {
         cwd: workspaceRoot,

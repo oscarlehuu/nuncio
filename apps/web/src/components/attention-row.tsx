@@ -4,7 +4,6 @@ import { relativeTime, type AttentionItemDto } from '../lib/api';
 import {
   attentionKindMeta,
   openTargetFor,
-  isCrewAttentionKind,
   TONE_ACCENT,
   TONE_CHIP,
   type OpenTarget,
@@ -18,14 +17,13 @@ interface AttentionRowProps {
   busy?: boolean;
   onOpen: (target: OpenTarget) => void;
   onApprove: (id: string, proposalCount: number) => void;
-  onAck: (id: string) => void;
   onResolve: (id: string) => void;
   /** Spawn-task chip: one-tap spin the follow-up into its own session. */
   onCreate?: (id: string) => void;
 }
 
 /** A row carries at most two actions: one primary (Open/Approve/Create) plus Dismiss. */
-export function AttentionRow({ item, busy, onOpen, onApprove, onAck, onResolve, onCreate }: AttentionRowProps) {
+export function AttentionRow({ item, busy, onOpen, onApprove, onResolve, onCreate }: AttentionRowProps) {
   const meta = attentionKindMeta(item.kind);
   const Icon = meta.icon;
   const target = openTargetFor(item);
@@ -37,7 +35,6 @@ export function AttentionRow({ item, busy, onOpen, onApprove, onAck, onResolve, 
   const spawnTaskTldr = isSpawnTask ? payloadText(item, 'tldr') : null;
   const approved = dispatcher.approvedAt !== null || dispatcher.taskIds.length > 0;
   const project = isDispatcher ? null : projectDisplayName(item.projectPath);
-  const crew = isCrewAttentionKind(item.kind);
 
   return (
     <li
@@ -93,21 +90,16 @@ export function AttentionRow({ item, busy, onOpen, onApprove, onAck, onResolve, 
             Approve
           </Button>
         )}
-        {crew && !acked ? (
-          <Button variant="ghost" size="sm" className="min-h-11 px-3 text-muted-foreground" disabled={busy} onClick={() => onAck(item.id)} aria-label={`Mark "${item.title}" seen`}>Mark seen</Button>
-        ) : null}
-        {!crew ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="min-h-11 px-2.5 text-muted-foreground"
-            disabled={busy}
-            onClick={() => onResolve(item.id)}
-            aria-label={`Dismiss "${item.title}"`}
-          >
-            Dismiss
-          </Button>
-        ) : null}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="min-h-11 px-2.5 text-muted-foreground"
+          disabled={busy}
+          onClick={() => onResolve(item.id)}
+          aria-label={`Dismiss "${item.title}"`}
+        >
+          Dismiss
+        </Button>
         {target && !isDispatcher && (
           <Button
             size="sm"

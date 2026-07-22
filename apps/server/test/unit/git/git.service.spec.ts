@@ -958,11 +958,11 @@ describe('GitService', () => {
     });
   });
 
-  describe('Crew workspace boundary and checkpoint', () => {
+  describe('Workspace boundary and checkpoint', () => {
     let repo: string;
 
     beforeEach(async () => {
-      repo = mkdtempSync(join(tmpdir(), 'nuncio-crew-boundary-'));
+      repo = mkdtempSync(join(tmpdir(), 'nuncio-workspace-boundary-'));
       await initRepo(repo);
     });
 
@@ -1053,14 +1053,14 @@ describe('GitService', () => {
     });
 
     it('checkpoints dirty workspace changes with a deterministic local commit and full SHA', async () => {
-      writeFileSync(join(repo, 'crew-output.txt'), 'result\n');
+      writeFileSync(join(repo, 'workspace-output.txt'), 'result\n');
 
-      const checkpoint = await service.checkpoint(repo, 'crew: builder checkpoint');
+      const checkpoint = await service.checkpoint(repo, 'checkpoint: committed output');
 
       expect(checkpoint).toMatchObject({ committed: true, clean: true });
       expect(checkpoint.fullHead).toMatch(/^[0-9a-f]{40}$/);
       expect(await readGitAsync(repo, ['show', '--format=%s', '--no-patch', 'HEAD']))
-        .toBe('crew: builder checkpoint');
+        .toBe('checkpoint: committed output');
 
       await expect(service.checkpoint(repo, 'unused clean checkpoint')).resolves.toEqual({
         fullHead: checkpoint.fullHead,
@@ -1069,11 +1069,11 @@ describe('GitService', () => {
       });
     });
 
-    it('rejects a sensitive path already committed by the Builder in the exact descendant range', async () => {
+    it('rejects a sensitive path already committed in the workspace in the exact descendant range', async () => {
       const fromHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
       writeFileSync(join(repo, '.env'), 'DATABASE_PASSWORD=do-not-commit\n');
       await runGitAsync(repo, ['add', '.env']);
-      await runGitAsync(repo, ['commit', '-m', 'builder self-commit']);
+      await runGitAsync(repo, ['commit', '-m', 'workspace self-commit']);
       const toHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
 
       await expect(validateCheckpointRange(service, repo, fromHead, toHead))
@@ -1085,7 +1085,7 @@ describe('GitService', () => {
       const secret = `sk-proj-${'A1b2C3d4'.repeat(8)}`;
       writeFileSync(join(repo, 'src-config.ts'), `export const apiKey = '${secret}';\n`);
       await runGitAsync(repo, ['add', 'src-config.ts']);
-      await runGitAsync(repo, ['commit', '-m', 'builder source commit']);
+      await runGitAsync(repo, ['commit', '-m', 'workspace source commit']);
       const toHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
 
       const message = await validateCheckpointRange(service, repo, fromHead, toHead).then(
@@ -1097,12 +1097,12 @@ describe('GitService', () => {
       expect(message).not.toContain(secret);
     });
 
-    it('rejects a high-confidence secret retained only in the direct Builder commit message', async () => {
+    it('rejects a high-confidence secret retained only in the direct workspace commit message', async () => {
       const fromHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
       const secret = `sk-proj-${'A1b2C3d4'.repeat(8)}`;
       writeFileSync(join(repo, 'safe-message-output.ts'), "export const result = 'safe';\n");
       await runGitAsync(repo, ['add', 'safe-message-output.ts']);
-      await runGitAsync(repo, ['commit', '-m', `builder note ${secret}`]);
+      await runGitAsync(repo, ['commit', '-m', `workspace note ${secret}`]);
       const toHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
 
       const message = await validateCheckpointRange(service, repo, fromHead, toHead).then(
@@ -1118,7 +1118,7 @@ describe('GitService', () => {
       let fromHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
       symlinkSync('../outside-workspace', join(repo, 'linked-output'));
       await runGitAsync(repo, ['add', 'linked-output']);
-      await runGitAsync(repo, ['commit', '-m', 'builder symlink commit']);
+      await runGitAsync(repo, ['commit', '-m', 'workspace symlink commit']);
       let toHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
       await expect(validateCheckpointRange(service, repo, fromHead, toHead))
         .rejects.toThrow('could not safely inspect');
@@ -1129,7 +1129,7 @@ describe('GitService', () => {
       fromHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
       writeFileSync(join(repo, 'oversized-output.txt'), 'x'.repeat(1_048_577));
       await runGitAsync(repo, ['add', 'oversized-output.txt']);
-      await runGitAsync(repo, ['commit', '-m', 'builder oversized commit']);
+      await runGitAsync(repo, ['commit', '-m', 'workspace oversized commit']);
       toHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
       await expect(validateCheckpointRange(service, repo, fromHead, toHead))
         .rejects.toThrow('could not safely inspect');
@@ -1139,7 +1139,7 @@ describe('GitService', () => {
       const fromHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
       writeFileSync(join(repo, 'safe-output.ts'), "export const status = 'green';\n");
       await runGitAsync(repo, ['add', 'safe-output.ts']);
-      await runGitAsync(repo, ['commit', '-m', 'builder safe commit']);
+      await runGitAsync(repo, ['commit', '-m', 'workspace safe commit']);
       const toHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
 
       await expect(validateCheckpointRange(service, repo, fromHead, toHead)).resolves.toBeUndefined();
@@ -1154,57 +1154,57 @@ describe('GitService', () => {
       const fromHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
       rmSync(join(repo, 'README.md'));
       await runGitAsync(repo, ['add', 'README.md']);
-      await runGitAsync(repo, ['commit', '-m', 'builder deletion commit']);
+      await runGitAsync(repo, ['commit', '-m', 'workspace deletion commit']);
       const toHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
 
       await expect(validateCheckpointRange(service, repo, fromHead, toHead)).resolves.toBeUndefined();
     });
 
-    it('rejects add-then-delete secrets retained in multi-commit Builder history', async () => {
+    it('rejects add-then-delete secrets retained in multi-commit workspace history', async () => {
       const fromHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
       const secret = `sk-proj-${'A1b2C3d4'.repeat(8)}`;
       writeFileSync(join(repo, 'temporary-secret.ts'), `export const token = '${secret}';\n`);
       await runGitAsync(repo, ['add', 'temporary-secret.ts']);
-      await runGitAsync(repo, ['commit', '-m', 'builder adds secret']);
+      await runGitAsync(repo, ['commit', '-m', 'workspace adds secret']);
       rmSync(join(repo, 'temporary-secret.ts'));
       await runGitAsync(repo, ['add', 'temporary-secret.ts']);
-      await runGitAsync(repo, ['commit', '-m', 'builder deletes secret']);
+      await runGitAsync(repo, ['commit', '-m', 'workspace deletes secret']);
       const toHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
 
       await expect(validateCheckpointRange(service, repo, fromHead, toHead))
         .rejects.toThrow('single linear commit');
     });
 
-    it('rejects nonlinear or merged Builder history instead of scanning only the final tree', async () => {
+    it('rejects nonlinear or merged workspace history instead of scanning only the final tree', async () => {
       const fromHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
-      await runGitAsync(repo, ['checkout', '-b', 'builder-side']);
+      await runGitAsync(repo, ['checkout', '-b', 'workspace-side']);
       writeFileSync(join(repo, 'side.ts'), 'export const side = true;\n');
       await runGitAsync(repo, ['add', 'side.ts']);
-      await runGitAsync(repo, ['commit', '-m', 'builder side commit']);
+      await runGitAsync(repo, ['commit', '-m', 'workspace side commit']);
       await runGitAsync(repo, ['checkout', 'main']);
       writeFileSync(join(repo, 'main.ts'), 'export const main = true;\n');
       await runGitAsync(repo, ['add', 'main.ts']);
-      await runGitAsync(repo, ['commit', '-m', 'builder main commit']);
-      await runGitAsync(repo, ['merge', '--no-ff', 'builder-side', '-m', 'builder merge']);
+      await runGitAsync(repo, ['commit', '-m', 'workspace main commit']);
+      await runGitAsync(repo, ['merge', '--no-ff', 'workspace-side', '-m', 'workspace merge']);
       const toHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
 
       await expect(validateCheckpointRange(service, repo, fromHead, toHead))
         .rejects.toThrow('single linear commit');
     });
 
-    it('validates the actual commit graph instead of a Builder-controlled replacement ref', async () => {
+    it('validates the actual commit graph instead of a workspace-controlled replacement ref', async () => {
       const fromHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
       const secret = `sk-proj-${'A1b2C3d4'.repeat(8)}`;
       writeFileSync(join(repo, 'replaced-secret.ts'), `export const token = '${secret}';\n`);
       await runGitAsync(repo, ['add', 'replaced-secret.ts']);
-      await runGitAsync(repo, ['commit', '-m', 'builder secret commit']);
+      await runGitAsync(repo, ['commit', '-m', 'workspace secret commit']);
       rmSync(join(repo, 'replaced-secret.ts'));
       await runGitAsync(repo, ['add', 'replaced-secret.ts']);
-      await runGitAsync(repo, ['commit', '-m', 'builder delete commit']);
+      await runGitAsync(repo, ['commit', '-m', 'workspace delete commit']);
       const toHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
       const finalTree = await readGitAsync(repo, ['rev-parse', `${toHead}^{tree}`]);
       const replacement = await readGitAsync(repo, [
-        'commit-tree', finalTree, '-p', fromHead, '-m', 'conceal Builder history',
+        'commit-tree', finalTree, '-p', fromHead, '-m', 'conceal workspace history',
       ]);
       await runGitAsync(repo, ['replace', toHead, replacement]);
 
@@ -1218,7 +1218,7 @@ describe('GitService', () => {
       const fromHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
       writeFileSync(join(repo, 'safe-sha256.ts'), "export const result = 'safe';\n");
       await runGitAsync(repo, ['add', 'safe-sha256.ts']);
-      await runGitAsync(repo, ['commit', '-m', 'builder sha256 commit']);
+      await runGitAsync(repo, ['commit', '-m', 'workspace sha256 commit']);
       const toHead = await readGitAsync(repo, ['rev-parse', 'HEAD']);
 
       expect(fromHead).toHaveLength(64);

@@ -6,7 +6,7 @@ import type {
   AgentRuntimePolicySupport,
 } from './agents.types';
 import type { AgentRuntimeTools } from './tools/agent-runtime-tools.types';
-import { isCrewRuntimeToolAllowed } from './tools/agent-runtime-tools-policy';
+import { isTrustedRuntimeToolAllowed } from './tools/agent-runtime-tools-policy';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -108,7 +108,7 @@ export function runtimeToolsForPolicy(
   tools: AgentRuntimeTools | undefined,
 ): AgentRuntimeTools | undefined {
   if (!policy) return tools;
-  const allowed = tools?.tools.filter((tool) => isCrewRuntimeToolAllowed(tool, policy)) ?? [];
+  const allowed = tools?.tools.filter((tool) => isTrustedRuntimeToolAllowed(tool, policy)) ?? [];
   // Aggregate prompt text may describe excluded browser/orchestration tools, so
   // explicit-policy runs receive only the independently-vetted tool objects.
   return allowed.length > 0 ? { tools: allowed } : undefined;

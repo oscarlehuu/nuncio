@@ -1,0 +1,20 @@
+{"ts": 900, "type": "delta", "tokens": 99}
+{"ts": 1000, "type": "turn_start"}
+{"ts": 1400, "type": "delta", "tokens": 5}
+{"ts": 1500, "type": "delta", "tokens": 5}
+{"ts": 1700, "type": "delta"}
+{"ts": 1800, "type": "delta", "tokens": 9}
+{"ts": 1900, "type": "turn_end"}
+{"ts": 1950, "type": "delta", "tokens": 50}
+{"ts": 3000, "type": "turn_start"}
+{"ts": 3100, "type": "tool_call"}
+{"ts": 3600, "type": "tool_result"}
+{"ts": 3700, "type": "turn_end"}
+{"ts": 5000, "type": "turn_start"}
+{"ts": 8600, "type": "delta", "tokens": 4}
+{"ts": 5600, "type": "delta", "tokens": 2}
+{"ts": 6000, "type": "delta", "tokens": 3}
+{"ts": 9000, "type": "turn_end"}
+{"ts": "oops", "type": "delta"}
+{"type": "delta", "tokens": 3}
+{"ts": 9500, "type": "unknown_kind"}

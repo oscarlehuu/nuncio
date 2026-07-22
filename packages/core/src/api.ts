@@ -158,8 +158,8 @@ export interface Session {
   supportsImages?: boolean;
   /** Agent is blocked on an open user-input or approval request (RUNNING only). */
   pendingInput?: boolean;
-  /** Crew owns lifecycle and steering for member sessions; clients render them inspect-only. */
-  verifyOwner?: 'session' | 'crew';
+  /** Which layer owns the verify gate for this session. */
+  verifyOwner?: 'session';
   parentSessionId?: string | null;
   originTaskId?: string | null;
   priorSessionId?: string | null;

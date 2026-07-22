@@ -90,7 +90,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
 
   function seedSession(
     status: 'IDLE' | 'PAUSED' | 'RUNNING' | 'ARCHIVED' | 'ERROR',
-    verifyOwner: 'session' | 'crew' = 'session',
+    verifyOwner: 'session' = 'session',
   ) {
     const created = sessions.create({
       prompt: 'Lifecycle test session',
@@ -139,7 +139,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
 
       const continued = await service.continueExistingSession(id, {
         prompt: `continue ${status.toLowerCase()}`,
-        contextBrief: { goal: `Crew ${status.toLowerCase()} goal` },
+        contextBrief: { goal: `Session ${status.toLowerCase()} goal` },
       });
 
       expect(continued.id).toBe(id);
@@ -147,7 +147,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
       expect(service.list(true).map((session) => session.id).sort()).toEqual(beforeIds);
       const continuation = events.list(id).filter((event) => event.type === 'steer_message').at(-1);
       expect(continuation?.payload).toEqual(expect.objectContaining({
-        text: expect.stringContaining(`Crew ${status.toLowerCase()} goal`),
+        text: expect.stringContaining(`Session ${status.toLowerCase()} goal`),
       }));
     }
   });
@@ -240,165 +240,17 @@ describe('SessionsService lifecycle (phase 3)', () => {
     expect(listed.some((s) => s.id === archivedId && s.status === 'ARCHIVED')).toBe(true);
   });
 
-  it('hides Crew member sessions from public lists while keeping detail readable', () => {
-    const activeCrewId = seedSession('IDLE', 'crew');
-    const archivedCrewId = seedSession('ARCHIVED', 'crew');
+  it('keeps legacy Crew-owned sessions hidden and rejects direct public access', async () => {
+    const id = seedSession('IDLE');
+    database.db.prepare("UPDATE sessions SET verify_owner = 'crew' WHERE id = ?").run(id);
 
-    expect(service.list().map((session) => session.id)).not.toContain(activeCrewId);
-    expect(service.list(true).map((session) => session.id)).not.toContain(activeCrewId);
-    expect(service.list(true).map((session) => session.id)).not.toContain(archivedCrewId);
-    expect(service.get(activeCrewId)).toMatchObject({
-      id: activeCrewId,
-      verifyOwner: 'crew',
-    });
-    expect(service.get(archivedCrewId)).toMatchObject({
-      id: archivedCrewId,
-      verifyOwner: 'crew',
-    });
-  });
-
-  it('rejects public mutations for Crew-owned sessions but allows internal continuation', async () => {
-    const crewId = seedSession('IDLE', 'crew');
-    const archivedCrewId = seedSession('ARCHIVED', 'crew');
-    const message = 'Crew-owned sessions are read-only outside Crew controls';
-
-    await expect(service.steer(crewId, 'bypass the Crew stage')).rejects.toThrow(message);
-    await expect(service.interrupt(crewId)).rejects.toThrow(message);
-    await expect(service.setSessionModel(crewId, 'cursor:other')).rejects.toThrow(message);
-    await expect(service.respondInteraction(crewId, 'request', {
-      answers: [],
-      resolvedBy: 'skip',
-    })).rejects.toThrow(message);
-    expect(() => service.respondProviderRequest(crewId, 'request', 'approve')).toThrow(message);
-    expect(() => service.pause(crewId)).toThrow(message);
-    expect(() => service.archive(crewId)).toThrow(message);
-    expect(() => service.rename(crewId, 'renamed outside Crew')).toThrow(message);
-    expect(() => service.refreshTranscript(crewId)).toThrow(message);
-    expect(() => service.restore(archivedCrewId)).toThrow(message);
-    expect(() => service.delete(archivedCrewId)).toThrow(message);
-
-    await expect(service.continueExistingSession(crewId, {
-      prompt: 'continue through the trusted Crew runner',
-      origin: 'crew-member-task',
-    })).resolves.toMatchObject({ id: crewId, status: 'IDLE', verifyOwner: 'crew' });
-  });
-
-  it('quiesces a Crew-owned running session through the internal owner seam', async () => {
-    const crewId = seedSession('RUNNING', 'crew');
-    const provider = registry.get('cursor');
-    const disposeSpy = jest.spyOn(provider, 'dispose');
-    try {
-      await expect(service.quiesceCrewSession(crewId)).resolves.toMatchObject({
-        id: crewId,
-        status: 'IDLE',
-        verifyOwner: 'crew',
-      });
-      expect(disposeSpy).toHaveBeenCalledWith(crewId);
-    } finally {
-      disposeSpy.mockRestore();
-    }
-  });
-
-  it('keeps a Crew session running until the provider acknowledges quiescence', async () => {
-    const crewId = seedSession('RUNNING', 'crew');
-    const provider = registry.get('cursor');
-    let acknowledge: (() => void) | undefined;
-    const acknowledgement = new Promise<void>((resolve) => {
-      acknowledge = resolve;
-    });
-    const quiesceSpy = jest.spyOn(provider, 'quiesce').mockImplementation(async () => acknowledgement);
-    try {
-      let settled = false;
-      const quiescing = service.quiesceCrewSession(crewId).then((session) => {
-        settled = true;
-        return session;
-      });
-      await Promise.resolve();
-
-      expect(settled).toBe(false);
-      expect(service.get(crewId)?.status).toBe('RUNNING');
-      expect(events.list(crewId).some((event) => event.type === 'interrupted')).toBe(false);
-
-      acknowledge?.();
-      await expect(quiescing).resolves.toMatchObject({ status: 'IDLE' });
-    } finally {
-      quiesceSpy.mockRestore();
-    }
-  });
-
-  it('fences a Crew member whose initial provider start is still resolving', async () => {
-    const provider = registry.get('cursor');
-    let releaseProvider: ((value: AgentProvider) => void) | undefined;
-    const providerReady = new Promise<AgentProvider>((resolve) => {
-      releaseProvider = resolve;
-    });
-    const resolveSpy = jest.spyOn(registry, 'resolveAvailableForSession')
-      .mockReturnValue(providerReady);
-    const runSpy = jest.spyOn(provider, 'run');
-    try {
-      const created = await service.create({
-        prompt: 'Crew start must not escape cancellation',
-        provider: 'cursor',
-        verifyOwner: 'crew',
-      });
-
-      await service.quiesceCrewSession(created.id);
-      releaseProvider?.(provider);
-      await service.awaitRun(created.id);
-
-      expect(runSpy).not.toHaveBeenCalled();
-      expect(events.list(created.id).some((event) => event.type === 'user_message')).toBe(false);
-      expect(service.get(created.id)?.status).toBe('CREATED');
-    } finally {
-      resolveSpy.mockRestore();
-      runSpy.mockRestore();
-    }
-  });
-
-  it('fences a Crew continuation that is still resolving its provider', async () => {
-    const crewId = seedSession('IDLE', 'crew');
-    const provider = registry.get('cursor');
-    let releaseProvider: ((value: AgentProvider) => void) | undefined;
-    const providerReady = new Promise<AgentProvider>((resolve) => {
-      releaseProvider = resolve;
-    });
-    const resolveSpy = jest.spyOn(registry, 'resolveAvailableForSession')
-      .mockReturnValue(providerReady);
-    const steerSpy = jest.spyOn(provider, 'steer');
-    try {
-      const continuation = service.continueExistingSession(crewId, {
-        prompt: 'Do not start after the owner has quiesced this continuation',
-        origin: 'crew-member-task',
-      });
-      await Promise.resolve();
-
-      await service.quiesceCrewSession(crewId);
-      releaseProvider?.(provider);
-      await expect(continuation).resolves.toMatchObject({ status: 'IDLE' });
-
-      expect(steerSpy).not.toHaveBeenCalled();
-      expect(events.list(crewId).some((event) => event.type === 'steer_message')).toBe(false);
-    } finally {
-      resolveSpy.mockRestore();
-      steerSpy.mockRestore();
-    }
-  });
-
-  it('propagates provider quiescence failure without claiming the Crew session stopped', async () => {
-    const crewId = seedSession('RUNNING', 'crew');
-    const provider = registry.get('cursor');
-    const quiesceSpy = jest.spyOn(provider, 'quiesce').mockRejectedValue(
-      new Error('provider did not acknowledge stop'),
-    );
-    try {
-      await expect(service.quiesceCrewSession(crewId)).rejects.toThrow(
-        'provider did not acknowledge stop',
-      );
-      expect(service.get(crewId)?.status).toBe('RUNNING');
-      expect(events.list(crewId).some((event) => event.type === 'interrupted')).toBe(false);
-    } finally {
-      quiesceSpy.mockRestore();
-    }
+    expect(service.get(id)).toBeNull();
+    expect(service.list(true).some((session) => session.id === id)).toBe(false);
+    expect(() => service.requirePublicMutableSession(id)).toThrow(NotFoundException);
+    await expect(service.steer(id, 'resume retired work')).rejects.toThrow(NotFoundException);
+    expect(() => service.archive(id)).toThrow(NotFoundException);
+    expect(() => service.getEvents(id)).toThrow(NotFoundException);
+    expect(() => service.subscribe(id, () => {})).toThrow(NotFoundException);
   });
 
   it('list returns a session from an unregistered provider with capabilities disabled', () => {

@@ -53,10 +53,6 @@ export class TasksRepository {
       context_json: input.contextBrief ? JSON.stringify(input.contextBrief) : null,
       notify_policy: input.notifyPolicy ?? null,
       tag: input.tag ?? null,
-      crew_run_id: input.crewRunId ?? null,
-      crew_member_key: input.crewMemberKey ?? null,
-      crew_phase: input.crewPhase ?? null,
-      crew_attempt_key: input.crewAttemptKey ?? null,
       execution_kind: input.executionKind ?? 'session',
       runtime_policy_json: stringifyAgentRuntimePolicy(input.runtimePolicy),
       verify_owner: input.verifyOwner ?? 'session',
@@ -70,18 +66,16 @@ export class TasksRepository {
         `INSERT INTO tasks (id, prompt, status, provider, model, model_options, project_path,
            base_branch, use_worktree, workspace, parent_session_id, role, cleanup_policy,
            review_state, session_id, outcome_json, hold_until, context_json, notify_policy, tag,
-           crew_run_id, crew_member_key, crew_phase, crew_attempt_key,
            execution_kind, runtime_policy_json, verify_owner,
            created_at, updated_at, started_at, finished_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id, row.prompt, row.status, row.provider, row.model, row.model_options,
         row.project_path, row.base_branch, row.use_worktree, row.workspace, row.parent_session_id,
         row.role, row.cleanup_policy, row.review_state, row.session_id, row.outcome_json,
         row.hold_until, row.context_json, row.notify_policy, row.tag,
-        row.crew_run_id, row.crew_member_key, row.crew_phase, row.crew_attempt_key, row.execution_kind,
-        row.runtime_policy_json, row.verify_owner,
+        row.execution_kind, row.runtime_policy_json, row.verify_owner,
         row.created_at, row.updated_at, row.started_at, row.finished_at,
       );
     return row;
@@ -89,7 +83,11 @@ export class TasksRepository {
 
   list(): TaskDto[] {
     const rows = this.database.db
-      .prepare<TaskRow, []>('SELECT * FROM tasks ORDER BY created_at DESC, rowid DESC')
+      .prepare<TaskRow, []>(
+        `SELECT * FROM tasks
+         WHERE execution_kind = 'session' AND verify_owner = 'session'
+         ORDER BY created_at DESC, rowid DESC`,
+      )
       .all();
     return rows.map(taskRowToDto);
   }
@@ -99,6 +97,8 @@ export class TasksRepository {
       .prepare<TaskRow, [string]>(
         `SELECT * FROM tasks
          WHERE parent_session_id = ?
+           AND execution_kind = 'session'
+           AND verify_owner = 'session'
          ORDER BY created_at DESC, rowid DESC`,
       )
       .all(parentSessionId);
@@ -112,18 +112,30 @@ export class TasksRepository {
     return row ? taskRowToDto(row) : null;
   }
 
+  /** Public lookup excludes retired internal task kinds before normalization. */
+  findUserFacingById(id: string): TaskDto | null {
+    const row = this.database.db
+      .prepare<TaskRow, [string]>(
+        `SELECT * FROM tasks
+         WHERE id = ? AND execution_kind = 'session' AND verify_owner = 'session'`,
+      )
+      .get(id);
+    return row ? taskRowToDto(row) : null;
+  }
+
   /** Atomically claim the oldest QUEUED task past its hold window, marking it RUNNING. */
-  claimNextQueued(options: { includeCrewMembers?: boolean } = {}): TaskDto | null {
+  claimNextQueued(): TaskDto | null {
     const now = Date.now();
     const candidates = this.database.db
-      .prepare<{ id: string }, [number, number]>(
+      .prepare<{ id: string }, [number]>(
         `SELECT id FROM tasks
          WHERE status = 'QUEUED'
-           AND (? = 1 OR execution_kind != 'crew-member')
+           AND execution_kind = 'session'
+           AND verify_owner = 'session'
            AND (hold_until IS NULL OR hold_until <= ?)
          ORDER BY created_at ASC, rowid ASC`,
       )
-      .all(options.includeCrewMembers === false ? 0 : 1, now);
+      .all(now);
     const candidate = candidates.find((row) => !this.cancellationReservations.has(row.id));
     if (!candidate) return null;
     const row = this.database.db
@@ -243,7 +255,11 @@ export class TasksRepository {
   earliestHold(): number | null {
     const row = this.database.db
       .prepare<{ earliest: number | null }, []>(
-        "SELECT MIN(hold_until) AS earliest FROM tasks WHERE status = 'QUEUED' AND hold_until IS NOT NULL",
+        `SELECT MIN(hold_until) AS earliest FROM tasks
+         WHERE status = 'QUEUED'
+           AND execution_kind = 'session'
+           AND verify_owner = 'session'
+           AND hold_until IS NOT NULL`,
       )
       .get();
     return row?.earliest ?? null;
@@ -263,28 +279,14 @@ export class TasksRepository {
     return row ? taskRowToDto(row) : null;
   }
 
-  /** Owner-only cancellation for hidden Crew attempts, including an active runner claim. */
-  cancelCrewMember(id: string): TaskDto | null {
-    const now = Date.now();
-    const row = this.database.db
-      .prepare<TaskRow, [number, number, string]>(
-        `UPDATE tasks SET status = 'CANCELLED', finished_at = ?, updated_at = ?
-         WHERE id = ?
-           AND execution_kind = 'crew-member'
-           AND status IN ('QUEUED', 'RUNNING')
-         RETURNING *`,
-      )
-      .get(now, now, id);
-    if (row) return taskRowToDto(row);
-    const existing = this.findById(id);
-    return existing?.executionKind === 'crew-member' && existing.status === 'CANCELLED'
-      ? existing
-      : null;
-  }
-
   countRunning(): number {
     const row = this.database.db
-      .prepare<{ count: number }, []>("SELECT COUNT(*) AS count FROM tasks WHERE status = 'RUNNING'")
+      .prepare<{ count: number }, []>(
+        `SELECT COUNT(*) AS count FROM tasks
+         WHERE status = 'RUNNING'
+           AND execution_kind = 'session'
+           AND verify_owner = 'session'`,
+      )
       .get();
     return row?.count ?? 0;
   }
@@ -304,6 +306,8 @@ export class TasksRepository {
                ELSE review_state
              END
          WHERE status = 'RUNNING'
+           AND execution_kind = 'session'
+           AND verify_owner = 'session'
          RETURNING *`,
       )
       .all(JSON.stringify({ reason }), now, now);

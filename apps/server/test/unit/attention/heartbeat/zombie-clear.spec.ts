@@ -23,11 +23,14 @@ describe('zombie item auto-clear', () => {
   let now = 5_000_000;
 
   const sessionRows = new Map<string, { id: string; status: string; createdAt: number }>();
+  const hiddenSessionIds = new Set<string>();
   const eventAt = new Map<string, number>();
   const fakeSessions = {
     list: () => [...sessionRows.values()],
-    listUserFacing: () => [...sessionRows.values()],
+    listUserFacing: () => [...sessionRows.values()].filter((row) => !hiddenSessionIds.has(row.id)),
     findById: (id: string) => sessionRows.get(id) ?? null,
+    findUserFacingById: (id: string) =>
+      hiddenSessionIds.has(id) ? null : (sessionRows.get(id) ?? null),
   };
   const fakeEvents = { latestEventAt: (id: string) => eventAt.get(id) ?? null };
 
@@ -35,6 +38,7 @@ describe('zombie item auto-clear', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-zombie-'));
     process.env.NUNCIO_DATA_DIR = dataDir;
     sessionRows.clear();
+    hiddenSessionIds.clear();
     eventAt.clear();
     module = await Test.createTestingModule({
       imports: [DatabaseModule],
@@ -88,5 +92,23 @@ describe('zombie item auto-clear', () => {
     attention.raise({ kind: 'zombie-session', subjectId: 'session:s2', title: 'silent', payload: { sessionId: 's2' } });
     attention.reconcileOpenItems();
     expect(attention.list().items.some((i) => i.subjectId === 'session:s2')).toBe(true);
+  });
+
+  it('clears a stale zombie item for a retired Crew session', () => {
+    sessionRows.set('legacy-crew', { id: 'legacy-crew', status: 'RUNNING', createdAt: 0 });
+    hiddenSessionIds.add('legacy-crew');
+    eventAt.set('legacy-crew', now - 40 * 60 * 1000);
+    attention.raise({
+      kind: 'zombie-session',
+      subjectId: 'session:legacy-crew',
+      title: 'silent',
+      payload: { sessionId: 'legacy-crew' },
+    });
+
+    attention.reconcileOpenItems();
+
+    expect(attention.list().items.some((item) => item.subjectId === 'session:legacy-crew')).toBe(
+      false,
+    );
   });
 });
