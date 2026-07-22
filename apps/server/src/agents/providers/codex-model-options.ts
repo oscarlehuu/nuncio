@@ -31,13 +31,21 @@ export function codexReasoningEffortLabel(effort: string): string {
   }
 }
 
-export function defaultCodexReasoningEffortOption(): ModelOptionDescriptorDto {
+export function defaultCodexReasoningEffortOption(
+  opts?: { excludeUltra?: boolean },
+): ModelOptionDescriptorDto {
+  // `ultra` (Multi-agent) is a native Codex-CLI tier. A Codex model routed
+  // through the Claude engine can't use it — Claude effort tops out at `max`
+  // and the Claude runtime skips `ultra` — so those catalog rows drop it.
+  const efforts = opts?.excludeUltra
+    ? DEFAULT_CODEX_REASONING_EFFORTS.filter((effort) => effort !== 'ultra')
+    : DEFAULT_CODEX_REASONING_EFFORTS;
   return {
     id: 'reasoningEffort',
     label: 'Reasoning',
     type: 'select',
     defaultValue: DEFAULT_CODEX_REASONING_EFFORT,
-    options: DEFAULT_CODEX_REASONING_EFFORTS.map((effort) => ({
+    options: efforts.map((effort) => ({
       id: effort,
       label: codexReasoningEffortLabel(effort),
       isDefault: effort === DEFAULT_CODEX_REASONING_EFFORT,
