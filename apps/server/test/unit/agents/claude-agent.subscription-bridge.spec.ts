@@ -131,7 +131,7 @@ describe('ClaudeAgentProvider × Subscription bridge', () => {
     expect(group?.models[0]?.badge).toBe('Codex sub');
   });
 
-  it('attaches reasoningEffort (incl. ultra) and ultracode options on Codex-sub models', async () => {
+  it('attaches reasoningEffort (Codex ultra excluded) and ultracode options on Codex-sub models', async () => {
     settings.set('NUNCIO_CLIPROXY_ENABLED', '1');
     settings.set('NUNCIO_CLIPROXY_API_KEY', 'bridge-secret');
     bridge.fetchImpl = stubFetch({
@@ -144,7 +144,10 @@ describe('ClaudeAgentProvider × Subscription bridge', () => {
     );
     const reasoning = model?.options?.find((o) => o.id === 'reasoningEffort');
     expect(reasoning?.type).toBe('select');
-    expect(reasoning?.options?.some((o) => o.id === 'ultra')).toBe(true);
+    // Codex's native `ultra` (Multi-agent) tier can't run via Claude Code, so it
+    // is excluded from Codex-sub rows in the Claude picker (effort up to xhigh).
+    expect(reasoning?.options?.some((o) => o.id === 'ultra')).toBe(false);
+    expect(reasoning?.options?.map((o) => o.id)).toEqual(['low', 'medium', 'high', 'xhigh']);
     const ultracode = model?.options?.find((o) => o.id === 'ultracode');
     expect(ultracode).toMatchObject({ type: 'boolean', defaultValue: false });
   });
