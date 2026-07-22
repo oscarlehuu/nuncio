@@ -26,6 +26,7 @@ describe('AgentRegistry', () => {
     if (dataDir) rmSync(dataDir, { recursive: true, force: true });
     delete process.env.NUNCIO_DATA_DIR;
     delete process.env.CURSOR_API_KEY;
+    delete process.env.NUNCIO_ENGINES_SHOW_LEGACY;
   });
 
   async function createRegistry(builder = Test.createTestingModule({
@@ -64,6 +65,9 @@ describe('AgentRegistry', () => {
   });
 
   it('prefers cursor as default when CURSOR_API_KEY is set', async () => {
+    // Cursor is a legacy engine; the default-preference ordering only applies
+    // when the legacy engines are shown.
+    process.env.NUNCIO_ENGINES_SHOW_LEGACY = '1';
     process.env.CURSOR_API_KEY = 'cursor_test_key';
     const registry = await createRegistry();
 
@@ -86,7 +90,8 @@ describe('AgentRegistry', () => {
     expect(registry.get('devin').id).toBe('devin');
   });
 
-  it('exposes every registered provider via all()', async () => {
+  it('exposes every registered provider via all() when legacy engines are shown', async () => {
+    process.env.NUNCIO_ENGINES_SHOW_LEGACY = '1';
     const registry = await createRegistry();
 
     expect(registry.all().map((provider) => provider.id).sort()).toEqual([
@@ -126,6 +131,7 @@ describe('AgentRegistry', () => {
   });
 
   it('uses codex as default after cursor and before pi', async () => {
+    process.env.NUNCIO_ENGINES_SHOW_LEGACY = '1';
     const registry = await createRegistry(
       Test.createTestingModule({
         imports: [DatabaseModule, SessionsPersistenceModule, AgentsModule],

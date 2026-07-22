@@ -38,6 +38,10 @@ does **not** mean the capability is unique to that file.
 
 ### Web (`apps/web/src/App.tsx`)
 
+> **Not a standalone browser surface.** These routes are the renderer the desktop shell
+> loads (ADR-014); a plain browser tab is unsupported. The renderer code stays and is
+> maintained — it is how the desktop app (and the review/steer paths) render.
+
 | Route | Surface | Canonical entry |
 |---|---|---|
 | `/` | **Home** — composer + digest + attention + recent Crew | `home-surface.tsx` → `home-view.tsx` |
@@ -68,8 +72,11 @@ Mobile has **no** Workbench, Autopilot, Settings shell, Forge dock, File explore
 
 ### Desktop
 
-Electron (`apps/desktop`) wraps the same web UI. Browser dock and `node-pty` terminal are
-desktop-capable; web/PWA uses WS terminal and does **not** expose the browser dock. The shell also
+Desktop (Electron, `apps/desktop`) is the **primary surface** (ADR-014): it loads and wraps the
+web renderer under `apps/web`. A standalone browser tab is **not a supported surface** — the Web
+routes above are that renderer as hosted by the desktop shell (plus the native mobile app for
+review/steer). Browser dock and `node-pty` terminal are desktop-only; the renderer's WS terminal
+still works but it does **not** expose the browser dock. The shell also
 persists normal window bounds plus maximized state under Electron `userData`, revalidating them
 against the current display work area whenever it creates a window. On macOS the title bar is
 integrated (`hiddenInset` + repositioned traffic lights, `desktop-chrome.js`); the web headers
@@ -117,7 +124,7 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 
 | | |
 |---|---|
-| **Web** | `model-picker.tsx` on Home composer, Workbench slot composer, Autopilot `create-loop-dialog` / loop settings, Crew profile dialogs, `subagent-row`, Settings Agents / subagent models |
+| **Web** | `model-picker.tsx` on Home composer, Workbench slot composer, Autopilot `create-loop-dialog` / loop settings, Crew profile dialogs, `subagent-row`, Settings Agents / subagent models. **The picker lists only Nuncio Engine by default;** the legacy vendor engines (Claude / Codex / Cursor / Devin) appear only when *Show legacy engines* (`engines.showLegacy`, Advanced settings) is on — mobile `/new` collapses the same way because it reads the same `/api/models`. |
 | **Mobile** | `/new` only |
 | **Settings** | Providers page sections: engines (Cursor / Nuncio Engine / Claude / Codex / Devin), **Subscription bridge** (existing CLIProxyAPI discover→external/migrate + fresh managed), **Tool updates**. Agents (subagent models), Usage. Default solo permission/runtime modes: Claude `NUNCIO_CLAUDE_PERMISSION_MODE`, Codex `NUNCIO_CODEX_RUNTIME_MODE`, Devin `NUNCIO_DEVIN_PERMISSION_MODE` (Pi has no permission mode). Subscription bridge keys: `NUNCIO_CLIPROXY_ENABLED`, `NUNCIO_CLIPROXY_MODE`, `NUNCIO_CLIPROXY_BASE_URL`, `NUNCIO_CLIPROXY_PORT`, `NUNCIO_CLIPROXY_API_KEY`, `NUNCIO_CLIPROXY_BIN`. |
 | **Server** | `models/`, provider `listModels()` (Claude merges CLIProxyAPI Codex-sub models when bridge is healthy), `subscription-bridge/` (`GET …/status`, `GET …/discover`, `POST …/refresh`, `POST …/adopt-external`, `POST …/migrate-managed`, `POST …/init-managed`, `POST …/managed/start|stop`, `POST …/claude-code-env`), `usage/`, settings registry keys above |
@@ -257,7 +264,7 @@ Read-only Claude Code / Codex CLI memories indexed into Pi sessions; stores stay
 | `workspaces` | Workspace roots / worktree dirs |
 | `projects` | Per-project defaults (verify, default MCP servers, loops, …) |
 | `remote-access` | Tailscale / pairing / remote |
-| `advanced` | Advanced |
+| `advanced` | Advanced — incl. *Show legacy engines* (`engines.showLegacy`, default off): reveal the legacy vendor engines in every engine/model picker |
 
 Server: `settings/`, `preferences/`, plus domain modules each section configures.
 

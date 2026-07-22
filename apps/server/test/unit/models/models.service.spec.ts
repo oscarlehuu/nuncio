@@ -22,6 +22,9 @@ describe('ModelsService', () => {
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'nuncio-models-svc-'));
     process.env.NUNCIO_DATA_DIR = dataDir;
+    // Cursor is a legacy engine; show the legacy engines so the catalog
+    // aggregates its models.
+    process.env.NUNCIO_ENGINES_SHOW_LEGACY = '1';
     configureSimulatedCursorEnv();
 
     module = await withSimulatedCursorProvider(
@@ -72,6 +75,7 @@ describe('ModelsService', () => {
     rmSync(dataDir, { recursive: true, force: true });
     delete process.env.NUNCIO_DATA_DIR;
     delete process.env.CURSOR_API_KEY;
+    delete process.env.NUNCIO_ENGINES_SHOW_LEGACY;
   });
 
   it('aggregates models from available providers only and attaches provider capabilities', async () => {

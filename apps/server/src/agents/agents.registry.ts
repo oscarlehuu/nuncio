@@ -16,10 +16,19 @@ import { MOCK_AGENT_PROVIDER } from './mock-agent.token';
 import { SettingsService } from '../settings/settings.service';
 import type { SessionDto } from '../sessions/domain/sessions.types';
 
+/**
+ * Vendor engines Nuncio no longer invests in. Hidden from every engine and model
+ * picker unless the operator opts back in via the `engines.showLegacy` setting;
+ * still fully resolvable by id (see `get`) so their existing sessions keep opening
+ * and streaming. `cursor-cli` is the handoff runtime and is never listed anyway.
+ */
+const LEGACY_ENGINE_IDS = new Set(['cursor', 'cursor-cli', 'codex', 'claude', 'devin']);
+
 @Injectable()
 export class AgentRegistry {
   private readonly providers: AgentProvider[];
   private readonly cliProvider: CursorCliProvider;
+  private legacyVisibleCache: boolean | undefined;
 
   constructor(
     private readonly pi: PiAgentProvider,
@@ -27,7 +36,7 @@ export class AgentRegistry {
     private readonly codex: CodexAgentProvider,
     private readonly claude: ClaudeAgentProvider,
     cli: CursorCliProvider,
-    settings: SettingsService,
+    private readonly settings: SettingsService,
     @Optional() private readonly devin?: DevinAgentProvider,
     // Bound only when `NUNCIO_FORCE_MOCK=1` opts the zero-credential engine in
     // (see AgentsModule). Resolves to undefined — and is thus never selectable —
@@ -38,9 +47,15 @@ export class AgentRegistry {
     this.providers = [this.pi, this.cursor, this.codex, this.claude];
     if (this.devin) this.providers.push(this.devin);
     if (mock) this.providers.push(mock);
-    settings.onChange(() => this.bustCaches());
+    settings.onChange(() => {
+      this.legacyVisibleCache = undefined;
+      this.bustCaches();
+    });
   }
 
+  /** Every registered provider. Runtime paths (shutdown durability flushes,
+   * title/commit-message helpers, routing) must see hidden engines too, so
+   * this is never filtered by visibility. */
   all(): AgentProvider[] {
     return this.providers;
   }
@@ -48,6 +63,20 @@ export class AgentRegistry {
   async available(): Promise<AgentProvider[]> {
     const flags = await Promise.all(this.providers.map((provider) => provider.isAvailable()));
     return this.providers.filter((_, index) => flags[index]);
+  }
+
+  /** Providers shown in engine/model pickers — legacy engines are dropped
+   * unless the operator opts back in. Visibility only: hidden engines stay
+   * fully operational for existing sessions and runtime helpers. */
+  listed(): AgentProvider[] {
+    if (this.legacyEnginesVisible()) return this.providers;
+    return this.providers.filter((provider) => !LEGACY_ENGINE_IDS.has(provider.id));
+  }
+
+  async listedAvailable(): Promise<AgentProvider[]> {
+    const shown = this.listed();
+    const flags = await Promise.all(shown.map((provider) => provider.isAvailable()));
+    return shown.filter((_, index) => flags[index]);
   }
 
   get(id: string): AgentProvider {
@@ -108,6 +137,18 @@ export class AgentRegistry {
 
   bustCaches(): void {
     for (const provider of this.providers) provider.bustCache();
+  }
+
+  /**
+   * Whether the legacy vendor engines are shown in listings. Read from settings
+   * and cached so `all()` stays synchronous; the cache is cleared on every
+   * settings change (see the constructor) so a toggle takes effect at once.
+   */
+  private legacyEnginesVisible(): boolean {
+    if (this.legacyVisibleCache === undefined) {
+      this.legacyVisibleCache = this.settings.resolve('engines.showLegacy') === '1';
+    }
+    return this.legacyVisibleCache;
   }
 
   supportsInteraction(providerId: string): boolean {

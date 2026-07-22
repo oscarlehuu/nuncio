@@ -4,17 +4,17 @@ Context file for AI coding agents working on Nuncio. Read this before touching t
 
 > **Work TDD-first.** Always start from a failing test. Implement only what makes it pass. A change is not done while the suite is red. See [Working practice: TDD-first](#working-practice-tdd-first).
 > **Need a decision from the user? Answer TL;DR.** One-line recommendation first, then the trade-off in a sentence (what you gain vs. lose), then the options. No long preamble — the user decides fast.
-> **North-star docs — read in this order before your first change:** [`docs/product-vision.md`](docs/product-vision.md) (why Nuncio exists: your-machine-as-cloud, pillars, direction tests) → [`docs/architecture-decisions.md`](docs/architecture-decisions.md) (locked decisions — never reverse one without the user) → [`docs/product-surfaces.md`](docs/product-surfaces.md) (capability → every web/mobile/settings/server surface — use this before UI or cross-cutting changes) → [`docs/system-architecture.md`](docs/system-architecture.md) (internals) → [`docs/testing-and-verification.md`](docs/testing-and-verification.md) (self-verify playbook + edge-case heuristics).
+> **North-star docs — read in this order before your first change:** [`docs/product-vision.md`](docs/product-vision.md) (why Nuncio exists: the single-engine thesis, subscription freedom, evidence ladder, pillars, direction tests) → [`docs/architecture-decisions.md`](docs/architecture-decisions.md) (locked decisions — never reverse one without the user) → [`docs/product-surfaces.md`](docs/product-surfaces.md) (capability → every web/mobile/settings/server surface — use this before UI or cross-cutting changes) → [`docs/system-architecture.md`](docs/system-architecture.md) (internals) → [`docs/testing-and-verification.md`](docs/testing-and-verification.md) (self-verify playbook + edge-case heuristics).
 
 ## What is Nuncio
 
-Nuncio is a **self-hosted, Devin-style web app for delegating tasks to AI agents**. Built for daily personal use, especially on mobile: you delegate a task from your phone, the agent runs on your always-on Mac, you come back later to review the output.
+Nuncio is a **self-hosted, single-engine agent harness for delegating coding tasks to AI agents**. Built for daily personal use: you delegate a task from the **desktop app** or your phone, the agent runs on your always-on Mac through **Nuncio Engine**, and you come back later to review the output with evidence. Read [`docs/product-vision.md`](docs/product-vision.md) for the thesis and pillars.
 
-- **Deployment model:** single process on a personal Mac, exposed over **Tailscale HTTPS** so the phone (or friends on the tailnet) can reach it. No VPS, no public domain.
+- **Deployment model:** single process on a personal Mac. The **Electron desktop app is the primary surface** (it loads the web renderer); the phone reaches it over **Tailscale HTTPS** to review and steer. A plain browser tab is not a supported surface. No VPS, no public domain.
 - **Distribution:** open source — friends/colleagues self-host on their own machines. MIT.
 - **Mental model:** async-first. A session is a self-contained task (not a realtime chat). Create → agent runs in background → stream/review → steer/pause/archive.
-- **Execution modes:** Solo is one user-selected provider session. Crew is a separate durable workspace harness above Tasks/Sessions: one saved profile binds Foreman, Builder, and Reviewer engines while Nuncio owns the fixed workflow, deterministic verify gate, recovery, and authority boundary.
-- **Agent harness is provider-agnostic by design.** Pi SDK is the **inaugural** provider — the architecture is meant to host any agent SDK (Cursor, OpenAI/Claude agents, …) behind one common contract. See [Agent providers](#agent-providers).
+- **Execution mode:** Solo — one Nuncio Engine session per task — is the product. (Crew, the durable multi-role workspace harness, is **deprecated pending removal**: still runnable, no new investment.)
+- **One engine.** **Nuncio Engine** (the Pi coding agent + Nuncio's own extensions) is the only engine Nuncio invests in and the only one shown in the pickers. The legacy vendor engines (Claude, Codex, Cursor, Cursor CLI, Devin) are **hidden by default behind the `engines.showLegacy` setting** — still fully resolvable so their existing sessions keep opening, just not extended. The `AgentProvider` contract still hosts them (see [Agent providers](#agent-providers)); it is now backward-compat plumbing, not the product thesis.
 - **Runtime:** Bun (server, build, tests). See [Bun runtime](#bun-runtime).
 
 ## Working practice: TDD-first
@@ -156,7 +156,7 @@ Install the versioned git hooks once with `bun run setup-hooks`. The pre-push ho
 
 | Layer | Choice |
 |---|---|
-| Agent harness | **Provider-agnostic by design** — any agent SDK behind a common `AgentProvider` contract. **Pi SDK** (`@earendil-works/pi-coding-agent`) is the inaugural provider, run in-process via `createAgentSession`; **Codex** runs through the local `codex app-server`; **Cursor** (`@cursor/sdk`) runs local agents when `CURSOR_API_KEY` is set. Additional SDKs plug into the same contract. |
+| Agent harness | **Nuncio Engine** — the Pi coding agent (`@earendil-works/pi-coding-agent`, run in-process via `createAgentSession`) plus Nuncio's extensions — is the only engine invested in and the only one shown by default. The `AgentProvider` contract still abstracts the legacy vendor engines (**Codex** via local `codex app-server`, **Cursor** via `@cursor/sdk`, **Claude**, **Devin**), now hidden behind the `engines.showLegacy` setting and kept resolvable so their existing sessions open. |
 | Backend | NestJS 11 (`apps/server`) on port **3000**, runs on Bun |
 | Frontend | Vite 8 + React 19 + Tailwind 4 + **shadcn/ui (nova preset, light + dark)** (`apps/web`) on port **5173** by default (`NUNCIO_WEB_PORT` overrides dev/preview; `NUNCIO_API_ORIGIN` overrides the `/api` proxy target); installable **PWA** via `vite-plugin-pwa`. shadcn primitives (Radix-based) in `components/ui/`, composed into feature components; nova oklch semantic tokens adopted directly. See [shadcn/ui adoption](#shadcnui-adoption). |
 | Mobile | **Expo** (`apps/mobile`, SDK 57 + Expo Router + NativeWind) — pairs by Tailscale URL + Bearer token (SecureStore; hub `/m/<machine>` bases pair too), streams over the WS relay, registers for Expo push. Shares `@nuncio/core` (API client, transcript parser, design tokens). |
@@ -267,16 +267,16 @@ bun run changeset                        # interactive alternative for humans
 
 ```
 apps/
-  server/                NestJS API + provider-agnostic agent harness (Bun runtime)
+  server/                NestJS API + agent harness (Nuncio Engine + hidden legacy engines, Bun runtime)
     src/
       health/            health.module/controller
-      agents/            provider-agnostic harness
+      agents/            agent harness (Nuncio Engine invested in; legacy engines abstracted behind the same contract)
         agents.types.ts        AgentProvider interface, AgentRunContext, EventEmitter type
         agents.base-provider.ts BaseAgentProvider (template-method: status/emit/error orchestration)
         agents.registry.ts     AgentRegistry (per-session provider resolution)
         agents.module.ts       wires providers + registry, exports registry
         providers/
-          pi-agent.provider.ts   Pi provider (inaugural) — real agent via Pi SDK
+          pi-agent.provider.ts   Nuncio Engine — real agent via Pi SDK
           codex-app-server.client.ts  JSON-RPC client for codex app-server
           codex-agent.provider.ts Codex provider via local codex app-server
           cursor-agent.provider.ts Cursor provider via @cursor/sdk local runtime
@@ -418,7 +418,7 @@ All Crew controls and runner transitions share one per-run serialization chain. 
 
 ### Agent providers
 
-The harness is provider-agnostic: an `AgentProvider` runs/steers/disposes a session and knows its own model catalog. **Pi is the inaugural provider**, with Codex, Cursor, and Claude registered alongside it; future SDKs should implement the same contract.
+The harness abstracts engines behind one `AgentProvider` contract (runs/steers/disposes a session, knows its own model catalog). **Nuncio Engine (Pi) is the only engine Nuncio invests in and the only one listed by default**; Codex, Cursor, Claude, and Devin are registered alongside it as **legacy** engines — hidden behind the `engines.showLegacy` setting but still resolved by id so their existing sessions open and render. The abstraction is now backward-compat plumbing, not a mandate to add engines.
 
 **Generic-first checklist — run it before writing ANY provider/engine code:**
 
@@ -685,7 +685,7 @@ Nuncio runs on **Bun** (≥ 1.3) — server, build, and tests. Bun replaces npm,
 - **TDD-first.** Write the failing test first; implement only what makes it pass; never call work done on a red suite, and never weaken a test to pass the build. See [Working practice: TDD-first](#working-practice-tdd-first).
 - **Async-first, not realtime chat.** Sessions are delegated background tasks; optimize for "delegate and review later," not "chat back and forth."
 - **In-process agent, not subprocess.** One Bun process hosts many agent sessions (today Pi `AgentSession`s sharing `ModelRegistry`/`AuthStorage`; tomorrow each provider manages its own). Simpler and faster than spawning a CLI per session. Acceptable trade-off: one crash kills active sessions (personal scale, 3–5 concurrent, SQLite recovers).
-- **Provider-agnostic harness.** Pi SDK is the inaugural provider, not the architecture. New agent SDKs (Cursor, Codex, OpenAI/Claude agents, …) implement the same `AgentProvider` contract and register — no session-layer or UI-layer changes to adopt them.
+- **One engine, legacy contract kept.** Nuncio Engine (Pi) is the product; the `AgentProvider` contract still hosts the legacy vendor engines (Cursor, Codex, Claude, Devin) behind the `engines.showLegacy` setting so their sessions keep working. When you do touch the engines that remain, keep the session/UI layers engine-neutral — no per-engine branches.
 - **Shared-first provider design.** When working on any provider, keep asking whether the code is actually common infrastructure. Prefer shared contracts, event shapes, status handling, settings definitions, model catalog plumbing, and UI affordances over one-off SDK branches in the session or frontend layers. SDK-specific code should mostly be auth, SDK client setup, model translation, tool/runtime quirks, and delta mapping.
 - **3-layer state decoupling** — conversation durable, agent loop disposable, machine state a strict FSM.
 - **YAGNI / KISS / DRY.** Don't build ahead of the roadmap. The agent-provider abstraction is the one forward-looking investment, because the whole point is multi-SDK support.
