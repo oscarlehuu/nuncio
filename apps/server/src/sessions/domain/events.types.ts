@@ -16,6 +16,7 @@ export type SessionEventType =
   | 'user_input_resolved'
   | 'plan_updated'
   | 'evidence_captured'
+  | 'evidence_skipped'
   | 'error'
   | 'status'
   | 'runtime_policy'
@@ -120,6 +121,13 @@ export interface EvidenceCapturedPayload {
   route: string;
   viewport: { w: number; h: number };
   workspaceHead: string;
+}
+
+export interface EvidenceSkippedPayload {
+  /** Why the auto after-image was skipped. */
+  reason: 'no-target';
+  /** One-line, human-readable note surfaced on the turn. */
+  message: string;
 }
 
 export interface TruncatedPayload {
