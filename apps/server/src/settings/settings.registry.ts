@@ -1041,7 +1041,7 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     description:
       'After a UI-touching turn reaches a green verify, automatically screenshot the running app and attach it to the transcript as after-evidence. On by default; capture failures never affect the turn. Turning this off leaves manual evidence capture unchanged.',
     envVar: 'NUNCIO_EVIDENCE_AUTO_CAPTURE',
-    default: 'true',
+    default: '1',
   },
   {
     key: 'NUNCIO_EVIDENCE_URL',

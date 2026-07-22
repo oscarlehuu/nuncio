@@ -3028,8 +3028,9 @@ export class SessionsService implements OnModuleDestroy {
       if (outcome === null) {
         const url = this.settings?.resolve('NUNCIO_EVIDENCE_URL')?.trim();
         if (!url) {
-          // Neither a known target nor a fallback URL resolved: skip quietly but
-          // record a one-line note on the turn so the miss is visible.
+          // Neither a known target nor a fallback URL resolved: skip quietly and
+          // record a one-line note on the turn's durable event log (not a
+          // transcript card — the card is reserved for a real captured image).
           if (!this.destroyed) {
             this.appendAndEmit(sessionId, 'evidence_skipped', {
               reason: 'no-target',
