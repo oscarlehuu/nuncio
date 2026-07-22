@@ -58,7 +58,7 @@ export function LoopRow({
   const nextFire = loop.status === 'active' ? formatNextFire(loop.nextFireAt) : null;
 
   return (
-    <li className="surface-lit rounded-xl border border-border bg-card shadow-e1">
+    <li className="rounded-xl border border-border bg-card">
       <div className="flex items-start gap-3 p-4">
         <button
           type="button"

@@ -42,7 +42,7 @@ export function AttentionRow({ item, busy, onOpen, onApprove, onAck, onResolve, 
   return (
     <li
       className={cn(
-        'surface-lit relative flex flex-col gap-3 overflow-hidden rounded-xl border border-border bg-card pl-4 pr-3 py-3 shadow-e1 sm:flex-row sm:items-center',
+        'relative flex flex-col gap-3 overflow-hidden rounded-xl border border-border bg-card pl-4 pr-3 py-3 sm:flex-row sm:items-center',
         acked && 'opacity-65',
       )}
     >

@@ -249,7 +249,7 @@ function PrIdentityHeader({
           {detail.reviewDecision && (
             <span
               className={cn(
-                'text-[10px] font-semibold uppercase',
+                'text-ui-xs font-semibold uppercase',
                 detail.reviewDecision === 'approved' ? 'text-success' : 'text-warning',
               )}
             >

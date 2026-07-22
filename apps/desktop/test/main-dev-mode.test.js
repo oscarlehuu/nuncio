@@ -418,6 +418,9 @@ async function runMain({
       if (specifier === './window-state') {
         return require(path.resolve(__dirname, '../src/window-state.js'));
       }
+      if (specifier === './desktop-chrome') {
+        return require(path.resolve(__dirname, '../src/desktop-chrome.js'));
+      }
       if (specifier === './updater') {
         return {
           initAutoUpdater() {},

@@ -20,6 +20,7 @@ const {
   restoreWindowState,
 } = require('./window-state');
 const { normalizeBrowserUrl } = require('./browser-url');
+const { getWindowChromeOptions } = require('./desktop-chrome');
 const {
   buildPickerInstallScript,
   buildPickerUninstallScript,
@@ -111,6 +112,7 @@ function createWindow(url) {
     ...restoredState.bounds,
     minWidth: 960,
     minHeight: 640,
+    ...getWindowChromeOptions(process.platform),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

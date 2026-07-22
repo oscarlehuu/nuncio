@@ -310,7 +310,7 @@ export function GridSlotComposer({
                   >
                     <span className="flex-1 truncate">{m.name}</span>
                     {isLocal ? (
-                      <span className="text-[10px] text-muted-foreground">this page</span>
+                      <span className="text-ui-xs text-muted-foreground">this page</span>
                     ) : null}
                     {isActive ? <Check className="size-3.5" /> : null}
                   </DropdownMenuItem>
@@ -355,7 +355,7 @@ export function GridSlotComposer({
             }}
             placeholder="Delegate a task to a new agent…"
             aria-label="New session prompt"
-            className="min-h-0 flex-1 resize-none text-[13px]"
+            className="min-h-0 flex-1 resize-none text-ui-lg"
           />
           <AttachmentTray
             items={imageAttachments.items}
@@ -416,9 +416,9 @@ export function GridSlotComposer({
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
           {machine && remoteSessions === null ? (
-            <p className="p-3 text-[12px] text-muted-foreground">Loading sessions from {machine}…</p>
+            <p className="p-3 text-ui text-muted-foreground">Loading sessions from {machine}…</p>
           ) : attachable.length === 0 ? (
-            <p className="p-3 text-[12px] text-muted-foreground">
+            <p className="p-3 text-ui text-muted-foreground">
               {machine
                 ? `No active sessions on ${machine}.`
                 : 'No active sessions to attach. Start a new one, or spin up an agent from the sidebar.'}
@@ -439,14 +439,14 @@ export function GridSlotComposer({
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-1.5">
-                        <span className="truncate text-[13px]">{s.title}</span>
+                        <span className="truncate text-ui-lg">{s.title}</span>
                         {boundSessionIds.has(s.id) ? (
-                          <span className="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground">
+                          <span className="shrink-0 rounded bg-muted px-1 text-ui-xs text-muted-foreground">
                             in grid
                           </span>
                         ) : null}
                       </span>
-                      <span className="block truncate text-[11px] text-muted-foreground">
+                      <span className="block truncate text-ui-sm text-muted-foreground">
                         {projectDisplayName(s.projectPath) ?? 'Chat'}
                         {s.model ? ` · ${prettyModelName(s.model)}` : ''}
                         {` · ${statusLabel(s.status)} · ${relativeTime(s.updatedAt)}`}
@@ -481,10 +481,10 @@ function TabButton({
       aria-selected={active}
       onClick={onClick}
       className={cn(
-        'flex items-center justify-center gap-1.5 rounded-md px-2 py-1 text-[12px] font-medium transition-colors',
+        'flex items-center justify-center gap-1.5 rounded-md px-2 py-1 text-ui font-medium transition-colors',
         'outline-none focus-visible:ring-2 focus-visible:ring-ring',
         active
-          ? 'bg-secondary text-secondary-foreground shadow-sm'
+          ? 'bg-secondary text-secondary-foreground shadow-e0'
           : 'text-muted-foreground hover:text-foreground',
       )}
     >

@@ -4,12 +4,16 @@ import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { SessionChangesPanel } from './session-changes-panel';
 import {
+  commitSession,
   fetchCommitDiff,
   fetchGitBranchSync,
   fetchGitHistory,
   fetchGitStash,
   fetchSessionDiff,
+  generateCommitMessage,
+  openPullRequest,
   postDiffComment,
+  pushSession,
   type GitBranchSyncDto,
   type SessionDiff,
 } from '../lib/api';
@@ -17,6 +21,7 @@ import { fetchBranches } from '../lib/projects';
 
 vi.mock('sonner', () => ({
   toast: {
+    loading: vi.fn(() => 'toast-1'),
     success: vi.fn(),
     error: vi.fn(),
   },
@@ -32,6 +37,10 @@ vi.mock('../lib/api', async () => {
     fetchGitHistory: vi.fn(),
     fetchCommitDiff: vi.fn(),
     postDiffComment: vi.fn(),
+    commitSession: vi.fn(),
+    pushSession: vi.fn(),
+    openPullRequest: vi.fn(),
+    generateCommitMessage: vi.fn(),
   };
 });
 
@@ -104,12 +113,180 @@ describe('SessionChangesPanel', () => {
     vi.mocked(fetchGitHistory).mockReset().mockResolvedValue({ branch: 'main', commits: [] });
     vi.mocked(fetchCommitDiff).mockReset().mockResolvedValue({ diff: '@@ -1 +1 @@\n-old\n+new', truncated: false });
     vi.mocked(postDiffComment).mockReset().mockResolvedValue({ ok: true });
+    vi.mocked(commitSession)
+      .mockReset()
+      .mockResolvedValue({ sha: 'abc1234', committed: true });
+    vi.mocked(pushSession)
+      .mockReset()
+      .mockResolvedValue({ pushed: true, remoteBranch: 'nuncio/s1' });
+    vi.mocked(openPullRequest)
+      .mockReset()
+      .mockResolvedValue({
+        url: 'https://github.com/o/r/pull/7',
+        number: 7,
+        state: 'open',
+      } as never);
+    vi.mocked(generateCommitMessage)
+      .mockReset()
+      .mockResolvedValue({ message: 'feat: add greeting helper' });
+    vi.mocked(toast.loading).mockReset().mockReturnValue('toast-1' as never);
     vi.mocked(fetchBranches).mockReset().mockResolvedValue([
       { name: 'main', isDefault: true, isCurrent: true },
       { name: 'feat/other', isDefault: false, isCurrent: false },
     ]);
     vi.mocked(toast.success).mockReset();
     vi.mocked(toast.error).mockReset();
+  });
+
+  describe('generated commit message', () => {
+    it('fills the message box from the generate icon inside it', async () => {
+      render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+      await screen.findByText('apps/web/src/app.tsx');
+      await userEvent.click(screen.getByRole('button', { name: /generate commit message/i }));
+
+      await waitFor(() => expect(generateCommitMessage).toHaveBeenCalledWith('s1'));
+      await waitFor(() =>
+        expect(screen.getByPlaceholderText(/commit message/i)).toHaveValue(
+          'feat: add greeting helper',
+        ),
+      );
+      // Generation only prefills — nothing commits without an explicit click.
+      expect(commitSession).not.toHaveBeenCalled();
+    });
+
+    it('surfaces a generation failure as an error toast', async () => {
+      vi.mocked(generateCommitMessage).mockRejectedValue(
+        new Error('No available engine supports text generation'),
+      );
+      render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+      await screen.findByText('apps/web/src/app.tsx');
+      await userEvent.click(screen.getByRole('button', { name: /generate commit message/i }));
+
+      await waitFor(() =>
+        expect(toast.error).toHaveBeenCalledWith('No available engine supports text generation'),
+      );
+    });
+  });
+
+  describe('commit section', () => {
+    it('renders a commit box when there are changed files, disabled until a message is typed', async () => {
+      render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+      expect(await screen.findByText('apps/web/src/app.tsx')).toBeInTheDocument();
+      const commitButton = screen.getByRole('button', { name: /^commit$/i });
+      expect(commitButton).toBeDisabled();
+
+      await userEvent.type(screen.getByPlaceholderText(/commit message/i), 'fix: app tweak');
+      expect(commitButton).toBeEnabled();
+    });
+
+    it('shows the commit box for staged-only changes (empty unstaged diff, dirty status)', async () => {
+      vi.mocked(fetchSessionDiff).mockResolvedValue({ files: [], truncated: false, omittedFiles: 0 });
+      vi.mocked(fetchGitBranchSync).mockResolvedValue({ ...SYNC_CLEAN, clean: false });
+      render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+      expect(await screen.findByPlaceholderText(/commit message/i)).toBeInTheDocument();
+      expect(screen.queryByText(/working tree clean/i)).not.toBeInTheDocument();
+    });
+
+    it('does not render the commit box when the working tree is clean', async () => {
+      vi.mocked(fetchSessionDiff).mockResolvedValue({ files: [], truncated: false, omittedFiles: 0 });
+      render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+      expect(await screen.findByText(/working tree clean|no local changes/i)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^commit$/i })).not.toBeInTheDocument();
+    });
+
+    it('commits with the typed message, clears it, and reloads changes', async () => {
+      render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+      await screen.findByText('apps/web/src/app.tsx');
+      const input = screen.getByPlaceholderText(/commit message/i);
+      await userEvent.type(input, 'fix: app tweak');
+      await userEvent.click(screen.getByRole('button', { name: /^commit$/i }));
+
+      await waitFor(() => expect(commitSession).toHaveBeenCalledWith('s1', 'fix: app tweak'));
+      await waitFor(() => expect(toast.success).toHaveBeenCalled());
+      expect(input).toHaveValue('');
+      // one load on mount + one reload after commit
+      await waitFor(() => expect(fetchSessionDiff).toHaveBeenCalledTimes(2));
+    });
+
+    it('commits and pushes via the commit split menu in order', async () => {
+      render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+      await screen.findByText('apps/web/src/app.tsx');
+      await userEvent.type(screen.getByPlaceholderText(/commit message/i), 'fix: app tweak');
+      await userEvent.click(screen.getByRole('button', { name: /more commit actions/i }));
+      await userEvent.click(await screen.findByRole('menuitem', { name: /commit & push/i }));
+
+      await waitFor(() => expect(pushSession).toHaveBeenCalledWith('s1'));
+      expect(commitSession).toHaveBeenCalledWith('s1', 'fix: app tweak');
+      expect(vi.mocked(commitSession).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(pushSession).mock.invocationCallOrder[0]!,
+      );
+      expect(openPullRequest).not.toHaveBeenCalled();
+      await waitFor(() => expect(toast.success).toHaveBeenCalled());
+      expect(screen.getByPlaceholderText(/commit message/i)).toHaveValue('');
+    });
+
+    it('runs commit, push & PR in order when the session is idle', async () => {
+      render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+      await screen.findByText('apps/web/src/app.tsx');
+      await userEvent.type(screen.getByPlaceholderText(/commit message/i), 'feat: ship');
+      await userEvent.click(screen.getByRole('button', { name: /more commit actions/i }));
+      await userEvent.click(await screen.findByRole('menuitem', { name: /commit, push & pr/i }));
+
+      await waitFor(() => expect(openPullRequest).toHaveBeenCalledWith('s1'));
+      expect(vi.mocked(pushSession).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(openPullRequest).mock.invocationCallOrder[0]!,
+      );
+    });
+
+    it('disables the PR chain while the session is running', async () => {
+      render(<SessionChangesPanel sessionId="s1" sessionStatus="RUNNING" />);
+
+      await screen.findByText('apps/web/src/app.tsx');
+      await userEvent.type(screen.getByPlaceholderText(/commit message/i), 'feat: ship');
+      await userEvent.click(screen.getByRole('button', { name: /more commit actions/i }));
+      expect(await screen.findByRole('menuitem', { name: /commit, push & pr/i })).toHaveAttribute(
+        'aria-disabled',
+        'true',
+      );
+      expect(screen.getByRole('menuitem', { name: /commit & push/i })).not.toHaveAttribute(
+        'aria-disabled',
+        'true',
+      );
+    });
+
+    it('stops the chain and reports the failing stage', async () => {
+      vi.mocked(pushSession).mockRejectedValue(new Error('remote rejected'));
+      render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+      await screen.findByText('apps/web/src/app.tsx');
+      await userEvent.type(screen.getByPlaceholderText(/commit message/i), 'feat: ship');
+      await userEvent.click(screen.getByRole('button', { name: /more commit actions/i }));
+      await userEvent.click(await screen.findByRole('menuitem', { name: /commit, push & pr/i }));
+
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      expect(openPullRequest).not.toHaveBeenCalled();
+    });
+
+    it('surfaces a commit failure as an error toast and keeps the message', async () => {
+      vi.mocked(commitSession).mockRejectedValue(new Error('nothing to commit'));
+      render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);
+
+      await screen.findByText('apps/web/src/app.tsx');
+      const input = screen.getByPlaceholderText(/commit message/i);
+      await userEvent.type(input, 'fix: app tweak');
+      await userEvent.click(screen.getByRole('button', { name: /^commit$/i }));
+
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith('nothing to commit'));
+      expect(input).toHaveValue('fix: app tweak');
+    });
   });
 
   it('fetches on open, renders files, and refreshes manually', async () => {
@@ -165,7 +342,9 @@ describe('SessionChangesPanel', () => {
       ],
       incoming: [],
       conflicts: [],
-      clean: false,
+      // Porcelain-clean: outgoing commits do not dirty the working tree (and a
+      // dirty tree would now correctly surface the commit box instead).
+      clean: true,
     });
 
     render(<SessionChangesPanel sessionId="s1" sessionStatus="IDLE" />);

@@ -794,6 +794,63 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     ],
   },
   {
+    key: 'NUNCIO_AUTO_TITLE',
+    category: 'agents',
+    type: 'boolean',
+    label: 'Auto-name sessions',
+    description:
+      "Generate a concise session title from your first request via a cheap engine one-shot " +
+      '(what Claude Code / Codex / Cursor do natively). Off = titles stay the first line of ' +
+      'the request. A manual rename always wins.',
+    envVar: 'NUNCIO_AUTO_TITLE',
+    default: '1',
+  },
+  {
+    key: 'NUNCIO_AUTO_BRANCH_NAME',
+    category: 'agents',
+    type: 'boolean',
+    label: 'Auto-name worktree branches',
+    description:
+      'Rename a new worktree branch from the temporary nuncio/<id>-<slug> to a generated ' +
+      'nuncio/<description> shortly after create (skipped once the branch changed, was adopted ' +
+      'from a remote, or a pull request exists).',
+    envVar: 'NUNCIO_AUTO_BRANCH_NAME',
+    default: '1',
+  },
+  {
+    key: 'NUNCIO_SESSION_TITLE_MODEL',
+    category: 'agents',
+    type: 'string',
+    label: 'Session title model',
+    description:
+      'Model for session auto-naming (provider:modelId, e.g. cliproxyapi:claude-haiku-4-5). ' +
+      'Prefer a cheap model — the call is one tiny completion per created session. Falls back ' +
+      'to the engine default when unset.',
+    envVar: 'NUNCIO_SESSION_TITLE_MODEL',
+  },
+  {
+    key: 'NUNCIO_COMMIT_MESSAGE_MODEL',
+    category: 'agents',
+    type: 'string',
+    label: 'Commit message model',
+    description:
+      'Model for the Source Control "generate commit message" one-shot (provider:modelId, e.g. ' +
+      'cliproxyapi:claude-haiku-4-5). Prefer a cheap model — the call is bounded (status + 24 KB ' +
+      'diff) and only prefills the message box. Falls back to the engine default when unset.',
+    envVar: 'NUNCIO_COMMIT_MESSAGE_MODEL',
+  },
+  {
+    key: 'NUNCIO_COMMIT_MESSAGE_INSTRUCTION',
+    category: 'agents',
+    type: 'string',
+    label: 'Commit message instruction',
+    description:
+      'Style instruction for generated commit messages. Leave empty and Nuncio will learn one ' +
+      'from your repository\'s recent commit subjects on first use and save it here — review and ' +
+      'edit it any time; clear it to re-learn.',
+    envVar: 'NUNCIO_COMMIT_MESSAGE_INSTRUCTION',
+  },
+  {
     key: 'NUNCIO_FACT_DISTILLATION_MODEL',
     category: 'agents',
     type: 'string',

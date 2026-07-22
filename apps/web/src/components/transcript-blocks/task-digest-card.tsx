@@ -50,12 +50,12 @@ export function TaskDigestCard({ digest, onOpenSession }: TaskDigestCardProps) {
   return (
     <div
       data-testid="task-digest-card"
-      className="max-w-[88%] overflow-hidden rounded-lg border border-border/60 bg-card text-foreground shadow-e1 surface-lit"
+      className="max-w-[88%] overflow-hidden rounded-lg border border-border/60 bg-card text-foreground"
     >
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3.5 py-2.5">
         <span
           className={cn(
-            'inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase leading-none',
+            'inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-ui-xs font-semibold uppercase leading-none',
             meta.pill,
           )}
         >

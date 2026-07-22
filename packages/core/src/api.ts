@@ -652,6 +652,47 @@ export async function commitSession(
   return res.json();
 }
 
+export interface HandoffToProviderInput {
+  provider: string;
+  model?: string;
+  prompt?: string;
+}
+
+/**
+ * Hand a settled session to another engine: the server creates a new session
+ * on the target provider seeded with the source's compacted timeline and
+ * working directory, linked via priorSessionId.
+ */
+export async function handoffSessionTo(
+  id: string,
+  input: HandoffToProviderInput,
+): Promise<Session> {
+  const res = await apiFetch(`/api/sessions/${id}/handoff-to`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(body?.message ?? 'Failed to hand off session');
+  }
+  return res.json();
+}
+
+/**
+ * Ask the server to draft a commit message for the session's working tree.
+ * Generation goes through an engine's one-shot completion; the result only
+ * prefills the message box — nothing is committed.
+ */
+export async function generateCommitMessage(id: string): Promise<{ message: string }> {
+  const res = await apiFetch(`/api/sessions/${id}/git/commit-message`, { method: 'POST' });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(body?.message ?? 'Failed to generate a commit message');
+  }
+  return res.json();
+}
+
 export async function pushSession(
   id: string,
   opts?: { force?: boolean },

@@ -18,7 +18,7 @@ export function VerifyChip({ status }: { status: VerifyStatus | null }) {
       aria-label={label}
       title={status.command ? `${label} · ${status.command}` : label}
       className={cn(
-        'inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium leading-none',
+        'inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-ui-xs font-medium leading-none',
         status.state === 'passed' && 'border-success/40 text-success',
         status.state === 'failed' && 'border-destructive/40 text-destructive',
         status.state === 'running' && 'border-border text-muted-foreground',

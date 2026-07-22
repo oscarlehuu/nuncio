@@ -103,9 +103,11 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 
   /* Elevation ladder — theme-aware via the --elevation-* vars per :root/.dark.
-   * Each rung is a layered shadow (contact + diffuse + ambient) plus an inset
-   * top-highlight that fakes light from above. shadow-e0 = control chrome,
-   * e1 = resting card, e2 = floating panel / hover, e3 = dialog / overlay.
+   * STRICT-FLAT direction (Cursor): cards, rows, tiles, and composers are flat
+   * at rest — a hairline border and bg tint on hover, never a resting shadow.
+   * Rungs are reserved for what actually floats or is touched: e0 = interactive
+   * control chrome (buttons, chips), e1 = control accents (slider thumbs),
+   * e2 = floating panels (menus/popovers), e3 = dialogs/overlays/flyouts.
    * These compose with Tailwind ring-* since both fold into box-shadow. */
   --shadow-e0: var(--elevation-0);
   --shadow-e1: var(--elevation-1);
@@ -152,10 +154,6 @@
   --elevation-3:
     0 4px 12px rgb(20 20 20 / 0.10),
     0 16px 44px -12px rgb(20 20 20 / 0.16);
-  /* Barely-there bottom-shading on light cards. */
-  --surface-gradient:
-    linear-gradient(180deg, oklch(0.145 0 0 / 0) 60%, oklch(0.145 0 0 / 0.01));
-
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
@@ -229,10 +227,6 @@
   --elevation-3:
     0 4px 12px rgb(0 0 0 / 0.40),
     0 16px 44px -12px rgb(0 0 0 / 0.55);
-  /* Barely-there top-lit gradient over the card surface — sits under content. */
-  --surface-gradient:
-    linear-gradient(180deg, oklch(1 0 0 / 0.022), oklch(1 0 0 / 0) 42%);
-
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
@@ -380,20 +374,8 @@ body {
 }
 
 /*
- * Lit surface: paints the faint top-lit gradient over a raised card's own
- * background-color (bg-card etc.). Pair with a shadow-e* utility so the card
- * reads as a physical plane catching light from above rather than a flat fill.
- * background-image only — never sets background-color, so it composes with any
- * bg-* utility on the same element.
- */
-.surface-lit {
-  background-image: var(--surface-gradient);
-}
-
-/*
  * Breathing activity glow for grid tiles. A soft inner halo that slowly pulses,
- * layered as an ::after overlay so it never fights the tile's own elevation
- * shadow, and inset so it survives the tile's overflow-hidden. Color, size and
+ * layered as an ::after overlay, inset so it survives the tile's overflow-hidden. Color, size and
  * speed are set per state via the --glow-* custom properties on the tile.
  */
 .tile-glow {
@@ -439,6 +421,25 @@ body {
   animation-iteration-count: 1 !important;
   transition-duration: 0.001ms !important;
   scroll-behavior: auto !important;
+}
+
+/* macOS desktop shell (hiddenInset title bar). main.tsx stamps
+   data-desktop-chrome="mac" when running inside the Electron shell on macOS;
+   the app-region utilities are inert everywhere else. Traffic-light geometry
+   lives in apps/desktop/src/desktop-chrome.js (52px header) — keep in sync. */
+:root {
+  /* Top inset for the sidebar/rail toggle strip; grows under the mac shell so
+     the hamburger clears the traffic lights. */
+  --shell-safe-top: calc(12px + env(safe-area-inset-top, 0px));
+}
+:root[data-desktop-chrome='mac'] {
+  --shell-safe-top: 2.5rem;
+}
+:root[data-desktop-chrome='mac'] .app-region-drag {
+  -webkit-app-region: drag;
+}
+:root[data-desktop-chrome='mac'] .app-region-no-drag {
+  -webkit-app-region: no-drag;
 }
 
 /* Opt-in pointer cursors on interactive chrome (default off, macOS convention). */

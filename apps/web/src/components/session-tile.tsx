@@ -59,7 +59,7 @@ function tileStateClasses(status: SessionStatus, pending: boolean, focused: bool
   else if (status === 'RUNNING') activity = 'border-border tile-glow';
   else if (status === 'ERROR') activity = 'border-destructive';
   else activity = 'border-border/60';
-  return cn(activity, focused && 'ring-2 ring-ring shadow-e2');
+  return cn(activity, focused && 'ring-2 ring-ring');
 }
 
 /** Breath color/intensity for the active tile states; undefined = no breath. */
@@ -196,8 +196,8 @@ export function SessionTile({
       style={glowStyle(status, pending)}
       className={cn(
         'group flex flex-col min-h-0 min-w-0 overflow-hidden rounded-xl border bg-card text-card-foreground',
-        'shadow-e1 surface-lit hover:shadow-e2 hover:-translate-y-0.5',
-        'transition-[box-shadow,border-color,translate] outline-none active:scale-[0.995]',
+        'hover:bg-accent/40',
+        'transition-[box-shadow,border-color,background-color] outline-none active:scale-[0.995]',
         'focus-visible:ring-2 focus-visible:ring-ring',
         tileStateClasses(status, pending, focused),
       )}
@@ -218,11 +218,11 @@ export function SessionTile({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <span className="truncate text-[13px] font-medium leading-tight">{session.title}</span>
+            <span className="truncate text-ui-lg font-medium leading-tight">{session.title}</span>
             <VerifyChip status={verifyStatus} />
             {session.mode && <SessionModeChip mode={session.mode} className="shrink-0" />}
           </div>
-          <div className="truncate text-[11px] text-muted-foreground leading-tight">
+          <div className="truncate text-ui-sm text-muted-foreground leading-tight">
             {pending ? (
               <span className="text-warning">Waiting for you</span>
             ) : (
@@ -281,7 +281,7 @@ export function SessionTile({
                   type="button"
                   variant="outline"
                   size="xs"
-                  className="h-6 text-[11px] text-muted-foreground"
+                  className="h-6 text-ui-sm text-muted-foreground"
                   disabled={loadingEarlier}
                   onClick={async (e) => {
                     e.stopPropagation();
@@ -322,7 +322,7 @@ export function SessionTile({
             }}
             placeholder="Steer this agent…"
             aria-label={`Steer ${session.title}`}
-            className="h-8 text-[12px]"
+            className="h-8 text-ui"
             disabled={steering}
           />
           <Button

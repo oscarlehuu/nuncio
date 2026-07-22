@@ -103,7 +103,7 @@ function TimelineRow({ entry, onOpen }: { entry: TimelineEntryDto; onOpen: () =>
   const Icon = iconForKind(entry.kind);
   const target = timelineTargetFor(entry);
   return (
-    <li className="surface-lit flex items-center gap-3 rounded-xl border border-border bg-card px-3 py-3 shadow-e1">
+    <li className="flex items-center gap-3 rounded-xl border border-border bg-card px-3 py-3">
       <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted/50 text-muted-foreground" aria-label={entry.kind}>
         <Icon className="size-4" />
       </span>

@@ -61,9 +61,9 @@ export function PrThread({ path, number, thread, canResolve, onChanged }: PrThre
         <span className="min-w-0 flex-1 truncate font-mono">
           {thread.path ? `${thread.path}${thread.line != null ? `:${thread.line}` : ''}` : 'Conversation thread'}
         </span>
-        {thread.outdated && <span className="shrink-0 text-[10px] uppercase text-muted-foreground">outdated</span>}
+        {thread.outdated && <span className="shrink-0 text-ui-xs uppercase text-muted-foreground">outdated</span>}
         {thread.resolved === true && (
-          <span className="flex shrink-0 items-center gap-1 text-[10px] uppercase text-success">
+          <span className="flex shrink-0 items-center gap-1 text-ui-xs uppercase text-success">
             <CheckCircle2 className="size-3" /> resolved
           </span>
         )}

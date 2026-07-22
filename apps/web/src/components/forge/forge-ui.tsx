@@ -20,7 +20,7 @@ export function ForgeStateBadge({ state, draft }: { state: string; draft?: boole
   return (
     <span
       className={cn(
-        'inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[11px] font-medium',
+        'inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-ui-sm font-medium',
         STATE_CLASSES[label] ?? 'text-muted-foreground border-border bg-muted',
       )}
     >
@@ -62,7 +62,7 @@ export function ChecksList({ checks }: { checks: ForgeCheckDto[] }) {
           )}
         >
           <span className="truncate font-semibold">{check.name}</span>
-          <span className="shrink-0 text-[10px] uppercase">{check.conclusion || check.status}</span>
+          <span className="shrink-0 text-ui-xs uppercase">{check.conclusion || check.status}</span>
         </li>
       ))}
     </ul>

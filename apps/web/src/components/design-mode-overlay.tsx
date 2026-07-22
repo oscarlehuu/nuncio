@@ -56,18 +56,18 @@ export function DesignModeOverlay({
       <div
         className={cn(
           'flex w-full max-w-[520px] items-center gap-2 rounded-full border border-border/80',
-          'bg-card/95 px-3 py-2 shadow-lg backdrop-blur-md',
+          'bg-card/95 px-3 py-2 shadow-e3 backdrop-blur-md',
         )}
       >
         {latest ? (
           <span
-            className="max-w-[120px] shrink-0 truncate rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-semibold text-primary"
+            className="max-w-[120px] shrink-0 truncate rounded-full bg-primary/15 px-2 py-0.5 text-ui-sm font-semibold text-primary"
             title={latest.cssPath || latest.xpath || latest.label}
           >
             {latest.label}
           </span>
         ) : (
-          <span className="shrink-0 text-[11px] text-muted-foreground">Design</span>
+          <span className="shrink-0 text-ui-sm text-muted-foreground">Design</span>
         )}
         <input
           ref={inputRef}

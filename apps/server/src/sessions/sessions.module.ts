@@ -11,6 +11,8 @@ import { SessionsController } from './api/sessions.controller';
 import { SessionDiffController } from './diff/session-diff.controller';
 import { SessionDiffService } from './diff/session-diff.service';
 import { SessionsPersistenceModule } from './sessions.persistence.module';
+import { GitCommitMessageService } from './git-commit-message.service';
+import { SessionTitleService } from './session-title.service';
 import { SessionsService } from './sessions.service';
 import { SettingsModule } from '../settings/settings.module';
 import { ProjectsModule } from '../projects/projects.module';
@@ -33,7 +35,7 @@ import { McpModule } from '../mcp/mcp.module';
     McpModule,
   ],
   controllers: [SessionsController, GitSessionController, SessionDiffController],
-  providers: [SessionsService, SessionDiffService],
+  providers: [SessionsService, SessionDiffService, GitCommitMessageService, SessionTitleService],
   exports: [SessionsService],
 })
 export class SessionsModule {}

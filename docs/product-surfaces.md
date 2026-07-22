@@ -71,7 +71,10 @@ Mobile has **no** Workbench, Autopilot, Settings shell, Forge dock, File explore
 Electron (`apps/desktop`) wraps the same web UI. Browser dock and `node-pty` terminal are
 desktop-capable; web/PWA uses WS terminal and does **not** expose the browser dock. The shell also
 persists normal window bounds plus maximized state under Electron `userData`, revalidating them
-against the current display work area whenever it creates a window.
+against the current display work area whenever it creates a window. On macOS the title bar is
+integrated (`hiddenInset` + repositioned traffic lights, `desktop-chrome.js`); the web headers
+double as drag regions via `data-desktop-chrome="mac"` (see system-architecture.md → Desktop
+window chrome).
 
 ---
 
@@ -154,9 +157,9 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 
 | | |
 |---|---|
-| **Web** | Session inspector: `forge/scm-panel.tsx` (live path — Changes / PR / issues). Standalone: `/forge/pr` → `standalone-pr-route.tsx` + `pr-detail.tsx`. PR Conversation tab loads `GET /api/forge/pulls/:number/comments` (full issue-style thread) plus review threads; markdown renders images (`ChatImage`) and mp4/webm/mov links (`ChatVideo`), unwrapping GitHub `<details>` wrappers. Project picker may browse/clone. Attention can deep-link PR review |
+| **Web** | Session inspector: `forge/scm-panel.tsx` (live path — Changes / PR / issues). Changes tab has Pull/Push (branch strip) and a Commit Message box (`commitSession` → `POST /api/sessions/:id/git/commit`, auto-stage) whose Commit split-button menu adds the stacked chains Commit & push / Commit, push & PR (staged progress toast; one home per git action, no header duplicate); a sparkles icon inside the message box drafts the message via `POST /api/sessions/:id/git/commit-message` (engine one-shot, prefill only). Standalone: `/forge/pr` → `standalone-pr-route.tsx` + `pr-detail.tsx`. PR Conversation tab loads `GET /api/forge/pulls/:number/comments` (full issue-style thread) plus review threads; markdown renders images (`ChatImage`) and mp4/webm/mov links (`ChatVideo`), unwrapping GitHub `<details>` wrappers. Project picker may browse/clone. Attention can deep-link PR review |
 | **Mobile** | None; forge automation is backend-only |
-| **Settings** | Source control (GitHub / GitLab) + Advanced automation toggles `forges.autoSteer` and `forges.autoCloseOnMerge` (both default true; env fallbacks `NUNCIO_FORGES_AUTO_STEER` / `NUNCIO_FORGES_AUTO_CLOSE_ON_MERGE`) |
+| **Settings** | Source control (GitHub / GitLab) + Advanced automation toggles `forges.autoSteer` and `forges.autoCloseOnMerge` (both default true; env fallbacks `NUNCIO_FORGES_AUTO_STEER` / `NUNCIO_FORGES_AUTO_CLOSE_ON_MERGE`). Agents page: `NUNCIO_COMMIT_MESSAGE_MODEL` + `NUNCIO_COMMIT_MESSAGE_INSTRUCTION` (auto-learned from repo commit history when empty; editable; clear to re-learn), `NUNCIO_AUTO_TITLE` + `NUNCIO_SESSION_TITLE_MODEL` (auto session naming), `NUNCIO_AUTO_BRANCH_NAME` (auto worktree branch naming) |
 | **Server** | `forges/` (incl. `GET /api/forge/pulls/:number/comments` via `listPullRequestComments`), `git/` (`sync`, `unpushed`, `commits/:sha/diff`, `stash`, `blame`, `history`, `pull`, status/diff/push), `POST /api/sessions/from-pr`, signed forge webhooks, session git/PR routes. GitHub normalizes reviews, review comments, PR issue comments, failed workflow/check runs, and PR close; GitLab normalizes MR notes, failed associated pipelines, and MR merge/close. Feedback auto-steers only for repository writers and never for the connected forge login; untrusted/unverifiable authors and missing owners raise `pr-feedback` Attention. Feedback and CI are durably queued before the webhook returns `202`; background delivery failures also raise Attention. PR adoption atomically reuses one active owner and configures plain pushes to the PR source. A merged owner is archived and its worktree removed only when IDLE, clean, and without unpushed commits; every failed gate skips cleanup non-destructively and raises Attention. |
 | **Also check** | Settings credentials/automation toggles + live `scm-panel` + standalone PR + `pr-review`/`pr-feedback` attention items; sidebar session rows show engine + PR open/merged/closed badges (`session-pr-badge.tsx`) from `pullRequestState`/`forgeStatus` |
 | **Legacy** | `review-changes.tsx` is unwired orphan; prefer `scm-panel` / `session-changes-panel`. Do not “fix PR UI” only in orphans |
@@ -212,6 +215,20 @@ changing a **tool** means the panel + its server module.
 | **Mobile** | Consumes imported sessions after pairing |
 | **Server** | `cursor-local/`, `pi-local/`, `POST /api/sessions/handoff` |
 | **Also check** | Both entry points + import APIs |
+
+### Hand off to another engine (cross-engine)
+
+A settled session (IDLE/PAUSED/ERROR) continues on a different provider: new session on the
+target engine seeded with a handoff brief + workspace snapshot + compacted timeline
+(`renderEventsSince`, 32 KB budget), reusing the source working dir/worktree, linked via
+`priorSessionId`.
+
+| | |
+|---|---|
+| **Web** | Session header ⋯ menu — "Hand off to {engine}" items (available engines ≠ current; `session-detail.tsx` `handleHandoff` → `handoffSessionTo`), navigates to the new session; lineage chips show the chain |
+| **Mobile** | Session detail ⋯ actions sheet — "Hand off to another engine" opens a `handoff-sheet.tsx` engine picker (targets from `lib/session-handoff.ts`, only IDLE/PAUSED/ERROR; `app/session/[id].tsx` `doHandoff` → `handoffSessionTo`), navigates to the new session |
+| **Server** | `POST /api/sessions/:id/handoff-to` (`sessions.controller.ts` → `SessionsService.handoffToProvider`); preamble `history` section; worktree adoption via explicit `worktreePath`/`branch` on create |
+| **Also check** | Re-handoff guard (fresh handoff needs ≥1 native turn); same-engine keeps model; capability drift when target lacks source's mode |
 
 ### External agent memories (Nuncio Engine)
 

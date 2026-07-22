@@ -170,7 +170,7 @@ export function UsageHeatmap({ days, unit, className }: UsageHeatmapProps) {
         data-testid="usage-heatmap-grid"
       >
         <div className="flex w-full gap-1.5">
-          <div className="flex w-6 shrink-0 flex-col justify-between py-px text-[10px] leading-none text-muted-foreground/70">
+          <div className="flex w-6 shrink-0 flex-col justify-between py-px text-ui-xs leading-none text-muted-foreground/70">
             {WEEKDAY_LABELS.map((label, index) => (
               <span key={index} className="flex flex-1 items-center">
                 {label}

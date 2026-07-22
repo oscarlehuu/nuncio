@@ -59,7 +59,7 @@ interface TranscriptProps {
  * provider is unknown. */
 function AssistantAvatar({ provider }: { provider?: string }) {
   return (
-    <div className="flex size-[22px] items-center justify-center rounded-lg border border-border/70 bg-card text-foreground/70 shadow-e0 surface-lit">
+    <div className="flex size-[22px] items-center justify-center rounded-lg border border-border/70 bg-card text-foreground/70">
       {provider ? (
         <ProviderIcon providerId={provider} className="size-3" />
       ) : (
@@ -175,7 +175,7 @@ function UserBlock({
         <div
           className={cn(
             'max-w-[88%] px-3.5 py-[var(--chat-msg-py)] rounded-[14px_14px_5px_14px] chat-text-body leading-relaxed',
-            'border border-border/60 bg-card text-foreground shadow-e0 surface-lit',
+            'border border-border/60 bg-card text-foreground',
             queued && 'opacity-70 border-dashed',
           )}
         >

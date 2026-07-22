@@ -40,7 +40,7 @@ export function LoopDashboardHeader({ stats, loading, onOpenRunHistory }: LoopDa
         type="button"
         onClick={onOpenRunHistory}
         aria-label="View all run history"
-        className="surface-lit group col-span-2 flex flex-col justify-between rounded-xl border border-border bg-card px-4 py-3 text-left shadow-e1 transition-shadow hover:shadow-e2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:col-span-1"
+        className="group col-span-2 flex flex-col justify-between rounded-xl border border-border bg-card px-4 py-3 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:col-span-1"
       >
         <span className="flex items-center justify-between text-ui-sm text-muted-foreground">
           <span>Last 14 days</span>
@@ -67,7 +67,7 @@ function StatCard({
   tone?: 'success' | 'warning';
 }) {
   return (
-    <div className="surface-lit flex flex-col gap-0.5 rounded-xl border border-border bg-card px-4 py-3 shadow-e1">
+    <div className="flex flex-col gap-0.5 rounded-xl border border-border bg-card px-4 py-3">
       <span className="text-ui-sm text-muted-foreground">{label}</span>
       <span
         className={cn(

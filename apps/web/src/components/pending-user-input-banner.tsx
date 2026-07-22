@@ -134,7 +134,7 @@ export const PendingUserInputBanner = memo(function PendingUserInputBanner({
   return (
     <TooltipProvider>
       <div
-        className="mb-2 rounded-2xl border border-warning/50 bg-card px-4 py-3.5 shadow-e2 surface-lit"
+        className="mb-2 rounded-2xl border border-warning/50 bg-card px-4 py-3.5"
         data-testid="pending-user-input-banner"
       >
         <div className="flex items-center gap-2">

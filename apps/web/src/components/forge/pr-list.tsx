@@ -44,7 +44,7 @@ export function PrList({ path, onOpen }: PrListProps) {
             type="button"
             onClick={() => setChip(value)}
             className={cn(
-              'rounded-full border px-2.5 py-0.5 text-[11px] font-medium',
+              'rounded-full border px-2.5 py-0.5 text-ui-sm font-medium',
               chip === value
                 ? 'border-primary bg-primary/10 text-foreground'
                 : 'border-border text-muted-foreground hover:text-foreground',
@@ -70,7 +70,7 @@ export function PrList({ path, onOpen }: PrListProps) {
               >
                 <span className="flex items-center gap-2">
                   <GitPullRequest className="size-3.5 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{pr.title}</span>
+                  <span className="min-w-0 flex-1 truncate text-ui-lg font-medium">{pr.title}</span>
                   <ForgeStateBadge state={pr.state} draft={pr.draft} />
                 </span>
                 <span className="flex items-center gap-2 pl-5.5 text-xs text-muted-foreground">

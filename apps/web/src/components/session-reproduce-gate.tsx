@@ -99,7 +99,7 @@ export function SessionReproduceGate({ sessionId, refreshKey, onResumed }: Sessi
   return (
     <div
       data-testid="reproduce-gate"
-      className="mx-auto flex max-w-[760px] flex-col gap-2.5 rounded-xl border border-border bg-card px-3.5 py-3 shadow-e1 surface-lit"
+      className="mx-auto flex max-w-[760px] flex-col gap-2.5 rounded-xl border border-border bg-card px-3.5 py-3"
     >
       <div className="flex items-center gap-2">
         <Bug className="size-3.5 shrink-0 text-destructive" aria-hidden />

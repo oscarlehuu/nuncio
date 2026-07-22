@@ -115,9 +115,11 @@ describe('GitSessionController', () => {
       commit: createSpy(() => commitResult),
       push: createSpy(() => ({ ok: true })),
     };
+    const commitMessages = { generate: createSpy(async () => ({ message: 'feat: x' })) };
     return {
-      controller: new GitSessionController(sessions as never, git as never),
+      controller: new GitSessionController(sessions as never, git as never, commitMessages as never),
       git,
+      commitMessages,
     };
   }
 

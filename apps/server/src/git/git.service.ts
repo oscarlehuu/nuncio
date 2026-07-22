@@ -529,6 +529,42 @@ export class GitService {
     return { worktreePath, branch, baseBranch: resolvedBase };
   }
 
+  /**
+   * Rename the branch a worktree is sitting on (temporary create-time name →
+   * generated name). Refuses when the worktree moved off the expected branch
+   * or the target already exists — callers treat both as "keep the old name".
+   */
+  async renameWorktreeBranch(
+    worktreePath: string,
+    oldBranch: string,
+    newBranch: string,
+  ): Promise<void> {
+    const current = (await git(['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath)).trim();
+    if (current !== oldBranch) {
+      throw new BadRequestException(
+        `Worktree is on ${current}, not ${oldBranch} — refusing to rename`,
+      );
+    }
+    const exists = await git(['rev-parse', '--verify', '--quiet', `refs/heads/${newBranch}`], worktreePath)
+      .then(() => true)
+      .catch(() => false);
+    if (exists) {
+      throw new BadRequestException(`Branch ${newBranch} already exists`);
+    }
+    // A branch that already has an upstream was pushed — renaming it locally
+    // would desync the remote and any PR pointing at it.
+    const hasUpstream = await git(
+      ['rev-parse', '--verify', '--quiet', `${oldBranch}@{upstream}`],
+      worktreePath,
+    )
+      .then(() => true)
+      .catch(() => false);
+    if (hasUpstream) {
+      throw new BadRequestException(`Branch ${oldBranch} is already pushed — refusing to rename`);
+    }
+    await git(['branch', '-m', oldBranch, newBranch], worktreePath);
+  }
+
   async fetchPullRequestHead(
     projectPath: string,
     provider: 'github' | 'gitlab',

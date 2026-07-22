@@ -286,8 +286,8 @@ export function GridView(props: GridViewProps) {
       <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center md:hidden">
         <MonitorSmartphone className="size-8 text-muted-foreground" />
         <div>
-          <h1 className="text-[17px] font-medium">The grid needs a desktop viewport</h1>
-          <p className="mx-auto mt-1 max-w-[320px] text-[13px] text-muted-foreground">
+          <h1 className="text-lg font-medium">The grid needs a desktop viewport</h1>
+          <p className="mx-auto mt-1 max-w-[320px] text-ui-lg text-muted-foreground">
             The multi-session workbench is built for a wide screen. Open a single session from the
             sidebar to keep working on this device.
           </p>
@@ -297,21 +297,21 @@ export function GridView(props: GridViewProps) {
       <div className="hidden min-h-0 flex-1 flex-col md:flex">
         <header
           className={cn(
-            'flex items-center gap-3 border-b border-border px-4 py-2.5 shrink-0',
+            'app-region-drag flex items-center gap-3 border-b border-border px-4 py-2.5 shrink-0',
             // Clear the fixed hover rail; the heading was clipped under the hamburger.
             props.railOverlay && 'pl-16',
           )}
         >
           <div className="flex items-baseline gap-2 min-w-0">
-            <h1 className="text-[15px] font-medium leading-tight">Workbench</h1>
+            <h1 className="text-md font-medium leading-tight">Workbench</h1>
             {props.projectFilterName && (
-              <span className="truncate text-[13px] text-muted-foreground">{props.projectFilterName}</span>
+              <span className="truncate text-ui-lg text-muted-foreground">{props.projectFilterName}</span>
             )}
           </div>
           <div
             role="tablist"
             aria-label="Grid layout"
-            className="ml-auto flex items-center gap-0.5 rounded-lg bg-muted/50 p-0.5"
+            className="app-region-no-drag ml-auto flex items-center gap-0.5 rounded-lg bg-muted/50 p-0.5"
           >
             {GRID_PRESETS.map((p) => (
               <button
@@ -321,10 +321,10 @@ export function GridView(props: GridViewProps) {
                 aria-selected={preset === p}
                 onClick={() => changePreset(p)}
                 className={cn(
-                  'rounded-md px-2.5 py-1 text-[12px] font-medium tabular-nums transition-colors',
+                  'rounded-md px-2.5 py-1 text-ui font-medium tabular-nums transition-colors',
                   'outline-none focus-visible:ring-2 focus-visible:ring-ring',
                   preset === p
-                    ? 'bg-background text-foreground shadow-sm'
+                    ? 'bg-background text-foreground shadow-e0'
                     : 'text-muted-foreground hover:text-foreground',
                 )}
               >

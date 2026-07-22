@@ -22,7 +22,7 @@ function statusInfo(file: GitFileChange): { code: string; label: string; classNa
   const code = file.index.trim() || file.workTree.trim() || '?';
   switch (code) {
     case 'M':
-      return { code, label: 'Modified', className: 'text-amber-500' };
+      return { code, label: 'Modified', className: 'text-warning' };
     case 'A':
       return { code, label: 'Added', className: 'text-success' };
     case '?':

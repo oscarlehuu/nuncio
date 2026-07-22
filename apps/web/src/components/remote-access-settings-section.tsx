@@ -70,7 +70,7 @@ function PeerRow({ peer, autoTrust }: { peer: TailscalePeer; autoTrust: boolean 
     <div className="flex items-center justify-between py-2.5 px-4">
       <div className="flex items-center gap-3 min-w-0">
         <span
-          className={`size-2 rounded-full flex-shrink-0 ${peer.online ? 'bg-emerald-500' : 'bg-muted-foreground/30'}`}
+          className={`size-2 rounded-full flex-shrink-0 ${peer.online ? 'bg-success' : 'bg-muted-foreground/30'}`}
           aria-label={peer.online ? 'online' : 'offline'}
         />
         <div className="flex flex-col min-w-0">

@@ -42,14 +42,18 @@ import { renderContextFacts } from '../context/context-facts.renderer';
 import { materializeContextFile } from '../context/context-file.materializer';
 import { GitService } from '../git/git.service';
 import type { ModelOptionsMap } from '../models/model-options.types';
+import { renderEventsSince } from '../context/events-compactor';
 import { renderHandoffBrief } from '../orchestration/handoff-brief.renderer';
+import type { HandoffBrief } from '../orchestration/handoff-brief.types';
 import { composeSessionPreamble } from '../orchestration/session-preamble';
+import { buildWorkspaceSnapshot } from '../orchestration/workspace-snapshot';
 import {
   buildSessionWorkspaceContext,
   renderWorkspaceContext,
 } from '../orchestration/session-workspace-context';
 import { PromptProfileService } from '../prompts/prompt-profile.service';
 import { PiLocalSessionsService } from '../pi-local/pi-local-sessions.service';
+import { SessionTitleService } from './session-title.service';
 import { canTransition } from './domain/sessions.fsm';
 import { assertModeSupported } from './domain/session-modes';
 import type { MultitaskCoordinator } from './domain/multitask-coordinator.types';
@@ -61,6 +65,7 @@ import type {
   CreateSessionDto,
   ContinueExistingSessionDto,
   HandoffSessionDto,
+  HandoffToProviderDto,
   ProviderRequestDecision,
   ProviderRequestInput,
   ProviderRequestResult,
@@ -117,6 +122,13 @@ const DEFAULT_DELETE_RETRY_WAIT_MS = 5_000;
 
 /** Ancestor walk depth cap — bounds cost and survives a manufactured cycle. */
 const ANCESTOR_WALK_CAP = 10;
+// Cross-engine handoff: the compacted source timeline rides the new session's
+// preamble under a 32 KB byte budget (renderEventsSince evicts oldest-first),
+// reading at most this many trailing events.
+const HANDOFF_HISTORY_EVENT_LIMIT = 2000;
+const HANDOFF_HISTORY_BUDGET_BYTES = 32 * 1024;
+const HANDOFF_CONTINUE_PROMPT =
+  'Continue this task from where the previous engine left off. The handoff context above has the goal, workspace state, and a compacted timeline of the work so far — verify the current state of the working tree before making changes, then proceed.';
 
 function toSessionRef(session: SessionDto): SessionRefDto {
   return { id: session.id, title: session.title, status: session.status, provider: session.provider };
@@ -226,6 +238,7 @@ export class SessionsService implements OnModuleDestroy {
     // after-evidence (fail-open — capture never affects the loop).
     @Optional() private readonly evidence?: EvidenceCaptureService,
     @Optional() private readonly mcp?: McpService,
+    @Optional() private readonly titles?: SessionTitleService,
   ) {
     // A crash mid-fan-out can leave steer rows leased forever; a claim must
     // never outlive the process that took it. Release before restore so the
@@ -355,6 +368,9 @@ export class SessionsService implements OnModuleDestroy {
     let baseBranch: string | undefined;
     let worktreePath: string | undefined;
     let branch: string | undefined;
+    // Only a worktree created BY this call may be rolled back on failure — an
+    // adopted (handoff) worktree belongs to the source session.
+    let createdWorktree = false;
 
     // Resolve the engine profile ONCE here (ADR-004: adapters get finished
     // strings). It drives both the preamble wrappers and the B4 context file.
@@ -368,6 +384,7 @@ export class SessionsService implements OnModuleDestroy {
         workspace = undefined;
         const slug = input.prompt.trim().split('\n')[0] ?? 'task';
         const worktree = await this.git.createWorktree(projectPath, baseBranch, id, slug);
+        createdWorktree = true;
         worktreePath = worktree.worktreePath;
         branch = input.pushBranch?.trim() || worktree.branch;
         baseBranch = worktree.baseBranch;
@@ -384,7 +401,12 @@ export class SessionsService implements OnModuleDestroy {
           }
         }
       } else {
-        workspace = workspace ?? projectPath;
+        // Adopt an existing working dir (cross-engine handoff): an explicit
+        // worktreePath/branch reuses the source session's isolated worktree
+        // instead of creating a new one; otherwise run in the project itself.
+        worktreePath = input.worktreePath?.trim() || undefined;
+        branch = input.branch?.trim() || undefined;
+        if (!worktreePath) workspace = workspace ?? projectPath;
       }
     }
 
@@ -412,6 +434,7 @@ export class SessionsService implements OnModuleDestroy {
       : await this.renderWorkspaceContextBlock(worktreePath ?? workspace, baseBranch);
     const prompt = composeSessionPreamble({
       ...(input.contextBrief ? { brief: renderHandoffBrief(input.contextBrief) } : {}),
+      ...(input.historyContext ? { history: input.historyContext } : {}),
       ...(factsInPreamble ? { facts: this.renderProjectFacts(projectPath!, id) } : {}),
       ...(workspaceContext ? { workspace: workspaceContext } : {}),
       prompt: input.prompt,
@@ -424,6 +447,7 @@ export class SessionsService implements OnModuleDestroy {
         ...input,
         id,
         prompt,
+        rawPrompt: input.prompt,
         provider: providerId,
         workspace,
         projectPath,
@@ -435,7 +459,7 @@ export class SessionsService implements OnModuleDestroy {
         cursorBackend: 'sdk',
       });
     } catch (error) {
-      if (worktreePath && projectPath) {
+      if (createdWorktree && worktreePath && projectPath) {
         try {
           await this.git.removeWorktree(projectPath, worktreePath);
         } catch {
@@ -459,7 +483,77 @@ export class SessionsService implements OnModuleDestroy {
     } else {
       void this.startRun(session, input.attachments);
     }
+    // Best-effort auto-naming from the user's request (engine-neutral one-shot),
+    // never under bun test (same rationale as fact distillation). Handoffs skip
+    // — they inherit the source session's title via rename.
+    if (process.env.NODE_ENV !== 'test' && this.titles?.enabled() && !input.priorSessionId) {
+      void this.titles
+        .generateTitle(input.prompt, providerId)
+        .then((title) => {
+          if (title) this.applyAutoTitle(session.id, session.title, title);
+        })
+        .catch(() => {});
+    }
+    // Same flow for the worktree branch (Synara's recipe): the create-time
+    // `nuncio/<id>-<slug>` acts as the temporary name; skip adopted branches
+    // (push/upstream configured) — their names belong to the remote.
+    if (
+      process.env.NODE_ENV !== 'test' &&
+      this.titles?.branchNamingEnabled() &&
+      !input.priorSessionId &&
+      worktreePath &&
+      branch &&
+      !input.pushBranch?.trim() &&
+      !input.upstreamBranch?.trim()
+    ) {
+      const createBranch = branch;
+      void this.titles
+        .generateBranchSlug(input.prompt, providerId)
+        .then((slug) => {
+          if (slug) return this.applyAutoBranch(session.id, createBranch, slug);
+        })
+        .catch(() => {});
+    }
     return this.enrichSession(session);
+  }
+
+  /**
+   * Apply a generated title only while the create-time derived title is still
+   * in place — a manual rename in the meantime always wins.
+   */
+  applyAutoTitle(id: string, expectedTitle: string, title: string): void {
+    try {
+      const current = this.sessions.findById(id);
+      if (!current || current.title !== expectedTitle) return;
+      this.rename(id, title);
+    } catch {
+      // Renaming an archived/deleted session is a no-op, never an error path.
+    }
+  }
+
+  /**
+   * Rename the session's temporary worktree branch (`nuncio/<id>-<slug>`) to
+   * the generated `nuncio/<fragment>` — only while the branch is untouched
+   * since create and no pull request exists yet. A name collision retries once
+   * with the session id as suffix; any git refusal keeps the old name.
+   */
+  async applyAutoBranch(id: string, expectedBranch: string, slug: string): Promise<void> {
+    const current = this.sessions.findById(id);
+    if (!current?.worktreePath || current.branch !== expectedBranch) return;
+    if (current.pullRequestUrl || (current.forgeStatus && current.forgeStatus !== 'none')) return;
+
+    const candidates = [`nuncio/${slug}`, `nuncio/${slug}-${id.slice(0, 4)}`].filter(
+      (name) => name !== expectedBranch,
+    );
+    for (const target of candidates) {
+      try {
+        await this.git.renameWorktreeBranch(current.worktreePath, expectedBranch, target);
+        this.sessions.updateBranch(id, target);
+        return;
+      } catch {
+        // Collision or a moved branch — try the suffixed candidate, else keep the old name.
+      }
+    }
   }
 
   /**
@@ -615,6 +709,71 @@ export class SessionsService implements OnModuleDestroy {
   }
 
   /**
+   * Hand a settled session to another engine: a fresh session on the target
+   * provider, seeded with a handoff brief (goal + workspace snapshot) and the
+   * source's compacted timeline, reusing the source's working directory and
+   * linked via priorSessionId. The transcript never replays verbatim —
+   * renderEventsSince is the sanctioned lossy carrier.
+   */
+  async handoffToProvider(id: string, input: HandoffToProviderDto): Promise<SessionDto> {
+    // Crew-owned members are read-only outside Crew controls — a handoff would
+    // start a Solo provider on a Crew-leased workspace.
+    const source = this.requirePublicMutableSession(id);
+    if (source.status !== 'IDLE' && source.status !== 'PAUSED' && source.status !== 'ERROR') {
+      throw new BadRequestException(`Cannot hand off session in status ${source.status}`);
+    }
+    // A source whose worktree already has a live successor cannot hand off again.
+    this.assertWorktreeNotHandedOff(source);
+    const targetId = input.provider?.trim();
+    if (!targetId) throw new BadRequestException('provider is required');
+    await this.agents.getAvailable(targetId);
+
+    const events = this.events.listTail(id, HANDOFF_HISTORY_EVENT_LIMIT);
+    // A session that is itself a fresh handoff has nothing native to carry —
+    // require one real assistant turn before chaining another handoff.
+    if (source.priorSessionId && !events.some((event) => event.type === 'assistant_message')) {
+      throw new BadRequestException(
+        'This session is a fresh handoff with no turns of its own yet — run it before handing off again.',
+      );
+    }
+
+    const history = renderEventsSince(events, HANDOFF_HISTORY_BUDGET_BYTES, {
+      sessionId: id,
+      sinceSeq: 0,
+    });
+    const workingDir = source.worktreePath ?? source.workspace ?? source.projectPath ?? undefined;
+    const snapshot = workingDir ? await buildWorkspaceSnapshot(workingDir, source.baseBranch) : null;
+    const brief: HandoffBrief = {
+      goal: `Continue "${source.title}" — handed off from ${source.provider}.`,
+      ...(snapshot ? { workspace: snapshot } : {}),
+      sourceSessionId: id,
+    };
+
+    const created = await this.create({
+      prompt: input.prompt?.trim() || HANDOFF_CONTINUE_PROMPT,
+      provider: targetId,
+      // Same engine keeps the source model unless overridden; a different
+      // engine falls back to its own default when no model is given.
+      ...(input.model
+        ? { model: input.model }
+        : targetId === source.provider && source.model
+          ? { model: source.model }
+          : {}),
+      ...(source.workspace ? { workspace: source.workspace } : {}),
+      ...(source.projectPath ? { projectPath: source.projectPath } : {}),
+      ...(source.baseBranch ? { baseBranch: source.baseBranch } : {}),
+      ...(source.worktreePath ? { worktreePath: source.worktreePath } : {}),
+      ...(source.branch ? { branch: source.branch } : {}),
+      contextBrief: brief,
+      historyContext: history,
+      priorSessionId: id,
+    });
+    // The handoff continues the same task — carry the source title instead of
+    // the first line of the composed preamble.
+    return this.rename(created.id, source.title);
+  }
+
+  /**
    * Continue one durable session in place and wait for its turn plus the
    * session-owned verification loop. Provider thread, workspace, and runtime
    * policy all come from the persisted session row.
@@ -627,6 +786,7 @@ export class SessionsService implements OnModuleDestroy {
     if (current.status !== 'IDLE' && current.status !== 'PAUSED' && current.status !== 'ERROR') {
       throw new BadRequestException(`Cannot continue session in status ${current.status}`);
     }
+    this.assertWorktreeNotHandedOff(current);
     const prompt = composeSessionPreamble({
       ...(input.contextBrief ? { brief: renderHandoffBrief(input.contextBrief) } : {}),
       prompt: input.prompt,
@@ -709,8 +869,24 @@ export class SessionsService implements OnModuleDestroy {
     attachments?: AgentAttachment[],
     origin?: string,
   ): Promise<SessionDto> {
-    this.requirePublicMutableSession(id);
+    const session = this.requirePublicMutableSession(id);
+    this.assertWorktreeNotHandedOff(session);
     return this.steerInternal(id, message, forceResume, attachments, origin);
+  }
+
+  /**
+   * After a cross-engine handoff the successor owns the shared worktree; the
+   * source must not start new provider runs on it or two agents would mutate
+   * one checkout concurrently. Archiving the successor releases the source.
+   */
+  private assertWorktreeNotHandedOff(session: SessionDto): void {
+    if (!session.worktreePath) return;
+    const successor = this.sessions.findActiveSuccessor(session.id, session.worktreePath);
+    if (successor) {
+      throw new BadRequestException(
+        `This session's worktree was handed off to session ${successor.id} — continue there, or archive it to reclaim this session.`,
+      );
+    }
   }
 
   steerInBackground(
@@ -977,18 +1153,23 @@ export class SessionsService implements OnModuleDestroy {
     const session = this.sessions.findById(id);
     if (!session) throw new NotFoundException('Session not found');
 
+    // Handoff chains (priorSessionId) are lineage too: walk them like parents
+    // and surface successors alongside spawned children.
     const ancestors: SessionRefDto[] = [];
     const visited = new Set<string>([id]);
-    let cursor = session.parentSessionId;
+    let cursor = session.parentSessionId ?? session.priorSessionId;
     while (cursor && ancestors.length < ANCESTOR_WALK_CAP && !visited.has(cursor)) {
       visited.add(cursor);
       const parent = this.sessions.findById(cursor);
       if (!parent) break;
       ancestors.push(toSessionRef(parent));
-      cursor = parent.parentSessionId;
+      cursor = parent.parentSessionId ?? parent.priorSessionId;
     }
 
-    const children = this.sessions.childrenOf(id).map(toSessionRef);
+    const children = [
+      ...this.sessions.childrenOf(id),
+      ...this.sessions.successorsOf(id),
+    ].map(toSessionRef);
     return { ancestors, children };
   }
 

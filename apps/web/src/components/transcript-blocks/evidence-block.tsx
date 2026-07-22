@@ -23,14 +23,14 @@ function shortHead(head: string): string {
 function Shot({ label, src, route }: { label: string; src: string; route: string }) {
   return (
     <figure className="flex min-w-0 flex-col gap-1.5">
-      <figcaption className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide leading-none text-muted-foreground">
+      <figcaption className="flex items-center gap-1.5 text-ui-xs font-semibold uppercase tracking-wide leading-none text-muted-foreground">
         <span className="size-1.5 rounded-full bg-muted-foreground/40" aria-hidden />
         {label}
       </figcaption>
       <ChatImage
         src={src}
         alt={`${label} screenshot of ${route}`}
-        className="w-full border-border/50 shadow-none transition hover:shadow-e1 active:scale-[0.98]"
+        className="w-full border-border/50 shadow-none transition hover:bg-accent/40 active:scale-[0.98]"
       />
     </figure>
   );
@@ -40,7 +40,7 @@ function Shot({ label, src, route }: { label: string; src: string; route: string
 function PendingShot({ viewport }: { viewport: { w: number; h: number } }) {
   return (
     <figure className="flex min-w-0 flex-col gap-1.5">
-      <figcaption className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide leading-none text-muted-foreground/70">
+      <figcaption className="flex items-center gap-1.5 text-ui-xs font-semibold uppercase tracking-wide leading-none text-muted-foreground/70">
         <span className="size-1.5 rounded-full bg-muted-foreground/25" aria-hidden />
         After
       </figcaption>
@@ -66,12 +66,12 @@ export function EvidenceBlock({ evidence, stale, sessionId, apiBase = '' }: Evid
     <div
       data-testid="evidence-block"
       className={cn(
-        'max-w-[88%] overflow-hidden rounded-lg border bg-card text-foreground shadow-e1 surface-lit',
+        'max-w-[88%] overflow-hidden rounded-lg border bg-card text-foreground',
         stale ? 'border-warning/40' : 'border-border/60',
       )}
     >
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3.5 py-2.5">
-        <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide leading-none text-muted-foreground">
+        <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border px-2 py-0.5 text-ui-xs font-semibold uppercase tracking-wide leading-none text-muted-foreground">
           <Camera className="size-3" aria-hidden />
           Evidence
         </span>
@@ -79,7 +79,7 @@ export function EvidenceBlock({ evidence, stale, sessionId, apiBase = '' }: Evid
         {stale && (
           <span
             data-testid="evidence-stale"
-            className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide leading-none text-warning"
+            className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-ui-xs font-semibold uppercase tracking-wide leading-none text-warning"
           >
             <TriangleAlert className="size-3" aria-hidden />
             Stale

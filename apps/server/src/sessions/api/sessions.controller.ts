@@ -17,6 +17,7 @@ import { validateHandoffBrief } from '../../orchestration/handoff-brief.validate
 import type {
   CreateSessionDto,
   HandoffSessionDto,
+  HandoffToProviderDto,
   RespondInteractionDto,
   RespondProviderRequestDto,
   SetSessionModelDto,
@@ -80,6 +81,18 @@ export class SessionsController {
   @Post('handoff')
   handoff(@Body() body: HandoffSessionDto) {
     return this.sessions.handoff(body);
+  }
+
+  @Post(':id/handoff-to')
+  handoffTo(@Param('id') id: string, @Body() body: HandoffToProviderDto) {
+    if (!body?.provider?.trim()) {
+      throw new BadRequestException('provider is required');
+    }
+    return this.sessions.handoffToProvider(id, {
+      provider: body.provider.trim(),
+      ...(body.model?.trim() ? { model: body.model.trim() } : {}),
+      ...(body.prompt?.trim() ? { prompt: body.prompt.trim() } : {}),
+    });
   }
 
   @Get(':id/active-run')

@@ -332,6 +332,29 @@ export class SessionsRepository {
   }
 
   /** Direct tree children of a session, oldest first (insertion order on a created_at tie). */
+  /** Handoff successors of a session (sessions continuing it via priorSessionId). */
+  successorsOf(priorSessionId: string): SessionDto[] {
+    const rows = this.database.db
+      .prepare<SessionRow, [string]>(
+        'SELECT * FROM sessions WHERE prior_session_id = ? ORDER BY created_at ASC, rowid ASC',
+      )
+      .all(priorSessionId);
+    return rows.map(toDto);
+  }
+
+  /**
+   * The non-archived handoff successor that co-owns a worktree with its
+   * source, if any — the guard that keeps two live sessions off one checkout.
+   */
+  findActiveSuccessor(priorSessionId: string, worktreePath: string): SessionDto | null {
+    const row = this.database.db
+      .prepare<SessionRow, [string, string]>(
+        "SELECT * FROM sessions WHERE prior_session_id = ? AND worktree_path = ? AND status != 'ARCHIVED' ORDER BY created_at DESC LIMIT 1",
+      )
+      .get(priorSessionId, worktreePath);
+    return row ? toDto(row) : null;
+  }
+
   childrenOf(parentSessionId: string): SessionDto[] {
     const rows = this.database.db
       .prepare<SessionRow, [string]>(
@@ -346,7 +369,9 @@ export class SessionsRepository {
     const id = input.id ?? uuidv4().slice(0, 8);
     const row: SessionRow = {
       id,
-      title: titleFromPrompt(input.prompt),
+      // The stored prompt may be a composed preamble; the title must reflect
+      // the user's actual request when the caller supplies it.
+      title: titleFromPrompt(input.rawPrompt ?? input.prompt),
       status: 'CREATED',
       provider: input.provider ?? 'pi',
       model: input.model ?? null,
@@ -373,7 +398,7 @@ export class SessionsRepository {
       forge_status: input.forgeStatus ?? 'none',
       parent_session_id: input.parentSessionId ?? null,
       origin_task_id: input.originTaskId ?? null,
-      prior_session_id: null,
+      prior_session_id: input.priorSessionId ?? null,
       mcp_server_ids_json: stringifyMcpServerIdsJson(input.mcpServerIds),
       created_at: now,
       updated_at: now,
@@ -469,6 +494,14 @@ export class SessionsRepository {
     this.database.db
       .prepare('UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?')
       .run(title, now, id);
+    return this.findById(id);
+  }
+
+  updateBranch(id: string, branch: string): SessionDto | null {
+    const now = Date.now();
+    this.database.db
+      .prepare('UPDATE sessions SET branch = ?, updated_at = ? WHERE id = ?')
+      .run(branch, now, id);
     return this.findById(id);
   }
 

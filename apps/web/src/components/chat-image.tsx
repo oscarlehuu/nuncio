@@ -26,7 +26,7 @@ export function ChatImage({
         onClick={() => setOpen(true)}
         aria-label={`View ${caption}`}
         className={cn(
-          'block max-w-full overflow-hidden rounded-lg border border-border/60 bg-muted/20 shadow-e1 transition-shadow hover:shadow-e2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+          'block max-w-full overflow-hidden rounded-lg border border-border/60 bg-muted/20 transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
           className,
         )}
       >

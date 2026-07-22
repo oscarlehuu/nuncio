@@ -111,7 +111,7 @@ export function IssueDetail({ path, number, projectPath, onBack }: IssueDetailPr
           <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
             <span>by {issue.author}</span>
             {issue.labels.map((label) => (
-              <span key={label} className="rounded-full border border-border px-1.5 text-[10px]">
+              <span key={label} className="rounded-full border border-border px-1.5 text-ui-xs">
                 {label}
               </span>
             ))}

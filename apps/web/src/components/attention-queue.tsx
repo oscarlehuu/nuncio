@@ -86,7 +86,7 @@ export function AttentionQueue({ compactEmpty = false }: AttentionQueueProps) {
         {[0, 1, 2].map((i) => (
           <li
             key={i}
-            className="h-[76px] rounded-xl border border-border bg-card shadow-e1 animate-pulse"
+            className="h-[76px] rounded-xl border border-border bg-card animate-pulse"
           />
         ))}
       </ul>

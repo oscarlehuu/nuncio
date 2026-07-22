@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import {
+  commitSession,
   countDebugSentinelLines,
   fetchGitBranchSync,
   fetchGitHistory,
   fetchGitStash,
   fetchSessionDiff,
+  generateCommitMessage,
+  openPullRequest,
   postDiffComment,
+  pushSession,
   type DiffFile,
   type DiffHunk,
   type GitBranchSyncDto,
@@ -15,7 +19,7 @@ import {
   type SessionDiff,
   type SessionStatus,
 } from '../lib/api';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, ChevronDown, Loader2, Sparkles } from 'lucide-react';
 import { SessionChangeFileRow } from './session-change-file-row';
 import { SessionScmBranchStrip } from './session-scm-branch-strip';
 import { SessionScmCommitList } from './session-scm-commit-list';
@@ -24,6 +28,14 @@ import { SessionScmHistory } from './session-scm-history';
 import { SessionScmIssues } from './session-scm-issues';
 import { SessionScmStash } from './session-scm-stash';
 import { hunkRange, hunkText, type ComposerKey } from './session-changes-panel-format';
+import { Button } from './ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu';
+import { Textarea } from './ui/textarea';
 
 interface SessionChangesPanelProps {
   sessionId: string;
@@ -60,6 +72,22 @@ export function SessionChangesPanel({
   const [comment, setComment] = useState('');
   const [sending, setSending] = useState(false);
   const [sentKey, setSentKey] = useState<ComposerKey | null>(null);
+  const [commitMessage, setCommitMessage] = useState('');
+  const [committing, setCommitting] = useState(false);
+  const [generating, setGenerating] = useState(false);
+
+  const generateMessage = async () => {
+    if (generating || committing) return;
+    try {
+      setGenerating(true);
+      const result = await generateCommitMessage(sessionId);
+      setCommitMessage(result.message);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to generate a commit message');
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   const load = useCallback(async () => {
     try {
@@ -145,6 +173,45 @@ export function SessionChangesPanel({
     }
   };
 
+  // Stacked commit actions: commit, then optionally push and open a PR, with
+  // one staged toast per chain. The chain stops at the first failing stage.
+  const submitCommit = async (action: 'commit' | 'commit_push' | 'commit_push_pr' = 'commit') => {
+    const message = commitMessage.trim();
+    if (!message || committing) return;
+    const toastId = action === 'commit' ? undefined : toast.loading('Committing…');
+    try {
+      setCommitting(true);
+      const result = await commitSession(sessionId, message);
+      const sha = result.sha ? result.sha.slice(0, 7) : '';
+      if (action === 'commit') {
+        toast.success(sha ? `Committed ${sha}` : 'Committed');
+      } else {
+        toast.loading('Pushing…', { id: toastId });
+        await pushSession(sessionId);
+        if (action === 'commit_push_pr') {
+          toast.loading('Opening pull request…', { id: toastId });
+          const pr = await openPullRequest(sessionId);
+          toast.success(pr.number ? `Pull request #${pr.number} opened` : 'Pull request opened', {
+            id: toastId,
+          });
+        } else {
+          toast.success(sha ? `Committed ${sha} & pushed` : 'Committed & pushed', { id: toastId });
+        }
+      }
+      setCommitMessage('');
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : 'Git action failed';
+      if (toastId) toast.error(messageText, { id: toastId });
+      else toast.error(messageText);
+    } finally {
+      setCommitting(false);
+      // Reload even on a mid-chain failure: a commit that landed before a
+      // failed push must be reflected (otherwise retrying re-commits nothing
+      // and the panel keeps offering the wrong action).
+      await load();
+    }
+  };
+
   if (loading && !diff && !sync) {
     return <div className="px-3 py-3 text-sm text-muted-foreground">Loading changes…</div>;
   }
@@ -159,6 +226,9 @@ export function SessionChangesPanel({
   const hasStash = stash.length > 0;
   const hasHistory = (history?.commits.length ?? 0) > 0;
   const hasFiles = files.length > 0;
+  // Staged-only work leaves the unstaged diff empty but the tree dirty — the
+  // commit box must still show (commit auto-stages, so it can commit the index).
+  const showCommit = hasFiles || !branchSync.clean;
   const fullyEmpty =
     branchSync.clean &&
     !hasFiles &&
@@ -212,14 +282,14 @@ export function SessionChangesPanel({
               </span>
             </div>
             {diff?.truncated && (
-              <div className="border-t border-border/50 bg-amber-500/10 px-3 py-2 text-xs text-muted-foreground">
+              <div className="border-t border-border/50 bg-warning/10 px-3 py-2 text-xs text-muted-foreground">
                 Diff truncated. {diff.omittedFiles} file{diff.omittedFiles === 1 ? '' : 's'} omitted.
               </div>
             )}
             {sentinels.count > 0 && (
               <div
                 data-testid="debug-sentinel-warning"
-                className="flex items-start gap-2 border-t border-border/50 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400"
+                className="flex items-start gap-2 border-t border-border/50 bg-warning/10 px-3 py-2 text-xs text-warning"
               >
                 <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
                 <span>
@@ -255,7 +325,74 @@ export function SessionChangesPanel({
           </div>
         )}
 
-        {!hasFiles && !fullyEmpty && (
+        {showCommit && (
+          <div className="border-b border-border/50 px-3 py-3">
+            <div className="mb-2 text-sm font-medium">Commit Message</div>
+            <div className="relative mb-2">
+              <Textarea
+                value={commitMessage}
+                onChange={(event) => setCommitMessage(event.target.value)}
+                placeholder="Commit message"
+                rows={2}
+                className="resize-none pr-9 text-sm"
+                disabled={committing}
+              />
+              <button
+                type="button"
+                aria-label="Generate commit message"
+                title="Generate commit message"
+                onClick={() => void generateMessage()}
+                disabled={generating || committing}
+                className="absolute right-1.5 top-1.5 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+              >
+                {generating ? (
+                  <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                ) : (
+                  <Sparkles className="size-3.5" aria-hidden />
+                )}
+              </button>
+            </div>
+            <div className="flex gap-px">
+              <Button
+                size="sm"
+                className="flex-1 rounded-r-none"
+                disabled={!commitMessage.trim() || committing}
+                onClick={() => void submitCommit()}
+              >
+                {committing ? 'Committing…' : 'Commit'}
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    size="sm"
+                    className="rounded-l-none px-1.5"
+                    aria-label="More commit actions"
+                    disabled={!commitMessage.trim() || committing}
+                  >
+                    <ChevronDown className="size-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem
+                    onClick={() => void submitCommit('commit_push')}
+                    aria-label="Commit & push"
+                  >
+                    Commit & push
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => void submitCommit('commit_push_pr')}
+                    disabled={sessionStatus !== 'IDLE'}
+                    aria-label="Commit, push & PR"
+                  >
+                    Commit, push & PR
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </div>
+        )}
+
+        {!showCommit && !fullyEmpty && (
           <div className="border-b border-border/50 px-3 py-2 text-xs text-muted-foreground">
             Working tree clean.
           </div>

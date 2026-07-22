@@ -6,6 +6,7 @@ import { AuthGate } from './components/auth-gate';
 import { ThemeProvider } from './components/theme-provider';
 import { AppearanceProvider } from './components/appearance-provider';
 import { API_BASE, installApiBaseFetch } from './lib/api-base';
+import { applyDesktopChromeAttribute } from './lib/desktop-chrome';
 import { unregisterLegacyServiceWorker } from './lib/unregister-service-worker';
 import './index.css';
 
@@ -15,6 +16,10 @@ installApiBaseFetch();
 
 // Recover clients still running the retired PWA service worker (see module doc).
 unregisterLegacyServiceWorker();
+
+// macOS Electron shell renders a hiddenInset title bar; stamp the root so the
+// drag-region/clearance CSS activates (no-op in browsers and on other OSes).
+applyDesktopChromeAttribute();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

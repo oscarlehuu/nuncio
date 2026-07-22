@@ -200,7 +200,7 @@ export function CreateLoopDialog({
             </label>
             <div
               data-testid="loop-goal-container"
-              className="flex flex-col rounded-xl border border-border/70 bg-card shadow-e1 surface-lit transition-shadow focus-within:ring-2 focus-within:ring-ring/40"
+              className="flex flex-col rounded-xl border border-border/70 bg-card transition-shadow focus-within:ring-2 focus-within:ring-ring/40"
             >
               <Textarea
                 id="loop-goal"

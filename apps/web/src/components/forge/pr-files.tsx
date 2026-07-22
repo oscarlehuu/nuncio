@@ -16,7 +16,7 @@ const STATUS_CLASSES: Record<ForgeFileDiff['status'], string> = {
   added: 'text-success',
   removed: 'text-destructive',
   renamed: 'text-info',
-  modified: 'text-amber-500',
+  modified: 'text-warning',
 };
 
 export function PrFiles({ path, number, threads }: PrFilesProps) {
@@ -59,9 +59,9 @@ export function PrFiles({ path, number, threads }: PrFilesProps) {
               className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-muted/40"
             >
               {isOpen ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
-              <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{file.path}</span>
+              <span className="min-w-0 flex-1 truncate font-mono text-ui-lg">{file.path}</span>
               {threadCount > 0 && (
-                <span className="flex shrink-0 items-center gap-0.5 text-[11px] text-info">
+                <span className="flex shrink-0 items-center gap-0.5 text-ui-sm text-info">
                   <MessageSquare className="size-3" />
                   {threadCount}
                 </span>
@@ -69,7 +69,7 @@ export function PrFiles({ path, number, threads }: PrFilesProps) {
               <span className="flex shrink-0 items-center gap-1.5 font-mono text-xs">
                 {file.additions > 0 && <span className="text-success">+{file.additions}</span>}
                 {file.deletions > 0 && <span className="text-destructive">-{file.deletions}</span>}
-                <span className={cn('text-[10px] font-semibold uppercase', STATUS_CLASSES[file.status])}>
+                <span className={cn('text-ui-xs font-semibold uppercase', STATUS_CLASSES[file.status])}>
                   {file.status[0]}
                 </span>
               </span>

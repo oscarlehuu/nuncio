@@ -73,6 +73,10 @@ export async function routePullRequestLifecycle(
       session.projectPath &&
       session.worktreePath
     ) {
+      if (deps.sessionRecords.findActiveSuccessor(session.id, session.worktreePath)) {
+        return acceptTerminal(() =>
+          skipCleanup(deps.attention, projectPath, event, 'worktree-handed-off'));
+      }
       const removal = await deps.git.removeWorktreeIfSafe(
         session.projectPath,
         session.worktreePath,
@@ -142,6 +146,10 @@ export async function routePullRequestLifecycle(
   }
   if (archived.status !== 'ARCHIVED') {
     return acceptTerminal(() => skipCleanup(deps.attention, projectPath, event, 'archive-pending'));
+  }
+  if (deps.sessionRecords.findActiveSuccessor(session.id, session.worktreePath)) {
+    return acceptTerminal(() =>
+      skipCleanup(deps.attention, projectPath, event, 'worktree-handed-off'));
   }
   deps.markCleanupCheckpoint();
   const removal = await deps.git.removeWorktreeIfSafe(session.projectPath, session.worktreePath, {

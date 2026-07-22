@@ -80,7 +80,7 @@ export function LoopRunDetailView() {
             </>
           ) : (
             <>
-              <div className="surface-lit flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 shadow-e1">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3">
                 <div className="flex items-center gap-2.5">
                   <VerifyDot verify={detail.verify} />
                   <div>

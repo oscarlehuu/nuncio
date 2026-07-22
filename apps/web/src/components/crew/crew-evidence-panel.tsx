@@ -19,7 +19,7 @@ export function CrewEvidencePanel({ run }: { run: CrewRunDetailDto }) {
     : null;
   if (!artifacts.length && !blocker) return null;
   return (
-    <section aria-labelledby="crew-readable-evidence" className="min-w-0 rounded-xl border bg-card p-4 shadow-e1 surface-lit">
+    <section aria-labelledby="crew-readable-evidence" className="min-w-0 rounded-xl border bg-card p-4">
       <div className="flex flex-wrap items-center gap-2">
         <h2 id="crew-readable-evidence" className="font-semibold text-foreground">Readable evidence</h2>
         {uiFileCount !== null ? (

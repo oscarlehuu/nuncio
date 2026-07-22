@@ -47,7 +47,7 @@ export function RunList({ path, branch, onOpen }: RunListProps) {
           type="button"
           onClick={() => setScope('all')}
           className={cn(
-            'rounded-full border px-2.5 py-0.5 text-[11px] font-medium',
+            'rounded-full border px-2.5 py-0.5 text-ui-sm font-medium',
             scope === 'all'
               ? 'border-primary bg-primary/10 text-foreground'
               : 'border-border text-muted-foreground hover:text-foreground',
@@ -61,7 +61,7 @@ export function RunList({ path, branch, onOpen }: RunListProps) {
             onClick={() => setScope('branch')}
             title={branch}
             className={cn(
-              'max-w-40 truncate rounded-full border px-2.5 py-0.5 font-mono text-[11px] font-medium',
+              'max-w-40 truncate rounded-full border px-2.5 py-0.5 font-mono text-ui-sm font-medium',
               scope === 'branch'
                 ? 'border-primary bg-primary/10 text-foreground'
                 : 'border-border text-muted-foreground hover:text-foreground',
@@ -87,7 +87,7 @@ export function RunList({ path, branch, onOpen }: RunListProps) {
               >
                 <span className="flex items-center gap-2">
                   {runStatusIcon(run)}
-                  <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
+                  <span className="min-w-0 flex-1 truncate text-ui-lg font-medium">
                     {run.name}
                     {run.runNumber != null && (
                       <span className="ml-1 text-muted-foreground">#{run.runNumber}</span>

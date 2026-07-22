@@ -103,7 +103,7 @@ export function LoopTemplates({ onPick }: LoopTemplatesProps) {
           return (
             <div
               key={template.id}
-              className="surface-lit group flex flex-col gap-2 rounded-xl border border-border bg-card p-4 shadow-e1 transition-shadow hover:shadow-e2"
+              className="group flex flex-col gap-2 rounded-xl border border-border bg-card p-4 transition-colors hover:bg-accent/40"
             >
               <div className="flex items-center gap-2.5">
                 <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted/60 text-muted-foreground shadow-e0">
