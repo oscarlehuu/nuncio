@@ -46,6 +46,8 @@ scope change the user must decide.
 
 ## ADR-004 — Provider-agnostic `AgentProvider` contract (generic-first)
 
+> **Amended by ADR-014 (2026-07-22).** The `AgentProvider` contract stays — it is now backward-compat plumbing that keeps the legacy engines resolvable — but hosting N engines is no longer the thesis. Nuncio Engine is the only engine invested in and shown by default; the generic-first rules below still apply to the engines that remain.
+
 **Status:** locked, shipped. The single most important code-level rule.
 **Decision:** every engine (Pi, Codex, Cursor, Claude next) implements the same `AgentProvider`
 interface behind `AgentRegistry`. `BaseAgentProvider` owns shared orchestration
@@ -116,6 +118,8 @@ non-programmer owner keeps N agents honest over time.
 
 ## ADR-010 — Monorepo, one daemon, many clients
 
+> **Amended by ADR-014 (2026-07-22).** Desktop (Electron) is the primary surface and loads the web renderer; a standalone browser tab is no longer a supported client. Mobile (Expo) is the review/steer client. The monorepo / one-daemon shape is unchanged.
+
 **Status:** locked, shipped.
 **Decision:** `apps/server` (daemon) + `apps/web` (PWA) + `apps/desktop` (Electron shell
 supervising the daemon) + `apps/mobile` (Expo) + `packages/core` (portable client layer: API
@@ -125,6 +129,8 @@ same-origin; desktop/web/mobile are all clients of the same API.
 **Reverse only if:** never split repos without user decision.
 
 ## ADR-011 — Engine scope is deliberate: stabilize before adding
+
+> **Superseded by ADR-014 (2026-07-22).** Scope narrowed from "stabilize the existing engines before adding" to a single invested engine (Nuncio Engine); the legacy engines are hidden by default, not stabilized further.
 
 **Status:** active direction (2026-07).
 **Decision:** current focus is durability + task-queue lanes and dogfooding on the existing
@@ -136,6 +142,8 @@ engines we have.
 **Reverse only if:** the user re-prioritizes.
 
 ## ADR-012 — Crew is a fixed, evidence-gated local workflow
+
+> **Deprecated by ADR-014 (2026-07-22).** Crew is deprecated pending removal — still runnable, no new investment. The invariants below stay accurate for as long as Crew ships.
 
 **Status:** locked implementation baseline; implemented on the feature branch, pending final
 verification and merge.
@@ -163,6 +171,8 @@ context reads, and automated cleanup/retention require separate decisions.
 
 ## ADR-013 — Remote Crew runs are routing, not distributed execution
 
+> **Deprecated by ADR-014 (2026-07-22).** Follows ADR-012 — Crew, including remote Crew routing, is deprecated pending removal.
+
 **Status:** locked, shipped.
 **Decision:** a Crew run created from one machine's Home can target another same-account tailnet
 peer (the machine picker beside the Crew controls). The chosen machine then **owns everything** —
@@ -185,3 +195,40 @@ a transient viewer reconnect.
 one machine driving an executor on another), which requires re-deriving the ADR-012 authority model
 across a network boundary. Cross-machine attention aggregation on Home is a separate, additive
 decision — its absence does not reverse this one.
+
+## ADR-014 — Engine refocus: one engine, desktop-first, evidence-led (2026-07-22)
+
+**Status:** locked (product thesis). Authorized by Oscar in the 2026-07-22 direction session.
+Supersedes the "one surface for N engines" framing; amends ADR-004 and ADR-010, supersedes ADR-011,
+and deprecates ADR-012 + ADR-013 (Crew).
+**Decision:**
+- **One engine.** Nuncio Engine (the Pi coding agent + Nuncio's own extensions) is the only engine
+  Nuncio invests in and the only one shown in every picker by default. The vendor engines (Claude,
+  Codex, Cursor, Cursor CLI, Devin) are **legacy: hidden behind the `engines.showLegacy` boolean
+  setting (default off), not deleted.** `AgentRegistry` still resolves every engine by id
+  (`get(id)`), so existing legacy-engine sessions keep opening, streaming, and resuming; only the
+  listing paths (`all()` / `available()`) are filtered.
+- **Desktop-first.** The Electron desktop app is the primary surface. It loads the web renderer —
+  that renderer code stays and is maintained — but a plain browser tab is no longer a supported way
+  to run Nuncio. Mobile stays **native Expo**, dedicated to reviewing and steering.
+- **Subscription freedom is a pillar.** The managed subscription bridge routes the user's vendor
+  subscriptions (Codex, Claude, Grok, …) into Nuncio Engine's model picker. No vendor harness will
+  route a competitor's subscription; a neutral local harness can — this is the structural reason a
+  single-engine Nuncio still beats using the vendor apps directly.
+- **Evidence is the roadmap spine.** Work is never "done" on the model's claim. The ladder:
+  (a) screenshot-after-build evidence gate → (b) the agent drives the app (browser / iOS simulator)
+  → (c) a recorded video of the change delivered to the phone for review.
+- **Factory-as-skills, no new substrate.** The "company of agents" arc grows as a library of skills
+  on top of one good engine plus the existing tasks / dispatcher / loops. Building a new
+  orchestration substrate is a non-goal.
+- **Crew is deprecated pending removal.** Solo is the product. Crew stays runnable but receives no
+  new investment (see the deprecation notes on ADR-012 / ADR-013).
+- **Dogfood inversion.** Every Nuncio dev task runs through Nuncio Engine; each escape to a vendor
+  tool costs one line in the pain log, which is the engine backlog.
+**Why:** matching five vendor UIs is a treadmill Nuncio loses — Claude Code and Cursor already own
+the single-vendor experience. A neutral, self-hosted harness wins on the two things a vendor cannot
+do (route a competitor's subscription; gate work behind machine-owned evidence), and those only pay
+off if investment concentrates on one engine Nuncio controls.
+**Reverse only if:** the user re-opens multi-engine breadth as the thesis, or asks to restore a
+supported browser surface. Deleting (not hiding) the legacy engines is a separate, later decision
+gated on engine trust and an open-source milestone.
