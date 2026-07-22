@@ -36,6 +36,7 @@ import { TasksModule } from './tasks/tasks.module';
 import { TerminalModule } from './terminal/terminal.module';
 import { PushModule } from './push/push.module';
 import { SubscriptionBridgeModule } from './subscription-bridge/subscription-bridge.module';
+import { SubscriptionHostModule } from './subscription-host/subscription-host.module';
 import { UsageModule } from './usage/usage.module';
 
 @Module({
@@ -77,6 +78,7 @@ import { UsageModule } from './usage/usage.module';
     TerminalModule,
     ObservabilityModule,
     SubscriptionBridgeModule,
+    SubscriptionHostModule,
     UsageModule,
   ],
 })

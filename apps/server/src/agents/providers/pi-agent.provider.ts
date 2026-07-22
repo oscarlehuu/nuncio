@@ -85,6 +85,7 @@ import {
   type CaptureEvidenceResult,
 } from '../pi-engine/capture-evidence-tool';
 import { EvidenceCaptureService } from '../../evidence/evidence-capture.service';
+import { SubscriptionHostService } from '../../subscription-host/subscription-host.service';
 import type { ExternalMemoryRoots } from '../pi-engine/external-memory-sources';
 import { expandHome } from './cli-path.helpers';
 
@@ -205,6 +206,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     @Optional() private readonly nuncioContext?: NuncioContextService,
     @Optional() private readonly externalMemories?: ExternalMemoriesService,
     @Optional() private readonly evidence?: EvidenceCaptureService,
+    @Optional() private readonly subscriptionHost?: SubscriptionHostService,
   ) {
     super(sessions, events);
   }
@@ -237,7 +239,12 @@ export class PiAgentProvider extends BaseAgentProvider {
       const pi = await this.loadSdk();
       const agentDir = this.resolveAgentDir(pi);
       const { modelRegistry } = createPiEngineModelRegistry(pi, agentDir, this.settings);
-      return this.fromRegistry(modelRegistry);
+      const catalog = this.fromRegistry(modelRegistry);
+      // The managed subscription model host, when up, contributes its models as a
+      // group under Nuncio Engine (mirrors the Claude engine's bridge merge).
+      return this.subscriptionHost
+        ? this.subscriptionHost.mergeIntoNuncioEngineCatalog(catalog)
+        : catalog;
     } catch {
       return [];
     }
