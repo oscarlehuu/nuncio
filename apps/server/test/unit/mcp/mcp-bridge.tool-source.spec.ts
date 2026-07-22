@@ -187,6 +187,114 @@ describe('McpBridgeToolSource', () => {
     );
   });
 
+  it('redacts imported transport secrets from rendered bridge errors', async () => {
+    repo.create({
+      name: 'secret-error',
+      transport: {
+        type: 'http',
+        url: 'https://remote.example/mcp?tenant=query-error-secret',
+        headers: { 'X-Account': 'header-error-secret' },
+      },
+      sources: ['import:cursor'],
+      secretKeys: ['X-Account'],
+      secretArgIndexes: [],
+      secretUrlQueryKeys: ['tenant'],
+    } as never);
+    const factory: McpClientFactory = {
+      async connect() {
+        throw new Error(
+          'failed https://remote.example/mcp?tenant=query-error-secret with header-error-secret',
+        );
+      },
+    };
+    const source = new McpBridgeToolSource(service, factory);
+    const findTools = toolByName(source.forSession(scope)?.tools, 'nuncio_mcp_find_tools');
+    const result = await runTool(findTools, {});
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain('query-error-secret');
+    expect(serialized).not.toContain('header-error-secret');
+    expect(serialized).toContain('failed');
+  });
+
+  it('redacts raw, percent-encoded, and plus-encoded payloads inside marked arguments', async () => {
+    repo.create({
+      name: 'argument-secret-error',
+      transport: {
+        type: 'stdio',
+        command: 'argument-secret-server',
+        args: [
+          '--api-key=inline-secret',
+          'https://args.example/mcp?token=query+secret',
+        ],
+      },
+      sources: ['import:cursor'],
+      secretArgIndexes: [0, 1],
+    });
+    const factory: McpClientFactory = {
+      async connect() {
+        throw new Error(
+          'failed inline-secret inline%2Dsecret query secret query+secret query%20secret',
+        );
+      },
+    };
+    const source = new McpBridgeToolSource(service, factory);
+    const findTools = toolByName(source.forSession(scope)?.tools, 'nuncio_mcp_find_tools');
+
+    const result = await runTool(findTools, {});
+    const serialized = JSON.stringify(result);
+    for (const leaked of [
+      'inline-secret',
+      'inline%2Dsecret',
+      'query secret',
+      'query+secret',
+      'query%20secret',
+    ]) {
+      expect(serialized).not.toContain(leaked);
+    }
+    expect(serialized).toContain('[redacted]');
+  });
+
+  it('redacts nested percent and plus encodings within fixed bounds without touching unrelated text', async () => {
+    const longEncodedSecret = `${'x'.repeat(9_000)}inline%252Dsecret`;
+    repo.create({
+      name: 'nested-encoding-error',
+      transport: {
+        type: 'stdio',
+        command: 'nested-encoding-server',
+        args: [
+          '--api-key=inline-secret',
+          'https://args.example/mcp?token=query+secret',
+        ],
+      },
+      secretArgIndexes: [0, 1],
+    });
+    const factory: McpClientFactory = {
+      async connect() {
+        throw new Error(
+          'failed inline%252Dsecret inline%25252Dsecret ' +
+            'query%2520secret query%25252Bsecret ' +
+            `public%252Dvalue public%25252Bvalue ${longEncodedSecret}`,
+        );
+      },
+    };
+    const source = new McpBridgeToolSource(service, factory);
+    const findTools = toolByName(source.forSession(scope)?.tools, 'nuncio_mcp_find_tools');
+
+    const result = await runTool(findTools, {});
+    const serialized = JSON.stringify(result);
+    for (const leaked of [
+      'inline%252Dsecret',
+      'inline%25252Dsecret',
+      'query%2520secret',
+      'query%25252Bsecret',
+    ]) {
+      expect(serialized).not.toContain(leaked);
+    }
+    expect(serialized).not.toContain('x'.repeat(128));
+    expect(serialized).toContain('public%252Dvalue');
+    expect(serialized).toContain('public%25252Bvalue');
+  });
+
   it('call routes to the right server and maps the outcome', async () => {
     repo.create({ name: 'bridgememory', transport: { type: 'stdio', command: 'bridge', args: [] } });
     const { factory, calls } = makeFactory({ bridge: { tools: [echoTool] } });

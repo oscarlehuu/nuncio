@@ -2,6 +2,7 @@ const { afterEach, describe, expect, test } = require('bun:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { EventEmitter } = require('node:events');
 const { DaemonSupervisor, findFreePort, waitForHealth } = require('../src/daemon.js');
 
 const healthFixture = path.resolve(__dirname, 'fixtures/health-server.mjs');
@@ -43,6 +44,23 @@ function isPidAlive(pid) {
   } catch {
     return false;
   }
+}
+
+function fakeChild() {
+  const child = new EventEmitter();
+  child.exitCode = null;
+  child.signalCode = null;
+  child.stdout = null;
+  child.stderr = null;
+  child.killCalls = [];
+  child.kill = (signal) => {
+    child.killCalls.push(signal);
+    if (child.exitCode !== null || child.signalCode !== null) return false;
+    child.signalCode = signal;
+    queueMicrotask(() => child.emit('exit', null, signal));
+    return true;
+  };
+  return child;
 }
 
 describe('DaemonSupervisor restart policy', () => {
@@ -97,6 +115,94 @@ describe('DaemonSupervisor restart policy', () => {
 
     await sleep(400);
     expect(spawns).toBe(0);
+  });
+
+  test('terminates an unhealthy replacement and schedules the next capped retry', async () => {
+    const supervisor = new DaemonSupervisor({
+      log: () => {},
+      maxRestarts: 2,
+      restartDelayMs: 0,
+      healthCheck: async () => false,
+      healthTimeoutMs: 20,
+      healthIntervalMs: 5,
+      killGraceMs: 20,
+    });
+    supervisor.port = await findFreePort();
+    const children = [];
+    supervisor.spawnDaemon = () => {
+      const child = fakeChild();
+      children.push(child);
+      supervisor.child = child;
+      return child;
+    };
+
+    supervisor.restartAfterUnexpectedExit();
+
+    expect(await waitFor(() => children.length === 2, 1_500)).toBe(true);
+    expect(await waitFor(() => children.every((child) => child.killCalls.length === 1), 500)).toBe(true);
+    expect(supervisor.restartAttempts).toBe(2);
+    expect(supervisor.child).toBeNull();
+  });
+
+  test('coalesces duplicate restart requests while replacement health is pending', async () => {
+    let settleHealth;
+    const supervisor = new DaemonSupervisor({
+      log: () => {},
+      maxRestarts: 2,
+      restartDelayMs: 0,
+      healthCheck: () => new Promise((resolve) => {
+        settleHealth = resolve;
+      }),
+      healthTimeoutMs: 1_000,
+    });
+    supervisor.port = await findFreePort();
+    const children = [];
+    supervisor.spawnDaemon = () => {
+      const child = fakeChild();
+      children.push(child);
+      supervisor.child = child;
+      return child;
+    };
+
+    supervisor.restartAfterUnexpectedExit();
+    supervisor.restartAfterUnexpectedExit();
+
+    expect(await waitFor(() => children.length > 0, 800)).toBe(true);
+    await sleep(300);
+    expect(children).toHaveLength(1);
+    settleHealth?.(true);
+  });
+
+  test('stop during replacement health reaps the child and suppresses later retry', async () => {
+    let settleHealth;
+    const supervisor = new DaemonSupervisor({
+      log: () => {},
+      maxRestarts: 3,
+      restartDelayMs: 0,
+      healthCheck: () => new Promise((resolve) => {
+        settleHealth = resolve;
+      }),
+      healthTimeoutMs: 1_000,
+      killGraceMs: 20,
+    });
+    supervisor.port = await findFreePort();
+    const children = [];
+    supervisor.spawnDaemon = () => {
+      const child = fakeChild();
+      children.push(child);
+      supervisor.child = child;
+      return child;
+    };
+
+    supervisor.restartAfterUnexpectedExit();
+    expect(await waitFor(() => children.length === 1, 800)).toBe(true);
+    await supervisor.stop();
+    settleHealth?.(false);
+    await sleep(100);
+
+    expect(children).toHaveLength(1);
+    expect(children[0].killCalls).toEqual(['SIGTERM']);
+    expect(supervisor.child).toBeNull();
   });
 });
 

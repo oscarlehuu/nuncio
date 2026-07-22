@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from 'bun:test';
-import { createServer, type Server } from 'node:http';
+import { afterEach, describe, expect, it, mock } from 'bun:test';
+import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
 import { WebSocket, WebSocketServer } from 'ws';
 import { attachHubWebSocketProxy } from '../../../src/hub/hub.ws-proxy';
@@ -45,11 +45,13 @@ async function startHangingTarget(): Promise<string> {
   return `http://127.0.0.1:${port}`;
 }
 
-async function startEchoTarget(onOpen?: (socket: WebSocket) => void): Promise<string> {
+async function startEchoTarget(
+  onOpen?: (socket: WebSocket, request: IncomingMessage) => void,
+): Promise<string> {
   const target = createServer();
   const wss = new WebSocketServer({ server: target });
-  wss.on('connection', (socket) => {
-    onOpen?.(socket);
+  wss.on('connection', (socket, request) => {
+    onOpen?.(socket, request);
     socket.on('message', (data, isBinary) => socket.send(data, { binary: isBinary }));
   });
   const port = await listen(target);
@@ -89,6 +91,31 @@ async function waitForClose(ws: WebSocket, timeoutMs = 300): Promise<boolean> {
   });
 }
 
+async function rawUpgrade(path: string): Promise<{ destroy: ReturnType<typeof mock> }> {
+  const server = createServer();
+  attachWithOptions(
+    server,
+    { enabled: () => true } as HubService,
+    { registryMap: async () => new Map([['machine', 'http://target.test']]) } as unknown as HubRegistryService,
+    undefined,
+    undefined,
+    {},
+  );
+  const destroy = mock(() => undefined);
+  const socket = { remoteAddress: '192.168.1.20', destroy };
+  expect(() => {
+    server.emit(
+      'upgrade',
+      { url: path, headers: {} },
+      socket,
+      Buffer.alloc(0),
+    );
+  }).not.toThrow();
+  await Promise.resolve();
+  await Promise.resolve();
+  return { destroy };
+}
+
 afterEach(() => {
   for (const socket of sockets) socket.destroy();
   sockets.clear();
@@ -96,6 +123,29 @@ afterEach(() => {
 });
 
 describe('hub WebSocket proxy reliability', () => {
+  for (const [label, path] of [
+    ['raw dot segments', '/m/machine/api/webhooks/../sessions/ws'],
+    ['encoded dot segments', '/m/machine/api/webhooks/%2e%2e/sessions/ws'],
+    ['mixed encoded dot segments', '/m/machine/api/webhooks/.%2E/sessions/ws'],
+  ] as const) {
+    it(`canonicalizes ${label} before raw-upgrade authorization`, async () => {
+      const socket = await rawUpgrade(path);
+      expect(socket.destroy).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  for (const path of [
+    '/m/%/api/sessions/ws',
+    '/m/%GG/api/sessions/ws',
+    '/m/machine/api/sessions/ws%',
+    '/m/machine/api/sessions/%GG/ws',
+  ]) {
+    it(`rejects a malformed raw upgrade without throwing or forwarding: ${path}`, async () => {
+      const socket = await rawUpgrade(path);
+      expect(socket.destroy).toHaveBeenCalledTimes(1);
+    });
+  }
+
   it('relays normal frames byte-for-byte in both directions', async () => {
     const target = await startEchoTarget();
     const port = await startProxy(target, {});
@@ -106,6 +156,30 @@ describe('hub WebSocket proxy reliability', () => {
     client.send('cursor-replay-frame');
 
     expect(await received).toBe('cursor-replay-frame');
+    client.terminate();
+  });
+
+  it('preserves the query string on a legitimate machine-prefixed upgrade', async () => {
+    let upstreamPath = '';
+    let markUpstreamConnected: (() => void) | undefined;
+    const upstreamConnected = new Promise<void>((resolve) => {
+      markUpstreamConnected = resolve;
+    });
+    const target = await startEchoTarget((_socket, request) => {
+      upstreamPath = request.url ?? '';
+      markUpstreamConnected?.();
+    });
+    const port = await startProxy(target, {});
+    const client = new WebSocket(
+      `ws://127.0.0.1:${port}/m/machine/api/sessions/ws?since=17`,
+    );
+    await new Promise<void>((resolve, reject) => {
+      client.on('open', resolve);
+      client.on('error', reject);
+    });
+    await upstreamConnected;
+
+    expect(upstreamPath).toBe('/api/sessions/ws?since=17');
     client.terminate();
   });
 

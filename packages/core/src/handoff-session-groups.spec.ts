@@ -49,7 +49,13 @@ describe('handoff-session-groups', () => {
 
     expect(formatHandoffDayLabel(todayKey)).toBe('Today');
     expect(formatHandoffDayLabel(yesterdayKey)).toBe('Yesterday');
-    expect(formatHandoffDayLabel(olderKey)).toMatch(/Jun 20, 2026/);
+    expect(formatHandoffDayLabel(olderKey)).toBe(
+      new Intl.DateTimeFormat(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      }).format(new Date(olderKey)),
+    );
   });
 
   it('formats session time as local clock time', () => {

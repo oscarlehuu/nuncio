@@ -107,11 +107,11 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 
 | | |
 |---|---|
-| **Web** | `session-transcript.tsx`, `transcript-blocks/*`, grid via `session-tile.tsx` |
-| **Mobile** | `transcript-block-view` + session screen |
-| **Shared** | `@nuncio/core` transcript build blocks; `session-relay-client`; web `use-session-stream.ts` |
-| **Server** | `events` log, `/api/sessions/ws`, SSE for API consumers |
-| **Also check** | Core parser first; then web + mobile renderers |
+| **Web** | `session-transcript.tsx`, `transcript-blocks/*`, grid via `session-tile.tsx`; `use-session-stream.ts` keeps a bounded live window while preserving explicit backfill |
+| **Mobile** | `transcript-block-view` + session screen with paged **Load earlier history**, bounded live retention, foreground resync, and scroll preservation |
+| **Shared** | `@nuncio/core` transcript build blocks, incremental transcript builder, event-window merge/retention helpers, and `session-relay-client` |
+| **Server** | `events` log, bounded tail/backfill reads, `/api/sessions/ws`, SSE for API consumers |
+| **Also check** | Core parser/window semantics first; then web + mobile renderers, reconnect cursors, paging races, and long-session memory bounds |
 
 ### Model selection
 

@@ -233,6 +233,13 @@ export function describeAgentProviderContract(name: string, makeHarness: MakeHar
       expect(statusEvents(all as CapturedEvent[]).at(-1)).toBe('IDLE');
     });
 
+    it('capability honesty: in-session model switching exposes the live switch method', async () => {
+      const h = await makeHarness();
+      if (h.provider.capabilities.modelSwitch === 'in-session') {
+        expect(typeof h.provider.setModel).toBe('function');
+      }
+    });
+
     it('capability honesty: interrupt matches its declared capability', async () => {
       const h = await makeHarness();
 

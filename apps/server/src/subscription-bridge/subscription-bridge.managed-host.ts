@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { spawnWithParentControl } from './subscription-bridge.process-launcher';
 
 export interface CliproxyChildHandle {
   pid: number;
@@ -21,6 +22,12 @@ export type CliproxySpawnImpl = (opts: {
   cwd: string;
 }) => Promise<CliproxyChildHandle>;
 
+interface StartFlight {
+  key: string;
+  stopGeneration: number;
+  promise: Promise<void>;
+}
+
 /**
  * Supervises a Nuncio-owned CLIProxyAPI process (mode=managed).
  * External installs are never spawned here — case 1 stays out-of-process.
@@ -30,6 +37,9 @@ export class CliproxyManagedHost implements OnModuleDestroy {
   private readonly logger = new Logger(CliproxyManagedHost.name);
   private child: CliproxyChildHandle | null = null;
   private configPath: string | null = null;
+  private lifecycleChain: Promise<void> = Promise.resolve();
+  private startFlight: StartFlight | null = null;
+  private stopGeneration = 0;
 
   /** Overridable for unit tests. */
   spawnImpl: CliproxySpawnImpl = defaultSpawn;
@@ -48,10 +58,52 @@ export class CliproxyManagedHost implements OnModuleDestroy {
     return this.isRunning() ? this.configPath : null;
   }
 
-  async start(bin: string, configPath: string, opts?: { forceRestart?: boolean }): Promise<void> {
+  start(bin: string, configPath: string, opts?: { forceRestart?: boolean }): Promise<void> {
+    const key = JSON.stringify([bin, configPath, opts?.forceRestart === true]);
+    const stopGeneration = this.stopGeneration;
+    if (
+      this.startFlight?.key === key &&
+      this.startFlight.stopGeneration === stopGeneration
+    ) {
+      return this.startFlight.promise;
+    }
+
+    const promise = this.enqueueLifecycle(() => this.startOwned(bin, configPath, opts));
+    const flight: StartFlight = { key, stopGeneration, promise };
+    this.startFlight = flight;
+    void promise.then(
+      () => {
+        if (this.startFlight === flight) this.startFlight = null;
+      },
+      () => {
+        if (this.startFlight === flight) this.startFlight = null;
+      },
+    );
+    return promise;
+  }
+
+  stop(): Promise<void> {
+    this.stopGeneration += 1;
+    return this.enqueueLifecycle(() => this.stopOwned());
+  }
+
+  private enqueueLifecycle<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.lifecycleChain.then(operation, operation);
+    this.lifecycleChain = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  private async startOwned(
+    bin: string,
+    configPath: string,
+    opts?: { forceRestart?: boolean },
+  ): Promise<void> {
     if (this.isRunning()) {
       if (this.configPath === configPath && !opts?.forceRestart) return;
-      await this.stop();
+      await this.stopOwned();
     }
     if (!existsSync(bin)) {
       throw new Error(`CLIProxyAPI binary not found: ${bin}`);
@@ -60,28 +112,36 @@ export class CliproxyManagedHost implements OnModuleDestroy {
       throw new Error(`CLIProxyAPI config not found: ${configPath}`);
     }
 
-    this.child = await this.spawnImpl({
+    const child = await this.spawnImpl({
       bin,
       configPath,
       cwd: dirname(configPath),
     });
+    this.child = child;
     this.configPath = configPath;
-    const startedPid = this.child.pid;
-    this.logger.log(`Started managed CLIProxyAPI pid=${startedPid} config=${configPath}`);
+    this.logger.log(`Started managed CLIProxyAPI pid=${child.pid} config=${configPath}`);
 
-    void this.child.exited.then((code) => {
-      // Ignore stale exit handlers after stop()/restart replaced the child.
-      if (this.child?.pid !== startedPid) return;
-      this.logger.warn(`Managed CLIProxyAPI exited code=${code}`);
-      this.child = null;
-      this.configPath = null;
-    });
+    void child.exited.then(
+      (code) => this.clearExitedChild(child, `code=${code}`),
+      (error) =>
+        this.clearExitedChild(
+          child,
+          `observation failed: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+    );
   }
 
-  async stop(): Promise<void> {
+  private clearExitedChild(child: CliproxyChildHandle, detail: string): void {
+    if (this.child !== child) return;
+    this.logger.warn(`Managed CLIProxyAPI exited ${detail}`);
+    this.child = null;
+    this.configPath = null;
+  }
+
+  private async stopOwned(): Promise<void> {
     const child = this.child;
     if (!child) return;
-    // Detach first so a late `exited` from a timed-out kill cannot clear a newer child.
+    // Detach first so a late exit from this child cannot clear a later start.
     this.child = null;
     this.configPath = null;
     try {
@@ -90,14 +150,17 @@ export class CliproxyManagedHost implements OnModuleDestroy {
       // already gone
     }
     const timeout = new Promise<void>((resolve) => setTimeout(resolve, this.stopGraceMs));
-    await Promise.race([child.exited.then(() => undefined), timeout]);
-    // `child.killed` is true as soon as SIGTERM was sent — only `hasExited` means the
-    // process actually left. Guard SIGKILL on exit, not on the signal-sent flag.
+    const observedExit = child.exited.then(
+      () => undefined,
+      () => undefined,
+    );
+    await Promise.race([observedExit, timeout]);
+    // `killed` flips on signal delivery; only `hasExited` proves the child left.
     if (!child.hasExited) {
       try {
         child.kill('SIGKILL');
       } catch {
-        // ignore
+        // already gone
       }
       await child.exited.catch(() => undefined);
     }
@@ -113,38 +176,5 @@ async function defaultSpawn(opts: {
   configPath: string;
   cwd: string;
 }): Promise<CliproxyChildHandle> {
-  const proc = Bun.spawn([opts.bin, '--config', opts.configPath], {
-    cwd: opts.cwd,
-    stdout: 'ignore',
-    stderr: 'pipe',
-    stdin: 'ignore',
-  });
-
-  let settled = false;
-  const exited = new Promise<number | null>((resolve) => {
-    void proc.exited.then((code) => {
-      settled = true;
-      resolve(code);
-    });
-  });
-
-  return {
-    get pid() {
-      return proc.pid;
-    },
-    get killed() {
-      return proc.killed || settled;
-    },
-    get hasExited() {
-      return settled;
-    },
-    kill(signal?: NodeJS.Signals | number) {
-      try {
-        proc.kill(signal ?? 'SIGTERM');
-      } catch {
-        // ignore
-      }
-    },
-    exited,
-  };
+  return spawnWithParentControl(opts);
 }

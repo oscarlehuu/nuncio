@@ -62,6 +62,8 @@ export interface ScheduleDto {
   nextFireAt: number | null;
   lastFireAt: number | null;
   lastResult: FireResult | null;
+  /** Monotonic config revision used to fence late dispatch completions. */
+  generation: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -82,6 +84,7 @@ export interface ScheduleRow {
   next_fire_at: number | null;
   last_fire_at: number | null;
   last_result: string | null;
+  generation: number;
   created_at: number;
   updated_at: number;
 }

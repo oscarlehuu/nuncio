@@ -7,32 +7,48 @@ import type { ModelProviderDto } from '../../models/models.types';
 import { EventsRepository } from '../../sessions/persistence/events.repository';
 import { SessionsRepository } from '../../sessions/persistence/sessions.repository';
 import { SettingsService } from '../../settings/settings.service';
-import { BaseAgentProvider } from '../agents.base-provider';
+import { AgentRunCancelledError, BaseAgentProvider } from '../agents.base-provider';
 import type { AgentRunContext, EventEmitter } from '../agents.types';
 import {
   DevinAcpClient,
+  DevinAcpRequestError,
   DevinAcpStdioTransport,
   type DevinAcpClientLike,
+  type DevinAcpError,
   type DevinAcpNotification,
   type DevinAcpRequest,
 } from './devin-acp.client';
 import {
   isAcpToolTerminal,
+  mapAcpPlan,
   mapAcpToolCall,
   mapPermissionDecision,
 } from './devin-acp.mappers';
+
+interface ActiveTurn {
+  generation: number;
+  emit?: EventEmitter;
+  approval?: AgentRunContext['requestProviderApproval'];
+  text: string;
+  interrupting: boolean;
+  settlement: 'pending' | 'completed' | 'cancelled' | 'failed';
+  done?: {
+    resolve: () => void;
+    reject: (error: Error) => void;
+  };
+}
+
+interface PendingCancel {
+  promise: Promise<void>;
+}
 
 interface Active {
   client: DevinAcpClientLike;
   threadId: string;
   cwd: string;
-  emit?: EventEmitter;
-  approval?: AgentRunContext['requestProviderApproval'];
-  text: string;
-  done?: {
-    resolve: () => void;
-    reject: (error: Error) => void;
-  };
+  nextTurnGeneration: number;
+  turn?: ActiveTurn;
+  cancelInFlight?: PendingCancel;
   unsub: Array<() => void>;
 }
 
@@ -127,13 +143,28 @@ export class DevinAgentProvider extends BaseAgentProvider implements OnModuleDes
   async interrupt(sessionId: string): Promise<void> {
     const active = this.active.get(sessionId);
     if (!active) return;
-    try {
-      await active.client.request('session/cancel', {
-        sessionId: active.threadId,
-      });
-    } finally {
-      this.close(sessionId, active);
-    }
+    if (active.cancelInFlight) return active.cancelInFlight.promise;
+    const turn = active.turn;
+    if (!turn) return;
+    turn.interrupting = true;
+
+    let operation!: PendingCancel;
+    const promise = this.cancelTurn(sessionId, active, turn).finally(() => {
+      if (active.cancelInFlight === operation) active.cancelInFlight = undefined;
+    });
+    operation = { promise };
+    active.cancelInFlight = operation;
+    return promise;
+  }
+
+  async setModel(sessionId: string, model: string): Promise<void> {
+    const active = this.active.get(sessionId);
+    if (!active) return;
+    await active.client.request('session/set_config_option', {
+      sessionId: active.threadId,
+      configId: 'model',
+      value: this.model(model),
+    });
   }
 
   protected disposeRuntime(sessionId: string): void {
@@ -148,18 +179,65 @@ export class DevinAgentProvider extends BaseAgentProvider implements OnModuleDes
     context: AgentRunContext,
   ): Promise<void> {
     const active = await this.ensure(sessionId, context);
-    active.emit = context.emit;
-    active.approval = context.requestProviderApproval;
-    active.text = '';
+    await this.waitForCancel(sessionId, active);
     if (isSteer && !active.threadId) throw new Error('Devin session is not resumable.');
+
+    const turn: ActiveTurn = {
+      generation: ++active.nextTurnGeneration,
+      emit: context.emit,
+      approval: context.requestProviderApproval,
+      text: '',
+      interrupting: false,
+      settlement: 'pending',
+    };
+    let done!: NonNullable<ActiveTurn['done']>;
     const completion = new Promise<void>((resolve, reject) => {
-      active.done = { resolve, reject };
+      done = {
+        resolve: () => resolve(),
+        reject: (error) => reject(error),
+      };
+      turn.done = done;
     });
-    await active.client.request('session/prompt', {
-      sessionId: active.threadId,
-      prompt: [{ type: 'text', text }],
-    });
-    await completion;
+    active.turn = turn;
+    const prompt = [
+      { type: 'text', text },
+      ...(context.attachments ?? []).map((attachment) => ({
+        type: 'image',
+        data: attachment.data,
+        mimeType: attachment.mimeType,
+      })),
+    ];
+    try {
+      await Promise.all([
+        active.client.request('session/prompt', {
+          sessionId: active.threadId,
+          prompt,
+        }, null),
+        completion,
+      ]);
+      turn.settlement = 'completed';
+    } catch (error) {
+      if (turn.interrupting && this.isPromptCancellation(error)) {
+        turn.settlement = 'cancelled';
+        try {
+          await active.cancelInFlight?.promise;
+        } catch (cancelError) {
+          turn.settlement = 'failed';
+          throw cancelError;
+        }
+        throw new AgentRunCancelledError('Devin ACP turn interrupted.');
+      }
+      turn.settlement = 'failed';
+      throw error;
+    } finally {
+      if (turn.done === done) turn.done = undefined;
+      if (
+        this.ownsTurn(active, turn.generation) &&
+        (turn.settlement !== 'cancelled' || !turn.interrupting)
+      ) {
+        active.turn = undefined;
+      }
+    }
   }
 
   private async ensure(sessionId: string, context: AgentRunContext): Promise<Active> {
@@ -180,50 +258,83 @@ export class DevinAgentProvider extends BaseAgentProvider implements OnModuleDes
       client,
       threadId: '',
       cwd,
-      text: '',
+      nextTurnGeneration: 0,
       unsub: [],
     };
-    active.unsub.push(
-      client.onNotification((n) => this.notification(sessionId, active, n)),
-      client.onServerRequest((r) => void this.serverRequest(sessionId, active, r)),
-      client.onClose((error) => this.close(sessionId, active, error)),
-    );
-    await client.initialize();
-    const persisted = this.sessions.findById(sessionId)?.providerThreadId;
-    const response = persisted
-      ? await client.request<{ sessionId?: string }>('session/load', {
-          sessionId: persisted,
-        })
-      : await client.request<{ sessionId?: string }>('session/new', {
+    try {
+      active.unsub.push(
+        client.onNotification((n) => this.notification(sessionId, active, n)),
+      );
+      active.unsub.push(
+        client.onServerRequest((r) => {
+          void this.serverRequest(sessionId, active, r).catch((error) => {
+            this.respondServerError(active, r.id, error);
+          });
+        }),
+      );
+      active.unsub.push(
+        client.onClose((error) => this.close(sessionId, active, error)),
+      );
+      await client.initialize();
+      const persisted = this.sessions.findById(sessionId)?.providerThreadId;
+      let response: { sessionId?: string };
+      let resumed = persisted;
+      if (persisted) {
+        try {
+          response = await client.request<{ sessionId?: string }>('session/load', {
+            sessionId: persisted,
+            cwd,
+            mcpServers: [],
+          });
+        } catch (error) {
+          if (!this.isMissingResume(error)) throw error;
+          this.sessions.updateProviderRuntimeState(sessionId, { providerThreadId: null });
+          resumed = null;
+          response = await client.request<{ sessionId?: string }>('session/new', {
+            cwd,
+            mcpServers: [],
+          });
+        }
+      } else {
+        response = await client.request<{ sessionId?: string }>('session/new', {
           cwd,
           mcpServers: [],
         });
-    active.threadId = response.sessionId ?? persisted ?? '';
-    if (!active.threadId) throw new Error('Devin ACP session response did not include a session id.');
-    const model = this.model(context.model);
-    this.sessions.updateProviderRuntimeState(sessionId, {
-      providerThreadId: active.threadId,
-      providerState: {
-        ...(this.sessions.findById(sessionId)?.providerState ?? {}),
-        model,
-      },
-    });
-    // Default ACP mode is accept-edits; Nuncio sets the configured permission
-    // mode (bypass by default) so solo sessions do not stall on every shell call.
-    await client.request('session/set_config_option', {
-      sessionId: active.threadId,
-      configId: 'mode',
-      value: this.permissionMode(),
-    });
-    if (model !== 'swe-1-7') {
+      }
+      active.threadId = response.sessionId ?? resumed ?? '';
+      if (!active.threadId) throw new Error('Devin ACP session response did not include a session id.');
+      const model = this.model(context.model);
+      this.sessions.updateProviderRuntimeState(sessionId, {
+        providerThreadId: active.threadId,
+        providerState: {
+          ...(this.sessions.findById(sessionId)?.providerState ?? {}),
+          model,
+        },
+      });
+      // Default ACP mode is accept-edits; Nuncio sets the configured permission
+      // mode (bypass by default) so solo sessions do not stall on every shell call.
       await client.request('session/set_config_option', {
         sessionId: active.threadId,
-        configId: 'model',
-        value: model,
+        configId: 'mode',
+        value: this.permissionMode(),
       });
+      if (model !== 'swe-1-7') {
+        await client.request('session/set_config_option', {
+          sessionId: active.threadId,
+          configId: 'model',
+          value: model,
+        });
+      }
+      this.active.set(sessionId, active);
+      return active;
+    } catch (error) {
+      try {
+        this.releaseClient(active);
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'Devin ACP setup and cleanup failed.');
+      }
+      throw error;
     }
-    this.active.set(sessionId, active);
-    return active;
   }
   private notification(sessionId: string, active: Active, n: DevinAcpNotification): void {
     const p = n.params as
@@ -236,35 +347,39 @@ export class DevinAgentProvider extends BaseAgentProvider implements OnModuleDes
             kind?: string;
             status?: string;
             rawInput?: unknown;
+            entries?: unknown;
           };
           sessionId?: string;
         }
       | undefined;
     const u = p?.update;
+    const turn = active.turn;
     if (n.method === '_cognition.ai/agent_stopped') {
-      const done = active.done;
-      active.done = undefined;
-      if (done) {
-        this.pushEvent(
-          sessionId,
-          'assistant_message',
-          { text: active.text || '(no response)' },
-          active.emit,
-        );
+      const done = turn?.done;
+      if (turn) turn.done = undefined;
+      if (turn && done) {
+        if (!turn.interrupting) {
+          this.pushEvent(
+            sessionId,
+            'assistant_message',
+            { text: turn.text || '(no response)' },
+            turn.emit,
+          );
+        }
         done.resolve();
       }
       return;
     }
-    if (!u) return;
+    if (!u || !turn) return;
     const text =
       u.content && typeof u.content === 'object' && !Array.isArray(u.content)
         ? (u.content as { text?: string }).text
         : undefined;
     if (u.sessionUpdate === 'agent_message_chunk' && text) {
-      active.text += text;
-      this.pushEvent(sessionId, 'assistant_delta', { delta: text }, active.emit);
+      turn.text += text;
+      this.pushEvent(sessionId, 'assistant_delta', { delta: text }, turn.emit);
     } else if (u.sessionUpdate === 'agent_thought_chunk' && text) {
-      this.pushEvent(sessionId, 'thinking_delta', { delta: text }, active.emit);
+      this.pushEvent(sessionId, 'thinking_delta', { delta: text }, turn.emit);
     } else if (u.sessionUpdate === 'tool_call') {
       const mapped = mapAcpToolCall(u);
       if (mapped) {
@@ -276,7 +391,7 @@ export class DevinAgentProvider extends BaseAgentProvider implements OnModuleDes
             tool: mapped.tool,
             ...(mapped.input !== undefined ? { input: mapped.input } : {}),
           },
-          active.emit,
+          turn.emit,
         );
       }
     } else if (u.sessionUpdate === 'tool_call_update') {
@@ -292,37 +407,57 @@ export class DevinAgentProvider extends BaseAgentProvider implements OnModuleDes
             ...(mapped.isError ? { isError: true } : {}),
             ...(mapped.output !== undefined ? { output: mapped.output } : {}),
           },
-          active.emit,
+          turn.emit,
         );
       }
     } else if (u.sessionUpdate === 'plan') {
-      this.pushEvent(sessionId, 'plan_updated', { plan: u }, active.emit);
+      const plan = mapAcpPlan(u);
+      if (plan) this.pushEvent(sessionId, 'plan_updated', plan, turn.emit);
     } else if (u.sessionUpdate === 'session_info_update' && u.title) {
-      this.pushEvent(sessionId, 'session_title', { title: u.title }, active.emit);
+      this.pushEvent(sessionId, 'session_title', { title: u.title }, turn.emit);
     }
   }
 
   private async serverRequest(sessionId: string, active: Active, request: DevinAcpRequest): Promise<void> {
     if (request.method === 'fs/read_text_file' || request.method === 'fs/write_text_file') {
-      const p = request.params as { path?: string; content?: string } | undefined;
-      const path = resolve(active.cwd, p?.path ?? '');
-      if (request.method === 'fs/read_text_file') {
-        const { readFile } = await import('node:fs/promises');
-        active.client.respond(request.id, {
-          content: await readFile(path, 'utf8'),
+      const p = request.params as { path?: unknown; content?: unknown } | undefined;
+      if (!p || typeof p.path !== 'string' || p.path.length === 0) {
+        this.respondServerError(active, request.id, {
+          code: -32602,
+          message: 'File path is required',
         });
-      } else {
-        const { writeFile } = await import('node:fs/promises');
-        await writeFile(path, p?.content ?? '', 'utf8');
-        active.client.respond(request.id, {});
+        return;
+      }
+      const path = resolve(active.cwd, p.path);
+      try {
+        if (request.method === 'fs/read_text_file') {
+          const { readFile } = await import('node:fs/promises');
+          active.client.respond(request.id, {
+            content: await readFile(path, 'utf8'),
+          });
+        } else {
+          if (p.content !== undefined && typeof p.content !== 'string') {
+            this.respondServerError(active, request.id, {
+              code: -32602,
+              message: 'File content must be text',
+            });
+            return;
+          }
+          const { writeFile } = await import('node:fs/promises');
+          await writeFile(path, p.content ?? '', 'utf8');
+          active.client.respond(request.id, {});
+        }
+      } catch (error) {
+        this.respondServerError(active, request.id, error);
       }
       return;
     }
 
     // Mirror Codex: the SessionsService approval hook owns the transcript card.
     // Emitting provider_request here as well duplicates the UI and desyncs requestIds.
-    const result = active.approval
-      ? await active.approval({
+    const turn = active.turn;
+    const result = turn?.approval
+      ? await turn.approval({
           provider: this.id,
           method: request.method,
           ...(request.params !== undefined ? { params: request.params } : {}),
@@ -331,7 +466,7 @@ export class DevinAgentProvider extends BaseAgentProvider implements OnModuleDes
 
     active.client.respond(request.id, mapPermissionDecision(result.decision, request.params));
 
-    if (!active.approval) {
+    if (!turn?.approval) {
       this.pushEvent(
         sessionId,
         'provider_request',
@@ -342,7 +477,7 @@ export class DevinAgentProvider extends BaseAgentProvider implements OnModuleDes
           status: 'pending',
           params: request.params,
         },
-        active.emit,
+        turn?.emit,
       );
       this.pushEvent(
         sessionId,
@@ -354,21 +489,128 @@ export class DevinAgentProvider extends BaseAgentProvider implements OnModuleDes
           status: 'resolved',
           decision: result.decision,
         },
-        active.emit,
+        turn?.emit,
       );
+    }
+  }
+
+  private async cancelTurn(
+    sessionId: string,
+    active: Active,
+    turn: ActiveTurn,
+  ): Promise<void> {
+    try {
+      await active.client.request('session/cancel', {
+        sessionId: active.threadId,
+      });
+    } catch (error) {
+      if (this.active.get(sessionId) === active && this.ownsTurn(active, turn.generation)) {
+        turn.interrupting = false;
+        if (turn.settlement !== 'pending') active.turn = undefined;
+      }
+      throw error;
+    }
+
+    if (
+      this.active.get(sessionId) !== active ||
+      !this.ownsTurn(active, turn.generation) ||
+      turn.settlement === 'completed' ||
+      turn.settlement === 'failed'
+    ) {
+      return;
+    }
+    this.close(
+      sessionId,
+      active,
+      new AgentRunCancelledError('Devin ACP turn interrupted.'),
+    );
+    this.pushEvent(sessionId, 'status', { status: 'IDLE' }, turn.emit);
+  }
+
+  private async waitForCancel(sessionId: string, active: Active): Promise<void> {
+    while (active.cancelInFlight) {
+      const operation = active.cancelInFlight;
+      try {
+        await operation.promise;
+      } catch {
+        // The caller that requested cancellation receives its error. A turn that
+        // already settled naturally may continue once the control RPC is done.
+      }
+    }
+    if (this.active.get(sessionId) !== active) {
+      throw new AgentRunCancelledError('Devin ACP session closed before the next turn.');
+    }
+  }
+
+  private ownsTurn(active: Active, generation: number): boolean {
+    return active.turn?.generation === generation;
+  }
+
+  private isPromptCancellation(error: unknown): boolean {
+    if (error instanceof AgentRunCancelledError) return true;
+    if (error instanceof DevinAcpRequestError && error.rpcError.code === -32800) return true;
+    return error instanceof Error && /cancel|interrupt/i.test(error.message);
+  }
+
+  private isMissingResume(error: unknown): boolean {
+    return error instanceof DevinAcpRequestError &&
+      error.rpcError.code === -32602 &&
+      /^Session not found\.?$/i.test(error.rpcError.message.trim());
+  }
+
+  private releaseClient(active: Active): void {
+    const unsubscribers = active.unsub.splice(0);
+    try {
+      for (const unsubscribe of unsubscribers) unsubscribe();
+    } finally {
+      active.client.close();
+    }
+  }
+
+  private respondServerError(
+    active: Active,
+    id: string | number,
+    error: unknown,
+  ): void {
+    let rpcError: DevinAcpError;
+    if (
+      error &&
+      typeof error === 'object' &&
+      typeof (error as { code?: unknown }).code === 'number' &&
+      typeof (error as { message?: unknown }).message === 'string'
+    ) {
+      const value = error as { code: number; message: string; data?: unknown };
+      rpcError = {
+        code: value.code,
+        message: value.message,
+        ...(value.data !== undefined ? { data: value.data } : {}),
+      };
+    } else {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      rpcError = code === 'ENOENT'
+        ? { code: -32002, message: 'File not found' }
+        : typeof code === 'string'
+          ? { code: -32603, message: 'Filesystem request failed' }
+          : { code: -32603, message: 'ACP client request failed' };
+    }
+    try {
+      active.client.respondError(id, rpcError);
+    } catch {
+      // The ACP process is already gone; its close callback owns turn teardown.
     }
   }
 
   private close(sessionId: string, active: Active, error?: Error): void {
     if (this.active.get(sessionId) !== active) return;
     this.active.delete(sessionId);
-    const done = active.done;
-    active.done = undefined;
+    const turn = active.turn;
+    active.turn = undefined;
+    const done = turn?.done;
+    if (turn) turn.done = undefined;
     if (done) {
       done.reject(error ?? new Error('Devin ACP session closed.'));
     }
-    active.unsub.forEach((unsubscribe) => unsubscribe());
-    active.client.close();
+    this.releaseClient(active);
   }
 
   private model(value: string | null | undefined): string {

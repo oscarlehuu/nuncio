@@ -20,12 +20,15 @@ export class CrewBuildFinalizerService {
   async finalizeSettled(runId: string, memberId: string): Promise<CrewSubmissionNotice> {
     const run = this.runs.findById(runId);
     const member = this.members.listByRun(runId).find((item) => item.id === memberId);
-    if (!run || run.phase !== 'BUILD' || run.status !== 'RUNNING' || !run.worktreePath
+    if (!run || run.phase !== 'BUILD' || run.status === 'TERMINAL' || !run.worktreePath
       || !run.workspaceHead || !member?.isCurrent || member.memberKey !== 'builder:primary') {
       throw new Error('Crew build settlement scope is stale');
     }
     const intent = this.results.listByRun(runId).filter((item) =>
-      item.memberSessionId === memberId && item.phase === 'BUILD' && item.result.kind === 'builder-intent',
+      item.memberSessionId === memberId && item.phase === 'BUILD'
+      && item.result.kind === 'builder-intent'
+      && item.basedOnContextRevision === run.contextRevision
+      && item.result.basedOnWorkspaceHead === run.workspaceHead,
     ).at(-1);
     if (!intent || intent.result.kind !== 'builder-intent') throw new Error('Crew build has no structured intent');
     const idempotencyKey = `build-final:${intent.id}`;
@@ -46,6 +49,9 @@ export class CrewBuildFinalizerService {
         this.leases.release(runId, lease.token);
       }
       return notice(runId, member.memberKey, existing, existing.workspaceHead);
+    }
+    if (run.status !== 'RUNNING' && run.status !== 'RECOVERING') {
+      throw new Error('Crew build settlement scope is stale');
     }
     const lease = this.leases.get(runId);
     if (!lease) throw new Error('Crew build writer lease is stale');

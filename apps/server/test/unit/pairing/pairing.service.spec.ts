@@ -38,4 +38,41 @@ describe('PairingService', () => {
     const pairing = new PairingService();
     expect(pairing.consume('anything')).toBe(false);
   });
+
+  it('reserves one overlapping claim and rolls it back for exactly one retry', () => {
+    const pairing = new PairingService();
+    const code = pairing.start().code;
+    const reservation = pairing.reserve(code);
+    expect(reservation).not.toBeNull();
+    expect(pairing.reserve(code)).toBeNull();
+
+    expect(pairing.rollback(reservation!)).toBe(true);
+    const retry = pairing.reserve(code);
+    expect(retry).not.toBeNull();
+    expect(pairing.commit(retry!)).toBe(true);
+    expect(pairing.reserve(code)).toBeNull();
+  });
+
+  it('does not let a stale rollback revive a code replaced by start', () => {
+    const pairing = new PairingService();
+    const first = pairing.start().code;
+    const reservation = pairing.reserve(first)!;
+    const second = pairing.start().code;
+
+    expect(pairing.rollback(reservation)).toBe(false);
+    expect(pairing.consume(first)).toBe(false);
+    expect(pairing.consume(second)).toBe(true);
+  });
+
+  it('does not reopen a reservation rolled back exactly at expiry', () => {
+    let now = 0;
+    const pairing = new PairingService();
+    pairing.setClock(() => now);
+    const code = pairing.start().code;
+    const reservation = pairing.reserve(code)!;
+    now = 5 * 60_000;
+
+    expect(pairing.rollback(reservation)).toBe(false);
+    expect(pairing.consume(code)).toBe(false);
+  });
 });

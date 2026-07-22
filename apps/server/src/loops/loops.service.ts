@@ -6,6 +6,7 @@ import {
   OnModuleInit,
   Optional,
 } from '@nestjs/common';
+import { DatabaseService } from '../db/database.service';
 import { SchedulerService } from '../scheduler/scheduler.service';
 import { ProjectDefaultsResolver } from '../projects/project-defaults-resolver';
 import { AgentRegistry } from '../agents/agents.registry';
@@ -79,9 +80,9 @@ export class LoopsService implements OnModuleInit {
   raiseAttention: (signal: LoopAttentionSignal) => void = () => {};
 
   /**
-   * Wedged-run safety-net threshold (ms). A run born `pending` whose task is
-   * still RUNNING past this age is force-failed so the loop's overlap guard stops
-   * blocking every future fire. Founder-tunable; bound from
+   * Wedged-run attention threshold (ms). A run born `pending` whose task is
+   * still RUNNING past this age is surfaced while remaining overlap-blocking.
+   * Founder-tunable; bound from
    * NUNCIO_LOOP_STUCK_PENDING_AGE_MIN by the heartbeat.
    */
   maxPendingAgeMs = DEFAULT_STUCK_PENDING_AGE_MS;
@@ -134,6 +135,7 @@ export class LoopsService implements OnModuleInit {
 
   constructor(
     private readonly loops: LoopsRepository,
+    private readonly database: DatabaseService,
     @Optional() private readonly scheduler?: SchedulerService,
     @Optional() private readonly tasks?: TasksService,
     @Optional() private readonly projectDefaults?: ProjectDefaultsResolver,
@@ -177,10 +179,10 @@ export class LoopsService implements OnModuleInit {
    * settle (a silent/zombie session that never errors). Its run then stays
    * `pending` and the loop-level overlap guard blocks every future fire silently.
    * On the reconcile cadence, a task still RUNNING past {@link maxPendingAgeMs}
-   * is treated as wedged: force-fail the run so the loop recovers and raise an
-   * attention item. QUEUED tasks are never force-failed (legitimately waiting for
-   * a slot; the pump re-drives them). A later real settlement of a force-failed
-   * run finds no pending row → no double-count.
+   * raises attention but remains pending. Age alone cannot revoke a live task's
+   * execution authority; retaining the pending row keeps the overlap guard closed
+   * until the task lane records a real terminal outcome. QUEUED tasks likewise
+   * remain pending while they legitimately wait for a slot.
    */
   reconcilePendingRuns(): void {
     for (const loop of this.loops.list()) {
@@ -200,11 +202,9 @@ export class LoopsService implements OnModuleInit {
           task.status === 'RUNNING' &&
           this.clock.now() - run.createdAt > this.maxPendingAgeMs
         ) {
-          // Wedged: a RUNNING task that has never settled past the generous
-          // threshold. Force-fail the run to unblock the overlap guard, and
-          // surface it. At boot this branch is inert — failInterrupted has
-          // already terminalized RUNNING tasks, so they fold above instead.
-          this.loops.updateRunOutcome(run.id, 'failed', 'none');
+          // The age threshold is an observability signal, not execution authority.
+          // A task still marked RUNNING may genuinely own a provider/process; keep
+          // the run pending so the overlap guard prevents a competing execution.
           this.raiseStuckPending(loop, run);
         }
         // else: task is QUEUED, or RUNNING-but-fresh — still alive; leave pending.
@@ -262,29 +262,29 @@ export class LoopsService implements OnModuleInit {
     const projectPath = input.projectPath?.trim() || null;
     const model = await this.validateModel(input.model, engine, projectPath);
     const name = this.normalizeName(input.name);
-    const created = this.loops.create({
-      name,
-      goal,
-      scheduleId: 'pending',
-      maxRunsPerDay,
-      maxConsecutiveFailures,
-      stopJson: input.stop ? JSON.stringify(input.stop) : null,
-      escalation: 'needs-attention',
-      projectPath,
-      engine,
-      model,
+    return this.database.transaction(() => {
+      const created = this.loops.create({
+        name,
+        goal,
+        scheduleId: 'pending',
+        maxRunsPerDay,
+        maxConsecutiveFailures,
+        stopJson: input.stop ? JSON.stringify(input.stop) : null,
+        escalation: 'needs-attention',
+        projectPath,
+        engine,
+        model,
+      });
+      const schedule = this.scheduler?.create({
+        kind: input.schedule.kind,
+        // Scope an event trigger to this loop's project so an identical event+label
+        // on another repo can never fire it (unscoped when the loop has no project).
+        spec: this.scopeEventSpec(input.schedule.kind, input.schedule.spec, projectPath),
+        target: { kind: 'loop', loopId: created.id },
+      });
+      if (schedule) this.loops.setScheduleId(created.id, schedule.id);
+      return this.loops.findById(created.id)!;
     });
-    const schedule = this.scheduler?.create({
-      kind: input.schedule.kind,
-      // Scope an event trigger to this loop's project so an identical event+label
-      // on another repo can never fire it (unscoped when the loop has no project).
-      spec: this.scopeEventSpec(input.schedule.kind, input.schedule.spec, projectPath),
-      target: { kind: 'loop', loopId: created.id },
-    });
-    if (schedule) {
-      this.loops.setScheduleId(created.id, schedule.id);
-    }
-    return this.loops.findById(created.id)!;
   }
 
   list(): LoopDto[] {
@@ -379,25 +379,32 @@ export class LoopsService implements OnModuleInit {
     });
     const prompt = withTriggerContext(trigger, withRunContext(loop.goal, context));
 
-    // Enqueue a task: goal (+context) as prompt, project scope, FORCED fresh
-    // worktree (a loop NEVER runs in-place — locked write policy).
-    const task = this.tasks?.enqueue({
+    // Enqueue and correlate as one SQLite transaction. The task pump opens only
+    // after the pending run row commits, so a retry can never encounter a live
+    // orphan or create a second task/run pair for the same fire attempt.
+    const taskInput = {
       prompt,
       useWorktree: true,
       ...(loop.projectPath ? { projectPath: loop.projectPath } : {}),
       ...(provider ? { provider } : {}),
       // Per-loop model override (validated at create/update); null = provider default.
       ...(loop.model ? { model: loop.model } : {}),
-    });
+    };
+    const correlated = this.tasks?.enqueueCorrelated(taskInput, (task) =>
+      this.loops.appendRun({
+        loopId,
+        taskId: task.id,
+        outcome: 'pending',
+        verify: 'none',
+        dayBucket: today,
+      }),
+    );
+    if (correlated) return { run: correlated.correlated };
 
-    // Born PENDING — a run must never be born `ok`. Settlement (onTaskSettled /
-    // reconcile) finalizes it to ok/failed; the day-budget still counts it.
+    // The task lane is optional only in narrow construction tests. Preserve the
+    // durable accounting row without pretending a task was dispatched.
     const run = this.loops.appendRun({
-      loopId,
-      taskId: task?.id ?? null,
-      outcome: 'pending',
-      verify: 'none',
-      dayBucket: today,
+      loopId, taskId: null, outcome: 'pending', verify: 'none', dayBucket: today,
     });
     return { run };
   }

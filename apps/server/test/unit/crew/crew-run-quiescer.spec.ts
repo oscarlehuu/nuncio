@@ -1,6 +1,35 @@
 import { CrewRunQuiescerService } from '../../../src/crew/crew-run-quiescer.service';
 
 describe('CrewRunQuiescerService', () => {
+  it('stops the active Builder task/process and releases its writer lease', async () => {
+    let task = {
+      id: 'task-builder', crewRunId: 'run-1', executionKind: 'crew-member',
+      status: 'RUNNING', sessionId: 'builder-session',
+    };
+    const order: string[] = [];
+    const service = new CrewRunQuiescerService(
+      {
+        listInternal: () => [task],
+        findById: () => task,
+        cancelCrewMember: () => {
+          order.push('cancel-task');
+          task = { ...task, status: 'CANCELLED' };
+          return task;
+        },
+      } as never,
+      { quiesceCrewSession: async () => { order.push('stop-session'); } } as never,
+      { listByRun: () => [{ isCurrent: true, sessionId: 'builder-session' }] } as never,
+      {
+        get: () => ({ token: 'lease-1' }),
+        release: () => { order.push('release-lease'); },
+      } as never,
+    );
+
+    await service.quiesce('run-1', Promise.resolve());
+
+    expect(order).toEqual(['stop-session', 'cancel-task', 'release-lease']);
+  });
+
   it('does not dispose a durable session already claimed by an active successor run', async () => {
     const activeSuccessor = {
       id: 'task-next', crewRunId: 'run-next', executionKind: 'crew-member',

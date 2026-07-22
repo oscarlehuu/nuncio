@@ -7,6 +7,7 @@ import type {
   AgentRuntimeToolSource,
   AgentRuntimeTools,
 } from '../../agents/tools/agent-runtime-tools.types';
+import { mapTransportSecrets, normalizeSecretMetadata } from '../domain/mcp-secret-metadata';
 import { resolveTransport } from '../domain/mcp-transport';
 import type { McpServerDefinition } from '../domain/mcp.types';
 import { McpService } from '../mcp.service';
@@ -213,7 +214,7 @@ export class McpBridgeToolSource implements AgentRuntimeToolSource, OnModuleInit
                 tools: matching,
               };
             } catch (error) {
-              return { server: server.id, error: message(error) };
+              return { server: server.id, error: safeMessage(error, server) };
             }
           }),
         );
@@ -294,7 +295,7 @@ export class McpBridgeToolSource implements AgentRuntimeToolSource, OnModuleInit
       return outcomeToResult(outcome);
     } catch (error) {
       // The pool has already retired the failed client; the next call reconnects.
-      return errorResult(`MCP call to ${server.id}.${toolName} failed: ${message(error)}`);
+      return errorResult(`MCP call to ${server.id}.${toolName} failed: ${safeMessage(error, server)}`);
     }
   }
 
@@ -302,7 +303,7 @@ export class McpBridgeToolSource implements AgentRuntimeToolSource, OnModuleInit
     if (server.auth !== 'oauth') return {};
     if (!this.oauth?.hasTokens(server.id)) return null;
     try {
-      return { authProvider: this.oauth.providerFor(server.id) };
+      return { authProvider: this.oauth.providerFor(server.id), principalId: server.id };
     } catch {
       return null;
     }
@@ -338,6 +339,83 @@ function errorResult(text: string): AgentRuntimeToolResult {
   return { content: [{ type: 'text', text }], isError: true };
 }
 
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function safeMessage(error: unknown, server: McpServerDefinition): string {
+  const text = error instanceof Error ? error.message : String(error);
+  const payloads = new Set<string>();
+  const secrets = normalizeSecretMetadata(server);
+  mapTransportSecrets(server.transport, secrets, (value, location) => {
+    collectSecretPayloads(value, location.kind === 'arg', payloads);
+    return value;
+  });
+  return redactSecretPayloads(text, [...payloads]);
+}
+
+function collectSecretPayloads(value: string, markedArgument: boolean, into: Set<string>): void {
+  if (!value) return;
+  into.add(value);
+
+  if (markedArgument) {
+    const equalsAt = value.indexOf('=');
+    if (value.startsWith('-') && equalsAt > 0) {
+      addNonEmpty(into, value.slice(equalsAt + 1));
+    }
+    try {
+      const parsed = new URL(value);
+      for (const secret of parsed.searchParams.values()) addNonEmpty(into, secret);
+    } catch {
+      // A marked non-URL argument still contributes its whole/inline payload.
+    }
+  }
+
+  const firstSpace = value.indexOf(' ');
+  if (firstSpace > 0) addNonEmpty(into, value.slice(firstSpace + 1));
+}
+
+function redactSecretPayloads(text: string, payloads: string[]): string {
+  const usable = payloads.filter(Boolean).sort((a, b) => b.length - a.length);
+  let redacted = text;
+  for (const payload of usable) {
+    redacted = redacted.split(payload).join('[redacted]');
+  }
+  return redacted.replace(/[^\s"'<>]+/g, (token) => {
+    const decoded = decodedTokenVariants(token);
+    return decoded.some((variant) => usable.some((payload) => variant.includes(payload)))
+      ? '[redacted]'
+      : token;
+  });
+}
+
+const MAX_DECODE_ROUNDS = 8;
+const MAX_DECODE_VARIANTS = 32;
+
+function decodedTokenVariants(token: string): string[] {
+  const variants = new Set<string>([token]);
+
+  let frontier = [token];
+  for (let round = 0; round < MAX_DECODE_ROUNDS && frontier.length > 0; round += 1) {
+    const next: string[] = [];
+    for (const value of frontier) {
+      const candidates: string[] = [];
+      if (value.includes('+')) candidates.push(value.replace(/\+/g, ' '));
+      if (value.includes('%')) {
+        try {
+          candidates.push(decodeURIComponent(value));
+        } catch {
+          // Malformed escapes stay opaque while other variants remain eligible.
+        }
+      }
+      for (const candidate of candidates) {
+        if (candidate === value || variants.has(candidate)) continue;
+        variants.add(candidate);
+        next.push(candidate);
+        if (variants.size >= MAX_DECODE_VARIANTS) return [...variants];
+      }
+    }
+    frontier = next;
+  }
+  return [...variants];
+}
+
+function addNonEmpty(values: Set<string>, value: string): void {
+  if (value) values.add(value);
 }

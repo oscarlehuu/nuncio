@@ -3,10 +3,35 @@
  * Keeps tool/permission translation unit-testable without spawning `devin acp`.
  */
 
+import type { PlanItemStatus, PlanUpdatedPayload } from '../../sessions/domain/plan.types';
+
 interface AcpPermissionOption {
   optionId: string;
   name: string;
   kind: string;
+}
+
+interface AcpPlanEntryLike {
+  content?: unknown;
+  status?: unknown;
+}
+
+/** Map ACP's replace-all plan snapshot onto the shared client event payload. */
+export function mapAcpPlan(value: unknown): PlanUpdatedPayload | null {
+  if (!value || typeof value !== 'object') return null;
+  const entries = (value as { entries?: unknown }).entries;
+  if (!Array.isArray(entries)) return null;
+  const items = entries.flatMap((entry, index) => {
+    if (!entry || typeof entry !== 'object') return [];
+    const candidate = entry as AcpPlanEntryLike;
+    const text = typeof candidate.content === 'string' ? candidate.content.trim() : '';
+    if (!text) return [];
+    let status: PlanItemStatus = 'pending';
+    if (candidate.status === 'in_progress') status = 'in_progress';
+    else if (candidate.status === 'completed') status = 'done';
+    return [{ id: `item-${index + 1}`, text, status }];
+  });
+  return { items };
 }
 
 export interface AcpToolCallLike {

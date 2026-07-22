@@ -15,9 +15,9 @@ import {
   PairingClaimError,
   probeCandidates,
 } from '@nuncio/core/pairing-client';
-import { apiFetch } from '@nuncio/core/http';
 import { applyConnection } from '../lib/api-setup';
 import { normalizeServerUrl, type ConnectionConfig } from '../lib/connection-store';
+import { connectManualCandidate } from '../lib/manual-pairing-controller';
 import { persistThenApply } from '../lib/persist-then-apply';
 import { secureStore } from '../lib/secure-store-adapter';
 import { registerForPush } from '../lib/push-registration';
@@ -105,24 +105,34 @@ export default function Pairing() {
     setBusy(true);
     setError(null);
     const config: ConnectionConfig = { serverUrl, token: token.trim() || null };
-    applyConnection(config);
     try {
-      const res = await apiFetch('/api/health');
-      if (res.status === 401 || res.status === 403) {
+      const result = await connectManualCandidate(config, {
+        fetchImpl: (input, init) => globalThis.fetch(input, init),
+        store: secureStore,
+        apply: applyConnection,
+      });
+      if (result.kind === 'unauthorized') {
         setError('This server needs the access token (Settings → Remote access on the server).');
         return;
       }
-      if (!res.ok) {
-        setError(`Server answered ${res.status} — is this a Nuncio server?`);
+      if (result.kind === 'server-error') {
+        setError(`Server answered ${result.status} — is this a Nuncio server?`);
         return;
       }
-      await finish(config);
-    } catch {
-      setError('Could not reach the server. Is Tailscale connected on this phone?');
+      if (result.kind === 'network-error') {
+        setError('Could not reach the server. Is Tailscale connected on this phone?');
+        return;
+      }
+      if (result.kind === 'persist-error') {
+        setError("Couldn't save the pairing on this device. Try again.");
+        return;
+      }
+      router.replace('/');
+      void registerForPush();
     } finally {
       setBusy(false);
     }
-  }, [finish, serverInput, token]);
+  }, [router, serverInput, token]);
 
   if (scanning) {
     return <QrScanner onScan={(t) => void onScan(t)} onCancel={() => setScanning(false)} />;

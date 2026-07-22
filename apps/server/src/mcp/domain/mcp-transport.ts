@@ -1,17 +1,28 @@
+import { createHash } from 'node:crypto';
 import type { McpTransport } from './mcp.types';
 
 /**
- * Stable identity of a transport, used to dedupe imports across source stores
- * (the same `bridgememory` command registered in Cursor, Claude and Codex must
- * collapse into one row). Identity deliberately ignores env/cwd/headers — those
- * are configuration of the same server, not a different server. Remote urls
- * are compared without a trailing slash and case-insensitively on the host.
+ * Stable import-dedupe identity. Environment, cwd, and headers remain excluded
+ * so registrations of the same server merge across source stores. The identity
+ * is hashed because CLI args and remote query values may contain credentials and
+ * the result is persisted in a plaintext indexed column.
  */
 export function transportIdentity(transport: McpTransport): string {
-  if (transport.type === 'stdio') {
-    return `stdio:${JSON.stringify([transport.command, ...transport.args])}`;
+  const canonical =
+    transport.type === 'stdio'
+      ? ['stdio', transport.command, ...transport.args]
+      : ['remote', normalizeUrl(transport.url)];
+  return `v2:${createHash('sha256').update(JSON.stringify(canonical)).digest('hex')}`;
+}
+
+/** URL userinfo is forbidden because transport URLs are persisted and returned by the API. */
+export function hasRemoteUrlUserinfo(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.username.length > 0 || parsed.password.length > 0;
+  } catch {
+    return false;
   }
-  return `remote:${normalizeUrl(transport.url)}`;
 }
 
 function normalizeUrl(url: string): string {
@@ -57,12 +68,13 @@ function mapValues(
   return Object.fromEntries(Object.entries(record).map(([key, value]) => [key, fn(value)]));
 }
 
-const SECRET_KEY_PATTERN = /(token|secret|key|password|passwd|credential|authorization|auth)/i;
+const SECRET_KEY_PATTERN =
+  /(token|secret|key|password|passwd|credential|authorization|auth|bearer|(^|_)pat($|_))/i;
 const SECRET_KEY_EXCLUDES = /^(path|node_env|content-type)$/i;
 
 /**
- * Heuristic used at import time to decide which env/header values must be
- * encrypted at rest. Users can adjust the flagged set per server afterwards.
+ * Heuristic used at import time to decide which env values must be encrypted at
+ * rest. Header values are all treated as secret by the import scanners.
  */
 export function looksLikeSecretKey(key: string): boolean {
   if (SECRET_KEY_EXCLUDES.test(key)) return false;

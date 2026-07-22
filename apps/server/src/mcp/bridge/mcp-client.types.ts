@@ -28,6 +28,8 @@ export interface McpBridgeClient {
 /** Injectable so unit tests never spawn processes or open sockets. */
 export interface McpClientConnectOptions {
   authProvider?: OAuthClientProvider;
+  /** Stable non-secret account identity used to isolate pooled OAuth clients. */
+  principalId?: string;
 }
 
 /** Injectable so unit tests never spawn processes or open sockets. */

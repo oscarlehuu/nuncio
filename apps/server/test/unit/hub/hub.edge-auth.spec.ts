@@ -23,7 +23,29 @@ describe('isPublicHubTargetPath', () => {
     expect(isPublicHubTargetPath('/api/sessions')).toBe(false);
     expect(isPublicHubTargetPath('/api/sessions/abc/stream?since=0')).toBe(false);
     expect(isPublicHubTargetPath('/api/settings')).toBe(false);
+    expect(isPublicHubTargetPath('/api/health/extra')).toBe(false);
+    expect(isPublicHubTargetPath('/api/auth/login/extra')).toBe(false);
+    expect(isPublicHubTargetPath('/api/webhooks')).toBe(false);
+    expect(isPublicHubTargetPath('/api//webhooks/forge/github')).toBe(false);
+    expect(isPublicHubTargetPath('/api/search/%E2%9C%93')).toBe(false);
   });
+
+  for (const targetPath of [
+    '/api/webhooks/../sessions',
+    '/api/webhooks/%2e%2e/sessions',
+    '/api/webhooks/.%2E/sessions',
+  ]) {
+    it(`canonicalizes dot segments before public-path authorization: ${targetPath}`, () => {
+      expect(isPublicHubTargetPath(targetPath)).toBe(false);
+    });
+  }
+
+  for (const targetPath of ['/api/%', '/api/%2', '/api/%GG', '/api/%E0%A4%A']) {
+    it(`fails malformed target encoding closed without throwing: ${targetPath}`, () => {
+      expect(() => isPublicHubTargetPath(targetPath)).not.toThrow();
+      expect(isPublicHubTargetPath(targetPath)).toBe(false);
+    });
+  }
 });
 
 describe('isAuthorizedHubRequest', () => {

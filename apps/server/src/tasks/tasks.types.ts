@@ -42,6 +42,7 @@ export interface TaskRow {
   execution_kind: TaskExecutionKind;
   runtime_policy_json: string | null;
   verify_owner: string;
+  schedule_dispatch_intent_id: string | null;
   created_at: number;
   updated_at: number;
   started_at: number | null;

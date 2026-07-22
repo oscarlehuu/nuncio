@@ -51,7 +51,7 @@ function makeFakeSessions(seed: number[] = []): FakeSessions {
 
 interface TestClient {
   ws: WebSocket;
-  responses: Array<{ id: unknown; result?: unknown; error?: { code: number; message: string } }>;
+  responses: Array<{ id?: unknown; result?: unknown; error?: { code: number; message: string } }>;
   events: SessionEvent[];
   frames: Array<'response' | 'event' | 'behind'>;
   send(msg: unknown): void;
@@ -504,6 +504,32 @@ describe('sessions WS relay', () => {
     client.send({ id: 2, method: 'subscribe', params: { sessionId: 'sess-1', since: lastSeen } });
     await client.waitFor(() => client.events.length === 4);
     expect(client.events.map((e) => e.seq)).toEqual([1, 2, 3, 4]);
+    await client.close();
+  });
+
+  it.each([
+    { label: 'null', value: null },
+    { label: 'an empty array', value: [] },
+    { label: 'a populated array', value: [{ method: 'unsubscribe' }] },
+    { label: 'a string', value: 'unsubscribe' },
+    { label: 'a Unicode string', value: '终端' },
+    { label: 'zero', value: 0 },
+    { label: 'a negative number', value: -1 },
+    { label: 'true', value: true },
+  ])('rejects $label JSON without killing the connection', async ({ value }) => {
+    const fake = makeFakeSessions();
+    const port = await startServer(fake);
+    const client = await connect(port);
+
+    client.send(value);
+    await client.waitFor(() => client.responses.length === 1);
+    expect(client.responses[0]).toEqual({
+      error: { code: 400, message: 'Message must be a JSON object' },
+    });
+
+    client.send({ id: 5, method: 'unsubscribe', params: {} });
+    await client.waitFor(() => client.responses.length === 2);
+    expect(client.responses[1]).toEqual({ id: 5, result: { ok: true } });
     await client.close();
   });
 

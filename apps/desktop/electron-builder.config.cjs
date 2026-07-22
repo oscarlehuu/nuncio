@@ -3,8 +3,9 @@
 // One config, two channels selected by NUNCIO_CHANNEL (dev | stable):
 //   - stable → "Nuncio",     appId dev.nuncio.desktop,     tracks GitHub `latest`
 //   - dev    → "Nuncio Dev",  appId dev.nuncio.desktop.dev, tracks GitHub `dev` prereleases
-// Distinct appId/productName means dev and stable install side by side with
-// separate userData (and therefore separate SQLite data dirs).
+// Distinct appId/productName lets dev and stable install side by side. main.js
+// gives them separate post-lock shell userData but one real pre-channel lock;
+// only the packaged smoke supplies a validated temporary appData root.
 //
 // The server script bundle (+ staged node_modules), Bun runtime, and web bundle
 // are produced by scripts/build-resources.mjs into ./build-resources before

@@ -118,6 +118,34 @@ class FakeTasksService {
       return task;
     });
   }
+
+  private readonly approvalCorrelations = new Map<string, TaskDto>();
+
+  enqueueApprovalBatch<T>(
+    entries: Array<{
+      input: CreateTaskDto;
+      correlationKey: string;
+      existingTaskId?: string;
+      reuseCorrelationKey?: string;
+    }>,
+    correlate: (tasks: TaskDto[]) => T,
+  ): { tasks: TaskDto[]; correlated: T } {
+    if (this.fail) throw new Error('task insert failed');
+    const approved = entries.map((entry) => {
+      const correlated = this.approvalCorrelations.get(entry.correlationKey);
+      if (correlated) return correlated;
+      const reused = entry.reuseCorrelationKey
+        ? this.approvalCorrelations.get(entry.reuseCorrelationKey)
+        : undefined;
+      const existing = entry.existingTaskId
+        ? this.created.find((task) => task.id === entry.existingTaskId)
+        : undefined;
+      const task = reused ?? existing ?? this.enqueueMany([entry.input])[0]!;
+      this.approvalCorrelations.set(entry.correlationKey, task);
+      return task;
+    });
+    return { tasks: approved, correlated: correlate(approved) };
+  }
 }
 
 const proposal = (overrides: Partial<DispatcherProposal> = {}): DispatcherProposal => ({

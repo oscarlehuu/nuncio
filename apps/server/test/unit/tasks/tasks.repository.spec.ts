@@ -1,3 +1,4 @@
+import 'reflect-metadata';
 import { Test, TestingModule } from '@nestjs/testing';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -24,7 +25,9 @@ describe('TasksRepository', () => {
   });
 
   beforeEach(() => {
-    module.get(DatabaseService).db.exec('DELETE FROM tasks');
+    module.get(DatabaseService).db.exec(
+      'DELETE FROM task_reconciliation_outbox; DELETE FROM task_approval_correlations; DELETE FROM tasks',
+    );
   });
 
   afterAll(async () => {
@@ -103,6 +106,41 @@ describe('TasksRepository', () => {
       runtimePolicy,
       verifyOwner: 'crew',
     });
+  });
+
+  it('persists unique approval correlations and reuses the correlated task after settlement', () => {
+    const database = module.get(DatabaseService);
+    const created = database.immediateTransaction(() =>
+      tasks.createApprovalTaskInCurrentTransaction(
+        { prompt: 'approved work' },
+        'dispatcher:proposal-1:0',
+      ),
+    );
+    expect(tasks.correlateApprovalTask('dispatcher:proposal-1:1', created.id)?.id).toBe(created.id);
+
+    tasks.claimNextQueued();
+    tasks.finish(created.id, 'DONE', { ok: true });
+
+    expect(tasks.findByApprovalCorrelation('dispatcher:proposal-1:0')?.id).toBe(created.id);
+    expect(tasks.findByApprovalCorrelation('dispatcher:proposal-1:1')?.id).toBe(created.id);
+    expect(tasks.createApprovalTaskInCurrentTransaction(
+      { prompt: 'must not duplicate' },
+      'dispatcher:proposal-1:0',
+    ).id).toBe(created.id);
+    expect(tasks.list()).toHaveLength(1);
+  });
+
+  it('does not attach a fresh approval correlation to a terminal historical task', () => {
+    const task = tasks.create({ prompt: 'historical' });
+    tasks.claimNextQueued();
+    tasks.finish(task.id, 'DONE', {});
+
+    expect(tasks.correlateApprovalTask(
+      'dispatcher:proposal-2:0',
+      task.id,
+      { activeOnly: true },
+    )).toBeNull();
+    expect(tasks.findByApprovalCorrelation('dispatcher:proposal-2:0')).toBeNull();
   });
 
   it('claims queued tasks in FIFO order and marks them RUNNING', () => {
@@ -229,7 +267,32 @@ describe('TasksRepository', () => {
       crewAttemptKey: 'runner:build:attempt:9',
       sessionId: 'session-restart',
     });
+    expect(tasks.listPendingReconciliations().map((entry) => entry.taskId).sort()).toEqual(
+      [task.id, subagent.id, crew.id].sort(),
+    );
     expect(tasks.countRunning()).toBe(0);
+  });
+
+  it('rolls back RUNNING to FAILED when its outbox insert cannot commit', () => {
+    const database = module.get(DatabaseService);
+    const task = tasks.create({ prompt: 'atomic interruption' });
+    tasks.claimNextQueued();
+    database.db.exec(`
+      CREATE TRIGGER fail_task_reconciliation_insert
+      BEFORE INSERT ON task_reconciliation_outbox
+      BEGIN
+        SELECT RAISE(ABORT, 'outbox unavailable');
+      END;
+    `);
+
+    try {
+      expect(() => tasks.failInterrupted('daemon_restart')).toThrow('outbox unavailable');
+      expect(tasks.findById(task.id)?.status).toBe('RUNNING');
+      expect(tasks.listPendingReconciliations()).toHaveLength(0);
+    } finally {
+      database.db.exec('DROP TRIGGER IF EXISTS fail_task_reconciliation_insert');
+      tasks.finish(task.id, 'FAILED', { reason: 'test_cleanup' });
+    }
   });
 
   it('delete removes only terminal tasks', () => {

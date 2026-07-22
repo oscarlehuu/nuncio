@@ -75,4 +75,22 @@ describe('WebhookDeliveryTracker', () => {
     expect(retryResult.claim.sessionId).toBe(reservedId);
     expect(tracker.reserveSessionId(retryResult.claim)).toBe(reservedId);
   });
+
+  it('fences an owner exactly at lease expiry before renewal or completion', () => {
+    const claimed = tracker.claim('github', 'expired-owner');
+    if (claimed.status !== 'claimed') throw new Error('expected first claim');
+    database.db.prepare(
+      'UPDATE forge_webhook_deliveries SET lease_expires_at = ? WHERE provider = ? AND delivery_id = ?',
+    ).run(Date.now(), 'github', 'expired-owner');
+
+    expect(tracker.renew(claimed.claim)).toBe(false);
+    const staleSideEffect = jest.fn(() => 'stale side effect');
+    expect(() => tracker.complete(claimed.claim, staleSideEffect)).toThrow(
+      'Webhook delivery claim is no longer owned',
+    );
+    expect(staleSideEffect).not.toHaveBeenCalled();
+
+    const replay = tracker.claim('github', 'expired-owner');
+    expect(replay.status).toBe('claimed');
+  });
 });

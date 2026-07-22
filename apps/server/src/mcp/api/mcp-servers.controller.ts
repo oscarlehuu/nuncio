@@ -94,7 +94,12 @@ function maskPreview(preview: McpImportPreview): McpImportPreview {
       ...entry,
       candidate: {
         ...entry.candidate,
-        transport: maskTransportSecrets(entry.candidate.transport, entry.candidate.secretKeys),
+        transport: maskTransportSecrets(
+          entry.candidate.transport,
+          entry.candidate.secretKeys,
+          entry.candidate.secretArgIndexes,
+          entry.candidate.secretUrlQueryKeys,
+        ),
       },
     })),
   };

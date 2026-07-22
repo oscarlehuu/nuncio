@@ -29,13 +29,16 @@ export type WebhookDeliveryAcceptance = <T>(work: () => T) => T;
 
 /** Leases webhook processing and commits completion with its durable terminal write. */
 export class WebhookDeliveryTracker {
+  leaseMs = DELIVERY_LEASE_MS;
+  clock = { now: () => Date.now() };
+
   constructor(private readonly database: DatabaseService) {}
 
   claim(provider: string, deliveryId: string): WebhookDeliveryClaimResult {
     return this.database.immediateTransaction(() => {
-      const now = Date.now();
+      const now = this.clock.now();
       const token = randomUUID();
-      const leaseExpiresAt = now + DELIVERY_LEASE_MS;
+      const leaseExpiresAt = now + this.leaseMs;
       const inserted = this.database.db
         .prepare(
           `INSERT OR IGNORE INTO forge_webhook_deliveries
@@ -94,42 +97,53 @@ export class WebhookDeliveryTracker {
 
   complete<T>(claim: WebhookDeliveryClaim, work: () => T): T {
     return this.database.immediateTransaction(() => {
-      const owned = this.database.db
-        .prepare<{ owned: number }, [string, string, string]>(
-          `SELECT 1 AS owned FROM forge_webhook_deliveries
-           WHERE provider = ? AND delivery_id = ?
-             AND status = 'processing' AND claim_token = ?`,
-        )
-        .get(claim.provider, claim.deliveryId, claim.token);
-      if (!owned) throw new Error('Webhook delivery claim is no longer owned');
+      this.assertOwned(claim);
       const result = work();
-      this.database.db
+      const completed = this.database.db
         .prepare(
           `UPDATE forge_webhook_deliveries
            SET status = 'completed', claim_token = NULL, lease_expires_at = NULL, updated_at = ?
-           WHERE provider = ? AND delivery_id = ? AND claim_token = ?`,
+           WHERE provider = ? AND delivery_id = ? AND status = 'processing'
+             AND claim_token = ? AND lease_expires_at > ?`,
         )
-        .run(Date.now(), claim.provider, claim.deliveryId, claim.token);
+        .run(
+          this.clock.now(), claim.provider, claim.deliveryId, claim.token, this.clock.now(),
+        );
+      if (completed.changes !== 1) throw new Error('Webhook delivery claim is no longer owned');
       return result;
     });
   }
 
-  renew(claim: WebhookDeliveryClaim): boolean {
-    const now = Date.now();
-    const renewed = this.database.db
-      .prepare(
-        `UPDATE forge_webhook_deliveries SET lease_expires_at = ?, updated_at = ?
+  assertOwned(claim: WebhookDeliveryClaim): void {
+    const owned = this.database.db
+      .prepare<{ owned: number }, [string, string, string, number]>(
+        `SELECT 1 AS owned FROM forge_webhook_deliveries
          WHERE provider = ? AND delivery_id = ?
-           AND status = 'processing' AND claim_token = ?`,
+           AND status = 'processing' AND claim_token = ? AND lease_expires_at > ?`,
       )
-      .run(
-        now + DELIVERY_LEASE_MS,
-        now,
-        claim.provider,
-        claim.deliveryId,
-        claim.token,
-      );
-    return renewed.changes === 1;
+      .get(claim.provider, claim.deliveryId, claim.token, this.clock.now());
+    if (!owned) throw new Error('Webhook delivery claim is no longer owned');
+  }
+
+  renew(claim: WebhookDeliveryClaim): boolean {
+    return this.database.immediateTransaction(() => {
+      const now = this.clock.now();
+      const renewed = this.database.db
+        .prepare(
+          `UPDATE forge_webhook_deliveries SET lease_expires_at = ?, updated_at = ?
+           WHERE provider = ? AND delivery_id = ?
+             AND status = 'processing' AND claim_token = ? AND lease_expires_at > ?`,
+        )
+        .run(
+          now + this.leaseMs,
+          now,
+          claim.provider,
+          claim.deliveryId,
+          claim.token,
+          now,
+        );
+      return renewed.changes === 1;
+    });
   }
 
   markCheckpoint(claim: WebhookDeliveryClaim, checkpoint: string): void {
@@ -137,14 +151,15 @@ export class WebhookDeliveryTracker {
       .prepare(
         `UPDATE forge_webhook_deliveries SET checkpoint = ?, updated_at = ?
          WHERE provider = ? AND delivery_id = ?
-           AND status = 'processing' AND claim_token = ?`,
+           AND status = 'processing' AND claim_token = ? AND lease_expires_at > ?`,
       )
       .run(
         checkpoint,
-        Date.now(),
+        this.clock.now(),
         claim.provider,
         claim.deliveryId,
         claim.token,
+        this.clock.now(),
       );
     if (updated.changes !== 1) throw new Error('Webhook delivery claim is no longer owned');
     claim.checkpoint = checkpoint;
@@ -157,14 +172,16 @@ export class WebhookDeliveryTracker {
       .prepare(
         `UPDATE forge_webhook_deliveries SET accepted_session_id = ?, updated_at = ?
          WHERE provider = ? AND delivery_id = ?
-           AND status = 'processing' AND claim_token = ? AND accepted_session_id IS NULL`,
+           AND status = 'processing' AND claim_token = ? AND accepted_session_id IS NULL
+           AND lease_expires_at > ?`,
       )
       .run(
         sessionId,
-        Date.now(),
+        this.clock.now(),
         claim.provider,
         claim.deliveryId,
         claim.token,
+        this.clock.now(),
       );
     if (updated.changes !== 1) throw new Error('Webhook delivery claim is no longer owned');
     claim.sessionId = sessionId;
@@ -179,6 +196,6 @@ export class WebhookDeliveryTracker {
          WHERE provider = ? AND delivery_id = ?
            AND status = 'processing' AND claim_token = ?`,
       )
-      .run(Date.now(), claim.provider, claim.deliveryId, claim.token);
+      .run(this.clock.now(), claim.provider, claim.deliveryId, claim.token);
   }
 }

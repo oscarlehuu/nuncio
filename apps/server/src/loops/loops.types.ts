@@ -160,10 +160,10 @@ export interface LoopAttentionSignal {
 }
 
 /**
- * Default wedged-run safety-net threshold. A loop run born `pending` whose task
- * is still RUNNING this long has almost certainly wedged (a silent session that
- * never settles) — long enough that a legitimately long agent run rarely trips
- * it, short enough to recover within a work session. Founder-tunable via
+ * Default wedged-run attention threshold. A loop run born `pending` whose task
+ * is still RUNNING this long may have wedged (a silent session that never settles),
+ * but remains overlap-blocking until the task lane records a terminal outcome.
+ * Founder-tunable via
  * NUNCIO_LOOP_STUCK_PENDING_AGE_MIN.
  */
 export const DEFAULT_STUCK_PENDING_AGE_MS = 180 * 60 * 1000;

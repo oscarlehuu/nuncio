@@ -62,14 +62,24 @@ export class PairingController {
     if (!this.claimLimiter.allow(key, CLAIM_RATE)) {
       throw new HttpException('Too many pairing attempts', HttpStatus.TOO_MANY_REQUESTS);
     }
-    if (!this.pairing.consume(body.code)) {
+    const reservation = this.pairing.reserve(body.code);
+    if (!reservation) {
       throw new UnauthorizedException('Invalid or expired pairing code');
     }
     const deviceName = typeof body.deviceName === 'string' && body.deviceName.trim()
       ? body.deviceName.trim()
       : 'Paired device';
     const platform = typeof body.platform === 'string' ? body.platform : undefined;
-    const created = this.devices.create(deviceName, platform);
+    let created: ReturnType<DevicesService['create']>;
+    try {
+      created = this.devices.create(deviceName, platform);
+    } catch (error) {
+      this.pairing.rollback(reservation);
+      throw error;
+    }
+    if (!this.pairing.commit(reservation)) {
+      throw new Error('Pairing reservation was replaced before commit');
+    }
     return { deviceId: created.id, deviceSecret: created.secret, serverName: hostname() };
   }
 }

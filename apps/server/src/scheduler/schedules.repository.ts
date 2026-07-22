@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { v4 as uuidv4 } from 'uuid';
 import { DatabaseService } from '../db/database.service';
+import { ScheduleDispatchIntentsRepository } from './schedule-dispatch-intents.repository';
 import type {
   CreateScheduleDto,
   FireResult,
@@ -19,6 +20,7 @@ function rowToDto(row: ScheduleRow): ScheduleDto {
     nextFireAt: row.next_fire_at,
     lastFireAt: row.last_fire_at,
     lastResult: (row.last_result as FireResult | null) ?? null,
+    generation: row.generation,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -27,7 +29,11 @@ function rowToDto(row: ScheduleRow): ScheduleDto {
 /** Durable schedule state (ADR-006). Guarded against a closing DB like the rest. */
 @Injectable()
 export class SchedulesRepository {
-  constructor(private readonly database: DatabaseService) {}
+  readonly dispatches: ScheduleDispatchIntentsRepository;
+
+  constructor(private readonly database: DatabaseService) {
+    this.dispatches = new ScheduleDispatchIntentsRepository(database);
+  }
 
   create(input: CreateScheduleDto & { nextFireAt: number | null }): ScheduleDto {
     const now = Date.now();
@@ -94,38 +100,95 @@ export class SchedulesRepository {
       .map(rowToDto);
   }
 
-  setEnabled(id: string, enabled: boolean, nextFireAt: number | null): ScheduleDto {
-    if (!this.database.closed) {
-      this.database.db
-        .prepare('UPDATE schedules SET enabled = ?, next_fire_at = ?, updated_at = ? WHERE id = ?')
-        .run(enabled ? 1 : 0, nextFireAt, Date.now(), id);
-    }
-    return this.findById(id)!;
-  }
-
-  recordFire(id: string, at: number, result: FireResult, nextFireAt: number | null): void {
-    if (this.database.closed) return;
-    this.database.db
+  setEnabled(
+    expected: ScheduleDto,
+    enabled: boolean,
+    nextFireAt: number | null,
+  ): boolean {
+    if (this.database.closed) return false;
+    const updated = this.database.db
       .prepare(
-        `UPDATE schedules SET last_fire_at = ?, last_result = ?, next_fire_at = ?, updated_at = ?
-         WHERE id = ?`,
+        `UPDATE schedules
+         SET enabled = ?, next_fire_at = ?, generation = generation + 1, updated_at = ?
+         WHERE id = ? AND generation = ? AND next_fire_at IS ?`,
       )
-      .run(at, result, nextFireAt, Date.now(), id);
+      .run(
+        enabled ? 1 : 0,
+        nextFireAt,
+        Date.now(),
+        expected.id,
+        expected.generation,
+        expected.nextFireAt,
+      );
+    return updated.changes === 1;
   }
 
-  setNextFire(id: string, nextFireAt: number | null): void {
-    if (this.database.closed) return;
-    this.database.db
-      .prepare('UPDATE schedules SET next_fire_at = ?, updated_at = ? WHERE id = ?')
-      .run(nextFireAt, Date.now(), id);
+  recordFire(
+    expected: ScheduleDto,
+    at: number,
+    result: FireResult,
+    nextFireAt: number | null,
+  ): boolean {
+    if (this.database.closed) return false;
+    const updated = this.database.db
+      .prepare(
+        `UPDATE schedules
+         SET last_fire_at = ?, last_result = ?, next_fire_at = ?, updated_at = ?
+         WHERE id = ? AND generation = ? AND next_fire_at IS ?`,
+      )
+      .run(
+        at,
+        result,
+        nextFireAt,
+        Date.now(),
+        expected.id,
+        expected.generation,
+        expected.nextFireAt,
+      );
+    return updated.changes === 1;
+  }
+
+  setNextFire(expected: ScheduleDto, nextFireAt: number | null): boolean {
+    if (this.database.closed) return false;
+    const updated = this.database.db
+      .prepare(
+        `UPDATE schedules SET next_fire_at = ?, updated_at = ?
+         WHERE id = ? AND generation = ? AND next_fire_at IS ?`,
+      )
+      .run(
+        nextFireAt,
+        Date.now(),
+        expected.id,
+        expected.generation,
+        expected.nextFireAt,
+      );
+    return updated.changes === 1;
   }
 
   /** Change a schedule's kind + spec (used when a heartbeat cadence setting changes). */
-  setSpec(id: string, kind: string, spec: string, nextFireAt: number | null): void {
-    if (this.database.closed) return;
-    this.database.db
-      .prepare('UPDATE schedules SET kind = ?, spec = ?, next_fire_at = ?, updated_at = ? WHERE id = ?')
-      .run(kind, spec, nextFireAt, Date.now(), id);
+  setSpec(
+    expected: ScheduleDto,
+    kind: string,
+    spec: string,
+    nextFireAt: number | null,
+  ): boolean {
+    if (this.database.closed) return false;
+    const updated = this.database.db
+      .prepare(
+        `UPDATE schedules
+         SET kind = ?, spec = ?, next_fire_at = ?, generation = generation + 1, updated_at = ?
+         WHERE id = ? AND generation = ? AND next_fire_at IS ?`,
+      )
+      .run(
+        kind,
+        spec,
+        nextFireAt,
+        Date.now(),
+        expected.id,
+        expected.generation,
+        expected.nextFireAt,
+      );
+    return updated.changes === 1;
   }
 
   delete(id: string): void {

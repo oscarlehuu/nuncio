@@ -49,14 +49,56 @@ function mergeEvents(prev: SessionEvent[], incoming: SessionEvent[]): SessionEve
   return [...prev, ...fresh].sort((a, b) => a.seq - b.seq);
 }
 
+function retentionLimit(tail: number | undefined): number | null {
+  if (!Number.isFinite(tail) || (tail ?? 0) <= 0) return null;
+  const limit = Math.floor(tail!);
+  return limit > 0 ? limit : null;
+}
+
+function highestSeq(events: SessionEvent[]): number {
+  return events.length > 0 ? events[events.length - 1].seq : 0;
+}
+
+function retainEventWindow(
+  events: SessionEvent[],
+  tail: number | undefined,
+  protectedThrough: number,
+): SessionEvent[] {
+  const limit = retentionLimit(tail);
+  if (limit === null || events.length <= limit) return events;
+  if (protectedThrough <= 0) return events.slice(-limit);
+
+  const firstRolling = events.findIndex((event) => event.seq > protectedThrough);
+  if (firstRolling < 0 || events.length - firstRolling <= limit) return events;
+  return [...events.slice(0, firstRolling), ...events.slice(-limit)];
+}
+
+function nextBackfillBefore(events: SessionEvent[]): number | null {
+  if (events.length === 0) return null;
+  for (let index = 1; index < events.length; index += 1) {
+    if (events[index].seq > events[index - 1].seq + 1) return events[index].seq;
+  }
+  return events[0].seq > 1 ? events[0].seq : null;
+}
+
+function hasMissingEarlierEvents(events: SessionEvent[]): boolean {
+  if (events.length === 0) return false;
+  if (events[0].seq > 1) return true;
+  for (let index = 1; index < events.length; index += 1) {
+    if (events[index].seq > events[index - 1].seq + 1) return true;
+  }
+  return false;
+}
+
 /**
  * `base` targets a specific machine's API (origin-absolute, hub mode); the
  * default empty string keeps page-relative behavior (rewritten by the page's
  * own hub base where applicable).
  *
- * `tail` bounds the initial load to the last N events; earlier history stays
- * on the server until `loadEarlier` pages it in (seq 1 is always the start,
- * so `hasEarlier` is simply "oldest loaded seq > 1").
+ * `tail` bounds both the cursor-zero bootstrap and automatic live retention.
+ * Explicit paging protects the rows the user chose to load; only the newer live
+ * suffix keeps rolling, and `loadEarlier` fills any retained gap before paging
+ * below the oldest row.
  */
 export function useSessionStream(sessionId: string | null, base = '', tail?: number) {
   const [events, setEvents] = useState<SessionEvent[]>([]);
@@ -72,6 +114,9 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
   tailRef.current = tail;
   const eventsRef = useRef<SessionEvent[]>([]);
   const loadingEarlierRef = useRef(false);
+  const backfillRequestRef = useRef(0);
+  const protectedThroughRef = useRef(0);
+  const pendingProtectionThroughRef = useRef(0);
   const pendingEventsRef = useRef<SessionEvent[]>([]);
   const scheduledFlushRef = useRef<ScheduledFlush | null>(null);
 
@@ -86,13 +131,19 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
     setEvents(next);
   }, []);
 
+  const applyRetention = useCallback((candidate: SessionEvent[]) => retainEventWindow(
+    candidate,
+    tailRef.current,
+    Math.max(protectedThroughRef.current, pendingProtectionThroughRef.current),
+  ), []);
+
   const flushPendingEvents = useCallback(() => {
     scheduledFlushRef.current = null;
     const pending = pendingEventsRef.current;
     if (pending.length === 0) return;
     pendingEventsRef.current = [];
-    updateEvents((prev) => mergeEvents(prev, pending));
-  }, [updateEvents]);
+    updateEvents((prev) => applyRetention(mergeEvents(prev, pending)));
+  }, [applyRetention, updateEvents]);
 
   const scheduleEventFlush = useCallback(() => {
     if (scheduledFlushRef.current) return;
@@ -158,28 +209,55 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
     if (!isCurrent(id, generation) || requestRef.current !== request) return;
     const pending = pendingEventsRef.current;
     cancelPendingEventFlush();
-    updateEvents((current) => mergeEvents(mergeEvents(current, pending), initial));
+    updateEvents((current) => applyRetention(mergeEvents(mergeEvents(current, pending), initial)));
     const fetchedSeq = initial.reduce((max, e) => Math.max(max, e.seq), 0);
     sinceRef.current = Math.max(sinceRef.current, fetchedSeq);
     connect(generation);
-  }, [connect, fetchInitial, isCurrent, updateEvents, cancelPendingEventFlush]);
+  }, [applyRetention, connect, fetchInitial, isCurrent, updateEvents, cancelPendingEventFlush]);
 
-  /** Page one window of history in before the oldest loaded event. */
+  /** Fill the earliest retained gap, then page below the oldest loaded event. */
   const loadEarlier = useCallback(async () => {
     const id = sessionIdRef.current;
     const generation = generationRef.current;
     if (!id || loadingEarlierRef.current) return;
-    const oldestSeq = eventsRef.current[0]?.seq ?? 0;
-    if (oldestSeq <= 1) return;
+    const before = nextBackfillBefore(eventsRef.current);
+    if (before === null) return;
+
+    const request = ++backfillRequestRef.current;
     loadingEarlierRef.current = true;
+    // While the request is pending, keep the rows the user expanded from. The
+    // protection commits only after a successful response; failure rolls back
+    // to the prior semantic window.
+    pendingProtectionThroughRef.current = Math.max(
+      protectedThroughRef.current,
+      highestSeq(eventsRef.current),
+    );
+    let committed = false;
     try {
-      const earlier = await fetchEvents(id, 0, baseRef.current, { before: oldestSeq });
-      if (!isCurrent(id, generation)) return;
-      updateEvents((prev) => mergeEvents(prev, earlier));
+      const earlier = await fetchEvents(id, 0, baseRef.current, { before });
+      if (!isCurrent(id, generation) || backfillRequestRef.current !== request) return;
+      const pending = pendingEventsRef.current;
+      cancelPendingEventFlush();
+      updateEvents((prev) => {
+        const merged = mergeEvents(mergeEvents(prev, pending), earlier);
+        protectedThroughRef.current = Math.max(
+          protectedThroughRef.current,
+          highestSeq(merged),
+        );
+        pendingProtectionThroughRef.current = 0;
+        return applyRetention(merged);
+      });
+      committed = true;
     } finally {
-      loadingEarlierRef.current = false;
+      if (backfillRequestRef.current === request) {
+        loadingEarlierRef.current = false;
+        if (!committed) {
+          pendingProtectionThroughRef.current = 0;
+          updateEvents((prev) => applyRetention(prev));
+        }
+      }
     }
-  }, [isCurrent, updateEvents]);
+  }, [applyRetention, cancelPendingEventFlush, isCurrent, updateEvents]);
 
   useEffect(() => {
     const generation = ++generationRef.current;
@@ -188,6 +266,9 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
     replaceEvents([]);
     sinceRef.current = 0;
     loadingEarlierRef.current = false;
+    backfillRequestRef.current += 1;
+    protectedThroughRef.current = 0;
+    pendingProtectionThroughRef.current = 0;
 
     if (!sessionId) {
       return () => {
@@ -202,7 +283,7 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
     void fetchInitial(sessionId)
       .then((initial) => {
         if (!isCurrent(sessionId, generation) || requestRef.current !== request) return;
-        updateEvents((current) => mergeEvents(current, initial));
+        updateEvents((current) => applyRetention(mergeEvents(current, initial)));
         const fetchedSeq = initial.reduce((max, e) => Math.max(max, e.seq), 0);
         sinceRef.current = Math.max(sinceRef.current, fetchedSeq);
       })
@@ -232,9 +313,19 @@ export function useSessionStream(sessionId: string | null, base = '', tail?: num
       subscriptionRef.current = null;
       cancelPendingEventFlush();
     };
-  }, [sessionId, base, connect, fetchInitial, isCurrent, replaceEvents, updateEvents, cancelPendingEventFlush]);
+  }, [
+    sessionId,
+    base,
+    applyRetention,
+    connect,
+    fetchInitial,
+    isCurrent,
+    replaceEvents,
+    updateEvents,
+    cancelPendingEventFlush,
+  ]);
 
-  const hasEarlier = (events[0]?.seq ?? 0) > 1;
+  const hasEarlier = hasMissingEarlierEvents(events);
 
   return { events, refetch, loadEarlier, hasEarlier };
 }

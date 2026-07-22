@@ -428,7 +428,7 @@ Pick **one** in-progress Cursor chat or Pi CLI session on your Mac and continue 
 1. Start or continue a chat in **Cursor IDE** on your Mac (same project folder you pick in Nuncio).
 2. On your phone (Tailscale HTTPS PWA), tap **Continue on mobile** (home composer or session header for SDK Cursor sessions).
 3. Pick the project folder → select the chat → **Import** (or **Open** if already imported).
-4. Steer from the phone; Nuncio runs `agent -p --resume <chatId>` and streams tokens into the session transcript.
+4. Steer from the phone; Nuncio runs `agent -p --resume <chatId>` and streams tokens into the session transcript. Long sessions open with a bounded recent-event window; use **Load earlier history** to page backward without losing live updates or scroll position.
 
 **Troubleshooting**
 

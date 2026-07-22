@@ -64,17 +64,19 @@ export default function SessionDetail() {
   const [message, setMessage] = useState('');
   const [composerHeight, setComposerHeight] = useState(64);
   const [sending, setSending] = useState(false);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [providers, setProviders] = useState<ModelProvider[]>([]);
   const [handingOffId, setHandingOffId] = useState<string | null>(null);
   const [pendingHandoff, setPendingHandoff] = useState(false);
   const listRef = useRef<FlatList>(null);
+  const preserveScrollOnNextContentSizeRef = useRef(false);
   const actionsRef = useRef<BottomSheetModal>(null);
   const handoffRef = useRef<BottomSheetModal>(null);
   const snapPoints = useMemo(() => (confirmDelete ? ['38%'] : ['42%']), [confirmDelete]);
 
-  const { events, steer, connectionState } = useSessionTranscript(sessionId);
+  const { events, steer, connectionState, loadEarlier, hasEarlier } = useSessionTranscript(sessionId);
   const blocks = groupTranscriptBlocks(useTranscriptBlocks(events));
   const access = crewMemberSessionAccess(session);
   const sessionLoaded = session !== null;
@@ -115,6 +117,21 @@ export default function SessionDetail() {
   const currentProviderName = session?.provider
     ? providerMeta(session.provider, providers.length ? providers : undefined).name
     : undefined;
+
+  const loadEarlierHistory = useCallback(async () => {
+    if (loadingEarlier || !hasEarlier) return;
+    setLoadingEarlier(true);
+    setError(null);
+    preserveScrollOnNextContentSizeRef.current = true;
+    try {
+      await loadEarlier();
+    } catch {
+      preserveScrollOnNextContentSizeRef.current = false;
+      setError('Loading earlier history failed.');
+    } finally {
+      setLoadingEarlier(false);
+    }
+  }, [hasEarlier, loadEarlier, loadingEarlier]);
 
   const send = useCallback(async () => {
     const text = message.trim();
@@ -262,7 +279,30 @@ export default function SessionDetail() {
             sessionRunning={sessionRunning}
           />
         )}
-        onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
+        maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+        onContentSizeChange={() => {
+          if (preserveScrollOnNextContentSizeRef.current) {
+            preserveScrollOnNextContentSizeRef.current = false;
+            return;
+          }
+          listRef.current?.scrollToEnd({ animated: true });
+        }}
+        ListHeaderComponent={
+          hasEarlier ? (
+            <View className="items-center pb-2 pt-3">
+              <Pressable
+                accessibilityLabel="Load earlier history"
+                disabled={loadingEarlier}
+                onPress={() => void loadEarlierHistory()}
+                className="rounded-full border border-border px-3 py-1.5 disabled:opacity-50"
+              >
+                <Text className="text-xs font-medium text-muted-foreground">
+                  {loadingEarlier ? 'Loading…' : 'Load earlier history'}
+                </Text>
+              </Pressable>
+            </View>
+          ) : null
+        }
         ListEmptyComponent={
           <View className="items-center px-6 py-16">
             <Text className="text-sm text-muted-foreground">Waiting for the agent transcript…</Text>

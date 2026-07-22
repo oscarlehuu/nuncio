@@ -49,9 +49,14 @@ export function attachHubWebSocketProxy(
   const heartbeatIntervalMs = options?.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
   httpServer.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     if (!hub.enabled()) return;
-    const url = new URL(req.url ?? '/', 'http://localhost');
-    const parsed = parseHubPath(url.pathname);
-    if (!parsed || !RELAYED_WS_PATHS.has(parsed.targetPath)) return;
+    const rawUrl = req.url ?? '/';
+    const parsed = parseHubPath(rawUrl);
+    if (!parsed) {
+      if (rawUrl.startsWith('/m/')) socket.destroy();
+      return;
+    }
+    const targetPathname = parsed.targetPath.split('?')[0];
+    if (!RELAYED_WS_PATHS.has(targetPathname)) return;
 
     void relay(req, socket, head, parsed.machine, parsed.targetPath);
   });

@@ -34,6 +34,88 @@ function parsePositiveInt(value: string | undefined): number | undefined {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+const SSE_MAX_PENDING_BYTES = 1_000_000;
+type SseStopReason = 'downstream' | 'overflow' | 'write-error';
+
+function createBoundedSseWriter(res: Response, onStop: () => void) {
+  const pending: Array<{ frame: string; bytes: number }> = [];
+  let pendingBytes = 0;
+  let blocked = false;
+  let stopped = false;
+
+  const safeEnd = () => {
+    if (res.writableEnded || res.destroyed) return;
+    try {
+      res.end();
+    } catch {
+      // The response already failed; cleanup still remains exact.
+    }
+  };
+  const stop = (reason: SseStopReason) => {
+    if (stopped) return;
+    stopped = true;
+    blocked = false;
+    pending.length = 0;
+    pendingBytes = 0;
+    res.off('drain', onDrain);
+    res.off('close', onClose);
+    res.off('error', onError);
+    onStop();
+    if (reason !== 'downstream') safeEnd();
+  };
+  const writeNow = (frame: string): boolean => {
+    if (stopped) return false;
+    if (res.writableEnded || res.destroyed) {
+      stop('downstream');
+      return false;
+    }
+    try {
+      if (!res.write(frame)) blocked = true;
+      return true;
+    } catch {
+      stop('write-error');
+      return false;
+    }
+  };
+  const send = (frame: string): boolean => {
+    if (stopped) return false;
+    if (!blocked && pending.length === 0) return writeNow(frame);
+
+    const bytes = Buffer.byteLength(frame);
+    if (bytes > SSE_MAX_PENDING_BYTES - pendingBytes) {
+      stop('overflow');
+      return false;
+    }
+    pending.push({ frame, bytes });
+    pendingBytes += bytes;
+    return true;
+  };
+  function onDrain() {
+    if (stopped) return;
+    blocked = false;
+    while (!blocked && pending.length > 0) {
+      const next = pending.shift()!;
+      pendingBytes -= next.bytes;
+      if (!writeNow(next.frame)) return;
+    }
+  }
+  function onClose() {
+    stop('downstream');
+  }
+  function onError() {
+    stop('downstream');
+  }
+
+  res.on('drain', onDrain);
+  res.on('close', onClose);
+  res.on('error', onError);
+  return {
+    send,
+    fail: () => stop('write-error'),
+    stopped: () => stopped,
+  };
+}
+
 @Controller('sessions')
 export class SessionsController {
   constructor(
@@ -254,19 +336,51 @@ export class SessionsController {
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders();
 
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let unsubscribe: (() => void) | undefined;
+    const cleanup = () => {
+      if (heartbeat !== undefined) {
+        clearInterval(heartbeat);
+        heartbeat = undefined;
+      }
+      const current = unsubscribe;
+      unsubscribe = undefined;
+      if (current) {
+        try {
+          current();
+        } catch {
+          // The response is already terminal; a subscriber cleanup failure cannot recover it.
+        }
+      }
+    };
+    const writer = createBoundedSseWriter(res, cleanup);
+
     for (const event of this.sessions.getEvents(id, safeSince)) {
-      res.write(`data: ${JSON.stringify(event)}\n\n`);
+      if (!writer.send(`data: ${JSON.stringify(event)}\n\n`)) return;
     }
 
-    const unsubscribe = this.sessions.subscribe(id, (event) => {
-      res.write(`data: ${JSON.stringify(event)}\n\n`);
-    });
-
-    const heartbeat = setInterval(() => res.write(': ping\n\n'), 15000);
-    res.on('close', () => {
-      clearInterval(heartbeat);
-      unsubscribe();
-      res.end();
-    });
+    if (!writer.stopped()) {
+      let subscribed: (() => void) | undefined;
+      try {
+        subscribed = this.sessions.subscribe(id, (event) => {
+          writer.send(`data: ${JSON.stringify(event)}\n\n`);
+        });
+      } catch {
+        writer.fail();
+        return;
+      }
+      if (writer.stopped()) {
+        try {
+          subscribed?.();
+        } catch {
+          // Cleanup remains best-effort after a terminal response.
+        }
+        return;
+      }
+      unsubscribe = subscribed;
+      heartbeat = setInterval(() => {
+        writer.send(': ping\n\n');
+      }, 15000);
+    }
   }
 }

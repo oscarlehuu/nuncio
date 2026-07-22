@@ -1,11 +1,14 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
+import type { NextFunction, Request as ExpressRequest, Response as ExpressResponse } from 'express';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AppModule } from '../../src/app.module';
+import { AuthTokenService } from '../../src/auth/auth-token.service';
 import { DatabaseService } from '../../src/db/database.service';
+import { PiLocalSessionsService } from '../../src/pi-local/pi-local-sessions.service';
 import { SessionsRepository } from '../../src/sessions/persistence/sessions.repository';
 import { TasksRepository } from '../../src/tasks/tasks.repository';
 import {
@@ -33,7 +36,53 @@ async function initRepo(dir: string): Promise<void> {
 }
 
 function api(app: INestApplication) {
-  return request(app.getHttpAdapter().getInstance());
+  const token = app.get(AuthTokenService).token;
+  return request.agent(app.getHttpServer()).set('Authorization', `Bearer ${token}`);
+}
+
+function requireExplicitFixtureAuth(app: INestApplication): void {
+  app.use((req: ExpressRequest, _res: ExpressResponse, next: NextFunction) => {
+    // Bun/Supertest can omit the transient socket address. Make that boundary deterministic so
+    // this fixture proves explicit API authentication instead of relying on the loopback exemption.
+    Object.defineProperty(req.socket, 'remoteAddress', {
+      configurable: true,
+      value: undefined,
+    });
+    next();
+  });
+}
+
+function expectJsonArrayResponse(
+  res: request.Response,
+  context: string,
+): asserts res is request.Response & { body: unknown[] } {
+  const contentType = res.headers['content-type'];
+  if (
+    res.status === 200 &&
+    typeof contentType === 'string' &&
+    contentType.includes('application/json') &&
+    Array.isArray(res.body)
+  ) {
+    return;
+  }
+
+  let serializedBody: string;
+  try {
+    serializedBody = JSON.stringify(res.body) ?? String(res.body);
+  } catch (error) {
+    serializedBody = `<unserializable: ${error instanceof Error ? error.message : String(error)}>`;
+  }
+  if (serializedBody.length > 2_000) serializedBody = `${serializedBody.slice(0, 2_000)}…`;
+
+  const bodyShape = Array.isArray(res.body)
+    ? `array(length=${res.body.length})`
+    : res.body === null
+      ? 'null'
+      : typeof res.body;
+  throw new Error(
+    `${context} expected HTTP 200 application/json array; ` +
+      `status=${res.status} content-type=${String(contentType)} body-shape=${bodyShape} body=${serializedBody}`,
+  );
 }
 
 describe('Nuncio API', () => {
@@ -62,12 +111,13 @@ describe('Nuncio API', () => {
     ).compile();
 
     app = moduleFixture.createNestApplication();
+    requireExplicitFixtureAuth(app);
     app.setGlobalPrefix('api');
-    await app.init();
+    await app.listen(0, '127.0.0.1');
   });
 
   afterAll(async () => {
-    await app.close();
+    if (app) await app.close();
     rmSync(dataDir, { recursive: true, force: true });
     rmSync(rootsDir, { recursive: true, force: true });
     rmSync(workspacesDir, { recursive: true, force: true });
@@ -75,6 +125,21 @@ describe('Nuncio API', () => {
     delete process.env.CURSOR_API_KEY;
     delete process.env.NUNCIO_PROJECT_ROOTS;
     delete process.env.NUNCIO_WORKSPACES_DIR;
+  });
+
+  it('authenticates fixture requests without relying on loopback socket identity', async () => {
+    const unauthenticated = await request(app.getHttpServer()).get('/api/sessions/missing/events');
+    expect(unauthenticated.status).toBe(401);
+    expect(unauthenticated.body.message).toBe('Access token required');
+    expect(() => {
+      expectJsonArrayResponse(unauthenticated, 'unauthenticated events probe');
+    }).toThrow(
+      /status=401 content-type=application\/json; charset=utf-8 body-shape=object body=.*Access token required/,
+    );
+
+    const authenticated = await api(app).get('/api/sessions');
+    expect(authenticated.status).toBe(200);
+    expect(Array.isArray(authenticated.body)).toBe(true);
   });
 
   it('GET /api/health returns ok', async () => {
@@ -117,6 +182,62 @@ describe('Nuncio API', () => {
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
     expect(res.body.length).toBeGreaterThan(0);
+  });
+
+  it('GET /api/sessions/:id/events returns a JSON array when the event log is empty', async () => {
+    const repo = app.get(SessionsRepository);
+    const session = repo.create({
+      id: 'empty-event-log-api',
+      prompt: 'no events yet',
+      provider: 'cursor',
+    });
+
+    const res = await api(app).get(`/api/sessions/${session.id}/events`);
+    expectJsonArrayResponse(res, `GET /api/sessions/${session.id}/events with empty log`);
+    expect(res.body).toEqual([]);
+  });
+
+  it('reuses one successful-empty transcript read across repeated session HTTP requests', async () => {
+    const repo = app.get(SessionsRepository);
+    const piLocal = app.get(PiLocalSessionsService);
+    const transcriptPath = join(dataDir, 'empty-pi-http-session.jsonl');
+    writeFileSync(transcriptPath, '');
+    const session = repo.createHandoff({
+      id: 'empty-pi-http-api',
+      provider: 'pi',
+      title: 'Empty Pi HTTP transcript',
+      workspace: repoPath,
+      providerThreadId: transcriptPath,
+      prompt: 'Empty Pi HTTP transcript',
+    });
+    const previousOpenSession = piLocal.openSession;
+    let transcriptReads = 0;
+    piLocal.openSession = () => {
+      transcriptReads += 1;
+      return {
+        getEntries: () => [],
+        buildSessionContext: () => ({ model: null, thinkingLevel: null }),
+      } as never;
+    };
+
+    try {
+      const detailOne = await api(app).get(`/api/sessions/${session.id}`);
+      const detailTwo = await api(app).get(`/api/sessions/${session.id}`);
+      const eventsOne = await api(app).get(`/api/sessions/${session.id}/events`);
+      const eventsTwo = await api(app).get(`/api/sessions/${session.id}/events`);
+
+      expect(detailOne.status).toBe(200);
+      expect(detailOne.body.id).toBe(session.id);
+      expect(detailTwo.status).toBe(200);
+      expect(detailTwo.body.id).toBe(session.id);
+      expectJsonArrayResponse(eventsOne, 'first empty Pi transcript HTTP read');
+      expectJsonArrayResponse(eventsTwo, 'second empty Pi transcript HTTP read');
+      expect(eventsOne.body).toEqual([]);
+      expect(eventsTwo.body).toEqual([]);
+      expect(transcriptReads).toBe(1);
+    } finally {
+      piLocal.openSession = previousOpenSession;
+    }
   });
 
   it('keeps Crew member sessions detail-readable but hidden and immutable publicly', async () => {
@@ -244,7 +365,7 @@ describe('Nuncio API', () => {
     await waitForIdle(app, id);
 
     const res = await api(app).get(`/api/sessions/${id}/events`);
-    expect(res.status).toBe(200);
+    expectJsonArrayResponse(res, `GET /api/sessions/${id}/events after run`);
     expect(res.body.some((e: { type: string }) => e.type === 'user_message')).toBe(true);
     expect(res.body.some((e: { type: string }) => e.type === 'assistant_message')).toBe(true);
   });
@@ -266,6 +387,7 @@ describe('Nuncio API', () => {
       await waitForIdle(app, id);
 
       const events = await api(app).get(`/api/sessions/${id}/events`);
+      expectJsonArrayResponse(events, `GET /api/sessions/${id}/events after steer`);
       expect(events.body.some((e: { type: string }) => e.type === 'steer_message')).toBe(true);
     });
 

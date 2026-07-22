@@ -31,8 +31,14 @@ function issue(overrides: Partial<Extract<ForgeWebhookEvent, { kind: 'issue' }>>
 /** Records scheduler.handleWebhookEvent dispatches (provider, event, projectPath). */
 class SchedulerSpy {
   readonly dispatches: Array<{ provider: string; kind: string; projectPath: string | null | undefined }> = [];
-  handleWebhookEvent(provider: string, event: ForgeWebhookEvent, projectPath?: string | null) {
+
+  handleWebhookEventTransactional(
+    provider: string,
+    event: ForgeWebhookEvent,
+    projectPath?: string | null,
+  ) {
     this.dispatches.push({ provider, kind: event.kind, projectPath });
+    return () => {};
   }
 }
 
@@ -101,6 +107,34 @@ describe('WebhooksService → event-loop dispatch', () => {
   it('does not re-dispatch a replayed delivery (independent #loops dedup)', async () => {
     await service.handleEvent('github', issue({ deliveryId: 'dup' }));
     await service.handleEvent('github', issue({ deliveryId: 'dup' }));
+    expect(scheduler.dispatches).toHaveLength(1);
+  });
+
+  it('renews a long loop-dispatch claim so replay cannot dispatch concurrently', async () => {
+    let releaseProjects!: () => void;
+    const projects = new Promise<Array<{ path: string }>>((resolve) => {
+      releaseProjects = () => resolve([{ path: KNOWN_PATH }]);
+    });
+    (service as unknown as { git: { listProjects: () => Promise<Array<{ path: string }>> } })
+      .git.listProjects = () => projects;
+    const internals = service as unknown as {
+      deliveryHeartbeatMs: number;
+      deliveries: { leaseMs: number };
+    };
+    internals.deliveryHeartbeatMs = 2;
+    internals.deliveries.leaseMs = 15;
+
+    const event = issue({ deliveryId: 'long-loop-dispatch', labels: [] });
+    const first = service.handleEvent('github', event);
+    await Promise.resolve();
+    db.db.prepare(
+      'UPDATE forge_webhook_deliveries SET lease_expires_at = ? WHERE provider = ? AND delivery_id = ?',
+    ).run(Date.now() + 10, 'github', 'long-loop-dispatch#loops');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const replay = service.handleEvent('github', event);
+    releaseProjects();
+
+    await Promise.all([first, replay]);
     expect(scheduler.dispatches).toHaveLength(1);
   });
 

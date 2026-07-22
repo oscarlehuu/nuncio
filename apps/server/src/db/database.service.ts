@@ -4,6 +4,8 @@ import { mkdirSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import { ensureCrewSchema } from '../crew/persistence/crew-schema';
 
+const DATABASE_SCHEMA_VERSION = 1;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
@@ -100,8 +102,29 @@ export class DatabaseService implements OnModuleDestroy {
    * and its continuation would otherwise write after close (SQLITE_MISUSE/IOERR).
    */
   private _closed = false;
+  private readonly scheduleDispatchIntentStack: string[] = [];
+
   get closed(): boolean {
     return this._closed;
+  }
+
+  /** Current durable scheduler intent while its target rows are committed. */
+  get currentScheduleDispatchIntentId(): string | null {
+    return this.scheduleDispatchIntentStack.at(-1) ?? null;
+  }
+
+  /**
+   * Correlate the synchronous task/run inserts performed by one target invocation.
+   * A stack handles re-entrant fires without leaking the receipt into the task's
+   * later async execution, which starts only after target creation returns.
+   */
+  withScheduleDispatchIntent<T>(intentId: string, createTarget: () => T): T {
+    this.scheduleDispatchIntentStack.push(intentId);
+    try {
+      return createTarget();
+    } finally {
+      this.scheduleDispatchIntentStack.pop();
+    }
   }
 
   constructor() {
@@ -109,11 +132,15 @@ export class DatabaseService implements OnModuleDestroy {
     mkdirSync(dataDir, { recursive: true });
     this.dataDir = dataDir;
     this.db = new Database(join(dataDir, 'nuncio.db'));
-    this.db.exec('PRAGMA journal_mode = WAL');
     this.db.exec('PRAGMA busy_timeout = 5000');
-    this.db.exec(SCHEMA);
-    this.migrate();
-    ensureCrewSchema(this);
+    this.db.exec('PRAGMA journal_mode = WAL');
+    try {
+      this.runMigrations();
+    } catch (error) {
+      this._closed = true;
+      this.db.close();
+      throw error;
+    }
   }
 
   onModuleDestroy() {
@@ -132,6 +159,24 @@ export class DatabaseService implements OnModuleDestroy {
 
   immediateTransaction<T>(fn: () => T): T {
     return this.db.transaction(fn).immediate();
+  }
+
+  /**
+   * SQLite's BEGIN IMMEDIATE write lock serializes every boot's schema work.
+   * All guarded column/index checks therefore run after ownership is acquired,
+   * and user_version advances only with the same atomic commit.
+   */
+  private runMigrations(): void {
+    this.db.transaction(() => {
+      const row = this.db.prepare<{ user_version: number }, []>('PRAGMA user_version').get();
+      const currentVersion = row?.user_version ?? 0;
+      this.db.exec(SCHEMA);
+      this.migrate();
+      ensureCrewSchema(this);
+      if (currentVersion < DATABASE_SCHEMA_VERSION) {
+        this.db.exec(`PRAGMA user_version = ${DATABASE_SCHEMA_VERSION}`);
+      }
+    }).immediate();
   }
 
   private migrate(): void {
@@ -368,9 +413,47 @@ export class DatabaseService implements OnModuleDestroy {
         next_fire_at INTEGER,
         last_fire_at INTEGER,
         last_result TEXT,
+        generation INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       )
+    `);
+    const scheduleColumns = this.db
+      .prepare('PRAGMA table_info(schedules)')
+      .all() as Array<{ name: string }>;
+    if (!scheduleColumns.some((column) => column.name === 'generation')) {
+      this.db.exec('ALTER TABLE schedules ADD COLUMN generation INTEGER NOT NULL DEFAULT 0');
+    }
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS schedule_dispatch_intents (
+        id TEXT PRIMARY KEY,
+        schedule_id TEXT NOT NULL,
+        generation INTEGER NOT NULL,
+        fired_at INTEGER NOT NULL,
+        initial_result TEXT NOT NULL,
+        next_fire_at INTEGER,
+        target_json TEXT NOT NULL,
+        trigger_json TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        claim_token TEXT,
+        lease_expires_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+    const dispatchIntentColumns = this.db
+      .prepare('PRAGMA table_info(schedule_dispatch_intents)')
+      .all() as Array<{ name: string }>;
+    if (!dispatchIntentColumns.some((column) => column.name === 'claim_token')) {
+      this.db.exec('ALTER TABLE schedule_dispatch_intents ADD COLUMN claim_token TEXT');
+    }
+    if (!dispatchIntentColumns.some((column) => column.name === 'lease_expires_at')) {
+      this.db.exec('ALTER TABLE schedule_dispatch_intents ADD COLUMN lease_expires_at INTEGER');
+    }
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_schedule_dispatch_intents_pending
+      ON schedule_dispatch_intents(status, created_at)
     `);
 
     // Loop primitive (rung 2 sub-phase C): standing tasks. A loop OWNS its
@@ -413,10 +496,25 @@ export class DatabaseService implements OnModuleDestroy {
         outcome TEXT NOT NULL,
         verify TEXT NOT NULL DEFAULT 'none',
         day_bucket TEXT NOT NULL,
+        schedule_dispatch_intent_id TEXT,
         created_at INTEGER NOT NULL
       )
     `);
+    const loopRunColumns = this.db
+      .prepare('PRAGMA table_info(loop_runs)')
+      .all() as Array<{ name: string }>;
+    if (!loopRunColumns.some((column) => column.name === 'schedule_dispatch_intent_id')) {
+      this.db.exec('ALTER TABLE loop_runs ADD COLUMN schedule_dispatch_intent_id TEXT');
+    }
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_loop_runs_loop ON loop_runs(loop_id, created_at)');
+    this.db.exec(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_loop_runs_task ON loop_runs(task_id) WHERE task_id IS NOT NULL',
+    );
+    this.db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_loop_runs_schedule_dispatch_intent
+      ON loop_runs(schedule_dispatch_intent_id)
+      WHERE schedule_dispatch_intent_id IS NOT NULL
+    `);
 
     // Attention queue (rung 3, sub-phase A). ONE ranked queue of everything needing
     // the founder. Deduped: a partial UNIQUE index over open rows guarantees at most
@@ -518,6 +616,7 @@ export class DatabaseService implements OnModuleDestroy {
         execution_kind TEXT NOT NULL DEFAULT 'session',
         runtime_policy_json TEXT,
         verify_owner TEXT NOT NULL DEFAULT 'session',
+        schedule_dispatch_intent_id TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         started_at INTEGER,
@@ -550,6 +649,7 @@ export class DatabaseService implements OnModuleDestroy {
       ['execution_kind', "TEXT NOT NULL DEFAULT 'session'"],
       ['runtime_policy_json', 'TEXT'],
       ['verify_owner', "TEXT NOT NULL DEFAULT 'session'"],
+      ['schedule_dispatch_intent_id', 'TEXT'],
     ] as const;
 
     for (const [column, type] of taskColumnDefinitions) {
@@ -565,6 +665,37 @@ export class DatabaseService implements OnModuleDestroy {
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_tasks_crew_run
       ON tasks(crew_run_id, created_at)
+    `);
+    this.db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_schedule_dispatch_intent
+      ON tasks(schedule_dispatch_intent_id)
+      WHERE schedule_dispatch_intent_id IS NOT NULL
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS task_reconciliation_outbox (
+        task_id TEXT PRIMARY KEY,
+        digest_pending INTEGER NOT NULL DEFAULT 1,
+        settlement_pending INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_task_reconciliation_outbox_pending
+      ON task_reconciliation_outbox(digest_pending, settlement_pending, created_at)
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS task_approval_correlations (
+        correlation_key TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    `);
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_task_approval_correlations_task
+      ON task_approval_correlations(task_id)
     `);
 
     this.db.exec(`

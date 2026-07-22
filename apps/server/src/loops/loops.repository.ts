@@ -163,10 +163,20 @@ export class LoopsRepository {
     const now = Date.now();
     this.database.db
       .prepare(
-        `INSERT INTO loop_runs (id, loop_id, task_id, outcome, verify, day_bucket, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO loop_runs
+           (id, loop_id, task_id, outcome, verify, day_bucket, schedule_dispatch_intent_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(id, input.loopId, input.taskId, input.outcome, input.verify ?? 'none', input.dayBucket, now);
+      .run(
+        id,
+        input.loopId,
+        input.taskId,
+        input.outcome,
+        input.verify ?? 'none',
+        input.dayBucket,
+        this.database.currentScheduleDispatchIntentId,
+        now,
+      );
     return this.getRun(id)!;
   }
 

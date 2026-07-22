@@ -1,5 +1,4 @@
-import { detectSecretKeys } from './json-mcp-entry';
-import { isStringRecord } from './json-mcp-entry';
+import { detectTransportSecrets, isStringRecord, isValidRemoteUrl } from './json-mcp-entry';
 import type { McpTransport } from '../domain/mcp.types';
 import type { McpImportCandidate } from './mcp-import.types';
 
@@ -41,6 +40,7 @@ function entryToCandidate(
   const record = entry as Record<string, unknown>;
   const parsed = entryToTransport(record);
   if (!parsed) return null;
+  const detected = detectTransportSecrets(parsed.transport);
   return {
     name,
     transport: parsed.transport,
@@ -48,9 +48,8 @@ function entryToCandidate(
     projectPath,
     enabled: record.enabled !== false,
     auth: record.oauth_resource || record.scopes ? 'oauth' : 'none',
-    secretKeys: [
-      ...new Set([...detectSecretKeys(parsed.transport), ...parsed.forcedSecretKeys]),
-    ],
+    ...detected,
+    secretKeys: [...new Set([...detected.secretKeys, ...parsed.forcedSecretKeys])],
   };
 }
 
@@ -72,6 +71,7 @@ function entryToTransport(
     };
   }
   if (typeof record.url === 'string' && record.url.trim()) {
+    if (!isValidRemoteUrl(record.url)) return null;
     const headers: Record<string, string> = {};
     // Values resolved from the daemon's own env are always treated as secrets,
     // whatever the header is called — they never leave the API unmasked.

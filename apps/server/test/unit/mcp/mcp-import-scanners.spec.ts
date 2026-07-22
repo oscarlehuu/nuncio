@@ -40,14 +40,76 @@ describe('parseCursorMcpConfig', () => {
     expect(remote?.secretKeys).toEqual(['Authorization']);
   });
 
+  it('detects CLI args, URL query values, all headers, and PAT env names as secrets', () => {
+    const candidates = parseCursorMcpConfig(
+      JSON.stringify({
+        mcpServers: {
+          cli: {
+            command: 'npx',
+            args: [
+              'account-mcp',
+              '--token',
+              'cursor-cli-secret',
+              '--api-key=inline-cli-secret',
+              'https://args.example/mcp?account=url-arg-secret',
+              '--env=GITHUB_PAT=nested-cli-secret',
+            ],
+            env: { GITHUB_PAT: 'github-pat-secret', DISPLAY_MODE: 'compact' },
+          },
+          remote: {
+            url: 'https://remote.example/mcp?tenant=query-secret&mode=read',
+            headers: { 'X-Account': 'header-secret', Accept: 'application/json' },
+          },
+        },
+      }),
+      null,
+    );
+
+    expect(candidates.find((candidate) => candidate.name === 'cli')).toMatchObject({
+      secretKeys: ['GITHUB_PAT'],
+      secretArgIndexes: [2, 3, 4, 5],
+      secretUrlQueryKeys: [],
+    });
+    expect(candidates.find((candidate) => candidate.name === 'remote')).toMatchObject({
+      secretKeys: ['X-Account', 'Accept'],
+      secretArgIndexes: [],
+      secretUrlQueryKeys: ['tenant', 'mode'],
+    });
+  });
+
   it('scopes candidates to a project when given a project path', () => {
     const candidates = parseCursorMcpConfig(fixture, '/Users/me/proj');
     expect(candidates.every((c) => c.projectPath === '/Users/me/proj')).toBe(true);
   });
 
-  it('returns [] for malformed json or missing mcpServers', () => {
+  it('returns [] for malformed json, invalid remote URLs, or missing mcpServers', () => {
     expect(parseCursorMcpConfig('not json', null)).toEqual([]);
     expect(parseCursorMcpConfig('{}', null)).toEqual([]);
+    expect(
+      parseCursorMcpConfig(
+        JSON.stringify({
+          mcpServers: { bad: { url: 'not a url?token=invalid-import-secret' } },
+        }),
+        null,
+      ),
+    ).toEqual([]);
+  });
+
+  it('omits username-only, password-bearing, and encoded URL userinfo while retaining safe siblings', () => {
+    const candidates = parseCursorMcpConfig(
+      JSON.stringify({
+        mcpServers: {
+          username: { url: 'https://alice@remote.example/mcp' },
+          password: { url: 'https://alice:cursor-password@remote.example/mcp' },
+          encoded: { url: 'https://%61lice:p%40ss@remote.example/mcp' },
+          safe: { url: 'https://remote.example/mcp?tenant=visible-name' },
+        },
+      }),
+      null,
+    );
+    expect(candidates.map((candidate) => candidate.name)).toEqual(['safe']);
+    expect(JSON.stringify(candidates)).not.toContain('cursor-password');
+    expect(JSON.stringify(candidates)).not.toContain('p%40ss');
   });
 });
 
@@ -88,6 +150,31 @@ describe('parseClaudeGlobalConfig', () => {
     );
     expect(candidates).toHaveLength(1);
     expect(candidates[0].projectPath).toBe('/Users/me/proj');
+  });
+
+  it('omits credential-bearing remote URLs from global and project config', () => {
+    const global = parseClaudeGlobalConfig(
+      JSON.stringify({
+        mcpServers: {
+          unsafe: { url: 'https://alice:claude-password@remote.example/mcp' },
+          safe: { url: 'https://remote.example/mcp' },
+        },
+        projects: {
+          '/Users/me/proj': {
+            mcpServers: { unsafeProject: { url: 'https://alice@remote.example/project' } },
+          },
+        },
+      }),
+    );
+    const project = parseClaudeProjectConfig(
+      JSON.stringify({
+        mcpServers: { unsafe: { url: 'https://%61lice:p%40ss@remote.example/mcp' } },
+      }),
+      '/Users/me/proj',
+    );
+    expect(global.map((candidate) => candidate.name)).toEqual(['safe']);
+    expect(project).toEqual([]);
+    expect(JSON.stringify(global)).not.toContain('claude-password');
   });
 });
 
@@ -160,8 +247,32 @@ X-Box-Key = "abc"
     expect(candidates.find((c) => c.name === 'box')?.secretKeys).toEqual(['X-Box-Key']);
   });
 
-  it('returns [] for malformed toml or configs without mcp_servers', () => {
+  it('returns [] for malformed toml, invalid remote URLs, or configs without mcp_servers', () => {
     expect(parseCodexConfig('= broken', null)).toEqual([]);
     expect(parseCodexConfig('model = "gpt-5.5"', null)).toEqual([]);
+    expect(
+      parseCodexConfig(
+        '[mcp_servers.bad]\nurl = "not a url?token=invalid-import-secret"',
+        null,
+      ),
+    ).toEqual([]);
+  });
+
+  it('omits credential-bearing URL userinfo from Codex config while retaining safe siblings', () => {
+    const candidates = parseCodexConfig(
+      [
+        '[mcp_servers.username]',
+        'url = "https://alice@remote.example/mcp"',
+        '[mcp_servers.password]',
+        'url = "https://alice:codex-password@remote.example/mcp"',
+        '[mcp_servers.encoded]',
+        'url = "https://%61lice:p%40ss@remote.example/mcp"',
+        '[mcp_servers.safe]',
+        'url = "https://remote.example/mcp"',
+      ].join('\n'),
+      null,
+    );
+    expect(candidates.map((candidate) => candidate.name)).toEqual(['safe']);
+    expect(JSON.stringify(candidates)).not.toContain('codex-password');
   });
 });

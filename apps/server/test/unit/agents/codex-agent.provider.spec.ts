@@ -24,8 +24,12 @@ class FakeCodexClient extends EventEmitter implements CodexAppServerClientLike {
   readonly responses: Array<{ id: string | number; result: unknown }> = [];
   closed = false;
   autoCompleteTurn = true;
+  completionNotificationsPerTurn = 1;
+  beforeAutoComplete?: (turnId: string) => void;
   emitApprovalRequests = true;
   suppressAutoDelta = false;
+  private turnSeq = 0;
+  private latestTurnId: string | undefined;
   private interruptAcknowledgement: Promise<void> | undefined;
   private acknowledgeInterrupt: (() => void) | undefined;
   threadStartName: string | null | undefined;
@@ -118,10 +122,12 @@ class FakeCodexClient extends EventEmitter implements CodexAppServerClientLike {
     }
 
     if (method === 'turn/start') {
+      const turnId = `turn-${++this.turnSeq}`;
+      this.latestTurnId = turnId;
       queueMicrotask(() => {
         this.emitNotification({
           method: 'turn/started',
-          params: { turn: { id: 'turn-1' } },
+          params: { turn: { id: turnId } },
         });
         if (this.emitApprovalRequests) {
           this.emitServerRequest({
@@ -133,14 +139,17 @@ class FakeCodexClient extends EventEmitter implements CodexAppServerClientLike {
         if (!this.suppressAutoDelta) {
           this.emitNotification({
             method: 'item/agentMessage/delta',
-            params: { threadId: 'codex-thread-1', turnId: 'turn-1', delta: 'Hello' },
+            params: { threadId: 'codex-thread-1', turnId, delta: 'Hello' },
           });
         }
         if (this.autoCompleteTurn) {
-          this.completeTurn();
+          this.beforeAutoComplete?.(turnId);
+          for (let index = 0; index < this.completionNotificationsPerTurn; index += 1) {
+            this.completeTurn(turnId);
+          }
         }
       });
-      return { turn: { id: 'turn-1' } } as T;
+      return { turn: { id: turnId } } as T;
     }
 
     if (method === 'turn/interrupt') {
@@ -186,10 +195,10 @@ class FakeCodexClient extends EventEmitter implements CodexAppServerClientLike {
     this.emit('close', error);
   }
 
-  completeTurn(): void {
+  completeTurn(turnId = this.latestTurnId ?? 'turn-1'): void {
     this.emitNotification({
       method: 'turn/completed',
-      params: { turn: { id: 'turn-1', status: 'completed' } },
+      params: { turn: { id: turnId, status: 'completed' } },
     });
   }
 
@@ -288,6 +297,138 @@ describe('CodexAgentProvider', () => {
         sandboxPolicy: { type: 'dangerFullAccess' },
       },
     });
+  });
+
+  it('keeps turn B active when Codex repeats turn A completion after A was consumed', async () => {
+    fakeClient.autoCompleteTurn = false;
+    fakeClient.emitApprovalRequests = false;
+    fakeClient.suppressAutoDelta = true;
+    const created = sessions.create({
+      id: 'session-stale-completion',
+      prompt: 'Complete A',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+    });
+
+    const turnA = provider.run(created.id, created.prompt, {
+      cwd: '/tmp/project',
+      model: created.model,
+    });
+    await waitUntil(
+      () =>
+        sessions.findById(created.id)?.providerActiveTurnId === 'turn-1' &&
+        completionState(provider, created.id).waitingTurnIds.includes('turn-1'),
+    );
+    fakeClient.completeTurn('turn-1');
+    await turnA;
+
+    const turnB = provider.steer(created.id, 'Hold B', {
+      cwd: '/tmp/project',
+      model: created.model,
+    });
+    await waitUntil(
+      () =>
+        sessions.findById(created.id)?.providerActiveTurnId === 'turn-2' &&
+        completionState(provider, created.id).waitingTurnIds.includes('turn-2'),
+    );
+
+    fakeClient.completeTurn('turn-1');
+
+    expect(sessions.findById(created.id)?.providerActiveTurnId).toBe('turn-2');
+    expect(completionState(provider, created.id)).toEqual({
+      activeTurnId: 'turn-2',
+      waitingTurnIds: ['turn-2'],
+      completedTurnIds: [],
+    });
+
+    await provider.interrupt(created.id);
+    await turnB;
+
+    expect(fakeClient.requests).toContainEqual({
+      method: 'turn/interrupt',
+      params: { threadId: 'codex-thread-1', turnId: 'turn-2' },
+    });
+    expect(events.list(created.id).filter((event) => event.type === 'assistant_message')).toHaveLength(1);
+  });
+
+  it('consumes a completion that arrives before its waiter without retaining bookkeeping', async () => {
+    fakeClient.emitApprovalRequests = false;
+    fakeClient.suppressAutoDelta = true;
+    const created = sessions.create({
+      id: 'session-completion-before-waiter',
+      prompt: 'Complete immediately',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+    });
+    let waitingTurnIdsAtCompletion: string[] | undefined;
+    fakeClient.beforeAutoComplete = () => {
+      waitingTurnIdsAtCompletion = completionState(provider, created.id).waitingTurnIds;
+    };
+
+    await provider.run(created.id, created.prompt, {
+      cwd: '/tmp/project',
+      model: created.model,
+    });
+
+    expect(waitingTurnIdsAtCompletion).toEqual([]);
+    expect(completionState(provider, created.id)).toEqual({
+      activeTurnId: undefined,
+      waitingTurnIds: [],
+      completedTurnIds: [],
+    });
+    expect(events.list(created.id).filter((event) => event.type === 'assistant_message')).toHaveLength(1);
+  });
+
+  it('treats duplicate completions before waiter registration as one notification', async () => {
+    fakeClient.completionNotificationsPerTurn = 2;
+    fakeClient.emitApprovalRequests = false;
+    fakeClient.suppressAutoDelta = true;
+    const created = sessions.create({
+      id: 'session-duplicate-early-completion',
+      prompt: 'Complete twice',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+    });
+
+    await provider.run(created.id, created.prompt, {
+      cwd: '/tmp/project',
+      model: created.model,
+    });
+
+    expect(completionState(provider, created.id)).toEqual({
+      activeTurnId: undefined,
+      waitingTurnIds: [],
+      completedTurnIds: [],
+    });
+    expect(events.list(created.id).filter((event) => event.type === 'assistant_message')).toHaveLength(1);
+  });
+
+  it('ignores an unidentifiable completion instead of assigning it to the active turn', async () => {
+    fakeClient.autoCompleteTurn = false;
+    fakeClient.emitApprovalRequests = false;
+    fakeClient.suppressAutoDelta = true;
+    const created = sessions.create({
+      id: 'session-completion-without-id',
+      prompt: 'Hold this turn',
+      provider: 'codex',
+      model: 'codex:gpt-5.5',
+    });
+    const run = provider.run(created.id, created.prompt, {
+      cwd: '/tmp/project',
+      model: created.model,
+    });
+    await waitUntil(() => sessions.findById(created.id)?.providerActiveTurnId === 'turn-1');
+
+    fakeClient.emitNotification({
+      method: 'turn/completed',
+      params: { turn: { status: 'completed' } },
+    });
+
+    expect(sessions.findById(created.id)?.providerActiveTurnId).toBe('turn-1');
+    expect(completionState(provider, created.id).waitingTurnIds).toEqual(['turn-1']);
+
+    await provider.interrupt(created.id);
+    await run;
   });
 
   it('maps an explicit workspace-write policy to a network-disabled Codex sandbox', async () => {
@@ -1453,6 +1594,25 @@ describe('CodexAgentProvider', () => {
     expect(await provider.isAvailable()).toBe(true);
   });
 });
+
+function completionState(provider: CodexAgentProvider, sessionId: string) {
+  const inspectable = provider as unknown as {
+    activeSessions: Map<
+      string,
+      {
+        activeTurnId?: string;
+        completions: Map<string, unknown>;
+        completedTurns: Map<string, unknown>;
+      }
+    >;
+  };
+  const active = inspectable.activeSessions.get(sessionId);
+  return {
+    activeTurnId: active?.activeTurnId,
+    waitingTurnIds: [...(active?.completions.keys() ?? [])],
+    completedTurnIds: [...(active?.completedTurns.keys() ?? [])],
+  };
+}
 
 function settingsClear(settings: SettingsService, key: string): void {
   try {

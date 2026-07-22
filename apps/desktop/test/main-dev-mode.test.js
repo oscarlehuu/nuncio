@@ -1,10 +1,46 @@
 const { describe, expect, test } = require('bun:test');
 const fs = require('node:fs');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const vm = require('node:vm');
 
 const mainPath = path.resolve(__dirname, '../src/main.js');
 const mainSource = fs.readFileSync(mainPath, 'utf8');
+
+function fakeNodePty() {
+  const ptys = [];
+  return {
+    ptys,
+    implementation: {
+      spawn() {
+        const handlers = { data: null, exit: null };
+        const pty = {
+          handlers,
+          killCalls: 0,
+          writes: [],
+          resizes: [],
+          kill() {
+            this.killCalls += 1;
+          },
+          write(data) {
+            this.writes.push(data);
+          },
+          resize(cols, rows) {
+            this.resizes.push({ cols, rows });
+          },
+          onData(handler) {
+            handlers.data = handler;
+          },
+          onExit(handler) {
+            handlers.exit = handler;
+          },
+        };
+        ptys.push(pty);
+        return pty;
+      },
+    },
+  };
+}
 
 async function runMain({
   env = {},
@@ -13,13 +49,32 @@ async function runMain({
   singleInstanceLock = true,
   onDaemonStart,
   appIsPackaged = false,
+  appVersion = '0.2.0',
+  appDataPath = path.join(__dirname, 'app-data'),
   resourcesPath = path.join(__dirname, 'missing-resources'),
   userDataPath = null,
+  nodePtyImpl = null,
+  daemonUrl = 'http://daemon.test:3000',
   displays = [{ workArea: { x: 0, y: 0, width: 2560, height: 1440 } }],
 } = {}) {
   const state = {
     appHandlers: {},
+    appCalls: [],
     appName: 'Nuncio',
+    configuredAppDataPath: appDataPath,
+    configuredUserDataPath: userDataPath,
+    singleInstanceSnapshots: [],
+    trustedRendererUrl: null,
+    trustedIpcEvent(url) {
+      const rendererUrl = url ?? state.trustedRendererUrl ?? 'http://localhost:5173/';
+      const sender = state.windows[state.windows.length - 1]?.webContents ?? {
+        getURL: () => rendererUrl,
+      };
+      return {
+        senderFrame: { url: rendererUrl },
+        sender,
+      };
+    },
     daemonConstructed: 0,
     daemonOptions: [],
     daemonStartCalls: 0,
@@ -90,19 +145,39 @@ async function runMain({
       state.quitCalls += 1;
     },
     requestSingleInstanceLock() {
-      return state.singleInstanceLock;
+      state.appCalls.push('request-lock');
+      const snapshot = {
+        name: this.name,
+        userData: state.configuredUserDataPath,
+      };
+      state.singleInstanceSnapshots.push(snapshot);
+      const acquired =
+        typeof singleInstanceLock === 'function'
+          ? singleInstanceLock(snapshot)
+          : singleInstanceLock;
+      state.singleInstanceLock = acquired;
+      return acquired;
     },
     isPackaged: appIsPackaged,
     name: 'Nuncio',
     getVersion() {
-      return '0.2.0';
+      return appVersion;
     },
     setName(name) {
+      state.appCalls.push('set-name');
       state.appName = name;
       this.name = name;
     },
+    setPath(name, value) {
+      state.appCalls.push(`set-path:${name}`);
+      if (name === 'appData') state.configuredAppDataPath = value;
+      if (name === 'userData') state.configuredUserDataPath = value;
+    },
     getPath(name) {
-      if (name === 'userData' && userDataPath) return userDataPath;
+      if (name === 'appData') return state.configuredAppDataPath;
+      if (name === 'userData' && state.configuredUserDataPath) {
+        return state.configuredUserDataPath;
+      }
       throw new Error(`Unavailable app path: ${name}`);
     },
   };
@@ -263,7 +338,7 @@ async function runMain({
     constructor(options = {}) {
       state.daemonConstructed += 1;
       state.daemonOptions.push(options);
-      this.url = 'http://daemon.test:3000';
+      this.url = daemonUrl;
     }
 
     async start() {
@@ -304,6 +379,9 @@ async function runMain({
     require(specifier) {
       if (specifier === 'node:path') {
         return require('node:path');
+      }
+      if (specifier === 'node:url') {
+        return require('node:url');
       }
       if (specifier === 'node:fs') {
         return require('node:fs');
@@ -398,11 +476,20 @@ async function runMain({
           },
         };
       }
+      if (specifier === 'node-pty' && nodePtyImpl) {
+        return nodePtyImpl;
+      }
       if (specifier === './browser-url') {
         return require(path.resolve(__dirname, '../src/browser-url.js'));
       }
       if (specifier === './design-mode') {
         return require(path.resolve(__dirname, '../src/design-mode.js'));
+      }
+      if (specifier === './ipc-origin') {
+        return require(path.resolve(__dirname, '../src/ipc-origin.js'));
+      }
+      if (specifier === './pre-lock-app-paths') {
+        return require(path.resolve(__dirname, '../src/pre-lock-app-paths.js'));
       }
       if (specifier === './daemon') {
         return { DaemonSupervisor: FakeDaemonSupervisor };
@@ -437,6 +524,10 @@ async function runMain({
 
   vm.runInNewContext(mainSource, sandbox, { filename: mainPath });
   await readyPromise;
+  state.trustedRendererUrl =
+    state.daemonConstructed > 0
+      ? daemonUrl
+      : (state.loadedUrls.find((url) => /^https?:\/\//.test(url)) ?? null);
   return state;
 }
 
@@ -559,6 +650,158 @@ describe('desktop main dev-mode loading', () => {
     expect(state.loadedUrls).toEqual(['http://localhost:5173', 'http://localhost:5173']);
   });
 
+  test('packaged Dev acquires the shared production lock before restoring channel identity', async () => {
+    const appDataPath = path.join(__dirname, 'identity-app-data');
+    const state = await runMain({
+      appIsPackaged: true,
+      appVersion: '0.2.0-dev.7',
+      appDataPath,
+    });
+
+    expect(state.appName).toBe('Nuncio Dev');
+    expect(state.configuredUserDataPath).toBe(path.join(appDataPath, 'Nuncio Dev'));
+    expect(state.appCalls.slice(0, 5)).toEqual([
+      'set-name',
+      'set-path:userData',
+      'request-lock',
+      'set-name',
+      'set-path:userData',
+    ]);
+    expect(state.singleInstanceSnapshots).toEqual([
+      { name: 'Nuncio', userData: path.join(appDataPath, 'Nuncio') },
+    ]);
+  });
+
+  test('packaged smoke sets explicit appData and userData before requesting its lock', async () => {
+    const smokeRoot = path.join(__dirname, 'smoke-temp-root');
+    const smokeDataDir = path.join(smokeRoot, 'home', '.nuncio', 'data');
+    const smokeAppDataRoot = path.join(smokeDataDir, 'electron-app-data');
+    const state = await runMain({
+      appIsPackaged: true,
+      env: {
+        NUNCIO_DATA_DIR: smokeDataDir,
+        NUNCIO_DESKTOP_SMOKE_TEMP_ROOT: smokeRoot,
+        NUNCIO_DESKTOP_SMOKE_APP_DATA_ROOT: smokeAppDataRoot,
+        NUNCIO_DESKTOP_SMOKE_NONCE: 'a'.repeat(64),
+      },
+    });
+
+    expect(state.configuredAppDataPath).toBe(smokeAppDataRoot);
+    expect(state.configuredUserDataPath).toBe(path.join(smokeAppDataRoot, 'Nuncio'));
+    expect(state.appCalls.slice(0, 6)).toEqual([
+      'set-path:appData',
+      'set-name',
+      'set-path:userData',
+      'request-lock',
+      'set-name',
+      'set-path:userData',
+    ]);
+    expect(state.singleInstanceSnapshots).toEqual([
+      { name: 'Nuncio', userData: path.join(smokeAppDataRoot, 'Nuncio') },
+    ]);
+  });
+
+  test.each([
+    ['empty appData root', 'empty-root', ''],
+    ['relative appData root', 'relative-root', 'relative/app-data'],
+    ['appData root equal to data dir', 'equal-root', null],
+    ['appData root outside data dir', 'outside-root', '../outside/app-data'],
+    ['common-prefix sibling appData root', 'prefix-sibling', '../../data-sibling/app-data'],
+    ['missing temp-root evidence', 'missing-temp', null],
+    ['relative temp-root evidence', 'relative-temp', null],
+    ['missing data-dir evidence', 'missing-data', null],
+    ['relative data-dir evidence', 'relative-data', null],
+    ['data-dir outside temp root', 'outside-data', null],
+    ['missing smoke nonce', 'missing-nonce', null],
+  ])('rejects %s before lock acquisition', async (_label, scenario, configuredRoot) => {
+    const smokeRoot = path.join(__dirname, 'invalid-smoke-root');
+    const absoluteDataDir = path.join(smokeRoot, 'home', '.nuncio', 'data');
+    let tempRoot = smokeRoot;
+    let dataDir = absoluteDataDir;
+    let appDataRoot = configuredRoot ?? path.join(absoluteDataDir, 'electron-app-data');
+    let nonce = 'a'.repeat(64);
+
+    if (scenario === 'equal-root') appDataRoot = absoluteDataDir;
+    if (scenario === 'outside-root' || scenario === 'prefix-sibling') {
+      appDataRoot = path.resolve(absoluteDataDir, configuredRoot);
+    }
+    if (scenario === 'missing-temp') tempRoot = '';
+    if (scenario === 'relative-temp') tempRoot = 'relative/temp';
+    if (scenario === 'missing-data') dataDir = '';
+    if (scenario === 'relative-data') dataDir = 'relative/data';
+    if (scenario === 'outside-data') {
+      dataDir = path.join(path.dirname(smokeRoot), 'outside-data');
+      appDataRoot = path.join(dataDir, 'electron-app-data');
+    }
+    if (scenario === 'missing-nonce') nonce = '';
+
+    await expect(
+      runMain({
+        appIsPackaged: true,
+        env: {
+          NUNCIO_DATA_DIR: dataDir,
+          NUNCIO_DESKTOP_SMOKE_TEMP_ROOT: tempRoot,
+          NUNCIO_DESKTOP_SMOKE_APP_DATA_ROOT: appDataRoot,
+          NUNCIO_DESKTOP_SMOKE_NONCE: nonce,
+        },
+      }),
+    ).rejects.toThrow(/smoke app-data root/i);
+  });
+
+  test('same-home stable and Dev contend while an explicit smoke root remains independent', async () => {
+    const heldNamespaces = new Set();
+    const acquireNamespace = ({ name, userData }) => {
+      const namespace = `${name}:${userData}`;
+      if (heldNamespaces.has(namespace)) return false;
+      heldNamespaces.add(namespace);
+      return true;
+    };
+    const realAppData = path.join(__dirname, 'same-home-app-data');
+    const smokeRoot = path.join(__dirname, 'isolated-smoke-root');
+    const smokeDataDir = path.join(smokeRoot, 'home', '.nuncio', 'data');
+    const smokeAppData = path.join(smokeDataDir, 'electron-app-data');
+
+    const stable = await runMain({
+      appIsPackaged: true,
+      appVersion: '0.2.0',
+      appDataPath: realAppData,
+      singleInstanceLock: acquireNamespace,
+    });
+    const dev = await runMain({
+      appIsPackaged: true,
+      appVersion: '0.2.0-dev.7',
+      appDataPath: realAppData,
+      singleInstanceLock: acquireNamespace,
+    });
+    const smoke = await runMain({
+      appIsPackaged: true,
+      appVersion: '0.2.0',
+      appDataPath: realAppData,
+      env: {
+        NUNCIO_DATA_DIR: smokeDataDir,
+        NUNCIO_DESKTOP_SMOKE_TEMP_ROOT: smokeRoot,
+        NUNCIO_DESKTOP_SMOKE_APP_DATA_ROOT: smokeAppData,
+        NUNCIO_DESKTOP_SMOKE_NONCE: 'a'.repeat(64),
+      },
+      singleInstanceLock: acquireNamespace,
+    });
+
+    expect(stable.singleInstanceSnapshots).toEqual([
+      { name: 'Nuncio', userData: path.join(realAppData, 'Nuncio') },
+    ]);
+    expect(stable.quitCalls).toBe(0);
+    expect(stable.daemonStartCalls).toBe(1);
+    expect(dev.singleInstanceSnapshots).toEqual(stable.singleInstanceSnapshots);
+    expect(dev.quitCalls).toBe(1);
+    expect(dev.daemonConstructed).toBe(0);
+    expect(dev.daemonStartCalls).toBe(0);
+    expect(smoke.singleInstanceSnapshots).toEqual([
+      { name: 'Nuncio', userData: path.join(smokeAppData, 'Nuncio') },
+    ]);
+    expect(smoke.quitCalls).toBe(0);
+    expect(smoke.daemonStartCalls).toBe(1);
+  });
+
   test('packaged launch marks the daemon env and strips forced mock', async () => {
     const resourcesPath = path.join(__dirname, 'packaged-resources');
     const state = await runMain({
@@ -588,7 +831,7 @@ describe('desktop main dev-mode loading', () => {
       fetchImpl: async (url) => ({ ok: url === 'http://localhost:5173' }),
     });
 
-    await state.ipcHandlers['browser:show']({}, {
+    await state.ipcHandlers['browser:show'](state.trustedIpcEvent(), {
       id: 's1',
       url: 'example.com',
       bounds: { x: 10, y: 52, width: 480, height: 320 },
@@ -611,11 +854,11 @@ describe('desktop main dev-mode loading', () => {
       fetchImpl: async (url) => ({ ok: url === 'http://localhost:5173' }),
     });
 
-    await state.ipcHandlers['browser:show']({}, {
+    await state.ipcHandlers['browser:show'](state.trustedIpcEvent(), {
       id: 's1',
       bounds: { x: 0, y: 0, width: 400, height: 300 },
     });
-    await state.ipcHandlers['browser:navigate']({}, 's1', 'localhost:5173');
+    await state.ipcHandlers['browser:navigate'](state.trustedIpcEvent(), 's1', 'localhost:5173');
 
     expect(state.browserLoads).toEqual(['http://localhost:5173']);
   });
@@ -625,13 +868,13 @@ describe('desktop main dev-mode loading', () => {
       fetchImpl: async (url) => ({ ok: url === 'http://localhost:5173' }),
     });
 
-    await state.ipcHandlers['browser:show']({}, {
+    await state.ipcHandlers['browser:show'](state.trustedIpcEvent(), {
       id: 's1',
       url: 'https://example.com',
       bounds: { x: 0, y: 0, width: 300, height: 200 },
     });
-    await state.ipcHandlers['browser:hide']({}, 's1');
-    await state.ipcHandlers['browser:show']({}, {
+    await state.ipcHandlers['browser:hide'](state.trustedIpcEvent(), 's1');
+    await state.ipcHandlers['browser:show'](state.trustedIpcEvent(), {
       id: 's1',
       bounds: { x: 0, y: 20, width: 300, height: 180 },
     });
@@ -646,13 +889,13 @@ describe('desktop main dev-mode loading', () => {
       fetchImpl: async (url) => ({ ok: url === 'http://localhost:5173' }),
     });
 
-    await state.ipcHandlers['browser:show']({}, {
+    await state.ipcHandlers['browser:show'](state.trustedIpcEvent(), {
       id: 's1',
       url: 'https://example.com',
       bounds: { x: 0, y: 0, width: 400, height: 300 },
     });
 
-    await state.ipcHandlers['browser:design-mode-enter']({}, 's1');
+    await state.ipcHandlers['browser:design-mode-enter'](state.trustedIpcEvent(), 's1');
     expect(
       state.browserExecuteScripts.some((script) => script.includes('__nuncio-design-mode-highlight')),
     ).toBe(true);
@@ -684,7 +927,7 @@ describe('desktop main dev-mode loading', () => {
     expect(pickEvent.payload.pick.label).toBe('Search');
     expect(pickEvent.payload.pick.cropPngBase64).toBe(Buffer.from('fake-png').toString('base64'));
 
-    await state.ipcHandlers['browser:design-mode-leave']({}, 's1');
+    await state.ipcHandlers['browser:design-mode-leave'](state.trustedIpcEvent(), 's1');
   });
 
   test('external:open delegates http links to the system browser only', async () => {
@@ -692,14 +935,179 @@ describe('desktop main dev-mode loading', () => {
       fetchImpl: async (url) => ({ ok: url === 'http://localhost:5173' }),
     });
 
-    await expect(state.ipcHandlers['external:open']({}, 'https://example.com/docs')).resolves.toEqual({
+    await expect(state.ipcHandlers['external:open'](state.trustedIpcEvent(), 'https://example.com/docs')).resolves.toEqual({
       ok: true,
       url: 'https://example.com/docs',
     });
-    await expect(state.ipcHandlers['external:open']({}, 'javascript:alert(1)')).rejects.toThrow(
+    await expect(state.ipcHandlers['external:open'](state.trustedIpcEvent(), 'javascript:alert(1)')).rejects.toThrow(
       /http or https/i,
     );
     expect(state.externalOpens).toEqual(['https://example.com/docs']);
+  });
+
+  test('untrusted remote renderers cannot invoke local privileged IPC or perform local operations', async () => {
+    const nodePty = fakeNodePty();
+    const state = await runMain({
+      fetchImpl: async (url) => ({ ok: url === 'http://localhost:5173' }),
+      nodePtyImpl: nodePty.implementation,
+    });
+    const remote = state.trustedIpcEvent('https://attacker.example/session/1');
+    const calls = [
+      ['nuncio:notify', [{ title: 'x', body: 'y' }]],
+      ['external:open', ['https://example.com']],
+      ['browser:show', [{ id: 'remote', bounds: { x: 0, y: 0, width: 10, height: 10 } }]],
+      ['terminal:create', [{ id: 'remote', cwd: '/' }]],
+      ['servers:list', []],
+      ['shell:set-settings', [{ closeToTray: false }]],
+    ];
+    const errors = [];
+
+    for (const [channel, args] of calls) {
+      try {
+        await state.ipcHandlers[channel](remote, ...args);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+
+    expect(errors).toHaveLength(calls.length);
+    expect(errors.every((error) => /trusted local renderer/i.test(String(error)))).toBe(true);
+    expect(state.externalOpens).toEqual([]);
+    expect(state.browserViews).toHaveLength(0);
+    expect(nodePty.ptys).toHaveLength(0);
+    expect(state.ipcHandlers['shell:get-settings'](state.trustedIpcEvent())).toEqual({
+      closeToTray: true,
+    });
+  });
+
+  test('a loopback server profile cannot invoke terminal or sensitive shell IPC', async () => {
+    const nodePty = fakeNodePty();
+    const daemonUrl = 'http://127.0.0.1:43127/';
+    const state = await runMain({
+      daemonUrl,
+      fetchImpl: async () => ({ ok: false }),
+      nodePtyImpl: nodePty.implementation,
+    });
+    const local = state.trustedIpcEvent(`${daemonUrl}sessions/1`);
+
+    await expect(
+      state.ipcHandlers['servers:connect'](local, 'http://127.0.0.1:4444'),
+    ).resolves.toEqual({ ok: true, target: 'http://127.0.0.1:4444' });
+
+    const profilePage = state.trustedIpcEvent('http://127.0.0.1:4444/session/remote');
+    const attempts = [
+      ['terminal:create', [{ id: 'profile-pty', cwd: '/' }]],
+      ['shell:set-settings', [{ closeToTray: false }]],
+      ['servers:list', []],
+    ];
+    const errors = [];
+    for (const [channel, args] of attempts) {
+      try {
+        await state.ipcHandlers[channel](profilePage, ...args);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+
+    expect(errors).toHaveLength(attempts.length);
+    expect(errors.every((error) => /trusted local renderer/i.test(String(error)))).toBe(true);
+    expect(nodePty.ptys).toHaveLength(0);
+    expect(state.ipcHandlers['shell:get-settings'](local)).toEqual({ closeToTray: true });
+  });
+
+  test('privileged IPC follows the dynamically selected daemon origin exactly', async () => {
+    const nodePty = fakeNodePty();
+    const daemonUrl = 'http://127.0.0.1:43127/';
+    const state = await runMain({
+      daemonUrl,
+      fetchImpl: async () => ({ ok: false }),
+      nodePtyImpl: nodePty.implementation,
+    });
+
+    expect(
+      state.ipcHandlers['terminal:create'](
+        state.trustedIpcEvent('http://127.0.0.1:43127/session/1'),
+        { id: 'dynamic-port', cwd: '/' },
+      ),
+    ).toEqual({ id: 'dynamic-port' });
+    expect(() =>
+      state.ipcHandlers['terminal:create'](
+        state.trustedIpcEvent('http://127.0.0.1:3000/session/1'),
+        { id: 'wrong-port', cwd: '/' },
+      ),
+    ).toThrow(/trusted local renderer/i);
+
+    expect(nodePty.ptys).toHaveLength(1);
+  });
+
+  test('a configured active dev URL is trusted without granting the default dev port', async () => {
+    const devUrl = 'http://127.0.0.1:61234/worktree';
+    const state = await runMain({
+      env: {
+        NUNCIO_DESKTOP_DEV: '1',
+        NUNCIO_DESKTOP_DEV_URL: devUrl,
+      },
+      fetchImpl: async (url) => ({ ok: url === devUrl }),
+    });
+
+    expect(
+      state.ipcHandlers['shell:get-settings'](
+        state.trustedIpcEvent('http://127.0.0.1:61234/settings'),
+      ),
+    ).toEqual({ closeToTray: true });
+    expect(() =>
+      state.ipcHandlers['shell:get-settings'](
+        state.trustedIpcEvent('http://localhost:5173/settings'),
+      ),
+    ).toThrow(/trusted local renderer/i);
+  });
+
+  test('only the approved packaged app file can invoke privileged IPC', async () => {
+    const resourcesPath = path.join(__dirname, 'packaged-origin-resources');
+    const state = await runMain({
+      appIsPackaged: true,
+      resourcesPath,
+      fetchImpl: async () => ({ ok: false }),
+    });
+    const appFile = pathToFileURL(path.join(resourcesPath, 'web', 'dist', 'index.html')).toString();
+
+    expect(
+      state.ipcHandlers['shell:get-settings'](
+        state.trustedIpcEvent(`${appFile}?section=mobile#settings`),
+      ),
+    ).toEqual({ closeToTray: true });
+    expect(() =>
+      state.ipcHandlers['shell:get-settings'](
+        state.trustedIpcEvent(
+          pathToFileURL(path.join(resourcesPath, 'web', 'dist', 'other.html')).toString(),
+        ),
+      ),
+    ).toThrow(/trusted local renderer/i);
+  });
+
+  test('an arbitrary BrowserView page cannot invoke the main window terminal IPC', async () => {
+    const nodePty = fakeNodePty();
+    const state = await runMain({
+      fetchImpl: async (url) => ({ ok: url === 'http://localhost:5173' }),
+      nodePtyImpl: nodePty.implementation,
+    });
+    const local = state.trustedIpcEvent('http://localhost:5173/session/1');
+
+    await state.ipcHandlers['browser:show'](local, {
+      id: 'guest',
+      url: 'http://localhost:5173/embedded',
+      bounds: { x: 0, y: 0, width: 400, height: 300 },
+    });
+    const guest = {
+      senderFrame: { url: state.browserViews[0].webContents.getURL() },
+      sender: state.browserViews[0].webContents,
+    };
+
+    expect(() =>
+      state.ipcHandlers['terminal:create'](guest, { id: 'guest-pty', cwd: '/' }),
+    ).toThrow(/trusted local renderer/i);
+    expect(nodePty.ptys).toHaveLength(0);
+    expect(state.browserLoads).toEqual(['http://localhost:5173/embedded']);
   });
 
   test('a local server outage parks the window on a wait page and reloads once the server returns', async () => {
@@ -751,27 +1159,80 @@ describe('desktop main dev-mode loading', () => {
     expect(typeof connect).toBe('function');
     expect(typeof list).toBe('function');
 
-    const result = await connect({}, 'oscars-macbook-pro.tail1.ts.net:3000');
+    const result = await connect(state.trustedIpcEvent(), 'oscars-macbook-pro.tail1.ts.net:3000');
     expect(result).toEqual({ ok: true, target: 'http://oscars-macbook-pro.tail1.ts.net:3000' });
     expect(state.loadedUrls).toEqual([
       'http://daemon.test:3000',
       'http://oscars-macbook-pro.tail1.ts.net:3000',
     ]);
 
-    const listed = list({});
+    const listed = list(state.trustedIpcEvent());
     expect(listed.current).toBe('http://oscars-macbook-pro.tail1.ts.net:3000');
     expect(listed.localUrl).toBe('http://daemon.test:3000');
     expect(listed.servers).toEqual([
       { name: 'oscars-macbook-pro', url: 'http://oscars-macbook-pro.tail1.ts.net:3000' },
     ]);
 
-    const back = await connect({}, 'local');
+    const back = await connect(state.trustedIpcEvent(), 'local');
     expect(back).toEqual({ ok: true, target: 'local' });
     expect(state.loadedUrls[2]).toBe('http://daemon.test:3000');
-    expect(list({}).current).toBe('local');
+    expect(list(state.trustedIpcEvent()).current).toBe('local');
 
-    const invalid = await connect({}, 'ftp://nope');
+    const invalid = await connect(state.trustedIpcEvent(), 'ftp://nope');
     expect(invalid.ok).toBe(false);
+  });
+});
+
+describe('desktop PTY identity and shutdown fencing', () => {
+  test('late output and exit from a replaced PTY cannot affect its replacement', async () => {
+    const nodePty = fakeNodePty();
+    const state = await runMain({
+      fetchImpl: async (url) => ({ ok: url === 'http://localhost:5173' }),
+      nodePtyImpl: nodePty.implementation,
+    });
+    const event = state.trustedIpcEvent();
+
+    await state.ipcHandlers['terminal:create'](event, { id: 'same-id', cwd: '/' });
+    const first = nodePty.ptys[0];
+    await state.ipcHandlers['terminal:create'](event, { id: 'same-id', cwd: '/' });
+    const replacement = nodePty.ptys[1];
+
+    expect(first.killCalls).toBe(1);
+    first.handlers.data('late old output');
+    first.handlers.exit({ exitCode: 9 });
+    await state.ipcHandlers['terminal:write'](event, 'same-id', 'still-live');
+    await state.ipcHandlers['terminal:resize'](event, 'same-id', 120, 40);
+
+    expect(replacement.writes).toEqual(['still-live']);
+    expect(replacement.resizes).toEqual([{ cols: 120, rows: 40 }]);
+    expect(state.windowSentEvents.filter((item) => item.channel === 'terminal:data')).toEqual([]);
+    expect(state.windowSentEvents.filter((item) => item.channel === 'terminal:exit')).toEqual([]);
+
+    replacement.handlers.data('replacement output');
+    replacement.handlers.exit({ exitCode: 0 });
+    expect(state.windowSentEvents).toContainEqual({
+      channel: 'terminal:data',
+      payload: { id: 'same-id', data: 'replacement output' },
+    });
+    expect(state.windowSentEvents).toContainEqual({
+      channel: 'terminal:exit',
+      payload: { id: 'same-id', code: 0 },
+    });
+  });
+
+  test('window close followed by app shutdown kills each PTY at most once', async () => {
+    const nodePty = fakeNodePty();
+    const state = await runMain({
+      fetchImpl: async (url) => ({ ok: url === 'http://localhost:5173' }),
+      nodePtyImpl: nodePty.implementation,
+    });
+    await state.ipcHandlers['terminal:create'](state.trustedIpcEvent(), { id: 'pty-1' });
+
+    state.windows[0].emit('closed');
+    state.appHandlers['before-quit']({ preventDefault() {} });
+    state.appHandlers['before-quit']({ preventDefault() {} });
+
+    expect(nodePty.ptys[0].killCalls).toBe(1);
   });
 });
 
@@ -900,12 +1361,12 @@ describe('desktop tray + close-to-tray + single instance', () => {
     expect(typeof set).toBe('function');
 
     // Defaults on, tray present.
-    expect(get()).toEqual({ closeToTray: true });
+    expect(get(state.trustedIpcEvent())).toEqual({ closeToTray: true });
     expect(state.trays.filter((t) => !t.destroyed)).toHaveLength(1);
 
     // Turn it off: tray goes away, and a subsequent window close is not intercepted.
-    expect(await set({}, { closeToTray: false })).toEqual({ closeToTray: false });
-    expect(get()).toEqual({ closeToTray: false });
+    expect(await set(state.trustedIpcEvent(), { closeToTray: false })).toEqual({ closeToTray: false });
+    expect(get(state.trustedIpcEvent())).toEqual({ closeToTray: false });
     expect(state.trays.every((t) => t.destroyed)).toBe(true);
 
     const window = state.windows[0];
@@ -918,12 +1379,12 @@ describe('desktop tray + close-to-tray + single instance', () => {
     expect(prevented).toBe(false);
 
     // Turn it back on: a fresh tray is created.
-    expect(await set({}, { closeToTray: true })).toEqual({ closeToTray: true });
+    expect(await set(state.trustedIpcEvent(), { closeToTray: true })).toEqual({ closeToTray: true });
     expect(state.trays.filter((t) => !t.destroyed)).toHaveLength(1);
 
     // A malformed payload keeps the current value.
-    expect(await set({}, null)).toEqual({ closeToTray: true });
-    expect(await set({}, { closeToTray: 'nope' })).toEqual({ closeToTray: true });
+    expect(await set(state.trustedIpcEvent(), null)).toEqual({ closeToTray: true });
+    expect(await set(state.trustedIpcEvent(), { closeToTray: 'nope' })).toEqual({ closeToTray: true });
   });
 
   test('an update-driven quit is not swallowed by close-to-tray', async () => {
