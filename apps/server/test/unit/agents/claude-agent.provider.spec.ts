@@ -1399,6 +1399,29 @@ describe('ClaudeAgentProvider', () => {
       expect(applied).toEqual([{ effortLevel: 'xhigh' }]);
     });
 
+    it("skips mid-session applyFlagSettings for Codex 'ultra' (not a Claude effortLevel)", async () => {
+      // Claude Settings.effortLevel has no 'ultra'; Codex-sub catalog rows can
+      // still carry it historically — mid-session must no-op, not send an invalid flag.
+      const applied: Array<Record<string, unknown>> = [];
+      provider.queryFactory = () => ({
+        async interrupt() {},
+        async setModel() {},
+        async applyFlagSettings(settings: Record<string, unknown>) {
+          applied.push(settings);
+        },
+        async *[Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+          yield { type: 'system', subtype: 'init', session_id: 't1' };
+          yield { type: 'result', subtype: 'success', result: 'ok' };
+        },
+      });
+      const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:sonnet' });
+      await provider.run(created.id, 'hi', { cwd: '/tmp/ws', model: 'claude:sonnet' });
+      await provider.setModel(created.id, 'claude:sonnet', { effort: 'ultra' });
+      expect(applied).toEqual([]);
+      await provider.setModel(created.id, 'claude:sonnet', { reasoningEffort: 'ultra' });
+      expect(applied).toEqual([]);
+    });
+
     it('does not throw on setModel when the query has no applyFlagSettings', async () => {
       const created = sessions.create({ prompt: 'hi', provider: 'claude', model: 'claude:haiku' });
       await provider.run(created.id, 'hi', { cwd: '/tmp/ws', model: 'claude:haiku' });

@@ -22,7 +22,6 @@ import {
   type ModelOptionDescriptor,
   type ModelOptionsMap,
 } from '@nuncio/core/model-options';
-import { modelSupportsFast } from '@nuncio/core/model-effort-options';
 import { ProviderIcon, brandForModel, type Brand } from './provider-icon';
 import {
   fetchBranches,
@@ -35,6 +34,7 @@ import {
 import { createSubmitLock } from '../lib/submit-lock';
 import { fetchDirectories, type DirListing } from '../lib/fs-api';
 import { basename } from '../lib/home-sections';
+import { composerModelOptionDescriptors } from '../lib/model-option-descriptors';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { Text } from './ui/text';
@@ -148,16 +148,10 @@ export function HomeComposer({ onCreated, onAdvanced }: HomeComposerProps) {
   }, [modelId, models]);
   const selectableBranchList = useMemo(() => selectableBranches(branches), [branches]);
   const sheetCopy = sheetMode ? SHEET_COPY[sheetMode] : null;
-  const modelOptionDescriptors = useMemo<ModelOptionDescriptor[]>(() => {
-    const base = selectedModel?.options ?? [];
-    // Some Codex/Cursor models expose `fast` (Priority) only as a variant, not
-    // as an options descriptor — surface it as a boolean toggle so the picker
-    // can set it, matching the web (which derives fast from variants).
-    if (selectedModel && !base.some((d) => d.id === 'fast') && modelSupportsFast(selectedModel)) {
-      return [...base, { id: 'fast', label: 'Priority', type: 'boolean', defaultValue: false }];
-    }
-    return base;
-  }, [selectedModel]);
+  const modelOptionDescriptors = useMemo<ModelOptionDescriptor[]>(
+    () => composerModelOptionDescriptors(selectedModel),
+    [selectedModel],
+  );
   const optionsSummary = optionSummaryLabel(modelOptionDescriptors, modelOptions);
   const canSend = Boolean(prompt.trim() && selectedModel && !busy);
 
