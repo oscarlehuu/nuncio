@@ -33,7 +33,7 @@ export function LoopDashboardHeader({ stats, loading, onOpenRunHistory }: LoopDa
 
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-      <StatCard label="Loops" value={view.total} hint={`${view.active} active`} />
+      <StatCard label="Standing tasks" value={view.total} hint={`${view.active} active`} />
       <StatCard label="Successful · 7d" value={view.successful7d} tone="success" />
       <StatCard label="Failed · 7d" value={view.failed7d} tone={view.failed7d > 0 ? 'warning' : undefined} />
       <button

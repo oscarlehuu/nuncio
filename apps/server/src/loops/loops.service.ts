@@ -220,7 +220,7 @@ export class LoopsService implements OnModuleInit {
         kind: 'loop-stuck',
         subjectId: loop.id,
         projectPath: loop.projectPath,
-        title: `Loop "${loop.name ?? loop.goal}" had a run stuck too long`,
+        title: `Autopilot run for "${loop.name ?? loop.goal}" was stuck too long`,
         payload: {
           loopId: loop.id,
           runId: run.id,

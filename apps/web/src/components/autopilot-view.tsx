@@ -4,15 +4,29 @@ import { ArrowLeft, Plus, Repeat } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   deleteLoop,
+  fetchAttention,
   fetchLoopRuns,
   fetchLoops,
   fetchLoopStats,
   pauseLoop,
   resumeLoop,
+  type AttentionItemDto,
   type LoopDto,
   type LoopRunDto,
   type LoopStatsDto,
 } from '../lib/api';
+import {
+  dispatcherDone,
+  dispatcherPayload,
+  markDispatcherProposalApproved,
+  queuedTasksLabel,
+  selectTonightDispatcherProposal,
+} from '../lib/dispatcher-proposal';
+import {
+  approveDispatcherProposalOnce,
+  useDispatcherProposalBusyIds,
+} from '../lib/dispatcher-proposal-approval';
+import { projectDisplayName } from '../lib/projects';
 import type { ModelProvider } from '../lib/model-providers';
 import { LoopRow } from './loop-row';
 import { LoopDashboardHeader } from './loop-dashboard-header';
@@ -37,8 +51,8 @@ interface AutopilotViewProps {
 /**
  * Autopilot — the loops fleet. Standing tasks nuncio runs on a schedule inside a
  * daily budget, self-fixing red verifies (rung 1) and landing each result as a PR.
- * Polls only while a loop is active or broken (a broken loop's streak can't move on
- * its own, but a paused/completed-only list is inert — no need to poll).
+ * The page keeps its existing poll cadence even when empty because tonight's plan
+ * can arrive while the user is already here.
  */
 export function AutopilotView({ onBack, providers }: AutopilotViewProps) {
   const navigate = useNavigate();
@@ -49,8 +63,12 @@ export function AutopilotView({ onBack, providers }: AutopilotViewProps) {
   const [createOpen, setCreateOpen] = useState(false);
   const [prefill, setPrefill] = useState<CreateLoopPrefill | null>(null);
   const [pendingDelete, setPendingDelete] = useState<LoopDto | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const errorShown = useRef(false);
+  const [tonightProposal, setTonightProposal] = useState<AttentionItemDto | null>(null);
+  const [loopBusyId, setLoopBusyId] = useState<string | null>(null);
+  const approvalBusyIds = useDispatcherProposalBusyIds();
+  const loopErrorShown = useRef(false);
+  const attentionErrorShown = useRef(false);
+  const attentionRequestId = useRef(0);
 
   const openCreate = (seed: CreateLoopPrefill | null) => {
     setPrefill(seed);
@@ -74,12 +92,38 @@ export function AutopilotView({ onBack, providers }: AutopilotViewProps) {
     setRunsByLoop(Object.fromEntries(entries));
   }, []);
 
-  const refresh = useCallback(async () => {
+  const refreshAttention = useCallback(async () => {
+    const requestId = ++attentionRequestId.current;
+    try {
+      const { items } = await fetchAttention();
+      if (requestId !== attentionRequestId.current) return;
+      const selected = selectTonightDispatcherProposal(items);
+      setTonightProposal((current) => {
+        if (
+          current &&
+          selected?.id === current.id &&
+          dispatcherDone(dispatcherPayload(current)) &&
+          !dispatcherDone(dispatcherPayload(selected))
+        ) {
+          return current;
+        }
+        return selected;
+      });
+      attentionErrorShown.current = false;
+    } catch {
+      if (requestId !== attentionRequestId.current) return;
+      if (!attentionErrorShown.current) {
+        toast.error('Failed to load tonight’s plan');
+        attentionErrorShown.current = true;
+      }
+    }
+  }, []);
+
+  const refreshLoops = useCallback(async () => {
     try {
       const list = await fetchLoops();
       setLoops(list);
-      errorShown.current = false;
-      // Stats + per-loop runs load in parallel; stats failure is non-fatal.
+      loopErrorShown.current = false;
       await Promise.all([
         loadRuns(list),
         fetchLoopStats()
@@ -88,39 +132,39 @@ export function AutopilotView({ onBack, providers }: AutopilotViewProps) {
       ]);
       return list;
     } catch {
-      if (!errorShown.current) {
-        toast.error('Failed to load loops');
-        errorShown.current = true;
+      if (!loopErrorShown.current) {
+        toast.error('Failed to load standing tasks');
+        loopErrorShown.current = true;
       }
       return undefined;
-    } finally {
-      setLoading(false);
     }
   }, [loadRuns]);
+
+  const refresh = useCallback(async () => {
+    await Promise.all([refreshLoops(), refreshAttention()]);
+    setLoading(false);
+  }, [refreshAttention, refreshLoops]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  // Poll while the view is mounted and any loop exists. A tripped breaker leaves
-  // NO loop 'active', so gating on active froze the list on stale breaker/pause
-  // state (smoke finding) — as long as loops exist, keep them fresh.
-  const hasLoops = loops.length > 0;
+  // A proposal can arrive while an empty Autopilot page is already open, so the
+  // existing cadence stays active even before either feed has content.
   useEffect(() => {
-    if (!hasLoops) return;
     const timer = setInterval(() => void refresh(), 8000);
     return () => clearInterval(timer);
-  }, [hasLoops, refresh]);
+  }, [refresh]);
 
   const runAction = async (id: string, action: (id: string) => Promise<unknown>) => {
-    setBusyId(id);
+    setLoopBusyId(id);
     try {
       await action(id);
       await refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Action failed');
     } finally {
-      setBusyId(null);
+      setLoopBusyId(null);
     }
   };
 
@@ -131,16 +175,37 @@ export function AutopilotView({ onBack, providers }: AutopilotViewProps) {
     if (!pendingDelete) return;
     const id = pendingDelete.id;
     setPendingDelete(null);
-    setBusyId(id);
+    setLoopBusyId(id);
     try {
       await deleteLoop(id);
-      toast.success('Loop deleted');
+      toast.success('Standing task deleted');
       await refresh();
     } catch {
-      toast.error('Failed to delete loop');
+      toast.error('Failed to delete standing task');
     } finally {
-      setBusyId(null);
+      setLoopBusyId(null);
     }
+  };
+
+  const approveTonight = () => {
+    if (!tonightProposal) return;
+    const proposalId = tonightProposal.id;
+    if (approvalBusyIds.has(proposalId)) return;
+    void approveDispatcherProposalOnce(proposalId, async (outcome) => {
+      if (outcome.ok) {
+        setTonightProposal((current) =>
+          current?.id === proposalId
+            ? markDispatcherProposalApproved(current, outcome.result.taskIds)
+            : current,
+        );
+        if (outcome.owner) {
+          toast.success(queuedTasksLabel(outcome.result.taskIds.length));
+        }
+      } else if (outcome.owner) {
+        toast.error(outcome.error instanceof Error ? outcome.error.message : 'Action failed');
+      }
+      await refreshAttention();
+    });
   };
 
   return (
@@ -153,7 +218,7 @@ export function AutopilotView({ onBack, providers }: AutopilotViewProps) {
         <div className="ml-auto flex items-center gap-2">
           <Button size="sm" className="gap-1.5" onClick={() => openCreate(null)}>
             <Plus className="size-4" />
-            <span className="hidden sm:inline">New loop</span>
+            <span className="hidden sm:inline">New standing task</span>
           </Button>
         </div>
       </header>
@@ -173,31 +238,40 @@ export function AutopilotView({ onBack, providers }: AutopilotViewProps) {
                 ))}
               </ul>
             </>
-          ) : loops.length === 0 ? (
-            <>
-              {/* The fleet stat frame stays present even with zero loops (Cursor-parity). */}
-              <LoopDashboardHeader stats={stats} onOpenRunHistory={() => navigate('/autopilot/runs')} />
-              <EmptyState onCreate={() => openCreate(null)} />
-              <LoopTemplates onPick={pickTemplate} />
-            </>
           ) : (
             <>
               <LoopDashboardHeader stats={stats} onOpenRunHistory={() => navigate('/autopilot/runs')} />
-              <ul className="flex flex-col gap-3">
-                {loops.map((loop) => (
-                  <LoopRow
-                    key={loop.id}
-                    loop={loop}
-                    runs={runsByLoop[loop.id] ?? []}
-                    busy={busyId === loop.id}
-                    onOpen={() => navigate(`/autopilot/${loop.id}`)}
-                    onPause={handlePause}
-                    onResume={handleResume}
-                    onDelete={setPendingDelete}
-                  />
-                ))}
-              </ul>
-              {loops.length < 3 && <LoopTemplates onPick={pickTemplate} />}
+              {tonightProposal && (
+                <PlannedForTonight
+                  item={tonightProposal}
+                  busy={approvalBusyIds.has(tonightProposal.id)}
+                  onApprove={approveTonight}
+                />
+              )}
+              {loops.length === 0 ? (
+                <>
+                  <EmptyState onCreate={() => openCreate(null)} />
+                  <LoopTemplates onPick={pickTemplate} />
+                </>
+              ) : (
+                <>
+                  <ul className="flex flex-col gap-3">
+                    {loops.map((loop) => (
+                      <LoopRow
+                        key={loop.id}
+                        loop={loop}
+                        runs={runsByLoop[loop.id] ?? []}
+                        busy={loopBusyId === loop.id}
+                        onOpen={() => navigate(`/autopilot/${loop.id}`)}
+                        onPause={handlePause}
+                        onResume={handleResume}
+                        onDelete={setPendingDelete}
+                      />
+                    ))}
+                  </ul>
+                  {loops.length < 3 && <LoopTemplates onPick={pickTemplate} />}
+                </>
+              )}
             </>
           )}
         </div>
@@ -222,7 +296,7 @@ export function AutopilotView({ onBack, providers }: AutopilotViewProps) {
         <Dialog open onOpenChange={(open) => !open && setPendingDelete(null)}>
           <DialogContent className="z-[60]">
             <DialogHeader>
-              <DialogTitle>Delete loop</DialogTitle>
+              <DialogTitle>Delete standing task</DialogTitle>
               <DialogDescription>
                 Delete “{pendingDelete.goal}”? Its schedule stops firing. Past run history is kept.
               </DialogDescription>
@@ -232,7 +306,7 @@ export function AutopilotView({ onBack, providers }: AutopilotViewProps) {
                 Cancel
               </Button>
               <Button variant="destructive" onClick={() => void confirmDelete()}>
-                Delete loop
+                Delete standing task
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -249,16 +323,61 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
         <Repeat className="size-5" />
       </span>
       <div className="space-y-1.5">
-        <h2 className="text-ui-lg font-semibold text-foreground">No loops yet</h2>
+        <h2 className="text-ui-lg font-semibold text-foreground">No standing tasks yet</h2>
         <p className="text-ui text-muted-foreground leading-relaxed">
-          A loop is a standing task nuncio runs on a schedule — nightly cleanup, issue triage,
+          A standing task is work nuncio runs on a schedule — nightly cleanup, issue triage,
           overnight refactors — inside a daily budget, landing each result as a pull request.
         </p>
       </div>
       <Button className="gap-1.5" onClick={onCreate}>
         <Plus className="size-4" />
-        Create your first loop
+        Create your first standing task
       </Button>
     </div>
+  );
+}
+
+function PlannedForTonight({
+  item,
+  busy,
+  onApprove,
+}: {
+  item: AttentionItemDto;
+  busy: boolean;
+  onApprove: () => void;
+}) {
+  const payload = dispatcherPayload(item);
+  const done = dispatcherDone(payload);
+  const queuedCount = payload.taskIds.length || payload.proposals.length;
+
+  return (
+    <section aria-labelledby="planned-for-tonight-heading" className="rounded-xl border border-border bg-card p-4">
+      <div className="flex items-center justify-between gap-3">
+        <h2 id="planned-for-tonight-heading" className="text-ui-lg font-semibold text-foreground">
+          Planned for tonight
+        </h2>
+        {done ? (
+          <span className="text-ui font-medium text-success">{queuedTasksLabel(queuedCount)}</span>
+        ) : (
+          <Button size="sm" disabled={busy} onClick={onApprove}>
+            Approve
+          </Button>
+        )}
+      </div>
+      <ul className="mt-3 space-y-2">
+        {payload.proposals.map((proposal, index) => (
+          <li
+            key={`${proposal.title}:${proposal.projectPath ?? 'none'}:${index}`}
+            className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2"
+          >
+            <p className="text-ui font-medium text-foreground">{proposal.title}</p>
+            <p className="mt-0.5 text-ui-sm text-muted-foreground">
+              {projectDisplayName(proposal.projectPath) ?? 'No project'}
+            </p>
+            <p className="mt-1 text-ui-sm text-muted-foreground">{proposal.rationale}</p>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

@@ -151,16 +151,18 @@ describe('dispatcher deterministic rule folds', () => {
     expect(proposals[0]!.prompt).toContain('Fix the failing verify');
   });
 
-  it('turns a broken loop into a resume-or-investigate proposal with loop engine defaults', () => {
+  it('turns a broken standing task into a proposal without changing its user-authored name', () => {
+    const name = 'broken event loop verify goal';
     const proposals = foldDispatcherProposals(base({
-      loops: [loop({ id: 'loop-1', name: 'Nightly', status: 'broken', engine: 'codex', model: 'codex:mini' })],
+      loops: [loop({ id: 'loop-1', name, status: 'broken', engine: 'codex', model: 'codex:mini' })],
     }));
     expect(proposals[0]).toMatchObject({
-      title: 'Resume or investigate Nightly',
+      title: `Resume or investigate ${name}`,
       engine: 'codex',
       model: 'codex:mini',
-      rationale: 'source: loop loop-1 is broken',
+      rationale: 'source: Autopilot task loop-1 is paused after failures',
     });
+    expect(proposals[0]!.prompt).toContain(`Autopilot task "${name}"`);
   });
 
   it('turns a stale pr-review item older than 24h into a review proposal', () => {
@@ -251,7 +253,7 @@ describe('dispatcher deterministic rule folds', () => {
     }));
     expect(proposals[0]).toMatchObject({
       title: 'Investigate why Nightly failed 2 times',
-      rationale: 'source: yesterday loop loop-1 had 2 failed runs and 0 ok runs',
+      rationale: 'source: yesterday Autopilot task loop-1 had 2 failed runs and 0 successful runs',
     });
   });
 
@@ -299,7 +301,15 @@ describe('dispatcher deterministic rule folds', () => {
         attention({
           kind: 'dispatcher-proposal',
           subjectId: 'dispatch:2026-07-08',
-          payload: { proposals: [{ subjectKey: 'attention:verify-dead:s1' }] },
+          payload: {
+            proposals: [{
+              subjectKey: 'attention:verify-dead:s1',
+              title: 'Fix the failing verify in app',
+              prompt: 'Fix the failing verify in app. Source: s1.',
+              projectPath: '/repo/app',
+              rationale: 'source: open verify-dead attention item s1',
+            }],
+          },
         }),
         attention({ kind: 'verify-dead', subjectId: 's1' }),
       ],

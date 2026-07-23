@@ -1,7 +1,8 @@
 import type { ComponentProps } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import userEvent from '@testing-library/user-event';
 import { HomeSurface } from './home-surface';
 import { fetchDigest, type DigestRunDto } from '../lib/api';
 
@@ -61,6 +62,23 @@ describe('HomeSurface', () => {
 
     const line = await screen.findByText('Overnight: 6 runs, 5 green, 2 PRs opened — 3 things need you.');
     expect(line.closest('button, a')).toBeNull();
+  });
+
+  it('keeps Timeline reachable from Home and navigates to it', async () => {
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route
+            path="/"
+            element={<HomeSurface sessionCount={0} providers={[]} onSubmit={noopSubmit} />}
+          />
+          <Route path="/timeline" element={<div>timeline-page</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(screen.getByRole('link', { name: 'Timeline' }));
+    expect(await screen.findByText('timeline-page')).toBeInTheDocument();
   });
 
   it('focuses the composer when the focus key advances', async () => {

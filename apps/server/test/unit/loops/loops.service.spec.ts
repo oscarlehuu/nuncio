@@ -574,7 +574,12 @@ describe('LoopsService', () => {
 
   describe('wedged-run safety net (stuck pending, finding #1)', () => {
     it('force-fails a run whose task is RUNNING past the threshold and raises attention', async () => {
-      const loop = await loops.create(create({ maxConsecutiveFailures: 10, maxRunsPerDay: 10 }));
+      const goal = 'repair the broken event loop verify path';
+      const loop = await loops.create(create({
+        goal,
+        maxConsecutiveFailures: 10,
+        maxRunsPerDay: 10,
+      }));
       const run = loops.fire(loop.id)!;
       tasks.setStatus(run.taskId!, 'RUNNING'); // never settled — wedged
       // Advance the clock well past a small threshold (run.createdAt is wall time).
@@ -589,6 +594,7 @@ describe('LoopsService', () => {
       expect(item).toBeDefined();
       expect(item!.subjectId).toBe(loop.id);
       expect(item!.payload).toMatchObject({ loopId: loop.id, runId: run.id });
+      expect(item!.title).toBe(`Autopilot run for "${goal}" was stuck too long`);
     });
 
     it('leaves a fresh RUNNING run pending (no phantom fail before the threshold)', async () => {

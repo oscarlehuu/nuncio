@@ -55,8 +55,20 @@ describe('AttentionRow', () => {
             title: 'Plan tomorrow',
             payload: {
               proposals: [
-                { title: 'Fix checks', projectPath: '/Users/me/nuncio', rationale: 'Checks are red' },
-                { title: 'Review PR', projectPath: '/Users/me/nuncio', rationale: 'Review is waiting' },
+                {
+                  subjectKey: 'checks:nuncio',
+                  title: 'Fix checks',
+                  prompt: 'Fix checks',
+                  projectPath: '/Users/me/nuncio',
+                  rationale: 'Checks are red',
+                },
+                {
+                  subjectKey: 'pr:nuncio',
+                  title: 'Review PR',
+                  prompt: 'Review PR',
+                  projectPath: '/Users/me/nuncio',
+                  rationale: 'Review is waiting',
+                },
               ],
             },
           })}

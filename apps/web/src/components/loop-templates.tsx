@@ -34,7 +34,7 @@ export const LOOP_TEMPLATES: readonly LoopTemplate[] = [
     name: 'Nightly maintenance',
     blurb: 'Update dependencies and run the project gate each night, opening a PR when it stays green.',
     icon: Moon,
-    goal: 'Update outdated dependencies, run the project verify gate, and open a pull request if everything passes.',
+    goal: 'Update outdated dependencies, run the project checks, and open a pull request if everything passes.',
     schedule: { mode: 'daily', time: '02:00' },
     maxRunsPerDay: 1,
   },
@@ -95,7 +95,7 @@ export function LoopTemplates({ onPick }: LoopTemplatesProps) {
         Start from a template
       </h2>
       <p className="mb-4 text-ui text-muted-foreground">
-        Common maintenance loops, ready to point at a project.
+        Common maintenance standing tasks, ready to point at a project.
       </p>
       <div className="grid gap-3 sm:grid-cols-2">
         {LOOP_TEMPLATES.map((template) => {

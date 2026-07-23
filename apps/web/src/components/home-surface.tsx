@@ -1,10 +1,13 @@
 import type { MessageAttachment } from '../lib/api';
 import type { ModelProvider } from '../lib/model-providers';
 import type { ModelOptionsMap } from '../lib/model-options';
+import { Clock3 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { AttentionQueue } from './attention-queue';
 import { HomeDigestLine } from './home-digest-line';
 import { HomeView } from './home-view';
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
 
 interface HomeSurfaceProps {
   sessionCount: number;
@@ -46,6 +49,12 @@ export function HomeSurface({
         )}
       >
         <h1 className="text-lg font-semibold tracking-tight">Home</h1>
+        <Button asChild variant="ghost" size="sm" className="app-region-no-drag ml-auto gap-1.5 text-muted-foreground">
+          <Link to="/timeline">
+            <Clock3 className="size-3.5" />
+            Timeline
+          </Link>
+        </Button>
       </header>
 
       <div className="flex-1 overflow-y-auto px-4 py-6">

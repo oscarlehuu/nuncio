@@ -122,6 +122,11 @@ describe('AnomalyCollector', () => {
       collector.loopsToday = () => [{ loopId: 'L1', projectPath: '/p', runs: [fail, budget, fail] }];
       collector.collectLoopFailing();
       expect(open('loop-failing', 'loop:L1')).toBe(true);
+      expect(
+        attention.list().items.find(
+          (item) => item.kind === 'loop-failing' && item.subjectId === 'loop:L1',
+        )?.title,
+      ).toBe('Autopilot failed every run today');
     });
 
     it('N-1 failing runs is NOT anomalous; the Nth trips it', () => {

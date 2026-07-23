@@ -30,7 +30,9 @@ interface AttentionKindMeta {
 const KIND_META: Record<string, AttentionKindMeta> = {
   permission: { label: 'Permission', icon: ShieldQuestion, tone: 'warning' },
   'verify-dead': { label: 'Checks failing', icon: Wrench, tone: 'warning' },
-  'tripped-breaker': { label: 'Loop paused', icon: TriangleAlert, tone: 'warning' },
+  'tripped-breaker': { label: 'Autopilot paused', icon: TriangleAlert, tone: 'warning' },
+  'loop-stuck': { label: 'Autopilot stuck', icon: TriangleAlert, tone: 'warning' },
+  'loop-failing': { label: 'Autopilot failing', icon: Radar, tone: 'neutral' },
   'pr-review': { label: 'PR review', icon: GitPullRequestArrow, tone: 'info' },
   // Webhook feedback that could not be auto-steered (untrusted author, failed
   // delivery, skipped cleanup) — a needs-you item, so it shares the amber class.
@@ -64,7 +66,11 @@ export function attentionGroupLabel(kind: string, count: number): string {
     case 'verify-dead':
       return `${count} sessions with failing checks`;
     case 'tripped-breaker':
-      return `${count} paused loops`;
+      return `${count} paused standing tasks`;
+    case 'loop-stuck':
+      return `${count} stuck Autopilot runs`;
+    case 'loop-failing':
+      return `${count} failing Autopilot tasks`;
     case 'dispatcher-proposal':
       return `${count} plans ready to approve`;
     case 'spawn-task':
@@ -137,6 +143,8 @@ export function openTargetFor(item: AttentionItemDto): OpenTarget | null {
     case 'verify-dead':
       return sessionId ? { to: `/session/${sessionId}` } : { to: `/session/${item.subjectId}` };
     case 'tripped-breaker':
+    case 'loop-stuck':
+    case 'loop-failing':
       return { to: `/autopilot/${loopId ?? item.subjectId}` };
     case 'pr-review':
     case 'pr-feedback':

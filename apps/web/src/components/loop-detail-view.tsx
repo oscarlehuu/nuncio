@@ -46,9 +46,9 @@ type Tab = 'settings' | 'runs';
 
 /** Why "Run now" is unavailable, or null when it can fire. */
 function fireDisabledReason(status: LoopDto['status']): string | null {
-  if (status === 'broken') return 'Resume the loop before running it';
-  if (status === 'paused') return 'Resume the loop before running it';
-  if (status === 'completed') return 'This loop has completed';
+  if (status === 'broken') return 'Resume the standing task before running it';
+  if (status === 'paused') return 'Resume the standing task before running it';
+  if (status === 'completed') return 'This standing task has completed';
   return null;
 }
 
@@ -119,7 +119,7 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
 
   useEffect(() => {
     if (missing) {
-      toast.error('Loop not found');
+      toast.error('Standing task not found');
       navigate('/autopilot', { replace: true });
     }
   }, [missing, navigate]);
@@ -192,7 +192,7 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
     return patch;
   };
 
-  const handleSave = () => run(() => updateLoop(loop.id, buildPatch()), 'Loop saved');
+  const handleSave = () => run(() => updateLoop(loop.id, buildPatch()), 'Standing task saved');
 
   const handleToggleActive = (next: boolean) =>
     run(() => (next ? resumeLoop(loop.id) : pauseLoop(loop.id)));
@@ -212,7 +212,7 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
       }
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to run loop');
+      toast.error(err instanceof Error ? err.message : 'Failed to run standing task');
     } finally {
       setBusy(false);
     }
@@ -223,10 +223,10 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
     setBusy(true);
     try {
       await deleteLoop(loop.id);
-      toast.success('Loop deleted');
+      toast.success('Standing task deleted');
       navigate('/autopilot');
     } catch {
-      toast.error('Failed to delete loop');
+      toast.error('Failed to delete standing task');
       setBusy(false);
     }
   };
@@ -248,7 +248,7 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
             size="sm"
             className="gap-1.5"
             disabled={busy || fireReason !== null}
-            title={fireReason ?? 'Run this loop now'}
+            title={fireReason ?? 'Run this standing task now'}
             onClick={handleFire}
           >
             <Play className="size-3.5" />
@@ -266,7 +266,7 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
             <DropdownMenuContent align="end">
               <DropdownMenuItem variant="destructive" onClick={() => setConfirmDelete(true)}>
                 <Trash2 className="size-3.5" />
-                Delete loop
+                Delete standing task
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -304,7 +304,7 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
               <div className="flex items-center gap-2.5">
                 <LoopStatusChip status="completed" />
                 <span className="text-ui-sm text-muted-foreground">
-                  This loop met its stop condition and won't run again.
+                  This standing task met its stop condition and won't run again.
                 </span>
               </div>
             ) : (
@@ -314,13 +314,13 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
                   checked={isActive}
                   disabled={busy}
                   onCheckedChange={handleToggleActive}
-                  aria-label="Loop active"
+                  aria-label="Standing task active"
                 />
               </label>
             )}
           </div>
 
-          <div role="tablist" aria-label="Loop detail" className="mb-4 inline-flex gap-1 rounded-lg bg-muted/40 p-1">
+          <div role="tablist" aria-label="Standing task detail" className="mb-4 inline-flex gap-1 rounded-lg bg-muted/40 p-1">
             <TabButton active={tab === 'settings'} onClick={() => setTab('settings')}>
               Settings
             </TabButton>
@@ -367,7 +367,7 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
         <Dialog open onOpenChange={(open) => !open && setConfirmDelete(false)}>
           <DialogContent className="z-[60]">
             <DialogHeader>
-              <DialogTitle>Delete loop</DialogTitle>
+              <DialogTitle>Delete standing task</DialogTitle>
               <DialogDescription>
                 Delete “{loopDisplayName(loop)}”? Its schedule stops firing. Past run history is kept.
               </DialogDescription>
@@ -377,7 +377,7 @@ export function LoopDetailView({ providers }: LoopDetailViewProps) {
                 Cancel
               </Button>
               <Button variant="destructive" onClick={() => void doDelete()}>
-                Delete loop
+                Delete standing task
               </Button>
             </DialogFooter>
           </DialogContent>
