@@ -85,7 +85,7 @@ describe('SubscriptionHostService', () => {
     let installedWith: { dir: string; packageName: string; version: string } | null = null;
     service.installImpl = async (opts) => {
       installedWith = opts;
-      return { version: opts.version, bin: `${opts.dir}/node_modules/.bin/pi-coding-agent` };
+      return { version: opts.version, bin: `${opts.dir}/node_modules/.bin/omp` };
     };
     service.fetchImpl = okModelsResponse() as unknown as typeof fetch;
 

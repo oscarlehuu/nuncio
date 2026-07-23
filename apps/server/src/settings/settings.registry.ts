@@ -460,7 +460,7 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     description:
       'Pinned version Nuncio installs into the data dir. Bump deliberately — a version that breaks the host contract twice is a signal to escalate.',
     envVar: 'NUNCIO_SUBHOST_VERSION',
-    default: '0.1.0',
+    default: '17.0.7',
   },
   {
     key: 'NUNCIO_SUBHOST_BROKER_PORT',

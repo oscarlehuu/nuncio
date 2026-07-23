@@ -49,12 +49,12 @@ function createChild(opts?: { exitOnSignal?: NodeJS.Signals | number }): {
 
 function startSpec() {
   return {
-    bin: '/data/subhost/node_modules/.bin/pi-coding-agent',
+    bin: '/data/subhost/node_modules/.bin/omp',
     cwd: '/data/subhost',
     env: { PI_HOME: '/data/subhost/home' },
     processes: [
-      { name: 'broker' as const, args: ['broker', '--port', '18700'] },
-      { name: 'router' as const, args: ['router', '--port', '18701'] },
+      { name: 'broker' as const, args: ['auth-broker', 'serve', '--bind', '127.0.0.1:18700'] },
+      { name: 'router' as const, args: ['auth-gateway', 'serve', '--bind', '127.0.0.1:18701'] },
     ],
   };
 }
@@ -83,7 +83,7 @@ describe('SubscriptionHostManagedHost', () => {
     await host.start(startSpec());
 
     expect(host.isRunning()).toBe(true);
-    expect(calls.map((c) => c.args[0])).toEqual(['broker', 'router']);
+    expect(calls.map((c) => c.args[0])).toEqual(['auth-broker', 'auth-gateway']);
     expect(calls.every((c) => c.bin === startSpec().bin && c.cwd === startSpec().cwd)).toBe(true);
     expect(host.pid('broker')).not.toBeNull();
     expect(host.pid('router')).not.toBeNull();
