@@ -8,6 +8,7 @@ import type {
   ForgeIssueDetail,
   ForgeIssueSummary,
   ForgePullRequestDetail,
+  ForgePullRequestPage,
   ForgePullRequestSummary,
   ForgeRepoRef,
   ForgeRepository,
@@ -17,6 +18,20 @@ import type {
   MergeResult,
   SubmitReviewOptions,
 } from '../forges.types';
+
+/**
+ * MR pagination bounds for the honest-count path. per_page=100 is GitLab's max;
+ * the page cap bounds a runaway project to ~1000 MRs per state before the count
+ * is reported as a floor (see ForgePullRequestPage.capped).
+ */
+const MR_PAGE_SIZE = 100;
+const MR_MAX_PAGES = 10;
+
+/** GitLab signals the next page number via the `X-Next-Page` header (empty on the last page). */
+function hasGitlabNextPage(response: Response): boolean {
+  const next = response.headers?.get?.('x-next-page') ?? '';
+  return next.trim().length > 0;
+}
 import { GitlabForgeActions } from './gitlab-forge.actions';
 import {
   mapGitlabDiscussion,
@@ -102,6 +117,23 @@ export class GitlabForgeProvider extends GitlabForgeActions {
       { headers: await this.authHeaders() },
     );
     return (data ?? []).map(mapGitlabMrSummary);
+  }
+
+  async listPullRequestsPaged(
+    repo: ForgeRepoRef,
+    state: ForgeStateFilter,
+  ): Promise<ForgePullRequestPage> {
+    const stateParam = state === 'open' ? 'opened' : state;
+    const headers = await this.authHeaders();
+    const { items, capped } = await this.fetchAllPages<GitlabMrSummaryResponse>({
+      buildUrl: (page) =>
+        `${this.projectUrl(repo)}/merge_requests?state=${stateParam}` +
+        `&order_by=updated_at&sort=desc&per_page=${MR_PAGE_SIZE}&page=${page}`,
+      init: { headers },
+      hasNextPage: (response) => hasGitlabNextPage(response),
+      maxPages: MR_MAX_PAGES,
+    });
+    return { pullRequests: items.map(mapGitlabMrSummary), capped };
   }
 
   async getPullRequestDetail(repo: ForgeRepoRef, number: number): Promise<ForgePullRequestDetail> {

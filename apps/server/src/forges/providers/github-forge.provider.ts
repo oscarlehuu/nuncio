@@ -8,6 +8,7 @@ import type {
   ForgeIssueDetail,
   ForgeIssueSummary,
   ForgePullRequestDetail,
+  ForgePullRequestPage,
   ForgePullRequestSummary,
   ForgeRepoRef,
   ForgeRepository,
@@ -17,6 +18,20 @@ import type {
   MergeResult,
   SubmitReviewOptions,
 } from '../forges.types';
+
+/**
+ * PR pagination bounds for the honest-count path. per_page=100 is GitHub's max;
+ * the page cap bounds a runaway repo to ~1000 PRs per state before the count is
+ * reported as a floor (see ForgePullRequestPage.capped).
+ */
+const PR_PAGE_SIZE = 100;
+const PR_MAX_PAGES = 10;
+
+/** GitHub signals more pages via a `Link` header carrying rel="next". */
+function hasGithubNextPage(response: Response): boolean {
+  const link = response.headers?.get?.('link') ?? '';
+  return /\brel="next"/.test(link);
+}
 import { GithubForgeActions } from './github-forge.actions';
 import {
   mapGithubComment,
@@ -134,6 +149,22 @@ export class GithubForgeProvider extends GithubForgeActions {
       { headers: await this.authHeaders() },
     );
     return (data ?? []).map(mapGithubPullSummary);
+  }
+
+  async listPullRequestsPaged(
+    repo: ForgeRepoRef,
+    state: ForgeStateFilter,
+  ): Promise<ForgePullRequestPage> {
+    const headers = await this.authHeaders();
+    const { items, capped } = await this.fetchAllPages<GithubPullSummaryResponse>({
+      buildUrl: (page) =>
+        `${this.repoUrl(repo)}/pulls?state=${state}&sort=updated&direction=desc` +
+        `&per_page=${PR_PAGE_SIZE}&page=${page}`,
+      init: { headers },
+      hasNextPage: (response) => hasGithubNextPage(response),
+      maxPages: PR_MAX_PAGES,
+    });
+    return { pullRequests: items.map(mapGithubPullSummary), capped };
   }
 
   async getPullRequestDetail(repo: ForgeRepoRef, number: number): Promise<ForgePullRequestDetail> {

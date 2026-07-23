@@ -94,6 +94,17 @@ export interface ForgePullRequestSummary {
   commentCount: number | null;
 }
 
+/**
+ * Exhaustive pull-request listing that pages through every result before
+ * returning, so a count over `pullRequests` is honest rather than a first-page
+ * undercount. `capped` is true when the page cap was hit and more may exist —
+ * the list (and any count derived from it) is then a floor, not the exact total.
+ */
+export interface ForgePullRequestPage {
+  pullRequests: ForgePullRequestSummary[];
+  capped: boolean;
+}
+
 export type ForgeMergeableState = 'mergeable' | 'conflicts' | 'blocked' | 'behind' | 'unknown';
 export type ForgeReviewDecision = 'approved' | 'changes_requested' | 'review_required';
 
@@ -310,6 +321,8 @@ export interface ForgeProvider {
   listChecks(repo: ForgeRepoRef, ref: string): Promise<ForgeCheck[]>;
   addComment(repo: ForgeRepoRef, number: number, body: string): Promise<void>;
   listPullRequests(repo: ForgeRepoRef, state: ForgeStateFilter): Promise<ForgePullRequestSummary[]>;
+  /** Page through every pull request in `state` for an honest total (see ForgePullRequestPage). */
+  listPullRequestsPaged(repo: ForgeRepoRef, state: ForgeStateFilter): Promise<ForgePullRequestPage>;
   getPullRequestDetail(repo: ForgeRepoRef, number: number): Promise<ForgePullRequestDetail>;
   listPullRequestFiles(repo: ForgeRepoRef, number: number): Promise<ForgeFileDiff[]>;
   listReviewThreads(repo: ForgeRepoRef, number: number): Promise<ForgeReviewThread[]>;

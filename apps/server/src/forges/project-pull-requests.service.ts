@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ForgeRepoService } from './forges-repo.service';
+import { GitService } from '../git/git.service';
 import { SessionsRepository } from '../sessions/persistence/sessions.repository';
 import type { ForgePullRequestSummary } from './forges.types';
 
@@ -33,6 +34,11 @@ export interface ProjectPullRequestsDto {
   /** `no-forge-remote` | `unavailable` when unavailable, else null. */
   reason: 'no-forge-remote' | 'unavailable' | null;
   counts: ProjectPullRequestCounts;
+  /**
+   * True when the forge paging cap was hit before all PRs were fetched — the
+   * counts are then a floor, not an exact total. False in the normal case.
+   */
+  capped: boolean;
   pullRequests: ProjectPullRequestItemDto[];
 }
 
@@ -75,6 +81,7 @@ export class ProjectPullRequestsService {
   constructor(
     private readonly forgeRepo: ForgeRepoService,
     private readonly sessions: SessionsRepository,
+    private readonly git: GitService,
   ) {}
 
   /** Test seam for the cache TTL clock. */
@@ -108,13 +115,19 @@ export class ProjectPullRequestsService {
     if (!connected) return this.unavailable('unavailable', provider);
 
     let summaries: ForgePullRequestSummary[];
+    let capped: boolean;
     try {
-      summaries = await this.forgeRepo.listPullRequests(path, 'all');
+      // Page through EVERY PR before counting — a first-page-only fetch would
+      // undercount a repo with more PRs than one page in a given state.
+      const page = await this.forgeRepo.listPullRequestsPaged(path, 'all');
+      summaries = page.pullRequests;
+      capped = page.capped;
     } catch {
       return this.unavailable('unavailable', provider);
     }
 
     const counts = bucketPullRequests(summaries);
+    const ownerByNumber = await this.resolvePullRequestOwners(path, summaries);
     const pullRequests = summaries.map((summary) => ({
       number: summary.number,
       title: summary.title,
@@ -122,7 +135,7 @@ export class ProjectPullRequestsService {
       url: summary.url,
       sourceBranch: summary.sourceBranch,
       author: summary.author,
-      sessionId: this.sessions.findByProjectPullRequest(path, summary.number)?.id ?? null,
+      sessionId: ownerByNumber.get(summary.number) ?? null,
     }));
 
     return {
@@ -130,8 +143,58 @@ export class ProjectPullRequestsService {
       provider,
       reason: null,
       counts,
+      capped,
       pullRequests,
     };
+  }
+
+  /**
+   * Map each PR number to its owning session id. An exact `project_path` match
+   * is tried first (the common case, zero git). For the rest, the owner may be a
+   * session opened in a LINKED WORKTREE of the same repo — its stored
+   * `project_path` differs from the dashboard `path`, so raw-path matching misses
+   * it. Fall back to comparing repo IDENTITY (worktree-aware), which collapses a
+   * worktree onto its owning repo. Identity resolution is cached and only runs
+   * for PR numbers left unresolved.
+   */
+  private async resolvePullRequestOwners(
+    path: string,
+    summaries: ForgePullRequestSummary[],
+  ): Promise<Map<number, string>> {
+    const ownerByNumber = new Map<number, string>();
+    const unresolved: number[] = [];
+    for (const summary of summaries) {
+      const exact = this.sessions.findByProjectPullRequest(path, summary.number);
+      if (exact) ownerByNumber.set(summary.number, exact.id);
+      else unresolved.push(summary.number);
+    }
+    if (unresolved.length === 0) return ownerByNumber;
+
+    const targetId = await this.resolveIdentityId(path);
+    if (!targetId) return ownerByNumber;
+
+    for (const number of unresolved) {
+      const candidates = this.sessions.findAllByPullRequestNumber(number);
+      for (const candidate of candidates) {
+        if (!candidate.projectPath) continue;
+        const candidateId = await this.resolveIdentityId(candidate.projectPath);
+        if (candidateId && candidateId === targetId) {
+          ownerByNumber.set(number, candidate.id);
+          break;
+        }
+      }
+    }
+    return ownerByNumber;
+  }
+
+  /** Repo identity id for a path, or null when it is not a resolvable git repo. */
+  private async resolveIdentityId(path: string): Promise<string | null> {
+    try {
+      const identity = await this.git.resolveRepoIdentity(path);
+      return identity.kind === 'repo' ? identity.id : null;
+    } catch {
+      return null;
+    }
   }
 
   private unavailable(
@@ -143,6 +206,7 @@ export class ProjectPullRequestsService {
       provider,
       reason,
       counts: { open: null, merged: null, closed: null },
+      capped: false,
       pullRequests: [],
     };
   }

@@ -3,6 +3,8 @@ import {
   ProjectPullRequestsService,
 } from '../../../src/forges/project-pull-requests.service';
 import type { ForgeRepoService } from '../../../src/forges/forges-repo.service';
+import type { GitService } from '../../../src/git/git.service';
+import type { RepoIdentity } from '../../../src/git/repo-identity';
 import type { SessionsRepository } from '../../../src/sessions/persistence/sessions.repository';
 import type { ForgePullRequestSummary } from '../../../src/forges/forges.types';
 
@@ -20,6 +22,11 @@ function summary(overrides: Partial<ForgePullRequestSummary>): ForgePullRequestS
     commentCount: null,
     ...overrides,
   };
+}
+
+/** A repo identity keyed on repoRoot so worktree/main paths of one repo collapse. */
+function repoIdentity(id: string): RepoIdentity {
+  return { kind: 'repo', id, repoRoot: id, remoteUrl: null, isWorktree: false };
 }
 
 describe('bucketPullRequests', () => {
@@ -42,6 +49,7 @@ describe('bucketPullRequests', () => {
 function makeService(
   repoOverrides: Partial<ForgeRepoService>,
   sessionOverrides: Partial<SessionsRepository> = {},
+  gitOverrides: Partial<GitService> = {},
 ) {
   const forgeRepo = {
     capabilities: async () => ({
@@ -56,25 +64,33 @@ function makeService(
       rerunFailedOnly: true,
       listRepositories: true,
     }),
-    listPullRequests: async () => [],
+    listPullRequestsPaged: async () => ({ pullRequests: [], capped: false }),
     ...repoOverrides,
   } as unknown as ForgeRepoService;
   const sessions = {
     findByProjectPullRequest: () => null,
+    findAllByPullRequestNumber: () => [],
     ...sessionOverrides,
   } as unknown as SessionsRepository;
-  return new ProjectPullRequestsService(forgeRepo, sessions);
+  const git = {
+    resolveRepoIdentity: async (path: string) => repoIdentity(path),
+    ...gitOverrides,
+  } as unknown as GitService;
+  return new ProjectPullRequestsService(forgeRepo, sessions, git);
 }
 
 describe('ProjectPullRequestsService.aggregate', () => {
   it('aggregates open/merged/closed and links known sessions', async () => {
     const service = makeService(
       {
-        listPullRequests: async () => [
-          summary({ number: 7, state: 'open', sourceBranch: 'feat-a' }),
-          summary({ number: 8, state: 'merged' }),
-          summary({ number: 9, state: 'closed' }),
-        ],
+        listPullRequestsPaged: async () => ({
+          pullRequests: [
+            summary({ number: 7, state: 'open', sourceBranch: 'feat-a' }),
+            summary({ number: 8, state: 'merged' }),
+            summary({ number: 9, state: 'closed' }),
+          ],
+          capped: false,
+        }),
       },
       {
         findByProjectPullRequest: ((_path: string, number: number) =>
@@ -86,9 +102,80 @@ describe('ProjectPullRequestsService.aggregate', () => {
     expect(result.available).toBe(true);
     expect(result.provider).toBe('github');
     expect(result.counts).toEqual({ open: 1, merged: 1, closed: 1 });
+    expect(result.capped).toBe(false);
     const linked = result.pullRequests.find((pr) => pr.number === 7);
     expect(linked?.sessionId).toBe('sess-7');
     expect(result.pullRequests.find((pr) => pr.number === 8)?.sessionId).toBeNull();
+  });
+
+  it('surfaces capped=true when the forge paging cap was hit (count is a floor)', async () => {
+    const service = makeService({
+      listPullRequestsPaged: async () => ({
+        pullRequests: [summary({ number: 1, state: 'open' })],
+        capped: true,
+      }),
+    });
+
+    const result = await service.aggregate('/repos/app');
+    expect(result.available).toBe(true);
+    expect(result.capped).toBe(true);
+  });
+
+  it('links a session whose projectPath is a linked worktree of the same repo', async () => {
+    // The dashboard is viewed at the main checkout; the owning session was opened
+    // in a linked worktree, so its stored project_path differs from the query
+    // path but resolves to the same repo identity.
+    const service = makeService(
+      {
+        listPullRequestsPaged: async () => ({
+          pullRequests: [summary({ number: 42, state: 'open' })],
+          capped: false,
+        }),
+      },
+      {
+        // No exact project_path match for the main checkout.
+        findByProjectPullRequest: (() => null) as never,
+        findAllByPullRequestNumber: ((number: number) =>
+          number === 42
+            ? [{ id: 'sess-wt', projectPath: '/work/wt-42' } as never]
+            : []) as never,
+      },
+      {
+        // Both the main checkout and the worktree resolve to one repo identity.
+        resolveRepoIdentity: (async (path: string) =>
+          path === '/repos/app' || path === '/work/wt-42'
+            ? repoIdentity('remote:github.com/octo/app')
+            : repoIdentity(path)) as never,
+      },
+    );
+
+    const result = await service.aggregate('/repos/app');
+    expect(result.pullRequests.find((pr) => pr.number === 42)?.sessionId).toBe('sess-wt');
+  });
+
+  it('does not link a same-PR-number session that belongs to a different repo', async () => {
+    const service = makeService(
+      {
+        listPullRequestsPaged: async () => ({
+          pullRequests: [summary({ number: 42, state: 'open' })],
+          capped: false,
+        }),
+      },
+      {
+        findByProjectPullRequest: (() => null) as never,
+        findAllByPullRequestNumber: ((number: number) =>
+          number === 42
+            ? [{ id: 'sess-other', projectPath: '/repos/other' } as never]
+            : []) as never,
+      },
+      {
+        resolveRepoIdentity: (async (path: string) =>
+          repoIdentity(path === '/repos/app' ? 'id-app' : 'id-other')) as never,
+      },
+    );
+
+    const result = await service.aggregate('/repos/app');
+    expect(result.pullRequests.find((pr) => pr.number === 42)?.sessionId).toBeNull();
   });
 
   it('yields "unavailable" (never an auth prompt) when the forge is unauthenticated', async () => {
@@ -105,7 +192,7 @@ describe('ProjectPullRequestsService.aggregate', () => {
         rerunFailedOnly: false,
         listRepositories: false,
       }),
-      listPullRequests: async () => {
+      listPullRequestsPaged: async () => {
         throw new Error('should not be called when unauthenticated');
       },
     });
@@ -115,6 +202,7 @@ describe('ProjectPullRequestsService.aggregate', () => {
     expect(result.reason).toBe('unavailable');
     expect(result.provider).toBe('github');
     expect(result.counts).toEqual({ open: null, merged: null, closed: null });
+    expect(result.capped).toBe(false);
     expect(result.pullRequests).toEqual([]);
   });
 
@@ -133,9 +221,9 @@ describe('ProjectPullRequestsService.aggregate', () => {
   it('caches within the TTL and refetches after it expires', async () => {
     let calls = 0;
     const service = makeService({
-      listPullRequests: async () => {
+      listPullRequestsPaged: async () => {
         calls += 1;
-        return [summary({ number: 1, state: 'open' })];
+        return { pullRequests: [summary({ number: 1, state: 'open' })], capped: false };
       },
     });
     let now = 1_000;
