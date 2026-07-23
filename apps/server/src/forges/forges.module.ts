@@ -12,6 +12,7 @@ import { SessionsFromPullRequestController } from './api/sessions-from-pr.contro
 import { ForgeRegistry } from './forges.registry';
 import { ForgeRepoService } from './forges-repo.service';
 import { ForgesService } from './forges.service';
+import { ProjectPullRequestsService } from './project-pull-requests.service';
 import { GithubForgeProvider } from './providers/github-forge.provider';
 import { GitlabForgeProvider } from './providers/gitlab-forge.provider';
 import { WebhooksController } from './webhooks/webhooks.controller';
@@ -39,8 +40,9 @@ import { WebhooksService } from './webhooks/webhooks.service';
     ForgeRegistry,
     ForgesService,
     ForgeRepoService,
+    ProjectPullRequestsService,
     WebhooksService,
   ],
-  exports: [ForgeRegistry, ForgesService, ForgeRepoService],
+  exports: [ForgeRegistry, ForgesService, ForgeRepoService, ProjectPullRequestsService],
 })
 export class ForgesModule {}
