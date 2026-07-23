@@ -12,6 +12,7 @@ import type {
   ForgeIssueSummary,
   ForgeProvider,
   ForgePullRequestDetail,
+  ForgePullRequestPage,
   ForgePullRequestSummary,
   ForgeRepoRef,
   ForgeReviewThread,
@@ -70,6 +71,12 @@ export class ForgeRepoService {
   async resolveRepoIdentity(path: string): Promise<string> {
     const { host, repo } = await this.resolve(path);
     return `${host}/${repo.owner}/${repo.repo}`.toLowerCase();
+  }
+
+  /** Exhaustive paginated listing for an honest count (see ForgePullRequestPage). */
+  async listPullRequestsPaged(path: string, state: ForgeStateFilter): Promise<ForgePullRequestPage> {
+    const { provider, repo } = await this.resolve(path);
+    return provider.listPullRequestsPaged(repo, state);
   }
 
   async getPullRequestDetail(path: string, number: number): Promise<ForgePullRequestDetailDto> {

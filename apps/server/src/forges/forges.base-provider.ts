@@ -12,6 +12,7 @@ import type {
   ForgeProvider,
   ForgePullRequest,
   ForgePullRequestDetail,
+  ForgePullRequestPage,
   ForgePullRequestSummary,
   ForgeRepoRef,
   ForgeRepository,
@@ -53,6 +54,10 @@ export abstract class BaseForgeProvider implements ForgeProvider {
     repo: ForgeRepoRef,
     state: ForgeStateFilter,
   ): Promise<ForgePullRequestSummary[]>;
+  abstract listPullRequestsPaged(
+    repo: ForgeRepoRef,
+    state: ForgeStateFilter,
+  ): Promise<ForgePullRequestPage>;
   abstract getPullRequestDetail(repo: ForgeRepoRef, number: number): Promise<ForgePullRequestDetail>;
   abstract listPullRequestFiles(repo: ForgeRepoRef, number: number): Promise<ForgeFileDiff[]>;
   abstract listReviewThreads(repo: ForgeRepoRef, number: number): Promise<ForgeReviewThread[]>;
@@ -127,6 +132,36 @@ export abstract class BaseForgeProvider implements ForgeProvider {
     }
 
     return body as T;
+  }
+
+  /**
+   * Follow forge pagination from page 1, accumulating every page's array items
+   * until `hasNextPage` reports no more or `maxPages` is reached. Returns the
+   * flat item list plus `capped` (true only when the cap stopped an ongoing
+   * sequence), so a caller can keep a derived count honest. `hasNextPage` reads
+   * the forge's own cursor (GitHub `Link` rel="next", GitLab `X-Next-Page`);
+   * a non-array or headerless response is treated as a final, empty page.
+   */
+  protected async fetchAllPages<TItem>(opts: {
+    buildUrl: (page: number) => string;
+    init: RequestInit;
+    hasNextPage: (response: Response) => boolean;
+    maxPages: number;
+  }): Promise<{ items: TItem[]; capped: boolean }> {
+    const fetchImpl = this.fetchOverride ?? fetch;
+    const items: TItem[] = [];
+    let page = 1;
+    for (;;) {
+      const response = await fetchImpl(opts.buildUrl(page), opts.init);
+      const body = await this.parseJson(response);
+      if (!response.ok) {
+        throw new HttpException(this.errorMessage(response, body), response.status);
+      }
+      if (Array.isArray(body)) items.push(...(body as TItem[]));
+      if (!opts.hasNextPage(response)) return { items, capped: false };
+      if (page >= opts.maxPages) return { items, capped: true };
+      page += 1;
+    }
   }
 
   /** Plain-text fetch (job logs / traces); follows the forge's redirect to log storage. */

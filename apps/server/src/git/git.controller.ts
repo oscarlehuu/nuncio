@@ -29,6 +29,15 @@ export class GitController {
     return this.git.listBranches(trimmed, { refresh: shouldRefresh });
   }
 
+  @Get('identity')
+  resolveIdentity(@Query('path') path?: string) {
+    const trimmed = path?.trim();
+    if (!trimmed) {
+      throw new BadRequestException('path query parameter is required');
+    }
+    return this.git.resolveRepoIdentity(trimmed);
+  }
+
   @Get('recent')
   listRecent() {
     return { items: this.recentProjects.list() };

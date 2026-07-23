@@ -1,9 +1,10 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { Fragment, useMemo, useState, type ReactNode } from 'react';
 import {
   Archive,
   ChevronDown,
   ChevronRight,
   FolderGit2,
+  GitBranch,
   House,
   LayoutGrid,
   MessageSquare,
@@ -38,7 +39,7 @@ import { relativeTime, statusLabel } from '../lib/api';
 import { projectDisplayName } from '../lib/projects';
 import { providerMeta } from '../lib/model-providers';
 import {
-  groupSessionsByProject,
+  groupSessionsByRepository,
   groupSessionsByStatus,
   loadCollapsedGroups,
   loadSidebarGroupBy,
@@ -47,6 +48,8 @@ import {
   type SessionGroup,
   type SidebarGroupBy,
 } from '../lib/group-sessions';
+import { fetchPullsSummary, type PullsSummaryDto } from '../lib/forge-api';
+import { useForgeQuery } from '../lib/forge-cache';
 import { resolveSessionPrBadge } from '../lib/session-pr-status';
 import type { SettingsSectionId } from '../lib/settings-sections';
 import { ProviderIcon } from './provider-icon';
@@ -114,7 +117,7 @@ export function Sidebar({
   const [pendingDelete, setPendingDelete] = useState<Session | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => loadCollapsedGroups());
 
-  const recentGroups = useMemo(() => groupSessionsByProject(sessions), [sessions]);
+  const recentGroups = useMemo(() => groupSessionsByRepository(sessions), [sessions]);
   const projectGroups = useMemo(
     () => recentGroups.filter((g) => g.projectPath !== null),
     [recentGroups],
@@ -353,6 +356,7 @@ export function Sidebar({
                       onSelect={onSelect}
                       onArchive={onArchive}
                       icon={<FolderGit2 className="size-3.5 text-muted-foreground shrink-0" />}
+                      prSummaryPath={group.repoRoot}
                     />
                   ))}
                 </>
@@ -468,6 +472,8 @@ interface RecentGroupSectionProps {
   onSelect: (id: string | null) => void;
   onArchive?: (id: string) => void | Promise<void>;
   icon?: ReactNode;
+  /** Repo main-checkout path — renders a PR rollup under the header when set. */
+  prSummaryPath?: string | null;
 }
 
 function RecentGroupSection({
@@ -478,6 +484,7 @@ function RecentGroupSection({
   onSelect,
   onArchive,
   icon,
+  prSummaryPath,
 }: RecentGroupSectionProps) {
   return (
     <div>
@@ -498,6 +505,7 @@ function RecentGroupSection({
           {group.sessions.length}
         </span>
       </button>
+      {prSummaryPath ? <RepoPrSummary path={prSummaryPath} /> : null}
       {!collapsed && (
         <div className="flex flex-col gap-0.5">
           {group.sessions.map((s) => (
@@ -511,6 +519,77 @@ function RecentGroupSection({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Devin-style pull-request rollup for one repository: `N open · M merged · K closed`.
+ * Quiet by design — a skeleton while loading, a muted reason when the forge is
+ * unavailable (never an auth prompt), and a floor form (`N+`) when the counts are
+ * capped. Fetches are deduped by path via the shared forge cache.
+ */
+function RepoPrSummary({ path }: { path: string }) {
+  const { data } = useForgeQuery<PullsSummaryDto>(
+    `pulls-summary:${path}`,
+    () => fetchPullsSummary(path),
+    { pollMs: 30_000, staleMs: 30_000 },
+  );
+
+  const wrapClass = 'flex flex-wrap items-center gap-x-1.5 gap-y-0.5 pl-7 pr-2 pb-1 text-ui-xs';
+
+  if (data === null) {
+    return (
+      <div className={cn(wrapClass, 'pt-0.5')} aria-hidden>
+        <span className="h-2 w-20 animate-pulse rounded-full bg-muted" />
+      </div>
+    );
+  }
+
+  if (!data.available) {
+    return (
+      <div className={cn(wrapClass, 'text-muted-foreground/70')}>
+        {data.reason === 'no-forge-remote' ? 'No forge remote' : 'Pull requests unavailable'}
+      </div>
+    );
+  }
+
+  const { counts, capped } = data;
+  const total = (counts.open ?? 0) + (counts.merged ?? 0) + (counts.closed ?? 0);
+  if (!capped && total === 0) {
+    return <div className={cn(wrapClass, 'text-muted-foreground/70')}>No pull requests</div>;
+  }
+
+  const fmt = (n: number | null) => (n == null ? '—' : capped && n > 0 ? `${n}+` : `${n}`);
+  const segments = [
+    { label: 'open', value: counts.open, color: 'text-success' },
+    { label: 'merged', value: counts.merged, color: 'text-info' },
+    { label: 'closed', value: counts.closed, color: 'text-muted-foreground' },
+  ] as const;
+  const ariaLabel = `Pull requests: ${segments.map((s) => `${fmt(s.value)} ${s.label}`).join(', ')}`;
+
+  return (
+    <div className={cn(wrapClass, 'text-muted-foreground')} aria-label={ariaLabel}>
+      {segments.map((segment, index) => (
+        <Fragment key={segment.label}>
+          {index > 0 && (
+            <span aria-hidden className="text-muted-foreground/40">
+              ·
+            </span>
+          )}
+          <span
+            className={cn(
+              'inline-flex items-center gap-1',
+              segment.value === 0 && !capped && 'opacity-45',
+            )}
+          >
+            <span className={cn('font-medium tabular-nums', segment.color)}>
+              {fmt(segment.value)}
+            </span>
+            <span>{segment.label}</span>
+          </span>
+        </Fragment>
+      ))}
     </div>
   );
 }
@@ -536,6 +615,7 @@ function RecentRow({ session, active, onSelect, onArchive }: RecentRowProps) {
   const showArchive = onArchive && canArchiveRow(session.status);
   const showDot = needsStatusDot(session.status);
   const prBadge = resolveSessionPrBadge(session);
+  const worktreeBranch = session.isWorktree && session.branch ? session.branch : null;
   return (
     <div
       className={cn(
@@ -567,8 +647,17 @@ function RecentRow({ session, active, onSelect, onArchive }: RecentRowProps) {
             {relativeTime(session.updatedAt)}
           </span>
         </div>
-        <div className="text-ui-sm text-muted-foreground truncate mt-0.5 pl-[18px]">
-          {session.preview ?? statusLabel(session.status)}
+        <div className="mt-0.5 flex items-center gap-1.5 pl-[18px] text-ui-sm text-muted-foreground">
+          {worktreeBranch && (
+            <span
+              className="inline-flex shrink-0 items-center gap-1 text-muted-foreground/90"
+              title={`Worktree branch ${worktreeBranch}`}
+            >
+              <GitBranch className="size-3 shrink-0" aria-hidden />
+              <span className="max-w-[8rem] truncate font-mono text-ui-xs">{worktreeBranch}</span>
+            </span>
+          )}
+          <span className="truncate">{session.preview ?? statusLabel(session.status)}</span>
         </div>
       </button>
       {showArchive && (

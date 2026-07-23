@@ -252,10 +252,39 @@ export class SessionsService implements OnModuleDestroy {
     this.resumeVerifyLoops();
   }
 
-  list(includeArchived = false): SessionDto[] {
-    return this.sessions
+  async list(includeArchived = false): Promise<SessionDto[]> {
+    const enriched = this.sessions
       .listUserFacing(includeArchived)
       .map((session) => this.enrichSession(session));
+    // Fill repo-grouping identity on the list path so the sidebar can group all
+    // worktrees of one repo together. Resolutions dedupe through GitService's
+    // per-path cache, so N sessions in one repo cost at most one git shell-out.
+    return Promise.all(enriched.map((session) => this.withRepoIdentity(session)));
+  }
+
+  /**
+   * Attach `repoIdentityId` / `repoRoot` / `isWorktree` derived from the session's
+   * working directory. Resolving from the worktree (when present) yields the same
+   * repo identity as the main checkout (worktree-aware) while also flagging that
+   * this session occupies a linked worktree. A non-git dir or a git failure leaves
+   * the null defaults enrichSession already set — the client then path-groups, and
+   * listing never breaks on a transient git fault.
+   */
+  private async withRepoIdentity(session: SessionDto): Promise<SessionDto> {
+    const workDir = session.worktreePath ?? session.projectPath ?? session.workspace;
+    if (!workDir) return session;
+    try {
+      const identity = await this.git.resolveRepoIdentity(workDir);
+      if (identity.kind !== 'repo') return session;
+      return {
+        ...session,
+        repoIdentityId: identity.id,
+        repoRoot: identity.repoRoot,
+        isWorktree: identity.isWorktree,
+      };
+    } catch {
+      return session;
+    }
   }
 
   get(id: string): SessionDto | null {
@@ -2357,7 +2386,7 @@ export class SessionsService implements OnModuleDestroy {
     } catch (error) {
       if (!this.isUnknownProviderError(error, session.provider)) throw error;
       return {
-        ...session,
+        ...this.withRepoIdentityDefaults(session),
         providerAvailable: false,
         supportsInteraction: false,
         supportsInterrupt: false,
@@ -2368,7 +2397,7 @@ export class SessionsService implements OnModuleDestroy {
     }
     const capabilities = provider.capabilities;
     return {
-      ...session,
+      ...this.withRepoIdentityDefaults(session),
       providerAvailable: true,
       supportsInteraction: provider.supportsInteraction?.() ?? false,
       supportsInterrupt: capabilities.interrupt,
@@ -2379,6 +2408,20 @@ export class SessionsService implements OnModuleDestroy {
         session.status === 'RUNNING'
           ? deriveHasPendingInput(this.events.listTail(session.id, PENDING_SCAN_TAIL))
           : false,
+    };
+  }
+
+  /**
+   * Seed the repo-grouping fields with null/false defaults so every enriched DTO
+   * carries them even on the non-list paths (create/get/handoff). The list path
+   * overrides them with real git-resolved values via {@link withRepoIdentity}.
+   */
+  private withRepoIdentityDefaults(session: SessionDto): SessionDto {
+    return {
+      repoIdentityId: null,
+      repoRoot: null,
+      isWorktree: false,
+      ...session,
     };
   }
 

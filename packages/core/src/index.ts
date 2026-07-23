@@ -24,6 +24,7 @@ export * from './model-providers';
 export * from './pairing-client';
 export * from './parse-changelog';
 export * from './reconnect-backoff';
+export * from './repo-grouping';
 export * from './tool-summary';
 export * from './session-preamble-display';
 export * from './transcript-build-blocks';

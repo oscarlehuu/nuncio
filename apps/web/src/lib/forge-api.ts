@@ -136,6 +136,48 @@ export function fetchForgePulls(path: string, state: ForgeStateFilter): Promise<
   return forgeFetch(`/api/forge/pulls?${q(path)}&state=${state}`, undefined, 'Failed to load pull requests');
 }
 
+/** Per-scope open/merged/closed totals. Null when a scope was not fetched. */
+interface PullsSummaryCounts {
+  open: number | null;
+  merged: number | null;
+  closed: number | null;
+}
+
+interface PullsSummaryItem {
+  number: number;
+  title: string;
+  /** Normalized state: 'open' | 'merged' | 'closed'. */
+  state: string;
+  url: string;
+  sourceBranch: string;
+  author: string;
+  /** The session that owns this PR, when Nuncio knows it. */
+  sessionId: string | null;
+}
+
+/**
+ * Devin-style pull-request rollup for a whole repository (all worktrees).
+ * `available:false` → render a muted reason, never an auth prompt.
+ * `capped:true` → counts are an honest floor (the paging cap was hit), so render
+ * a floor form (`N+`), not a silent exact number.
+ */
+export interface PullsSummaryDto {
+  available: boolean;
+  provider: string | null;
+  reason: 'no-forge-remote' | 'unavailable' | null;
+  counts: PullsSummaryCounts;
+  capped: boolean;
+  pullRequests: PullsSummaryItem[];
+}
+
+export function fetchPullsSummary(path: string): Promise<PullsSummaryDto> {
+  return forgeFetch(
+    `/api/forge/pulls-summary?${q(path)}`,
+    undefined,
+    'Failed to load pull request summary',
+  );
+}
+
 export function fetchForgePull(path: string, number: number): Promise<ForgePullRequestDetail> {
   return forgeFetch(`/api/forge/pulls/${number}?${q(path)}`, undefined, 'Failed to load pull request');
 }

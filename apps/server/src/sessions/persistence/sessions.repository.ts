@@ -186,6 +186,28 @@ export class SessionsRepository {
     return row ? toDto(row) : null;
   }
 
+  /**
+   * Every session that owns the given PR number, across all project paths. Used
+   * to match ownership by repo identity when a session's `project_path` is a
+   * linked worktree that differs from the queried repo path. Active sessions
+   * first, then archived (both may legitimately own a historical PR).
+   */
+  findAllByPullRequestNumber(
+    pullRequestNumber: number,
+    options: { includeArchived?: boolean } = {},
+  ): SessionDto[] {
+    const archivedFilter = options.includeArchived ? '' : "AND status != 'ARCHIVED'";
+    const rows = this.database.db
+      .prepare<SessionRow, [number]>(
+        `SELECT * FROM sessions
+         WHERE pull_request_number = ?
+           ${archivedFilter} AND verify_owner = 'session'
+         ORDER BY (status = 'ARCHIVED') ASC, updated_at DESC, rowid DESC`,
+      )
+      .all(pullRequestNumber);
+    return rows.map(toDto);
+  }
+
   claimPullRequestAdoption(
     projectPath: string,
     pullRequestNumber: number,
