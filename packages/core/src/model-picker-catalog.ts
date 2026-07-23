@@ -82,20 +82,29 @@ export type ModelOptionBadge = { id: string; label: string };
 export function activeModelOptionBadges(
   model: FlatModel | undefined,
   modelOptions: ModelOptionsMap | undefined,
+  /**
+   * The picker trigger (the composer chip) has no room for the effort slider or
+   * the fast bolt, so those options are otherwise invisible there. Pass
+   * `forTrigger` to surface them as text badges (e.g. `High`, `Priority`) so the
+   * selected reasoning effort and priority are actually visible on the chip.
+   * In the dropdown rows (default), they stay off the badge list because the
+   * slider and bolt already represent them.
+   */
+  opts: { forTrigger?: boolean } = {},
 ): ModelOptionBadge[] {
   if (!model) return [];
   const selections = mergeOptionsForModel(model, modelOptions);
   const badges: ModelOptionBadge[] = [];
 
   for (const descriptor of booleanOptionsForModel(model)) {
-    if (descriptor.id === 'fast') continue;
+    if (descriptor.id === 'fast' && !opts.forTrigger) continue;
     if (selections[descriptor.id] === true) {
       badges.push({ id: descriptor.id, label: descriptor.label });
     }
   }
 
   for (const descriptor of selectOptionsForModel(model)) {
-    if (isTriggerIconOption(descriptor.id)) continue;
+    if (isTriggerIconOption(descriptor.id) && !opts.forTrigger) continue;
     const value = selections[descriptor.id];
     if (value === undefined || typeof value === 'boolean') continue;
     const label =
@@ -111,14 +120,12 @@ export function formatModelPickerLabel(
   modelOptions: ModelOptionsMap | undefined,
 ): string {
   if (!model) return 'Select model';
-  const selections = mergeOptionsForModel(model, modelOptions);
-  const badges = activeModelOptionBadges(model, modelOptions);
+  // Trigger label (also the aria-label): surface effort + priority so the
+  // selection is announced, matching the visible trigger badges.
+  const badges = activeModelOptionBadges(model, modelOptions, { forTrigger: true });
   const name = prettyModelName(model.name);
-  const suffix: string[] = [];
-  if (modelSupportsFast(model) && selections.fast === true) suffix.push('Fast');
-  suffix.push(...badges.map((badge) => badge.label));
-  if (suffix.length === 0) return name;
-  return `${name} ${suffix.join(' ')}`;
+  if (badges.length === 0) return name;
+  return `${name} ${badges.map((badge) => badge.label).join(' ')}`;
 }
 
 export function modelShowsSubmenu(model: FlatModel): boolean {

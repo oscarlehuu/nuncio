@@ -163,10 +163,24 @@ describe('plainRowOptions', () => {
 });
 
 describe('activeModelOptionBadges', () => {
-  it('omits fast and reasoning effort from text badges', () => {
+  it('omits fast and reasoning effort from row text badges (slider/bolt represent them)', () => {
     expect(activeModelOptionBadges(COMPOSER_MODEL, { fast: true })).toEqual([]);
     expect(activeModelOptionBadges(OPUS_MODEL, { thinkingLevel: 'high' })).toEqual([]);
     expect(activeModelOptionBadges(CODEX_MODEL, { reasoningEffort: 'xhigh' })).toEqual([]);
+  });
+
+  it('surfaces reasoning effort and priority as text badges on the trigger chip', () => {
+    expect(activeModelOptionBadges(OPUS_MODEL, { thinkingLevel: 'high' }, { forTrigger: true })).toEqual([
+      { id: 'thinkingLevel', label: 'High' },
+    ]);
+    expect(activeModelOptionBadges(CODEX_MODEL, { reasoningEffort: 'xhigh' }, { forTrigger: true })).toEqual([
+      { id: 'reasoningEffort', label: expect.any(String) },
+    ]);
+    expect(activeModelOptionBadges(COMPOSER_MODEL, { fast: true }, { forTrigger: true })).toEqual([
+      { id: 'fast', label: 'Fast' },
+    ]);
+    // Priority off → no badge on the trigger either.
+    expect(activeModelOptionBadges(COMPOSER_MODEL, { fast: false }, { forTrigger: true })).toEqual([]);
   });
 
   it('keeps context-style selects as text badges', () => {

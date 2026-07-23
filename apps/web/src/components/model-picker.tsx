@@ -100,10 +100,11 @@ function modelRowBadges(
   model: FlatModel | undefined,
   modelOptions: ModelOptionsMap | undefined,
   includeOptionBadges: boolean,
+  forTrigger = false,
 ): ModelOptionBadge[] {
   const source = catalogSourceBadges(model);
   if (!includeOptionBadges) return source;
-  return [...source, ...activeModelOptionBadges(model, modelOptions)];
+  return [...source, ...activeModelOptionBadges(model, modelOptions, { forTrigger })];
 }
 
 function ModelNameWithBadges({
@@ -619,11 +620,9 @@ export function ModelPicker(props: ModelPickerProps) {
               !!model && model.providerId === recents[index]?.providerId,
           );
 
-  const triggerBadges = modelRowBadges(selected, modelOptions, true);
+  const triggerBadges = modelRowBadges(selected, modelOptions, true, true);
   const triggerName = selected ? prettyModelName(selected.name) : 'Select model';
   const triggerLabel = formatModelPickerLabel(selected, modelOptions);
-  const showFastOnTrigger = selected ? modelSupportsFast(selected) : false;
-  const fastOnTrigger = modelOptions?.fast === true;
 
   const engineLabel = pair
     ? pair.engine
@@ -744,9 +743,6 @@ export function ModelPicker(props: ModelPickerProps) {
               providerId={selected?.providerId ?? 'pi'}
               className="size-3.5 shrink-0 text-muted-foreground"
             />
-            {showFastOnTrigger && (
-              <FastLightningToggle active={fastOnTrigger} />
-            )}
             <ModelNameWithBadges
               name={triggerName}
               badges={triggerBadges}
