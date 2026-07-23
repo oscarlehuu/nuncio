@@ -19,7 +19,7 @@ const REQUEST_EVENTS = new Set(['user_input_requested', 'provider_request']);
 const RESOLVED_EVENTS = new Set(['user_input_resolved', 'provider_request_resolved']);
 
 /**
- * The rung-1/2 signal collectors that feed the attention queue (sub-phase A).
+ * Signal collectors that feed the attention queue.
  * ADDITIVE (ADR-007): every source is an EXISTING event or durable state — no
  * new session event types. Two ingestion styles:
  *
@@ -29,16 +29,15 @@ const RESOLVED_EVENTS = new Set(['user_input_resolved', 'provider_request_resolv
  *     awaiting review, plus `reconcileOpenItems()` to auto-resolve cleared ones.
  *
  * Auto-resolve uses kind-probes (a broken loop that resumed) or a direct resolve
- * (a permission request that was answered), per decision #2.
+ * (a permission request that was answered).
  */
 @Injectable()
 export class AttentionCollectors implements OnModuleInit {
   private unsubscribe?: () => void;
 
   /**
-   * Extra poll-collectors that ride the same sweep cadence (rung-3 sub-phase C
-   * anomaly heuristics register here) — keeps A's core decoupled from C while the
-   * anomalies still run every sweep with their own raise+clear paths.
+   * Extra poll-collectors ride the same sweep cadence while keeping anomaly
+   * heuristics decoupled from the core collectors.
    */
   private readonly extraSweeps = new Set<() => Promise<void>>();
   registerSweep(sweep: () => Promise<void>): () => void {
@@ -69,9 +68,9 @@ export class AttentionCollectors implements OnModuleInit {
     // A verify-dead item clears only on an explicit re-run / resolve — no probe;
     // it stays until the founder acts (that is the whole point of "needs you").
 
-    // Boot reconciliation: re-derive open items against live state (persist +
-    // reconcile — decision #3). A loop that resumed while the daemon was down
-    // has its tripped-breaker item auto-resolved here. Fire-and-forget at boot;
+    // Boot reconciliation re-derives open items against live state. A loop that
+    // resumed while the daemon was down has its breaker item auto-resolved here.
+    // Fire-and-forget at boot;
     // the forge leg must never crash startup.
     void this.sweep().catch(() => {});
   }
@@ -101,7 +100,7 @@ export class AttentionCollectors implements OnModuleInit {
         kind: 'verify-dead',
         subjectId: sessionId,
         projectPath: this.sessionProjectPath(sessionId),
-        title: 'Verify failed after auto-fix rounds',
+        title: 'Checks still failing after auto-fix — needs your decision',
         payload: { sessionId },
       });
     }
@@ -109,14 +108,14 @@ export class AttentionCollectors implements OnModuleInit {
 
   /**
    * Poll-based sweep — runs at boot and on the heartbeat fleet-reconciliation
-   * cadence (sub-phase B wires the cadence). Raises broken-loop + PR items and
+   * cadence. Raises broken-loop + PR items and
    * auto-resolves the ones whose condition cleared, then reconciles remaining
    * open items via kind-probes. Async: the PR leg awaits the forge fetch.
    */
   async sweep(): Promise<void> {
     this.collectBrokenLoops();
     await this.collectPullRequests();
-    // Registered extra collectors (sub-phase C anomalies) — each is best-effort so
+    // Registered extra collectors are best-effort so
     // one failing sweep never blocks the others or the reconcile.
     for (const extra of this.extraSweeps) {
       await extra().catch(() => {});
@@ -131,57 +130,101 @@ export class AttentionCollectors implements OnModuleInit {
           kind: 'tripped-breaker',
           subjectId: loop.id,
           projectPath: loop.projectPath,
-          title: `Loop "${loop.name ?? loop.goal}" tripped its breaker`,
+          title: `Autopilot paused "${loop.name ?? loop.goal}" after repeated failures`,
           payload: { loopId: loop.id },
         });
       } else {
         // The condition is CLEAR (loop resumed / completed) — drop any manual-
         // resolve suppression so a genuine re-trip later raises a fresh item, and
-        // auto-resolve a still-open item (finding #2).
+        // auto-resolve a still-open item.
         this.attention.onConditionCleared('tripped-breaker', loop.id);
       }
     }
   }
 
   /**
-   * Per project: fetch the open PRs and raise an item for each. Then diff the
-   * previously-tracked open PR item keys against the freshly-fetched open set and
-   * auto-resolve the missing ones — a merged/closed PR clears its item (finding
-   * #3). CRITICAL: on a forge fetch failure the project is SKIPPED entirely (no
-   * mass-resolve), so a transient outage never wipes real review items.
+   * Fetch each remote repository once even when several local checkouts point to
+   * it. Reconciliation is scoped to repositories fetched successfully so a
+   * transient forge outage never clears review work we could not verify.
    */
   private async collectPullRequests(): Promise<void> {
     if (!this.forgeRepos || !this.recentProjects) return;
+
+    const previouslyOpen = this.attention.list().items.filter((item) => item.kind === 'pr-review');
+    const repoGroups = new Map<string, { projectPath: string; localPaths: string[] }>();
     for (const project of this.recentProjects.list()) {
+      let repoIdentity: string;
+      try {
+        repoIdentity = normalizeRepoIdentity(
+          await this.forgeRepos.resolveRepoIdentity(project.path),
+        );
+      } catch {
+        continue;
+      }
+      const group = repoGroups.get(repoIdentity);
+      if (group) {
+        group.localPaths.push(project.path);
+      } else {
+        repoGroups.set(repoIdentity, { projectPath: project.path, localPaths: [project.path] });
+      }
+    }
+
+    // A legacy item can outlive the recent-project cap. Resolve its still-local
+    // path only as an alias of a recent repo; never let it create a fetch group.
+    for (const item of previouslyOpen) {
+      const path = item.projectPath;
+      if (!path || legacyPullRequestNumber(item.subjectId, path) === null) continue;
+      try {
+        const repoIdentity = normalizeRepoIdentity(
+          await this.forgeRepos.resolveRepoIdentity(path),
+        );
+        if (!payloadMatchesRepo(item.payload, repoIdentity)) continue;
+        const group = repoGroups.get(repoIdentity);
+        if (group && !group.localPaths.includes(path)) group.localPaths.push(path);
+      } catch {
+        // A removed checkout cannot be mapped safely, so preserve its row.
+      }
+    }
+
+    for (const [repoIdentity, group] of repoGroups) {
       let openPrs: Array<{ number: number; title?: string; url: string }>;
       try {
-        openPrs = await this.forgeRepos.listPullRequests(project.path, 'open');
+        openPrs = await this.forgeRepos.listPullRequests(group.projectPath, 'open');
       } catch {
-        // Disconnected / unauthenticated / unreachable forge → leave this
-        // project's PR items untouched (conservative; never mass-resolve).
+        // Without a trustworthy open set, preserve canonical and legacy rows.
         continue;
       }
 
       const stillOpen = new Set<string>();
       for (const pr of openPrs) {
-        const subjectId = `${project.path}#${pr.number}`;
+        const subjectId = `${repoIdentity}#${pr.number}`;
         stillOpen.add(subjectId);
         this.attention.raise({
           kind: 'pr-review',
           subjectId,
-          projectPath: project.path,
+          projectPath: group.projectPath,
           title: pr.title || `PR #${pr.number} awaiting review`,
-          payload: { projectPath: project.path, number: pr.number, url: pr.url },
+          payload: {
+            repo: repoIdentity,
+            projectPath: group.projectPath,
+            number: pr.number,
+            url: pr.url,
+          },
         });
       }
 
-      // Any pr-review item for THIS project no longer in the open set has
-      // merged/closed — clear it.
-      for (const item of this.attention.list().items) {
-        if (item.kind !== 'pr-review') continue;
-        if (item.projectPath !== project.path) continue;
-        if (stillOpen.has(item.subjectId)) continue;
-        this.attention.onConditionCleared('pr-review', item.subjectId);
+      const canonicalPrefix = `${repoIdentity}#`;
+      const legacyPrefixes = group.localPaths.map((path) => `${path}#`);
+      for (const item of previouslyOpen) {
+        const isStaleCanonical = item.subjectId.startsWith(canonicalPrefix) && !stillOpen.has(item.subjectId);
+        const isLegacy = legacyPrefixes.some((prefix) => {
+          const path = prefix.slice(0, -1);
+          return legacyPullRequestNumber(item.subjectId, path) !== null &&
+            payloadMatchesRepo(item.payload, repoIdentity);
+        });
+        if (isStaleCanonical || isLegacy) {
+          this.attention.onConditionCleared('pr-review', item.subjectId);
+        }
       }
     }
   }
@@ -199,5 +242,46 @@ export class AttentionCollectors implements OnModuleInit {
 
   private sessionProjectPath(sessionId: string): string | null {
     return this.sessions?.findById(sessionId)?.projectPath ?? null;
+  }
+}
+
+function normalizeRepoIdentity(identity: string): string {
+  return identity.trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '').toLowerCase();
+}
+
+function legacyPullRequestNumber(subjectId: string, path: string): number | null {
+  const prefix = `${path}#`;
+  if (!subjectId.startsWith(prefix)) return null;
+  const suffix = subjectId.slice(prefix.length);
+  if (!/^[1-9]\d*$/.test(suffix)) return null;
+  const number = Number(suffix);
+  return Number.isSafeInteger(number) ? number : null;
+}
+
+function payloadMatchesRepo(
+  payload: Record<string, unknown> | null,
+  repoIdentity: string,
+): boolean {
+  const storedRepo = payload?.repo;
+  if (typeof storedRepo === 'string' && storedRepo.trim()) {
+    const normalized = normalizeRepoIdentity(storedRepo).replace(/\.git$/i, '');
+    if (normalized === repoIdentity) return true;
+  }
+
+  const url = payload?.url;
+  return typeof url === 'string' && repoIdentityFromPullRequestUrl(url) === repoIdentity;
+}
+
+function repoIdentityFromPullRequestUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    const segments = url.pathname.split('/').filter(Boolean);
+    const pullMarker = segments.findIndex((segment) => segment === 'pull');
+    const gitlabMarker = segments.findIndex((segment) => segment === '-');
+    const marker = pullMarker >= 0 ? pullMarker : gitlabMarker;
+    if (marker < 2) return null;
+    return normalizeRepoIdentity(`${url.hostname}/${segments.slice(0, marker).join('/')}`);
+  } catch {
+    return null;
   }
 }

@@ -29,14 +29,14 @@ interface AttentionKindMeta {
 
 const KIND_META: Record<string, AttentionKindMeta> = {
   permission: { label: 'Permission', icon: ShieldQuestion, tone: 'warning' },
-  'verify-dead': { label: 'Verify stuck', icon: Wrench, tone: 'warning' },
+  'verify-dead': { label: 'Checks failing', icon: Wrench, tone: 'warning' },
   'tripped-breaker': { label: 'Loop paused', icon: TriangleAlert, tone: 'warning' },
   'pr-review': { label: 'PR review', icon: GitPullRequestArrow, tone: 'info' },
   // Webhook feedback that could not be auto-steered (untrusted author, failed
   // delivery, skipped cleanup) — a needs-you item, so it shares the amber class.
   'pr-feedback': { label: 'PR feedback', icon: MessageSquareWarning, tone: 'warning' },
   anomaly: { label: 'Anomaly', icon: Radar, tone: 'neutral' },
-  'dispatcher-proposal': { label: 'Dispatcher proposal', icon: ListChecks, tone: 'info' },
+  'dispatcher-proposal': { label: 'Plan', icon: ListChecks, tone: 'info' },
   // A follow-up the agent flagged mid-turn — a proposal, so it shares the calmer
   // review class rather than the amber needs-you one.
   'spawn-task': { label: 'Follow-up', icon: Sparkles, tone: 'info' },
@@ -50,6 +50,34 @@ export function attentionKindMeta(kind: string): AttentionKindMeta {
       tone: 'neutral',
     }
   );
+}
+
+/** Plain-language summaries for collapsed consecutive runs. */
+export function attentionGroupLabel(kind: string, count: number): string {
+  switch (kind) {
+    case 'pr-review':
+      return `${count} PRs waiting for review`;
+    case 'pr-feedback':
+      return `${count} PRs with feedback`;
+    case 'permission':
+      return `${count} sessions waiting on your answer`;
+    case 'verify-dead':
+      return `${count} sessions with failing checks`;
+    case 'tripped-breaker':
+      return `${count} paused loops`;
+    case 'dispatcher-proposal':
+      return `${count} plans ready to approve`;
+    case 'spawn-task':
+      return `${count} follow-ups ready to create`;
+    case 'missed-schedule':
+      return `${count} missed schedules`;
+    case 'anomaly':
+      return `${count} anomalies to inspect`;
+    default: {
+      const label = attentionKindMeta(kind).label.toLowerCase();
+      return `${count} ${label}${count === 1 ? '' : ' items'}`;
+    }
+  }
 }
 
 /** Tailwind classes for the tone — the row's left accent + kind chip share this. */

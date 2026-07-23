@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { openTargetFor } from '../lib/attention-kind';
+import { attentionKindMeta, openTargetFor } from '../lib/attention-kind';
 import type { AttentionItemDto } from '../lib/api';
 
 function item(partial: Partial<AttentionItemDto>): AttentionItemDto {
@@ -79,5 +79,12 @@ describe('openTargetFor', () => {
   it('unknown kind → session if payload carries one, else null', () => {
     expect(openTargetFor(item({ kind: 'mystery', payload: { sessionId: 's1' } }))).toEqual({ to: '/session/s1' });
     expect(openTargetFor(item({ kind: 'mystery', payload: null }))).toBeNull();
+  });
+});
+
+describe('attentionKindMeta', () => {
+  it('uses plain-language labels for plans and failing checks', () => {
+    expect(attentionKindMeta('dispatcher-proposal').label).toBe('Plan');
+    expect(attentionKindMeta('verify-dead').label).toBe('Checks failing');
   });
 });

@@ -165,6 +165,7 @@ export class WebhooksService implements OnModuleDestroy {
           sessions: this.sessions,
           sessionRecords: this.sessionRecords,
           git: this.git,
+          forgeRepos: this.forgeRepos,
           attention: this.attention,
           accept,
           deliveryRetrying: claim.retrying,

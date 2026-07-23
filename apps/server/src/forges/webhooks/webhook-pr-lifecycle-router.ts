@@ -2,6 +2,7 @@ import type { AttentionService } from '../../attention/attention.service';
 import type { GitService } from '../../git/git.service';
 import type { SessionsRepository } from '../../sessions/persistence/sessions.repository';
 import type { SessionsService } from '../../sessions/sessions.service';
+import type { ForgeRepoService } from '../forges-repo.service';
 import type { ForgePullRequestWebhookEvent } from '../forges.types';
 import type { WebhookDeliveryAcceptance } from './webhook-delivery-tracker';
 
@@ -9,6 +10,7 @@ interface LifecycleDependencies {
   sessions: SessionsService;
   sessionRecords: SessionsRepository;
   git: GitService;
+  forgeRepos: ForgeRepoService;
   attention: AttentionService;
   accept: WebhookDeliveryAcceptance;
   deliveryRetrying: boolean;
@@ -42,6 +44,12 @@ export async function routePullRequestLifecycle(
   }
 
   const state = event.merged === true ? 'merged' : 'closed';
+  let canonicalRepoIdentity: string | null = null;
+  try {
+    canonicalRepoIdentity = await deps.forgeRepos.resolveRepoIdentity(projectPath);
+  } catch {
+    // Fall back to signed webhook metadata if the local forge seam is unavailable.
+  }
   const acceptTerminal: WebhookDeliveryAcceptance = (work) => deps.accept(() => {
     deps.sessionRecords.updateForgeState(session.id, {
       forgeProvider: provider,
@@ -50,7 +58,7 @@ export async function routePullRequestLifecycle(
       pullRequestState: state,
       forgeStatus: state,
     });
-    clearPullRequestAttention(deps.attention, projectPath, event);
+    clearPullRequestAttention(deps.attention, projectPath, event, canonicalRepoIdentity);
     return work();
   });
 
@@ -184,11 +192,36 @@ function clearPullRequestAttention(
   attention: AttentionService,
   projectPath: string,
   event: ForgePullRequestWebhookEvent,
+  canonicalRepoIdentity: string | null,
 ): void {
+  const canonicalSubject = canonicalRepoIdentity
+    ? `${canonicalRepoIdentity.toLowerCase()}#${event.number}`
+    : canonicalPullRequestSubject(providerHost(event, event.provider), event);
+  attention.onConditionCleared('pr-review', canonicalSubject);
   attention.onConditionCleared('pr-review', `${projectPath}#${event.number}`);
   attention.onConditionCleared('pr-feedback', `${event.repoFullName}#${event.number}`);
   attention.onConditionCleared('pr-feedback', `${event.repoFullName}#${event.number}:delivery`);
   attention.onConditionCleared('pr-feedback', `${event.repoFullName}#${event.number}:cleanup`);
+}
+
+function providerHost(event: ForgePullRequestWebhookEvent, provider: string): string {
+  if (event.url) {
+    try {
+      return new URL(event.url).hostname;
+    } catch {
+      // Fall through to the public provider host for legacy payloads without a valid URL.
+    }
+  }
+  if (provider === 'github') return 'github.com';
+  if (provider === 'gitlab') return 'gitlab.com';
+  return provider;
+}
+
+function canonicalPullRequestSubject(
+  host: string,
+  event: ForgePullRequestWebhookEvent,
+): string {
+  return `${host}/${event.repoFullName}#${event.number}`.toLowerCase();
 }
 
 function skipCleanup(

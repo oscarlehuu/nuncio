@@ -26,7 +26,7 @@ interface AttentionRowProps {
 export function AttentionRow({ item, busy, onOpen, onApprove, onResolve, onCreate }: AttentionRowProps) {
   const meta = attentionKindMeta(item.kind);
   const Icon = meta.icon;
-  const target = openTargetFor(item);
+  const target = item.kind === 'missed-schedule' ? null : openTargetFor(item);
   const acked = item.acknowledgedAt !== null;
   const external = target !== null && 'href' in target;
   const dispatcher = dispatcherPayload(item);
@@ -79,6 +79,16 @@ export function AttentionRow({ item, busy, onOpen, onApprove, onResolve, onCreat
 
       {/* Actions — always visible (no hover), tap-sized for phone. */}
       <div className="flex shrink-0 items-center gap-1.5">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="min-h-11 px-2.5 text-muted-foreground"
+          disabled={busy}
+          onClick={() => onResolve(item.id)}
+          aria-label={`Dismiss "${item.title}"`}
+        >
+          Dismiss
+        </Button>
         {isDispatcher && !approved && (
           <Button
             size="sm"
@@ -90,17 +100,7 @@ export function AttentionRow({ item, busy, onOpen, onApprove, onResolve, onCreat
             Approve
           </Button>
         )}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="min-h-11 px-2.5 text-muted-foreground"
-          disabled={busy}
-          onClick={() => onResolve(item.id)}
-          aria-label={`Dismiss "${item.title}"`}
-        >
-          Dismiss
-        </Button>
-        {target && !isDispatcher && (
+        {target && !isDispatcher && !isSpawnTask && (
           <Button
             size="sm"
             className="min-h-11 gap-1.5 px-3"
@@ -162,6 +162,11 @@ function DispatcherProposalSummary({
         {expanded ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
         <span className="truncate">{done ? doneLabel(payload.taskIds.length || count) : `Tomorrow's plan - ${count} proposal${count === 1 ? '' : 's'}`}</span>
       </button>
+      {!done && (
+        <p className="mt-1 text-ui-sm text-muted-foreground">
+          Approve queues {count} task{count === 1 ? '' : 's'} to run tonight
+        </p>
+      )}
       {expanded && (
         <ul className="mt-3 space-y-2">
           {payload.proposals.map((proposal, idx) => (

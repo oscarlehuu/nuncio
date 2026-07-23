@@ -11,7 +11,6 @@ vi.mock('../lib/api', async () => {
     ackAttentionItem: vi.fn(),
     approveDispatcherProposal: vi.fn(),
     resolveAttentionItem: vi.fn(),
-    // The DigestCard at the top of the Inbox fetches this — keep it inert here.
     fetchDigest: vi.fn().mockResolvedValue(null),
   };
 });
@@ -21,6 +20,7 @@ import { InboxView } from './inbox-view';
 import {
   ackAttentionItem,
   approveDispatcherProposal,
+  fetchDigest,
   fetchAttention,
   resolveAttentionItem,
   type AttentionItemDto,
@@ -67,6 +67,34 @@ describe('InboxView', () => {
     vi.mocked(ackAttentionItem).mockReset().mockResolvedValue(item({ acknowledgedAt: 1 }));
     vi.mocked(approveDispatcherProposal).mockReset().mockResolvedValue({ proposalId: 'a', taskIds: ['t1', 't2'] });
     vi.mocked(resolveAttentionItem).mockReset().mockResolvedValue(item({ status: 'resolved' } as never));
+    vi.mocked(fetchDigest).mockReset().mockResolvedValue(null);
+  });
+
+  it('does not render digest content above the queue', async () => {
+    vi.mocked(fetchDigest).mockResolvedValue({
+      slotKey: '2026-07-23:morning',
+      variant: 'morning',
+      sentAt: 1,
+      windowFrom: 0,
+      windowTo: 1,
+      digest: {
+        variant: 'morning',
+        windowFrom: 0,
+        windowTo: 1,
+        loops: { runsOk: 1, runsFailed: 0, prsOpened: 0 },
+        attention: { raised: 0, resolved: 0, openTopCount: 0 },
+        sessions: { completed: 1, needsYou: 0 },
+        budget: { runsToday: 1, cap: 24 },
+        highlights: [],
+        projectLines: [],
+      },
+    });
+    vi.mocked(fetchAttention).mockResolvedValue({ items: [], counts: { total: 0, unacked: 0, bySeverity: {} } });
+    renderInbox();
+
+    await waitFor(() => expect(screen.getByText('Nothing needs you')).toBeInTheDocument());
+    expect(screen.queryByText("Today's digest")).not.toBeInTheDocument();
+    expect(fetchDigest).not.toHaveBeenCalled();
   });
 
   it('shows the calm empty state when nothing needs the founder', async () => {

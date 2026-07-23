@@ -48,11 +48,11 @@ function makeProvider(overrides: Partial<ForgeProvider> = {}): ForgeProvider {
   } as ForgeProvider;
 }
 
-function makeService(provider: ForgeProvider, host = 'github.com') {
+function makeService(provider: ForgeProvider, host = 'github.com', owner = 'octo', repo = 'repo') {
   const git = {
     remoteInfo: async (path: string) => {
       if (!path.startsWith('/')) throw new BadRequestException('not a repo');
-      return { host, owner: 'octo', repo: 'repo' };
+      return { host, owner, repo };
     },
   } as unknown as GitService;
   const registry = {
@@ -69,6 +69,16 @@ function makeService(provider: ForgeProvider, host = 'github.com') {
 }
 
 describe('ForgeRepoService', () => {
+  it('resolves a canonical host/owner/repo identity through the existing forge seam', async () => {
+    const service = makeService(makeProvider());
+    await expect(service.resolveRepoIdentity('/some/repo')).resolves.toBe('github.com/octo/repo');
+  });
+
+  it('normalizes host, owner, and repository case in the canonical identity', async () => {
+    const service = makeService(makeProvider(), 'GitHub.COM', 'Octo', 'Nuncio');
+    await expect(service.resolveRepoIdentity('/some/repo')).resolves.toBe('github.com/octo/nuncio');
+  });
+
   it('rejects a missing path with a 400', async () => {
     const service = makeService(makeProvider());
     await expect(service.listPullRequests('', 'open')).rejects.toThrow('path query parameter');

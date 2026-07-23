@@ -35,8 +35,16 @@ class FakeLoops {
 /** Fake forge repo service: returns canned open PRs per path, or throws (unreachable). */
 class FakeForgeRepos {
   prsByPath = new Map<string, Array<{ number: number; title: string; url: string }>>();
+  identitiesByPath = new Map<string, string>();
   unreachablePaths = new Set<string>();
+  listCalls: string[] = [];
+  async resolveRepoIdentity(path: string): Promise<string> {
+    const identity = this.identitiesByPath.get(path);
+    if (!identity) throw new Error('repo identity unavailable');
+    return identity;
+  }
   async listPullRequests(path: string): Promise<Array<{ number: number; title: string; url: string }>> {
+    this.listCalls.push(path);
     if (this.unreachablePaths.has(path)) throw new Error('forge unreachable');
     return this.prsByPath.get(path) ?? [];
   }
@@ -132,14 +140,15 @@ describe('AttentionCollectors', () => {
 
   it('raises a verify-dead item on verify_needs_attention', () => {
     notifySessionEventHooks('sess-9', event('verify_needs_attention', {}));
-    const items = attention.list().items;
-    expect(items.some((i) => i.kind === 'verify-dead' && i.subjectId === 'sess-9')).toBe(true);
+    const item = attention.list().items.find((i) => i.kind === 'verify-dead' && i.subjectId === 'sess-9');
+    expect(item?.title).toBe('Checks still failing after auto-fix — needs your decision');
   });
 
   it('sweep raises a tripped-breaker item for a broken loop', async () => {
     fakeLoops.loops = [loop({ id: 'loop-1', status: 'broken' })];
     await collectors.sweep();
-    expect(attention.list().items.some((i) => i.kind === 'tripped-breaker' && i.subjectId === 'loop-1')).toBe(true);
+    const item = attention.list().items.find((i) => i.kind === 'tripped-breaker' && i.subjectId === 'loop-1');
+    expect(item?.title).toBe('Autopilot paused "nightly" after repeated failures');
   });
 
   it('a broken loop that resumed auto-resolves its item on the next sweep', async () => {
@@ -196,28 +205,183 @@ describe('AttentionCollectors', () => {
   });
 
   describe('PR items clear when the PR closes / merges (finding #3)', () => {
+    it('fetches and raises each forge PR once when multiple local paths share a repo', async () => {
+      fakeRecent.paths = ['/repos/app', '/worktrees/app-feature'];
+      fakeForge.identitiesByPath.set('/repos/app', 'github.com/octo/app');
+      fakeForge.identitiesByPath.set('/worktrees/app-feature', 'github.com/octo/app');
+      fakeForge.prsByPath.set('/repos/app', [{ number: 7, title: 'Add feature', url: 'u' }]);
+
+      await collectors.sweep();
+
+      expect(fakeForge.listCalls).toEqual(['/repos/app']);
+      const items = attention.list().items.filter((item) => item.kind === 'pr-review');
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({
+        subjectId: 'github.com/octo/app#7',
+        projectPath: '/repos/app',
+        payload: { projectPath: '/repos/app', number: 7, url: 'u' },
+      });
+    });
+
+    it('keeps same-named repositories on different forge hosts distinct', async () => {
+      fakeRecent.paths = ['/repos/github-app', '/repos/gitlab-app'];
+      fakeForge.identitiesByPath.set('/repos/github-app', 'github.com/octo/app');
+      fakeForge.identitiesByPath.set('/repos/gitlab-app', 'gitlab.com/octo/app');
+      fakeForge.prsByPath.set('/repos/github-app', [{ number: 7, title: 'GitHub PR', url: 'gh' }]);
+      fakeForge.prsByPath.set('/repos/gitlab-app', [{ number: 7, title: 'GitLab MR', url: 'gl' }]);
+
+      await collectors.sweep();
+
+      expect(fakeForge.listCalls).toEqual(['/repos/github-app', '/repos/gitlab-app']);
+      expect(attention.list().items.map((item) => item.subjectId).sort()).toEqual([
+        'github.com/octo/app#7',
+        'gitlab.com/octo/app#7',
+      ]);
+    });
+
     it('a PR that is no longer open auto-resolves its item on the next sweep', async () => {
       fakeRecent.paths = ['/repos/x'];
+      fakeForge.identitiesByPath.set('/repos/x', 'github.com/octo/x');
       fakeForge.prsByPath.set('/repos/x', [{ number: 7, title: 'Add feature', url: 'u' }]);
       await collectors.sweep();
-      expect(attention.list().items.some((i) => i.subjectId === '/repos/x#7')).toBe(true);
+      expect(attention.list().items.some((i) => i.subjectId === 'github.com/octo/x#7')).toBe(true);
 
       // PR #7 merged → no longer in the open set.
       fakeForge.prsByPath.set('/repos/x', []);
       await collectors.sweep();
-      expect(attention.list().items.some((i) => i.subjectId === '/repos/x#7')).toBe(false);
+      expect(attention.list().items.some((i) => i.subjectId === 'github.com/octo/x#7')).toBe(false);
     });
 
-    it('does NOT mass-resolve PR items when the forge is unreachable', async () => {
-      fakeRecent.paths = ['/repos/x'];
-      fakeForge.prsByPath.set('/repos/x', [{ number: 7, title: 'PR', url: 'u' }]);
+    it("one repo's fetch failure does not clear another repo's items", async () => {
+      fakeRecent.paths = ['/repos/x', '/repos/y'];
+      fakeForge.identitiesByPath.set('/repos/x', 'github.com/octo/x');
+      fakeForge.identitiesByPath.set('/repos/y', 'github.com/octo/y');
+      fakeForge.prsByPath.set('/repos/x', [{ number: 7, title: 'PR X', url: 'ux' }]);
+      fakeForge.prsByPath.set('/repos/y', [{ number: 8, title: 'PR Y', url: 'uy' }]);
       await collectors.sweep();
-      expect(attention.list().items.some((i) => i.subjectId === '/repos/x#7')).toBe(true);
+      expect(attention.list().items.map((i) => i.subjectId).sort()).toEqual([
+        'github.com/octo/x#7',
+        'github.com/octo/y#8',
+      ]);
 
-      // Forge unreachable this sweep — the open item must SURVIVE (conservative).
       fakeForge.unreachablePaths.add('/repos/x');
+      fakeForge.prsByPath.set('/repos/y', []);
       await collectors.sweep();
-      expect(attention.list().items.some((i) => i.subjectId === '/repos/x#7')).toBe(true);
+      expect(attention.list().items.map((i) => i.subjectId)).toEqual(['github.com/octo/x#7']);
+    });
+
+    it('clears legacy local-path keys even when the alias fell out of recent projects', async () => {
+      fakeRecent.paths = ['/repos/x'];
+      fakeForge.identitiesByPath.set('/repos/x', 'github.com/octo/x');
+      fakeForge.identitiesByPath.set('/worktrees/x-feature', 'github.com/octo/x');
+      fakeForge.prsByPath.set('/repos/x', [{ number: 7, title: 'PR X', url: 'u' }]);
+      attention.raise({
+        kind: 'pr-review',
+        subjectId: '/worktrees/x-feature#7',
+        projectPath: '/worktrees/x-feature',
+        title: 'PR X',
+        payload: {
+          projectPath: '/worktrees/x-feature',
+          number: 7,
+          url: 'https://github.com/octo/x/pull/7',
+        },
+      });
+
+      await collectors.sweep();
+
+      expect(attention.list().items.map((item) => item.subjectId)).toEqual(['github.com/octo/x#7']);
+    });
+
+    it('preserves a legacy path key when the checkout now points at a different repository', async () => {
+      fakeRecent.paths = ['/repos/app'];
+      fakeForge.identitiesByPath.set('/repos/app', 'github.com/new-owner/app');
+      fakeForge.prsByPath.set('/repos/app', []);
+      attention.raise({
+        kind: 'pr-review',
+        subjectId: '/repos/app#7',
+        projectPath: '/repos/app',
+        title: 'Old repository PR',
+        payload: {
+          projectPath: '/repos/app',
+          number: 7,
+          url: 'https://github.com/old-owner/app/pull/7',
+        },
+      });
+
+      await collectors.sweep();
+
+      expect(attention.list().items.map((item) => item.subjectId)).toEqual(['/repos/app#7']);
+    });
+
+    it('does not treat a hostless repo payload as proof across forge hosts', async () => {
+      fakeRecent.paths = ['/repos/app'];
+      fakeForge.identitiesByPath.set('/repos/app', 'gitlab.com/octo/app');
+      fakeForge.prsByPath.set('/repos/app', []);
+      attention.raise({
+        kind: 'pr-review',
+        subjectId: '/repos/app#7',
+        projectPath: '/repos/app',
+        title: 'GitHub PR from the previous checkout',
+        payload: { repo: 'octo/app', number: 7 },
+      });
+
+      await collectors.sweep();
+
+      expect(attention.list().items.map((item) => item.subjectId)).toEqual(['/repos/app#7']);
+    });
+
+    it('preserves malformed legacy subject ids even when their payload repository matches', async () => {
+      fakeRecent.paths = ['/repos/app'];
+      fakeForge.identitiesByPath.set('/repos/app', 'github.com/octo/app');
+      fakeForge.prsByPath.set('/repos/app', []);
+      attention.raise({
+        kind: 'pr-review',
+        subjectId: '/repos/app#not-a-pr',
+        projectPath: '/repos/app',
+        title: 'Malformed legacy row',
+        payload: { repo: 'github.com/octo/app' },
+      });
+
+      await collectors.sweep();
+
+      expect(attention.list().items.map((item) => item.subjectId)).toEqual([
+        '/repos/app#not-a-pr',
+      ]);
+    });
+
+    it('preserves a matching legacy key when that repository fetch fails', async () => {
+      fakeRecent.paths = ['/repos/app'];
+      fakeForge.identitiesByPath.set('/repos/app', 'github.com/octo/app');
+      fakeForge.unreachablePaths.add('/repos/app');
+      attention.raise({
+        kind: 'pr-review',
+        subjectId: '/repos/app#7',
+        projectPath: '/repos/app',
+        title: 'PR awaiting review',
+        payload: { repo: 'github.com/octo/app', number: 7 },
+      });
+
+      await collectors.sweep();
+
+      expect(attention.list().items.map((item) => item.subjectId)).toEqual(['/repos/app#7']);
+    });
+
+    it('deduplicates case-variant repository identities into one canonical fetch and item', async () => {
+      fakeRecent.paths = ['/repos/app', '/worktrees/app'];
+      fakeForge.identitiesByPath.set('/repos/app', 'GitHub.com/Octo/App');
+      fakeForge.identitiesByPath.set('/worktrees/app', 'github.com/octo/app');
+      fakeForge.prsByPath.set('/repos/app', [{
+        number: 7,
+        title: 'Case-insensitive repo',
+        url: 'https://github.com/octo/app/pull/7',
+      }]);
+
+      await collectors.sweep();
+
+      expect(fakeForge.listCalls).toEqual(['/repos/app']);
+      expect(attention.list().items.map((item) => item.subjectId)).toEqual([
+        'github.com/octo/app#7',
+      ]);
     });
   });
 });
