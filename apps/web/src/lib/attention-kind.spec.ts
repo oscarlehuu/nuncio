@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { attentionKindMeta, openTargetFor } from '../lib/attention-kind';
+import { attentionGroupLabel, attentionKindMeta, openTargetFor } from '../lib/attention-kind';
 import type { AttentionItemDto } from '../lib/api';
 
 function item(partial: Partial<AttentionItemDto>): AttentionItemDto {
@@ -86,5 +86,20 @@ describe('attentionKindMeta', () => {
   it('uses plain-language labels for plans and failing checks', () => {
     expect(attentionKindMeta('dispatcher-proposal').label).toBe('Plan');
     expect(attentionKindMeta('verify-dead').label).toBe('Checks failing');
+    expect(attentionKindMeta('tripped-breaker').label).toBe('Autopilot paused');
+    expect(attentionGroupLabel('tripped-breaker', 2)).toBe('2 paused standing tasks');
+  });
+
+  it('uses severity-appropriate Autopilot labels for stuck and failing conditions', () => {
+    expect(attentionKindMeta('loop-stuck')).toMatchObject({
+      label: 'Autopilot stuck',
+      tone: 'warning',
+    });
+    expect(attentionKindMeta('loop-failing')).toMatchObject({
+      label: 'Autopilot failing',
+      tone: 'neutral',
+    });
+    expect(attentionGroupLabel('loop-stuck', 2)).toBe('2 stuck Autopilot runs');
+    expect(attentionGroupLabel('loop-failing', 2)).toBe('2 failing Autopilot tasks');
   });
 });

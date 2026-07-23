@@ -23,8 +23,8 @@ function detail(partial: Partial<LoopRunDetailDto> = {}): LoopRunDetailDto {
     createdAt: 1,
     sessionId: 's1',
     durationMs: 92_000,
-    verifyOutputTail: 'FAIL src/foo.spec.ts\n  expected 1 to be 2',
-    failureReason: 'Verify stayed red after 3 rounds',
+    verifyOutputTail: 'FAIL broken event loop verify output\n  expected 1 to be 2',
+    failureReason: 'broken event loop verify diagnostic',
     startedAt: 1,
     settledAt: 2,
     ...partial,
@@ -48,11 +48,11 @@ describe('LoopRunDetailView', () => {
     vi.mocked(fetchLoopRunDetail).mockReset().mockResolvedValue(detail());
   });
 
-  it('shows outcome, failure reason, and the verify output tail', async () => {
+  it('shows outcome and preserves run diagnostics verbatim', async () => {
     renderRun();
     await waitFor(() => expect(screen.getByText('Failed')).toBeInTheDocument());
-    expect(screen.getByText('Verify stayed red after 3 rounds')).toBeInTheDocument();
-    expect(screen.getByText(/FAIL src\/foo\.spec\.ts/)).toBeInTheDocument();
+    expect(screen.getByText('broken event loop verify diagnostic')).toBeInTheDocument();
+    expect(screen.getByText(/FAIL broken event loop verify output/)).toBeInTheDocument();
   });
 
   it('links into the session that ran it', async () => {
@@ -62,10 +62,10 @@ describe('LoopRunDetailView', () => {
     expect(await screen.findByText('session page')).toBeInTheDocument();
   });
 
-  it('handles a run with no verify output', async () => {
+  it('handles a run with no checks output', async () => {
     vi.mocked(fetchLoopRunDetail).mockResolvedValue(detail({ verifyOutputTail: null, sessionId: null }));
     renderRun();
-    await waitFor(() => expect(screen.getByText(/no verify output/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/no checks output/i)).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: /open session/i })).not.toBeInTheDocument();
   });
 });

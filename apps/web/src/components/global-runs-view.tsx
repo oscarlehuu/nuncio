@@ -99,14 +99,14 @@ export function GlobalRunsView() {
             </div>
           ) : runs.length === 0 ? (
             <p className="rounded-xl border border-dashed border-border bg-card/40 px-6 py-10 text-center text-ui text-muted-foreground">
-              No runs yet. Loops record a row here each time they fire.
+              No runs yet. Standing tasks record a row here each time they run.
             </p>
           ) : (
             <div className="overflow-hidden rounded-xl border border-border bg-card">
               <table className="w-full text-ui">
                 <thead>
                   <tr className="border-b border-border text-left text-ui-sm text-muted-foreground">
-                    <th className="px-4 py-2 font-medium">Loop</th>
+                    <th className="px-4 py-2 font-medium">Standing task</th>
                     <th className="px-4 py-2 font-medium">Triggered</th>
                     <th className="px-4 py-2 font-medium">Status</th>
                   </tr>

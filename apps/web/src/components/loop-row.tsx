@@ -8,9 +8,9 @@ import {
   lastExecutedRun,
   loopDisplayName,
   runsToday,
-  verifyLabel,
 } from '@nuncio/core/loop-schedule';
 import { projectDisplayName } from '../lib/projects';
+import { checkLabel } from '../lib/loop-check-label';
 import { LoopStatusChip, VerifyDot } from './loop-status-chip';
 import { LoopRunHistory } from './loop-run-history';
 import { Button } from '@/components/ui/button';
@@ -31,7 +31,7 @@ interface LoopRowProps {
 function stopLabel(loop: LoopDto): string | null {
   if (!loop.stop) return null;
   if (loop.stop.kind === 'maxTotalRuns') return `Stops after ${loop.stop.n} runs`;
-  return `Stops after ${loop.stop.n} green verifies`;
+  return `Stops after ${loop.stop.n} successful checks`;
 }
 
 export function LoopRow({
@@ -110,7 +110,7 @@ export function LoopRow({
               <span className="inline-flex items-center gap-1.5 text-muted-foreground">
                 <VerifyDot verify={last.verify} />
                 <span>
-                  Last run {relativeTime(last.createdAt)} · {verifyLabel(last.verify)}
+                  Last run {relativeTime(last.createdAt)} · {checkLabel(last.verify)}
                 </span>
               </span>
             ) : (

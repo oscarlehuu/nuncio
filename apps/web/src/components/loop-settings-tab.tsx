@@ -25,7 +25,7 @@ function absoluteTime(ts: number): string {
 function stopText(stop: StopCondition): string {
   if (!stop) return 'Runs until you pause it';
   if (stop.kind === 'maxTotalRuns') return `Stops after ${stop.n} total runs`;
-  return `Stops after ${stop.n} consecutive green verifies`;
+  return `Stops after ${stop.n} consecutive successful checks`;
 }
 
 interface LoopSettingsTabProps {

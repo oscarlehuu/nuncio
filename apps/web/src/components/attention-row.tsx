@@ -9,6 +9,12 @@ import {
   type OpenTarget,
 } from '../lib/attention-kind';
 import { projectDisplayName } from '../lib/projects';
+import {
+  dispatcherDone,
+  dispatcherPayload,
+  queuedTasksLabel,
+  type DispatcherPayload,
+} from '../lib/dispatcher-proposal';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -33,7 +39,7 @@ export function AttentionRow({ item, busy, onOpen, onApprove, onResolve, onCreat
   const isDispatcher = item.kind === 'dispatcher-proposal' && dispatcher.proposals.length > 0;
   const isSpawnTask = item.kind === 'spawn-task';
   const spawnTaskTldr = isSpawnTask ? payloadText(item, 'tldr') : null;
-  const approved = dispatcher.approvedAt !== null || dispatcher.taskIds.length > 0;
+  const approved = dispatcherDone(dispatcher);
   const project = isDispatcher ? null : projectDisplayName(item.projectPath);
 
   return (
@@ -129,18 +135,6 @@ export function AttentionRow({ item, busy, onOpen, onApprove, onResolve, onCreat
   );
 }
 
-interface DispatcherProposal {
-  title: string;
-  projectPath: string | null;
-  rationale: string;
-}
-
-interface DispatcherPayload {
-  proposals: DispatcherProposal[];
-  approvedAt: number | null;
-  taskIds: string[];
-}
-
 function DispatcherProposalSummary({
   payload,
 }: {
@@ -148,7 +142,7 @@ function DispatcherProposalSummary({
 }) {
   const [expanded, setExpanded] = useState(false);
   const count = payload.proposals.length;
-  const done = payload.approvedAt !== null || payload.taskIds.length > 0;
+  const done = dispatcherDone(payload);
 
   return (
     <div className="mt-1.5">
@@ -160,7 +154,11 @@ function DispatcherProposalSummary({
         aria-label={`${expanded ? 'Hide' : 'Show'} dispatcher proposals`}
       >
         {expanded ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
-        <span className="truncate">{done ? doneLabel(payload.taskIds.length || count) : `Tomorrow's plan - ${count} proposal${count === 1 ? '' : 's'}`}</span>
+        <span className="truncate">
+          {done
+            ? `Done - ${queuedTasksLabel(payload.taskIds.length || count)}`
+            : `Tomorrow's plan - ${count} proposal${count === 1 ? '' : 's'}`}
+        </span>
       </button>
       {!done && (
         <p className="mt-1 text-ui-sm text-muted-foreground">
@@ -182,35 +180,8 @@ function DispatcherProposalSummary({
   );
 }
 
-function doneLabel(taskCount: number): string {
-  return `Done - ${taskCount} task${taskCount === 1 ? '' : 's'} queued`;
-}
-
 /** Read a trimmed string field off an item's payload, or null. */
 function payloadText(item: AttentionItemDto, key: string): string | null {
   const value = item.payload?.[key];
   return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
-function dispatcherPayload(item: AttentionItemDto): DispatcherPayload {
-  const raw = item.payload ?? {};
-  const proposals = Array.isArray(raw.proposals)
-    ? raw.proposals.flatMap((proposal): DispatcherProposal[] => {
-        if (!proposal || typeof proposal !== 'object') return [];
-        const p = proposal as Record<string, unknown>;
-        if (typeof p.title !== 'string') return [];
-        return [
-          {
-            title: p.title,
-            projectPath: typeof p.projectPath === 'string' ? p.projectPath : null,
-            rationale: typeof p.rationale === 'string' ? p.rationale : '',
-          },
-        ];
-      })
-    : [];
-  return {
-    proposals,
-    approvedAt: typeof raw.approvedAt === 'number' ? raw.approvedAt : null,
-    taskIds: Array.isArray(raw.taskIds) ? raw.taskIds.filter((id): id is string => typeof id === 'string') : [],
-  };
 }

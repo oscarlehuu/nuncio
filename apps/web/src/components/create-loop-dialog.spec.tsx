@@ -19,6 +19,7 @@ vi.mock('./project-picker', () => ({
 import { CreateLoopDialog } from './create-loop-dialog';
 import { createLoop, type LoopDto } from '../lib/api';
 import type { ModelProvider } from '../lib/model-providers';
+import { toast } from 'sonner';
 
 const PROVIDERS: ModelProvider[] = [
   {
@@ -46,12 +47,13 @@ const CREATED: LoopDto = {
 describe('CreateLoopDialog', () => {
   beforeEach(() => {
     vi.mocked(createLoop).mockReset().mockResolvedValue(CREATED);
+    vi.mocked(toast.error).mockReset();
   });
 
   it('disables create until a goal is entered', async () => {
     render(<CreateLoopDialog open onOpenChange={vi.fn()} onCreated={vi.fn()} />);
     expect(screen.getByRole('dialog')).toHaveAttribute('data-outside-dismiss', 'blocked');
-    const create = screen.getByRole('button', { name: /create loop/i });
+    const create = screen.getByRole('button', { name: /create standing task/i });
     expect(create).toBeDisabled();
     await userEvent.type(screen.getByLabelText('Goal'), 'Nightly dependency bump');
     expect(create).toBeEnabled();
@@ -67,7 +69,7 @@ describe('CreateLoopDialog', () => {
     const onCreated = vi.fn();
     render(<CreateLoopDialog open onOpenChange={vi.fn()} onCreated={onCreated} />);
     await userEvent.type(screen.getByLabelText('Goal'), 'Triage agent issues');
-    await userEvent.click(screen.getByRole('button', { name: /create loop/i }));
+    await userEvent.click(screen.getByRole('button', { name: /create standing task/i }));
     await waitFor(() => expect(createLoop).toHaveBeenCalledTimes(1));
     const payload = vi.mocked(createLoop).mock.calls[0]![0];
     expect(payload).toMatchObject({
@@ -84,7 +86,7 @@ describe('CreateLoopDialog', () => {
     await userEvent.type(screen.getByLabelText('Goal'), 'Poll for drift');
     await userEvent.click(screen.getByRole('tab', { name: 'Interval' }));
     expect(screen.getByText(/Every 6 hours/)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: /create loop/i }));
+    await userEvent.click(screen.getByRole('button', { name: /create standing task/i }));
     await waitFor(() => expect(createLoop).toHaveBeenCalled());
     expect(vi.mocked(createLoop).mock.calls[0]![0].schedule.spec).toBe('every:6h');
   });
@@ -96,7 +98,7 @@ describe('CreateLoopDialog', () => {
       screen.getByRole('button', { name: /engine and model: inherit from project · default model/i }),
     );
     await userEvent.click(await screen.findByRole('menuitem', { name: /fable 5/i }));
-    await userEvent.click(screen.getByRole('button', { name: /create loop/i }));
+    await userEvent.click(screen.getByRole('button', { name: /create standing task/i }));
     await waitFor(() => expect(createLoop).toHaveBeenCalled());
     const payload = vi.mocked(createLoop).mock.calls[0]![0];
     expect(payload.engine).toBe('pi');
@@ -118,7 +120,7 @@ describe('CreateLoopDialog', () => {
   it('omits engine + model when left on inherit + default', async () => {
     render(<CreateLoopDialog open onOpenChange={vi.fn()} onCreated={vi.fn()} providers={PROVIDERS} />);
     await userEvent.type(screen.getByLabelText('Goal'), 'Nightly refactor');
-    await userEvent.click(screen.getByRole('button', { name: /create loop/i }));
+    await userEvent.click(screen.getByRole('button', { name: /create standing task/i }));
     await waitFor(() => expect(createLoop).toHaveBeenCalled());
     const payload = vi.mocked(createLoop).mock.calls[0]![0];
     expect(payload).not.toHaveProperty('engine');
@@ -130,7 +132,7 @@ describe('CreateLoopDialog', () => {
     await userEvent.type(screen.getByLabelText('Goal'), 'Bounded improvement run');
     await userEvent.click(screen.getByRole('button', { name: /run until i pause it/i }));
     await userEvent.click(await screen.findByRole('menuitem', { name: /stop after n total runs/i }));
-    await userEvent.click(screen.getByRole('button', { name: /create loop/i }));
+    await userEvent.click(screen.getByRole('button', { name: /create standing task/i }));
     await waitFor(() => expect(createLoop).toHaveBeenCalled());
     expect(vi.mocked(createLoop).mock.calls[0]![0].stop).toEqual({ kind: 'maxTotalRuns', n: 5 });
   });
@@ -142,7 +144,7 @@ describe('CreateLoopDialog', () => {
     // Default event is issue.opened; add a label filter.
     await userEvent.type(screen.getByLabelText(/required label filter/i), 'agent');
     expect(screen.getByText(/On Issue opened · label/)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: /create loop/i }));
+    await userEvent.click(screen.getByRole('button', { name: /create standing task/i }));
     await waitFor(() => expect(createLoop).toHaveBeenCalled());
     const payload = vi.mocked(createLoop).mock.calls[0]![0];
     expect(payload.schedule.kind).toBe('event');
@@ -155,8 +157,18 @@ describe('CreateLoopDialog', () => {
     const breaker = screen.getByLabelText(/consecutive failures before pausing/i);
     // A clamped controlled number input: one change event mirrors select-all-then-type.
     fireEvent.change(breaker, { target: { value: '5' } });
-    await userEvent.click(screen.getByRole('button', { name: /create loop/i }));
+    await userEvent.click(screen.getByRole('button', { name: /create standing task/i }));
     await waitFor(() => expect(createLoop).toHaveBeenCalled());
     expect(vi.mocked(createLoop).mock.calls[0]![0].maxConsecutiveFailures).toBe(5);
+  });
+
+  it('preserves server error text verbatim', async () => {
+    vi.mocked(createLoop).mockRejectedValue(new Error('Failed to create broken loop verify job'));
+    render(<CreateLoopDialog open onOpenChange={vi.fn()} onCreated={vi.fn()} />);
+    await userEvent.type(screen.getByLabelText('Goal'), 'Nightly cleanup');
+    await userEvent.click(screen.getByRole('button', { name: /create standing task/i }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Failed to create broken loop verify job'),
+    );
   });
 });

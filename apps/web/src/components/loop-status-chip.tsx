@@ -1,4 +1,5 @@
 import type { LoopRunVerify, LoopStatus } from '../lib/api';
+import { checkLabel } from '../lib/loop-check-label';
 import { cn } from '@/lib/utils';
 
 /**
@@ -18,7 +19,7 @@ const STATUS_META: Record<LoopStatus, { label: string; className: string; dot: s
     dot: 'bg-muted-foreground',
   },
   broken: {
-    label: 'Needs you',
+    label: 'Paused after failures',
     className: 'border-warning/40 bg-warning/10 text-warning',
     dot: 'bg-warning animate-pulse shadow-[0_0_5px_var(--color-warning)]',
   },
@@ -45,20 +46,20 @@ export function LoopStatusChip({ status, className }: { status: LoopStatus; clas
   );
 }
 
-const VERIFY_META: Record<LoopRunVerify, { label: string; dot: string }> = {
-  green: { label: 'Verify passed', dot: 'bg-success shadow-[0_0_4px_var(--color-success)]' },
-  red: { label: 'Verify failed', dot: 'bg-destructive' },
-  none: { label: 'No verify', dot: 'bg-muted-foreground/50' },
+const VERIFY_DOT: Record<LoopRunVerify, string> = {
+  green: 'bg-success shadow-[0_0_4px_var(--color-success)]',
+  red: 'bg-destructive',
+  none: 'bg-muted-foreground/50',
 };
 
 /** Tri-state verify dot for a run — green/red/neutral. */
 export function VerifyDot({ verify, className }: { verify: LoopRunVerify; className?: string }) {
-  const meta = VERIFY_META[verify];
+  const label = checkLabel(verify);
   return (
     <span
-      className={cn('inline-block size-[7px] rounded-full shrink-0', meta.dot, className)}
-      title={meta.label}
-      aria-label={meta.label}
+      className={cn('inline-block size-[7px] rounded-full shrink-0', VERIFY_DOT[verify], className)}
+      title={label}
+      aria-label={label}
     />
   );
 }

@@ -37,7 +37,7 @@ type StopKind = 'standing' | 'maxTotalRuns' | 'verifyGreenN';
 const STOP_LABELS: Record<StopKind, string> = {
   standing: 'Run until I pause it',
   maxTotalRuns: 'Stop after N total runs',
-  verifyGreenN: 'Stop after N green verifies',
+  verifyGreenN: 'Stop after N successful checks',
 };
 
 /** A template prefill — schedule fields + goal/budget/stop, project still user-picked. */
@@ -169,12 +169,12 @@ export function CreateLoopDialog({
     };
     try {
       const loop = await createLoop(input);
-      toast.success('Loop created');
+      toast.success('Standing task created');
       reset();
       onCreated(loop);
       onOpenChange(false);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to create loop');
+      toast.error(err instanceof Error ? err.message : 'Failed to create standing task');
     } finally {
       setSubmitting(false);
     }
@@ -184,7 +184,7 @@ export function CreateLoopDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent preventOutsideDismiss className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>New loop</DialogTitle>
+          <DialogTitle>New standing task</DialogTitle>
           <DialogDescription>
             A standing task nuncio runs on a schedule, inside a daily budget, landing each result as a
             pull request.
@@ -316,7 +316,7 @@ export function CreateLoopDialog({
             Cancel
           </Button>
           <Button onClick={handleSubmit} disabled={!canSubmit}>
-            {submitting ? 'Creating…' : 'Create loop'}
+            {submitting ? 'Creating…' : 'Create standing task'}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -3,13 +3,22 @@ import { Check } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
-  approveDispatcherProposal,
   actChip,
   dismissChip,
   fetchAttention,
   resolveAttentionItem,
   type AttentionItemDto,
 } from '../lib/api';
+import {
+  dispatcherDone,
+  dispatcherPayload,
+  markDispatcherProposalApproved,
+  queuedTasksLabel,
+} from '../lib/dispatcher-proposal';
+import {
+  approveDispatcherProposalOnce,
+  useDispatcherProposalBusyIds,
+} from '../lib/dispatcher-proposal-approval';
 import type { OpenTarget } from '../lib/attention-kind';
 import { cn } from '@/lib/utils';
 import { AttentionRow } from './attention-row';
@@ -29,15 +38,33 @@ export function AttentionQueue({ compactEmpty = false }: AttentionQueueProps) {
   const [loading, setLoading] = useState(true);
   const [busyIds, setBusyIds] = useState<Set<string>>(() => new Set());
   const [expandedKinds, setExpandedKinds] = useState<Set<string>>(() => new Set());
+  const approvalBusyIds = useDispatcherProposalBusyIds();
   const errorShown = useRef(false);
   const inFlight = useRef(new Set<string>());
+  const attentionRequestId = useRef(0);
 
   const refresh = useCallback(async () => {
+    const requestId = ++attentionRequestId.current;
     try {
       const { items: next } = await fetchAttention();
-      setItems(next);
+      if (requestId !== attentionRequestId.current) return;
+      setItems((current) => {
+        const currentById = new Map(current.map((item) => [item.id, item]));
+        return next.map((item) => {
+          const previous = currentById.get(item.id);
+          if (
+            previous &&
+            dispatcherDone(dispatcherPayload(previous)) &&
+            !dispatcherDone(dispatcherPayload(item))
+          ) {
+            return previous;
+          }
+          return item;
+        });
+      });
       errorShown.current = false;
     } catch {
+      if (requestId !== attentionRequestId.current) return;
       if (!errorShown.current) {
         toast.error('Failed to load the inbox');
         errorShown.current = true;
@@ -85,6 +112,27 @@ export function AttentionQueue({ compactEmpty = false }: AttentionQueueProps) {
     }
   };
 
+  const approve = (id: string) => {
+    if (approvalBusyIds.has(id)) return;
+    void approveDispatcherProposalOnce(id, async (outcome) => {
+      if (outcome.ok) {
+        setItems((current) =>
+          current.map((item) =>
+            item.id === id
+              ? markDispatcherProposalApproved(item, outcome.result.taskIds)
+              : item,
+          ),
+        );
+        if (outcome.owner) {
+          toast.success(queuedTasksLabel(outcome.result.taskIds.length));
+        }
+      } else if (outcome.owner) {
+        toast.error(outcome.error instanceof Error ? outcome.error.message : 'Action failed');
+      }
+      await refresh();
+    });
+  };
+
   if (loading) {
     return (
       <ul className="flex flex-col gap-3" aria-hidden>
@@ -104,15 +152,9 @@ export function AttentionQueue({ compactEmpty = false }: AttentionQueueProps) {
     <AttentionRow
       key={item.id}
       item={item}
-      busy={busyIds.has(item.id)}
+      busy={busyIds.has(item.id) || approvalBusyIds.has(item.id)}
       onOpen={handleOpen}
-      onApprove={(id, proposalCount) =>
-        void act(id, approveDispatcherProposal, (result) => {
-          const taskIds = (result as { taskIds?: unknown }).taskIds;
-          const count = Array.isArray(taskIds) ? taskIds.length : proposalCount;
-          toast.success(`${count} task${count === 1 ? '' : 's'} queued`);
-        })
-      }
+      onApprove={(id) => approve(id)}
       onResolve={(id) =>
         item.kind === 'spawn-task'
           ? void act(id, (chipId) => dismissChip(chipId))

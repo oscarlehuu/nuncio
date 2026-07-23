@@ -3,8 +3,8 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
 import { fetchLoopRunDetail, relativeTime, type LoopRunDetailDto } from '../lib/api';
+import { checkLabel } from '../lib/loop-check-label';
 import { VerifyDot } from './loop-status-chip';
-import { verifyLabel } from '@nuncio/core/loop-schedule';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -64,7 +64,7 @@ export function LoopRunDetailView() {
           variant="ghost"
           size="icon"
           onClick={() => navigate(loopId ? `/autopilot/${loopId}` : '/autopilot')}
-          aria-label="Back to loop"
+          aria-label="Back to standing task"
         >
           <ArrowLeft className="size-4" />
         </Button>
@@ -87,7 +87,7 @@ export function LoopRunDetailView() {
                     <div className={cn('text-ui-lg font-semibold', OUTCOME_TONE[detail.outcome] ?? 'text-foreground')}>
                       {outcomeTitle(detail.outcome)}
                     </div>
-                    <div className="text-ui-sm text-muted-foreground">{verifyLabel(detail.verify)}</div>
+                    <div className="text-ui-sm text-muted-foreground">{checkLabel(detail.verify)}</div>
                   </div>
                 </div>
                 {detail.sessionId && (
@@ -114,18 +114,18 @@ export function LoopRunDetailView() {
                 <Meta term="Duration" value={formatDuration(detail.durationMs)} />
                 <Meta term="Started" value={detail.startedAt ? relativeTime(detail.startedAt) : '—'} />
                 <Meta term="Settled" value={detail.settledAt ? relativeTime(detail.settledAt) : '—'} />
-                <Meta term="Verify" value={verifyLabel(detail.verify)} />
+                <Meta term="Checks" value={checkLabel(detail.verify)} />
               </dl>
 
               <div>
-                <div className="mb-1.5 text-ui font-medium text-foreground">Verify output</div>
+                <div className="mb-1.5 text-ui font-medium text-foreground">Checks output</div>
                 {detail.verifyOutputTail ? (
                   <pre className="max-h-96 overflow-auto rounded-xl border border-border bg-muted/30 p-3 text-ui-sm leading-relaxed font-mono text-foreground">
                     {detail.verifyOutputTail}
                   </pre>
                 ) : (
                   <p className="rounded-xl border border-border bg-card px-4 py-3 text-ui text-muted-foreground">
-                    No verify output for this run.
+                    No checks output for this run.
                   </p>
                 )}
               </div>

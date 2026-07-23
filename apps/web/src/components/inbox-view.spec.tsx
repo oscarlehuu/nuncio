@@ -236,8 +236,8 @@ describe('InboxView', () => {
           title: 'Dispatcher proposal for 2026-07-09',
           payload: {
             proposals: [
-              { title: 'Fix flaky tests', prompt: 'fix', projectPath: '/Users/me/nuncio', rationale: 'source: failing verify' },
-              { title: 'Review PR', prompt: 'review', projectPath: '/Users/me/api', rationale: 'source: open pr-review item' },
+              { subjectKey: 'tests:nuncio', title: 'Fix flaky tests', prompt: 'fix', projectPath: '/Users/me/nuncio', rationale: 'source: failing verify' },
+              { subjectKey: 'pr:api', title: 'Review PR', prompt: 'review', projectPath: '/Users/me/api', rationale: 'source: open pr-review item' },
             ],
           },
         }),
@@ -262,7 +262,7 @@ describe('InboxView', () => {
           item({
             id: 'a',
             kind: 'dispatcher-proposal',
-            payload: { proposals: [{ title: 'Fix flaky tests', prompt: 'fix', projectPath: '/Users/me/nuncio', rationale: 'source: failing verify' }] },
+            payload: { proposals: [{ subjectKey: 'tests:nuncio', title: 'Fix flaky tests', prompt: 'fix', projectPath: '/Users/me/nuncio', rationale: 'source: failing verify' }] },
           }),
         ],
         counts: { total: 1, unacked: 1, bySeverity: {} },
@@ -288,8 +288,8 @@ describe('InboxView', () => {
             approvedAt: 1,
             taskIds: ['t1', 't2'],
             proposals: [
-              { title: 'Fix flaky tests', prompt: 'fix', projectPath: '/Users/me/nuncio', rationale: 'source: failing verify' },
-              { title: 'Review PR', prompt: 'review', projectPath: '/Users/me/api', rationale: 'source: open pr-review item' },
+              { subjectKey: 'tests:nuncio', title: 'Fix flaky tests', prompt: 'fix', projectPath: '/Users/me/nuncio', rationale: 'source: failing verify' },
+              { subjectKey: 'pr:api', title: 'Review PR', prompt: 'review', projectPath: '/Users/me/api', rationale: 'source: open pr-review item' },
             ],
           },
         }),
@@ -308,7 +308,7 @@ describe('InboxView', () => {
         item({
           id: 'a',
           kind: 'dispatcher-proposal',
-          payload: { proposals: [{ title: 'Fix flaky tests', prompt: 'fix', projectPath: '/Users/me/nuncio', rationale: 'source: failing verify' }] },
+          payload: { proposals: [{ subjectKey: 'tests:nuncio', title: 'Fix flaky tests', prompt: 'fix', projectPath: '/Users/me/nuncio', rationale: 'source: failing verify' }] },
         }),
       ],
       counts: { total: 1, unacked: 1, bySeverity: {} },

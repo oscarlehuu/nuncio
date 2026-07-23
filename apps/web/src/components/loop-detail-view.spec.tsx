@@ -136,6 +136,25 @@ describe('LoopDetailView', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Run started'));
   });
 
+  it('preserves server error text verbatim', async () => {
+    vi.mocked(fireLoop).mockRejectedValue(new Error('Failed to run broken event loop verify job'));
+    renderDetail();
+    await userEvent.click(await screen.findByRole('button', { name: /run now/i }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Failed to run broken event loop verify job'),
+    );
+  });
+
+  it('renders a user-authored goal containing loop, broken, and verify verbatim', async () => {
+    vi.mocked(fetchLoop).mockResolvedValue(
+      loop({ goal: 'Keep the broken event loop verify wording' }),
+    );
+    renderDetail();
+    expect(
+      await screen.findByRole('heading', { name: 'Keep the broken event loop verify wording' }),
+    ).toBeInTheDocument();
+  });
+
   it('tells the truth when a fire is skipped for overlap (409)', async () => {
     vi.mocked(fireLoop).mockResolvedValue({ fired: false, reason: 'overlap' });
     renderDetail();
@@ -177,16 +196,16 @@ describe('LoopDetailView', () => {
   it('shows only the toggle for an active loop — no redundant status chip', async () => {
     vi.mocked(fetchLoop).mockResolvedValue(loop({ status: 'active' }));
     renderDetail();
-    await waitFor(() => expect(screen.getByRole('switch', { name: /loop active/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('switch', { name: /standing task active/i })).toBeInTheDocument());
     // "Active" appears once (the toggle's label), never also as a status chip.
     expect(screen.getAllByText('Active')).toHaveLength(1);
-    expect(screen.queryByText('Needs you')).not.toBeInTheDocument();
+    expect(screen.queryByText('Paused after failures')).not.toBeInTheDocument();
   });
 
   it('a paused loop shows the toggle (off), not a chip', async () => {
     vi.mocked(fetchLoop).mockResolvedValue(loop({ status: 'paused' }));
     renderDetail();
-    const toggle = await screen.findByRole('switch', { name: /loop active/i });
+    const toggle = await screen.findByRole('switch', { name: /standing task active/i });
     expect(toggle).not.toBeChecked();
     expect(screen.getByText('Paused')).toBeInTheDocument();
   });
@@ -198,8 +217,8 @@ describe('LoopDetailView', () => {
       { id: 'r2', loopId: 'l1', taskId: 't2', outcome: 'failed', verify: 'red', dayBucket: '2000-01-01', createdAt: 2 },
     ]);
     renderDetail();
-    await waitFor(() => expect(screen.getByText('Needs you')).toBeInTheDocument());
-    expect(screen.queryByRole('switch', { name: /loop active/i })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Paused after failures')).toBeInTheDocument());
+    expect(screen.queryByRole('switch', { name: /standing task active/i })).not.toBeInTheDocument();
     expect(screen.getByText(/2 failed runs in a row/i)).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /fix.*resume/i }));
     expect(resumeLoop).toHaveBeenCalledWith('l1');
@@ -209,7 +228,7 @@ describe('LoopDetailView', () => {
     vi.mocked(fetchLoop).mockResolvedValue(loop({ status: 'completed' }));
     renderDetail();
     await waitFor(() => expect(screen.getByText('Completed')).toBeInTheDocument());
-    expect(screen.queryByRole('switch', { name: /loop active/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: /standing task active/i })).not.toBeInTheDocument();
   });
 
   it('renders the current engine + model in the embedded control', async () => {
@@ -369,9 +388,9 @@ describe('LoopDetailView', () => {
     renderDetail();
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Nightly dependency bump' })).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /more actions/i }));
-    await userEvent.click(await screen.findByRole('menuitem', { name: /delete loop/i }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /delete standing task/i }));
     const dialog = await screen.findByRole('dialog');
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Delete loop' }));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Delete standing task' }));
     expect(deleteLoop).toHaveBeenCalledWith('l1');
   });
 });

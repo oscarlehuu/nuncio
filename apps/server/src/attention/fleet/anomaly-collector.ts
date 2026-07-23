@@ -176,7 +176,7 @@ export class AnomalyCollector implements OnModuleInit {
           kind: 'loop-failing',
           subjectId,
           projectPath: loop.projectPath,
-          title: 'Loop failing all runs today',
+          title: 'Autopilot failed every run today',
           payload: { loopId: loop.loopId },
         });
       } else {

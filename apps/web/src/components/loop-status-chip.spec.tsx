@@ -6,7 +6,7 @@ describe('LoopStatusChip', () => {
   it.each([
     ['active', 'Active'],
     ['paused', 'Paused'],
-    ['broken', 'Needs you'],
+    ['broken', 'Paused after failures'],
     ['completed', 'Completed'],
   ] as const)('renders %s as %s', (status, label) => {
     render(<LoopStatusChip status={status} />);
@@ -16,9 +16,9 @@ describe('LoopStatusChip', () => {
 
 describe('VerifyDot', () => {
   it.each([
-    ['green', 'Verify passed'],
-    ['red', 'Verify failed'],
-    ['none', 'No verify'],
+    ['green', 'Checks passed'],
+    ['red', 'Checks failed'],
+    ['none', 'No checks'],
   ] as const)('exposes %s via aria-label', (verify, label) => {
     render(<VerifyDot verify={verify} />);
     expect(screen.getByLabelText(label)).toBeInTheDocument();
