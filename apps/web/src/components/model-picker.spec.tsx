@@ -239,7 +239,7 @@ describe('ModelPicker', () => {
     expect(gptRow.parentElement?.querySelector('[data-testid="model-picker-options-footer"]')).toBeNull();
   });
 
-  it('shows a green lightning indicator when fast is on', () => {
+  it('shows a priority text badge on the trigger when fast is on', () => {
     render(
       <ModelPicker
         value="cursor:composer-2.5"
@@ -248,8 +248,21 @@ describe('ModelPicker', () => {
         providers={[PI_PROVIDER, CURSOR_PROVIDER]}
       />,
     );
-    expect(screen.getByRole('button', { name: /composer 2\.5 fast/i })).toBeInTheDocument();
-    expect(screen.getByLabelText('Fast mode on')).toBeInTheDocument();
+    const trigger = screen.getByRole('button', { name: /composer 2\.5 fast/i });
+    expect(within(trigger).getByText('Fast')).toBeInTheDocument();
+  });
+
+  it('shows the reasoning effort as a text badge on the trigger', () => {
+    render(
+      <ModelPicker
+        value="anthropic:claude-opus-4-6"
+        modelOptions={{ thinkingLevel: 'high' }}
+        onChange={vi.fn()}
+        providers={[PI_PROVIDER, CURSOR_PROVIDER]}
+      />,
+    );
+    const trigger = screen.getByRole('button', { name: /opus 4\.6 high/i });
+    expect(within(trigger).getByText('High')).toBeInTheDocument();
   });
 
   it('selects composer from the flat model panel with fast=false', async () => {
