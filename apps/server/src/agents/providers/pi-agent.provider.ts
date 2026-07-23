@@ -86,6 +86,10 @@ import {
 } from '../pi-engine/capture-evidence-tool';
 import { EvidenceCaptureService } from '../../evidence/evidence-capture.service';
 import { SubscriptionHostService } from '../../subscription-host/subscription-host.service';
+import {
+  SUBSCRIPTION_HOST_PROVIDER_ID,
+  type PiProviderRegistrar,
+} from '../../subscription-host/subscription-host.pi-provider';
 import type { ExternalMemoryRoots } from '../pi-engine/external-memory-sources';
 import { expandHome } from './cli-path.helpers';
 
@@ -216,7 +220,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     try {
       const pi = await this.loadSdk();
       const agentDir = this.resolveAgentDir(pi);
-      const { modelRegistry: registry } = createPiEngineModelRegistry(pi, agentDir, this.settings);
+      const { modelRegistry: registry } = await this.buildEngineRegistry(pi, agentDir);
       this.cachedAvailable = registry.getAvailable().length > 0;
     } catch {
       this.cachedAvailable = false;
@@ -238,7 +242,7 @@ export class PiAgentProvider extends BaseAgentProvider {
     try {
       const pi = await this.loadSdk();
       const agentDir = this.resolveAgentDir(pi);
-      const { modelRegistry } = createPiEngineModelRegistry(pi, agentDir, this.settings);
+      const { modelRegistry } = await this.buildEngineRegistry(pi, agentDir);
       const catalog = this.fromRegistry(modelRegistry);
       // The managed subscription model host, when up, contributes its models as a
       // group under Nuncio Engine (mirrors the Claude engine's bridge merge).
@@ -449,7 +453,7 @@ export class PiAgentProvider extends BaseAgentProvider {
   async completeOneShot(input: OneShotCompletionInput): Promise<string> {
     const pi = await this.loadSdk();
     const agentDir = this.resolveAgentDir(pi);
-    const { authStorage, modelRegistry } = createPiEngineModelRegistry(pi, agentDir, this.settings);
+    const { authStorage, modelRegistry } = await this.buildEngineRegistry(pi, agentDir);
     // Honor the caller's model; never a hardcoded one. When it cannot be
     // resolved the SDK falls back to its default, same as the normal run path.
     const model = resolveModelId(input.model ?? undefined, (provider, id) => modelRegistry.find(provider, id));
@@ -574,6 +578,22 @@ export class PiAgentProvider extends BaseAgentProvider {
   }
 
   /**
+   * Build the Nuncio Pi registry (no interactive CLI models.json) and, when the
+   * managed subscription model host is up, register its catalog as a
+   * `subscription-host` provider so a chosen `subscription-host:<id>` model
+   * resolves to the router's loopback endpoint instead of a built-in provider.
+   * Fail-soft: host down → provider absent, the session falls back as it does
+   * today. Shared by every call site that builds the registry.
+   */
+  private async buildEngineRegistry(pi: PiSdk, agentDir: string) {
+    const built = createPiEngineModelRegistry(pi, agentDir, this.settings);
+    await this.subscriptionHost?.applyToPiRegistry(
+      built.modelRegistry as unknown as PiProviderRegistrar,
+    );
+    return built;
+  }
+
+  /**
    * Resolve the Pi agent directory: a configured setting (DB or env) wins,
    * otherwise defer to the SDK's own resolution (`~/.pi/agent` by default).
    */
@@ -692,7 +712,7 @@ export class PiAgentProvider extends BaseAgentProvider {
   ): Promise<PiSessionHandle> {
     const pi = await this.loadSdk();
     const agentDir = this.resolveAgentDir(pi);
-    const { authStorage, modelRegistry } = createPiEngineModelRegistry(pi, agentDir, this.settings);
+    const { authStorage, modelRegistry } = await this.buildEngineRegistry(pi, agentDir);
     const model = resolveModelId(context.model, (provider, id) => modelRegistry.find(provider, id));
     if (context.runtimePolicy && context.model?.trim() && !model) {
       throw new Error(
@@ -1185,6 +1205,9 @@ export class PiAgentProvider extends BaseAgentProvider {
 
     const groupsByProvider = new Map<string, ModelItemDto[]>();
     for (const model of models) {
+      // The subscription-host provider is surfaced by mergeIntoNuncioEngineCatalog
+      // as its own "Subscription models" group; skip it here to avoid a duplicate.
+      if (model.provider === SUBSCRIPTION_HOST_PROVIDER_ID) continue;
       const registryModel = modelRegistry.find(model.provider, model.id);
       const options = piThinkingDescriptors(registryModel ?? model);
       const contextWindow = registryModel?.contextWindow ?? model.contextWindow;
