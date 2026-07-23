@@ -1,9 +1,8 @@
-import { useNavigate } from 'react-router-dom';
 import type { MessageAttachment } from '../lib/api';
 import type { ModelProvider } from '../lib/model-providers';
 import type { ModelOptionsMap } from '../lib/model-options';
 import { AttentionQueue } from './attention-queue';
-import { DigestCard } from './digest-card';
+import { HomeDigestLine } from './home-digest-line';
 import { HomeView } from './home-view';
 import { cn } from '@/lib/utils';
 
@@ -28,7 +27,7 @@ interface HomeSurfaceProps {
   railOverlay?: boolean;
 }
 
-/** Home: the composer on top, then the digest and the ranked attention queue. */
+/** Home: the composer on top, then one digest line and the ranked attention queue. */
 export function HomeSurface({
   sessionCount,
   providers,
@@ -38,8 +37,6 @@ export function HomeSurface({
   composerFocusKey,
   railOverlay = true,
 }: HomeSurfaceProps) {
-  const navigate = useNavigate();
-
   return (
     <section className="flex-1 flex flex-col min-h-0 overflow-hidden bg-background">
       <header
@@ -62,7 +59,7 @@ export function HomeSurface({
             onContinueOnMobile={onContinueOnMobile}
             loading={loading}
           />
-          <DigestCard onOpen={() => navigate('/digest')} />
+          <HomeDigestLine />
           <AttentionQueue compactEmpty />
         </div>
       </div>

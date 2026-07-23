@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseModule } from '../../../src/db/database.module';
 import { DatabaseService } from '../../../src/db/database.service';
+import { AttentionRepository } from '../../../src/attention/attention.repository';
+import { AttentionService } from '../../../src/attention/attention.service';
 import { WebhooksService } from '../../../src/forges/webhooks/webhooks.service';
 import type { CreateSessionDto } from '../../../src/sessions/domain/sessions.types';
 import type { ForgeIssueWebhookEvent } from '../../../src/forges/forges.types';
@@ -31,6 +33,7 @@ function makeEvent(overrides: Partial<ForgeIssueWebhookEvent> = {}): ForgeIssueW
 describe('WebhooksService (Phase 4)', () => {
   let module: TestingModule;
   let db: DatabaseService;
+  let attention: AttentionService;
   let service: WebhooksService;
   let dataDir: string;
 
@@ -62,6 +65,7 @@ describe('WebhooksService (Phase 4)', () => {
   let statusCalls: number;
   let projectPaths: string[];
   let matchingProjectPaths: Set<string>;
+  let remoteHost: string;
   let archiveError: Error | null;
   let authorCanWrite: boolean;
   let clearedWorktreeMetadata: string[];
@@ -109,9 +113,11 @@ describe('WebhooksService (Phase 4)', () => {
 
     module = await Test.createTestingModule({
       imports: [DatabaseModule],
+      providers: [AttentionRepository, AttentionService],
     }).compile();
 
     db = module.get(DatabaseService);
+    attention = module.get(AttentionService);
   });
 
   afterAll(async () => {
@@ -122,6 +128,7 @@ describe('WebhooksService (Phase 4)', () => {
 
   beforeEach(() => {
     db.db.exec('DELETE FROM forge_webhook_deliveries');
+    db.db.exec('DELETE FROM attention_items');
     createCalls = [];
     steerCalls = [];
     attentionSignals = [];
@@ -145,6 +152,7 @@ describe('WebhooksService (Phase 4)', () => {
     statusCalls = 0;
     projectPaths = [KNOWN_PATH];
     matchingProjectPaths = new Set([KNOWN_PATH]);
+    remoteHost = 'github.com';
     archiveError = null;
     authorCanWrite = true;
     clearedWorktreeMetadata = [];
@@ -196,7 +204,7 @@ describe('WebhooksService (Phase 4)', () => {
       },
       remoteInfo: async (path) =>
         matchingProjectPaths.has(path)
-          ? { host: 'github.com', owner: 'octo', repo: 'nuncio' }
+          ? { host: remoteHost, owner: 'octo', repo: 'nuncio' }
           : { host: 'github.com', owner: 'someone', repo: 'else' },
       status: async () => {
         statusCalls += 1;
@@ -260,6 +268,7 @@ describe('WebhooksService (Phase 4)', () => {
         canAuthorWriteRepository: async () => authorCanWrite,
       } as never,
       {
+        resolveRepoIdentity: async () => `${remoteHost}/octo/nuncio`.toLowerCase(),
         getWorkflowRunJobs: async () => {
           if (workflowJobsError) throw workflowJobsError;
           return [{ id: 901, name: 'unit-tests', status: 'completed', conclusion: 'failure' }];
@@ -270,8 +279,14 @@ describe('WebhooksService (Phase 4)', () => {
         },
       } as never,
       {
-        raise: (signal: Record<string, unknown>) => attentionSignals.push(signal),
-        onConditionCleared: (kind: string, subject: string) => resolvedAttention.push([kind, subject]),
+        raise: (signal: Record<string, unknown>) => {
+          attentionSignals.push(signal);
+          return attention.raise(signal as never);
+        },
+        onConditionCleared: (kind: string, subject: string) => {
+          resolvedAttention.push([kind, subject]);
+          attention.onConditionCleared(kind, subject);
+        },
       } as never,
     );
   });
@@ -820,6 +835,20 @@ describe('WebhooksService (Phase 4)', () => {
       id: 'sess-pr', status: 'IDLE', projectPath: KNOWN_PATH, pullRequestNumber: 7,
       worktreePath: '/worktrees/sess-pr', baseBranch: 'main',
     } as never;
+    attention.raise({
+      kind: 'pr-review',
+      subjectId: 'github.com/octo/nuncio#7',
+      projectPath: KNOWN_PATH,
+      title: 'Canonical PR review',
+      payload: { repo: 'github.com/octo/nuncio', number: 7 },
+    });
+    attention.raise({
+      kind: 'pr-review',
+      subjectId: `${KNOWN_PATH}#7`,
+      projectPath: KNOWN_PATH,
+      title: 'Legacy PR review',
+      payload: { repo: 'github.com/octo/nuncio', number: 7 },
+    });
     const result = await service.handleEvent(
       'github',
       {
@@ -837,9 +866,34 @@ describe('WebhooksService (Phase 4)', () => {
     expect(archiveCalls).toEqual(['sess-pr']);
     expect(removeWorktreeCalls).toEqual([[KNOWN_PATH, '/worktrees/sess-pr']]);
     expect(clearedWorktreeMetadata).toEqual(['sess-pr']);
+    expect(attention.list().items.filter((item) => item.kind === 'pr-review')).toHaveLength(0);
+    expect(resolvedAttention).toContainEqual(['pr-review', 'github.com/octo/nuncio#7']);
     expect(resolvedAttention).toContainEqual(['pr-review', `${KNOWN_PATH}#7`]);
     expect(resolvedAttention).toContainEqual(['pr-feedback', 'octo/nuncio#7']);
     expect(resolvedAttention).toContainEqual(['pr-feedback', 'octo/nuncio#7:delivery']);
+  });
+
+  it('resolves the canonical PR key derived from the matched remote host alias', async () => {
+    remoteHost = 'ssh.github.com';
+    attention.raise({
+      kind: 'pr-review',
+      subjectId: 'ssh.github.com/octo/nuncio#7',
+      projectPath: KNOWN_PATH,
+      title: 'PR review through SSH remote',
+      payload: { repo: 'ssh.github.com/octo/nuncio', number: 7 },
+    });
+
+    await service.handleEvent('github', {
+      ...makeEvent({ deliveryId: 'closed-ssh-host', kind: 'issue' }),
+      kind: 'pull_request',
+      action: 'closed',
+      merged: false,
+      url: 'https://github.com/octo/nuncio/pull/7',
+      labels: [],
+    } as never);
+
+    expect(attention.list().items.filter((item) => item.kind === 'pr-review')).toHaveLength(0);
+    expect(resolvedAttention).toContainEqual(['pr-review', 'ssh.github.com/octo/nuncio#7']);
   });
 
   it('skips destructive merge cleanup and raises attention for a dirty worktree', async () => {
@@ -925,6 +979,7 @@ describe('WebhooksService (Phase 4)', () => {
     expect(archiveCalls).toHaveLength(0);
     expect(removeWorktreeCalls).toHaveLength(0);
     expect(resolvedAttention).toEqual([
+      ['pr-review', 'github.com/octo/nuncio#7'],
       ['pr-review', `${KNOWN_PATH}#7`],
       ['pr-feedback', 'octo/nuncio#7'],
       ['pr-feedback', 'octo/nuncio#7:delivery'],
@@ -996,7 +1051,7 @@ describe('WebhooksService (Phase 4)', () => {
         sessionId: 'sess-pr',
       });
       expect(forgeStateUpdates).toHaveLength(1);
-      expect(resolvedAttention).toHaveLength(4);
+      expect(resolvedAttention).toHaveLength(5);
     } finally {
       tracker.complete = originalComplete;
     }

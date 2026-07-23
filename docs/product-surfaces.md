@@ -44,12 +44,11 @@ does **not** mean the capability is unique to that file.
 
 | Route | Surface | Canonical entry |
 |---|---|---|
-| `/` | **Home** — composer + digest + attention + recent sessions | `home-surface.tsx` → `home-view.tsx` |
+| `/` | **Home** — composer + one-line digest narrative + attention | `home-surface.tsx` → `home-view.tsx` |
 | `/grid` | **Workbench** — multi-session grid | `grid-view.tsx` |
 | `/session/:sessionId` | **Session detail** — transcript + steer + inspector dock | `session-detail.tsx` |
 | `/autopilot/*` | **Autopilot / loops** | `autopilot-routes.tsx` |
 | `/settings` | **Settings** (`?section=`) — main sidebar swaps to settings nav + Back; content is `settings-view.tsx` |
-| `/digest` | Digest detail | `digest-view.tsx` |
 | `/timeline` | Global activity | `timeline-view.tsx` |
 | `/forge/pr` | Standalone PR deep link | `forge/standalone-pr-route.tsx` |
 | `/changelog` | What's new | `changelog-view.tsx` |
@@ -142,10 +141,10 @@ Columns: **Web** = primary components / routes · **Mobile** · **Settings** · 
 
 | | |
 |---|---|
-| **Web** | Home embedded: `attention-queue.tsx`, `digest-card.tsx`. Full: `/digest`, `/timeline`. Sidebar badge. Routing kinds: `lib/attention-kind.ts` |
+| **Web** | Home embedded: `home-digest-line.tsx`, `attention-queue.tsx`. Full activity: `/timeline`. Sidebar badge. Routing/group copy: `lib/attention-kind.ts` |
 | **Mobile** | Push deep-links to sessions — no full inbox UI |
 | **Server** | `attention/`, `attention/heartbeat/`, `attention/fleet/`, `dispatcher/`, `observability/` |
-| **Also check** | Home queue + digest/timeline + collectors; dispatcher approvals are **attention rows**, not a `/dispatcher` route |
+| **Also check** | Home narrative/queue + timeline + collectors; dispatcher approvals are **attention rows**, not a `/dispatcher` route |
 | **Legacy** | `inbox-view.tsx` is **not routed** (`/inbox` → `/`). Do not revive without updating this doc |
 
 ### Forge / SCM / PR
@@ -308,7 +307,7 @@ Use these literally when the change touches that capability:
 |---|---|
 | `sessions/`, `agents/`, `models/` | Home, Workbench, Session, Mobile |
 | `loops/`, `scheduler/` | `/autopilot/*`, Settings projects |
-| `attention/`, `dispatcher/`, `observability/` | Home queue, `/digest`, `/timeline`, push |
+| `attention/`, `dispatcher/`, `observability/` | Home narrative/queue, `/timeline`, push |
 | `forges/`, `git/` | Settings source-control, session SCM, `/forge/pr` |
 | `tasks/` | Multitask / subagents panel |
 | `terminal/`, `browser/`, `fs/`, `evidence/` | Session inspector dock |

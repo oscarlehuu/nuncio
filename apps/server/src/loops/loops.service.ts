@@ -52,14 +52,14 @@ export function outcomeFromTask(task: TaskDto): RunOutcome {
   const verify: LoopRunVerify =
     outcome.verify === undefined ? 'none' : outcome.verify.ok ? 'green' : 'red';
   // A run is 'ok' only when the task finished DONE and nothing flagged failure:
-  // a failing verify, a needs-attention (rung-1 gave up), or a FAILED status.
+  // a failing verify, a needs-attention outcome, or a FAILED status.
   const ok =
     task.status === 'DONE' && verify !== 'red' && outcome.needsAttention === undefined;
   return { ok, verify };
 }
 
 /**
- * The loop primitive (rung 2 sub-phase C): standing tasks firing loop-runs
+ * The loop primitive: standing tasks firing loop-runs
  * through the scheduler inside run-count budgets + a consecutive-failure breaker,
  * output landing via worktree + PR. All budget/breaker/stop state is DERIVED FROM
  * durable loop_runs rows (restart-safe, no in-memory counters).
@@ -622,7 +622,7 @@ export class LoopsService implements OnModuleInit {
   private trip(loop: LoopDto): void {
     if (loop.scheduleId !== 'pending') this.scheduler?.setEnabled(loop.scheduleId, false);
     this.loops.setStatus(loop.id, 'broken');
-    // Needs-attention emission (rung-1 vocabulary) — the attention-queue seam.
+    // Needs-attention emission uses the attention-queue seam.
     this.emitNeedsAttention(loop);
   }
 
@@ -640,7 +640,7 @@ export class LoopsService implements OnModuleInit {
         kind: 'tripped-breaker',
         subjectId: loop.id,
         projectPath: loop.projectPath,
-        title: `Loop "${loop.name ?? loop.goal}" tripped its breaker`,
+        title: `Autopilot paused "${loop.name ?? loop.goal}" after repeated failures`,
         payload: { loopId: loop.id },
       });
     } catch {

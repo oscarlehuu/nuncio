@@ -71,10 +71,6 @@ const ChangelogView = lazy(() =>
 // The Autopilot surfaces (list + detail + runs) load as one lazy chunk so they
 // never weigh on the entry bundle.
 const AutopilotRoutes = lazy(() => import('./components/autopilot-routes'));
-// The heartbeat digest — a read-once briefing, lazy-loaded.
-const DigestView = lazy(() =>
-  import('./components/digest-view').then((m) => ({ default: m.DigestView })),
-);
 const TimelineView = lazy(() =>
   import('./components/timeline-view').then((m) => ({ default: m.TimelineView })),
 );
@@ -832,21 +828,11 @@ export default function App() {
           />
           <Route path="/inbox" element={<Navigate to="/" replace />} />
           <Route
-            path="/digest"
-            element={
-              <ChunkErrorBoundary>
-                <Suspense fallback={<div className="flex-1" aria-hidden />}>
-                  <DigestView onBack={() => navigate('/inbox')} />
-                </Suspense>
-              </ChunkErrorBoundary>
-            }
-          />
-          <Route
             path="/timeline"
             element={
               <ChunkErrorBoundary>
                 <Suspense fallback={<div className="flex-1" aria-hidden />}>
-                  <TimelineView onBack={() => navigate('/digest')} />
+                  <TimelineView onBack={() => navigate('/')} />
                 </Suspense>
               </ChunkErrorBoundary>
             }

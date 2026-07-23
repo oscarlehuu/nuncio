@@ -13,6 +13,7 @@ import {
 import type { OpenTarget } from '../lib/attention-kind';
 import { cn } from '@/lib/utils';
 import { AttentionRow } from './attention-row';
+import { AttentionGroup } from './attention-group';
 
 interface AttentionQueueProps {
   compactEmpty?: boolean;
@@ -26,7 +27,8 @@ export function AttentionQueue({ compactEmpty = false }: AttentionQueueProps) {
   const navigate = useNavigate();
   const [items, setItems] = useState<AttentionItemDto[]>([]);
   const [loading, setLoading] = useState(true);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [busyIds, setBusyIds] = useState<Set<string>>(() => new Set());
+  const [expandedKinds, setExpandedKinds] = useState<Set<string>>(() => new Set());
   const errorShown = useRef(false);
   const inFlight = useRef(new Set<string>());
 
@@ -66,7 +68,7 @@ export function AttentionQueue({ compactEmpty = false }: AttentionQueueProps) {
   ) => {
     if (inFlight.current.has(id)) return;
     inFlight.current.add(id);
-    setBusyId(id);
+    setBusyIds((current) => new Set(current).add(id));
     try {
       const result = await action(id);
       afterSuccess?.(result);
@@ -75,7 +77,11 @@ export function AttentionQueue({ compactEmpty = false }: AttentionQueueProps) {
       toast.error(err instanceof Error ? err.message : 'Action failed');
     } finally {
       inFlight.current.delete(id);
-      setBusyId(null);
+      setBusyIds((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
     }
   };
 
@@ -94,36 +100,69 @@ export function AttentionQueue({ compactEmpty = false }: AttentionQueueProps) {
 
   if (items.length === 0) return <EmptyState compact={compactEmpty} />;
 
+  const renderRow = (item: AttentionItemDto) => (
+    <AttentionRow
+      key={item.id}
+      item={item}
+      busy={busyIds.has(item.id)}
+      onOpen={handleOpen}
+      onApprove={(id, proposalCount) =>
+        void act(id, approveDispatcherProposal, (result) => {
+          const taskIds = (result as { taskIds?: unknown }).taskIds;
+          const count = Array.isArray(taskIds) ? taskIds.length : proposalCount;
+          toast.success(`${count} task${count === 1 ? '' : 's'} queued`);
+        })
+      }
+      onResolve={(id) =>
+        item.kind === 'spawn-task'
+          ? void act(id, (chipId) => dismissChip(chipId))
+          : void act(id, resolveAttentionItem)
+      }
+      onCreate={(id) =>
+        void act(id, actChip, (result) => {
+          const childId = (result as { session?: { id?: unknown } }).session?.id;
+          if (typeof childId === 'string') navigate(`/session/${childId}`);
+        })
+      }
+    />
+  );
+
   return (
     <ul className="flex flex-col gap-3">
-      {items.map((item) => (
-        <AttentionRow
-          key={item.id}
-          item={item}
-          busy={busyId === item.id}
-          onOpen={handleOpen}
-          onApprove={(id, proposalCount) =>
-            void act(id, approveDispatcherProposal, (result) => {
-              const taskIds = (result as { taskIds?: unknown }).taskIds;
-              const count = Array.isArray(taskIds) ? taskIds.length : proposalCount;
-              toast.success(`${count} task${count === 1 ? '' : 's'} queued`);
-            })
-          }
-          onResolve={(id) =>
-            item.kind === 'spawn-task'
-              ? void act(id, (chipId) => dismissChip(chipId))
-              : void act(id, resolveAttentionItem)
-          }
-          onCreate={(id) =>
-            void act(id, actChip, (result) => {
-              const childId = (result as { session?: { id?: unknown } }).session?.id;
-              if (typeof childId === 'string') navigate(`/session/${childId}`);
-            })
-          }
-        />
-      ))}
+      {consecutiveRuns(items).map((run, index) =>
+        run.length === 1 ? (
+          renderRow(run[0])
+        ) : (
+          <AttentionGroup
+            key={`${run[0].kind}:${index}`}
+            kind={run[0].kind}
+            count={run.length}
+            expanded={expandedKinds.has(run[0].kind)}
+            onToggle={() => setExpandedKinds((current) => toggleSetValue(current, run[0].kind))}
+          >
+            {run.map(renderRow)}
+          </AttentionGroup>
+        ),
+      )}
     </ul>
   );
+}
+
+function toggleSetValue(current: Set<string>, value: string): Set<string> {
+  const next = new Set(current);
+  if (next.has(value)) next.delete(value);
+  else next.add(value);
+  return next;
+}
+
+/** Preserve server ranking by grouping only adjacent items with the same kind. */
+function consecutiveRuns(items: AttentionItemDto[]): AttentionItemDto[][] {
+  return items.reduce<AttentionItemDto[][]>((runs, item) => {
+    const current = runs.at(-1);
+    if (current?.[0].kind === item.kind) current.push(item);
+    else runs.push([item]);
+    return runs;
+  }, []);
 }
 
 /** The empty queue is the PRODUCT GOAL; keep it calm, not blank. */

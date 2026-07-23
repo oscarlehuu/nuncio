@@ -36,6 +36,7 @@ export type ForgePullRequestDetailDto = ForgePullRequestDetail & { checks: Forge
 interface ResolvedRepo {
   provider: ForgeProvider;
   repo: ForgeRepoRef;
+  host: string;
 }
 
 /**
@@ -65,6 +66,11 @@ export class ForgeRepoService {
   async listPullRequests(path: string, state: ForgeStateFilter): Promise<ForgePullRequestSummary[]> {
     const { provider, repo } = await this.resolve(path);
     return provider.listPullRequests(repo, state);
+  }
+
+  async resolveRepoIdentity(path: string): Promise<string> {
+    const { host, repo } = await this.resolve(path);
+    return `${host}/${repo.owner}/${repo.repo}`.toLowerCase();
   }
 
   /** Exhaustive paginated listing for an honest count (see ForgePullRequestPage). */
@@ -186,7 +192,7 @@ export class ForgeRepoService {
   private async resolve(path: string): Promise<ResolvedRepo> {
     const remote = await this.git.remoteInfo(this.requirePath(path));
     const provider = await this.registry.getAvailable(providerIdForHost(remote.host));
-    return { provider, repo: { owner: remote.owner, repo: remote.repo } };
+    return { provider, repo: { owner: remote.owner, repo: remote.repo }, host: remote.host };
   }
 
   private requirePath(path: string): string {

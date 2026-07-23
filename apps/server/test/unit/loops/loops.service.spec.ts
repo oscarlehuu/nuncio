@@ -560,7 +560,7 @@ describe('LoopsService', () => {
       // subjectId = loop.id) so the immediate raise and any later sweep dedup.
       expect(item!.subjectId).toBe(loop.id);
       expect(item!.payload).toMatchObject({ loopId: loop.id });
-      expect(item!.title).toContain('tripped its breaker');
+      expect(item!.title).toBe('Autopilot paused "nightly maintenance" after repeated failures');
     });
 
     it('does not raise while the loop is still active (below the threshold)', async () => {

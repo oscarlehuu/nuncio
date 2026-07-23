@@ -32,6 +32,7 @@ vi.mock('./lib/api', () => ({
   fetchAttentionCounts: vi.fn().mockResolvedValue({ total: 0, unacked: 0, bySeverity: {} }),
   fetchAttention: vi.fn().mockResolvedValue({ items: [], counts: { total: 0, unacked: 0, bySeverity: {} } }),
   fetchDigest: vi.fn().mockResolvedValue(null),
+  fetchTimeline: vi.fn().mockResolvedValue({ entries: [], nextBefore: null }),
   ackAttentionItem: vi.fn(),
   resolveAttentionItem: vi.fn(),
   statusLabel: (s: string) => s,
@@ -303,6 +304,19 @@ describe('App URL routing', () => {
     expect(screen.queryByRole('heading', { name: /^inbox$/i })).not.toBeInTheDocument();
   });
 
+  it('redirects removed /digest deep links to Home', async () => {
+    renderApp('/digest');
+    await waitFor(() => expect(screen.getByRole('heading', { name: /^home$/i })).toBeInTheDocument());
+    expect(screen.queryByRole('heading', { name: /^digest$/i })).not.toBeInTheDocument();
+  });
+
+  it('returns from Timeline to Home', async () => {
+    renderApp('/timeline');
+    await waitFor(() => expect(screen.getByRole('heading', { name: /^timeline$/i })).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: /^back$/i }));
+    expect(await screen.findByRole('heading', { name: /^home$/i })).toBeInTheDocument();
+  });
+
   it('renders Home as digest and attention queue without loading fleet rows', async () => {
     vi.mocked(fetchDigest).mockResolvedValue({
       slotKey: '2026-07-08:morning',
@@ -329,7 +343,7 @@ describe('App URL routing', () => {
 
     renderApp('/');
 
-    const digest = await screen.findByRole('button', { name: /read the morning digest/i });
+    const digest = await screen.findByText('Overnight: 0 runs, 0 green, 0 PRs opened — 2 things need you.');
     const queueItem = await screen.findByText('Approve command');
     expect(digest.compareDocumentPosition(queueItem) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByText(/^fleet$/i)).not.toBeInTheDocument();

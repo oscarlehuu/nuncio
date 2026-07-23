@@ -78,6 +78,11 @@ class FakeAttentionService {
     row.updatedAt = this.clock.now();
     return row;
   }
+
+  onConditionCleared(kind: string, subjectId: string): void {
+    const row = this.repo.findOpen(kind, subjectId);
+    if (row) this.resolve(row.id);
+  }
 }
 
 class FakeTasksService {
@@ -164,7 +169,7 @@ describe('DispatcherService', () => {
           subjectId: 's1',
           projectPath: '/repo/app',
           severity: 5,
-          title: 'Verify failed after auto-fix rounds',
+          title: 'Checks still failing after auto-fix — needs your decision',
           payload: { sessionId: 's1' },
           status: 'open',
           acknowledgedAt: null,
@@ -189,6 +194,7 @@ describe('DispatcherService', () => {
       kind: 'dispatcher-proposal',
       subjectId: 'dispatch:2026-07-08',
       severity: 2,
+      title: "Tomorrow's plan (2026-07-08)",
     });
     expect(item!.payload).toMatchObject({
       proposals: [expect.objectContaining({ title: 'Fix the failing verify in app' })],
@@ -262,11 +268,109 @@ describe('DispatcherService', () => {
     });
   });
 
+  for (const approvalPayload of [
+    { approvedAt: NOW - 1 },
+    { taskIds: ['task-9'] },
+  ]) {
+    const approvalMarker = 'approvedAt' in approvalPayload ? 'approvedAt' : 'taskIds';
+    it(`does not overwrite an open same-subject proposal carrying ${approvalMarker}`, () => {
+      const approved = attention.raise({
+        kind: 'dispatcher-proposal',
+        subjectId: 'dispatch:2026-07-08',
+        title: "Tomorrow's plan (2026-07-08)",
+        payload: {
+          proposals: [proposal({ subjectKey: 'approved:proposal', title: 'Approved proposal' })],
+          ...approvalPayload,
+        },
+      });
+      const approvedState = structuredClone(approved);
+
+      const result = service.draftFromSources({
+        attentionItems: repo.list('open'),
+        loops: [{ id: 'loop-1', name: 'New draft source', goal: 'g', scheduleId: 's', maxRunsPerDay: 1, maxConsecutiveFailures: 3, stop: null, escalation: 'needs-attention', projectPath: '/repo/app', engine: null, model: null, status: 'broken', createdAt: NOW, updatedAt: NOW }],
+        loopRuns: [],
+        sessions: [],
+        eventsBySession: {},
+        tasks: [],
+        projectDefaults: {},
+        projectWeights: {},
+        now: NOW,
+      });
+
+      expect(result).toEqual(approvedState);
+      expect(repo.findById(approved.id)).toEqual(approvedState);
+    });
+  }
+
+  it('a new proposal supersedes older open unapproved proposals but preserves approved ones', () => {
+    const superseded = attention.raise({
+      kind: 'dispatcher-proposal',
+      subjectId: 'dispatch:2026-07-07',
+      title: "Tomorrow's plan (2026-07-07)",
+      payload: { proposals: [proposal({ subjectKey: 'loop:broken:loop-1' })] },
+    });
+    const approvedAt = attention.raise({
+      kind: 'dispatcher-proposal',
+      subjectId: 'dispatch:2026-07-06',
+      title: "Tomorrow's plan (2026-07-06)",
+      payload: { proposals: [proposal({ subjectKey: 'old:approved-at' })], approvedAt: NOW - 1 },
+    });
+    const approvedTasks = attention.raise({
+      kind: 'dispatcher-proposal',
+      subjectId: 'dispatch:2026-07-05',
+      title: "Tomorrow's plan (2026-07-05)",
+      payload: { proposals: [proposal({ subjectKey: 'old:tasks' })], taskIds: ['task-9'] },
+    });
+    const approvedAtState = structuredClone(approvedAt);
+    const approvedTasksState = structuredClone(approvedTasks);
+
+    const item = service.draftFromSources({
+      attentionItems: repo.list('open'),
+      loops: [{ id: 'loop-1', name: 'Nightly', goal: 'g', scheduleId: 's', maxRunsPerDay: 1, maxConsecutiveFailures: 3, stop: null, escalation: 'needs-attention', projectPath: '/repo/app', engine: null, model: null, status: 'broken', createdAt: NOW, updatedAt: NOW }],
+      loopRuns: [],
+      sessions: [],
+      eventsBySession: {},
+      tasks: [],
+      projectDefaults: {},
+      projectWeights: {},
+      now: NOW,
+    });
+
+    expect(item?.subjectId).toBe('dispatch:2026-07-08');
+    expect(repo.findById(superseded.id)?.status).toBe('resolved');
+    expect(repo.findById(approvedAt.id)).toEqual(approvedAtState);
+    expect(repo.findById(approvedTasks.id)).toEqual(approvedTasksState);
+  });
+
+  it('expires an older unapproved proposal even when today has no replacement', () => {
+    const stale = attention.raise({
+      kind: 'dispatcher-proposal',
+      subjectId: 'dispatch:2026-07-07',
+      title: "Tomorrow's plan (2026-07-07)",
+      payload: { proposals: [proposal({ subjectKey: 'stale:proposal' })] },
+    });
+
+    const result = service.draftFromSources({
+      attentionItems: repo.list('open'),
+      loops: [],
+      loopRuns: [],
+      sessions: [],
+      eventsBySession: {},
+      tasks: [],
+      projectDefaults: {},
+      projectWeights: {},
+      now: NOW,
+    });
+
+    expect(result).toBeNull();
+    expect(repo.findById(stale.id)?.status).toBe('resolved');
+  });
+
   it('approve creates queued tasks, resolves the proposal, and records audit payload', () => {
     const item = attention.raise({
       kind: 'dispatcher-proposal',
       subjectId: 'dispatch:2026-07-08',
-      title: 'Dispatcher proposal for 2026-07-08',
+      title: "Tomorrow's plan (2026-07-08)",
       payload: { proposals: [proposal(), proposal({ subjectKey: 'loop:loop-1', title: 'Resume loop', prompt: 'Resume loop', engine: undefined, model: undefined })] },
     });
 
@@ -283,7 +387,7 @@ describe('DispatcherService', () => {
     const item = attention.raise({
       kind: 'dispatcher-proposal',
       subjectId: 'dispatch:2026-07-08',
-      title: 'Dispatcher proposal for 2026-07-08',
+      title: "Tomorrow's plan (2026-07-08)",
       payload: { proposals: [proposal()], approvedAt: NOW, taskIds: ['task-9'] },
     });
 
@@ -302,7 +406,7 @@ describe('DispatcherService', () => {
     const item = attention.raise({
       kind: 'dispatcher-proposal',
       subjectId: 'dispatch:2026-07-08',
-      title: 'Dispatcher proposal for 2026-07-08',
+      title: "Tomorrow's plan (2026-07-08)",
       payload: { proposals: [proposal()] },
     });
 
@@ -322,7 +426,7 @@ describe('DispatcherService', () => {
     const item = attention.raise({
       kind: 'dispatcher-proposal',
       subjectId: 'dispatch:2026-07-09',
-      title: 'Dispatcher proposal for 2026-07-09',
+      title: "Tomorrow's plan (2026-07-09)",
       payload: { proposals: [proposal()] },
     });
 
@@ -335,7 +439,7 @@ describe('DispatcherService', () => {
     const item = attention.raise({
       kind: 'dispatcher-proposal',
       subjectId: 'dispatch:2026-07-08',
-      title: 'Dispatcher proposal for 2026-07-08',
+      title: "Tomorrow's plan (2026-07-08)",
       payload: { proposals: [proposal()] },
     });
     tasks.fail = true;

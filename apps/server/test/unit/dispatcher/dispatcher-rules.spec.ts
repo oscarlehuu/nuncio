@@ -20,7 +20,7 @@ function attention(overrides: Partial<AttentionItemDto> & { id?: string; kind?: 
     subjectId: overrides.subjectId ?? 's1',
     projectPath: overrides.projectPath ?? '/repo/app',
     severity: overrides.severity ?? 5,
-    title: overrides.title ?? 'Verify failed after auto-fix rounds',
+    title: overrides.title ?? 'Checks still failing after auto-fix — needs your decision',
     payload: overrides.payload ?? { sessionId: 's1' },
     status: overrides.status ?? 'open',
     acknowledgedAt: overrides.acknowledgedAt ?? null,

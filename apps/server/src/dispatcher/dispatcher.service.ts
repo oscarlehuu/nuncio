@@ -62,17 +62,36 @@ export class DispatcherService implements OnModuleInit {
   }
 
   draftFromSources(sources: DispatcherRuleSources): AttentionItemDto | null {
-    const proposals = foldDispatcherProposals({ ...sources, now: sources.now ?? this.clock.now() });
-    if (proposals.length === 0) return null;
     const now = this.clock.now();
-    const day = dispatcherSubjectFor(now).replace('dispatch:', '');
-    return this.attention.raise({
+    const subjectId = dispatcherSubjectFor(now);
+    const existingToday = this.items.findOpen(DISPATCHER_KIND, subjectId);
+    if (existingToday && isApprovedProposal(existingToday.payload)) return existingToday;
+    const superseded = this.items
+      .list('open')
+      .filter((item) =>
+        item.kind === DISPATCHER_KIND &&
+        item.subjectId < subjectId &&
+        !isApprovedProposal(item.payload)
+      );
+    const supersededIds = new Set(superseded.map((item) => item.id));
+    const proposals = foldDispatcherProposals({
+      ...sources,
+      attentionItems: sources.attentionItems.filter((item) => !supersededIds.has(item.id)),
+      now: sources.now ?? now,
+    });
+    for (const item of superseded) {
+      this.attention.onConditionCleared(DISPATCHER_KIND, item.subjectId);
+    }
+    if (proposals.length === 0) return null;
+    const day = subjectId.replace('dispatch:', '');
+    const proposal = this.attention.raise({
       kind: DISPATCHER_KIND,
-      subjectId: dispatcherSubjectFor(now),
+      subjectId,
       projectPath: null,
-      title: `Dispatcher proposal for ${day}`,
+      title: `Tomorrow's plan (${day})`,
       payload: { proposals, draftedAt: now },
     });
+    return proposal;
   }
 
   approve(id: string): { proposalId: string; taskIds: string[] } {
@@ -158,6 +177,11 @@ function parsePayload(payload: Record<string, unknown> | null): DispatcherPayloa
     ...(typeof payload?.approvedAt === 'number' ? { approvedAt: payload.approvedAt } : {}),
     ...(Array.isArray(taskIds) && taskIds.every((id) => typeof id === 'string') ? { taskIds } : {}),
   };
+}
+
+function isApprovedProposal(payload: Record<string, unknown> | null): boolean {
+  return typeof payload?.approvedAt === 'number' ||
+    (Array.isArray(payload?.taskIds) && payload.taskIds.length > 0);
 }
 
 function isProposal(value: unknown): value is DispatcherProposal {

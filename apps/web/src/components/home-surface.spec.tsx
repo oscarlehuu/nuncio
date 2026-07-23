@@ -1,8 +1,9 @@
 import type { ComponentProps } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { HomeSurface } from './home-surface';
+import { fetchDigest, type DigestRunDto } from '../lib/api';
 
 const noopSubmit = vi.fn().mockResolvedValue(undefined);
 
@@ -34,6 +35,10 @@ vi.mock('../lib/api', () => ({
 }));
 
 describe('HomeSurface', () => {
+  beforeEach(() => {
+    vi.mocked(fetchDigest).mockReset().mockResolvedValue(null);
+  });
+
   it('renders composer, digest and attention queue without a fleet section', async () => {
     renderSurface();
 
@@ -43,6 +48,19 @@ describe('HomeSurface', () => {
     expect(screen.queryByText(/^fleet$/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /open .*fleet/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /new agent/i })).not.toBeInTheDocument();
+  });
+
+  it('renders the latest digest as one non-interactive narrative line', async () => {
+    vi.mocked(fetchDigest).mockResolvedValue(digest({
+      variant: 'morning',
+      loops: { runsOk: 5, runsFailed: 1, prsOpened: 2 },
+      attention: { raised: 0, resolved: 0, openTopCount: 2 },
+      sessions: { completed: 5, needsYou: 1 },
+    }));
+    renderSurface();
+
+    const line = await screen.findByText('Overnight: 6 runs, 5 green, 2 PRs opened — 3 things need you.');
+    expect(line.closest('button, a')).toBeNull();
   });
 
   it('focuses the composer when the focus key advances', async () => {
@@ -58,3 +76,24 @@ describe('HomeSurface', () => {
     await waitFor(() => expect(composer).toHaveFocus());
   });
 });
+
+function digest(overrides: Partial<DigestRunDto['digest']>): DigestRunDto {
+  return {
+    slotKey: '2026-07-23:morning',
+    variant: overrides.variant ?? 'morning',
+    sentAt: 1,
+    windowFrom: 0,
+    windowTo: 1,
+    digest: {
+      variant: overrides.variant ?? 'morning',
+      windowFrom: 0,
+      windowTo: 1,
+      loops: overrides.loops ?? { runsOk: 0, runsFailed: 0, prsOpened: 0 },
+      attention: overrides.attention ?? { raised: 0, resolved: 0, openTopCount: 0 },
+      sessions: overrides.sessions ?? { completed: 0, needsYou: 0 },
+      budget: { runsToday: 0, cap: 24 },
+      highlights: [],
+      projectLines: [],
+    },
+  };
+}
