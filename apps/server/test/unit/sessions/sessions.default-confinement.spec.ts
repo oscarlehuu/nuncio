@@ -86,23 +86,11 @@ describe('SessionsService default workspace confinement (task-03)', () => {
     return events.list(id).filter((event) => event.type === 'runtime_policy');
   }
 
-  it('confines a Nuncio Engine project session to workspace-write by default', async () => {
+  it('leaves a Nuncio Engine project session unconfined by default (full machine access)', async () => {
     const session = await service.create({ prompt: 'edit here', provider: 'pi', projectPath: repoPath });
 
-    expect(session.runtimePolicy).toEqual({
-      filesystem: 'workspace-write',
-      workspaceRoot: realpathSync(repoPath),
-      network: 'disabled',
-    });
-
-    const notices = runtimePolicyEvents(session.id);
-    expect(notices).toHaveLength(1);
-    expect(notices[0].payload).toMatchObject({
-      filesystem: 'workspace-write',
-      workspaceRoot: realpathSync(repoPath),
-      source: 'default',
-    });
-    expect(typeof (notices[0].payload as { shellSandboxEnforced: boolean }).shellSandboxEnforced).toBe('boolean');
+    expect(session.runtimePolicy ?? null).toBeNull();
+    expect(runtimePolicyEvents(session.id)).toHaveLength(0);
   });
 
   it('leaves an ad-hoc session with no workspace unconfined', async () => {
@@ -127,12 +115,25 @@ describe('SessionsService default workspace confinement (task-03)', () => {
     expect(runtimePolicyEvents(session.id)).toHaveLength(0);
   });
 
-  it('honors the global opt-out setting', async () => {
-    process.env.NUNCIO_ENGINE_WORKSPACE_CONFINEMENT = 'off';
+  it('confines to workspace-write when the opt-in setting is on', async () => {
+    process.env.NUNCIO_ENGINE_WORKSPACE_CONFINEMENT = 'on';
     try {
-      const session = await service.create({ prompt: 'unconfined', provider: 'pi', projectPath: repoPath });
-      expect(session.runtimePolicy ?? null).toBeNull();
-      expect(runtimePolicyEvents(session.id)).toHaveLength(0);
+      const session = await service.create({ prompt: 'hermetic', provider: 'pi', projectPath: repoPath });
+
+      expect(session.runtimePolicy).toEqual({
+        filesystem: 'workspace-write',
+        workspaceRoot: realpathSync(repoPath),
+        network: 'disabled',
+      });
+
+      const notices = runtimePolicyEvents(session.id);
+      expect(notices).toHaveLength(1);
+      expect(notices[0].payload).toMatchObject({
+        filesystem: 'workspace-write',
+        workspaceRoot: realpathSync(repoPath),
+        source: 'default',
+      });
+      expect(typeof (notices[0].payload as { shellSandboxEnforced: boolean }).shellSandboxEnforced).toBe('boolean');
     } finally {
       delete process.env.NUNCIO_ENGINE_WORKSPACE_CONFINEMENT;
     }

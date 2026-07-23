@@ -164,19 +164,19 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     type: 'string',
     label: 'Nuncio Engine workspace confinement',
     description:
-      'Confines a Nuncio Engine session\'s file writes and shell side effects to its own workspace by default whenever the session has a project or worktree. Reads and the OS shell sandbox follow the policy shell setting. Ad-hoc chats with no workspace are unaffected, an explicit per-session runtime policy always wins, and legacy vendor engines are unchanged.',
+      'When on, a Nuncio Engine session runs inside the hermetic OS sandbox (network denied, reads limited, writes confined to the workspace). Off by default: sessions run with full machine access — the point of running agents on your own machine — and isolation comes from per-session git worktrees plus the gate guard, not an OS sandbox. Turn on only to run untrusted work. An explicit per-session runtime policy always wins; ad-hoc chats and legacy vendor engines are unaffected.',
     envVar: 'NUNCIO_ENGINE_WORKSPACE_CONFINEMENT',
-    default: 'on',
+    default: 'off',
     options: [
-      {
-        value: 'on',
-        label: 'On',
-        description: 'Default new project sessions to workspace-write confinement (recommended).',
-      },
       {
         value: 'off',
         label: 'Off',
-        description: 'Run project sessions unconfined unless an explicit runtime policy is set.',
+        description: 'Full machine access; isolation via worktree + gate guard (default).',
+      },
+      {
+        value: 'on',
+        label: 'On',
+        description: 'Run project sessions inside the hermetic sandbox (for untrusted work).',
       },
     ],
   },
