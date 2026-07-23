@@ -137,13 +137,13 @@ export function fetchForgePulls(path: string, state: ForgeStateFilter): Promise<
 }
 
 /** Per-scope open/merged/closed totals. Null when a scope was not fetched. */
-export interface PullsSummaryCounts {
+interface PullsSummaryCounts {
   open: number | null;
   merged: number | null;
   closed: number | null;
 }
 
-export interface PullsSummaryItem {
+interface PullsSummaryItem {
   number: number;
   title: string;
   /** Normalized state: 'open' | 'merged' | 'closed'. */

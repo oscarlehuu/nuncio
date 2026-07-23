@@ -51,7 +51,7 @@ export function groupSessionsByProject(sessions: Session[]): SessionGroup[] {
 }
 
 /** A linked worktree under a repo: its branch and the session(s) occupying it. */
-export interface RepoWorktreeGroup {
+interface RepoWorktreeGroup {
   path: string;
   branch: string | null;
   sessions: Session[];
