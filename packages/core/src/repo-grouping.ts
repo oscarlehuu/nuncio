@@ -2,7 +2,8 @@
  * Group sessions/tasks by repository identity so that all worktrees of one repo
  * (main checkout + linked worktrees) appear under a single project entry, with
  * each active worktree and its branch listed inside. Pure — callers resolve the
- * repo identity of each record first (see GitService.resolveRepoIdentity).
+ * repo identity of each record first (see GitService.resolveRepoIdentity on the
+ * server; the session DTO carries `repoIdentityId` / `repoRoot` / `isWorktree`).
  */
 export interface RepoGroupSessionInput {
   id: string;
@@ -20,7 +21,7 @@ export interface RepoGroupSessionInput {
   isWorktree: boolean;
 }
 
-interface RepoGroupWorktree {
+export interface RepoGroupWorktree {
   path: string;
   branch: string | null;
   sessionIds: string[];

@@ -1,4 +1,5 @@
-import { groupSessionsByRepo } from '../../../src/projects/repo-grouping';
+import { describe, it, expect } from 'vitest';
+import { groupSessionsByRepo } from './repo-grouping';
 
 describe('groupSessionsByRepo', () => {
   it('groups a main-checkout session and a worktree session of one repo together', () => {
