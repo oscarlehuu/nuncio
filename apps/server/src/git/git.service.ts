@@ -18,6 +18,7 @@ import {
 import { validateGitCheckpointRange } from './git-checkpoint-range-validation';
 import { inspectGitWorkspaceBoundary } from './git-workspace-boundary';
 import { checkpointGitWorkspace } from './git-workspace-checkpoint';
+import { computeRepoIdentity, type RepoIdentity } from './repo-identity';
 import {
   blame as blameFile,
   branchSync as computeBranchSync,
@@ -320,6 +321,43 @@ export class GitService {
     }
 
     return projects.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * Derive a project's identity from the git repository, not the working dir.
+   * All worktrees of one repo (main checkout + linked worktrees) resolve to the
+   * same identity; a non-git folder falls back to path identity so loose
+   * directories never regress.
+   */
+  async resolveRepoIdentity(path: string): Promise<RepoIdentity> {
+    const normalized = expandHome(path.trim());
+    let toplevel: string | null;
+    try {
+      const rawToplevel = await git(['rev-parse', '--show-toplevel'], normalized);
+      toplevel = realpathSync.native(resolve(rawToplevel));
+    } catch {
+      return computeRepoIdentity({ path: normalized, toplevel: null });
+    }
+
+    let commonDir: string | null = null;
+    try {
+      const rawCommon = await git(
+        ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+        normalized,
+      );
+      commonDir = realpathSync.native(resolve(rawCommon));
+    } catch {
+      commonDir = null;
+    }
+
+    let remoteUrl: string | null = null;
+    try {
+      remoteUrl = await git(['remote', 'get-url', 'origin'], normalized);
+    } catch {
+      remoteUrl = null;
+    }
+
+    return computeRepoIdentity({ path: normalized, toplevel, commonDir, remoteUrl });
   }
 
   async resolveRepoRoot(path: string): Promise<string> {

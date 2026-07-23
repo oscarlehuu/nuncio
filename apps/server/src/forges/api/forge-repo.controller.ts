@@ -1,5 +1,6 @@
 import { BadRequestException, Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { ForgeRepoService } from '../forges-repo.service';
+import { ProjectPullRequestsService } from '../project-pull-requests.service';
 import type {
   ForgeMergeMethod,
   ForgeReviewEvent,
@@ -20,7 +21,10 @@ interface MergeBody {
  */
 @Controller('forge')
 export class ForgeRepoController {
-  constructor(private readonly forge: ForgeRepoService) {}
+  constructor(
+    private readonly forge: ForgeRepoService,
+    private readonly pullRequests: ProjectPullRequestsService,
+  ) {}
 
   @Get('capabilities')
   capabilities(@Query('path') path: string) {
@@ -30,6 +34,11 @@ export class ForgeRepoController {
   @Get('pulls')
   listPulls(@Query('path') path: string, @Query('state') state?: string) {
     return this.forge.listPullRequests(path, parseStateFilter(state));
+  }
+
+  @Get('pulls-summary')
+  pullsSummary(@Query('path') path: string) {
+    return this.pullRequests.aggregate(path);
   }
 
   @Get('pulls/:number')
