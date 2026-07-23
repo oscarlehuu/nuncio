@@ -104,9 +104,17 @@ export function activeModelOptionBadges(
   }
 
   for (const descriptor of selectOptionsForModel(model)) {
-    if (isTriggerIconOption(descriptor.id) && !opts.forTrigger) continue;
+    const isEffort = isTriggerIconOption(descriptor.id);
+    if (isEffort && !opts.forTrigger) continue;
     const value = selections[descriptor.id];
     if (value === undefined || typeof value === 'boolean') continue;
+    // An effort slider only earns a trigger badge when it differs from the
+    // model's default — showing the default level everywhere is just noise.
+    if (isEffort && opts.forTrigger) {
+      const defaultValue =
+        descriptor.defaultValue ?? descriptor.options?.find((choice) => choice.isDefault)?.id;
+      if (value === defaultValue) continue;
+    }
     const label =
       descriptor.options?.find((choice) => choice.id === value)?.label ?? String(value);
     badges.push({ id: descriptor.id, label });

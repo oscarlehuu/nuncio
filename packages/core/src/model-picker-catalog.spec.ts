@@ -240,18 +240,20 @@ describe('formatModelPickerLabel', () => {
     };
     expect(
       formatModelPickerLabel(model, { context: '1M', reasoning: 'xhigh' }),
-    ).toBe('Claude Opus 4.6 1M');
+    ).toBe('Claude Opus 4.6 1M Max');
   });
 
   it('includes fast in the accessible label when enabled', () => {
     expect(formatModelPickerLabel(COMPOSER_MODEL, { fast: true })).toBe('Composer 2.5 Fast');
   });
 
-  it('omits reasoning effort from the trigger label', () => {
+  it('shows a non-default reasoning effort in the trigger label', () => {
     expect(formatModelPickerLabel(OPUS_MODEL, { thinkingLevel: 'high' })).toBe(
-      'Claude Opus 4.6',
+      'Claude Opus 4.6 High',
     );
-    expect(formatModelPickerLabel(CODEX_MODEL, { reasoningEffort: 'xhigh' })).toBe('GPT 5.5');
+    expect(formatModelPickerLabel(CODEX_MODEL, { reasoningEffort: 'xhigh' })).toBe(
+      'GPT 5.5 Xhigh',
+    );
   });
 
   it('omits default thinking from the trigger label', () => {
