@@ -21,7 +21,7 @@ export type PiApi =
 /** Provider name the host's catalog registers under in the Pi ModelRegistry. */
 export const SUBSCRIPTION_HOST_PROVIDER_ID = 'subscription-host';
 
-export interface PiModelCost {
+interface PiModelCost {
   input: number;
   output: number;
   cacheRead: number;
@@ -29,7 +29,7 @@ export interface PiModelCost {
 }
 
 /** One entry of the registered provider's `models[]`, mirroring ProviderConfigInput. */
-export interface SubscriptionHostProviderModel {
+interface SubscriptionHostProviderModel {
   id: string;
   name: string;
   api: PiApi;
@@ -122,7 +122,7 @@ interface DefaultMetadata {
  * placeholders — NOT exact per-model limits — to refine later (out of scope here).
  * Cost is zeroed because subscription-billed models are not metered per token.
  */
-export function defaultMetadataForApi(api: PiApi): DefaultMetadata {
+function defaultMetadataForApi(api: PiApi): DefaultMetadata {
   const zeroCost: PiModelCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   switch (apiFamily(api)) {
     case 'anthropic':
