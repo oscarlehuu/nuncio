@@ -16,6 +16,12 @@ export interface RepoIdentity {
   repoRoot: string;
   /** Normalized remote URL (`host/owner/repo`) when an origin remote exists, else null. */
   remoteUrl: string | null;
+  /**
+   * True when the queried path is a LINKED worktree rather than the repo's main
+   * checkout — i.e. its `--show-toplevel` differs from the repo root derived from
+   * the shared git-common-dir. Always false for a non-git path.
+   */
+  isWorktree: boolean;
 }
 
 export interface RepoIdentityInput {
@@ -89,11 +95,20 @@ function deriveRepoRoot(toplevel: string, commonDir?: string | null): string {
 export function computeRepoIdentity(input: RepoIdentityInput): RepoIdentity {
   if (!input.toplevel) {
     const normalizedPath = normalizePath(input.path);
-    return { kind: 'path', id: normalizedPath, repoRoot: normalizedPath, remoteUrl: null };
+    return {
+      kind: 'path',
+      id: normalizedPath,
+      repoRoot: normalizedPath,
+      remoteUrl: null,
+      isWorktree: false,
+    };
   }
 
   const repoRoot = deriveRepoRoot(input.toplevel, input.commonDir);
   const remoteUrl = normalizeRemoteUrl(input.remoteUrl);
   const id = remoteUrl ? `remote:${remoteUrl}` : `repo:${repoRoot}`;
-  return { kind: 'repo', id, repoRoot, remoteUrl };
+  // A linked worktree's own top-level differs from the repo root (the main
+  // checkout derived from the shared common dir); the main checkout's matches.
+  const isWorktree = repoRoot !== normalizePath(input.toplevel);
+  return { kind: 'repo', id, repoRoot, remoteUrl, isWorktree };
 }

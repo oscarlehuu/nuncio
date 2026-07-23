@@ -135,7 +135,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
   it('continues an existing settled session with context and waits for that exact session', async () => {
     for (const status of ['IDLE', 'PAUSED', 'ERROR'] as const) {
       const id = seedSession(status);
-      const beforeIds = service.list(true).map((session) => session.id).sort();
+      const beforeIds = (await service.list(true)).map((session) => session.id).sort();
 
       const continued = await service.continueExistingSession(id, {
         prompt: `continue ${status.toLowerCase()}`,
@@ -144,7 +144,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
 
       expect(continued.id).toBe(id);
       expect(continued.status).toBe('IDLE');
-      expect(service.list(true).map((session) => session.id).sort()).toEqual(beforeIds);
+      expect((await service.list(true)).map((session) => session.id).sort()).toEqual(beforeIds);
       const continuation = events.list(id).filter((event) => event.type === 'steer_message').at(-1);
       expect(continuation?.payload).toEqual(expect.objectContaining({
         text: expect.stringContaining(`Session ${status.toLowerCase()} goal`),
@@ -221,23 +221,53 @@ describe('SessionsService lifecycle (phase 3)', () => {
     expect(() => service.archive(id)).toThrow(BadRequestException);
   });
 
-  it('list excludes archived sessions by default', () => {
+  it('list excludes archived sessions by default', async () => {
     const activeId = seedSession('IDLE');
     const archivedId = seedSession('IDLE');
     service.archive(archivedId);
 
-    const listed = service.list();
+    const listed = await service.list();
     expect(listed.some((s) => s.id === activeId)).toBe(true);
     expect(listed.some((s) => s.id === archivedId)).toBe(false);
     expect(listed.every((s) => s.status !== 'ARCHIVED')).toBe(true);
   });
 
-  it('list includes archived when includeArchived is true', () => {
+  it('list includes archived when includeArchived is true', async () => {
     const archivedId = seedSession('IDLE');
     service.archive(archivedId);
 
-    const listed = service.list(true);
+    const listed = await service.list(true);
     expect(listed.some((s) => s.id === archivedId && s.status === 'ARCHIVED')).toBe(true);
+  });
+
+  it('enriches the list DTO with repo identity for a git-backed session', async () => {
+    const created = sessions.create({
+      prompt: 'repo-identity enrichment',
+      provider: 'cursor',
+      projectPath: repoPath,
+      verifyOwner: 'session',
+    });
+
+    const listed = await service.list(true);
+    const dto = listed.find((s) => s.id === created.id);
+    expect(dto?.repoIdentityId).toBeTruthy();
+    expect(dto?.repoRoot).toBeTruthy();
+    expect(dto?.isWorktree).toBe(false);
+  });
+
+  it('leaves repo identity null for a non-git project path (client path-groups)', async () => {
+    const created = sessions.create({
+      prompt: 'non-git enrichment',
+      provider: 'cursor',
+      projectPath: '/definitely/not/a/git/repo',
+      verifyOwner: 'session',
+    });
+
+    const listed = await service.list(true);
+    const dto = listed.find((s) => s.id === created.id);
+    expect(dto?.repoIdentityId).toBeNull();
+    expect(dto?.repoRoot).toBeNull();
+    expect(dto?.isWorktree).toBe(false);
   });
 
   it('keeps legacy Crew-owned sessions hidden and rejects direct public access', async () => {
@@ -245,7 +275,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
     database.db.prepare("UPDATE sessions SET verify_owner = 'crew' WHERE id = ?").run(id);
 
     expect(service.get(id)).toBeNull();
-    expect(service.list(true).some((session) => session.id === id)).toBe(false);
+    expect((await service.list(true)).some((session) => session.id === id)).toBe(false);
     expect(() => service.requirePublicMutableSession(id)).toThrow(NotFoundException);
     await expect(service.steer(id, 'resume retired work')).rejects.toThrow(NotFoundException);
     expect(() => service.archive(id)).toThrow(NotFoundException);
@@ -253,14 +283,14 @@ describe('SessionsService lifecycle (phase 3)', () => {
     expect(() => service.subscribe(id, () => {})).toThrow(NotFoundException);
   });
 
-  it('list returns a session from an unregistered provider with capabilities disabled', () => {
+  it('list returns a session from an unregistered provider with capabilities disabled', async () => {
     const ghost = sessions.create({
       id: 'ghost-open',
       prompt: 'stale test run',
       provider: 'ghost-provider',
     });
 
-    const listed = service.list();
+    const listed = await service.list();
     const dto = listed.find((s) => s.id === ghost.id);
 
     expect(dto).toMatchObject({
@@ -275,7 +305,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
     });
   });
 
-  it('archived list returns a session from an unregistered provider with capabilities disabled', () => {
+  it('archived list returns a session from an unregistered provider with capabilities disabled', async () => {
     const ghost = sessions.create({
       id: 'ghost-archived',
       prompt: 'archived stale test run',
@@ -285,9 +315,9 @@ describe('SessionsService lifecycle (phase 3)', () => {
     sessions.updateStatus(ghost.id, 'IDLE');
     sessions.updateStatus(ghost.id, 'ARCHIVED');
 
-    expect(service.list().some((s) => s.id === ghost.id)).toBe(false);
+    expect((await service.list()).some((s) => s.id === ghost.id)).toBe(false);
 
-    const listed = service.list(true);
+    const listed = await service.list(true);
     const dto = listed.find((s) => s.id === ghost.id);
 
     expect(dto).toMatchObject({
@@ -1157,7 +1187,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
     });
 
     it('does not persist a session when worktree creation fails', async () => {
-      const before = service.list(true).length;
+      const before = (await service.list(true)).length;
       await expect(
         service.create({
           prompt: 'Broken workspace',
@@ -1167,7 +1197,7 @@ describe('SessionsService lifecycle (phase 3)', () => {
           useWorktree: true,
         }),
       ).rejects.toThrow(BadRequestException);
-      expect(service.list(true).length).toBe(before);
+      expect((await service.list(true)).length).toBe(before);
     });
 
     it('removes a newly created worktree when active PR ownership rejects the insert', async () => {

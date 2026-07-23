@@ -43,6 +43,9 @@ describe('computeRepoIdentity', () => {
     expect(main.id).toBe(worktree.id);
     expect(main.repoRoot).toBe('/repos/app');
     expect(worktree.repoRoot).toBe('/repos/app');
+    // The main checkout's top-level equals the repo root; the worktree's does not.
+    expect(main.isWorktree).toBe(false);
+    expect(worktree.isWorktree).toBe(true);
   });
 
   it('groups worktrees of a remote-less repo by their shared common git dir', () => {
@@ -69,6 +72,7 @@ describe('computeRepoIdentity', () => {
     expect(identity.id).toBe('/some/loose/folder');
     expect(identity.repoRoot).toBe('/some/loose/folder');
     expect(identity.remoteUrl).toBeNull();
+    expect(identity.isWorktree).toBe(false);
   });
 
   it('gives two different repos distinct identities', () => {
@@ -141,6 +145,9 @@ describe('GitService.resolveRepoIdentity', () => {
     expect(mainIdentity.id).toBe(worktreeIdentity.id);
     expect(mainIdentity.remoteUrl).toBe('github.com/octo/app');
     expect(mainIdentity.repoRoot).toBe(worktreeIdentity.repoRoot);
+    // Only the linked worktree is flagged as a worktree.
+    expect(mainIdentity.isWorktree).toBe(false);
+    expect(worktreeIdentity.isWorktree).toBe(true);
   });
 
   it('keeps path identity for a non-git folder', async () => {
@@ -148,5 +155,44 @@ describe('GitService.resolveRepoIdentity', () => {
     expect(identity.kind).toBe('path');
     expect(identity.remoteUrl).toBeNull();
     expect(identity.id).toBe(identity.repoRoot);
+    expect(identity.isWorktree).toBe(false);
+  });
+
+  it('caches an identity so a second resolve of the same path does not re-shell', async () => {
+    const cached = new GitService({ resolve: (key: string) => process.env[key] } as never);
+    const realGit = cached.repoIdentityGit;
+    let calls = 0;
+    cached.repoIdentityGit = (args, cwd) => {
+      calls += 1;
+      return realGit(args, cwd);
+    };
+
+    const first = await cached.resolveRepoIdentity(repo);
+    const callsAfterFirst = calls;
+    const second = await cached.resolveRepoIdentity(repo);
+
+    expect(first.id).toBe(second.id);
+    expect(callsAfterFirst).toBeGreaterThan(0);
+    // No additional shell-outs on the cached resolve.
+    expect(calls).toBe(callsAfterFirst);
+  });
+
+  it('dedupes concurrent resolves of the same path into a single resolution', async () => {
+    const cached = new GitService({ resolve: (key: string) => process.env[key] } as never);
+    const realGit = cached.repoIdentityGit;
+    let calls = 0;
+    cached.repoIdentityGit = (args, cwd) => {
+      calls += 1;
+      return realGit(args, cwd);
+    };
+
+    const [a, b] = await Promise.all([
+      cached.resolveRepoIdentity(repo),
+      cached.resolveRepoIdentity(repo),
+    ]);
+
+    expect(a.id).toBe(b.id);
+    // One resolution's git calls (show-toplevel + common-dir + remote), not two races.
+    expect(calls).toBeLessThanOrEqual(3);
   });
 });

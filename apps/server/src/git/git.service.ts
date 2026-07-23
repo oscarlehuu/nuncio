@@ -52,6 +52,12 @@ import type {
 /** Per-repo debounce for best-effort `git fetch` before listing branches. */
 const BRANCH_REFRESH_TTL_MS = 60_000;
 const BRANCH_REFRESH_TIMEOUT_MS = 15_000;
+/**
+ * Upper bound on cached repo identities. Identities are stable per path, so a
+ * plain FIFO-evicting Map keeps the enrich-per-session cost O(distinct paths)
+ * without unbounded growth on a long-lived daemon.
+ */
+const REPO_IDENTITY_CACHE_MAX = 512;
 
 function expandHome(path: string): string {
   return path.startsWith('~/') ? join(homedir(), path.slice(2)) : path;
@@ -269,6 +275,18 @@ function parseRemoteUrl(url: string): RemoteInfoDto | null {
 @Injectable()
 export class GitService {
   private readonly branchRefreshAt = new Map<string, number>();
+  /**
+   * Path → resolved identity cache. Stores the in-flight Promise (not just the
+   * settled value) so N sessions in one repo resolved concurrently on a single
+   * `GET /sessions` share ONE git shell-out instead of racing N of them.
+   */
+  private readonly repoIdentityCache = new Map<string, Promise<RepoIdentity>>();
+  /**
+   * Test seam: the git invoker used only by repo-identity resolution, so a spec
+   * can count/stub shell-outs without touching every other git call. Defaults to
+   * the real module-level `git`.
+   */
+  repoIdentityGit: (args: string[], cwd: string) => Promise<string> = (args, cwd) => git(args, cwd);
 
   constructor(private readonly settings: SettingsService) {}
 
@@ -331,9 +349,32 @@ export class GitService {
    */
   async resolveRepoIdentity(path: string): Promise<RepoIdentity> {
     const normalized = expandHome(path.trim());
+    const cached = this.repoIdentityCache.get(normalized);
+    if (cached) return cached;
+
+    const pending = this.computeRepoIdentityUncached(normalized);
+    this.repoIdentityCache.set(normalized, pending);
+    // A transient git fault must not poison the cache forever — evict on reject
+    // so a later call re-resolves. Settled successes stay (identities are stable).
+    void pending.catch(() => {
+      if (this.repoIdentityCache.get(normalized) === pending) {
+        this.repoIdentityCache.delete(normalized);
+      }
+    });
+    // Bound memory on a long-lived daemon: FIFO-evict the oldest once over cap.
+    if (this.repoIdentityCache.size > REPO_IDENTITY_CACHE_MAX) {
+      const oldest = this.repoIdentityCache.keys().next().value;
+      if (oldest !== undefined && oldest !== normalized) {
+        this.repoIdentityCache.delete(oldest);
+      }
+    }
+    return pending;
+  }
+
+  private async computeRepoIdentityUncached(normalized: string): Promise<RepoIdentity> {
     let toplevel: string | null;
     try {
-      const rawToplevel = await git(['rev-parse', '--show-toplevel'], normalized);
+      const rawToplevel = await this.repoIdentityGit(['rev-parse', '--show-toplevel'], normalized);
       toplevel = realpathSync.native(resolve(rawToplevel));
     } catch {
       return computeRepoIdentity({ path: normalized, toplevel: null });
@@ -341,7 +382,7 @@ export class GitService {
 
     let commonDir: string | null = null;
     try {
-      const rawCommon = await git(
+      const rawCommon = await this.repoIdentityGit(
         ['rev-parse', '--path-format=absolute', '--git-common-dir'],
         normalized,
       );
@@ -352,7 +393,7 @@ export class GitService {
 
     let remoteUrl: string | null = null;
     try {
-      remoteUrl = await git(['remote', 'get-url', 'origin'], normalized);
+      remoteUrl = await this.repoIdentityGit(['remote', 'get-url', 'origin'], normalized);
     } catch {
       remoteUrl = null;
     }
