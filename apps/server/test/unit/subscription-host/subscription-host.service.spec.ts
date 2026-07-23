@@ -109,7 +109,51 @@ describe('SubscriptionHostService', () => {
     const pi = merged.find((p) => p.id === 'pi');
     const group = pi?.groups?.find((g) => g.id === 'subscription-host');
     expect(group?.models).toHaveLength(2);
-    expect(group?.models[0].id).toBe('pi:gpt-x-sol');
+    // The picker id splits to provider `subscription-host` so the registered
+    // provider (not a built-in) resolves it on the run path.
+    expect(group?.models[0].id).toBe('subscription-host:gpt-x-sol');
+  });
+
+  it('registers a subscription-host provider that routes to the router /v1 endpoint', async () => {
+    const { service } = build(settings);
+    service.installImpl = async (opts) => ({ version: opts.version, bin: `${opts.dir}/bin` });
+    service.fetchImpl = (async () =>
+      new Response(
+        JSON.stringify({ data: [{ id: 'gpt-x-sol', api: 'openai-responses' }] }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )) as unknown as typeof fetch;
+    settings.set('NUNCIO_SUBHOST_ENABLED', '1');
+    await service.reconcileNow();
+
+    const register: Array<[string, { baseUrl?: string; authHeader?: boolean }]> = [];
+    const unregister: string[] = [];
+    await service.applyToPiRegistry({
+      registerProvider: (name, config) => register.push([name, config]),
+      unregisterProvider: (name) => unregister.push(name),
+      getAll: () => [],
+    });
+
+    expect(register).toHaveLength(1);
+    expect(register[0][0]).toBe('subscription-host');
+    expect(register[0][1].baseUrl).toBe('http://127.0.0.1:18701/v1');
+    expect(register[0][1].authHeader).toBe(false);
+    expect(unregister).toEqual([]);
+  });
+
+  it('unregisters the subscription-host provider when disabled (teardown symmetry)', async () => {
+    const { service } = build(settings);
+    let registered = 0;
+    const unregister: string[] = [];
+    await service.applyToPiRegistry({
+      registerProvider: () => {
+        registered += 1;
+      },
+      unregisterProvider: (name) => unregister.push(name),
+      getAll: () => [],
+    });
+
+    expect(registered).toBe(0);
+    expect(unregister).toEqual(['subscription-host']);
   });
 
   it('surfaces the error and omits the model group when install fails (fail-soft)', async () => {

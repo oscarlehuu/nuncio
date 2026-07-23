@@ -6,6 +6,8 @@ export interface SubscriptionHostModel {
   id: string;
   displayName: string;
   ownedBy?: string;
+  /** Transport family the router speaks for this model (`anthropic-messages`, OpenAI-family, …). */
+  api?: string;
 }
 
 export interface SubscriptionHostStatusDto {

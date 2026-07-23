@@ -13,6 +13,12 @@ import type {
   SubscriptionHostModel,
   SubscriptionHostStatusDto,
 } from './subscription-host.types';
+import {
+  buildBuiltinLookup,
+  buildSubscriptionHostProviderConfig,
+  SUBSCRIPTION_HOST_PROVIDER_ID,
+  type PiProviderRegistrar,
+} from './subscription-host.pi-provider';
 
 /**
  * Underlying helper package — deliberately never surfaced in the UI. The setting
@@ -163,7 +169,7 @@ export class SubscriptionHostService implements OnModuleInit, OnModuleDestroy {
     if (models.length === 0) return catalog;
 
     const items: ModelItemDto[] = models.map((model) => ({
-      id: `pi:${model.id}`,
+      id: `${SUBSCRIPTION_HOST_PROVIDER_ID}:${model.id}`,
       name: model.displayName,
       sub: 'via Subscription model host',
       badge: 'Subscription',
@@ -186,7 +192,28 @@ export class SubscriptionHostService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  async restart(): Promise<SubscriptionHostStatusDto> {
+  /**
+   * Register (or tear down) the host's catalog as a `subscription-host` provider
+   * on a Pi ModelRegistry so a chosen `subscription-host:<id>` model routes to the
+   * router's loopback `/v1` endpoint. Fail-soft: when the host is disabled or
+   * offline the catalog is empty and the provider is unregistered, so a session
+   * falls back exactly as before and no stale routing lingers (teardown symmetry).
+   */
+  async applyToPiRegistry(registry: PiProviderRegistrar): Promise<void> {
+    const models = await this.listModels();
+    if (models.length === 0) {
+      registry.unregisterProvider(SUBSCRIPTION_HOST_PROVIDER_ID);
+      return;
+    }
+    const config = buildSubscriptionHostProviderConfig(
+      this.routerBaseUrl(),
+      models,
+      buildBuiltinLookup(registry),
+    );
+    registry.registerProvider(SUBSCRIPTION_HOST_PROVIDER_ID, config);
+  }
+
+    async restart(): Promise<SubscriptionHostStatusDto> {
     this.installed = null;
     await this.host.stop();
     await this.enqueueReconcile();
@@ -304,6 +331,7 @@ function parseModelsResponse(body: unknown): SubscriptionHostModel[] {
       id,
       displayName: typeof record.display_name === 'string' ? record.display_name : id,
       ...(typeof record.owned_by === 'string' ? { ownedBy: record.owned_by } : {}),
+      ...(typeof record.api === 'string' ? { api: record.api } : {}),
     });
   }
   return models;
