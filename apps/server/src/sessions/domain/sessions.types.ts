@@ -118,6 +118,16 @@ export interface SessionDto {
   baseBranch: string | null;
   worktreePath: string | null;
   branch: string | null;
+  /**
+   * Repo-grouping identity for the session's working dir (RepoIdentity.id).
+   * Populated on the list path via GitService.resolveRepoIdentity; null when the
+   * session has no working dir or it is a non-git folder (client path-groups).
+   */
+  repoIdentityId?: string | null;
+  /** The owning repository's main working tree; null for non-git / no project. */
+  repoRoot?: string | null;
+  /** True when the session runs in a LINKED worktree rather than the main checkout. */
+  isWorktree?: boolean;
   providerThreadId: string | null;
   providerActiveTurnId: string | null;
   providerState: Record<string, unknown> | null;

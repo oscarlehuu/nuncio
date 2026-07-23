@@ -5,6 +5,27 @@ import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from './theme-provider';
 import { Sidebar } from './sidebar';
 import type { Session } from '../lib/api';
+import { fetchPullsSummary, type PullsSummaryDto } from '../lib/forge-api';
+import { clearForgeCache } from '../lib/forge-cache';
+
+vi.mock('../lib/forge-api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/forge-api')>();
+  return { ...actual, fetchPullsSummary: vi.fn() };
+});
+
+const mockPullsSummary = vi.mocked(fetchPullsSummary);
+
+function makeSummary(overrides: Partial<PullsSummaryDto> = {}): PullsSummaryDto {
+  return {
+    available: true,
+    provider: 'github',
+    reason: null,
+    counts: { open: 0, merged: 0, closed: 0 },
+    capped: false,
+    pullRequests: [],
+    ...overrides,
+  };
+}
 
 function renderWithTheme(ui: ReactElement) {
   return render(<ThemeProvider defaultTheme="light">{ui}</ThemeProvider>);
@@ -647,6 +668,114 @@ describe('Sidebar', () => {
         <Sidebar sessions={[]} activeId={null} onSelect={() => {}} onNew={() => {}} onHome={() => {}} inboxUnacked={150} />,
       );
       expect(screen.getByText('99+')).toBeInTheDocument();
+    });
+  });
+
+  describe('repository grouping (one project per repo)', () => {
+    // A repo main checkout + one of its linked worktrees, same identity.
+    function repoSessions(): Session[] {
+      return [
+        makeSession({
+          id: 's-main',
+          title: 'Main checkout work',
+          projectPath: '/Users/dev/code/nuncio',
+          repoIdentityId: 'repo-abc',
+          repoRoot: '/Users/dev/code/nuncio',
+          isWorktree: false,
+          branch: 'main',
+        }),
+        makeSession({
+          id: 's-wt',
+          title: 'Worktree work',
+          projectPath: '/Users/dev/.nuncio/workspaces/xy12',
+          worktreePath: '/Users/dev/.nuncio/workspaces/xy12',
+          repoIdentityId: 'repo-abc',
+          repoRoot: '/Users/dev/code/nuncio',
+          isWorktree: true,
+          branch: 'nuncio/xy12-fix-login',
+        }),
+      ];
+    }
+
+    beforeEach(() => {
+      clearForgeCache();
+      mockPullsSummary.mockReset();
+      mockPullsSummary.mockResolvedValue(makeSummary());
+    });
+
+    it('folds a repo main checkout and its worktree into ONE section with the worktree branch shown', async () => {
+      mockPullsSummary.mockResolvedValue(makeSummary({ available: false, reason: 'no-forge-remote' }));
+      renderWithTheme(
+        <Sidebar sessions={repoSessions()} activeId={null} onSelect={() => {}} onNew={() => {}} />,
+      );
+
+      // A single "nuncio" section header — not two separate projects.
+      expect(screen.getAllByText('nuncio')).toHaveLength(1);
+      expect(screen.getByText('Main checkout work')).toBeInTheDocument();
+      expect(screen.getByText('Worktree work')).toBeInTheDocument();
+      // The worktree row is marked with its branch.
+      expect(screen.getByText('nuncio/xy12-fix-login')).toBeInTheDocument();
+      // Flush the async PR fetch.
+      expect(await screen.findByText(/no forge remote/i)).toBeInTheDocument();
+    });
+
+    it('renders the open / merged / closed rollup from the summary endpoint', async () => {
+      mockPullsSummary.mockResolvedValue(makeSummary({ counts: { open: 3, merged: 12, closed: 1 } }));
+      renderWithTheme(
+        <Sidebar sessions={repoSessions()} activeId={null} onSelect={() => {}} onNew={() => {}} />,
+      );
+
+      const summary = await screen.findByLabelText(/pull requests: 3 open, 12 merged, 1 closed/i);
+      expect(summary).toHaveTextContent('3');
+      expect(summary).toHaveTextContent('open');
+      expect(summary).toHaveTextContent('12');
+      expect(summary).toHaveTextContent('merged');
+      expect(summary).toHaveTextContent('1');
+      expect(summary).toHaveTextContent('closed');
+      expect(mockPullsSummary).toHaveBeenCalledWith('/Users/dev/code/nuncio');
+    });
+
+    it('deduplicates the summary request to one per repoRoot across worktrees', async () => {
+      mockPullsSummary.mockResolvedValue(makeSummary({ counts: { open: 2, merged: 0, closed: 0 } }));
+      renderWithTheme(
+        <Sidebar sessions={repoSessions()} activeId={null} onSelect={() => {}} onNew={() => {}} />,
+      );
+      await screen.findByLabelText(/pull requests: 2 open/i);
+      // Two sessions, one repo → exactly one summary fetch.
+      expect(mockPullsSummary).toHaveBeenCalledTimes(1);
+    });
+
+    it('renders a muted unavailable state and never an auth prompt', async () => {
+      mockPullsSummary.mockResolvedValue(
+        makeSummary({
+          available: false,
+          provider: null,
+          reason: 'no-forge-remote',
+          counts: { open: null, merged: null, closed: null },
+        }),
+      );
+      renderWithTheme(
+        <Sidebar sessions={repoSessions()} activeId={null} onSelect={() => {}} onNew={() => {}} />,
+      );
+
+      expect(await screen.findByText(/no forge remote/i)).toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: /sign in|log in|authenticate|connect|authorize/i }),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByText(/sign in|log in|authenticate|authorize/i)).not.toBeInTheDocument();
+    });
+
+    it('renders a floor form (N+) when the counts are capped', async () => {
+      mockPullsSummary.mockResolvedValue(
+        makeSummary({ counts: { open: 1000, merged: 4, closed: 0 }, capped: true }),
+      );
+      renderWithTheme(
+        <Sidebar sessions={repoSessions()} activeId={null} onSelect={() => {}} onNew={() => {}} />,
+      );
+
+      const summary = await screen.findByLabelText(/pull requests: 1000\+ open, 4\+ merged, 0 closed/i);
+      expect(summary).toHaveTextContent('1000+');
+      expect(summary).toHaveTextContent('4+');
     });
   });
 });

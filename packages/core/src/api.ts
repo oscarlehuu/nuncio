@@ -142,6 +142,17 @@ export interface Session {
   baseBranch: string | null;
   worktreePath: string | null;
   branch: string | null;
+  /**
+   * Repo-grouping identity (RepoIdentity.id) for the session's working dir, so
+   * clients group all worktrees of one repo under a single project. Null when the
+   * session has no project/workspace or it is a non-git folder → the client falls
+   * back to path grouping. Optional so responses from an older server still parse.
+   */
+  repoIdentityId?: string | null;
+  /** The owning repository's main working tree; null for non-git / no project. */
+  repoRoot?: string | null;
+  /** True when the session runs in a LINKED worktree rather than the main checkout. */
+  isWorktree?: boolean;
   cursorBackend: 'sdk' | 'cli' | null;
   cursorChatId: string | null;
   forgeProvider?: string | null;

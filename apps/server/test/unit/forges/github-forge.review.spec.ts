@@ -140,6 +140,32 @@ describe('GithubForgeProvider — review/merge/issues surface', () => {
     ]);
   });
 
+  it('listPullRequestsPaged follows the Link header and accumulates every page', async () => {
+    const calls: string[] = [];
+    // Page 1 signals a next page via Link; page 2 has no Link → last page.
+    const fetchOverride = (async (input: unknown) => {
+      const url = String(input);
+      calls.push(url);
+      const page = url.includes('page=2') ? 2 : 1;
+      const item = { ...PULL_LIST_ITEM, number: page === 1 ? 5 : 6 };
+      const headers = new Headers(
+        page === 1
+          ? { link: '<https://api.github.com/repos/octo/repo/pulls?page=2>; rel="next"' }
+          : {},
+      );
+      return { ok: true, status: 200, headers, json: async () => [item] } as unknown as Response;
+    }) as unknown as typeof fetch;
+    provider.fetchOverride = fetchOverride;
+
+    const { pullRequests, capped } = await provider.listPullRequestsPaged(repo, 'all');
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toContain('per_page=100&page=1');
+    expect(calls[1]).toContain('page=2');
+    expect(pullRequests.map((pr) => pr.number)).toEqual([5, 6]);
+    expect(capped).toBe(false);
+  });
+
   it('getPullRequestDetail merges REST detail with the GraphQL review decision', async () => {
     const { fetchOverride } = makeRoutedFetch([
       { match: (url) => url.endsWith('/graphql'), body: THREADS_GRAPHQL },

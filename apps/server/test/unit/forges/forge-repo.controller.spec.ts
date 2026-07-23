@@ -2,6 +2,17 @@ import { BadRequestException } from '@nestjs/common';
 import { describe, expect, it } from 'bun:test';
 import { ForgeRepoController } from '../../../src/forges/api/forge-repo.controller';
 import type { ForgeRepoService } from '../../../src/forges/forges-repo.service';
+import type { ProjectPullRequestsService } from '../../../src/forges/project-pull-requests.service';
+
+const pullRequests = {
+  aggregate: async () => ({
+    available: false,
+    provider: null,
+    reason: 'no-forge-remote' as const,
+    counts: { open: null, merged: null, closed: null },
+    pullRequests: [],
+  }),
+} as unknown as ProjectPullRequestsService;
 
 function makeSpy() {
   const calls: Record<string, unknown[][]> = {};
@@ -109,7 +120,7 @@ describe('ForgeRepoController', () => {
 
   it('delegates capabilities and pull/issue/workflow routes to ForgeRepoService', async () => {
     const { forge, calls } = makeSpy();
-    const controller = new ForgeRepoController(forge);
+    const controller = new ForgeRepoController(forge, pullRequests);
 
     await expect(controller.capabilities(path)).resolves.toEqual({
       provider: 'github',
@@ -234,14 +245,14 @@ describe('ForgeRepoController', () => {
 
   it('rejects invalid numeric path params', () => {
     const { forge } = makeSpy();
-    const controller = new ForgeRepoController(forge);
+    const controller = new ForgeRepoController(forge, pullRequests);
     expect(() => controller.getPull(path, '0')).toThrow(BadRequestException);
     expect(() => controller.getPull(path, 'abc')).toThrow(BadRequestException);
   });
 
   it('rejects invalid state filters and open/closed transitions', async () => {
     const { forge } = makeSpy();
-    const controller = new ForgeRepoController(forge);
+    const controller = new ForgeRepoController(forge, pullRequests);
     expect(() => controller.listPulls(path, 'merged')).toThrow(BadRequestException);
     await expect(controller.updatePullState(path, '1', { state: 'merged' })).rejects.toBeInstanceOf(
       BadRequestException,
@@ -251,7 +262,7 @@ describe('ForgeRepoController', () => {
 
   it('rejects invalid review events and merge methods', async () => {
     const { forge } = makeSpy();
-    const controller = new ForgeRepoController(forge);
+    const controller = new ForgeRepoController(forge, pullRequests);
     await expect(controller.submitReview(path, '1', { event: 'ship' })).rejects.toBeInstanceOf(
       BadRequestException,
     );
