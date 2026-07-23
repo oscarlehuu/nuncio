@@ -118,8 +118,9 @@ describe('Recent projects', () => {
 
   it('resolves identity for a git repo path', async () => {
     const identity = await controller.resolveIdentity(repo);
-    expect(identity.kind).toBe('path');
+    expect(identity.kind).toBe('repo');
     expect(identity.repoRoot).toBe(realpathSync.native(repo));
+    expect(identity.remoteUrl).toBeNull();
     expect(identity.isWorktree).toBe(false);
   });
 });
