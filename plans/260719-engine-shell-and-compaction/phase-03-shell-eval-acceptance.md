@@ -30,7 +30,7 @@ believing it: A/B the Builder role between `codex` (today's only shelled Builder
 
 ## Todo
 
-- [ ] Curate task set with user
+- [x] Curate task set with user
 - [ ] Run A/B, collect metrics
 - [ ] Report + docs guidance update
 

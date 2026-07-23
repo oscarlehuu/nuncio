@@ -1,0 +1,12 @@
+{
+  "id": "isolate-model-picker-per-composer",
+  "title": "Isolate model picker preference per composer (from session 1e9997f2)",
+  "fixture": "model-pref-composer-scope",
+  "prompt": "hiện tại hình như mỗi lần mình đổi model trên 1 session trong workbench hoặc new agent, thì các model trong tất cả session khác đều bị đổi theo, làm sao để cô lập việc này\n\nFollow-up requirements (from the original session — apply them all):\n- After changing the model in one composer (Home or a Workbench slot), other composers must keep their own selection.\n- Keep a legacy global default for scopes that have never been set.\n- Implement the scoped APIs the failing unit tests already expect in src/model-preference.ts. Do not modify the tests. Run bun test yourself before finishing.",
+  "setup": {},
+  "verifyCommand": "bun test",
+  "timeoutMs": 300000,
+  "tags": ["recorded", "distilled", "ui", "mechanical"],
+  "sourceSession": "1e9997f2",
+  "expect": { "verifyPassed": true }
+}

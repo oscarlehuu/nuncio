@@ -1,0 +1,26 @@
+{
+  "id": "fix-user-message-turn-display",
+  "title": "hiện tại app đang bị lỗi là vấn hiển thị user messsage sau mỗi turn của agent tr",
+  "fixture": {
+    "repo": "/Users/a1241968/Desktop/Oscar/nuncio",
+    "baseSha": "374ea90b441ec8a66fb3eb38f48b3569818cb555"
+  },
+  "prompt": "hiện tại app đang bị lỗi là vấn hiển thị user messsage sau mỗi turn của agent trên chat, lỗi này đã bị khá nhiều lần và đã cố fix nó nhưng vẫn chưa được, giúp mình fix đi",
+  "followUpSteers": [
+    "tiếp tục"
+  ],
+  "setup": {},
+  "verifyCommand": "bun run --filter @nuncio/web test",
+  "timeoutMs": 300000,
+  "tags": [
+    "recorded",
+    "seed",
+    "control"
+  ],
+  "expect": {
+    "verifyPassed": true
+  },
+  "informational": true,
+  "sourceSession": "94aa1f34",
+  "curationNotes": "Seed extract from real session. No verify_* in the original log — verifyCommand is curator-supplied and the full-repo pin is archival. Prefer the distilled fixture task for graded Builder runs."
+}

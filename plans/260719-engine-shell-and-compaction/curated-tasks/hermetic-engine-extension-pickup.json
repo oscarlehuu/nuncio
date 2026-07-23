@@ -1,0 +1,26 @@
+{
+  "id": "hermetic-engine-extension-pickup",
+  "title": "mình thấy nuncio engine hình như vậy đang cố pickup extensions trong pi, trong k",
+  "fixture": {
+    "repo": "/Users/a1241968/Desktop/Oscar/nuncio",
+    "baseSha": "374ea90b441ec8a66fb3eb38f48b3569818cb555"
+  },
+  "prompt": "mình thấy nuncio engine hình như vậy đang cố pickup extensions trong pi, trong khi đó ở fix trước mình đã setup để nuncio engine pick up engine configuration riêng thì phải, bạn hãy check các fix, implement và docs giúp mình.\n\nmình biết vì agents tiếp tục báo lỗi là \"Mình đã thử khởi động Foreman 3 lần nhưng controller lỗi nội bộ: Theme not initialized. Thử đường crew-agent cũng bị Nuncio con khởi động trùng daemon trên port 58181. Chưa có code nào bị sửa.\"\n\ntức là pi cli có foreman, nhưng theo design mình muôn nuncio engine không dùng 1 số thứ trong .pi rồi",
+  "followUpSteers": [
+    "tức là sau fix này, nuncio engine sẽ nhận gì và không nhận gì từ .pi?"
+  ],
+  "setup": {},
+  "verifyCommand": "bun test test/unit/agents/",
+  "timeoutMs": 300000,
+  "tags": [
+    "recorded",
+    "seed",
+    "control"
+  ],
+  "expect": {
+    "verifyPassed": true
+  },
+  "informational": true,
+  "sourceSession": "4f09a061",
+  "curationNotes": "Seed extract from real session. No verify_* in the original log — verifyCommand is curator-supplied and the full-repo pin is archival. Prefer the distilled fixture task for graded Builder runs."
+}

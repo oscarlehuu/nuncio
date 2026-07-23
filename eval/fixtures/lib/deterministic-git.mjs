@@ -69,6 +69,11 @@ export function deterministicGit(dir) {
 export function initRepo(dir) {
   const git = deterministicGit(dir);
   git('init', '-b', 'main', '--object-format=sha1');
+  // Persist identity into .git/config too. Commit objects already use -c / env
+  // (so HEAD stays byte-stable), but Crew checkpoint commits require a
+  // repository-local user.name/user.email or they block as unrecoverable.
+  git('config', 'user.name', FIXTURE_AUTHOR_NAME);
+  git('config', 'user.email', FIXTURE_AUTHOR_EMAIL);
   return git;
 }
 

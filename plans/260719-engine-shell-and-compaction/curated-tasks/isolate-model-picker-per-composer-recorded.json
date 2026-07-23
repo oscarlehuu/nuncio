@@ -1,0 +1,27 @@
+{
+  "id": "isolate-model-picker-per-composer-recorded",
+  "title": "hiện tại hình như mỗi lần mình đổi model trên 1 session trong workbench hoặc new",
+  "fixture": {
+    "repo": "/Users/a1241968/Desktop/Oscar/nuncio",
+    "baseSha": "1bfc8445b6f0f054e18e65f32aa7d0cbbd24a5f6"
+  },
+  "prompt": "hiện tại hình như mỗi lần mình đổi model trên 1 session trong workbench hoặc new agent, thì các model trong tất cả session khác đều bị đổi theo, làm sao để cô lập việc này",
+  "followUpSteers": [
+    "Option 1 — Sau khi đổi trang (note: và không biết liệu thật sự sessions có đổi không, nưhng về thị giác thì nó thay đổi model ở tất cả các view có model picker.)",
+    "Option 1 — Sửa trực tiếp (note: mình nghĩ nên thay đổi preference global, nó nên isolate giữa các vị session hay lựa chọn, vì ví dụ ở workbecnh, có session mình dùng gpt 5.6, có ô thì mình dùng opus, nên là mình nghỉ nên isolate.)"
+  ],
+  "setup": {},
+  "verifyCommand": "bun run --filter @nuncio/core test",
+  "timeoutMs": 300000,
+  "tags": [
+    "recorded",
+    "seed",
+    "control"
+  ],
+  "expect": {
+    "verifyPassed": true
+  },
+  "informational": true,
+  "sourceSession": "1e9997f2",
+  "curationNotes": "Seed extract from real session. No verify_* in the original log — verifyCommand is curator-supplied and the full-repo pin is archival. Prefer the distilled fixture task for graded Builder runs."
+}
