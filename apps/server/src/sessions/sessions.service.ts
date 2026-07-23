@@ -2498,12 +2498,13 @@ export class SessionsService implements OnModuleDestroy {
     }
   }
 
-  /** Global default-confinement opt-out (on unless explicitly disabled). */
+  /** Global confinement opt-IN (off by default — full machine access). */
   private workspaceConfinementEnabled(): boolean {
     const raw =
       this.settings?.resolve('NUNCIO_ENGINE_WORKSPACE_CONFINEMENT') ??
       process.env.NUNCIO_ENGINE_WORKSPACE_CONFINEMENT;
-    return (raw ?? 'on').trim().toLowerCase() !== 'off';
+    const value = (raw ?? 'off').trim().toLowerCase();
+    return value === 'on' || value === '1' || value === 'true';
   }
 
   /**
