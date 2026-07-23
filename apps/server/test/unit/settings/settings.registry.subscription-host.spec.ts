@@ -21,7 +21,7 @@ describe('settings.registry Subscription model host', () => {
     expect(getSettingDefinition('NUNCIO_SUBHOST_VERSION')).toMatchObject({
       providerId: 'subscription-host',
       type: 'string',
-      default: '0.1.0',
+      default: '17.0.7',
     });
     expect(getSettingDefinition('NUNCIO_SUBHOST_BROKER_PORT')).toMatchObject({ default: '18700' });
     expect(getSettingDefinition('NUNCIO_SUBHOST_ROUTER_PORT')).toMatchObject({ default: '18701' });

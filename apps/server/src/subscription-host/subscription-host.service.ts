@@ -19,8 +19,13 @@ import type {
  * users see is "Subscription model host (managed)".
  */
 const SUBSCRIPTION_HOST_PACKAGE = '@oh-my-pi/pi-coding-agent';
-/** Pinned default; the operator can override via NUNCIO_SUBHOST_VERSION. */
-const DEFAULT_SUBSCRIPTION_HOST_VERSION = '0.1.0';
+/**
+ * Pinned default; the operator can override via NUNCIO_SUBHOST_VERSION. This is
+ * the first published version whose CLI exposes the `auth-broker` / `auth-gateway`
+ * subcommands and the `omp` binary this module drives — older versions are a bare
+ * chat CLI with none of that.
+ */
+const DEFAULT_SUBSCRIPTION_HOST_VERSION = '17.0.7';
 const DEFAULT_BROKER_PORT = 18_700;
 const DEFAULT_ROUTER_PORT = 18_701;
 const HEALTH_TIMEOUT_MS = 3_000;
@@ -234,20 +239,24 @@ export class SubscriptionHostService implements OnModuleInit, OnModuleDestroy {
     const spec: SubscriptionHostStartSpec = {
       bin: this.installed.bin,
       cwd: dir,
-      // Root the sign-in vault under the data dir; Nuncio supervises the process
-      // but never reads the secrets it holds.
-      env: { HOME: this.signInStoreDir(), PI_CODING_AGENT_HOME: this.signInStoreDir() },
+      // Root the sign-in vault under the data dir (the CLI keeps it under
+      // $HOME/.omp); Nuncio supervises the process but never reads the secrets
+      // it holds. The router (gateway) discovers the broker via env.
+      env: {
+        HOME: this.signInStoreDir(),
+        OMP_AUTH_BROKER_URL: `http://127.0.0.1:${this.brokerPort()}`,
+      },
       processes: [
-        { name: 'broker', args: ['broker', '--port', String(this.brokerPort())] },
+        {
+          name: 'broker',
+          args: ['auth-broker', 'serve', '--bind', `127.0.0.1:${this.brokerPort()}`],
+        },
         {
           name: 'router',
-          args: [
-            'router',
-            '--port',
-            String(this.routerPort()),
-            '--broker',
-            `http://127.0.0.1:${this.brokerPort()}`,
-          ],
+          // Loopback-only; skip the per-request bearer so Nuncio's local catalog
+          // fetch needs no token round-trip (same trust model as the existing
+          // loopback helper).
+          args: ['auth-gateway', 'serve', '--bind', `127.0.0.1:${this.routerPort()}`, '--no-auth'],
         },
       ],
     };
@@ -323,5 +332,5 @@ async function defaultInstall(opts: {
     const stderr = await new Response(proc.stderr).text();
     throw new Error(`Subscription model host install failed (exit ${code}): ${stderr.slice(0, 500)}`);
   }
-  return { version: opts.version, bin: join(opts.dir, 'node_modules', '.bin', 'pi-coding-agent') };
+  return { version: opts.version, bin: join(opts.dir, 'node_modules', '.bin', 'omp') };
 }
