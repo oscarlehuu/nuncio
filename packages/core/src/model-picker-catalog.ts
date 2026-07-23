@@ -5,7 +5,7 @@ import {
 } from './model-options';
 import type { FlatModel, ModelVariant } from './model-providers';
 import { prettyModelName } from './model-providers';
-import { isTriggerIconOption, modelSupportsFast } from './model-effort-options';
+import { isTriggerIconOption } from './model-effort-options';
 
 export type { ModelVariant } from './model-providers';
 
