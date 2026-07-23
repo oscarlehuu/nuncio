@@ -128,6 +128,31 @@ describe('GitlabForgeProvider — review/merge/issues surface', () => {
     expect(capped).toBe(false);
   });
 
+  it('listPullRequestsPaged reports capped=true when the page budget stops an ongoing sequence', async () => {
+    const calls: string[] = [];
+    const fetchOverride = (async (input: unknown) => {
+      const url = String(input);
+      calls.push(url);
+      const pageMatch = /[?&]page=(\d+)/.exec(url);
+      const page = pageMatch ? Number(pageMatch[1]) : 1;
+      const headers = new Headers({ 'x-next-page': String(page + 1) });
+      return {
+        ok: true,
+        status: 200,
+        headers,
+        json: async () => [{ ...MR_ITEM, iid: page }],
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+    provider.fetchOverride = fetchOverride;
+
+    const { pullRequests, capped } = await provider.listPullRequestsPaged(repo, 'open');
+
+    expect(calls).toHaveLength(10);
+    expect(calls[9]).toContain('page=10');
+    expect(pullRequests.map((pr) => pr.number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(capped).toBe(true);
+  });
+
   it('getPullRequestDetail combines MR detail with the approvals state', async () => {
     const { fetchOverride } = makeRoutedFetch([
       { match: (url) => url.endsWith('/approvals'), body: { approved: true } },

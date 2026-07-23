@@ -110,4 +110,17 @@ describe('Recent projects', () => {
     expect(listed[0].name).toBe('bulk-24');
     expect(listed[19].name).toBe('bulk-05');
   });
+
+  it('rejects an empty identity path', () => {
+    expect(() => controller.resolveIdentity(undefined)).toThrow(BadRequestException);
+    expect(() => controller.resolveIdentity('  ')).toThrow(BadRequestException);
+  });
+
+  it('resolves identity for a git repo path', async () => {
+    const identity = await controller.resolveIdentity(repo);
+    expect(identity.kind).toBe('repo');
+    expect(identity.repoRoot).toBe(realpathSync.native(repo));
+    expect(identity.remoteUrl).toBeNull();
+    expect(identity.isWorktree).toBe(false);
+  });
 });
